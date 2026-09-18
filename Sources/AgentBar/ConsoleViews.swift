@@ -569,6 +569,10 @@ struct PlatformDetailPage: View {
     @State private var costUsd = ""
     @State private var renewalDate = ""
     @State private var showCostAndRenewal = false
+    /// Audit fix #6: a pending debounced save for keystroke edits.  Cancelled
+    /// and rescheduled on every keystroke so the persistence layer sees one
+    /// save per pause rather than one per character.
+    @State private var saveDebounceTask: Task<Void, Never>?
 
     /// The page's own row.  A pool-qualified key such as
     /// `google-antigravity:gemini` selects one Antigravity pool.
@@ -606,20 +610,30 @@ struct PlatformDetailPage: View {
             displaySection
         }
         .onAppear(perform: load)
-        .onDisappear(perform: save)
+        .onDisappear {
+            // Audit fix #6: a debounced save may still be pending.  Flush it
+            // synchronously so closing the window or the page cannot drop edits.
+            saveDebounceTask?.cancel()
+            saveDebounceTask = nil
+            save()
+        }
         // Switching platforms in the sidebar reuses this view instance, so
         // `onDisappear` never fires.  The edits in flight belong to the key
         // that is going away, which is why the flush names it explicitly.
         .onChange(of: providerKey) { oldKey, _ in
+            saveDebounceTask?.cancel()
+            saveDebounceTask = nil
             save(for: customInfoKey(for: oldKey))
             load()
         }
         // Typed text is never held only in `@State`: closing the window or
-        // switching pages must not be able to lose it.
-        .onChange(of: customSubtitle) { _, _ in save() }
-        .onChange(of: planName) { _, _ in save() }
-        .onChange(of: costUsd) { _, _ in save() }
-        .onChange(of: renewalDate) { _, _ in save() }
+        // switching pages must not be able to lose it.  Keystrokes, on the
+        // other hand, are debounced so a per-character writer does not hit
+        // the JSON encoder (and the handoff file) on every keypress.
+        .onChange(of: customSubtitle) { _, _ in scheduleDebouncedSave() }
+        .onChange(of: planName) { _, _ in scheduleDebouncedSave() }
+        .onChange(of: costUsd) { _, _ in scheduleDebouncedSave() }
+        .onChange(of: renewalDate) { _, _ in scheduleDebouncedSave() }
     }
 
     /// Editing a platform's presentation happens on that platform's own page,
@@ -679,6 +693,26 @@ struct PlatformDetailPage: View {
                                                      costUsd: costUsd,
                                                      renewalDateText: renewalDate,
                                                      showCostAndRenewal: showCostAndRenewal))
+    }
+
+    /// Audit fix #6: collapse a burst of keystrokes into one save, fired
+    /// 250ms after the last edit.  `platformCustomInfo.didSet` re-encodes the
+    /// full map and writes it back to UserDefaults, so saving per character
+    /// does far more work than the edit itself deserves.
+    private func scheduleDebouncedSave() {
+        saveDebounceTask?.cancel()
+        saveDebounceTask = Task { [customInfoKey, customSubtitle, planName, costUsd, renewalDate, showCostAndRenewal] in
+            try? await Task.sleep(for: .milliseconds(250))
+            if Task.isCancelled { return }
+            await MainActor.run {
+                model.setCustomInfo(for: customInfoKey,
+                                    info: PlatformCustomInfo(customSubtitle: customSubtitle,
+                                                             planName: planName,
+                                                             costUsd: costUsd,
+                                                             renewalDateText: renewalDate,
+                                                             showCostAndRenewal: showCostAndRenewal))
+            }
+        }
     }
 }
 
