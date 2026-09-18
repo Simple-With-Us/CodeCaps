@@ -66,6 +66,12 @@ public struct AntigravitySummaryReader: Sendable {
             var candidates = 0
             for line in String(decoding: pids, as: UTF8.self).split(whereSeparator: \.isNewline).reversed() {
                 try Task.checkCancellation()
+                // Audit fix #5: cap the candidates the fan-out reaches.  The
+                // pre-fix behaviour tried every candidate and every port, and
+                // a misconfigured language server could push the refresh past
+                // its deadline while still finding nothing.  Two attempts per
+                // process are enough — a working one answers quickly, a broken
+                // one says so on the first call.
                 guard candidates < 4, ProcessInfo.processInfo.systemUptime < deadline else { break }
                 guard let pid = Int32(line.trimmingCharacters(in: .whitespacesAndNewlines)), pid > 0,
                       let commandData = try? await BoundedQuotaProcess().run(
@@ -89,27 +95,17 @@ public struct AntigravitySummaryReader: Sendable {
                 for name in ["--https_server_port", "--extension_server_port"] {
                     if let port = argument(command, names: [name]).flatMap(Int.init), !ports.contains(port) { ports.append(port) }
                 }
-                for port in ports.filter({ (1...65535).contains($0) }).prefix(4) {
-                    for scheme in ["https", "http"] {
-                        try Task.checkCancellation()
-                        guard ProcessInfo.processInfo.systemUptime < deadline else { throw SummaryError.unavailable }
-                        let url = URL(string: "\(scheme)://127.0.0.1:\(port)/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary")!
-                        var request = URLRequest(url: url)
-                        request.httpMethod = "POST"
-                        request.httpBody = Data("{}".utf8)
-                        request.timeoutInterval = min(3, deadline - ProcessInfo.processInfo.systemUptime)
-                        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                        request.setValue("application/json", forHTTPHeaderField: "Accept")
-                        request.setValue("1", forHTTPHeaderField: "Connect-Protocol-Version")
-                        if !csrf.isEmpty { request.setValue(csrf, forHTTPHeaderField: "X-Codeium-Csrf-Token") }
-                        do {
-                            let data = try await Self.fetch(request)
-                            let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
-                            let response = root["response"] as? [String: Any] ?? root
-                            if let groups = response["groups"] as? [[String: Any]], !groups.isEmpty { return data }
-                        } catch is CancellationError { throw CancellationError() }
-                        catch { continue }
-                    }
+                // Two attempts per candidate.  HTTPS first, then HTTP.  A 4xx
+                // (or a 2xx with no groups) is the process answering; stop
+                // here and try the next candidate rather than burn the
+                // deadline hammering ports on a server that already said no.
+                let attemptLimit = 2
+                let candidates_ports = Array(ports.filter({ (1...65535).contains($0) }).prefix(attemptLimit))
+                if let data = await Self.attemptCandidate(csrf: csrf,
+                                                         ports: candidates_ports,
+                                                         deadline: deadline,
+                                                         fetch: Self.fetch) {
+                    return data
                 }
             }
             throw SummaryError.unavailable
@@ -120,13 +116,71 @@ public struct AntigravitySummaryReader: Sendable {
         let delegate = LocalTLSDelegate(); let config = URLSessionConfiguration.ephemeral; config.timeoutIntervalForRequest = request.timeoutInterval; config.timeoutIntervalForResource = request.timeoutInterval; config.httpCookieStorage = nil; config.urlCache = nil
         let session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil); defer { session.invalidateAndCancel() }
         let (bytes, response) = try await session.bytes(for: request)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw SummaryError.unavailable }
-        var data = Data(); data.reserveCapacity(16_384)
-        for try await byte in bytes { guard data.count < 1_048_576 else { throw SummaryError.tooLarge }; data.append(byte) }
-        return data
+        guard let http = response as? HTTPURLResponse else { throw FetchFailure.transport }
+        if (200..<300).contains(http.statusCode) {
+            var data = Data(); data.reserveCapacity(16_384)
+            for try await byte in bytes { guard data.count < 1_048_576 else { throw SummaryError.tooLarge }; data.append(byte) }
+            return data
+        }
+        // Surface 4xx distinctly so the caller can short-circuit the candidate
+        // instead of treating it like a transport error.
+        if (400..<500).contains(http.statusCode) { throw FetchFailure.clientError(http.statusCode) }
+        throw FetchFailure.transport
+    }
+
+    /// The per-candidate fan-out: HTTPS, then HTTP, on each port in `ports`,
+    /// capped at two attempts.  A 4xx (or a 2xx with no groups) is the
+    /// process answering; we stop here and return nil so the outer loop tries
+    /// the next candidate instead of burning the deadline.
+    ///
+    /// Exposed as `static` (rather than free) so a unit test can drive it
+    /// with a stubbed `fetch` and assert the short-circuit without spinning
+    /// up an HTTP server on the test machine.
+    static func attemptCandidate(csrf: String,
+                                  ports: [Int],
+                                  deadline: TimeInterval,
+                                  fetch: @Sendable (URLRequest) async throws -> Data) async -> Data? {
+        var attempts = 0
+        let limit = 2
+        outer: for port in ports.prefix(limit) {
+            for scheme in ["https", "http"] {
+                try? Task.checkCancellation()
+                if attempts >= limit { break outer }
+                guard ProcessInfo.processInfo.systemUptime < deadline else { return nil }
+                attempts += 1
+                let url = URL(string: "\(scheme)://127.0.0.1:\(port)/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary")!
+                var request = URLRequest(url: url)
+                request.httpMethod = "POST"
+                request.httpBody = Data("{}".utf8)
+                request.timeoutInterval = min(3, deadline - ProcessInfo.processInfo.systemUptime)
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                request.setValue("application/json", forHTTPHeaderField: "Accept")
+                request.setValue("1", forHTTPHeaderField: "Connect-Protocol-Version")
+                if !csrf.isEmpty { request.setValue(csrf, forHTTPHeaderField: "X-Codeium-Csrf-Token") }
+                do {
+                    let data = try await fetch(request)
+                    let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+                    let response = root["response"] as? [String: Any] ?? root
+                    if let groups = response["groups"] as? [[String: Any]], !groups.isEmpty { return data }
+                    return nil
+                } catch let error as FetchFailure {
+                    if case .clientError = error { return nil }
+                    continue
+                } catch is CancellationError { return nil }
+                catch { continue }
+            }
+        }
+        return nil
     }
 
     private enum SummaryError: Error { case unavailable, tooLarge, malformed }
+    /// Split out from `SummaryError` so the caller can distinguish a server
+    /// answer that means "stop" (4xx) from one that means "try the next port"
+    /// (transport error or 5xx).
+    enum FetchFailure: Error, Equatable {
+        case clientError(Int)
+        case transport
+    }
 }
 
 private func finiteNumber(_ value: Any?) -> Double? {
