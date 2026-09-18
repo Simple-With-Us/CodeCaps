@@ -20,6 +20,9 @@ private struct SettingsPage<Content: View>: View {
 
 struct SettingsMenuBarPage: View {
     @ObservedObject var model: MonitorModel
+    /// Audit fix #8: the menu-bar icon preview scales with Dynamic Type so
+    /// what the owner sees in this row matches what their Mac actually draws.
+    @ScaledMetric(relativeTo: .body) private var menuBarIconSize: CGFloat = 14
 
     var body: some View {
         SettingsPage {
@@ -31,7 +34,7 @@ struct SettingsMenuBarPage: View {
             } footer: {
                 Text("Both keeps the menu bar icon and a Dock icon." + sentenceGap
                      + "Dock hides the menu bar icon, so use Open AgentBar to reach your quota.")
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
@@ -56,15 +59,15 @@ struct SettingsMenuBarPage: View {
                         HStack(spacing: 4) {
                             if model.menuBarStyle != .percentOnly {
                                 PlatformLogo(providerKey: model.menuBarTargetSnapshot?.window.canonicalProviderKey ?? "auto",
-                                             size: 14)
+                                             size: menuBarIconSize)
                             }
                             if model.menuBarStyle != .symbolOnly {
                                 Text(model.menuBarTitle.isEmpty ? "—" : model.menuBarTitle)
-                                    .font(.system(size: 13, weight: .medium).monospacedDigit())
+                                    .font(.subheadline.weight(.medium).monospacedDigit())
                             }
                         }
                         Text(model.menuBarDetail)
-                            .font(.system(size: 11))
+                            .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                     .accessibilityElement(children: .combine)
@@ -96,7 +99,7 @@ struct SettingsPlatformsPage: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Drag to reorder." + sentenceGap
                  + "This order is used in the quota list and in Glance.")
-                .font(.system(size: 11))
+                .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -106,12 +109,12 @@ struct SettingsPlatformsPage: View {
                 ForEach(orderedKeys, id: \.self) { providerKey in
                     HStack(spacing: 10) {
                         Image(systemName: "line.3.horizontal")
-                            .font(.system(size: 11))
+                            .font(.caption)
                             .foregroundStyle(.tertiary)
                             .help("Drag to Reorder")
                             .accessibilityHidden(true)
                         PlatformLogo(providerKey: providerKey, size: 16)
-                        Text(label(for: providerKey)).font(.system(size: 13, weight: .medium))
+                        Text(label(for: providerKey)).font(.subheadline.weight(.medium))
                         Spacer()
                     }
                     .tag(providerKey)
@@ -237,7 +240,7 @@ struct SettingsSourcesFleetPage: View {
                     Text(handoffError).foregroundStyle(Theme.warning)
                 }
             }
-            .font(.system(size: 11))
+            .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
         }
@@ -254,10 +257,10 @@ struct SettingsSourcesFleetPage: View {
             HStack(spacing: 8) {
                 PlatformLogo(providerKey: reader.providerKey, size: 16)
                 Text(section?.providerLabel ?? reader.label)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.subheadline.weight(.medium))
                     .frame(width: 110, alignment: .leading)
                 Text(reader.source)
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 8)
                 Image(systemName: healthy ? "checkmark.circle" : "exclamationmark.triangle")
@@ -267,12 +270,12 @@ struct SettingsSourcesFleetPage: View {
             }
             if let issue {
                 Text(issue)
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             } else if !healthy && model.localEnabled {
                 Text("Not signed in locally.")
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
             if needsConsent { claudeConsentControls }
@@ -308,12 +311,12 @@ struct SettingsSourcesFleetPage: View {
                 }
             }
             Text("macOS will ask once." + sentenceGap + "Choose Always Allow.")
-                .font(.system(size: 11))
+                .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             if let claudeConsentMessage {
                 Text(claudeConsentMessage)
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(claudeConsentSucceeded ? Theme.accent : Theme.warning)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -329,7 +332,7 @@ private struct ReauthorizeCaption: View {
     var body: some View {
         Text("This build cannot read the saved token yet." + sentenceGap
              + "Re-authorize it, or paste the token again.")
-            .font(.system(size: 11))
+            .font(.caption)
             .foregroundStyle(Theme.warning)
             .textCase(nil)
             .fixedSize(horizontal: false, vertical: true)
@@ -360,7 +363,7 @@ private struct ReauthorizeCaption: View {
             .disabled(!pushEnabled)
 
             if pushDirty {
-                Text("Unsaved changes").font(.system(size: 11)).foregroundStyle(Theme.warning)
+                Text("Unsaved changes").font(.caption).foregroundStyle(Theme.warning)
             }
             HStack(spacing: 10) {
                 if model.syncTokenState.needsReauthorization {
@@ -402,7 +405,7 @@ private struct ReauthorizeCaption: View {
             }
             if let pushMessage {
                 Text(pushMessage)
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(pushSucceeded ? Theme.accent : Theme.danger)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -412,7 +415,7 @@ private struct ReauthorizeCaption: View {
                     Eyebrow("SHARE THIS MAC")
                     Spacer()
                     Text(model.lastSyncTime.map { "Pushed \($0.formatted(date: .omitted, time: .shortened))" } ?? "Never pushed")
-                        .font(.system(size: 11))
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                         .textCase(nil)
                 }
@@ -423,7 +426,7 @@ private struct ReauthorizeCaption: View {
                 }
                 if let pushError = model.lastSyncError {
                     Text("Last push failed." + sentenceGap + pushError)
-                        .font(.system(size: 11))
+                        .font(.caption)
                         .foregroundStyle(Theme.danger)
                         .textCase(nil)
                         .fixedSize(horizontal: false, vertical: true)
@@ -431,7 +434,7 @@ private struct ReauthorizeCaption: View {
             }
         } footer: {
             Text("The Ingest Token is stored in your Keychain, never in a preference file.")
-                .font(.system(size: 11))
+                .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -480,7 +483,7 @@ private struct ReauthorizeCaption: View {
                 .onSubmit(savePull)
 
             if pullDirty {
-                Text("Unsaved changes").font(.system(size: 11)).foregroundStyle(Theme.warning)
+                Text("Unsaved changes").font(.caption).foregroundStyle(Theme.warning)
             }
             HStack(spacing: 10) {
                 if model.readTokenState.needsReauthorization {
@@ -522,7 +525,7 @@ private struct ReauthorizeCaption: View {
             }
             if let pullMessage {
                 Text(pullMessage)
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(pullSucceeded ? Theme.accent : Theme.danger)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -538,13 +541,13 @@ private struct ReauthorizeCaption: View {
                         Label("Open Web Dashboard", systemImage: "arrow.up.right.square")
                     }
                     .buttonStyle(.plain)
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .textCase(nil)
                     .help("Open Web Dashboard")
                     .accessibilityLabel("Open Web Dashboard")
                 }
                 Text(model.lastPullTime.map { "Pulled \($0.formatted(date: .omitted, time: .shortened))" } ?? "Never pulled")
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .textCase(nil)
             }
@@ -553,7 +556,7 @@ private struct ReauthorizeCaption: View {
                 }
                 if let pullError = model.serverError {
                     Text("Last pull failed." + sentenceGap + pullError)
-                        .font(.system(size: 11))
+                        .font(.caption)
                         .foregroundStyle(Theme.danger)
                         .textCase(nil)
                         .fixedSize(horizontal: false, vertical: true)
@@ -561,7 +564,7 @@ private struct ReauthorizeCaption: View {
             }
         } footer: {
             Text("Refreshes every 5 minutes while AgentBar is running.")
-                .font(.system(size: 11))
+                .font(.caption)
                 .foregroundStyle(.secondary)
         }
     }
@@ -621,7 +624,7 @@ struct SettingsAppearancePage: View {
                 .accessibilityLabel("Theme")
             } footer: {
                 Text("Light is the default." + sentenceGap + "System follows your Mac's setting.")
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
         }
@@ -657,7 +660,7 @@ struct SettingsAboutPage: View {
                         .accessibilityHidden(true)
                     Text("AgentBar").font(.system(size: 16, weight: .semibold))
                     Text(AgentBarVersion.display)
-                        .font(.system(size: 11))
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity)
@@ -681,7 +684,7 @@ struct SettingsAboutPage: View {
             } footer: {
                 Text("AgentBar reads quota from agent CLIs already signed in on this Mac." + sentenceGap
                      + "It never stores a provider API key.")
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

@@ -255,7 +255,7 @@ struct ConsoleSidebar: View {
                 Section {
                     sidebarRow(page: .allPlatforms) {
                         Label("All Platforms", systemImage: "square.grid.2x2")
-                            .font(.system(size: 13, weight: .medium))
+                            .font(.subheadline.weight(.medium))
                     }
                     ForEach(model.displaySections) { row in
                         sidebarRow(page: .platform(row.id)) { quotaRow(row) }
@@ -267,7 +267,7 @@ struct ConsoleSidebar: View {
                     ForEach(ConsolePage.settingsPages, id: \.self) { page in
                         sidebarRow(page: page) {
                             Label(page.settingsTitle, systemImage: page.symbol)
-                                .font(.system(size: 13, weight: .medium))
+                                .font(.subheadline.weight(.medium))
                         }
                     }
                 } header: {
@@ -313,12 +313,12 @@ struct ConsoleSidebar: View {
             // pool takes a second line in this 200pt column.
             VStack(alignment: .leading, spacing: 0) {
                 Text(row.platformTitle)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.subheadline.weight(.medium))
                     .lineLimit(1)
                     .truncationMode(.tail)
                 if let poolTitle = row.poolTitle {
                     Text(poolTitle)
-                        .font(.system(size: 11))
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.85)
@@ -334,7 +334,7 @@ struct ConsoleSidebar: View {
                 // A fixed column keeps the percentage on screen when the label
                 // is long enough to want every point of the row.
                 Text("\(Int(remaining.rounded()))%")
-                    .font(.system(size: 11).monospacedDigit())
+                    .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
                     .frame(width: 30, alignment: .trailing)
             } else if model.lastChecked == nil {
@@ -348,18 +348,18 @@ struct ConsoleSidebar: View {
         VStack(alignment: .leading, spacing: 6) {
             Label(model.localEnabled ? "Local readings on" : "Local readings off",
                   systemImage: "desktopcomputer")
-                .font(.system(size: 11))
+                .font(.caption)
                 .foregroundStyle(.secondary)
                 .help("Local Quota Readers Status")
                 .accessibilityLabel("Local Quota Readers Status")
             if let handoffError = model.handoffError {
                 Text(handoffError)
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(Theme.warning)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Text(AgentBarVersion.display)
-                .font(.system(size: 11))
+                .font(.caption)
                 .foregroundStyle(.tertiary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -404,9 +404,9 @@ struct AllPlatformsPage: View {
                 emptyState
             } else {
                 HStack {
-                    Text("This Mac").font(.system(size: 13, weight: .semibold))
+                    Text("This Mac").font(.subheadline.weight(.semibold))
                     Spacer()
-                    Text("Percent remaining").font(.system(size: 11)).foregroundStyle(.secondary)
+                    Text("Percent remaining").font(.caption).foregroundStyle(.secondary)
                 }
                 LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
                     ForEach(localSections) { row in
@@ -418,7 +418,7 @@ struct AllPlatformsPage: View {
 
             Text("Quota windows are independent." + sentenceGap
                  + "Antigravity meters two model pools separately, so each pool has its own row.")
-                .font(.system(size: 11))
+                .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -468,9 +468,9 @@ struct AllPlatformsPage: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Fleet refresh failed." + sentenceGap + "Showing the last report.")
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.callout.weight(.medium))
                 Text(error)
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -509,25 +509,25 @@ struct AllPlatformsPage: View {
             Rectangle().fill(Theme.fleet).frame(width: 2)
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    Text(fleetTitle).font(.system(size: 13, weight: .semibold))
+                    Text(fleetTitle).font(.subheadline.weight(.semibold))
                     Spacer()
                     Text(model.lastPullTime.map { "Pulled \($0.formatted(date: .omitted, time: .shortened))" } ?? "Never pulled")
-                        .font(.system(size: 11))
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 if fleetGroups.isEmpty {
                     Text("No other machines have reported yet.")
-                        .font(.system(size: 11))
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(fleetGroups) { group in
                         // A group header per machine: the pull carries an
                         // origin per window and nothing finer.
                         HStack {
-                            Text(group.title).font(.system(size: 12, weight: .semibold))
+                            Text(group.title).font(.callout.weight(.semibold))
                             Spacer()
                             Text("\(group.windowCount) window\(group.windowCount == 1 ? "" : "s")")
-                                .font(.system(size: 11))
+                                .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
                         LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
@@ -604,7 +604,7 @@ struct PlatformDetailPage: View {
                                 ? { state.page = .settingsSourcesFleet } : nil)
             } else {
                 Text("Quota unavailable")
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.subheadline.weight(.medium))
                     .foregroundStyle(.secondary)
             }
             displaySection
@@ -661,7 +661,7 @@ struct PlatformDetailPage: View {
                        caption: String? = nil, disabled: Bool = false) -> some View {
         HStack(alignment: .top, spacing: 12) {
             Text(label)
-                .font(.system(size: 13, weight: .medium))
+                .font(.subheadline.weight(.medium))
                 .frame(width: 150, alignment: .leading)
             VStack(alignment: .leading, spacing: 3) {
                 TextField(placeholder, text: binding)
@@ -669,7 +669,7 @@ struct PlatformDetailPage: View {
                     .disabled(disabled)
                     .onSubmit(save)
                 if let caption {
-                    Text(caption).font(.system(size: 11)).foregroundStyle(.secondary)
+                    Text(caption).font(.caption).foregroundStyle(.secondary)
                 }
             }
         }

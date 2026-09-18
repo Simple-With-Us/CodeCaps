@@ -2,6 +2,8 @@ import AppKit
 import QuotaCore
 import SwiftUI
 
+// Menu-bar symbol sizes are pinned to font metrics; do not scale with Dynamic Type.
+
 /// The status-item popover.  Read-only, one row per platform, plus three
 /// affordances in the footer.  Glance never renders a `PlatformCard`; the
 /// Console never renders a `GlanceRow`.
@@ -47,7 +49,7 @@ struct GlancePopover: View {
             Text("AgentBar").font(.system(size: 13, weight: .semibold))
             Spacer(minLength: 8)
             Text(headerStatus)
-                .font(.system(size: 11).monospacedDigit())
+                .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
@@ -143,7 +145,7 @@ struct GlancePopover: View {
             Text("No quota report yet")
                 .font(.system(size: 13, weight: .semibold))
             Text("Turn on local readers or connect a fleet server.")
-                .font(.system(size: 11))
+                .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
         }
@@ -184,7 +186,7 @@ struct GlancePopover: View {
             Button { openConsole(.allPlatforms) } label: {
                 HStack(spacing: 5) {
                     Text("Open AgentBar")
-                    Text("⌘1").font(.system(size: 10)).foregroundStyle(.tertiary)
+                    Text("⌘1").font(.caption2).foregroundStyle(.tertiary)
                 }
             }
             .buttonStyle(.borderedProminent)
@@ -253,12 +255,12 @@ struct GlanceRow: View {
                 // the platform in a 136pt column, so the pool takes the second
                 // line rather than being truncated away.
                 Text(row.poolTitle == nil ? row.title : row.platformTitle)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.subheadline.weight(.medium))
                     .lineLimit(1)
                     .truncationMode(.tail)
                 if let subtitle = [row.poolTitle, attribution].compactMap({ $0 }).first {
                     Text(subtitle)
-                        .font(.system(size: 10))
+                        .font(.caption2)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.85)
@@ -297,7 +299,7 @@ struct GlanceRow: View {
     private var trailingColumn: some View {
         VStack(alignment: .trailing, spacing: 2) {
             Text(trailingText)
-                .font(.system(size: 11))
+                .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -351,7 +353,7 @@ struct ConsentRow: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
                 Text(message)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.callout.weight(.medium))
                     .fixedSize(horizontal: false, vertical: true)
                 Button("Open Settings", action: action)
                     .controlSize(.small)
@@ -382,9 +384,9 @@ struct FleetSetupRow: View {
                     .foregroundStyle(Theme.fleet)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Set Up Fleet Sync")
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.subheadline.weight(.medium))
                     Text("Share this Mac's quota, or show your other machines here.")
-                        .font(.system(size: 11))
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)

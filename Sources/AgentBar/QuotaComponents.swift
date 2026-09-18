@@ -234,14 +234,14 @@ struct SummaryTile: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Label(label, systemImage: symbol)
-                .font(.system(size: 11, weight: .medium))
+                .font(.caption.weight(.medium))
                 .foregroundStyle(.secondary)
             Text(value)
                 .font(.system(size: 18, weight: .semibold, design: .rounded).monospacedDigit())
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
             Text(detail)
-                .font(.system(size: 11))
+                .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
@@ -299,10 +299,10 @@ struct PlatformCard: View {
             if section.windows.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Quota unavailable")
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.subheadline.weight(.medium))
                         .foregroundStyle(.secondary)
                     Text(issue ?? "no quota source connected")
-                        .font(.system(size: 11))
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     openSettingsButton
@@ -325,11 +325,11 @@ struct PlatformCard: View {
                 .frame(width: compact ? 24 : 30, height: compact ? 24 : 30)
             VStack(alignment: .leading, spacing: 2) {
                 Text(section.providerLabel)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
                 if let subtitleText {
                     Text(subtitleText)
-                        .font(.system(size: 11))
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
@@ -377,13 +377,13 @@ struct PlatformCard: View {
                 .padding(.top, 8)
             } label: {
                 Label("Video · \(videoWindows.count) Windows", systemImage: "video")
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
         }
         if let issue {
             Label(issue, systemImage: "exclamationmark.circle")
-                .font(.system(size: 11))
+                .font(.caption)
                 .foregroundStyle(Theme.warning)
                 .fixedSize(horizontal: false, vertical: true)
             openSettingsButton
@@ -429,7 +429,7 @@ struct QuotaRow: View {
             HStack(alignment: .firstTextBaseline) {
                 Text(compact ? compactWindowName(snapshot.window.label)
                              : AntigravityDisplay.windowLabel(snapshot.window.label))
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.caption.weight(.medium))
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 10)
                 VStack(alignment: .trailing, spacing: 1) {
@@ -437,14 +437,14 @@ struct QuotaRow: View {
                         .font(.system(size: compact ? 18 : 22, weight: .semibold, design: .rounded).monospacedDigit())
                         .foregroundStyle(tint)
                     Text(stateText)
-                        .font(.system(size: 11))
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
 
             if masked {
                 Text(AntigravityDisplay.maskedCaption)
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             } else if let pacing = snapshot.pacing(now: now), !compact {
@@ -467,7 +467,7 @@ struct QuotaRow: View {
                remaining.isFinite, limit.isFinite, remaining >= 0, limit > 0,
                let unit = snapshot.window.quotaUnit {
                 Text("\(remaining.formatted(.number.precision(.fractionLength(0...1)))) of \(limit.formatted(.number.precision(.fractionLength(0...1)))) \(unit) left")
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
@@ -475,12 +475,12 @@ struct QuotaRow: View {
                 Image(systemName: "clock.arrow.circlepath").accessibilityHidden(true)
                 Text(resetCountdown(snapshot.resetAt, now: now))
             }
-            .font(.system(size: 11))
+            .font(.caption)
             .foregroundStyle(.secondary)
 
             if let reset = snapshot.resetAt, !compact {
                 Text(reset.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().hour().minute()))
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
             if !compact {
@@ -492,7 +492,7 @@ struct QuotaRow: View {
                     else if snapshot.isStale { Text("stale").foregroundStyle(Theme.warning) }
                     else if let source = snapshot.window.source { Text(source).lineLimit(1) }
                 }
-                .font(.system(size: 10))
+                .font(.caption2)
                 .foregroundStyle(.tertiary)
             }
         }
