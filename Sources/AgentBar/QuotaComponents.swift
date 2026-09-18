@@ -416,7 +416,7 @@ struct QuotaRow: View {
     }
     private var percentText: String {
         if masked { return AntigravityDisplay.maskedValue }
-        return snapshot.remainingPercent.map { "\(Int($0.rounded()))%" } ?? "—"
+        return snapshot.remainingPercent.map { "\(Int($0.rounded()))% remaining" } ?? "—"
     }
     private var stateText: String {
         if masked { return "not applicable" }

@@ -256,19 +256,21 @@ struct GlanceRow: View {
                         .truncationMode(.tail)
                 }
             }
-            .frame(width: 136, alignment: .leading)
+            .frame(width: 76, alignment: .leading)
             Spacer().frame(width: 8)
             bar
                 .frame(width: 56, height: 3)
             Spacer().frame(width: 8)
             if percent != nil || driving?.remainingPercent != nil {
-                Text(percent.map { "\(Int($0.rounded()))%" } ?? "—")
+                Text(percent.map { "\(Int($0.rounded()))% remaining" } ?? "—")
                     .font(.system(size: 15, weight: .semibold).monospacedDigit())
                     .foregroundStyle(tint)
-                    .frame(width: 40, alignment: .trailing)
+                    .frame(width: 110, alignment: .trailing)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
                 Spacer().frame(width: 8)
                 trailingColumn
-                    .frame(width: 58, alignment: .trailing)
+                    .frame(width: 48, alignment: .trailing)
             } else {
                 trailingColumn
                     .frame(width: 106, alignment: .trailing)
