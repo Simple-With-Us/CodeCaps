@@ -95,10 +95,18 @@ struct GlancePopover: View {
                 }
                 .fixedSize(horizontal: false, vertical: true)
             }
-            if let consentMessage {
+            if !consentMessages.isEmpty {
                 Spacer().frame(height: 10)
-                ConsentRow(message: consentMessage) { openConsole(.settingsSourcesFleet) }
-                    .padding(.horizontal, Metrics.glanceGutter)
+                VStack(alignment: .leading, spacing: 6) {
+                    // Audit fix #7: surface every provider that needs consent,
+                    // not just the first one.  Today only Anthropic hits this,
+                    // but a future provider that gains a one-time step should
+                    // not have to claw its way past the alphabetically first.
+                    ForEach(consentMessages, id: \.self) { message in
+                        ConsentRow(message: message) { openConsole(.settingsSourcesFleet) }
+                            .padding(.horizontal, Metrics.glanceGutter)
+                    }
+                }
             }
             if showsFleetSetup {
                 Spacer().frame(height: 12)
@@ -108,11 +116,12 @@ struct GlancePopover: View {
         }
     }
 
-    /// The short issue text for a reader whose saved login is on this Mac but
-    /// unreadable until the owner allows this build once.  Glance is the
-    /// surface that actually gets opened, so it has to say so.
-    private var consentMessage: String? {
-        model.consentNeeded.sorted().compactMap { model.issues[$0] }.first
+    /// The short issue text for every reader whose saved login is on this Mac
+    /// but unreadable until the owner allows this build once.  Glance is the
+    /// surface that actually gets opened, so it has to say so — for each
+    /// provider that needs the one-time step, not just the first one.
+    private var consentMessages: [String] {
+        model.consentNeeded.sorted().compactMap { model.issues[$0] }
     }
 
     private func groupHeader(_ title: String) -> some View {
