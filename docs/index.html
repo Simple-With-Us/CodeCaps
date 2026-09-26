@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CodeCaps — See Your AI Coding Quota From The Menu Bar</title>
-<meta name="description" content="CodeCaps is a free, open-source macOS menu bar app that shows how much quota is left on every AI coding CLI signed in on your Mac, and can push and pull those readings across the machines you use.">
+<title>CodeCaps — AI Plan Quotas From Your Menu Bar</title>
+<meta name="description" content="CodeCaps is a free, open-source macOS menu bar app for supported AI plan quota and reset windows.&nbsp; Share readings with a collector you configure, or pull readings from other Macs when enabled.">
 <link rel="icon" type="image/png" href="icon-192.png">
 <style>
   :root{
@@ -88,7 +88,7 @@
 <header class="hero">
   <img class="app-icon" src="icon-192.png" width="96" height="96" alt="CodeCaps app icon">
   <h1>CodeCaps</h1>
-  <p class="tagline">See how much of every AI coding agent's quota is left, from the menu bar.</p>
+  <p class="tagline">See supported AI plan quotas and reset windows from your Mac menu bar.</p>
 </header>
 
 <main>
@@ -136,7 +136,7 @@
 
   <section id="providers" class="container">
     <h2>What It Reads</h2>
-    <p>CodeCaps reads each CLI's own saved credentials, in place — nothing is typed, ever.</p>
+    <p>CodeCaps reuses supported apps' existing local sign-ins for their available usage data.&nbsp; You do not enter provider API keys into CodeCaps.&nbsp; A missing or unreadable source is shown as unavailable.</p>
     <ul class="provider-list">
       <li><strong>Claude</strong> — quota windows (5-hour and weekly), read from <code>~/.claude/.credentials.json</code> or the Keychain.</li>
       <li><strong>Codex</strong> — rate-limit windows, read from <code>~/.codex/auth.json</code>.</li>
@@ -151,7 +151,7 @@
 
   <section id="fleet" class="container">
     <h2>Fleet Push And Pull</h2>
-    <p>CodeCaps can push this Mac's quota windows to an endpoint you run, and pull other machines' windows back into the same view.  Both are off by default, and nothing leaves this Mac until you turn one on and enter an endpoint yourself.  The two secrets it stores, an ingest token and a read token, live in the macOS Keychain, never a config file.</p>
+    <p>CodeCaps can push this Mac's quota readings to a collector you configure and pull readings from other configured Macs into the same view.&nbsp; Both connections are off by default.&nbsp; Enabling either one makes requests to your chosen endpoint; its ingest or read token is stored in the macOS Keychain.</p>
     <figure>
       <img src="screenshots/settings-sources-fleet.png" width="1280" height="896" loading="lazy" decoding="async" alt="Console Settings, Sources and Fleet page, with This Mac, Share This Mac, and Pull The Fleet groups">
       <figcaption>Settings → Sources &amp; Fleet</figcaption>
@@ -164,7 +164,7 @@
 
   <section id="headline-number" class="container">
     <h2>How The Headline Number Is Chosen</h2>
-    <p>A collapsed row in Glance, or a card in Console, always shows the fresh window closest to its cap, the lowest remaining percent, alongside that window's own reset countdown.  The menu bar has its own setting, Menu Bar → Displayed Quota, choosing the lowest active quota by default, the lowest quota outright, or one window pinned by name.  Console's Next Reset tile is the soonest reset across every fresh window on every platform, not just whichever window is nearest its cap.</p>
+    <p>Each supported source reports its own usage measure and reset window; a quota percentage is not a bill or subscription charge.&nbsp; A collapsed row shows the fresh window with the lowest remaining percentage and that window's reset time.&nbsp; Menu Bar → Displayed Quota lets you choose the lowest active quota, the lowest quota overall, or a named window.&nbsp; Console's Next Reset tile shows the soonest reset among fresh windows.</p>
     <figure>
       <img src="screenshots/platform-antigravity.png" width="1280" height="896" loading="lazy" decoding="async" alt="Antigravity platform detail, showing separate Gemini and Claude and GPT pools">
       <figcaption>Antigravity splits into two pools, Gemini and Claude &amp; GPT, so one hitting zero does not hide the other.</figcaption>
@@ -173,7 +173,7 @@
 
   <section id="is-this-for-you" class="container">
     <h2>Is This For You?</h2>
-    <p>If you only run one Mac, better tools already exist: <a href="https://github.com/steipete/CodexBar">steipete/CodexBar</a> and <a href="https://github.com/tddworks/ClaudeBar">tddworks/ClaudeBar</a> both cover more providers than CodeCaps does, and both are free, signed, and notarized.  CodeCaps exists for a different job, reading quota into a collector you run yourself and pulling it back across every machine you use.</p>
+    <p>Use CodeCaps for a local view of supported AI plan windows.  If you run a collector, you can also share this Mac's readings and see readings from other configured Macs in one view.</p>
   </section>
 </main>
 
