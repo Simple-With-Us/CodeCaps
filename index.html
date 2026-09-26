@@ -3,17 +3,17 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CodeCaps — Watch Every AI Subscription From The Menu Bar</title>
-<meta name="description" content="CodeCaps is a free, open-source macOS menu bar app for centralized monitoring and alerting on every AI subscription plan on your Mac. Tracks usage, quotas, and caps across Claude, Codex, Cursor, and more, with no provider API key required.">
+<title>CodeCaps — AI Plan Quotas From Your Menu Bar</title>
+<meta name="description" content="CodeCaps shows available AI plan quota and reset windows on your Mac.  Optional collector connections let you share readings with other configured Macs.">
 <meta name="theme-color" content="#053d33">
 <meta property="og:type" content="website">
-<meta property="og:title" content="CodeCaps — Watch Every AI Subscription From The Menu Bar">
-<meta property="og:description" content="Free, open-source macOS menu bar app. Centralized monitoring and alerting for every AI subscription plan on your Mac — Claude, Codex, Cursor, and more.">
+<meta property="og:title" content="CodeCaps — AI Plan Quotas From Your Menu Bar">
+<meta property="og:description" content="See supported AI plan quota and reset windows on Mac, with optional collector connections for other configured Macs.">
 <meta property="og:url" content="https://codecaps.SimpleWithUs.com/">
 <meta property="og:image" content="icon-192.png">
 <meta name="twitter:card" content="summary">
-<meta name="twitter:title" content="CodeCaps — Watch Every AI Subscription From The Menu Bar">
-<meta name="twitter:description" content="Free, open-source macOS menu bar app. Centralized monitoring and alerting for every AI subscription plan on your Mac.">
+<meta name="twitter:title" content="CodeCaps — AI Plan Quotas From Your Menu Bar">
+<meta name="twitter:description" content="See supported AI plan quota and reset windows on Mac.">
 <meta name="twitter:image" content="icon-192.png">
 <link rel="canonical" href="https://codecaps.SimpleWithUs.com/">
 <link rel="icon" type="image/png" href="icon-192.png">
@@ -37,20 +37,18 @@
     font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",sans-serif;
     line-height:1.6;
     -webkit-font-smoothing:antialiased;
-    display:flex;
     min-height:100vh;
-    align-items:center;
-    justify-content:center;
-    padding:24px;
   }
   main{
-    text-align:center;
-    max-width:560px;
+    max-width:960px;
+    padding:56px 24px 64px;
+    margin:0 auto;
   }
+  .hero{display:grid;grid-template-columns:minmax(0,1fr) minmax(250px,340px);align-items:center;gap:48px;}
   .app-icon{
-    width:96px;
-    height:96px;
-    margin:0 auto 22px;
+    width:72px;
+    height:72px;
+    margin:0 0 22px;
     display:block;
   }
   h1{
@@ -61,25 +59,20 @@
   .tagline{
     font-size:18px;
     color:var(--text-muted);
-    margin:0 0 32px;
+    margin:0 0 24px;
   }
-  .features{
-    list-style:none;
-    padding:0;
-    margin:0 0 32px;
-    display:flex;
-    flex-wrap:wrap;
-    justify-content:center;
-    gap:8px;
-  }
-  .features li{
-    font-size:13px;
-    color:var(--text);
-    background:#f4f6f5;
-    border:1px solid var(--border);
-    border-radius:999px;
-    padding:6px 12px;
-  }
+  .intro{font-size:15px;max-width:58ch;margin:0 0 26px;}
+  .actions{display:flex;flex-wrap:wrap;align-items:center;gap:16px;}
+  .hero-shot{margin:0;}
+  .hero-shot img,.settings-shot img{display:block;width:100%;height:auto;border:1px solid var(--border);border-radius:12px;box-shadow:0 12px 36px rgba(3,40,31,.1);}
+  figcaption{margin-top:8px;color:var(--text-muted);font-size:13px;}
+  section.details{border-top:1px solid var(--border);margin-top:54px;padding-top:38px;}
+  h2{font-size:24px;letter-spacing:-.02em;margin:0 0 18px;}
+  .features{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;}
+  .features article{background:#f4f6f5;border:1px solid var(--border);border-radius:var(--radius);padding:20px;}
+  .features h3{font-size:16px;margin:0 0 8px;}
+  .features p{font-size:14px;color:var(--text-muted);margin:0;}
+  .settings-shot{max-width:760px;margin:22px auto 0;}
   .cta{
     display:inline-block;
     background:var(--accent);
@@ -100,38 +93,69 @@
     box-shadow:0 0 0 3px var(--accent-tint);
   }
   .secondary{
-    display:inline-block;
-    margin-top:18px;
-    font-size:13px;
+    font-size:14px;
     color:var(--text-muted);
     text-decoration:none;
     border-bottom:1px solid var(--border);
   }
   .secondary:hover{color:var(--text);border-bottom-color:var(--text);}
+  .secondary:focus-visible,footer a:focus-visible{outline:3px solid var(--accent);outline-offset:4px;}
   footer{
-    margin-top:36px;
-    font-size:12px;
+    margin-top:48px;
+    border-top:1px solid var(--border);
+    padding-top:20px;
+    font-size:13px;
     color:var(--text-muted);
   }
   footer a{color:inherit;text-decoration:none;border-bottom:1px solid var(--border);}
   footer a:hover{color:var(--text);border-bottom-color:var(--text);}
+  @media(max-width:720px){
+    main{padding:32px 18px 48px;}
+    .hero{grid-template-columns:1fr;gap:28px;}
+    .hero-shot{max-width:340px;margin:0 auto;}
+    .features{grid-template-columns:1fr;}
+  }
 </style>
 </head>
 <body>
 <main>
-  <img class="app-icon" src="icon-192.png" alt="CodeCaps app icon" width="96" height="96">
-  <h1>CodeCaps</h1>
-  <p class="tagline">Centralized monitoring and alerting for every AI subscription plan on your Mac.  Watches usage, quotas, and caps across Claude, Codex, Cursor, and more — straight from the menu bar.</p>
-  <ul class="features">
-    <li>Usage &amp; quotas</li>
-    <li>Reset countdowns</li>
-    <li>Cross-Mac fleet</li>
-    <li>No API key required</li>
-  </ul>
-  <a class="cta" href="https://github.com/jaywedgeworth22/codecaps" rel="noopener">View on GitHub →</a>
-  <br>
-  <a class="secondary" href="https://github.com/jaywedgeworth22/codecaps/releases" rel="noopener">Source &amp; releases</a>
-  <footer><a href="https://github.com/jaywedgeworth22/codecaps" rel="noopener">github.com/jaywedgeworth22/codecaps</a></footer>
+  <header class="hero">
+    <div>
+      <img class="app-icon" src="icon-192.png" alt="CodeCaps app icon" width="72" height="72">
+      <h1>CodeCaps</h1>
+      <p class="tagline">AI plan quotas, where you can see them.</p>
+      <p class="intro">See supported quota and reset windows from the Mac menu bar.&nbsp; CodeCaps reuses sign-ins from supported apps; you do not enter provider API keys into it.&nbsp; A source that cannot provide a reading is shown as unavailable.</p>
+      <div class="actions">
+        <a class="cta" href="https://github.com/jaywedgeworth22/CodeCaps/releases/latest/download/CodeCaps.dmg">Download for Mac</a>
+        <a class="secondary" href="https://github.com/jaywedgeworth22/CodeCaps">View source</a>
+      </div>
+      <p style="font-size:13px;color:var(--text-muted);margin-top:14px;">macOS 14 or later · Apple silicon and Intel · Free and open source</p>
+    </div>
+    <figure class="hero-shot">
+      <img src="screenshots/glance-light.png" alt="CodeCaps Glance window showing quota percentages and reset times for this Mac" width="772" height="964">
+      <figcaption>Glance shows the windows available from signed-in sources on this Mac.</figcaption>
+    </figure>
+  </header>
+
+  <section class="details" aria-labelledby="features-heading">
+    <h2 id="features-heading">What CodeCaps Shows</h2>
+    <div class="features">
+      <article><h3>Provider windows</h3><p>Claude, Codex, Antigravity, Cursor, Grok CLI, Grok Bot, and MiniMax have source-specific quota or usage readings.&nbsp; A percentage is a quota measure, not a subscription bill.</p></article>
+      <article><h3>Reset context</h3><p>Read each available window with its own reset time.&nbsp; Choose the menu bar window you want to keep in view.</p></article>
+      <article><h3>Optional fleet view</h3><p>Connect a collector you run to push this Mac's readings or pull those from other configured Macs.&nbsp; Both connections start off, and endpoint tokens are stored in the macOS Keychain.</p></article>
+    </div>
+  </section>
+
+  <section class="details" aria-labelledby="settings-heading">
+    <h2 id="settings-heading">Your Sources and Fleet Settings</h2>
+    <p>Choose local readers and configure fleet connections in the app.&nbsp; Sharing readings requires an endpoint you supply.</p>
+    <figure class="settings-shot">
+      <img src="screenshots/settings-sources-fleet.png" alt="CodeCaps settings window showing This Mac, Share This Mac, and Pull The Fleet sections" width="1280" height="896" loading="lazy" decoding="async">
+      <figcaption>Settings → Sources &amp; Fleet</figcaption>
+    </figure>
+  </section>
+
+  <footer><a href="https://github.com/jaywedgeworth22/CodeCaps">CodeCaps on GitHub</a> · <a href="https://github.com/jaywedgeworth22/CodeCaps/blob/main/LICENSE">Apache 2.0 license</a></footer>
 </main>
 </body>
 </html>
