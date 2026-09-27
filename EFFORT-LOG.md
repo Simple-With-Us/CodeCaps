@@ -1,5 +1,9 @@
 # CodeCaps — Effort Log
 
+## 2026-09-26 — Public site quota and fleet copy — IN PROGRESS
+
+Lane: `codex/public-copy` at `~/apps/codecaps-codex-public-copy` (board `90d3d40a`, issue #52).  Align the GitHub Pages product copy with supported AI plan windows, existing local sign-ins, and optional collector push/pull.  No reader or app behavior changes.
+
 Running log of work units, newest first.  Each entry: date, lane, summary,
 PR (when shipped), follow-ups (when parked).
 
@@ -122,4 +126,3 @@ quota shown two ways.  The expanded row labels now make origin legible
 without inspecting the underlying window.
 
 Board 42ae688ab3b84d9aa65e445aab072a15.  Closes #37.
-
