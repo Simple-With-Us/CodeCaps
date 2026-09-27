@@ -261,6 +261,21 @@ stage_icon() {
   rm -rf "$workdir"
 }
 
+# The resource bundle has to sit under Contents/Resources, which is the only
+# place codesign seals it -- a copy at the .app root makes signing fail with
+# "unsealed contents present in the bundle root".  `ResourceBundle` in
+# Sources/CodeCaps/PlatformLogo.swift is what looks there, because the generated
+# `Bundle.module` accessor does not.
+assert_resource_bundle_reachable() {
+  local resource_name="$1" target="$APP_RESOURCES/$1"
+  if [[ ! -d "$target" ]]; then
+    echo "error: the staged app cannot reach its resource bundle: $target is missing." >&2
+    echo "error: refusing to sign and install an app whose brand marks cannot be found." >&2
+    exit 1
+  fi
+  echo "resource bundle reachable at Contents/Resources: $resource_name"
+}
+
 build_and_stage() {
   local arch_flags=()
   if [[ "$UNIVERSAL" == "1" ]]; then
@@ -297,9 +312,17 @@ build_and_stage() {
     done
   fi
   build_resources="$(find "$build_bin_dir" -maxdepth 1 -type d \( -name "*_"$PRODUCT_NAME.bundle -o -name "*_"$PRODUCT_NAME.resources \) -print -quit)"
-  if [[ -n "$build_resources" ]]; then
-    cp -R "$build_resources" "$APP_RESOURCES/"
+  # A staged app with no resource bundle is a staged app with no brand marks, and
+  # `PlatformLogoImage` resolves the bundle by hand because `Bundle.module` calls
+  # fatalError instead of returning nil.  Fail the build here rather than hand
+  # over a bundle whose icons quietly never appear.
+  if [[ -z "$build_resources" ]]; then
+    echo "error: no SwiftPM resource bundle for $PRODUCT_NAME in $build_bin_dir." >&2
+    echo "error: $APP_NAME needs its brand marks; refusing to stage an app without them." >&2
+    exit 1
   fi
+  cp -R "$build_resources" "$APP_RESOURCES/"
+  assert_resource_bundle_reachable "$(basename "$build_resources")"
   stage_icon
 
   /usr/bin/tee "$INFO_PLIST" >/dev/null <<PLIST
