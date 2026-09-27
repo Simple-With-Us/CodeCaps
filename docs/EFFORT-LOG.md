@@ -5,9 +5,9 @@ PR (when shipped), follow-ups (when parked).
 
 ---
 
-## 2026-09-27 — Public site and README Simple With Us attribution [CODEX, in progress]
+## 2026-09-27 — Public site and README Simple With Us attribution [CODEX, deployed]
 
-Board: `4ddf224d`.  Issue #56.  Site branch `codex/swu-backlink-copy-20260927` targets `gh-pages`; README branch `codex/swu-readme-copy-20260927` targets `main`.  Scoped public copy and footer wordmark; app runtime unchanged.
+Board: `4ddf224d`.  Issue #56.  Site PR #59 merged to `gh-pages`; README PR #58 merged to `main`.  The published `codecaps.simplewithus.com` footer visually shows the complete official SWU logo and its WebP returns HTTP 200.  README and GitHub About now describe supported AI plan usage and quota windows; app runtime unchanged.  The site Seer check was canceled after early merge without a finding; source and live page were reviewed manually.
 
 ---
 
@@ -136,4 +136,3 @@ quota shown two ways.  The expanded row labels now make origin legible
 without inspecting the underlying window.
 
 Board 42ae688ab3b84d9aa65e445aab072a15.  Closes #37.
-
