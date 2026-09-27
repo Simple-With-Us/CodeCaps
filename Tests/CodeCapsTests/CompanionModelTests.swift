@@ -146,8 +146,12 @@ final class CompanionModelTests: XCTestCase {
             "CompanionQuotaModel must build Antigravity pool rows per period, not per model"
         )
         XCTAssertTrue(
-            source.contains(#"id: "antigravity:\(poolKey):\(period)""#),
-            "a collapsed Antigravity row must carry a pool-and-period id, not a model window id"
+            source.contains(#"let canonicalID = "antigravity:\(poolKey):\(period)""#),
+            "a collapsed Antigravity row must be keyed by its pool and period, not a model window id"
+        )
+        XCTAssertTrue(
+            source.contains("id: canonicalID"),
+            "the row's id must be the pool-and-period key"
         )
         XCTAssertTrue(
             source.contains("Self.periodRows("),
@@ -165,15 +169,45 @@ final class CompanionModelTests: XCTestCase {
 
     /// The shared-pool rule from `AntigravityQuotaGroups`: a weekly reading has
     /// to be identified explicitly, and a reset's distance is not a duration.
-    func testAntigravityPeriodDetectionDoesNotInferWeeklyFromAReset() throws {
+    ///
+    /// A window that names neither period is a *per-model observation of the
+    /// pool*, not a third period, so it must not become a row.  This is the
+    /// second half of the fix: collapsing the known periods while still emitting
+    /// an "other" bucket is what left "Claude Opus 4.6 (Thinking)" and
+    /// "GPT-OSS 120B (Medium)" on screen.
+    func testAntigravityDropsPerModelObservationsRatherThanShowingThemAsPeriods() throws {
         let source = try readCompanionModelSource()
         XCTAssertTrue(
-            source.contains(#"["weekly", "week", "1w", "7d", "168h", "10080m"]"#),
-            "weekly cadence must be matched explicitly, never guessed from a reset distance"
+            source.contains("private static func antigravityPeriod(of w: WireRawWindow) -> String?"),
+            "period detection must be able to answer \"neither period\""
         )
         XCTAssertTrue(
+            source.contains("guard let period = antigravityPeriod(of: w) else { continue }"),
+            "a window that is not a pool period must be skipped, not bucketed"
+        )
+        XCTAssertFalse(
             source.contains(#"return token.isEmpty ? "other" : token"#),
-            "an unrecognised period must be surfaced as its own bucket rather than dropped"
+            "per-model observations must never become their own period row"
+        )
+        // Only the two canonical periods may ever produce a row.
+        XCTAssertTrue(
+            source.contains("return antigravityPeriodOrder.compactMap { period in"),
+            "rows must be built from the two canonical periods alone"
+        )
+    }
+
+    /// The payload carries the pool's own aggregate row as well as the per-model
+    /// ones, so the aggregate is preferred -- it is the reading every surface
+    /// agrees on.
+    func testAntigravityPrefersThePoolsOwnAggregateRowPerPeriod() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains(#"let canonicalID = "antigravity:\(poolKey):\(period)""#),
+            "a period row must be keyed by the pool and period"
+        )
+        XCTAssertTrue(
+            source.contains("let driving = candidates.first { $0.id == canonicalID }"),
+            "the pool's own aggregate row must win over a per-model observation"
         )
     }
 
@@ -181,10 +215,6 @@ final class CompanionModelTests: XCTestCase {
     /// and a tie between models reading the same pool takes the lower value.
     func testAntigravityRowSelectsDrivingObservationWithoutAveraging() throws {
         let source = try readCompanionModelSource()
-        XCTAssertTrue(
-            source.contains("let driving = candidates.min { left, right in"),
-            "a period's percentage must be picked from a driving observation"
-        )
         XCTAssertTrue(
             source.contains("(left.remainingPercent ?? 101) < (right.remainingPercent ?? 101)"),
             "a tie between two models of one shared pool must take the lower value"

@@ -756,13 +756,20 @@ public final class CompanionQuotaModel: ObservableObject {
     /// The two periods an Antigravity pool is sold in, in display order.
     private static let antigravityPeriodOrder = ["5h", "weekly"]
 
-    /// Whether a raw window reports the pool's short or its weekly cap.
+    /// Whether a raw window reports the pool's short or its weekly cap, or
+    /// `nil` when it reports neither.
     ///
     /// Mirrors `AntigravityQuotaGroups.cadence`: a weekly reading has to be
-    /// explicitly identified rather than inferred from a reset distance, and
-    /// anything unrecognised is returned as its own bucket so a period nobody
-    /// anticipated is still shown rather than silently dropped.
-    private static func antigravityPeriod(of w: WireRawWindow) -> String {
+    /// explicitly identified rather than inferred from a reset distance, because
+    /// a reset's distance is not a duration.
+    ///
+    /// `nil` is the common case, and it is a *discard*, not a third period.  A
+    /// window like "Claude Opus 4.6 (Thinking)" or "GPT-OSS 120B (Medium)" names
+    /// one model, not a period, so it is an observation of the pool's short cap
+    /// and not a row of its own.  `AntigravityQuotaGroups.normalize` drops these
+    /// from the export for exactly this reason, and the Mac shows two periods per
+    /// pool because of it.
+    private static func antigravityPeriod(of w: WireRawWindow) -> String? {
         let token = (w.window ?? "").lowercased().replacingOccurrences(of: " ", with: "")
         let label = w.label.lowercased()
         if ["weekly", "week", "1w", "7d", "168h", "10080m"].contains(token)
@@ -773,10 +780,10 @@ public final class CompanionQuotaModel: ObservableObject {
             || label.contains("5h") || label.contains("5-hour") || label.contains("five_hour") {
             return "5h"
         }
-        return token.isEmpty ? "other" : token
+        return nil
     }
 
-    /// One row per period for an Antigravity pool, five-hour first.
+    /// The two rows an Antigravity pool shows: five-hour first, then weekly.
     private static func periodRows(
         poolKey: String,
         windows: [WireRawWindow],
@@ -784,35 +791,35 @@ public final class CompanionQuotaModel: ObservableObject {
     ) -> [CompanionWindowItem] {
         var buckets: [String: [WireRawWindow]] = [:]
         for w in windows {
-            buckets[antigravityPeriod(of: w), default: []].append(w)
+            guard let period = antigravityPeriod(of: w) else { continue }
+            buckets[period, default: []].append(w)
         }
 
-        // Known periods first in the canonical order, then anything unexpected
-        // in a stable order of its own.
-        let ordered = antigravityPeriodOrder.filter { buckets[$0] != nil }
-            + buckets.keys.filter { !antigravityPeriodOrder.contains($0) }.sorted()
-
-        return ordered.compactMap { period in
+        return antigravityPeriodOrder.compactMap { period in
             guard let candidates = buckets[period], !candidates.isEmpty else { return nil }
 
-            // Prefer the latest observation; a tie between models reading the
-            // same shared pool takes the lower value.  Never average, never add.
-            let driving = candidates.min { left, right in
-                let l = CompanionDateFormatter.date(from: left.resetAt) ?? .distantPast
-                let r = CompanionDateFormatter.date(from: right.resetAt) ?? .distantPast
-                if l != r { return l > r }
-                return (left.remainingPercent ?? 101) < (right.remainingPercent ?? 101)
-            }
+            // A pool period is one shared allowance, so one row reports it.  When
+            // the payload carries the pool's own aggregate row -- the Mac exports
+            // one per family per period, "Third-Party Models · Weekly" -- prefer
+            // it, because that is the reading every surface agrees on.  Otherwise
+            // take the latest observation, breaking a tie between two models of
+            // the same pool with the lower value.  Never averaged, never added.
+            let canonicalID = "antigravity:\(poolKey):\(period)"
+            let driving = candidates.first { $0.id == canonicalID }
+                ?? candidates.min { left, right in
+                    let l = CompanionDateFormatter.date(from: left.resetAt) ?? .distantPast
+                    let r = CompanionDateFormatter.date(from: right.resetAt) ?? .distantPast
+                    if l != r { return l > r }
+                    return (left.remainingPercent ?? 101) < (right.remainingPercent ?? 101)
+                }
             guard let driving else { return nil }
 
             let pct = driving.remainingPercent
             let exhausted = (pct ?? 100) <= 0 || (driving.isExhausted ?? false)
-            let cadenceLabel = period == "5h" ? "5-hour window"
-                : period == "weekly" ? "Weekly window"
-                : Self.formatCadence(driving.label)
+            let cadenceLabel = period == "5h" ? "5-hour window" : "Weekly window"
 
             return CompanionWindowItem(
-                id: "antigravity:\(poolKey):\(period)",
+                id: canonicalID,
                 label: cadenceLabel,
                 cadence: cadenceLabel,
                 remainingPercent: pct,
