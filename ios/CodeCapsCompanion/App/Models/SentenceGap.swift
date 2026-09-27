@@ -31,7 +31,7 @@ public enum TestNotificationOutcome: Equatable, Sendable {
     public var message: String {
         switch self {
         case .sent:
-            return "Test notification sent." + sentenceGap + "Pull down to see it."
+            return "Test notification sent." + sentenceGap + "Banner and sound delivered."
         case .denied:
             return "Notifications are turned off for CodeCaps." + sentenceGap
                 + "Turn them on in Settings, then try again."

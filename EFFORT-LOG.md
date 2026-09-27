@@ -9,6 +9,20 @@ PR (when shipped), follow-ups (when parked).
 
 ---
 
+## 2026-09-27 — iOS multi-window allowance periods, customizable platform order, duplicate source folding, and foreground push alerts [AG, in progress]
+
+Lane: `ag/ios-multi-window-reorder-notifications` (issue #66).
+
+Parity updates for CodeCaps iOS companion matching macOS menu bar Glance popover:
+- Multi-window expansion: Tapping any platform card expands inline to show each allowance period / window with label, reset countdown, mini progress bar, and percentage.  Consolidates multi-window platforms (e.g. MiniMax 4 active windows, Claude Code 5h and 7d windows).
+- Customizable platform order: Full reordering in Companion Settings with up/down arrows and drag-to-reorder, with persistence to UserDefaults and App Group (`group.com.simplewithus.codecaps`).  Includes a navigation toolbar shortcut.
+- Duplicate source folding: When multiple readers report for the same window (e.g. Cursor DashboardService and `gbu` for Grok Bot weekly), the primary controls the platform card and duplicates fold cleanly under an expandable "Additional Sources" disclosure section.
+- Foreground notification delegate: Fixed iOS suppressing foreground local/test notifications by configuring `CodeCapsNotificationDelegate` with `UNUserNotificationCenterDelegate` `willPresent` returning banner, sound, badge, and list.  Verified test alerts and remote push display banners immediately.
+- Fixed `AlarmSoundPlayer.swift` `AVAudioSession` conditional compilation for macOS companion target `CodeCapsCompanionMac`.
+- Added 5 unit tests in `CompanionModelTests.swift` covering App Group parity, sentence gap hygiene, platform ordering, duplicate source separation, and Antigravity controlling-cap masking.  All 222 tests pass.
+
+---
+
 ## 2026-09-27 — Fix CodeCaps quitting instantly on launch
 
 Lane: `mm/bundle-module-crash`.
