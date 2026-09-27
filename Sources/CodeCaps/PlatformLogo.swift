@@ -1,6 +1,78 @@
 import AppKit
 import SwiftUI
 
+/// Locates the SwiftPM resource bundle without tripping `Bundle.module`'s trap.
+///
+/// The generated accessor (see
+/// `.build/*/CodeCaps.build/DerivedSources/resource_bundle_accessor.swift`) probes
+/// exactly two paths: the app bundle root and the absolute `.build` directory
+/// that compiled the target.  When neither exists it calls `fatalError`, so a
+/// menu bar app that is merely missing a brand mark dies on the first draw --
+/// during `applicationDidFinishLaunching`, which is what "it quits as soon as I
+/// open it" turns out to be.  Resolving the same locations by hand keeps a
+/// missing mark cosmetic, because `PlatformLogo` falls back to an SF Symbol.
+public enum ResourceBundle {
+    /// The name SwiftPM gives the generated bundle for the `CodeCaps` target.
+    public static let name = "CodeCaps_CodeCaps"
+
+    /// Every directory worth probing, nearest first.
+    ///
+    /// The upward hops matter for a `swift test` run, where the module bundle is
+    /// a sibling of the test bundle rather than a child of it.  Three levels
+    /// covers `Contents/MacOS`, `Contents`, and the package bin directory an
+    /// xctest bundle executes from.
+    public static var searchRoots: [URL] {
+        var roots: [URL] = [Bundle.main.bundleURL]
+        if let resources = Bundle.main.resourceURL { roots.append(resources) }
+        if let executable = Bundle.main.executableURL?.deletingLastPathComponent() {
+            roots.append(executable)
+        }
+        var parents: [URL] = []
+        for root in roots {
+            var dir = root
+            for _ in 0..<3 {
+                dir = dir.deletingLastPathComponent()
+                parents.append(dir)
+            }
+        }
+        roots.append(contentsOf: parents)
+        var unique: [URL] = []
+        for root in roots where !unique.contains(root) { unique.append(root) }
+        return unique
+    }
+
+    /// The first root in `roots` that actually holds the resource bundle, or
+    /// `nil` when none does.  Never traps, which is the whole point.
+    public static func resolve(in roots: [URL]) -> Bundle? {
+        let target = "\(name).bundle"
+        for root in roots {
+            let candidate = root.appendingPathComponent(target, isDirectory: true)
+            guard FileManager.default.fileExists(atPath: candidate.path) else { continue }
+            if let bundle = Bundle(path: candidate.path) { return bundle }
+        }
+        return nil
+    }
+
+    /// Whether the generated `Bundle.module` accessor is safe to reach for.
+    ///
+    /// Its second candidate is the absolute `.build` directory that compiled the
+    /// target, and that directory is alive whenever the code is run as a bare
+    /// executable from `.build` or as an XCTest bundle -- which is not something
+    /// `Bundle.main` can tell you, because under `swift test` the main bundle is
+    /// Xcode's own `xctest` tool.  An installed `.app` is the one case where the
+    /// build directory is gone, so reaching for the accessor there is the trap
+    /// itself and the app is expected to have shipped the bundle.
+    public static func mayUseGeneratedAccessor(appBundleURL: URL) -> Bool {
+        appBundleURL.pathExtension.lowercased() != "app"
+    }
+
+    public static let resolved: Bundle? = {
+        if let found = resolve(in: searchRoots) { return found }
+        guard mayUseGeneratedAccessor(appBundleURL: Bundle.main.bundleURL) else { return nil }
+        return Bundle.module
+    }()
+}
+
 /// How a provider's brand mark should be drawn.
 ///
 /// - `standard` keeps the mark's own brand colors (orange for OpenAI, blue for
@@ -114,9 +186,10 @@ public enum PlatformLogoImage {
         let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() as NSString
         let cache = (style == .standard) ? standardCache : templateCache
         if let cached = cache.object(forKey: key) { return cached }
-        guard let resource = resourceNames[key as String],
-              let url = Bundle.module.url(forResource: resource.name, withExtension: resource.ext)
-                  ?? Bundle.module.url(
+        guard let bundle = ResourceBundle.resolved,
+              let resource = resourceNames[key as String],
+              let url = bundle.url(forResource: resource.name, withExtension: resource.ext)
+                  ?? bundle.url(
                       forResource: resource.name,
                       withExtension: resource.ext,
                       subdirectory: "ProviderMarks"
