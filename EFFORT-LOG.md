@@ -1,8 +1,8 @@
 # CodeCaps — Effort Log
 
-## 2026-09-26 — Public site quota and fleet copy — IN PROGRESS
+## 2026-09-26 — Public site quota and fleet copy — DEPLOYED
 
-Lane: `codex/public-copy` at `~/apps/codecaps-codex-public-copy` (board `90d3d40a`, issue #52).  Align the GitHub Pages product copy with supported AI plan windows, existing local sign-ins, and optional collector push/pull.  No reader or app behavior changes.
+Lane: `codex/public-copy` at `~/apps/codecaps-codex-public-copy` (board `90d3d40a`, issue #52).  PRs #53 and #54 aligned the GitHub Pages product copy with supported AI plan windows, existing local sign-ins, and optional collector push/pull.  Pages run 36281399171 deployed the gh-pages merge, and the live page and screenshot assets were verified.  No reader or app behavior changed.
 
 Running log of work units, newest first.  Each entry: date, lane, summary,
 PR (when shipped), follow-ups (when parked).
