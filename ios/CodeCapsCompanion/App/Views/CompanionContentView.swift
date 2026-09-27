@@ -3,6 +3,7 @@ import SwiftUI
 /// The main content view of the CodeCaps iOS companion app.
 public struct CompanionContentView: View {
     @ObservedObject public var model: CompanionQuotaModel
+    @StateObject private var soundPlayer = AlarmSoundPlayer()
     @State private var showingSettings = false
 
     public init(model: CompanionQuotaModel) {
@@ -14,8 +15,20 @@ public struct CompanionContentView: View {
             ScrollView {
                 VStack(spacing: 16) {
                     headerCard
-                    ForEach(model.items) { item in
-                        quotaCard(item)
+
+                    if let error = model.lastError {
+                        errorBanner(error)
+                    }
+
+                    // An honest empty state.  This used to render eight
+                    // hardcoded quotas at 100% that were never measured, so a
+                    // completely unconfigured app looked healthy.
+                    if model.items.isEmpty {
+                        emptyState
+                    } else {
+                        ForEach(model.items) { item in
+                            quotaCard(item)
+                        }
                     }
                 }
                 .padding(.horizontal, 16)
@@ -91,6 +104,47 @@ public struct CompanionContentView: View {
         }
         .padding(14)
         .background(cardBackground, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    // MARK: - Error Banner
+
+    private func errorBanner(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            Text(message)
+                .font(.caption)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    // MARK: - Empty State
+
+    private var emptyState: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "antenna.radiowaves.left.and.right.slash")
+                .font(.system(size: 28, weight: .light))
+                .foregroundStyle(.secondary)
+            Text("No Quota Report Yet")
+                .font(.headline)
+            Text("Point this app at your Mac's sync endpoint, or open CodeCaps on the Mac so it can share readings.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Open Companion Settings") {
+                showingSettings = true
+            }
+            .buttonStyle(.bordered)
+            .padding(.top, 2)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 28)
+        .padding(.horizontal, 16)
+        .background(cardBackground, in: RoundedRectangle(cornerRadius: 14))
     }
 
     // MARK: - Quota Card
@@ -171,6 +225,56 @@ public struct CompanionContentView: View {
                     Text(model.alarmSound.pickerDetail)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
+
+                    // Parity with the macOS sheet, which had both of these all
+                    // along.  The preview was simply missing here, and the
+                    // picker it sat next to could not have worked regardless:
+                    // the tone names it offered are macOS system sounds, which
+                    // resolve to nothing on iOS.
+                    Button {
+                        soundPlayer.preview(model.alarmSound)
+                    } label: {
+                        Label("Preview Sound", systemImage: "speaker.wave.2")
+                    }
+                    .disabled(model.alarmSound == .silent)
+
+                    if let preview = soundPlayer.lastPreview {
+                        Label {
+                            Text(preview.message).fixedSize(horizontal: false, vertical: true)
+                        } icon: {
+                            Image(systemName: preview.isFailure
+                                  ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                        }
+                        .font(.caption2)
+                        .foregroundStyle(preview.isFailure ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.secondary))
+                    }
+
+                    Button {
+                        Task { await model.sendTestNotification() }
+                    } label: {
+                        Label("Send Test Notification", systemImage: "bell.badge")
+                    }
+
+                    if model.notificationsDenied {
+                        Button {
+                            if let url = URL(string: UIApplication.openSettingsURLString) {
+                                UIApplication.shared.open(url)
+                            }
+                        } label: {
+                            Label("Open Notification Settings", systemImage: "gearshape")
+                        }
+                    }
+
+                    if let outcome = model.testNotificationOutcome {
+                        Label {
+                            Text(outcome.message).fixedSize(horizontal: false, vertical: true)
+                        } icon: {
+                            Image(systemName: outcome.isFailure
+                                  ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                        }
+                        .font(.caption2)
+                        .foregroundStyle(outcome.isFailure ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.secondary))
+                    }
                 }
 
                 Section {

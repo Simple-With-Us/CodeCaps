@@ -8,28 +8,55 @@
 
 /* Begin PBXBuildFile section */
 		034780ECDDEB89E523E7E1B7 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = DF46F01EE0931315955EE9AF /* Assets.xcassets */; };
+		056BC4016EE14B5CDADD58E1 /* alarm-glass.wav in Resources */ = {isa = PBXBuildFile; fileRef = 185B2FA090E97F0B48E3E9A8 /* alarm-glass.wav */; };
 		0BDDE676F287EA3372B9D24B /* CompanionQuotaModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1371DB889435F70346FB6AF /* CompanionQuotaModel.swift */; };
+		135997B0E383FB2D00C87CB0 /* SentenceGap.swift in Sources */ = {isa = PBXBuildFile; fileRef = E124B68EB2FF725D59E2EC1F /* SentenceGap.swift */; };
+		137C79F45750F4FA04219AFE /* SentenceGap.swift in Sources */ = {isa = PBXBuildFile; fileRef = E124B68EB2FF725D59E2EC1F /* SentenceGap.swift */; };
+		15B3EE6BAA0DB41A14ED38A6 /* AlarmSoundPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 674BB9709E48A6D00D4EE92C /* AlarmSoundPlayer.swift */; };
+		1E390605C8A820FFB895AA0F /* alarm-tink.wav in Resources */ = {isa = PBXBuildFile; fileRef = 4FE56A36DCE8762AD17C6776 /* alarm-tink.wav */; };
+		1F27C36495D3FB241A242476 /* alarm-blow.wav in Resources */ = {isa = PBXBuildFile; fileRef = 0638A6007D4E7A392FD7D595 /* alarm-blow.wav */; };
 		2018A85587B07653EFF5445C /* CompanionContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84C4C2C5DC3AA20234129F15 /* CompanionContentView.swift */; };
 		2300043111EDF02526E8D53B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = DF46F01EE0931315955EE9AF /* Assets.xcassets */; };
+		238EE47D0BA13D2064CE6DE6 /* alarm-tink.wav in Resources */ = {isa = PBXBuildFile; fileRef = 4FE56A36DCE8762AD17C6776 /* alarm-tink.wav */; };
 		2440D143F835BAD99240BE8D /* CompanionContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84C4C2C5DC3AA20234129F15 /* CompanionContentView.swift */; };
 		2CA370B5E2149BEA3FCB3F6C /* CodeCapsCompanionApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34CE8BC7DF9DCF088BF1B805 /* CodeCapsCompanionApp.swift */; };
+		346906A2DDABDF60AF9D4F62 /* alarm-submarine.wav in Resources */ = {isa = PBXBuildFile; fileRef = 5F63EE805947E5707E2A0C3F /* alarm-submarine.wav */; };
+		4D9258D010AD16F059277D93 /* alarm-submarine.wav in Resources */ = {isa = PBXBuildFile; fileRef = 5F63EE805947E5707E2A0C3F /* alarm-submarine.wav */; };
+		6447965E07907E9AA3407123 /* alarm-sosumi.wav in Resources */ = {isa = PBXBuildFile; fileRef = 4FA72166D5E5A0F726B4DF18 /* alarm-sosumi.wav */; };
+		7F3D6663EA86FDE73EA17DCB /* alarm-sosumi.wav in Resources */ = {isa = PBXBuildFile; fileRef = 4FA72166D5E5A0F726B4DF18 /* alarm-sosumi.wav */; };
 		831B4D460D912E65E3D869D3 /* ResetAlarmSound.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89A5807594DFD989CADCC6F2 /* ResetAlarmSound.swift */; };
 		99A788DAEA41B4AB83A93501 /* CodeCapsCompanionApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34CE8BC7DF9DCF088BF1B805 /* CodeCapsCompanionApp.swift */; };
 		9D826DF8BA1D0C240F17EAFC /* ResetAlarmSound.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89A5807594DFD989CADCC6F2 /* ResetAlarmSound.swift */; };
+		AFBBFB2FD8EEA9DA9EF40042 /* alarm-bottle.wav in Resources */ = {isa = PBXBuildFile; fileRef = 302C44DD0C87899C354A914C /* alarm-bottle.wav */; };
+		BD4C31C68641BA2ED6BE8798 /* alarm-bottle.wav in Resources */ = {isa = PBXBuildFile; fileRef = 302C44DD0C87899C354A914C /* alarm-bottle.wav */; };
+		C23393B11365D16E8ECA5D8E /* alarm-blow.wav in Resources */ = {isa = PBXBuildFile; fileRef = 0638A6007D4E7A392FD7D595 /* alarm-blow.wav */; };
 		C48D9F8052E4F39044504C84 /* CompanionQuotaModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1371DB889435F70346FB6AF /* CompanionQuotaModel.swift */; };
+		E4F68F451FCE5A7069DA052D /* alarm-frog.wav in Resources */ = {isa = PBXBuildFile; fileRef = 881BAB30A7762A0170BE4FD8 /* alarm-frog.wav */; };
+		E77E1CAAEDCB9C3AAD706144 /* alarm-frog.wav in Resources */ = {isa = PBXBuildFile; fileRef = 881BAB30A7762A0170BE4FD8 /* alarm-frog.wav */; };
+		FC810FA7900F297E014083A5 /* AlarmSoundPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 674BB9709E48A6D00D4EE92C /* AlarmSoundPlayer.swift */; };
+		FE52A4A8D224D9DBB320ABCC /* alarm-glass.wav in Resources */ = {isa = PBXBuildFile; fileRef = 185B2FA090E97F0B48E3E9A8 /* alarm-glass.wav */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		0638A6007D4E7A392FD7D595 /* alarm-blow.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "alarm-blow.wav"; sourceTree = "<group>"; };
 		154D17A5A492536F43729222 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		185B2FA090E97F0B48E3E9A8 /* alarm-glass.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "alarm-glass.wav"; sourceTree = "<group>"; };
+		302C44DD0C87899C354A914C /* alarm-bottle.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "alarm-bottle.wav"; sourceTree = "<group>"; };
 		34CE8BC7DF9DCF088BF1B805 /* CodeCapsCompanionApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeCapsCompanionApp.swift; sourceTree = "<group>"; };
+		4FA72166D5E5A0F726B4DF18 /* alarm-sosumi.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "alarm-sosumi.wav"; sourceTree = "<group>"; };
+		4FE56A36DCE8762AD17C6776 /* alarm-tink.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "alarm-tink.wav"; sourceTree = "<group>"; };
+		5F63EE805947E5707E2A0C3F /* alarm-submarine.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "alarm-submarine.wav"; sourceTree = "<group>"; };
+		674BB9709E48A6D00D4EE92C /* AlarmSoundPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlarmSoundPlayer.swift; sourceTree = "<group>"; };
 		6992E7C7086CA631814CCD87 /* CodeCapsCompanionMac.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = CodeCapsCompanionMac.entitlements; sourceTree = "<group>"; };
 		84C4C2C5DC3AA20234129F15 /* CompanionContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionContentView.swift; sourceTree = "<group>"; };
+		881BAB30A7762A0170BE4FD8 /* alarm-frog.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "alarm-frog.wav"; sourceTree = "<group>"; };
 		89A5807594DFD989CADCC6F2 /* ResetAlarmSound.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResetAlarmSound.swift; sourceTree = "<group>"; };
 		B47E0485E1902045DBFE06B1 /* CodeCapsCompanion.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = CodeCapsCompanion.entitlements; sourceTree = "<group>"; };
 		C1371DB889435F70346FB6AF /* CompanionQuotaModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionQuotaModel.swift; sourceTree = "<group>"; };
 		C2EA171A442F77D9348C68D4 /* InfoMac.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = InfoMac.plist; sourceTree = "<group>"; };
 		C679EF2BE96C94E938E56DC1 /* CodeCapsCompanionMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CodeCapsCompanionMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		DF46F01EE0931315955EE9AF /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		E124B68EB2FF725D59E2EC1F /* SentenceGap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SentenceGap.swift; sourceTree = "<group>"; };
 		FFD1407F089F595B7B485517 /* CodeCapsCompanion.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = CodeCapsCompanion.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -37,6 +64,13 @@
 		1A10513D0EF01D22E9941268 /* Resources */ = {
 			isa = PBXGroup;
 			children = (
+				0638A6007D4E7A392FD7D595 /* alarm-blow.wav */,
+				302C44DD0C87899C354A914C /* alarm-bottle.wav */,
+				881BAB30A7762A0170BE4FD8 /* alarm-frog.wav */,
+				185B2FA090E97F0B48E3E9A8 /* alarm-glass.wav */,
+				4FA72166D5E5A0F726B4DF18 /* alarm-sosumi.wav */,
+				5F63EE805947E5707E2A0C3F /* alarm-submarine.wav */,
+				4FE56A36DCE8762AD17C6776 /* alarm-tink.wav */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -44,8 +78,10 @@
 		2616D2707F562EA07D0E6527 /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				674BB9709E48A6D00D4EE92C /* AlarmSoundPlayer.swift */,
 				C1371DB889435F70346FB6AF /* CompanionQuotaModel.swift */,
 				89A5807594DFD989CADCC6F2 /* ResetAlarmSound.swift */,
+				E124B68EB2FF725D59E2EC1F /* SentenceGap.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -175,6 +211,13 @@
 			buildActionMask = 2147483647;
 			files = (
 				034780ECDDEB89E523E7E1B7 /* Assets.xcassets in Resources */,
+				1F27C36495D3FB241A242476 /* alarm-blow.wav in Resources */,
+				AFBBFB2FD8EEA9DA9EF40042 /* alarm-bottle.wav in Resources */,
+				E77E1CAAEDCB9C3AAD706144 /* alarm-frog.wav in Resources */,
+				FE52A4A8D224D9DBB320ABCC /* alarm-glass.wav in Resources */,
+				7F3D6663EA86FDE73EA17DCB /* alarm-sosumi.wav in Resources */,
+				346906A2DDABDF60AF9D4F62 /* alarm-submarine.wav in Resources */,
+				1E390605C8A820FFB895AA0F /* alarm-tink.wav in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -183,6 +226,13 @@
 			buildActionMask = 2147483647;
 			files = (
 				2300043111EDF02526E8D53B /* Assets.xcassets in Resources */,
+				C23393B11365D16E8ECA5D8E /* alarm-blow.wav in Resources */,
+				BD4C31C68641BA2ED6BE8798 /* alarm-bottle.wav in Resources */,
+				E4F68F451FCE5A7069DA052D /* alarm-frog.wav in Resources */,
+				056BC4016EE14B5CDADD58E1 /* alarm-glass.wav in Resources */,
+				6447965E07907E9AA3407123 /* alarm-sosumi.wav in Resources */,
+				4D9258D010AD16F059277D93 /* alarm-submarine.wav in Resources */,
+				238EE47D0BA13D2064CE6DE6 /* alarm-tink.wav in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -193,10 +243,12 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				FC810FA7900F297E014083A5 /* AlarmSoundPlayer.swift in Sources */,
 				99A788DAEA41B4AB83A93501 /* CodeCapsCompanionApp.swift in Sources */,
 				2018A85587B07653EFF5445C /* CompanionContentView.swift in Sources */,
 				0BDDE676F287EA3372B9D24B /* CompanionQuotaModel.swift in Sources */,
 				831B4D460D912E65E3D869D3 /* ResetAlarmSound.swift in Sources */,
+				135997B0E383FB2D00C87CB0 /* SentenceGap.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -204,10 +256,12 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				15B3EE6BAA0DB41A14ED38A6 /* AlarmSoundPlayer.swift in Sources */,
 				2CA370B5E2149BEA3FCB3F6C /* CodeCapsCompanionApp.swift in Sources */,
 				2440D143F835BAD99240BE8D /* CompanionContentView.swift in Sources */,
 				C48D9F8052E4F39044504C84 /* CompanionQuotaModel.swift in Sources */,
 				9D826DF8BA1D0C240F17EAFC /* ResetAlarmSound.swift in Sources */,
+				137C79F45750F4FA04219AFE /* SentenceGap.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
