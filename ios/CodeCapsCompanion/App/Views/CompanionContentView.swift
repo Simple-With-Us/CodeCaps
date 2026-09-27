@@ -5,6 +5,7 @@ public struct CompanionContentView: View {
     @ObservedObject public var model: CompanionQuotaModel
     @StateObject private var soundPlayer = AlarmSoundPlayer()
     @State private var showingSettings = false
+    @State private var expandedIds: Set<String> = []
 
     public init(model: CompanionQuotaModel) {
         self.model = model
@@ -20,9 +21,6 @@ public struct CompanionContentView: View {
                         errorBanner(error)
                     }
 
-                    // An honest empty state.  This used to render eight
-                    // hardcoded quotas at 100% that were never measured, so a
-                    // completely unconfigured app looked healthy.
                     if model.items.isEmpty {
                         emptyState
                     } else {
@@ -40,12 +38,21 @@ public struct CompanionContentView: View {
             #endif
             .toolbar {
                 #if os(iOS)
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        showingSettings = true
+                    } label: {
+                        Image(systemName: "arrow.up.arrow.down")
+                    }
+                    .accessibilityLabel("Customize Platform Order")
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         showingSettings = true
                     } label: {
                         Image(systemName: "gearshape")
                     }
+                    .accessibilityLabel("Settings")
                 }
                 #else
                 ToolbarItem(placement: .primaryAction) {
@@ -92,7 +99,7 @@ public struct CompanionContentView: View {
                 Text("FLEET STATUS")
                     .font(.caption2.weight(.bold))
                     .foregroundStyle(.secondary)
-                Text("\(model.items.count) Quotas Active")
+                Text("\(model.items.count) Platforms Monitored")
                     .font(.headline)
             }
             Spacer()
@@ -149,8 +156,21 @@ public struct CompanionContentView: View {
 
     // MARK: - Quota Card
 
+    private func toggleExpanded(_ id: String) {
+        withAnimation(.easeInOut(duration: 0.22)) {
+            if expandedIds.contains(id) {
+                expandedIds.remove(id)
+            } else {
+                expandedIds.insert(id)
+            }
+        }
+    }
+
     private func quotaCard(_ item: CompanionQuotaItem) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let isExpanded = expandedIds.contains(item.id)
+
+        return VStack(alignment: .leading, spacing: 12) {
+            // Main clickable row
             HStack(alignment: .center, spacing: 12) {
                 CompanionProviderLogo(item: item)
 
@@ -161,6 +181,8 @@ public struct CompanionContentView: View {
                         Text(sub)
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
                     }
                 }
                 Spacer()
@@ -171,16 +193,25 @@ public struct CompanionContentView: View {
                         Image(systemName: item.isAlarmArmed ? "bell.fill" : "bell")
                             .font(.system(size: 14))
                             .foregroundStyle(item.isAlarmArmed ? Color.accentColor : .secondary)
+                            .frame(width: 28, height: 28)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel(item.isAlarmArmed ? "Disarm reset alert" : "Arm reset alert")
 
                     Text(item.displayPercent)
-                        .font(.system(size: 17, weight: .bold, design: .rounded))
+                        .font(.system(size: 17, weight: .bold, design: .rounded).monospacedDigit())
                         .foregroundStyle(item.statusColor)
+
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                        .frame(width: 14, height: 14)
+                        .rotationEffect(.degrees(isExpanded ? 180 : 0))
+                        .accessibilityHidden(true)
                 }
             }
 
-            // Progress Bar
+            // Overarching Progress Bar
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     Capsule()
@@ -193,9 +224,120 @@ public struct CompanionContentView: View {
                 }
             }
             .frame(height: 6)
+
+            // Multiple time periods / windows when expanded
+            if isExpanded {
+                Divider()
+                    .padding(.vertical, 2)
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("ALLOWANCE PERIODS")
+                        .font(.system(size: 10, weight: .bold))
+                        .tracking(0.6)
+                        .foregroundStyle(.secondary)
+
+                    ForEach(item.windows) { win in
+                        windowRow(win)
+                    }
+
+                    // Duplicate sources for the same data folded under the overarching section
+                    if !item.duplicateWindows.isEmpty {
+                        duplicateSourcesSection(item.duplicateWindows)
+                    }
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
         }
         .padding(14)
         .background(cardBackground, in: RoundedRectangle(cornerRadius: 14))
+        .contentShape(Rectangle())
+        .onTapGesture {
+            toggleExpanded(item.id)
+        }
+    }
+
+    // MARK: - Individual Window Row
+
+    private func windowRow(_ win: CompanionWindowItem) -> some View {
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(win.label)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.primary)
+                let cd = win.countdown()
+                if !cd.isEmpty {
+                    Text("Resets in \(cd)")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer(minLength: 8)
+
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(trackColor)
+                    if let pct = win.remainingPercent {
+                        Capsule().fill(win.statusColor)
+                            .frame(width: geo.size.width * CGFloat(min(max(pct, 0), 100)) / 100)
+                    }
+                }
+            }
+            .frame(width: 48, height: 4)
+
+            Text(win.displayPercent)
+                .font(.system(size: 13, weight: .bold, design: .rounded).monospacedDigit())
+                .foregroundStyle(win.statusColor)
+                .frame(width: 40, alignment: .trailing)
+        }
+        .padding(.vertical, 2)
+    }
+
+    // MARK: - Duplicate Sources Folded Section
+
+    private func duplicateSourcesSection(_ duplicates: [CompanionWindowItem]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Divider()
+                .padding(.top, 4)
+
+            DisclosureGroup {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(duplicates) { dup in
+                        HStack(spacing: 8) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack(spacing: 6) {
+                                    Text(dup.label)
+                                        .font(.system(size: 12, weight: .medium))
+                                    if let src = dup.source ?? dup.via {
+                                        Text("via \(src)")
+                                            .font(.system(size: 10, weight: .medium))
+                                            .foregroundStyle(.secondary)
+                                            .padding(.horizontal, 5)
+                                            .padding(.vertical, 1.5)
+                                            .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 4))
+                                    }
+                                }
+                                let cd = dup.countdown()
+                                if !cd.isEmpty {
+                                    Text("Resets in \(cd)")
+                                        .font(.system(size: 10))
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            Spacer()
+                            Text(dup.displayPercent)
+                                .font(.system(size: 12, weight: .bold, design: .rounded).monospacedDigit())
+                                .foregroundStyle(dup.statusColor)
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+                .padding(.top, 4)
+            } label: {
+                Label("Additional Sources (\(duplicates.count))", systemImage: "arrow.triangle.merge")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 
     // MARK: - Settings View
@@ -203,6 +345,50 @@ public struct CompanionContentView: View {
     private var companionSettingsView: some View {
         NavigationStack {
             Form {
+                Section {
+                    ForEach(model.items) { item in
+                        HStack(spacing: 10) {
+                            CompanionProviderLogo(item: item, size: 24)
+                            Text(item.title)
+                                .font(.system(size: 14, weight: .medium))
+                            Spacer()
+                            Button {
+                                model.movePlatformUp(id: item.id)
+                            } label: {
+                                Image(systemName: "arrow.up")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .frame(width: 28, height: 28)
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(model.items.first?.id == item.id)
+
+                            Button {
+                                model.movePlatformDown(id: item.id)
+                            } label: {
+                                Image(systemName: "arrow.down")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .frame(width: 28, height: 28)
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(model.items.last?.id == item.id)
+                        }
+                    }
+                    .onMove(perform: model.movePlatform)
+
+                    if !model.platformOrder.isEmpty {
+                        Button("Reset Default Order") {
+                            model.resetPlatformOrder()
+                        }
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("Platform Order")
+                } footer: {
+                    Text("Customize the order of platforms shown on the main screen." + sentenceGap
+                         + "Use the up/down arrows or drag to reorder.")
+                }
+
                 Section("Mac Sync Endpoint") {
                     #if os(iOS)
                     TextField("Endpoint URL (https://...)", text: $model.syncEndpoint)
@@ -226,11 +412,6 @@ public struct CompanionContentView: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
 
-                    // Parity with the macOS sheet, which had both of these all
-                    // along.  The preview was simply missing here, and the
-                    // picker it sat next to could not have worked regardless:
-                    // the tone names it offered are macOS system sounds, which
-                    // resolve to nothing on iOS.
                     Button {
                         soundPlayer.preview(model.alarmSound)
                     } label: {
@@ -257,9 +438,11 @@ public struct CompanionContentView: View {
 
                     if model.notificationsDenied {
                         Button {
+                            #if os(iOS)
                             if let url = URL(string: UIApplication.openSettingsURLString) {
                                 UIApplication.shared.open(url)
                             }
+                            #endif
                         } label: {
                             Label("Open Notification Settings", systemImage: "gearshape")
                         }
@@ -308,6 +491,11 @@ public struct CompanionProviderLogo: View {
     public let item: CompanionQuotaItem
     public var size: CGFloat = 36
 
+    public init(item: CompanionQuotaItem, size: CGFloat = 36) {
+        self.item = item
+        self.size = size
+    }
+
     private var isMonochrome: Bool {
         guard let name = item.providerLogoName else { return false }
         return name == "provider-openai" || name == "provider-cursor" || name == "provider-grok" || name == "provider-grok-bot"
@@ -355,4 +543,3 @@ public struct CompanionProviderLogo: View {
         #endif
     }
 }
-

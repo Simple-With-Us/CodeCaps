@@ -113,9 +113,11 @@ public final class AlarmSoundPlayer: NSObject, ObservableObject {
         guard let url = Self.assetURL(for: sound) else { return .missingAsset(name) }
 
         do {
+            #if os(iOS)
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
             try session.setActive(true)
+            #endif
 
             let newPlayer = try AVAudioPlayer(contentsOf: url)
             newPlayer.prepareToPlay()
