@@ -942,16 +942,47 @@ struct SettingsNotificationsPage: View {
             }
 
             Section {
-                Button("Send Test Notification") {
-                    model.alarmManager.sendTestNotification()
+                HStack(spacing: 8) {
+                    Button("Send Test Notification") {
+                        Task { await model.alarmManager.sendTestNotification() }
+                    }
+                    .help("Send Test Notification")
+                    .accessibilityLabel("Send Test Notification")
+
+                    if model.alarmManager.notificationsDenied {
+                        Button("Open Notification Settings") {
+                            NSWorkspace.shared.open(ResetAlarmManager.notificationSettingsURL)
+                        }
+                        .help("CodeCaps notifications are turned off." + sentenceGap
+                              + "Opens the Notifications pane in System Settings.")
+                        .accessibilityLabel("Open Notification Settings")
+                    }
                 }
-                .help("Send Test Notification")
-                .accessibilityLabel("Send Test Notification")
+
+                if let outcome = model.alarmManager.testNotificationOutcome {
+                    Label {
+                        Text(outcome.message)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } icon: {
+                        Image(systemName: outcome.isFailure ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                    }
+                    .font(.system(size: 11))
+                    .foregroundStyle(outcome.isFailure ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.secondary))
+                    .padding(.top, 2)
+                }
             } footer: {
-                Text("Triggers a test notification and alert sound to confirm macOS Notification permissions.")
+                Text("Triggers a test notification and alert sound to confirm macOS Notification permissions." + sentenceGap
+                     + "The result is reported here, so a refused send tells you why instead of doing nothing.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
+        }
+        .task {
+            // Learn the real authorization state on open, so the "Open
+            // Notification Settings" affordance is there before the owner has
+            // discovered the problem by pressing a button that does nothing.
+            await model.alarmManager.refreshNotificationAuthorization()
         }
     }
 }

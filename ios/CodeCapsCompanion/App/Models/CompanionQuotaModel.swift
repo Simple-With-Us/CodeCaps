@@ -73,6 +73,18 @@ public final class CompanionQuotaModel: ObservableObject {
     @Published public var items: [CompanionQuotaItem] = []
     @Published public var isRefreshing: Bool = false
     @Published public var lastUpdated: Date?
+    /// Last failure worth telling the owner about.  The old code swallowed every
+    /// fetch error in an empty `catch`, so a wrong endpoint or an expired token
+    /// looked exactly like a healthy app.
+    @Published public var lastError: String?
+    /// Result of the most recent test notification, mirroring the macOS sheet.
+    @Published public var testNotificationOutcome: TestNotificationOutcome?
+    /// Whether the system reports notifications as denied, so the sheet can
+    /// offer a route into Settings instead of a button that does nothing.
+    @Published public var notificationsDenied = false
+    /// True when at least one real reading has been parsed.  Drives the empty
+    /// state, which replaces the old hardcoded fake rows.
+    @Published public var hasDataSource = false
     @Published public var syncEndpoint: String {
         didSet {
             UserDefaults.standard.set(syncEndpoint, forKey: "companionSyncEndpoint")
@@ -109,6 +121,9 @@ public final class CompanionQuotaModel: ObservableObject {
     private var previouslyExhaustedIds: Set<String> = []
     private var hasInitialized = false
 
+    /// Ids armed on a previous launch, restored from the App Group.
+    private var persistedArmedIds: Set<String> = []
+
     public init() {
         let defaults = UserDefaults(suiteName: Self.appGroupId) ?? UserDefaults.standard
         self.syncEndpoint = defaults.string(forKey: "companionSyncEndpoint")
@@ -128,19 +143,79 @@ public final class CompanionQuotaModel: ObservableObject {
             self.alarmSound = .systemDefault
         }
 
-        requestNotificationPermission()
+        self.persistedArmedIds = Set(defaults.stringArray(forKey: "armedResetAlarmSectionIds") ?? [])
+
+        // Read the authorization state, but do not ask for it here.  Prompting
+        // on first launch, before the owner has any reason to want alerts, is how
+        // an app gets its permission prompt reflexively dismissed.  The request
+        // now happens in context: arming a row's alarm, or pressing Send Test
+        // Notification.  This matches the macOS app, which also asks on arming.
+        Task { await refreshNotificationAuthorization() }
         loadLocalFallback()
     }
 
-    public func requestNotificationPermission() {
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
+    /// Asks for notification permission and reports whether it was granted.
+    @discardableResult
+    public func requestNotificationPermission() async -> Bool {
+        do {
+            let granted = try await UNUserNotificationCenter.current()
+                .requestAuthorization(options: [.alert, .sound, .badge])
+            notificationsDenied = !granted
+            return granted
+        } catch {
+            notificationsDenied = true
+            return false
+        }
+    }
+
+    /// Reads the real authorization state so the sheet can act on it.
+    public func refreshNotificationAuthorization() async {
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        notificationsDenied = (settings.authorizationStatus == .denied)
+    }
+
+    /// Sends a test notification and reports what happened, matching the macOS
+    /// button.  Requests authorization first and waits for the answer, because
+    /// issuing the add before the prompt resolves is what made the original
+    /// button look broken.
+    public func sendTestNotification() async {
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        if settings.authorizationStatus == .notDetermined {
+            guard await requestNotificationPermission() else {
+                testNotificationOutcome = .denied
+                return
+            }
+        } else if settings.authorizationStatus == .denied {
+            notificationsDenied = true
+            testNotificationOutcome = .denied
+            return
+        }
+
+        notificationsDenied = false
+        let content = UNMutableNotificationContent()
+        content.title = "CodeCaps Reset Alert Test"
+        content.body = "Reset alerts and alarms are working properly." + sentenceGap + "Sound and banners active."
+        content.sound = AlarmSoundPlayer.notificationSound(for: alarmSound)
+
+        let request = UNNotificationRequest(
+            identifier: "codecaps.companion.test.\(Date().timeIntervalSince1970)",
+            content: content,
+            trigger: nil
+        )
+        do {
+            try await UNUserNotificationCenter.current().add(request)
+            testNotificationOutcome = .sent
+        } catch {
+            testNotificationOutcome = .failed(error.localizedDescription)
+        }
     }
 
     public func toggleAlarm(for itemId: String) {
         guard let index = items.firstIndex(where: { $0.id == itemId }) else { return }
         items[index].isAlarmArmed.toggle()
+        persistArmedIds()
         if items[index].isAlarmArmed {
-            requestNotificationPermission()
+            Task { await requestNotificationPermission() }
         }
     }
 
@@ -148,6 +223,8 @@ public final class CompanionQuotaModel: ObservableObject {
         guard !isRefreshing else { return }
         isRefreshing = true
         defer { isRefreshing = false }
+
+        var failure: String?
 
         // Attempt endpoint fetch if configured
         if let url = URL(string: syncEndpoint), !syncEndpoint.isEmpty {
@@ -159,15 +236,32 @@ public final class CompanionQuotaModel: ObservableObject {
                 let (data, response) = try await URLSession.shared.data(for: req)
                 if let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) {
                     parseSnapshot(data: data)
+                    lastError = nil
                     lastUpdated = Date()
                     return
                 }
+                let status = (response as? HTTPURLResponse)?.statusCode
+                failure = "The sync endpoint answered \(status.map(String.init) ?? "unexpectedly")." + sentenceGap
+                    + "Check the endpoint and token in Companion Settings."
             } catch {
-                // Fall back to iCloud / cached readings
+                failure = "Could not reach the sync endpoint." + sentenceGap
+                    + error.localizedDescription
             }
         }
 
         loadLocalFallback()
+
+        // A fallback read is only a success if it produced something.  When the
+        // endpoint failed and there is no local snapshot, say so -- the old code
+        // reported nothing and the app just looked idle.
+        if hasDataSource {
+            lastError = nil
+        } else if let failure {
+            lastError = failure
+        } else {
+            lastError = "No quota readings yet." + sentenceGap
+                + "Add a sync endpoint, or open CodeCaps on your Mac."
+        }
         lastUpdated = Date()
     }
 
@@ -188,7 +282,8 @@ public final class CompanionQuotaModel: ObservableObject {
 
     private func parseSnapshot(data: Data) {
         guard let envelope = try? JSONDecoder().decode(WireEnvelope.self, from: data),
-              let rawWindows = envelope.windows else { return }
+              let rawWindows = envelope.windows, !rawWindows.isEmpty else { return }
+        hasDataSource = true
 
         var newItems: [CompanionQuotaItem] = []
         var antigravityWindows: [WireRawWindow] = []
@@ -201,7 +296,8 @@ public final class CompanionQuotaModel: ObservableObject {
             } else {
                 let pct = w.remainingPercent
                 let exhausted = (pct ?? 100) <= 0 || (w.isExhausted ?? false)
-                let existingArmed = items.first(where: { $0.id == w.id })?.isAlarmArmed ?? false
+                let existingArmed = items.first(where: { $0.id == w.id })?.isAlarmArmed
+                    ?? persistedArmedIds.contains(w.id)
 
                 let (formattedTitle, formattedSubtitle) = Self.formatTitleAndSubtitle(
                     provider: w.provider,
@@ -386,6 +482,7 @@ public final class CompanionQuotaModel: ObservableObject {
             return
         }
 
+        var fired = Set<String>()
         for item in newItems {
             let wasExhausted = previouslyExhaustedIds.contains(item.id)
             let isArmed = item.isAlarmArmed
@@ -393,8 +490,19 @@ public final class CompanionQuotaModel: ObservableObject {
             if !item.isExhausted && (wasExhausted || isArmed) {
                 if notifyOnReset || isArmed {
                     sendResetAlert(item: item)
+                    fired.insert(item.id)
                 }
             }
+        }
+
+        // One-shot, matching the macOS manager: a fired alarm disarms itself so
+        // the next clear does not alert again.  Without this an iOS alarm stayed
+        // armed forever and re-fired on every refresh that saw the quota usable.
+        if !fired.isEmpty {
+            for index in items.indices where fired.contains(items[index].id) {
+                items[index].isAlarmArmed = false
+            }
+            persistArmedIds()
         }
 
         previouslyExhaustedIds = Set(newItems.filter(\.isExhausted).map(\.id))
@@ -403,33 +511,33 @@ public final class CompanionQuotaModel: ObservableObject {
     private func sendResetAlert(item: CompanionQuotaItem) {
         let content = UNMutableNotificationContent()
         content.title = "Quota Reset: \(item.title)"
-        content.body = "Quota has cleared (\(item.displayPercent) remaining).  Ready for prompt turns."
-        // Pick the sound the user set in Settings.  `.silent` produces
-        // a nil sound so the banner still appears but no chime plays —
-        // mirroring macOS behaviour so an owner with this picker on
-        // Silent sees both Alerts running banner-only.
-        content.sound = Self.notificationSound(for: alarmSound)
+        content.body = "Quota has cleared (\(item.displayPercent) remaining)." + sentenceGap + "Ready for prompt turns."
+        // Pick the sound the user set in Settings.  `.silent` produces a nil
+        // sound so the banner still appears but no chime plays, mirroring the
+        // macOS picker.  Every other value resolves to bundled audio, because
+        // the macOS system sound names this enum carries do not exist on iOS
+        // and resolved to nothing at all -- a real alert was silently mute.
+        content.sound = AlarmSoundPlayer.notificationSound(for: alarmSound)
 
         let request = UNNotificationRequest(
             identifier: "codecaps.companion.reset.\(item.id).\(Date().timeIntervalSince1970)",
             content: content,
             trigger: nil
         )
-        UNUserNotificationCenter.current().add(request)
+        Task { @MainActor in
+            do {
+                try await UNUserNotificationCenter.current().add(request)
+            } catch {
+                lastError = "A reset alert for \(item.title) could not be delivered." + sentenceGap
+                    + error.localizedDescription
+            }
+        }
     }
 
     /// Same translation rule as `ResetAlarmManager.notificationSound(for:)`
-    /// on macOS.  Lives here as a small free function so a test or a
-    /// future preview path can call it without touching the model.
+    /// on macOS, resolved against iOS's bundled audio.
     static func notificationSound(for sound: ResetAlarmSound) -> UNNotificationSound? {
-        switch sound {
-        case .silent:
-            return nil
-        case .systemDefault:
-            return .default
-        default:
-            return UNNotificationSound(named: UNNotificationSoundName(sound.rawValue))
-        }
+        AlarmSoundPlayer.notificationSound(for: sound)
     }
 
     private func loadLocalFallback() {
@@ -451,16 +559,20 @@ public final class CompanionQuotaModel: ObservableObject {
         }
 
         if items.isEmpty {
-            items = [
-                CompanionQuotaItem(id: "claude:5h", providerKey: "anthropic", title: "Claude Code", subtitle: "5-hour window", remainingPercent: 100, resetAt: nil, isExhausted: false, isAlarmArmed: false),
-                CompanionQuotaItem(id: "claude:7d", providerKey: "anthropic", title: "Claude Code", subtitle: "7-day window", remainingPercent: 100, resetAt: nil, isExhausted: false, isAlarmArmed: false),
-                CompanionQuotaItem(id: "antigravity:gemini", providerKey: "google-antigravity", title: "Antigravity · Gemini", subtitle: "Gemini Models · 5h & Weekly", remainingPercent: 100, resetAt: nil, isExhausted: false, isAlarmArmed: false),
-                CompanionQuotaItem(id: "antigravity:third-party", providerKey: "google-antigravity", title: "Antigravity · Third-Party", subtitle: "Claude & GPT · 5h & Weekly", remainingPercent: 100, resetAt: nil, isExhausted: false, isAlarmArmed: false),
-                CompanionQuotaItem(id: "cursor", providerKey: "cursor", title: "Cursor", subtitle: "Included plan", remainingPercent: 19, resetAt: nil, isExhausted: false, isAlarmArmed: false),
-                CompanionQuotaItem(id: "grok-bot", providerKey: "grok-bot", title: "Grok Bot", subtitle: "Weekly window", remainingPercent: 87, resetAt: nil, isExhausted: false, isAlarmArmed: false),
-                CompanionQuotaItem(id: "minimax", providerKey: "minimax", title: "MiniMax", subtitle: "General (5h)", remainingPercent: 88, resetAt: nil, isExhausted: false, isAlarmArmed: false),
-                CompanionQuotaItem(id: "codex", providerKey: "openai", title: "Codex", subtitle: "Weekly window", remainingPercent: 95, resetAt: nil, isExhausted: false, isAlarmArmed: false)
-            ]
+            // No fake rows.  The old fallback invented eight quotas at 100%
+            // that were never measured, so a completely unconfigured app looked
+            // healthy.  An honest empty state is what the macOS Glance shows.
+            items = []
         }
+    }
+
+    // MARK: - Arm persistence
+
+    /// Ids the owner has armed.  Persisted into the App Group so an alarm armed
+    /// on the iPhone survives a relaunch, matching the macOS manager's
+    /// `armedResetAlarmSectionIds`.
+    private func persistArmedIds() {
+        let armed = items.filter(\.isAlarmArmed).map(\.id)
+        sharedDefaults.set(armed, forKey: "armedResetAlarmSectionIds")
     }
 }

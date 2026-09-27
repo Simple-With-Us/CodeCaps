@@ -17,6 +17,68 @@ public struct ResetAlarmNotification: Equatable, Sendable {
     public let sound: ResetAlarmSound
 }
 
+/// What happened when the owner pressed "Send Test Notification".
+///
+/// The button used to be fire-and-forget: `UNUserNotificationCenter.add` was
+/// called with no completion handler, so a rejected request produced no banner,
+/// no sound, and no explanation.  A first run was always rejected, because the
+/// authorization prompt had not been answered yet when the add was issued.
+public enum TestNotificationOutcome: Equatable, Sendable {
+    case sent
+    /// Notifications are off for this app and the owner has to grant them in
+    /// System Settings; nothing can be delivered until they do.
+    case denied
+    /// Delivery failed for a reason worth showing, e.g. the notification centre
+    /// rejected the request.
+    case failed(String)
+
+    /// Owner-facing sentence for the Settings status line.
+    public var message: String {
+        switch self {
+        case .sent:
+            return "Test notification sent." + sentenceGap + "Check your notification centre."
+        case .denied:
+            return "Notifications are turned off for CodeCaps." + sentenceGap
+                + "Turn them on in System Settings, then try again."
+        case .failed(let reason):
+            return "Could not send the test notification." + sentenceGap + reason
+        }
+    }
+
+    public var isFailure: Bool {
+        if case .sent = self { return false }
+        return true
+    }
+}
+
+/// The routing decision for a test send, kept pure so it is unit-testable
+/// without a live `UNUserNotificationCenter`.
+public enum TestNotificationAction: Equatable, Sendable {
+    /// Authorization is already in hand, so deliver.
+    case deliver
+    /// Never asked; ask, and deliver only if the owner grants it.
+    case requestThenDeliver
+    /// Refused at the system level.  Delivering anyway is a silent no-op, which
+    /// is exactly the bug this replaces.
+    case refuseDenied
+}
+
+public struct TestNotificationPlanner {
+    /// Maps an authorization status onto what a test send should do.
+    ///
+    /// `.ephemeral` is deliberately absent: it is iOS-only and this planner
+    /// lives in the macOS app.  A status the compiler does not know about falls
+    /// into `requestThenDeliver`, which is the safe answer.
+    public static func action(for status: UNAuthorizationStatus) -> TestNotificationAction {
+        switch status {
+        case .notDetermined: return .requestThenDeliver
+        case .denied: return .refuseDenied
+        case .authorized, .provisional: return .deliver
+        @unknown default: return .requestThenDeliver
+        }
+    }
+}
+
 /// Manages reset alerts and alarms when exhausted quotas clear.
 ///
 /// Ensures that an alert is only fired when ALL controlling quotas for a model
@@ -43,6 +105,15 @@ public final class ResetAlarmManager: ObservableObject {
     @Published public var armedSectionIds: Set<String> {
         didSet { defaults.set(Array(armedSectionIds), forKey: "armedResetAlarmSectionIds") }
     }
+
+    /// Result of the most recent "Send Test Notification", or `nil` before the
+    /// owner has ever pressed it.  Surfaced in Settings so a refused send is
+    /// visible instead of silent.
+    @Published public private(set) var testNotificationOutcome: TestNotificationOutcome?
+
+    /// Whether the system reports notifications as denied for this app.  Drives
+    /// the "Open System Settings" affordance.
+    @Published public private(set) var notificationsDenied = false
 
     /// The IDs of sections observed as exhausted/blocked on previous evaluations.
     public private(set) var exhaustedSectionIds: Set<String> = []
@@ -121,10 +192,38 @@ public final class ResetAlarmManager: ObservableObject {
 
     // MARK: - Permission
 
-    public func requestNotificationPermission() {
-        guard Self.canUseUserNotifications else { return }
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
+    /// Asks for notification permission and reports whether it was granted.
+    ///
+    /// The old signature was a fire-and-forget completion handler that threw the
+    /// answer away, so the very next `add` raced the prompt and lost.
+    @discardableResult
+    public func requestNotificationPermission() async -> Bool {
+        guard Self.canUseUserNotifications else { return false }
+        do {
+            let granted = try await UNUserNotificationCenter.current()
+                .requestAuthorization(options: [.alert, .sound, .badge])
+            notificationsDenied = !granted
+            return granted
+        } catch {
+            notificationsDenied = true
+            return false
+        }
     }
+
+    /// Refreshes the denied flag from the system so the Settings affordance
+    /// reflects reality on open rather than only after a failed send.
+    public func refreshNotificationAuthorization() async {
+        guard Self.canUseUserNotifications else { return }
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        notificationsDenied = (settings.authorizationStatus == .denied)
+    }
+
+    /// The URL that opens this app's notifications pane in System Settings.
+    /// macOS has no deep link to one specific app, so this lands on the
+    /// Notifications preference pane where CodeCaps is listed.
+    public static let notificationSettingsURL = URL(
+        string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension"
+    )!
 
     // MARK: - Arming
 
@@ -137,7 +236,7 @@ public final class ResetAlarmManager: ObservableObject {
             armedSectionIds.remove(sectionId)
         } else {
             armedSectionIds.insert(sectionId)
-            requestNotificationPermission()
+            Task { await requestNotificationPermission() }
         }
     }
 
@@ -259,10 +358,6 @@ public final class ResetAlarmManager: ObservableObject {
         if let onNotification {
             onNotification(payload)
         } else if Self.canUseUserNotifications {
-            // Deliver via macOS User Notifications; the sound picked in
-            // Settings travels on the payload so the notification owns the
-            // audio output.  We no longer fire a second `NSSound(named:)`
-            // after, which used to make the alarm ring twice.
             let content = UNMutableNotificationContent()
             content.title = title
             content.body = body
@@ -273,16 +368,31 @@ public final class ResetAlarmManager: ObservableObject {
                 content: content,
                 trigger: nil
             )
-            UNUserNotificationCenter.current().add(request)
+            // A real alert that the centre refuses is worth recording for the
+            // same reason the test button is: a silent no-op reads as "the app
+            // is broken" when it is actually a permission problem.
+            Task { [weak self] in
+                do {
+                    try await UNUserNotificationCenter.current().add(request)
+                } catch {
+                    self?.testNotificationOutcome = .failed(error.localizedDescription)
+                }
+            }
         }
     }
 
     /// Sends an immediate test notification to verify notification delivery and sound.
-    public func sendTestNotification() {
-        requestNotificationPermission()
+    ///
+    /// Now reports what happened.  The previous version requested authorization
+    /// and delivered in the same breath, so on a first run the add was issued
+    /// before the prompt was answered and was dropped without a word -- and a
+    /// permanently denied app made the button inert forever.
+    public func sendTestNotification() async {
         let title = "CodeCaps Reset Alert Test"
         let body = "Reset alerts and alarms are working properly." + sentenceGap + "Sound and banners active."
 
+        // An injected handler owns delivery entirely, which is how the unit
+        // tests exercise this without a notification centre.
         if let onNotification {
             onNotification(ResetAlarmNotification(
                 id: UUID().uuidString,
@@ -292,17 +402,53 @@ public final class ResetAlarmManager: ObservableObject {
                 remainingPercent: 100,
                 sound: alarmSound
             ))
-        } else if Self.canUseUserNotifications {
-            let content = UNMutableNotificationContent()
-            content.title = title
-            content.body = body
-            content.sound = notificationSound(for: alarmSound)
-            let request = UNNotificationRequest(
-                identifier: "codecaps.test.\(Date().timeIntervalSince1970)",
-                content: content,
-                trigger: nil
+            testNotificationOutcome = .sent
+            return
+        }
+
+        guard Self.canUseUserNotifications else {
+            testNotificationOutcome = .failed(
+                "Notifications are unavailable in this build of CodeCaps."
             )
-            UNUserNotificationCenter.current().add(request)
+            return
+        }
+
+        let center = UNUserNotificationCenter.current()
+        let settings = await center.notificationSettings()
+
+        switch TestNotificationPlanner.action(for: settings.authorizationStatus) {
+        case .refuseDenied:
+            notificationsDenied = true
+            testNotificationOutcome = .denied
+            return
+
+        case .requestThenDeliver:
+            guard await requestNotificationPermission() else {
+                notificationsDenied = true
+                testNotificationOutcome = .denied
+                return
+            }
+
+        case .deliver:
+            break
+        }
+
+        notificationsDenied = false
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = notificationSound(for: alarmSound)
+
+        let request = UNNotificationRequest(
+            identifier: "codecaps.test.\(Date().timeIntervalSince1970)",
+            content: content,
+            trigger: nil
+        )
+        do {
+            try await center.add(request)
+            testNotificationOutcome = .sent
+        } catch {
+            testNotificationOutcome = .failed(error.localizedDescription)
         }
     }
 }

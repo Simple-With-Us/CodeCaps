@@ -255,16 +255,42 @@ final class ResetAlarmManagerTests: XCTestCase {
         XCTAssertFalse(manager.isAlarmArmed(for: sectionId), "Armed alarm should automatically disarm after firing")
     }
 
-    func testSendTestNotification() {
+    func testSendTestNotification() async {
         let manager = ResetAlarmManager(defaults: defaults)
         var receivedAlerts: [ResetAlarmNotification] = []
         manager.onNotification = { receivedAlerts.append($0) }
 
-        manager.sendTestNotification()
+        await manager.sendTestNotification()
 
         XCTAssertEqual(receivedAlerts.count, 1)
         XCTAssertEqual(receivedAlerts.first?.sectionId, "test")
         XCTAssertEqual(receivedAlerts.first?.sound, .systemDefault)
+        XCTAssertEqual(manager.testNotificationOutcome, .sent)
+    }
+
+    /// The button used to request authorization and deliver in the same breath,
+    /// so on a first run the add lost the race with the prompt and was dropped
+    /// silently.  The plan has to ask first when nothing has been decided yet.
+    func testPlannerAsksBeforeDeliveringWhenAuthorizationIsUndecided() {
+        XCTAssertEqual(TestNotificationPlanner.action(for: .notDetermined), .requestThenDeliver)
+    }
+
+    /// A denied app cannot be delivered to at all.  Attempting it is the silent
+    /// no-op that made the button look broken.
+    func testPlannerRefusesToDeliverWhenDenied() {
+        XCTAssertEqual(TestNotificationPlanner.action(for: .denied), .refuseDenied)
+    }
+
+    func testPlannerDeliversWhenAlreadyAuthorized() {
+        XCTAssertEqual(TestNotificationPlanner.action(for: .authorized), .deliver)
+        XCTAssertEqual(TestNotificationPlanner.action(for: .provisional), .deliver)
+    }
+
+    func testDeniedOutcomeExplainsTheFix() {
+        XCTAssertTrue(TestNotificationOutcome.denied.isFailure)
+        XCTAssertTrue(TestNotificationOutcome.denied.message.contains("System Settings"))
+        XCTAssertFalse(TestNotificationOutcome.sent.isFailure)
+        XCTAssertTrue(TestNotificationOutcome.failed("nope").isFailure)
     }
 
     func testPreviewChosenSoundInvokesCallbackForAudible() {
