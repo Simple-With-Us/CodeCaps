@@ -47,7 +47,13 @@ final class LocalQuotaReaderTests: XCTestCase {
 
     func testRealClaudeCredentialSourceReadsValidData() async throws {
         guard case .authorized(let data) = await ClaudeCredentialSource.access() else { return }
-        XCTAssertGreaterThan(data.count, 65_536)
+        // Assert the shape, not a byte count.  This reads the live keychain
+        // item, whose size depends on how many MCP OAuth servers are registered
+        // against it — and that number is supposed to be able to shrink.
+        // Pruning duplicate `mcpOAuth` entries took this item from ~128 KB to
+        // ~39 KB, which a `> 64 KB` floor flagged as corrupt when it was
+        // healthier than before.
+        XCTAssertGreaterThan(data.count, 1_024, "a real credential payload should not be trivially small")
         let root = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         XCTAssertNotNil(root?["claudeAiOauth"])
     }

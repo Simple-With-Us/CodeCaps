@@ -720,33 +720,20 @@ public final class CompanionQuotaModel: ObservableObject {
             }
         }
 
-        // Build individual child window items for this pool
-        var childWindows: [CompanionWindowItem] = []
-        for w in windows {
-            let labelText = windowText(w)
-            let is5h = labelText.contains("5h") || labelText.contains("5-hour")
-            let masked = is5h && weeklyExhausted
-            let cadence = Self.formatCadence(w.label.isEmpty ? (w.window ?? "") : w.label)
-            let parsedReset = CompanionDateFormatter.date(from: w.resetAt)
-            let pct = w.remainingPercent
-            let exhausted = (pct ?? 100) <= 0 || (w.isExhausted ?? false)
-
-            childWindows.append(CompanionWindowItem(
-                id: w.id,
-                label: w.label.isEmpty ? cadence : w.label,
-                cadence: cadence,
-                remainingPercent: pct,
-                resetAt: parsedReset,
-                source: w.source,
-                via: w.via,
-                isDuplicateSource: false,
-                isExhausted: exhausted,
-                isMasked: masked,
-                absoluteRemaining: w.absoluteRemaining,
-                absoluteLimit: w.absoluteLimit,
-                quotaUnit: w.quotaUnit
-            ))
-        }
+        // Collapse the pool's observations into one row per period.
+        //
+        // Antigravity sells two shared pools, each with a short and a weekly
+        // cap.  Per-model reports are *observations of those pools*, never
+        // separate quotas, so listing one row per model contradicted the pool
+        // the card is already named for and buried the two numbers that matter.
+        // This mirrors `AntigravityQuotaGroups.normalize` on the macOS side:
+        // prefer the latest observation of a period, break ties with the lower
+        // value, and never average or add.
+        let childWindows = Self.periodRows(
+            poolKey: poolKey,
+            windows: windows,
+            weeklyExhausted: weeklyExhausted
+        )
 
         let now = Date()
         let nearestReset = childWindows.compactMap(\.resetAt).filter { $0 > now }.min()
@@ -766,8 +753,83 @@ public final class CompanionQuotaModel: ObservableObject {
         )
     }
 
-    private func windowText(_ w: WireRawWindow) -> String {
-        (w.id + " " + w.label + " " + (w.window ?? "")).lowercased()
+    /// The two periods an Antigravity pool is sold in, in display order.
+    private static let antigravityPeriodOrder = ["5h", "weekly"]
+
+    /// Whether a raw window reports the pool's short or its weekly cap.
+    ///
+    /// Mirrors `AntigravityQuotaGroups.cadence`: a weekly reading has to be
+    /// explicitly identified rather than inferred from a reset distance, and
+    /// anything unrecognised is returned as its own bucket so a period nobody
+    /// anticipated is still shown rather than silently dropped.
+    private static func antigravityPeriod(of w: WireRawWindow) -> String {
+        let token = (w.window ?? "").lowercased().replacingOccurrences(of: " ", with: "")
+        let label = w.label.lowercased()
+        if ["weekly", "week", "1w", "7d", "168h", "10080m"].contains(token)
+            || label.contains("weekly") || label.contains("week") {
+            return "weekly"
+        }
+        if ["5h", "5hr", "5-hour", "5hours", "300m"].contains(token)
+            || label.contains("5h") || label.contains("5-hour") || label.contains("five_hour") {
+            return "5h"
+        }
+        return token.isEmpty ? "other" : token
+    }
+
+    /// One row per period for an Antigravity pool, five-hour first.
+    private static func periodRows(
+        poolKey: String,
+        windows: [WireRawWindow],
+        weeklyExhausted: Bool
+    ) -> [CompanionWindowItem] {
+        var buckets: [String: [WireRawWindow]] = [:]
+        for w in windows {
+            buckets[antigravityPeriod(of: w), default: []].append(w)
+        }
+
+        // Known periods first in the canonical order, then anything unexpected
+        // in a stable order of its own.
+        let ordered = antigravityPeriodOrder.filter { buckets[$0] != nil }
+            + buckets.keys.filter { !antigravityPeriodOrder.contains($0) }.sorted()
+
+        return ordered.compactMap { period in
+            guard let candidates = buckets[period], !candidates.isEmpty else { return nil }
+
+            // Prefer the latest observation; a tie between models reading the
+            // same shared pool takes the lower value.  Never average, never add.
+            let driving = candidates.min { left, right in
+                let l = CompanionDateFormatter.date(from: left.resetAt) ?? .distantPast
+                let r = CompanionDateFormatter.date(from: right.resetAt) ?? .distantPast
+                if l != r { return l > r }
+                return (left.remainingPercent ?? 101) < (right.remainingPercent ?? 101)
+            }
+            guard let driving else { return nil }
+
+            let pct = driving.remainingPercent
+            let exhausted = (pct ?? 100) <= 0 || (driving.isExhausted ?? false)
+            let cadenceLabel = period == "5h" ? "5-hour window"
+                : period == "weekly" ? "Weekly window"
+                : Self.formatCadence(driving.label)
+
+            return CompanionWindowItem(
+                id: "antigravity:\(poolKey):\(period)",
+                label: cadenceLabel,
+                cadence: cadenceLabel,
+                remainingPercent: pct,
+                resetAt: CompanionDateFormatter.date(from: driving.resetAt),
+                source: driving.source,
+                via: driving.via,
+                isDuplicateSource: false,
+                isExhausted: exhausted,
+                // A five-hour cap means nothing while the pool's weekly cap is
+                // spent, so it is reported as not applicable rather than as a
+                // number the owner cannot act on.
+                isMasked: period == "5h" && weeklyExhausted,
+                absoluteRemaining: nil,
+                absoluteLimit: nil,
+                quotaUnit: nil
+            )
+        }
     }
 
     private static func canonicalPlatformKey(for raw: WireRawWindow) -> (key: String, title: String, providerKey: String) {
