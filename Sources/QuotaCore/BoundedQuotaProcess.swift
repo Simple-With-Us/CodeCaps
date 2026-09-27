@@ -32,7 +32,7 @@ final class BoundedQuotaProcess: @unchecked Sendable {
         process.executableURL = URL(fileURLWithPath: path)
         process.arguments = arguments
         process.environment = ["HOME": home.path,
-                               "PATH": "\(home.path)/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
+                               "PATH": "\(home.path)/.gbu/bin:\(home.path)/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
                                "NO_COLOR": "1"]
         process.standardInput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
