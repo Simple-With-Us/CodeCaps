@@ -12,11 +12,13 @@ final class CompanionModelTests: XCTestCase {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()  // Tests/CodeCapsTests
             .deletingLastPathComponent()  // Tests
+            .deletingLastPathComponent()  // repo root
             .appendingPathComponent("ios/CodeCapsCompanion/App/Models/CompanionQuotaModel.swift")
     }
 
     private static var sentenceGapURL: URL? {
         URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("ios/CodeCapsCompanion/App/Models/SentenceGap.swift")
@@ -125,5 +127,91 @@ final class CompanionModelTests: XCTestCase {
 
         let displayPercent = isFiveHourMasked ? "n/a" : "\(Int(round(fiveHourPct)))%"
         XCTAssertEqual(displayPercent, "n/a")
+    }
+
+    // MARK: - Antigravity pool rows are periods, not models
+
+    /// Regression guard for the owner report that tapping an Antigravity card on
+    /// iOS listed every individual model instead of the pool's two periods.
+    ///
+    /// The Mac has always collapsed these: `AntigravityQuotaGroups` treats a
+    /// per-model report as an *observation of a shared pool*, never as its own
+    /// quota.  The companion was building one row per raw window, so a pool
+    /// that holds six models showed twelve rows and buried the two numbers that
+    /// mean anything.
+    func testAntigravityPoolCollapsesToOneRowPerPeriod() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains("private static func periodRows("),
+            "CompanionQuotaModel must build Antigravity pool rows per period, not per model"
+        )
+        XCTAssertTrue(
+            source.contains(#"id: "antigravity:\(poolKey):\(period)""#),
+            "a collapsed Antigravity row must carry a pool-and-period id, not a model window id"
+        )
+        XCTAssertTrue(
+            source.contains("Self.periodRows("),
+            "consolidateAntigravityPool must route its children through periodRows"
+        )
+    }
+
+    func testAntigravityPeriodOrderIsFiveHourThenWeekly() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains(#"antigravityPeriodOrder = ["5h", "weekly"]"#),
+            "an Antigravity pool shows its 5-hour period before its weekly period"
+        )
+    }
+
+    /// The shared-pool rule from `AntigravityQuotaGroups`: a weekly reading has
+    /// to be identified explicitly, and a reset's distance is not a duration.
+    func testAntigravityPeriodDetectionDoesNotInferWeeklyFromAReset() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains(#"["weekly", "week", "1w", "7d", "168h", "10080m"]"#),
+            "weekly cadence must be matched explicitly, never guessed from a reset distance"
+        )
+        XCTAssertTrue(
+            source.contains(#"return token.isEmpty ? "other" : token"#),
+            "an unrecognised period must be surfaced as its own bucket rather than dropped"
+        )
+    }
+
+    /// A pool's headline number comes from one driving observation: latest wins,
+    /// and a tie between models reading the same pool takes the lower value.
+    func testAntigravityRowSelectsDrivingObservationWithoutAveraging() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains("let driving = candidates.min { left, right in"),
+            "a period's percentage must be picked from a driving observation"
+        )
+        XCTAssertTrue(
+            source.contains("(left.remainingPercent ?? 101) < (right.remainingPercent ?? 101)"),
+            "a tie between two models of one shared pool must take the lower value"
+        )
+        XCTAssertFalse(
+            source.contains("remainingPercent) / Double("),
+            "pool percentages must never be averaged"
+        )
+    }
+
+    /// A five-hour cap means nothing while the pool's weekly cap is spent, so it
+    /// still reports as not applicable after the collapse.
+    func testAntigravityCollapsedFiveHourRowStaysMaskedUnderExhaustedWeekly() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains("isMasked: period == \"5h\" && weeklyExhausted"),
+            "the collapsed 5-hour row must stay masked when the pool's weekly cap is spent"
+        )
+    }
+
+    /// Non-Antigravity platforms keep their per-window rows; the collapse is
+    /// specific to the two shared pools.
+    func testNonAntigravityPlatformsKeepTheirOwnWindows() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains("let modelQualifier = (w.modelId ?? \"\").lowercased()"),
+            "buildPlatformSection must still fold ordinary platforms by model-qualified cadence"
+        )
     }
 }
