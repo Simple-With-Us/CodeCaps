@@ -84,3 +84,5 @@ checkout is on the same Mac — keep it stable per worktree.
   is the default once CI is green and the owner has not asked to drive.
 - Audit batches use the `audit-#N` branch naming and ship in
   `docs/audits/<date>-<topic>.md`.
+- UI changes must be covered by automated visual verification where feasible: Playwright screenshot assertions for web surfaces, `xcrun simctl io booted screenshot` for iOS simulator. The owner never takes manual screenshots and does not run local UI preview sessions. Native Mac app UI is verified through code review and CI.
+
