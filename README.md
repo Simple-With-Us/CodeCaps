@@ -1,16 +1,14 @@
 # CodeCaps
 
-A macOS menu bar app that reads AI coding CLI quotas already on your Mac, and pushes and pulls them across a fleet of machines you control.
+A macOS menu bar app for supported AI plan usage and quota windows.  It can share available readings across Macs through a collector you run.
 
-**[Download CodeCaps →](https://jaywedgeworth22.github.io/codecaps/)**
+**[Download CodeCaps →](https://codecaps.simplewithus.com/)** · **[From Simple With Us](https://simplewithus.com/)**
 
 ## Why This Exists
 
-CodeCaps reads quota for the AI coding CLIs already signed in on this Mac — no provider API key is ever entered — and can push those readings to a server you run, and pull that server's aggregated readings back, so one Glance popover shows more than one machine's quota at once.
+CodeCaps reads available usage and quota windows from supported AI apps and CLIs already signed in on this Mac — no provider API key is entered into CodeCaps.  Optional push and pull connections can show readings from other configured Macs in one Glance popover.
 
-For a single Mac, better tools already exist.  [steipete/CodexBar](https://github.com/steipete/CodexBar) (MIT, 69 providers, signed and notarized) and [tddworks/ClaudeBar](https://github.com/tddworks/ClaudeBar) (MIT, 20+ providers, signed and notarized) both cover every provider CodeCaps does, and go further.  If you only care about the machine in front of you, use one of those instead.
-
-CodeCaps's reason to exist is what neither handles: pushing quota to your own endpoint, and pulling a fleet's worth of machines back into one view.
+CodeCaps keeps local readings visible in the menu bar.  If you run a collector, it can also bring multiple Macs into one view.
 
 ## What It Shows
 
