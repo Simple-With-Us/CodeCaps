@@ -9,9 +9,9 @@ PR (when shipped), follow-ups (when parked).
 
 ---
 
-## 2026-09-27 — iOS multi-window allowance periods, customizable platform order, duplicate source folding, and foreground push alerts [AG, in progress]
+## 2026-09-27 — iOS multi-window allowance periods, customizable platform order, duplicate source folding, and foreground push alerts [AG, completed]
 
-Lane: `ag/ios-multi-window-reorder-notifications` (issue #66).
+Lane: `ag/ios-multi-window-reorder-notifications` (issue #66, PR #67).
 
 Parity updates for CodeCaps iOS companion matching macOS menu bar Glance popover:
 - Multi-window expansion: Tapping any platform card expands inline to show each allowance period / window with label, reset countdown, mini progress bar, and percentage.  Consolidates multi-window platforms (e.g. MiniMax 4 active windows, Claude Code 5h and 7d windows).
