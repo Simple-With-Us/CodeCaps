@@ -5,6 +5,31 @@ PR (when shipped), follow-ups (when parked).
 
 ---
 
+## 2026-09-27 — Fix CodeCaps quitting instantly on launch
+
+Lane: `mm/bundle-module-crash`.
+
+Opening CodeCaps quit it immediately.  Two crash reports at 3:38am Central, `EXC_BREAKPOINT` / `SIGTRAP`, both with `_assertionFailure` -> `static NSBundle.module` -> `PlatformLogoImage.bundledImage` on top, reached from `AppDelegate.updateStatus` during `applicationDidFinishLaunching`.  Running the binary directly printed the trap:
+
+    CodeCaps/resource_bundle_accessor.swift:12: Fatal error: could not load resource
+    bundle: from /Users/jay/Applications/CodeCaps.app/CodeCaps_CodeCaps.bundle or
+    /private/tmp/codecaps-land-verify/.build/arm64-apple-macosx/debug/CodeCaps_CodeCaps.bundle
+
+The SwiftPM-generated accessor probes exactly two paths: the `.app` bundle root, and the absolute `.build` directory that compiled the target.  `build_and_run.sh` copies the resource bundle to `Contents/Resources`, which the accessor never probes, and nothing placed a copy at the `.app` root.  An installed build could therefore only resolve its own brand marks while the checkout that built it still had its `.build` directory, and the first `Bundle.module` touch is the menu bar icon built during launch.  The installed build came from a `/private/tmp` checkout that has since been deleted.
+
+Fixed in #61:
+- Added `ResourceBundle` in `Sources/CodeCaps/PlatformLogo.swift`, which resolves the bundle by hand — the app root, the resource directory, the executable's directory, and three parent levels each — and returns `nil` rather than trapping, so a missing brand mark costs a missing brand mark and `PlatformLogo` draws its SF Symbol fallback.
+- Inside an installed `.app` the generated accessor is refused outright (`mayUseGeneratedAccessor`), because the build directory it names is gone by design.  A bare `.build` executable and the XCTest harness still use it, which is what keeps `swift test` working: under `swift test` `Bundle.main` is Xcode's own `xctest` tool, so no probe can reach the bundle.
+- `build_and_run.sh` now fails the build when SwiftPM produced no resource bundle, and asserts the copy reached `Contents/Resources`.
+
+Rejected alternative: seeding a copy at the `.app` root.  It works, but `codesign` rejects it with `unsealed contents present in the bundle root`, and the build then falls back to ad-hoc signing, which changes the code identity every build and invalidates the saved Read and Ingest tokens.
+
+194 tests pass, including six new ones.  Verified on the installed build with the build directory moved away: the app launches and stays up, where the previous build traps.
+
+Board 6c0c64f440a34425974ccf804ea10a71.  Closes #62.
+
+---
+
 ## 2026-09-21 — Stand up automated iOS TestFlight shipping workflow
 
 Lane: `plumber/ios-testflight-workflow`.
