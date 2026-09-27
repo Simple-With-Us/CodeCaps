@@ -109,6 +109,8 @@
   }
   footer a{color:inherit;text-decoration:none;border-bottom:1px solid var(--border);}
   footer a:hover{color:var(--text);border-bottom-color:var(--text);}
+  .footer-brand{display:inline-flex;align-items:center;gap:5px;margin-top:10px;font-size:11px;}
+  .footer-brand img{display:block;width:min(288px,calc(100vw - 92px));height:auto;border-radius:2px;}
   @media(max-width:720px){
     main{padding:32px 18px 48px;}
     .hero{grid-template-columns:1fr;gap:28px;}
@@ -155,7 +157,11 @@
     </figure>
   </section>
 
-  <footer><a href="https://github.com/jaywedgeworth22/CodeCaps">CodeCaps on GitHub</a> · <a href="https://github.com/jaywedgeworth22/CodeCaps/blob/main/LICENSE">Apache 2.0 license</a></footer>
+  <footer>
+    <a href="https://github.com/jaywedgeworth22/CodeCaps">CodeCaps on GitHub</a> · <a href="https://github.com/jaywedgeworth22/CodeCaps/blob/main/LICENSE">Apache 2.0 license</a>
+    <br>
+    <a class="footer-brand" href="https://simplewithus.com/" aria-label="From Simple With Us"><span>From</span><img src="swu-logo-wide.webp" alt="Simple With Us by Jay Wedgeworth" width="288" height="30"></a>
+  </footer>
 </main>
 </body>
 </html>
