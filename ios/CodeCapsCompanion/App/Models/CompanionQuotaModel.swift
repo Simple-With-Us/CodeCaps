@@ -437,6 +437,7 @@ public final class CompanionQuotaModel: ObservableObject {
                 let (data, response) = try await URLSession.shared.data(for: req)
                 if let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) {
                     parseSnapshot(data: data)
+                    saveLocalSnapshot(data: data)
                     lastError = nil
                     lastUpdated = Date()
                     return
@@ -452,15 +453,17 @@ public final class CompanionQuotaModel: ObservableObject {
 
         loadLocalFallback()
 
-        if hasDataSource {
-            lastError = nil
-        } else if let failure {
+        if let failure {
             lastError = failure
+        } else if hasDataSource {
+            lastError = nil
         } else {
             lastError = "No quota readings yet." + sentenceGap
                 + "Add a sync endpoint, or open CodeCaps on your Mac."
         }
-        lastUpdated = Date()
+        if lastUpdated == nil && hasDataSource {
+            lastUpdated = Date()
+        }
     }
 
     private struct WireEnvelope: Decodable {
@@ -942,11 +945,46 @@ public final class CompanionQuotaModel: ObservableObject {
     }
 
     private func loadLocalFallback() {
-        // First check shared App Group container
+        // 1. First check shared App Group container
         if let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: Self.appGroupId) {
             let sharedFile = container.appendingPathComponent("quota-windows.json")
             if let data = try? Data(contentsOf: sharedFile) {
                 parseSnapshot(data: data)
+                if self.lastUpdated == nil,
+                   let attrs = try? FileManager.default.attributesOfItem(atPath: sharedFile.path),
+                   let modDate = attrs[.modificationDate] as? Date {
+                    self.lastUpdated = modDate
+                }
+                if !items.isEmpty { return }
+            }
+        }
+
+        // 2. Check local sandbox Application Support
+        if let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            let localFile = appSupport.appendingPathComponent("CodeCaps/quota-windows.json")
+            if FileManager.default.fileExists(atPath: localFile.path),
+               let data = try? Data(contentsOf: localFile) {
+                parseSnapshot(data: data)
+                if self.lastUpdated == nil,
+                   let attrs = try? FileManager.default.attributesOfItem(atPath: localFile.path),
+                   let modDate = attrs[.modificationDate] as? Date {
+                    self.lastUpdated = modDate
+                }
+                if !items.isEmpty { return }
+            }
+        }
+
+        // 3. Check local sandbox Caches
+        if let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first {
+            let cacheFile = caches.appendingPathComponent("quota-windows.json")
+            if FileManager.default.fileExists(atPath: cacheFile.path),
+               let data = try? Data(contentsOf: cacheFile) {
+                parseSnapshot(data: data)
+                if self.lastUpdated == nil,
+                   let attrs = try? FileManager.default.attributesOfItem(atPath: cacheFile.path),
+                   let modDate = attrs[.modificationDate] as? Date {
+                    self.lastUpdated = modDate
+                }
                 if !items.isEmpty { return }
             }
         }
@@ -959,6 +997,11 @@ public final class CompanionQuotaModel: ObservableObject {
             if FileManager.default.fileExists(atPath: hostPath),
                let data = try? Data(contentsOf: URL(fileURLWithPath: hostPath)) {
                 parseSnapshot(data: data)
+                if self.lastUpdated == nil,
+                   let attrs = try? FileManager.default.attributesOfItem(atPath: hostPath),
+                   let modDate = attrs[.modificationDate] as? Date {
+                    self.lastUpdated = modDate
+                }
                 if !items.isEmpty { return }
             }
         }
@@ -969,11 +1012,40 @@ public final class CompanionQuotaModel: ObservableObject {
         if FileManager.default.fileExists(atPath: fallbackPath),
            let data = try? Data(contentsOf: URL(fileURLWithPath: fallbackPath)) {
             parseSnapshot(data: data)
+            if self.lastUpdated == nil,
+               let attrs = try? FileManager.default.attributesOfItem(atPath: fallbackPath),
+               let modDate = attrs[.modificationDate] as? Date {
+                self.lastUpdated = modDate
+            }
             if !items.isEmpty { return }
         }
 
         if items.isEmpty {
             items = []
+        }
+    }
+
+    /// Persists the latest fetched snapshot to local storage so future launches
+    /// immediately have quota data even before a network request completes.
+    private func saveLocalSnapshot(data: Data) {
+        // 1. Shared App Group container if available
+        if let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: Self.appGroupId) {
+            let sharedFile = container.appendingPathComponent("quota-windows.json")
+            try? data.write(to: sharedFile, options: .atomic)
+        }
+
+        // 2. Local sandbox Application Support directory
+        if let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            let dir = appSupport.appendingPathComponent("CodeCaps", isDirectory: true)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let localFile = dir.appendingPathComponent("quota-windows.json")
+            try? data.write(to: localFile, options: .atomic)
+        }
+
+        // 3. Local sandbox Caches directory
+        if let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first {
+            let cacheFile = caches.appendingPathComponent("quota-windows.json")
+            try? data.write(to: cacheFile, options: .atomic)
         }
     }
 

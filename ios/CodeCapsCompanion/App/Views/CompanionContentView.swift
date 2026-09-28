@@ -4,11 +4,12 @@ import SwiftUI
 public struct CompanionContentView: View {
     @ObservedObject public var model: CompanionQuotaModel
     @StateObject private var soundPlayer = AlarmSoundPlayer()
-    @State private var showingSettings = false
+    @State private var showingSettings: Bool
     @State private var expandedIds: Set<String> = []
 
-    public init(model: CompanionQuotaModel) {
+    public init(model: CompanionQuotaModel, showingSettings: Bool = ProcessInfo.processInfo.arguments.contains("-openSettings")) {
         self.model = model
+        self._showingSettings = State(initialValue: showingSettings)
     }
 
     public var body: some View {
@@ -31,7 +32,11 @@ public struct CompanionContentView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
+                .frame(maxWidth: .infinity)
             }
+            #if os(iOS)
+            .scrollBounceBehavior(.always, axes: .vertical)
+            #endif
             .navigationTitle("CodeCaps")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -66,6 +71,11 @@ public struct CompanionContentView: View {
             }
             .refreshable {
                 await model.refresh()
+            }
+            .task {
+                if model.items.isEmpty || !model.syncEndpoint.isEmpty {
+                    await model.refresh()
+                }
             }
             .sheet(isPresented: $showingSettings) {
                 companionSettingsView
@@ -131,7 +141,7 @@ public struct CompanionContentView: View {
     // MARK: - Empty State
 
     private var emptyState: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 12) {
             Image(systemName: "antenna.radiowaves.left.and.right.slash")
                 .font(.system(size: 28, weight: .light))
                 .foregroundStyle(.secondary)
@@ -142,11 +152,35 @@ public struct CompanionContentView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
-            Button("Open Companion Settings") {
-                showingSettings = true
+
+            if model.isRefreshing {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                    Text("Refreshing Quotas...")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.top, 4)
+            } else {
+                HStack(spacing: 12) {
+                    Button {
+                        #if os(iOS)
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        #endif
+                        Task { await model.refresh() }
+                    } label: {
+                        Label("Refresh", systemImage: "arrow.clockwise")
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    Button("Companion Settings") {
+                        showingSettings = true
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .padding(.top, 4)
             }
-            .buttonStyle(.bordered)
-            .padding(.top, 2)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 28)
@@ -344,7 +378,8 @@ public struct CompanionContentView: View {
 
     private var companionSettingsView: some View {
         NavigationStack {
-            Form {
+            ScrollViewReader { proxy in
+                Form {
                 Section {
                     ForEach(model.items) { item in
                         HStack(spacing: 10) {
@@ -461,15 +496,68 @@ public struct CompanionContentView: View {
                 }
 
                 Section {
-                    Button("Refresh Quotas Now") {
+                    Button {
+                        #if os(iOS)
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        #endif
                         Task { await model.refresh() }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Spacer()
+                            if model.isRefreshing {
+                                ProgressView()
+                                    .progressViewStyle(.circular)
+                                Text("Refreshing Quotas...")
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundStyle(Color.accentColor)
+                                Text("Refresh Quotas Now")
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .foregroundStyle(Color.accentColor)
+                            }
+                            Spacer()
+                        }
+                        .padding(.vertical, 12)
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(SettingsRefreshButtonStyle())
+                    .disabled(model.isRefreshing)
+                } footer: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        if let updated = model.lastUpdated {
+                            Text("Last updated \(updated.formatted(date: .omitted, time: .shortened))")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        if let error = model.lastError {
+                            Text(error)
+                                .font(.caption2)
+                                .foregroundStyle(.orange)
+                        }
                     }
                 }
+                .id("refreshSection")
             }
             .navigationTitle("Companion Settings")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
+            .refreshable {
+                await model.refresh()
+            }
+            .onAppear {
+                if ProcessInfo.processInfo.arguments.contains("-scrollToRefresh") {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        withAnimation {
+                            proxy.scrollTo("refreshSection", anchor: .bottom)
+                        }
+                    }
+                }
+            }
             .toolbar {
                 #if os(iOS)
                 ToolbarItem(placement: .confirmationAction) {
@@ -480,6 +568,7 @@ public struct CompanionContentView: View {
                     Button("Done") { showingSettings = false }
                 }
                 #endif
+            }
             }
         }
     }
@@ -543,3 +632,20 @@ public struct CompanionProviderLogo: View {
         #endif
     }
 }
+
+// MARK: - Settings Refresh Button Style
+
+/// Dedicated button style providing instant visual feedback on touch down
+/// across the entire row, avoiding UIKit delay/suppression in Form lists.
+public struct SettingsRefreshButtonStyle: ButtonStyle {
+    public init() {}
+
+    public func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(configuration.isPressed ? Color.accentColor.opacity(0.15) : Color.clear)
+            .opacity(configuration.isPressed ? 0.72 : 1.0)
+            .scaleEffect(configuration.isPressed ? 0.985 : 1.0)
+            .animation(.easeInOut(duration: 0.12), value: configuration.isPressed)
+    }
+}
+

@@ -24,6 +24,14 @@ final class CompanionModelTests: XCTestCase {
             .appendingPathComponent("ios/CodeCapsCompanion/App/Models/SentenceGap.swift")
     }
 
+    private static var companionContentViewURL: URL? {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("ios/CodeCapsCompanion/App/Views/CompanionContentView.swift")
+    }
+
     private func readCompanionModelSource() throws -> String {
         guard let url = Self.companionModelURL, FileManager.default.fileExists(atPath: url.path) else {
             throw XCTSkip("CompanionQuotaModel.swift is not present at \(Self.companionModelURL?.path ?? "")")
@@ -34,6 +42,13 @@ final class CompanionModelTests: XCTestCase {
     private func readSentenceGapSource() throws -> String {
         guard let url = Self.sentenceGapURL, FileManager.default.fileExists(atPath: url.path) else {
             throw XCTSkip("SentenceGap.swift is not present at \(Self.sentenceGapURL?.path ?? "")")
+        }
+        return try String(contentsOf: url, encoding: .utf8)
+    }
+
+    private func readCompanionContentViewSource() throws -> String {
+        guard let url = Self.companionContentViewURL, FileManager.default.fileExists(atPath: url.path) else {
+            throw XCTSkip("CompanionContentView.swift is not present at \(Self.companionContentViewURL?.path ?? "")")
         }
         return try String(contentsOf: url, encoding: .utf8)
     }
@@ -244,4 +259,43 @@ final class CompanionModelTests: XCTestCase {
             "buildPlatformSection must still fold ordinary platforms by model-qualified cadence"
         )
     }
+
+    // MARK: - Local Snapshot Caching and Pull-to-Refresh Parity
+
+    func testLocalSnapshotPersistenceMethods() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains("private func saveLocalSnapshot(data: Data)"),
+            "CompanionQuotaModel must persist fetched snapshots to local storage"
+        )
+        XCTAssertTrue(
+            source.contains("saveLocalSnapshot(data: data)"),
+            "refresh() must save local snapshots upon successful network response"
+        )
+        XCTAssertTrue(
+            source.contains("CodeCaps/quota-windows.json"),
+            "loadLocalFallback and saveLocalSnapshot must check the app's local sandbox storage"
+        )
+    }
+
+    func testPullToRefreshAndButtonResponsiveness() throws {
+        let source = try readCompanionContentViewSource()
+        XCTAssertTrue(
+            source.contains("scrollBounceBehavior(.always, axes: .vertical)"),
+            "ScrollView must enable always vertical bounce so pull-to-refresh works when empty"
+        )
+        XCTAssertTrue(
+            source.contains("SettingsRefreshButtonStyle"),
+            "Settings refresh button must use SettingsRefreshButtonStyle for instant visual press feedback"
+        )
+        XCTAssertTrue(
+            source.contains("refreshable"),
+            "Settings form must support pull-to-refresh"
+        )
+        XCTAssertTrue(
+            source.contains("task {"),
+            "CompanionContentView must kick off background refresh on appear"
+        )
+    }
 }
+
