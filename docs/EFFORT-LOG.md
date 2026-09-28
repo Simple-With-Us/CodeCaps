@@ -5,6 +5,18 @@ PR (when shipped), follow-ups (when parked).
 
 ---
 
+## 2026-09-28 — iOS Settings refresh button responsiveness, visual press feedback, and pull-to-refresh on main and settings screens [AG, in progress]
+
+Lane: `ag/ios-pull-to-refresh-and-button-polish` (issue #70, board `30d3165e`).
+
+Responsiveness and pull-to-refresh polish for CodeCaps iOS companion:
+- Settings Refresh Quotas button: Fixed unresponsiveness and lack of touch-down visual feedback inside the Form by introducing `SettingsRefreshButtonStyle` with scale, opacity, and accent tint changes on press.  Expanded touch target to full width (`maxWidth: .infinity, minHeight: 44`) with `.contentShape(Rectangle())` so taps register anywhere on the button.  Added medium haptic impact and in-flight `ProgressView()` spinner with "Refreshing Quotas..." label and timestamp/error status.
+- Pull-to-refresh on main screen and settings: Added `.scrollBounceBehavior(.always, axes: .vertical)` on the main `ScrollView` so vertical bounce and pull-to-refresh work reliably even when content is short or empty.  Added `.refreshable` to `companionSettingsView` so pulling down on Settings refreshes quotas with known endpoint/cache info.
+- Initial startup and local snapshot persistence: Updated `refresh()` to save successful payloads to local sandbox storage (`CodeCaps/quota-windows.json` in Application Support and Caches) in addition to the App Group container.  Updated `loadLocalFallback()` to check local sandbox storage and retain file modification timestamps, preventing the app from appearing blank on launch when info is already known.  Added `.task` on `CompanionContentView` to trigger background refresh on appear.
+- Unit tests: Added 2 unit tests in `CompanionModelTests.swift` covering local snapshot persistence methods and pull-to-refresh/button responsiveness hygiene.  All 238 tests pass.
+
+---
+
 ## 2026-09-27 — iOS multi-window allowance periods, customizable platform order, duplicate source folding, and foreground push alerts [AG, completed]
 
 Lane: `ag/ios-multi-window-reorder-notifications` (issue #66, PR #67).
