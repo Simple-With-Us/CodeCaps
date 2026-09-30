@@ -2,9 +2,10 @@ import Security
 import XCTest
 @testable import CodeCaps
 
-/// `TokenStore` talks to the real Keychain, so only its pure parts are pinned
-/// here: which service name a bundle identifier produces, and the state that
-/// decides whether a settings group offers Re-Authorize Saved Token.
+/// `TokenStore.shared` talks to the real Keychain, so only `TokenStore`'s pure
+/// parts are pinned here: which service name a bundle identifier produces, the
+/// save strategy, and the state that decides whether a settings group offers
+/// Re-Authorize Saved Token.  `TokenCacheTests` drives the cache over fakes.
 final class TokenStoreTests: XCTestCase {
 
     // MARK: Service names
@@ -67,19 +68,33 @@ final class TokenStoreTests: XCTestCase {
     // MARK: Save strategy
 
     /// A delete that removed the item, or found nothing, leaves room for a
-    /// clean add.  Anything else means the old item is still there.
+    /// clean add, and the added item is created by the running build.
     func testCleanDeleteGoesStraightToAdd() {
-        XCTAssertFalse(TokenStore.shouldUpdateInPlace(afterDelete: errSecSuccess))
-        XCTAssertFalse(TokenStore.shouldUpdateInPlace(afterDelete: errSecItemNotFound))
+        XCTAssertTrue(TokenStore.canAdd(afterDelete: errSecSuccess))
+        XCTAssertTrue(TokenStore.canAdd(afterDelete: errSecItemNotFound))
     }
 
-    /// The owner's case on 2026-09-25: the delete was refused with -25244 and
-    /// the add then collided with -25299.  A refused delete must update the
-    /// item in place instead of adding a duplicate.
-    func testRefusedDeleteUpdatesInPlace() {
-        XCTAssertTrue(TokenStore.shouldUpdateInPlace(afterDelete: errSecInvalidOwnerEdit))
-        XCTAssertTrue(TokenStore.shouldUpdateInPlace(afterDelete: errSecInteractionNotAllowed))
-        XCTAssertTrue(TokenStore.shouldUpdateInPlace(afterDelete: errSecAuthFailed))
+    /// The owner's case on 2026-09-25: the delete was refused with -25244.
+    /// The save stops there rather than adding a duplicate or updating the
+    /// old item in place, which would keep that item's access and partition
+    /// lists — the lists that make a later launch's first read raise a panel.
+    func testRefusedDeleteNeverAdds() {
+        XCTAssertFalse(TokenStore.canAdd(afterDelete: errSecInvalidOwnerEdit))
+        XCTAssertFalse(TokenStore.canAdd(afterDelete: errSecInteractionNotAllowed))
+        XCTAssertFalse(TokenStore.canAdd(afterDelete: errSecAuthFailed))
+    }
+
+    // MARK: Whose items
+
+    /// Only CodeCaps's own two items are ever named.  Claude Code's saved login
+    /// is read by `ClaudeCredentialSource` through `/usr/bin/security` and must
+    /// never reach this store.
+    func testOnlyCodeCapsItemsAreOwn() {
+        XCTAssertTrue(TokenStore.isOwnService(TokenStore.readService))
+        XCTAssertTrue(TokenStore.isOwnService(TokenStore.syncService))
+        XCTAssertTrue(TokenStore.isOwnService("com.jays.agent-bar.mac.dev.sync-token"))
+        XCTAssertFalse(TokenStore.isOwnService("Claude Code-credentials"))
+        XCTAssertFalse(TokenStore.isOwnService(""))
     }
 
     // MARK: Failure wording

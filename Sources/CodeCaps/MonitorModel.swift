@@ -738,9 +738,12 @@ final class MonitorModel: ObservableObject {
 
     // MARK: - Saved Token Availability
 
-    /// Re-reads both saved tokens silently and records what this build can see.
-    /// Prompt-free by construction: the interactive read lives behind the
-    /// Re-Authorize Saved Token button and is never reached from here.
+    /// Records what this build can see of both saved tokens.  The answers come
+    /// from `TokenStore`'s cache, which asks the Keychain at most once per
+    /// token per launch, so opening Settings makes no Keychain request for a
+    /// token this launch already holds or already failed to read.  Nothing
+    /// here prompts: the interactive read lives behind the Re-Authorize Saved
+    /// Token button and is never reached from here.
     func refreshSavedTokenStates() async {
         let readOK = hasSavedToken && !endpoint.isEmpty
             ? await TokenStore.read(server: endpoint, service: TokenStore.readService) != nil
@@ -938,6 +941,11 @@ final class MonitorModel: ObservableObject {
         isSyncing = true
         defer { isSyncing = false }
         let token = await TokenStore.read(server: syncEndpoint, service: TokenStore.syncService).map(sanitizedToken(_:))
+        // Served from the token cache after the first read of the launch.  A
+        // read that failed or timed out stays failed until the owner saves or
+        // re-authorizes the token, so say so where the button is.
+        syncTokenState = SavedTokenState.resolve(hasSavedFlag: hasSavedSyncToken,
+                                                 silentReadSucceeded: !(token ?? "").isEmpty)
         do {
             let result = try await publisher.publish(windows: windows, to: url, token: token, format: syncFormat)
             self.lastSyncTime = Date()
@@ -965,6 +973,8 @@ final class MonitorModel: ObservableObject {
             var failure: String?
             // The pull's own read doubles as the availability check, so the
             // caption below the group header costs no extra Keychain traffic.
+            // After the first read of the launch it is served from memory, and
+            // a failed read is not retried here (see `TokenCache`).
             var savedTokenReadable = false
             if useServer {
                 let token = await TokenStore.read(server: currentEndpoint, service: TokenStore.readService)
