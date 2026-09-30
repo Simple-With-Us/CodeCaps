@@ -26,6 +26,23 @@ public enum ClaudeOAuthParser {
         return value
     }
 
+    /// Whether `root` holds a login that has expired but can still be renewed
+    /// by Claude Code itself: an access token is present, its `expiresAt` has
+    /// passed, and a non-empty refresh token exists whose own expiry (when
+    /// recorded) is still ahead.  Claude Code only refreshes its 8-hour access
+    /// token while a session runs, so an idle owner lands here.  Returns only a
+    /// Bool — no token value ever leaves the parser.
+    public static func isRenewable(in root: [String: Any], now: Date) -> Bool {
+        let value = record(root["claudeAiOauth"])
+        guard firstString(value, ["accessToken", "access_token"]) != nil,
+              firstString(value, ["refreshToken", "refresh_token"]) != nil,
+              let expiry = firstTimestamp(value, ["expiresAt", "expires_at"]),
+              let expiryDate = parseDate(expiry), expiryDate <= now else { return false }
+        if let refreshExpiry = firstTimestamp(value, ["refreshTokenExpiresAt", "refresh_token_expires_at"]),
+           let refreshDate = parseDate(refreshExpiry), refreshDate <= now { return false }
+        return true
+    }
+
     /// Decodes the raw JSON bytes of a credentials file (or a Keychain
     /// payload) into a dictionary, returning `nil` for anything that is not
     /// valid JSON.  Caps the input size so a hostile file cannot make the

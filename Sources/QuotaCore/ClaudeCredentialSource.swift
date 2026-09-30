@@ -26,8 +26,11 @@ public enum ClaudeCredentialAccess: Equatable, Sendable {
     }
 }
 
-/// Reads Claude Code's own saved login, and never writes to it, refreshes it,
-/// or deletes it.
+/// Reads Claude Code's own saved login.  This type never writes it, refreshes
+/// it, or deletes it.  When the saved access token has expired while Claude
+/// Code sat idle, `LocalQuotaReader` may ask Claude Code itself to renew its
+/// own login (a zero-turn `/usage` run); Claude Code then writes its own
+/// Keychain item and CodeCaps only reads the result.
 public enum ClaudeCredentialSource {
     static let service = "Claude Code-credentials"
 
@@ -297,10 +300,16 @@ public enum ClaudeLoginState: Equatable, Sendable {
     case needsPermission
     /// No usable Claude Code login exists here at all.
     case signedOut
+    /// Claude Code is signed in, but its saved access token expired while
+    /// Claude Code was idle and a renewal has not landed yet.  Claude Code
+    /// renews it the next time it runs, so this is not a sign-in problem.
+    case idle
 
-    public static func resolve(hasUsableCredential: Bool, access: ClaudeCredentialAccess) -> ClaudeLoginState {
+    public static func resolve(hasUsableCredential: Bool, access: ClaudeCredentialAccess,
+                               renewable: Bool = false) -> ClaudeLoginState {
         if hasUsableCredential { return .connected }
-        return access == .unauthorized ? .needsPermission : .signedOut
+        if access == .unauthorized { return .needsPermission }
+        return renewable ? .idle : .signedOut
     }
 
     /// The one sentence a Glance row, a Console card and the Settings row all
@@ -314,6 +323,9 @@ public enum ClaudeLoginState: Equatable, Sendable {
         case .signedOut:
             return "Claude Code quota login is unavailable." + sentenceGap
                 + "Sign in to Claude Code to connect subscription quotas."
+        case .idle:
+            return "Claude Code's saved login expired while Claude Code was idle." + sentenceGap
+                + "It renews the next time Claude Code runs."
         }
     }
 

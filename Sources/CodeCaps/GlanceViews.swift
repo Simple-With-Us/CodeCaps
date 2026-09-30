@@ -263,6 +263,7 @@ struct GlanceRow: View {
             return countdown.isEmpty ? "no reset time" : countdown
         }
         if let issue {
+            if issue == ClaudeLoginState.idle.issue { return "login idle" }
             if issue.localizedCaseInsensitiveContains("permission") { return "needs permission" }
             return issue.localizedCaseInsensitiveContains("sign in") ? "not signed in" : "unavailable"
         }
