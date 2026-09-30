@@ -71,3 +71,252 @@ final class GlanceRowTests: XCTestCase {
         }
     }
 }
+
+// MARK: - The two meters a compact row carries
+
+/// Pins the 2026-09-29 widen: the popover shows the short (4-5hr) and the long
+/// (weekly/monthly) quota for every platform on the row itself, so nothing has
+/// to be expanded to see a second cadence.
+///
+/// The failure this guards against is specifically a row that quietly renders
+/// ONE meter — a selector that returns the driving window twice looks correct
+/// in a snapshot and is exactly the "half the truth" layout it replaced.
+final class GlanceMeterTests: XCTestCase {
+    private let now = Date(timeIntervalSince1970: 1_700_000_000)
+
+    // MARK: Helpers
+
+    private func makeWindow(
+        id: String,
+        label: String,
+        token: String? = nil,
+        remaining: Double? = 50,
+        resetIn: TimeInterval? = nil
+    ) -> QuotaWindowSnapshot {
+        let iso = ISO8601DateFormatter()
+        return QuotaWindowSnapshot(window: QuotaWindow(
+            id: id,
+            provider: "Claude",
+            providerKey: "anthropic",
+            providerLabel: "Claude",
+            label: label,
+            remainingPercent: remaining,
+            remainingUnknown: remaining == nil,
+            resetAt: resetIn.map { iso.string(from: now.addingTimeInterval($0)) },
+            window: token,
+            occurredAt: iso.string(from: now)), now: now)
+    }
+
+    /// A Claude-shaped 5h + weekly row: the exact pair the owner asked to see
+    /// at once, with the five-hour window deliberately healthier than the
+    /// weekly so a selector that just took "closest to cap" twice would fail.
+    private func claudeRow() -> DisplaySection {
+        makeRow([
+            makeWindow(id: "session", label: "5h window", token: "5h", remaining: 92, resetIn: 3 * 3600),
+            makeWindow(id: "weekly", label: "7d window", token: "168h", remaining: 11, resetIn: 4 * 86_400),
+        ])
+    }
+
+    private func makeRow(_ windows: [QuotaWindowSnapshot], masked: Set<String> = []) -> DisplaySection {
+        DisplaySection(
+            id: "anthropic",
+            providerKey: "anthropic",
+            title: "Claude",
+            platformTitle: "Claude",
+            section: QuotaPlatformSection(
+                providerKey: "anthropic",
+                providerLabel: "Claude",
+                via: nil,
+                expected: true,
+                windows: windows),
+            poolKey: nil,
+            remainingPercent: windows.compactMap(\.remainingPercent).min(),
+            resetAt: windows.compactMap(\.resetAt).min(),
+            maskedWindowIds: masked)
+    }
+
+    // MARK: Layout
+
+    func testTwoMeterRowFitsInsideThePopoverWidth() {
+        // The whole point of the widen: two meters plus the title, the reset
+        // countdown and the chevron, with the gutters, have to fit the frame
+        // the popover actually opens at.  If a column grows past this, the
+        // footer clips "Open CodeCaps ⌘1" the way the old 360pt width did.
+        XCTAssertLessThanOrEqual(Metrics.glanceRowIntrinsicWidth, Metrics.glanceWidth,
+            "the two-meter row is wider than the popover it renders in")
+    }
+
+    func testWidenedPopoverIsStillNarrowEnoughForAModestScreen() {
+        // 1280pt was the narrowest display this app has been used on.  The
+        // popover must not cover a useful share of it.
+        XCTAssertLessThan(Metrics.glanceWidth, 1280 * 0.5)
+    }
+
+    func testMeterCaptionAlwaysFitsTheCaptionColumn() {
+        // The caption column is 26pt at 9pt type, which is about five
+        // characters.  A caption that outgrows it would push the two meters
+        // out of alignment with each other.
+        let tokens = ["5h", "5hr", "300m", "168h", "10080m", "weekly", "1w", "2w",
+                      "43200m", "monthly", "24h", "daily", "3h", "session", "fast",
+                      "plan", "", "1800s", "1.5h"]
+        for token in tokens {
+            let caption = glanceMeterCaption(makeWindow(id: token, label: "\(token) window", token: token))
+            XCTAssertLessThanOrEqual(caption.count, 5,
+                "caption '\(caption)' (token '\(token)') is too wide for the meter caption column")
+        }
+    }
+
+    // MARK: Pair selection
+
+    func testFiveHourAndWeeklyPairOntoOppositeMeters() {
+        let pair = glanceMeterPair(for: claudeRow(), now: now)
+        XCTAssertEqual(pair.short?.window.id, "session")
+        XCTAssertEqual(pair.long?.window.id, "weekly")
+    }
+
+    func testPairNeverReturnsTheSameWindowTwice() {
+        // The regression this exists for: a selector that resolves both slots
+        // to the driving window renders one meter duplicated and the owner
+        // still cannot see the weekly cap.
+        for windows in [
+            [makeWindow(id: "a", label: "5h window", token: "5h"), makeWindow(id: "b", label: "7d window", token: "weekly")],
+            [makeWindow(id: "a", label: "3h window", token: "3h"), makeWindow(id: "b", label: "24h window", token: "24h")],
+            [makeWindow(id: "a", label: "plan", remaining: nil), makeWindow(id: "b", label: "plan", remaining: nil)],
+        ] {
+            let pair = glanceMeterPair(for: makeRow(windows), now: now)
+            XCTAssertNotNil(pair.long, "a two-window row must fill the second meter")
+            if let long = pair.long {
+                XCTAssertNotEqual(long.window.id, pair.short?.window.id,
+                    "the same window cannot occupy both meters")
+            }
+        }
+    }
+
+    func testPairPicksByCadenceRatherThanByWhichWindowIsWorse() {
+        // The weekly is at 11% and the five-hour at 92%.  A row that took the
+        // lowest percentage twice would show the weekly in both slots and hide
+        // the five-hour entirely.
+        let pair = glanceMeterPair(for: claudeRow(), now: now)
+        XCTAssertEqual(pair.short?.window.remainingPercent, 92)
+        XCTAssertEqual(pair.long?.window.remainingPercent, 11)
+    }
+
+    func testPairSkipsAnAntigravityMaskedFiveHourWindow() {
+        // Antigravity masks the 5h percentage when the weekly cap is spent,
+        // because the 5h reading must not be believed.  A masked window in a
+        // meter is worse than no meter.
+        let row = makeRow([
+            makeWindow(id: "5h", label: "Claude & GPT · 5-hour", token: "5h", remaining: 80),
+            makeWindow(id: "weekly", label: "Claude & GPT · Weekly", token: "weekly", remaining: 0),
+        ], masked: ["5h"])
+        let pair = glanceMeterPair(for: row, now: now)
+        XCTAssertEqual(pair.short?.window.id, "weekly")
+    }
+
+    func testPairFallsBackToTheDrivingWindowWhenEveryWindowIsMasked() {
+        let row = makeRow([
+            makeWindow(id: "5h", label: "Gemini · 5-hour", token: "5h", remaining: 80),
+            makeWindow(id: "weekly", label: "Gemini · Weekly", token: "weekly", remaining: 0),
+        ], masked: ["5h", "weekly"])
+        let pair = glanceMeterPair(for: row, now: now)
+        XCTAssertNotNil(pair.short, "a fully masked row must still render something")
+    }
+
+    func testSingleCadenceProviderFillsTheFirstMeterOnly() {
+        // Grok Bot publishes one weekly meter.  It must land in the first slot
+        // — never the second, and never both.
+        let pair = glanceMeterPair(for: makeRow([
+            makeWindow(id: "grokbot", label: "Grok Bot weekly", token: "weekly", remaining: 40)
+        ]), now: now)
+        XCTAssertEqual(pair.short?.window.id, "grokbot")
+        XCTAssertNil(pair.long)
+    }
+
+    func testPairIsEmptyForARowWithNoWindows() {
+        let pair = glanceMeterPair(for: makeRow([]), now: now)
+        XCTAssertNil(pair.short)
+        XCTAssertNil(pair.long)
+    }
+
+    func testSupplementaryVideoQuotaNeverOccupiesAMeter() {
+        // MiniMax's video allowance is supplementary to the coding
+        // subscription; showing it in a meter would displace a real cap.
+        let video = QuotaWindowSnapshot(window: QuotaWindow(
+            id: "video",
+            provider: "MiniMax",
+            providerKey: "minimax",
+            label: "Video generation",
+            remainingPercent: 30,
+            remainingUnknown: false,
+            window: "5h",
+            occurredAt: ISO8601DateFormatter().string(from: now)), now: now)
+        let pair = glanceMeterPair(for: makeRow([
+            video,
+            makeWindow(id: "code", label: "MiniMax Code (5h window)", token: "5h", remaining: 70),
+        ]), now: now)
+        XCTAssertEqual(pair.short?.window.id, "code")
+    }
+
+    // MARK: Captions
+
+    func testWeeklyTokensCaptionAsSevenDays() {
+        // Antigravity's pool labels are long ("Claude & GPT · Weekly"), so the
+        // caption has to come from the cadence token, and a weekly window has
+        // to read the same way next to a 5h one.
+        for token in ["weekly", "1w", "168h", "10080m"] {
+            XCTAssertEqual(glanceMeterCaption(makeWindow(id: token, label: "Claude & GPT · Weekly", token: token)), "7d",
+                "token '\(token)' should caption as 7d")
+        }
+    }
+
+    func testFiveHourTokensCaptionAsFiveHours() {
+        for token in ["5h", "5hr", "300m"] {
+            XCTAssertEqual(glanceMeterCaption(makeWindow(id: token, label: "Gemini · 5-hour", token: token)), "5h",
+                "token '\(token)' should caption as 5h")
+        }
+    }
+
+    func testMonthlyTokensCaptionAsThirtyDays() {
+        for token in ["monthly", "30d", "43200m"] {
+            XCTAssertEqual(glanceMeterCaption(makeWindow(id: token, label: "Plan", token: token)), "30d",
+                "token '\(token)' should caption as 30d")
+        }
+    }
+
+    func testTokenlessWindowCaptionsFromItsLabelThenAsPlan() {
+        // Cursor's included plan and Kimi's plan quota both arrive with no
+        // cadence token at all.
+        XCTAssertEqual(glanceMeterCaption(makeWindow(id: "c", label: "Included plan", token: nil)), "Plan")
+        XCTAssertEqual(glanceMeterCaption(makeWindow(id: "k", label: "Plan quota", token: nil)), "Plan")
+        XCTAssertEqual(glanceMeterCaption(makeWindow(id: "u", label: "Something else", token: nil)), "Quota")
+    }
+
+    func testCaptionFallsBackToTheLabelWhenTheTokenIsNotADuration() {
+        XCTAssertEqual(glanceMeterCaption(makeWindow(id: "x", label: "Third-Party Models · Weekly", token: "shared")), "7d")
+        XCTAssertEqual(glanceMeterCaption(makeWindow(id: "y", label: "Gemini Models · 5-hour", token: "shared")), "5h")
+    }
+
+    // MARK: Cadence
+
+    func testCadenceReadsTheWindowTokenWhenPresent() {
+        XCTAssertEqual(glanceCadence(makeWindow(id: "a", label: "l", token: "5h"), now: now), .short)
+        XCTAssertEqual(glanceCadence(makeWindow(id: "b", label: "l", token: "24h"), now: now), .long)
+        XCTAssertEqual(glanceCadence(makeWindow(id: "c", label: "l", token: "weekly"), now: now), .long)
+        XCTAssertEqual(glanceCadence(makeWindow(id: "d", label: "l", token: "session"), now: now), .short)
+    }
+
+    func testCadenceFallsBackToHowLongUntilReset() {
+        // A window with no cadence token is still classifiable by how far off
+        // its reset is, which is the only signal a plan meter gives.
+        let soon = makeWindow(id: "s", label: "l", token: nil, resetIn: 3 * 3600)
+        let later = makeWindow(id: "l", label: "l", token: nil, resetIn: 5 * 86_400)
+        XCTAssertEqual(glanceCadence(soon, now: now), .short)
+        XCTAssertEqual(glanceCadence(later, now: now), .long)
+    }
+
+    func testCadenceTreatsATokenlessWindowWithNoResetAsLong() {
+        // A subscription-wide allowance with neither a cadence nor a reset is
+        // the long side of the pair far more often than the short one.
+        XCTAssertEqual(glanceCadence(makeWindow(id: "u", label: "Included plan", token: nil), now: now), .long)
+    }
+}

@@ -219,6 +219,194 @@ struct GlancePopover: View {
     }
 }
 
+// MARK: - The two meters a compact row carries
+
+/// The pair of quota windows a one-line Glance row shows side by side: the
+/// short cadence that reopens sooner, and the long cadence that caps the
+/// subscription.  The owner reads both from the popover without expanding.
+struct GlanceMeterPair: Equatable {
+    var short: QuotaWindowSnapshot?
+    var long: QuotaWindowSnapshot?
+}
+
+/// Which side of the pair a window belongs to.  Named after cadence length
+/// rather than a provider, because every provider that publishes two meters
+/// splits the same way: Claude's 5h/7d, Antigravity's 5h/weekly, MiniMax's
+/// interval/weekly.
+enum GlanceCadence: Equatable {
+    case short
+    case long
+}
+
+/// The two windows a one-line row meters, chosen the way the rest of the app
+/// picks the window a row "speaks for": the one closest to its cap within its
+/// own cadence.
+///
+/// The pairing is deliberately not "first and second window in the array".
+/// Antigravity hands back a 5h and a weekly per pool, MiniMax hands back a
+/// per-model interval and weekly pair, and a row scoped to one pool still has
+/// to end up with one of each.
+///
+/// Windows Antigravity masks — a 5h percentage reported under an exhausted
+/// weekly cap — are excluded, because the whole point of a second meter is
+/// that you can trust it.  If that leaves nothing, the row's own driving
+/// window is used so the row never renders blank.
+func glanceMeterPair(for row: DisplaySection, now: Date) -> GlanceMeterPair {
+    let trustworthy = row.section.windows.filter {
+        !$0.window.isSupplementaryVideoQuota && !row.isMasked($0)
+    }
+    let candidates = trustworthy.isEmpty
+        ? [row.driving].compactMap { $0 }
+        : trustworthy
+    guard let anchor = candidates.first else { return GlanceMeterPair() }
+
+    let shortest = candidates.filter { glanceCadence($0, now: now) == .short }
+    let longest = candidates.filter { glanceCadence($0, now: now) == .long }
+
+    // A provider that publishes only one cadence — Grok Bot's weekly meter, or
+    // a plan-only subscription — still fills the first slot.  The second slot
+    // then falls back to the next window closest to its cap, so a provider
+    // with two unnamed windows still gets two meters.
+    let short = nearestToCap(shortest) ?? nearestToCap(candidates) ?? anchor
+    // Both fallbacks exclude the window the first slot already took.  A
+    // single-window provider that classifies as long — which every weekly
+    // meter does — would otherwise resolve `longest` to the same snapshot and
+    // render one meter twice, hiding the second cadence entirely.
+    let long = nearestToCap(longest.filter { $0.window.id != short.window.id })
+        ?? nearestToCap(candidates.filter { $0.window.id != short.window.id })
+    return GlanceMeterPair(short: short, long: long)
+}
+
+/// The window closest to its cap, preferring one that reports a percentage.
+/// Same rule as `QuotaPlatformSection.drivingWindow`, so the second meter and
+/// the row's headline always agree on which window is closest to trouble.
+private func nearestToCap(_ pool: [QuotaWindowSnapshot]) -> QuotaWindowSnapshot? {
+    pool.filter { $0.remainingPercent != nil }
+        .min { ($0.remainingPercent ?? 100) < ($1.remainingPercent ?? 100) }
+        ?? pool.first
+}
+
+/// A window's cadence, from its own token where the reader set one, and from
+/// how long until it resets otherwise.  A window with neither — an unknown
+/// bucket, a plan meter with no end date — is `.long`: a subscription-wide
+/// allowance is the long side of the pair far more often than the short one.
+func glanceCadence(_ snapshot: QuotaWindowSnapshot, now: Date) -> GlanceCadence {
+    let token = (snapshot.window.window ?? "")
+        .lowercased()
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    if let seconds = glanceDurationSeconds(token) {
+        return seconds < 86_400 ? .short : .long
+    }
+    switch token {
+    case "session", "fast": return .short
+    case "weekly", "week", "monthly", "month", "plan", "included plan": return .long
+    default: break
+    }
+    if let reset = snapshot.resetAt, reset > now {
+        return reset.timeIntervalSince(now) < 86_400 ? .short : .long
+    }
+    return .long
+}
+
+/// The unit tag above a meter: "5h", "7d", "30d".  Kept to five characters so
+/// the caption column never has to truncate, and derived from the window's own
+/// cadence token rather than its label alone, because a label is allowed to be
+/// "Claude & GPT · Weekly" while its caption has to be "7d".
+func glanceMeterCaption(_ snapshot: QuotaWindowSnapshot) -> String {
+    let token = (snapshot.window.window ?? "")
+        .lowercased()
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    if let seconds = glanceDurationSeconds(token) {
+        return glanceDurationTag(seconds)
+    }
+    let named = token + " " + snapshot.window.label.lowercased()
+    if named.contains("weekly") || named.contains("7-day") { return "7d" }
+    if named.contains("month") { return "30d" }
+    if named.contains("5-hour") || named.contains("5 hour") { return "5h" }
+    if named.contains("daily") { return "24h" }
+    if named.contains("plan") || named.contains("quota") { return "Plan" }
+    return "Quota"
+}
+
+/// Reads a duration token such as "5h", "300m", "168h" or "1w" into seconds.
+/// Returns nil for anything that is not a number followed by a time unit, so
+/// a free-text label falls through to the caption's other rules.
+private func glanceDurationSeconds(_ token: String) -> TimeInterval? {
+    let digits = token.prefix { $0.isNumber || $0 == "." }
+    guard !digits.isEmpty, let value = Double(digits), value > 0 else { return nil }
+    let unit = String(token.dropFirst(digits.count))
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    switch unit {
+    case "s", "sec", "secs", "second", "seconds": return value
+    case "m", "min", "mins", "minute", "minutes": return value * 60
+    case "h", "hr", "hrs", "hour", "hours": return value * 3_600
+    case "d", "day", "days": return value * 86_400
+    case "w", "week", "weeks": return value * 604_800
+    default: return nil
+    }
+}
+
+/// Rounds a duration to the largest whole unit that divides it, days first so
+/// a weekly window reads "7d" rather than "1w" — the fleet copy already
+/// shortens a 7-day window to "7d", and "1w" next to a "5h" was the
+/// inconsistency worth avoiding.
+private func glanceDurationTag(_ seconds: TimeInterval) -> String {
+    let whole = max(1, Int(seconds.rounded()))
+    if whole % 86_400 == 0 { return "\(whole / 86_400)d" }
+    if whole % 3_600 == 0 { return "\(whole / 3_600)h" }
+    if whole % 60 == 0 { return "\(whole / 60)m" }
+    return "\(whole)s"
+}
+
+/// One caption, one bar, one percentage.  Two of these sit in a row's meter
+/// area, which is why the popover is 560pt rather than 400pt.
+struct GlanceMeter: View {
+    let snapshot: QuotaWindowSnapshot
+
+    private var percent: Double? { snapshot.remainingPercent }
+    private var tint: Color { quotaStatusColor(for: snapshot, sourceFailed: false) }
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text(glanceMeterCaption(snapshot))
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .frame(width: Metrics.glanceMeterCaptionWidth, alignment: .leading)
+            bar
+                .frame(width: Metrics.glanceMeterBarWidth, height: 3)
+            Text(percent.map { "\(Int($0.rounded()))%" } ?? "—")
+                .font(.system(size: 12, weight: .medium).monospacedDigit())
+                .foregroundStyle(tint)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .fixedSize(horizontal: true, vertical: false)
+                // Leading, not trailing: the percentage belongs beside ITS
+                // bar.  Trailing-aligning it inside the column pushed it into
+                // the slack at the far end, so a bar at 11% read as though
+                // its number belonged to the next meter over.
+                .frame(width: Metrics.glanceMeterPercentWidth, alignment: .leading)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(glanceMeterCaption(snapshot))
+        .accessibilityValue(percent.map { "\(Int($0.rounded())) percent remaining" } ?? "no reading")
+    }
+
+    private var bar: some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Theme.track)
+                if let percent {
+                    Capsule().fill(tint)
+                        .frame(width: geometry.size.width * CGFloat(min(max(percent, 0), 100)) / 100)
+                }
+            }
+        }
+        .clipShape(Capsule())
+    }
+}
+
 /// One platform, one line.  The only compact row type in the app.
 struct GlanceRow: View {
     let row: DisplaySection
@@ -247,12 +435,33 @@ struct GlanceRow: View {
         issue == nil ? row.remainingPercent : nil
     }
 
-    private var tint: Color {
-        guard let driving, issue == nil else { return .secondary }
-        return quotaStatusColor(for: driving, sourceFailed: false)
+    private var isLive: Bool { issue == nil && section.hasFreshReport }
+
+    /// The two meters this row shows.  Nil only when the row has no window at
+    /// all, in which case the row already shows "no report" in its trailing
+    /// column.
+    private var meters: GlanceMeterPair {
+        issue == nil ? glanceMeterPair(for: row, now: now) : GlanceMeterPair()
     }
 
-    private var isLive: Bool { issue == nil && section.hasFreshReport }
+    @ViewBuilder
+    private var meterArea: some View {
+        // The gap belongs in here, not between `meterArea` and its
+        // neighbours: this view is a single child of the row's HStack, so a
+        // spacer outside it leaves the two meters touching and the first
+        // meter's percentage runs into the second meter's caption.
+        HStack(spacing: 0) {
+            if let short = meters.short {
+                GlanceMeter(snapshot: short)
+                    .frame(width: Metrics.glanceMeterWidth, alignment: .leading)
+            }
+            if let long = meters.long {
+                Spacer().frame(width: Metrics.glanceColumnGap)
+                GlanceMeter(snapshot: long)
+                    .frame(width: Metrics.glanceMeterWidth, alignment: .leading)
+            }
+        }
+    }
 
     /// The trailing column is 64pt wide, or 112pt with no percentage, and one
     /// line tall.  A reader's issue is a sentence or two, so the column carries
@@ -282,8 +491,8 @@ struct GlanceRow: View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
                 PlatformLogo(providerKey: section.providerKey, size: 16, style: markStyle)
-                    .frame(width: 16, height: 16)
-                Spacer().frame(width: 6)
+                    .frame(width: Metrics.glanceLogoWidth, height: Metrics.glanceLogoWidth)
+                Spacer().frame(width: Metrics.glanceLogoGap)
                 VStack(alignment: .leading, spacing: 1) {
                     // An Antigravity row names its pool, which does not fit beside
                     // the platform in a 136pt column, so the pool takes the second
@@ -301,40 +510,34 @@ struct GlanceRow: View {
                             .truncationMode(.tail)
                     }
                 }
-                .frame(width: 136, alignment: .leading)
-                Spacer().frame(width: 8)
-                bar
-                    .frame(width: 56, height: 3)
-                Spacer().frame(width: 8)
+                .frame(width: Metrics.glanceRowTitleWidth, alignment: .leading)
+                Spacer().frame(width: Metrics.glanceColumnGap)
+                if percent != nil {
+                    // Both cadences, always.  The 4-5hr window and the
+                    // weekly/monthly window are the two numbers an owner
+                    // actually routes on, and hiding the second one behind a
+                    // click made the compact row say half the truth.
+                    meterArea
+                }
+                Spacer().frame(width: Metrics.glanceColumnGap)
                 if percent != nil || driving?.remainingPercent != nil {
-                    Text(percent.map { "\(Int($0.rounded()))%" } ?? "—")
-                        .font(.system(size: 15, weight: .semibold).monospacedDigit())
-                        .foregroundStyle(tint)
-                        // Hardening: the popover sits 40–48pt above the menu bar,
-                        // and an HStack's flexible space can squeeze a fixed-width
-                        // frame down a couple of points on a re-layout.  Belt and
-                        // braces — lineLimit keeps the text to one row, minScale
-                        // shrinks instead of clipping, and fixedSize blocks the
-                        // HStack from compressing the column.
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
-                        .fixedSize(horizontal: true, vertical: false)
-                        .frame(width: 48, alignment: .trailing)
-                    Spacer().frame(width: 8)
                     trailingColumn
-                        .frame(width: 64, alignment: .trailing)
+                        .frame(width: Metrics.glanceRowTrailingWidth, alignment: .trailing)
                 } else {
                     trailingColumn
-                        .frame(width: 112, alignment: .trailing)
+                        .frame(width: Metrics.glanceRowTrailingWideWidth, alignment: .trailing)
                 }
-                Spacer().frame(width: 6)
+                Spacer().frame(width: Metrics.glanceLogoGap)
                 // Chevron on the rightmost edge signals click-to-expand without
                 // claiming space from any of the value columns.  Rotates 180°
-                // when the row is expanded.
+                // when the row is expanded.  With both cadences already on the
+                // line, the expansion is now for the detail list — every
+                // window's reset countdown — rather than for seeing a second
+                // meter at all.
                 Image(systemName: "chevron.down")
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(.tertiary)
-                    .frame(width: 10)
+                    .frame(width: Metrics.glanceChevronWidth)
                     .rotationEffect(.degrees(isExpanded ? 180 : 0))
                     .accessibilityHidden(true)
             }
@@ -393,8 +596,11 @@ struct GlanceRow: View {
 
     /// Inline expansion: every quota window the local reader (or the fleet pull)
     /// has for this provider, one row each, with label · percent remaining ·
-    /// reset countdown.  Mirrors what the Console cards show, minus the chart —
-    /// the popover stays readable at 376pt wide.
+    /// reset countdown.  Mirrors what the Console cards show, minus the chart.
+    ///
+    /// This is the detail the collapsed row no longer needs for its two
+    /// meters, so it earns its keep on the windows the meters leave out — a
+    /// third cadence, or a per-model split inside a pool.
     @ViewBuilder
     private var expandedSection: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -425,23 +631,17 @@ struct GlanceRow: View {
         .background(Theme.surface.opacity(0.55))
     }
 
-    private var bar: some View {
-        GeometryReader { geometry in
-            ZStack(alignment: .leading) {
-                Capsule().fill(Theme.track)
-                if let percent {
-                    Capsule().fill(tint)
-                        .frame(width: geometry.size.width * CGFloat(min(max(percent, 0), 100)) / 100)
-                }
-            }
-        }
-        .clipShape(Capsule())
-    }
-
+    /// Speaks both cadences, not just the row's headline number, because that
+    /// is what the row now shows on the line.  A screen reader user gets the
+    /// same two numbers an owner reads at a glance.
     private var spokenValue: String {
         var parts: [String] = []
-        if let percent { parts.append("\(Int(percent.rounded())) percent remaining") }
-        else { parts.append("no reading") }
+        for meter in [meters.short, meters.long].compactMap({ $0 }) {
+            let caption = glanceMeterCaption(meter)
+            let reading = meter.remainingPercent.map { "\(Int($0.rounded())) percent remaining" } ?? "no reading"
+            parts.append("\(caption) \(reading)")
+        }
+        if parts.isEmpty { parts.append(percent.map { "\(Int($0.rounded())) percent remaining" } ?? "no reading") }
         if let reset = row.resetAt ?? driving?.resetAt, percent != nil {
             parts.append(resetCountdown(reset, now: now).lowercased())
         }

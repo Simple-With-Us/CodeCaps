@@ -44,11 +44,13 @@ enum Theme {
 /// site and the SwiftUI root cannot disagree the way the old 580x510 window and
 /// its 620x560 content did.
 enum Metrics {
-    /// 400pt gives the footer buttons enough horizontal room for "Open
-    /// CodeCaps ⌘1" without the ⌘1 badge being clipped at the right edge, the
-    /// way the old 360pt width clipped it once the row added the Settings
-    /// gear.
-    static let glanceWidth: CGFloat = 400
+    /// 560pt carries TWO quota meters per row — the short 4-5hr window and the
+    /// long weekly/monthly window — beside the platform name, so neither
+    /// cadence needs the click-to-expand.  It replaced a 400pt width that
+    /// fitted one bar, and still clears the 1280pt-wide screen minimum with
+    /// room to spare.  See `glanceRowIntrinsicWidth` for the arithmetic this
+    /// width has to satisfy, which `GlanceRowTests` pins.
+    static let glanceWidth: CGFloat = 560
     static let glanceMinHeight: CGFloat = 200
     static let glanceGutter: CGFloat = 12
     static let glanceHeaderHeight: CGFloat = 32
@@ -57,6 +59,43 @@ enum Metrics {
     static let glanceLocalRowHeight: CGFloat = 34
     static let glanceFleetRowHeight: CGFloat = 46
     static let glanceCTARowHeight: CGFloat = 52
+
+    // Per-row column widths.  The two-meter row used to be laid out from
+    // whatever space was left over, which is how a percentage ends up
+    // truncated after a long platform name; these are fixed instead.
+    static let glanceLogoWidth: CGFloat = 16
+    static let glanceRowTitleWidth: CGFloat = 136
+    static let glanceMeterCaptionWidth: CGFloat = 26
+    static let glanceMeterBarWidth: CGFloat = 56
+    static let glanceMeterPercentWidth: CGFloat = 38
+    static let glanceRowTrailingWidth: CGFloat = 64
+    static let glanceRowTrailingWideWidth: CGFloat = 112
+    static let glanceChevronWidth: CGFloat = 10
+    /// The fixed gap between the row's columns, used by every spacer so one
+    /// change re-tunes the whole row.
+    static let glanceColumnGap: CGFloat = 10
+    /// The gap right after the logo, which is tighter than the rest.
+    static let glanceLogoGap: CGFloat = 6
+
+    /// How wide one meter is: caption, gap, bar, gap, percent.
+    static let glanceMeterWidth: CGFloat = glanceMeterCaptionWidth + 4 + glanceMeterBarWidth
+        + 4 + glanceMeterPercentWidth
+
+    /// The width a two-meter row actually occupies: logo, title, two meters,
+    /// the trailing countdown column, the chevron, their gaps, and the
+    /// popover's own horizontal gutter on both sides.
+    ///
+    /// This is the contract `glanceWidth` has to honour.  It is computed rather
+    /// than restated so a column change cannot silently overflow the popover —
+    /// a wider row inside a fixed frame is what truncated "Open CodeCaps ⌘1"
+    /// in the footer once already.
+    static let glanceRowIntrinsicWidth: CGFloat = glanceLogoWidth + glanceLogoGap
+        + glanceRowTitleWidth + glanceColumnGap
+        + glanceMeterWidth + glanceColumnGap
+        + glanceMeterWidth + glanceColumnGap
+        + glanceRowTrailingWidth + glanceLogoGap
+        + glanceChevronWidth
+        + glanceGutter * 2
 
     static let consoleDefault = NSSize(width: 960, height: 640)
     static let consoleMin = NSSize(width: 820, height: 560)
