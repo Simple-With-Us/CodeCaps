@@ -74,6 +74,8 @@ struct GlancePopover: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .fixedSize()
+                        // The bullets are for the eye; VoiceOver would say "bullet".
+                        .accessibilityLabel(headerSpokenStatus)
                 }
             }
             // Auto-refresh fires every 5 min (see MonitorModel.refreshTimer) and
@@ -102,13 +104,24 @@ struct GlancePopover: View {
 
     /// "6 of 7   •   4:27 PM", live: the count and the time of the last read.
     private var headerStatus: String {
-        glanceHeaderStatus(view: model.glanceView,
-                           reporting: model.reportingCount,
-                           total: model.sections.count,
-                           sources: fleetGroups.count,
-                           checked: model.glanceView == .fromFleet
-                               ? (model.lastPullTime ?? model.lastChecked)
-                               : model.lastChecked)
+        glanceHeaderParts(view: model.glanceView,
+                          reporting: model.reportingCount,
+                          total: model.sections.count,
+                          sources: fleetGroups.count,
+                          checked: headerChecked).joined(separator: glanceHeaderSeparator)
+    }
+
+    /// The same phrases set apart by commas, for VoiceOver.
+    private var headerSpokenStatus: String {
+        glanceHeaderParts(view: model.glanceView,
+                          reporting: model.reportingCount,
+                          total: model.sections.count,
+                          sources: fleetGroups.count,
+                          checked: headerChecked).joined(separator: ", ")
+    }
+
+    private var headerChecked: Date? {
+        model.glanceView == .fromFleet ? (model.lastPullTime ?? model.lastChecked) : model.lastChecked
     }
 
     private func toggleExpanded(_ id: String) {
@@ -245,7 +258,7 @@ struct GlancePopover: View {
             Text(glanceFleetGroupHeading(group.title))
                 .font(.system(size: 10, weight: .bold))
                 .tracking(0.8)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.groupBandLabel)
                 .lineLimit(1)
                 .accessibilityAddTraits(.isHeader)
             Spacer(minLength: 8)
@@ -253,7 +266,7 @@ struct GlancePopover: View {
                 Text(reported)
                     .font(.system(size: 9, weight: .semibold).monospacedDigit())
                     .tracking(0.6)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Theme.groupBandLabel)
                     .lineLimit(1)
                     .fixedSize()
             }
@@ -305,6 +318,13 @@ let glanceHeaderSeparator = "   •   "
 /// app that reported them (`FleetOrigin.identity`), and that is a machine only
 /// some of the time.
 func glanceHeaderStatus(view: GlanceViewMode, reporting: Int, total: Int, sources: Int, checked: Date?) -> String {
+    glanceHeaderParts(view: view, reporting: reporting, total: total, sources: sources, checked: checked)
+        .joined(separator: glanceHeaderSeparator)
+}
+
+/// The phrases of `glanceHeaderStatus` before they are joined: the count, then
+/// the time.  Either is left out when there is nothing to say.
+func glanceHeaderParts(view: GlanceViewMode, reporting: Int, total: Int, sources: Int, checked: Date?) -> [String] {
     let counted: String?
     switch view {
     case .fromMac:
@@ -314,13 +334,17 @@ func glanceHeaderStatus(view: GlanceViewMode, reporting: Int, total: Int, source
         counted = sources == 0 ? nil : (sources == 1 ? "1 source" : "\(sources) sources")
     }
     let time = checked.map { $0.formatted(date: .omitted, time: .shortened) }
-    return [counted, time].compactMap { $0 }.joined(separator: glanceHeaderSeparator)
+    return [counted, time].compactMap { $0 }
 }
 
 /// A source's heading in From Fleet: its name as reported, in capitals —
-/// "CHATGPT.COM", "MAC MINI".
+/// "CHATGPT.COM", "MAC MINI".  A source that names nothing (no `source`, no
+/// `sourceApp`, or a name of only dashes and spaces) gets a plain label rather
+/// than a blank band or a bare "FLEET", which the switch above already says.
 func glanceFleetGroupHeading(_ title: String) -> String {
-    title.uppercased()
+    let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
+    if name.isEmpty || name.lowercased() == "fleet" { return "UNNAMED SOURCE" }
+    return name.uppercased()
 }
 
 // MARK: - Header controls
@@ -595,6 +619,19 @@ func glanceMeterSpeech(_ snapshot: QuotaWindowSnapshot, now: Date) -> String {
     "\(glanceMeterCaption(snapshot)) \(QuotaBarMetrics(snapshot: snapshot, now: now).spokenSummary)"
 }
 
+/// A line of meters, spoken whole: each meter's caption and reading, then how
+/// long until it resets, with semicolons between the meters because each one
+/// already carries commas of its own.  The row and every extra line under it
+/// use this, so the captions ("1d", "7d") are never lost and a reset is said
+/// once, at the precision the tooltip shows.
+func glanceMetersSpeech(_ snapshots: [QuotaWindowSnapshot?], now: Date) -> String {
+    snapshots.compactMap { $0 }.map { snapshot -> String in
+        let reading = glanceMeterSpeech(snapshot, now: now)
+        let reset = glanceResetFullCountdown(snapshot.resetAt, now: now)
+        return reset.isEmpty ? reading : "\(reading), resets in \(reset)"
+    }.joined(separator: "; ")
+}
+
 /// Rounds a duration to the largest whole unit that divides it, days first so
 /// a weekly window reads "7d" rather than "1w" — the fleet copy already
 /// shortens a 7-day window to "7d", and "1w" next to a "5h" was the
@@ -621,7 +658,7 @@ struct GlanceMeter: View {
     private var metrics: QuotaBarMetrics { QuotaBarMetrics(snapshot: snapshot, now: now) }
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: Metrics.glanceMeterGap) {
             Text(glanceMeterCaption(snapshot))
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.secondary)
@@ -719,8 +756,25 @@ struct GlanceMeterLine: Identifiable, Equatable {
 /// and the row already skips it for the same reason.
 func glanceExpandedLines(for row: DisplaySection, now: Date) -> [GlanceMeterLine] {
     let pair = glanceMeterPair(for: row, now: now)
-    let shown = Set([pair.short, pair.long].compactMap { $0?.window.id })
-    let rest = row.section.windows.filter { !shown.contains($0.window.id) && !row.isMasked($0) }
+    let shownWindows = [pair.short, pair.long].compactMap { $0 }
+    let shown = Set(shownWindows.map(\.window.id))
+
+    // The same reading from a second source (two readers both reporting a 5h
+    // and a weekly window) is the row's own number again, not another window.
+    // Only a different source is treated as a duplicate: two windows from one
+    // source that share a label and cadence are two windows.
+    var holders: [String: Set<String>] = [:]
+    func key(_ snapshot: QuotaWindowSnapshot) -> String {
+        glanceLineLabel(snapshot) + "|" + glanceMeterCaption(snapshot)
+    }
+    func source(_ snapshot: QuotaWindowSnapshot) -> String { snapshot.window.source ?? "" }
+    for snapshot in shownWindows { holders[key(snapshot), default: []].insert(source(snapshot)) }
+    var rest: [QuotaWindowSnapshot] = []
+    for snapshot in row.section.windows where !shown.contains(snapshot.window.id) && !row.isMasked(snapshot) {
+        if let known = holders[key(snapshot)], !known.contains(source(snapshot)) { continue }
+        holders[key(snapshot), default: []].insert(source(snapshot))
+        rest.append(snapshot)
+    }
 
     var order: [String] = []
     var grouped: [String: [QuotaWindowSnapshot]] = [:]
@@ -901,9 +955,10 @@ struct GlanceRow: View {
         .animation(.easeInOut(duration: 0.18), value: isExpanded)
     }
 
-    /// The logo, the name, the two meters and the chevron: the part a tap
-    /// expands, and the part VoiceOver reads as one element.
-    private var rowBody: some View {
+    /// The logo and the name.  The row's tooltip belongs here (and to the
+    /// status text), not to the whole row: a countdown carries a tooltip of
+    /// its own, and two nested tooltips leave it to AppKit which one shows.
+    private var nameBlock: some View {
         HStack(spacing: 0) {
             // Keyed by the row, not the platform, so each Antigravity pool
             // wears its own mark: the colour Gemini star, or the solid
@@ -929,6 +984,15 @@ struct GlanceRow: View {
                 }
             }
             .frame(width: Metrics.glanceRowTitleWidth, alignment: .leading)
+        }
+        .help(helpText)
+    }
+
+    /// The logo, the name, the two meters and the chevron: the part a tap
+    /// expands, and the part VoiceOver reads as one element.
+    private var rowBody: some View {
+        HStack(spacing: 0) {
+            nameBlock
             Spacer().frame(width: Metrics.glanceColumnGap)
             if percent != nil {
                 // Both cadences, always.  The 4-5hr window and the
@@ -937,13 +1001,16 @@ struct GlanceRow: View {
                 // click made the compact row say half the truth.
                 GlanceMeterColumns(short: meters.short, long: meters.long, now: now)
             } else {
-                // Where a single meter would start, left-aligned, so a row
-                // without a reading still lines up with every other row.
+                // Where a single meter's bar would start (Cursor's, say),
+                // left-aligned, so a row without a reading still lines up
+                // with the bars in the rows above and below it.
                 Text(statusText)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .fixedSize()
+                    .padding(.leading, Metrics.glanceMeterBarInset)
+                    .help(helpText)
             }
             Spacer(minLength: Metrics.glanceColumnGap)
             // Chevron signals click-to-expand only when the row has windows
@@ -970,7 +1037,6 @@ struct GlanceRow: View {
         .accessibilityLabel(row.title)
         .accessibilityValue(spokenValue)
         .accessibilityHint(canExpand ? (isExpanded ? "Double-tap to collapse." : "Double-tap to expand.") : "")
-        .help(helpText)
     }
 
     /// The row's tooltip: the issue when there is one, and for a fleet row
@@ -1026,8 +1092,11 @@ struct GlanceRow: View {
                 .padding(.horizontal, Metrics.glanceGutter)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .frame(height: Metrics.glanceExpandedLineHeight)
-                .accessibilityElement(children: .combine)
+                // An explicit value, as the row has: a label alone replaces
+                // the combined children's, which would drop the "1d" and "7d".
+                .accessibilityElement(children: .ignore)
                 .accessibilityLabel(line.label)
+                .accessibilityValue(glanceMetersSpeech([line.short, line.long], now: now))
             }
         }
         .padding(.bottom, 4)
@@ -1040,18 +1109,14 @@ struct GlanceRow: View {
     /// same two numbers an owner reads at a glance.
     private var spokenValue: String {
         var parts: [String] = []
-        let meterSpeech = [meters.short, meters.long].compactMap { $0 }.map { glanceMeterSpeech($0, now: now) }
+        let meterSpeech = glanceMetersSpeech([meters.short, meters.long], now: now)
         if meterSpeech.isEmpty {
             parts.append(percent == nil
                          ? statusText
                          : QuotaBarMetrics(remainingPercent: percent, elapsedFraction: nil).spokenSummary)
         } else {
-            // Each meter already carries commas of its own, so the meters are
-            // set apart with semicolons.
-            parts.append(meterSpeech.joined(separator: "; "))
-        }
-        if let reset = row.resetAt ?? driving?.resetAt, percent != nil {
-            parts.append(resetCountdown(reset, now: now).lowercased())
+            // Each meter says its own reset, so the row does not say it again.
+            parts.append(meterSpeech)
         }
         switch origin {
         case .fleet: parts.append("from the fleet")
@@ -1134,38 +1199,38 @@ struct FleetSetupRow: View {
     }
 }
 
+/// A countdown's non-zero units, largest first, for a time left of one minute
+/// or more: 4d 0h 59m is ["4d", "59m"].  Whole minutes left, so a countdown
+/// never claims more time than there is.
+private func glanceCountdownUnits(seconds: Int) -> [String] {
+    let minutes = seconds / 60
+    let days = minutes / 1_440
+    let hours = (minutes % 1_440) / 60
+    let mins = minutes % 60
+    return [(days, "d"), (hours, "h"), (mins, "m")].filter { $0.0 > 0 }.map { "\($0.0)\($0.1)" }
+}
+
 /// Reset countdown without the "Resets in" prefix, in at most its two largest
-/// units: "4d 2h", "17d 4h", "2h 42m", "45m", "<1m".  A unit that is zero is
-/// dropped rather than shown, so a countdown never reads "1d 0h" or "0h".
-/// Minutes are whole minutes left, so the line never claims more time than
-/// there is.  The full value is `glanceResetFullCountdown`, one hover away.
+/// non-zero units: "4d 2h", "17d 4h", "2h 42m", "45m", "<1m".  A unit that is
+/// zero is skipped rather than shown, so a countdown never reads "1d 0h" or
+/// "0h", and 4d 0h 59m reads "4d 59m".  The full value is
+/// `glanceResetFullCountdown`, one hover away.
 func glanceResetCountdown(_ reset: Date?, now: Date) -> String {
     guard let reset else { return "" }
     let seconds = Int(reset.timeIntervalSince(now).rounded())
     guard seconds > 0 else { return "due" }
     guard seconds >= 60 else { return "<1m" }
-    let minutes = seconds / 60
-    let days = minutes / 1_440
-    let hours = (minutes % 1_440) / 60
-    let mins = minutes % 60
-    if days > 0 { return hours > 0 ? "\(days)d \(hours)h" : "\(days)d" }
-    if hours > 0 { return mins > 0 ? "\(hours)h \(mins)m" : "\(hours)h" }
-    return "\(mins)m"
+    return glanceCountdownUnits(seconds: seconds).prefix(2).joined(separator: " ")
 }
 
-/// The whole countdown, down to the minute: "4d 2h 42m", "2h 42m", "45m".
+/// The whole countdown, down to the minute, with zero units skipped the same
+/// way: "4d 2h 42m", "2h 42m", "2h", "45m".
 func glanceResetFullCountdown(_ reset: Date?, now: Date) -> String {
     guard let reset else { return "" }
     let seconds = Int(reset.timeIntervalSince(now).rounded())
     guard seconds > 0 else { return "due" }
     guard seconds >= 60 else { return "less than a minute" }
-    let minutes = seconds / 60
-    let days = minutes / 1_440
-    let hours = (minutes % 1_440) / 60
-    let mins = minutes % 60
-    if days > 0 { return "\(days)d \(hours)h \(mins)m" }
-    if hours > 0 { return "\(hours)h \(mins)m" }
-    return "\(mins)m"
+    return glanceCountdownUnits(seconds: seconds).joined(separator: " ")
 }
 
 /// The countdown's tooltip: the full value and the reset's own date and time,

@@ -67,6 +67,15 @@ final class GlanceToggleTests: XCTestCase {
                        time, "no sources: just the time")
     }
 
+    func testTheHeaderIsSpokenWithCommasNotBullets() {
+        let checked = Date(timeIntervalSince1970: 1_790_000_000)
+        let time = checked.formatted(date: .omitted, time: .shortened)
+        let parts = glanceHeaderParts(view: .fromMac, reporting: 6, total: 7, sources: 2, checked: checked)
+        XCTAssertEqual(parts, ["6 of 7", time])
+        XCTAssertEqual(parts.joined(separator: ", "), "6 of 7, \(time)")
+        XCTAssertFalse(parts.contains { $0.contains("•") })
+    }
+
     func testAlarmsAllIsSharedWithTheManagerAndPersists() {
         let model = MonitorModel(defaults: defaults)
         XCTAssertTrue(model.alarmsAll)
@@ -169,6 +178,47 @@ final class GlanceToggleTests: XCTestCase {
         XCTAssertFalse(glanceFleetGroupHeading("build-box").contains("FLEET"))
     }
 
+    func testASourceThatNamesNothingGetsAPlainHeading() {
+        // No source, no sourceApp: FleetOrigin.identity falls back to "fleet".
+        let noName = QuotaWindow(id: "x", provider: "openai", label: "5h window", occurredAt: "2026-09-30T12:00:00Z")
+        XCTAssertEqual(FleetOrigin.identity(of: noName), "fleet")
+        XCTAssertEqual(glanceFleetGroupHeading(FleetOrigin.title(for: FleetOrigin.identity(of: noName))),
+                       "UNNAMED SOURCE", "not a bare FLEET under the From Fleet switch")
+        // A name of only separators has no words left once it is titled.
+        XCTAssertEqual(FleetOrigin.title(for: " - _ "), "")
+        XCTAssertEqual(glanceFleetGroupHeading(FleetOrigin.title(for: " - _ ")), "UNNAMED SOURCE")
+        XCTAssertEqual(glanceFleetGroupHeading(""), "UNNAMED SOURCE")
+        XCTAssertEqual(glanceFleetGroupHeading("  Mac mini "), "MAC MINI", "trimmed")
+        // A source that only names its app still gets a real heading.
+        let appOnly = QuotaWindow(id: "y", provider: "openai", sourceApp: "chatgpt.com", label: "5h window",
+                                occurredAt: "2026-09-30T12:00:00Z")
+        XCTAssertEqual(glanceFleetGroupHeading(FleetOrigin.title(for: FleetOrigin.identity(of: appOnly))),
+                       "CHATGPT.COM")
+    }
+
+    func testTextOnTheHeadingBandIsReadableInBothAppearances() {
+        func components(_ color: Color, _ appearance: NSAppearance.Name) -> (r: CGFloat, g: CGFloat, b: CGFloat) {
+            var value: (r: CGFloat, g: CGFloat, b: CGFloat) = (0, 0, 0)
+            NSAppearance(named: appearance)?.performAsCurrentDrawingAppearance {
+                if let rgb = NSColor(color).usingColorSpace(.sRGB) {
+                    value = (rgb.redComponent, rgb.greenComponent, rgb.blueComponent)
+                }
+            }
+            return value
+        }
+        func relativeLuminance(_ c: (r: CGFloat, g: CGFloat, b: CGFloat)) -> CGFloat {
+            func lin(_ v: CGFloat) -> CGFloat { v <= 0.03928 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
+            return 0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
+        }
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            let band = relativeLuminance(components(Theme.groupBand, appearance))
+            let label = relativeLuminance(components(Theme.groupBandLabel, appearance))
+            let contrast = (max(band, label) + 0.05) / (min(band, label) + 0.05)
+            XCTAssertGreaterThanOrEqual(contrast, 4.5,
+                                        "\(appearance.rawValue): the source name and its time on the band")
+        }
+    }
+
     func testTheHeadingBandIsDarkerThanTheListInBothAppearances() {
         func luminance(_ color: Color, _ appearance: NSAppearance.Name) -> CGFloat {
             var value: CGFloat = -1
@@ -230,8 +280,9 @@ final class GlanceToggleTests: XCTestCase {
             glanceResetCountdown(start.addingTimeInterval(29 * 86_400 + 23 * 3_600 + 59 * 60), now: start),
             glanceResetCountdown(start.addingTimeInterval(31 * 86_400 + 23 * 3_600 + 59 * 60), now: start),
             glanceResetCountdown(start.addingTimeInterval(23 * 3_600 + 59 * 60), now: start),
+            glanceResetCountdown(start.addingTimeInterval(29 * 86_400 + 59 * 60), now: start),
         ]
-        XCTAssertEqual(longest, ["6d 23h", "17d 4h", "29d 23h", "31d 23h", "23h 59m"])
+        XCTAssertEqual(longest, ["6d 23h", "17d 4h", "29d 23h", "31d 23h", "23h 59m", "29d 59m"])
         for value in longest {
             XCTAssertLessThanOrEqual(width(value), Metrics.glanceMeterCountdownWidth,
                                      "'\(value)' would truncate in the countdown column")

@@ -50,6 +50,12 @@ enum Theme {
     /// background in both appearances, so each source reads as a section.
     static let groupBand = dyn(hex(0xE1E6E7), hex(0x111214))
 
+    /// Text on that band: the source's name and its "reported" time.  The
+    /// system secondary and tertiary greys are tuned for the list background
+    /// and fall under 3:1 on the darker band, so the band carries its own
+    /// label colour (at least 4.5:1 in both appearances; a test measures it).
+    static let groupBandLabel = dyn(hex(0x4A5663), hex(0xB7BEC7))
+
     /// A one-colour brand mark that has to read as solid, not as body text:
     /// pure black on Light and pure white on Dark, never the ink's grey.
     static let solidMark = dyn(NSColor.black, NSColor.white)
@@ -121,6 +127,9 @@ enum Metrics {
     static let glanceRowTitleWidth: CGFloat = 80
     /// Fits "Plan" and "24h" at 11pt medium; "Quota" fits at its 0.8 scale.
     static let glanceMeterCaptionWidth: CGFloat = 26
+    /// The gap between the parts inside one meter: caption, bar, percentage
+    /// and countdown.
+    static let glanceMeterGap: CGFloat = 4
     static let glanceMeterBarWidth: CGFloat = 50
     /// The bar's thickness: 1.5x the 4pt it was before the 2026-09-30 delta.
     static let glanceMeterBarHeight: CGFloat = 6
@@ -146,8 +155,13 @@ enum Metrics {
     static let glanceLogoGap: CGFloat = 6
 
     /// How wide one meter is: caption, gap, bar, gap, percent, gap, countdown.
-    static let glanceMeterWidth: CGFloat = glanceMeterCaptionWidth + 4 + glanceMeterBarWidth
-        + 4 + glanceMeterPercentWidth + 4 + glanceMeterCountdownWidth
+    static let glanceMeterWidth: CGFloat = glanceMeterCaptionWidth + glanceMeterGap + glanceMeterBarWidth
+        + glanceMeterGap + glanceMeterPercentWidth + glanceMeterGap + glanceMeterCountdownWidth
+
+    /// Where a meter's bar starts, measured from the start of its column.  A
+    /// row with no reading puts its status text here, so "not signed in" sits
+    /// exactly where a single bar (Cursor's) would begin.
+    static let glanceMeterBarInset: CGFloat = glanceMeterCaptionWidth + glanceMeterGap
 
     /// The width a two-meter row actually occupies: the alarm bell, logo,
     /// title, two meters, the chevron, their gaps, and the popover's own

@@ -93,7 +93,9 @@ struct FleetWindowGroup: Equatable {
     let windows: [QuotaWindow]
 }
 
-/// One machine's worth of fleet rows.
+/// One reporting source's worth of fleet rows: everything the payload
+/// attributes to one `source` or `sourceApp` (`FleetOrigin.identity`), which is
+/// a machine only some of the time.
 struct FleetGroup: Identifiable, Equatable {
     let id: String
     let title: String
