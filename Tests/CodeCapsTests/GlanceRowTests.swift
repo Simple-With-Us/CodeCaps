@@ -331,7 +331,7 @@ final class GlanceMeterTests: XCTestCase {
     func testElapsedFractionForFiveHourWindow() {
         // 5-hour window with 2.5 hours remaining -> 50% elapsed
         let window5hHalf = makeWindow(id: "5h", label: "5h window", token: "5h", resetIn: 2.5 * 3_600)
-        let fractionHalf = glanceElapsedFraction(for: window5hHalf, now: now)
+        let fractionHalf = window5hHalf.elapsedFraction(now: now)
         XCTAssertNotNil(fractionHalf)
         if let fractionHalf {
             XCTAssertEqual(fractionHalf, 0.5, accuracy: 0.01)
@@ -339,7 +339,7 @@ final class GlanceMeterTests: XCTestCase {
 
         // 5-hour window with 5 hours remaining -> 0% elapsed
         let window5hFull = makeWindow(id: "5h", label: "5h window", token: "5h", resetIn: 5.0 * 3_600)
-        let fractionFull = glanceElapsedFraction(for: window5hFull, now: now)
+        let fractionFull = window5hFull.elapsedFraction(now: now)
         XCTAssertNotNil(fractionFull)
         if let fractionFull {
             XCTAssertEqual(fractionFull, 0.0, accuracy: 0.01)
@@ -347,7 +347,7 @@ final class GlanceMeterTests: XCTestCase {
 
         // 5-hour window with 0 hours remaining -> 100% elapsed
         let window5hZero = makeWindow(id: "5h", label: "5h window", token: "5h", resetIn: 0)
-        let fractionZero = glanceElapsedFraction(for: window5hZero, now: now)
+        let fractionZero = window5hZero.elapsedFraction(now: now)
         XCTAssertNotNil(fractionZero)
         if let fractionZero {
             XCTAssertEqual(fractionZero, 1.0, accuracy: 0.01)
@@ -357,7 +357,7 @@ final class GlanceMeterTests: XCTestCase {
     func testElapsedFractionForWeeklyWindow() {
         // 7-day window with 3.5 days remaining -> 50% elapsed
         let window7dHalf = makeWindow(id: "7d", label: "Weekly window", token: "weekly", resetIn: 3.5 * 86_400)
-        let fractionHalf = glanceElapsedFraction(for: window7dHalf, now: now)
+        let fractionHalf = window7dHalf.elapsedFraction(now: now)
         XCTAssertNotNil(fractionHalf)
         if let fractionHalf {
             XCTAssertEqual(fractionHalf, 0.5, accuracy: 0.01)
@@ -366,9 +366,9 @@ final class GlanceMeterTests: XCTestCase {
 
     func testElapsedFractionNilWhenResetOrDurationUnknown() {
         let windowNoReset = makeWindow(id: "x", label: "No reset", token: "5h", resetIn: nil)
-        XCTAssertNil(glanceElapsedFraction(for: windowNoReset, now: now))
+        XCTAssertNil(windowNoReset.elapsedFraction(now: now))
 
         let windowNoDuration = makeWindow(id: "y", label: "Unknown", token: nil, resetIn: 3_600)
-        XCTAssertNil(glanceElapsedFraction(for: windowNoDuration, now: now))
+        XCTAssertNil(windowNoDuration.elapsedFraction(now: now))
     }
 }

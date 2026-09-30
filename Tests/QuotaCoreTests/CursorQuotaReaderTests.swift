@@ -113,6 +113,36 @@ final class CursorQuotaReaderTests: XCTestCase {
         XCTAssertEqual(result.windows.first?.remainingPercent, 30)
     }
 
+    /// The elapsed-time marker prefers the cycle's own start to a start derived
+    /// from the reset, so the reader carries `billingCycleStart` through when the
+    /// summary has it, and leaves it unset (the marker then derives one calendar
+    /// month before the reset) when it does not.
+    func testBillingCycleStartBecomesTheWindowsExplicitPeriodStart() async throws {
+        let token = Self.jwt(subject: "auth0|cursor-user-5", expiration: observedAt.addingTimeInterval(3600))
+        let withStart = CursorQuotaReader(now: { self.observedAt }, accessToken: { token }, fetch: { _ in
+            Self.response(#"{"billingCycleStart":"2026-09-01T00:00:00Z","billingCycleEnd":"2026-10-01T00:00:00Z","individualUsage":{"plan":{"used":2500,"limit":10000}}}"#)
+        })
+        let withStartResult = await withStart.read()
+        let window = try XCTUnwrap(withStartResult.windows.first)
+        XCTAssertEqual(window.periodStart, "2026-09-01T00:00:00Z")
+        XCTAssertEqual(window.window, "billing-cycle")
+
+        let withoutStart = CursorQuotaReader(now: { self.observedAt }, accessToken: { token }, fetch: { _ in
+            Self.response(#"{"billingCycleEnd":"2026-10-01T00:00:00Z","individualUsage":{"plan":{"used":2500,"limit":10000}}}"#)
+        })
+        let withoutStartResult = await withoutStart.read()
+        XCTAssertNil(try XCTUnwrap(withoutStartResult.windows.first).periodStart)
+    }
+
+    func testAMalformedBillingCycleStartIsDropped() async throws {
+        let token = Self.jwt(subject: "auth0|cursor-user-6", expiration: observedAt.addingTimeInterval(3600))
+        let reader = CursorQuotaReader(now: { self.observedAt }, accessToken: { token }, fetch: { _ in
+            Self.response(#"{"billingCycleStart":"yesterday","billingCycleEnd":"2026-10-01T00:00:00Z","individualUsage":{"plan":{"used":2500,"limit":10000}}}"#)
+        })
+        let result = await reader.read()
+        XCTAssertNil(try XCTUnwrap(result.windows.first).periodStart)
+    }
+
     func testOversizedTokenFailsClosedBeforeRequest() async {
         let oversized = String(repeating: "a", count: 65_537)
         let reader = CursorQuotaReader(accessToken: { oversized }, fetch: { _ in

@@ -106,15 +106,18 @@ private func parseSummary(_ root: [String: Any], observedAt: Date) -> [QuotaWind
     let individual = root["individualUsage"] as? [String: Any] ?? [:]
     let plan = individual["plan"] as? [String: Any]
     let reset = validCursorTimestamp(root["billingCycleEnd"])
+    // The cycle's own start, when the summary carries it.  The elapsed-time
+    // marker prefers it to "one calendar month before the reset".
+    let start = validCursorTimestamp(root["billingCycleStart"])
     let planName = safeString(root["membershipType"])
     var windows: [QuotaWindow] = []
     if let plan {
-        windows.append(cursorWindow(id: "plan", label: "Included plan", values: plan, resetAt: reset, planName: planName, observedAt: observedAt))
+        windows.append(cursorWindow(id: "plan", label: "Included plan", values: plan, resetAt: reset, periodStart: start, planName: planName, observedAt: observedAt))
     }
     return windows
 }
 
-private func cursorWindow(id: String, label: String, values: [String: Any], resetAt: String?, planName: String?, observedAt: Date) -> QuotaWindow {
+private func cursorWindow(id: String, label: String, values: [String: Any], resetAt: String?, periodStart: String?, planName: String?, observedAt: Date) -> QuotaWindow {
     let limitCents = finiteNumber(values["limit"])
     let remainingCents = finiteNumber(values["remaining"])
     let usedCents = finiteNumber(values["used"])
@@ -139,7 +142,8 @@ private func cursorWindow(id: String, label: String, values: [String: Any], rese
         absoluteRemaining: remainingUSD,
         absoluteLimit: limitUSD, quotaUnit: "USD", planName: planName,
         resetAt: resetAt, window: "billing-cycle",
-        occurredAt: cursorISOFormatter.string(from: observedAt), source: "Cursor"
+        occurredAt: cursorISOFormatter.string(from: observedAt), source: "Cursor",
+        periodStart: periodStart
     ).normalizedForExport()
 }
 
