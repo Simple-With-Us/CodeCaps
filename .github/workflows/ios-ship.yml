@@ -6,6 +6,9 @@ name: iOS TestFlight ship (GitHub-hosted macOS)
 #   IOS_DIST_P12_BASE64, IOS_DIST_P12_PASSWORD
 # scripts/ios-appstore-gm-prepare.sh writes ~/.secrets/appstore-connect.env
 # and imports the Distribution identity. Values are never printed.
+# IOS_MANUAL_SIGN=1 signs Release with the installed App Store profiles.
+# Xcode's provisioning service rejects this API key, so the job must not
+# ask it to create or update profiles.
 #
 # Marketing train is 0.1.N; build is UTC YYYYMMDDHHMM.
 # Bundle `com.simplewithus.codecaps.ios` and team `CC8UTF7ATG`.
@@ -19,6 +22,7 @@ on:
       - 'scripts/ios-fleet/**'
       - 'scripts/ios-ship-testflight.sh'
       - 'scripts/ios-appstore-gm-prepare.sh'
+      - 'scripts/ios-install-appstore-profiles.sh'
   workflow_dispatch:
   schedule:
     # Twice an hour, offset from other fleet apps
@@ -99,10 +103,15 @@ jobs:
           fi
           bash "$GITHUB_WORKSPACE/scripts/ios-appstore-gm-prepare.sh"
 
+      - name: Install App Store profiles
+        if: steps.gate.outputs.should_ship == '1'
+        run: bash "$GITHUB_WORKSPACE/scripts/ios-install-appstore-profiles.sh"
+
       - name: Ship CodeCaps to TestFlight
         if: steps.gate.outputs.should_ship == '1'
         env:
           IOS_TF_RELEASE_NOTES: "1"
+          IOS_MANUAL_SIGN: "1"
         run: bash scripts/ios-ship-testflight.sh
 
       - name: Save ship-state cache
