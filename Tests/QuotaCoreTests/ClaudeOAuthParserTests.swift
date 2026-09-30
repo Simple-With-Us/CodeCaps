@@ -71,4 +71,51 @@ final class ClaudeOAuthParserTests: XCTestCase {
         XCTAssertNotNil(parsed)
         XCTAssertNotNil(parsed?["claudeAiOauth"] as? [String: Any])
     }
+
+    // MARK: - Renewable detection
+
+    private func oauthRoot(_ fields: [String: Any]) -> [String: Any] {
+        ["claudeAiOauth": fields]
+    }
+
+    func testExpiredLoginWithRefreshTokenIsRenewable() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let root = oauthRoot(["accessToken": "a", "refreshToken": "r", "expiresAt": 1_699_000_000_000.0])
+        XCTAssertTrue(ClaudeOAuthParser.isRenewable(in: root, now: now))
+        let withFutureRefreshExpiry = oauthRoot(["accessToken": "a", "refreshToken": "r",
+                                                 "expiresAt": 1_699_000_000_000.0,
+                                                 "refreshTokenExpiresAt": 1_900_000_000_000.0])
+        XCTAssertTrue(ClaudeOAuthParser.isRenewable(in: withFutureRefreshExpiry, now: now))
+    }
+
+    func testUnexpiredLoginIsNotRenewable() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let root = oauthRoot(["accessToken": "a", "refreshToken": "r", "expiresAt": 1_900_000_000_000.0])
+        XCTAssertFalse(ClaudeOAuthParser.isRenewable(in: root, now: now))
+        // No recorded expiry counts as valid, so there is nothing to renew.
+        XCTAssertFalse(ClaudeOAuthParser.isRenewable(in: oauthRoot(["accessToken": "a", "refreshToken": "r"]), now: now))
+    }
+
+    func testExpiredLoginWithoutRefreshTokenIsNotRenewable() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        XCTAssertFalse(ClaudeOAuthParser.isRenewable(
+            in: oauthRoot(["accessToken": "a", "expiresAt": 1_699_000_000_000.0]), now: now))
+        XCTAssertFalse(ClaudeOAuthParser.isRenewable(
+            in: oauthRoot(["accessToken": "a", "refreshToken": "   ", "expiresAt": 1_699_000_000_000.0]), now: now))
+    }
+
+    func testExpiredRefreshTokenIsNotRenewable() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let root = oauthRoot(["accessToken": "a", "refreshToken": "r",
+                              "expiresAt": 1_699_000_000_000.0,
+                              "refreshTokenExpiresAt": 1_699_500_000_000.0])
+        XCTAssertFalse(ClaudeOAuthParser.isRenewable(in: root, now: now))
+    }
+
+    func testMissingRecordOrAccessTokenIsNotRenewable() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        XCTAssertFalse(ClaudeOAuthParser.isRenewable(in: [:], now: now))
+        XCTAssertFalse(ClaudeOAuthParser.isRenewable(
+            in: oauthRoot(["refreshToken": "r", "expiresAt": 1_699_000_000_000.0]), now: now))
+    }
 }

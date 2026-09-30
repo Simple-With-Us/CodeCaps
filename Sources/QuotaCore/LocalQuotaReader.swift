@@ -36,12 +36,15 @@ public struct LocalQuotaReader: Sendable {
     private let fetchJSON: @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)
     private let runAntigravity: @Sendable () async throws -> Data
     private let readClaudeCredential: @Sendable () async -> ClaudeCredentialAccess
+    private let renewClaudeLogin: @Sendable () async -> Void
+    private let renewalThrottle: ClaudeRenewalThrottle
 
     private static let maxCredentialBytes = 1_048_576
     private static let maxResponseBytes = 1_048_576
     private static let maxProcessOutputBytes = 262_144
     private static let requestTimeout: TimeInterval = 15
     private static let processTimeout: TimeInterval = 30
+    private static let claudeRenewTimeout: TimeInterval = 45
 
     /// `homeDirectory`, `now`, and the transport/process closures are
     /// injectable solely for offline tests.  Production uses the current home
@@ -51,7 +54,9 @@ public struct LocalQuotaReader: Sendable {
         now: @escaping @Sendable () -> Date = { Date() },
         fetchJSON: (@Sendable (URLRequest) async throws -> (Data, HTTPURLResponse))? = nil,
         runAntigravity: (@Sendable () async throws -> Data)? = nil,
-        readClaudeCredential: (@Sendable () async -> ClaudeCredentialAccess)? = nil
+        readClaudeCredential: (@Sendable () async -> ClaudeCredentialAccess)? = nil,
+        renewClaudeLogin: (@Sendable () async -> Void)? = nil,
+        renewalThrottle: ClaudeRenewalThrottle = .shared
     ) {
         self.homeDirectory = homeDirectory.standardizedFileURL
         self.now = now
@@ -61,10 +66,17 @@ public struct LocalQuotaReader: Sendable {
         else if self.homeDirectory == FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL {
             self.readClaudeCredential = { await ClaudeCredentialSource.access() }
         } else { self.readClaudeCredential = { .missing } }
+        if let renewClaudeLogin { self.renewClaudeLogin = renewClaudeLogin }
+        else if self.homeDirectory == FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL {
+            self.renewClaudeLogin = Self.makeClaudeRenewer(homeDirectory: self.homeDirectory)
+        } else { self.renewClaudeLogin = {} }
+        self.renewalThrottle = renewalThrottle
     }
 
     /// Reads all configured local sources concurrently.  This method never
-    /// refreshes OAuth credentials and never posts telemetry.
+    /// refreshes OAuth credentials itself and never posts telemetry.  The one
+    /// exception is asking Claude Code to renew its own expired login, which
+    /// Claude Code performs and writes on its own.
     public func read() async -> LocalQuotaResult {
         await withTaskGroup(of: ProviderRead.self, returning: LocalQuotaResult.self) { group in
             for provider in Provider.allCases {
@@ -104,20 +116,35 @@ public struct LocalQuotaReader: Sendable {
 
     private func readClaude() async throws -> ProviderRead {
         let provider = Provider.claude
-        let file = (try? readJSONObject(relativePath: ".claude/.credentials.json")) ?? [:]
+        var file = (try? readJSONObject(relativePath: ".claude/.credentials.json")) ?? [:]
         var candidate = ClaudeOAuthParser.validOAuth(in: file, now: now())
         // The Keychain is consulted only when Claude Code's own file has no
         // usable credential, so a fresh file never costs a Keychain call.
         var access = ClaudeCredentialAccess.missing
+        var renewable = false
         if candidate == nil {
             access = await ClaudeCredentialSource.boundedAccess { await readClaudeCredential() }
-            if let data = access.data, data.count <= Self.maxCredentialBytes,
-               let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
-                candidate = ClaudeOAuthParser.validOAuth(in: root, now: now())
+            var keychainRoot = credentialRoot(access)
+            candidate = ClaudeOAuthParser.validOAuth(in: keychainRoot, now: now())
+            renewable = ClaudeOAuthParser.isRenewable(in: file, now: now())
+                || ClaudeOAuthParser.isRenewable(in: keychainRoot, now: now())
+            // Claude Code refreshes its 8-hour access token only while it
+            // runs.  An expired-but-renewable login means it is idle, so ask
+            // it to renew its own login (at most once per 15 minutes) and
+            // read the result back.  CodeCaps never writes or refreshes it.
+            if candidate == nil, renewable,
+               await renewalThrottle.perform(now: now(), action: renewClaudeLogin) {
+                file = (try? readJSONObject(relativePath: ".claude/.credentials.json")) ?? [:]
+                access = await ClaudeCredentialSource.boundedAccess { await readClaudeCredential() }
+                keychainRoot = credentialRoot(access)
+                candidate = ClaudeOAuthParser.validOAuth(in: file, now: now())
+                    ?? ClaudeOAuthParser.validOAuth(in: keychainRoot, now: now())
+                renewable = ClaudeOAuthParser.isRenewable(in: file, now: now())
+                    || ClaudeOAuthParser.isRenewable(in: keychainRoot, now: now())
             }
         }
         guard let oauth = candidate, let token = firstString(oauth, ["accessToken", "access_token"]) else {
-            let state = ClaudeLoginState.resolve(hasUsableCredential: false, access: access)
+            let state = ClaudeLoginState.resolve(hasUsableCredential: false, access: access, renewable: renewable)
             return ProviderRead(provider: provider, windows: [], issue: state.issue,
                                 needsConsent: state.needsConsent)
         }
@@ -132,6 +159,13 @@ public struct LocalQuotaReader: Sendable {
             return ProviderRead(provider: provider, windows: [unknownWindow(provider: provider, label: "Claude quota", observedAt: now())], issue: "Claude returned no readable quota windows.")
         }
         return ProviderRead(provider: provider, windows: windows, issue: nil)
+    }
+
+    /// The decoded Keychain record, or an empty dictionary when it is absent,
+    /// unreadable, or oversized.
+    private func credentialRoot(_ access: ClaudeCredentialAccess) -> [String: Any] {
+        guard let data = access.data, data.count <= Self.maxCredentialBytes else { return [:] }
+        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
     }
 
     private func readCodex() async throws -> ProviderRead {
@@ -604,6 +638,26 @@ private extension LocalQuotaReader {
         }
     }
 
+    /// Asks Claude Code to renew its own expired login.  `/usage` costs no
+    /// model tokens and no quota, but starting a session makes Claude Code
+    /// refresh and rewrite its own saved login.  Output is discarded unread,
+    /// and a missing binary or any failure quietly does nothing.
+    static func makeClaudeRenewer(homeDirectory: URL) -> @Sendable () async -> Void {
+        let candidates = [
+            homeDirectory.appendingPathComponent(".local/bin/claude").path,
+            "/opt/homebrew/bin/claude",
+            "/usr/local/bin/claude",
+        ]
+        return {
+            guard let path = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else { return }
+            _ = try? await BoundedQuotaProcess().run(
+                path: path,
+                arguments: ["-p", "--settings", "{\"disableAllHooks\":true}", "--strict-mcp-config",
+                            "--no-session-persistence", "--output-format", "json", "/usage"],
+                home: homeDirectory, timeout: claudeRenewTimeout, maxBytes: maxProcessOutputBytes)
+        }
+    }
+
     static func makeAntigravityRunner(homeDirectory: URL) -> @Sendable () async throws -> Data {
         let candidates = [
             homeDirectory.appendingPathComponent(".local/bin/antigravity-usage").path,
@@ -621,4 +675,54 @@ private extension LocalQuotaReader {
 
 private final class RedirectRefusingURLSessionDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) { completionHandler(nil) }
+}
+
+/// Limits how often CodeCaps asks Claude Code to renew its own login, and
+/// makes overlapping refreshes share one run instead of spawning two.  The
+/// default instance is process-wide; tests pass their own.
+public final class ClaudeRenewalThrottle: @unchecked Sendable {
+    public static let shared = ClaudeRenewalThrottle()
+
+    public let minimumInterval: TimeInterval
+    private let lock = NSLock()
+    private var lastAttempt: Date?
+    private var inFlight: Task<Void, Never>?
+
+    public init(minimumInterval: TimeInterval = 15 * 60) {
+        self.minimumInterval = minimumInterval
+    }
+
+    /// Runs `action` unless an attempt started less than `minimumInterval`
+    /// ago.  A caller that arrives while an attempt is running waits for it.
+    /// Returns whether a renewal ran (or was joined), so the caller knows a
+    /// re-read can be worthwhile.  Failed attempts count toward the interval.
+    func perform(now: Date, action: @escaping @Sendable () async -> Void) async -> Bool {
+        let task: Task<Void, Never>
+        var isOwner = false
+        lock.lock()
+        if let running = inFlight {
+            task = running
+        } else {
+            if let last = lastAttempt {
+                let elapsed = now.timeIntervalSince(last)
+                if elapsed >= 0, elapsed < minimumInterval {
+                    lock.unlock()
+                    return false
+                }
+            }
+            lastAttempt = now
+            let created = Task { await action() }
+            inFlight = created
+            task = created
+            isOwner = true
+        }
+        lock.unlock()
+        await task.value
+        if isOwner {
+            lock.lock()
+            inFlight = nil
+            lock.unlock()
+        }
+        return true
+    }
 }

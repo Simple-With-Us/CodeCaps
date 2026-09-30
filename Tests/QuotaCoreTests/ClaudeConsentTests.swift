@@ -46,6 +46,19 @@ final class ClaudeConsentTests: XCTestCase {
         XCTAssertEqual(ClaudeLoginState.resolve(hasUsableCredential: true, access: .unauthorized), .connected)
     }
 
+    func testRenewableExpiredLoginReadsAsIdleNotSignedOut() {
+        let state = ClaudeLoginState.resolve(hasUsableCredential: false, access: .missing, renewable: true)
+        XCTAssertEqual(state, .idle)
+        XCTAssertFalse(state.needsConsent)
+        XCTAssertEqual(state.issue, "Claude Code's saved login expired while Claude Code was idle." + sentenceGap
+                       + "It renews the next time Claude Code runs.")
+        // An unreadable item still asks for permission first.
+        XCTAssertEqual(ClaudeLoginState.resolve(hasUsableCredential: false, access: .unauthorized, renewable: true),
+                       .needsPermission)
+        XCTAssertEqual(ClaudeLoginState.resolve(hasUsableCredential: false, access: .missing, renewable: false),
+                       .signedOut)
+    }
+
     // MARK: - The reader, with an injected credential closure
 
     func testUnauthorizedItemSurfacesTheConsentIssueAndFlagsTheProvider() async throws {
@@ -113,6 +126,122 @@ final class ClaudeConsentTests: XCTestCase {
         XCTAssertFalse(probed.value, "a fresh credentials file must not cost a Keychain read")
         XCTAssertEqual(result.windows.first { $0.providerKey == "anthropic" }?.remainingPercent, 90)
         XCTAssertTrue(result.consentNeeded.isEmpty)
+    }
+
+    // MARK: - Idle renewal
+
+    private static let expiredRenewable = Data(
+        #"{"claudeAiOauth":{"accessToken":"old","refreshToken":"r","expiresAt":1000000000000}}"#.utf8)
+    private static let freshLogin = Data(
+        #"{"claudeAiOauth":{"accessToken":"new","refreshToken":"r","expiresAt":4102444800000}}"#.utf8)
+
+    /// A counter safe to touch from `@Sendable` closures.
+    private final class Counter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var count = 0
+        func bump() { lock.lock(); count += 1; lock.unlock() }
+        var value: Int { lock.lock(); defer { lock.unlock() }; return count }
+    }
+
+    /// Serves the expired login until `bump()` has been called, then a fresh one.
+    private func makeIdleReader(home: URL, renewals: Counter, renewalHelps: Bool,
+                                throttle: ClaudeRenewalThrottle,
+                                now: @escaping @Sendable () -> Date = { Date() }) -> LocalQuotaReader {
+        LocalQuotaReader(
+            homeDirectory: home,
+            now: now,
+            fetchJSON: { _ in Self.httpResponse(#"{"five_hour":{"utilization":25}}"#) },
+            runAntigravity: { Data("{}".utf8) },
+            readClaudeCredential: {
+                .authorized(renewals.value > 0 && renewalHelps ? Self.freshLogin : Self.expiredRenewable)
+            },
+            renewClaudeLogin: { renewals.bump() },
+            renewalThrottle: throttle)
+    }
+
+    func testIdleLoginIsRenewedThenReadAndReturnsWindows() async throws {
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let renewals = Counter()
+        let reader = makeIdleReader(home: home, renewals: renewals, renewalHelps: true,
+                                    throttle: ClaudeRenewalThrottle())
+        let result = await reader.read()
+        XCTAssertEqual(renewals.value, 1)
+        XCTAssertEqual(result.windows.first { $0.providerKey == "anthropic" }?.remainingPercent, 75)
+        XCTAssertNil(result.issues["anthropic"])
+        XCTAssertTrue(result.consentNeeded.isEmpty)
+    }
+
+    func testRenewalThatDoesNotHelpReportsIdleNotSignedOut() async throws {
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let renewals = Counter()
+        let reader = makeIdleReader(home: home, renewals: renewals, renewalHelps: false,
+                                    throttle: ClaudeRenewalThrottle())
+        let result = await reader.read()
+        XCTAssertEqual(renewals.value, 1)
+        XCTAssertEqual(result.issues["anthropic"], ClaudeLoginState.idle.issue)
+        XCTAssertNotEqual(result.issues["anthropic"], ClaudeLoginState.signedOut.issue)
+        XCTAssertFalse(result.consentNeeded.contains("anthropic"))
+        XCTAssertTrue(result.windows.filter { $0.providerKey == "anthropic" }.isEmpty)
+    }
+
+    func testRenewalIsThrottledToOncePerFifteenMinutes() async throws {
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let renewals = Counter()
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        let reader = makeIdleReader(home: home, renewals: renewals, renewalHelps: false,
+                                    throttle: ClaudeRenewalThrottle(), now: { start })
+        _ = await reader.read()
+        _ = await reader.read()
+        XCTAssertEqual(renewals.value, 1, "two reads inside 15 minutes must renew once")
+
+        let later = makeIdleReader(home: home, renewals: renewals, renewalHelps: false,
+                                   throttle: ClaudeRenewalThrottle(), now: { start })
+        _ = await later.read()   // fresh throttle: one more, proving the counter is per throttle
+        XCTAssertEqual(renewals.value, 2)
+    }
+
+    func testThrottleAllowsAnotherRenewalAfterTheInterval() async {
+        let throttle = ClaudeRenewalThrottle()
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        let renewals = Counter()
+        let first = await throttle.perform(now: start) { renewals.bump() }
+        let second = await throttle.perform(now: start.addingTimeInterval(14 * 60)) { renewals.bump() }
+        let third = await throttle.perform(now: start.addingTimeInterval(16 * 60)) { renewals.bump() }
+        XCTAssertEqual([first, second, third], [true, false, true])
+        XCTAssertEqual(renewals.value, 2)
+    }
+
+    func testOverlappingRenewalsShareOneRun() async {
+        let throttle = ClaudeRenewalThrottle()
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let renewals = Counter()
+        async let a = throttle.perform(now: now) {
+            renewals.bump()
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+        async let b = throttle.perform(now: now) { renewals.bump() }
+        _ = await (a, b)
+        XCTAssertEqual(renewals.value, 1)
+    }
+
+    func testUnrenewableExpiredLoginNeverAsksClaudeCodeToRenew() async throws {
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let renewals = Counter()
+        let reader = LocalQuotaReader(
+            homeDirectory: home,
+            runAntigravity: { Data("{}".utf8) },
+            readClaudeCredential: {
+                .authorized(Data(#"{"claudeAiOauth":{"accessToken":"old","expiresAt":1000000000000}}"#.utf8))
+            },
+            renewClaudeLogin: { renewals.bump() },
+            renewalThrottle: ClaudeRenewalThrottle())
+        let result = await reader.read()
+        XCTAssertEqual(renewals.value, 0)
+        XCTAssertEqual(result.issues["anthropic"], ClaudeLoginState.signedOut.issue)
     }
 
     // MARK: - Helpers
