@@ -5,6 +5,21 @@ PR (when shipped), follow-ups (when parked).
 
 ---
 
+## 2026-09-30 — Glance v2: From Mac / From Fleet, source bands, thicker bars, two-unit countdowns, MiniMax expand [CLAUDE, in review]
+
+Lane: `claude/glance-v2-polish` (worktree `~/apps/codecaps-claude-glance-v2`, board `622653dd`).  Owner delta on top of the switch below, which this renames: `THIS MAC | FLEET REPORTED` is now `FROM MAC | FROM FLEET` everywhere (titles, VoiceOver, empty states, tests).  The stored `glanceView` values stay `thisMac` and `fleetReported`, so a saved choice survives.
+
+- Header: the right side is one line, `[bell] ALL   •   6 of 7   •   4:27 PM   [reload]`, live.  With All off, each row starts with a faint bell (solid when picked) and its logo and name shift right.
+- From Fleet: no per-row FLEET badge.  Rows sit under an uppercase heading per reporting source (`FleetOrigin.identity`, for example `CHATGPT.COM`) on a band darker than the list, with the source's latest reading on the right.  A source that names nothing reads `UNNAMED SOURCE`.  Band text has its own colour (`Theme.groupBandLabel`, 4.5:1 or better in both appearances, tested).  A fleet MiniMax row never expands.
+- Bars are 6pt (1.5x) with a 16pt elapsed marker (2x, same 2pt width); the gap between the two meters is 48pt (was 24pt); the popover stays 624pt.
+- Countdowns show the two largest non-zero units (`4d 2h`, `4d 59m`, `2h 42m`, `45m`, `<1m`), with the full value and the reset's date and time in a tooltip on the countdown.  The Console's Next Reset tile keeps the whole value.  The row's own tooltip now sits on the logo and name, so it never nests with the countdown's.
+- Expanded rows list only windows the row's two meters leave out, as meter lines in the row's columns (local MiniMax opens to its video 1d / 7d line).  A second source's copy of a shown window is not listed again.  VoiceOver reads each line with its captions and resets.
+- A row with no reading (`not signed in`, `unavailable`, `login idle`, `needs permission`) starts its text where a single bar starts; `GlanceAlignmentTests` lays a real row out and compares pixels.
+- Third-Party star: pure black on Light, pure white on Dark.  Gemini keeps the colour star.  Cursor's plan reads `1m`.
+- Evidence: `GlanceRenderTests` (`CODECAPS_GLANCE_RENDER_DIR`) draws From Mac and From Fleet (two sources), All on and off, MiniMax expanded, Claude signed out and the fleet empty state, Light and Dark.  The docs Glance screenshots are regenerated.
+
+---
+
 ## 2026-09-30 — Glance view switch, per-provider reset alarms, Third-Party pool, 1m, roomier rows [CLAUDE, in review]
 
 Lane: `claude/glance-toggle-alarms` (worktree `~/apps/codecaps-claude-glance-toggle`, board `e551b867`).

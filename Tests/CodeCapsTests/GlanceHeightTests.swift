@@ -95,10 +95,11 @@ final class GlanceHeightTests: XCTestCase {
     }
 
     func testFleetGroupsCountHeadingsGapsAndHairlines() {
-        // Two groups of 3 and 1 rows: two headings, one 6pt gap, 4 rows, 2 hairlines.
+        // Two groups of 3 and 1 rows: two 22pt heading bands, one 6pt gap,
+        // 4 rows, 2 hairlines.
         let two = QuotaGlanceMetrics.fleetListHeight(rowsPerGroup: [3, 1])
         let empty = QuotaGlanceMetrics.fleetListHeight(rowsPerGroup: [])
-        let expected: CGFloat = 36 + 6 + 152 + 2
+        let expected: CGFloat = 44 + 6 + 152 + 2
         XCTAssertEqual(two, expected)
         XCTAssertEqual(empty, Metrics.glanceEmptyStateHeight)
     }
@@ -139,13 +140,13 @@ final class GlanceHeightTests: XCTestCase {
         return document.frame.height - scroll.contentSize.height
     }
 
-    func testThisMacListFitsItsScrollAreaWithoutScrolling() throws {
-        let extra = try overflow(of: .thisMac)
-        XCTAssertLessThanOrEqual(extra, 0.5, "This Mac's list overflows the popover by \(extra)pt")
+    func testFromMacListFitsItsScrollAreaWithoutScrolling() throws {
+        let extra = try overflow(of: .fromMac)
+        XCTAssertLessThanOrEqual(extra, 0.5, "From Mac's list overflows the popover by \(extra)pt")
     }
 
-    func testFleetReportedListFitsItsScrollAreaWithoutScrolling() throws {
-        let extra = try overflow(of: .fleetReported)
-        XCTAssertLessThanOrEqual(extra, 0.5, "Fleet Reported's list overflows the popover by \(extra)pt")
+    func testFromFleetListFitsItsScrollAreaWithoutScrolling() throws {
+        let extra = try overflow(of: .fromFleet)
+        XCTAssertLessThanOrEqual(extra, 0.5, "From Fleet's list overflows the popover by \(extra)pt")
     }
 }

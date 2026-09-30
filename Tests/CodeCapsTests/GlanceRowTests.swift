@@ -12,69 +12,261 @@ import QuotaCore
 /// that the popover depends on for every row, so it is the right thing to
 /// lock down.
 final class GlanceRowTests: XCTestCase {
+    private let now = Date(timeIntervalSince1970: 1_700_000_000)
+    private let minute: TimeInterval = 60
+    private let hour: TimeInterval = 3_600
+    private let day: TimeInterval = 86_400
+
+    private func countdown(_ interval: TimeInterval) -> String {
+        glanceResetCountdown(now.addingTimeInterval(interval), now: now)
+    }
+
+    // MARK: Countdown: at most the two largest non-zero units
+
     func testCountdownReturnsEmptyStringForNilReset() {
-        let result = glanceResetCountdown(nil, now: Date(timeIntervalSince1970: 0))
-        XCTAssertEqual(result, "")
+        XCTAssertEqual(glanceResetCountdown(nil, now: now), "")
     }
 
-    func testCountdownReturnsDueForPastReset() {
-        let now = Date(timeIntervalSince1970: 1_700_000_000)
-        let reset = now.addingTimeInterval(-60)
-        XCTAssertEqual(glanceResetCountdown(reset, now: now), "due")
+    func testCountdownIsDueAtZeroAndInThePast() {
+        XCTAssertEqual(countdown(0), "due")
+        XCTAssertEqual(countdown(-60), "due")
+        XCTAssertEqual(countdown(-3 * day), "due")
     }
 
-    func testCountdownRoundsUpToWholeMinute() {
-        // The popover shows time in whole minutes; any sub-minute remainder
-        // rounds up so a window with 30.4s left reads "1m", not "0m".
-        let now = Date(timeIntervalSince1970: 1_700_000_000)
-        let reset = now.addingTimeInterval(30)
-        XCTAssertEqual(glanceResetCountdown(reset, now: now), "1m")
+    func testUnderAMinuteReadsLessThanOneMinute() {
+        XCTAssertEqual(countdown(1), "<1m")
+        XCTAssertEqual(countdown(30), "<1m")
+        XCTAssertEqual(countdown(59), "<1m")
+        XCTAssertEqual(countdown(60), "1m")
     }
 
-    func testCountdownFormatSwitchesFromMinutesToHours() {
-        let now = Date(timeIntervalSince1970: 1_700_000_000)
-        let in59min = now.addingTimeInterval(59 * 60)
-        let in60min = now.addingTimeInterval(60 * 60)
-        let in61min = now.addingTimeInterval(61 * 60)
-        XCTAssertEqual(glanceResetCountdown(in59min, now: now), "59m")
-        XCTAssertEqual(glanceResetCountdown(in60min, now: now), "1h 0m")
-        XCTAssertEqual(glanceResetCountdown(in61min, now: now), "1h 1m")
+    func testMinutesOnly() {
+        XCTAssertEqual(countdown(45 * minute), "45m")
+        XCTAssertEqual(countdown(59 * minute + 59), "59m", "whole minutes left, never rounded up into an hour")
     }
 
-    func testCountdownFormatSwitchesFromHoursToDays() {
-        let now = Date(timeIntervalSince1970: 1_700_000_000)
-        let daySeconds: TimeInterval = 24 * 60 * 60
-        let in23h59m = now.addingTimeInterval(23 * 60 * 60 + 59 * 60)
-        let in24h = now.addingTimeInterval(daySeconds)
-        let in25h = now.addingTimeInterval(daySeconds + 60 * 60)
-        XCTAssertEqual(glanceResetCountdown(in23h59m, now: now), "23h 59m")
-        XCTAssertEqual(glanceResetCountdown(in24h, now: now), "1d 0h")
-        XCTAssertEqual(glanceResetCountdown(in25h, now: now), "1d 1h")
+    func testHoursAndMinutes() {
+        XCTAssertEqual(countdown(2 * hour + 42 * minute), "2h 42m")
+        XCTAssertEqual(countdown(23 * hour + 59 * minute), "23h 59m")
+        XCTAssertEqual(countdown(hour + minute), "1h 1m")
     }
 
-    func testCountdownIncludesMinutesForWeeklyWhenNonZero() {
-        let now = Date(timeIntervalSince1970: 1_700_000_000)
-        let in2d5h30m = now.addingTimeInterval(2 * 86_400 + 5 * 3_600 + 30 * 60)
-        XCTAssertEqual(glanceResetCountdown(in2d5h30m, now: now), "2d 5h 30m")
+    func testDaysAndHoursDropTheMinutes() {
+        XCTAssertEqual(countdown(4 * day + 2 * hour + 42 * minute), "4d 2h")
+        XCTAssertEqual(countdown(17 * day + 4 * hour + 57 * minute), "17d 4h")
+        XCTAssertEqual(countdown(6 * day + 23 * hour + 59 * minute), "6d 23h")
+        XCTAssertEqual(countdown(day + hour), "1d 1h")
     }
 
-    func testCountdownFitsInTrailingColumnForCodepath() {
-        // The trailing column on the popover is fixed at 64pt wide.  Any
-        // countdown value that would clip in that column is a layout bug;
-        // a regression here is a regression of the PR-#38 width bump.
-        let now = Date(timeIntervalSince1970: 1_700_000_000)
-        let values: [String] = [
-            glanceResetCountdown(now.addingTimeInterval(60), now: now),
-            glanceResetCountdown(now.addingTimeInterval(60 * 60 + 50 * 60), now: now),
-            glanceResetCountdown(now.addingTimeInterval(2 * 24 * 60 * 60 + 5 * 60 * 60), now: now),
-        ]
-        for value in values {
-            // Five characters is the most the column has been shown to fit
-            // in practice after the widen; longer strings have already been
-            // observed to clip in the screenshot that drove PR #38.
-            XCTAssertLessThanOrEqual(value.count, 6,
-                "countdown '\(value)' is longer than the 64pt trailing column can render")
+    func testAZeroUnitIsDroppedAndNeverShowsZeroHours() {
+        XCTAssertEqual(countdown(hour), "1h", "not \"1h 0m\"")
+        XCTAssertEqual(countdown(day), "1d", "not \"1d 0h\"")
+        // "The two largest non-zero units": the zero hour is skipped, the
+        // minutes are not lost.
+        XCTAssertEqual(countdown(4 * day + 59 * minute), "4d 59m", "a zero hour is skipped, never shown as \"0h\"")
+        XCTAssertEqual(countdown(day + minute), "1d 1m")
+        XCTAssertEqual(countdown(2 * day + 30), "2d", "seconds are not a unit")
+        XCTAssertEqual(countdown(day - 1), "23h 59m", "a second short of a day stays in hours")
+        XCTAssertEqual(countdown(hour - 1), "59m", "a second short of an hour stays in minutes")
+        for interval in stride(from: 0.0, through: 40 * day, by: 7 * minute + 13) {
+            let text = countdown(interval)
+            XCTAssertFalse(text.hasPrefix("0"), "'\(text)' leads with a zero unit")
+            XCTAssertFalse(text.contains(" 0"), "'\(text)' carries a zero unit")
+            XCTAssertLessThanOrEqual(text.split(separator: " ").count, 2, "'\(text)' has more than two units")
         }
+    }
+
+    func testTheTooltipCarriesTheFullValueAndTheResetTime() {
+        let reset = now.addingTimeInterval(4 * day + 2 * hour + 42 * minute)
+        XCTAssertEqual(glanceResetFullCountdown(reset, now: now), "4d 2h 42m")
+        XCTAssertEqual(glanceResetFullCountdown(now.addingTimeInterval(2 * hour), now: now), "2h",
+                       "zero units are skipped in the tooltip too")
+        XCTAssertEqual(glanceResetFullCountdown(now.addingTimeInterval(4 * day + 5 * minute), now: now), "4d 5m")
+        XCTAssertEqual(glanceResetFullCountdown(now.addingTimeInterval(45 * minute), now: now), "45m")
+        XCTAssertEqual(glanceResetFullCountdown(now.addingTimeInterval(20), now: now), "less than a minute")
+        let help = glanceResetHelp(reset, now: now)
+        let when = reset.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().hour().minute())
+        XCTAssertEqual(help, "Resets in 4d 2h 42m, on \(when)")
+        XCTAssertNil(glanceResetHelp(nil, now: now))
+        XCTAssertNotNil(glanceResetHelp(now.addingTimeInterval(-60), now: now))
+    }
+
+    func testTheTooltipNeverShowsAZeroUnit() {
+        for interval in stride(from: 61.0, through: 40 * day, by: 5 * minute + 7) {
+            let text = glanceResetFullCountdown(now.addingTimeInterval(interval), now: now)
+            XCTAssertFalse(text.hasPrefix("0"), "'\(text)'")
+            XCTAssertFalse(text.contains(" 0"), "'\(text)'")
+        }
+    }
+
+    // MARK: Status text
+
+    func testStatusTextNamesTheProblemInAFewWords() {
+        XCTAssertEqual(glanceRowStatusText(issue: ClaudeLoginState.signedOut.issue, hasWindows: false), "not signed in")
+        XCTAssertEqual(glanceRowStatusText(issue: ClaudeLoginState.needsPermission.issue, hasWindows: false),
+                       "needs permission")
+        XCTAssertEqual(glanceRowStatusText(issue: ClaudeLoginState.idle.issue, hasWindows: true), "login idle")
+        XCTAssertEqual(glanceRowStatusText(issue: "Claude quota is temporarily unavailable.", hasWindows: true),
+                       "unavailable")
+        XCTAssertEqual(glanceRowStatusText(issue: nil, hasWindows: false), "no report")
+    }
+}
+
+// MARK: - Expanded rows show only what the row does not
+
+final class GlanceExpandedLineTests: XCTestCase {
+    private let now = Date(timeIntervalSince1970: 1_700_000_000)
+    private let iso = ISO8601DateFormatter()
+
+    private func window(_ id: String, provider: String = "minimax", label: String, token: String?,
+                        remaining: Double = 50, resetIn: TimeInterval = 3_600, model: String? = nil) -> QuotaWindow {
+        QuotaWindow(id: id, provider: provider, providerKey: provider, modelId: model, label: label,
+                    remainingPercent: remaining,
+                    resetAt: iso.string(from: now.addingTimeInterval(resetIn)),
+                    window: token, occurredAt: iso.string(from: now))
+    }
+
+    private func row(_ windows: [QuotaWindow]) -> DisplaySection {
+        let section = QuotaResponse(generatedAt: "", windows: windows).platformSections(now: now)
+            .first { !$0.windows.isEmpty }!
+        return DisplaySection.rows(for: section, now: now)[0]
+    }
+
+    /// MiniMax as it reports: a "general" 4h and weekly pair the row meters,
+    /// and a "video" daily and weekly pair it does not.
+    private var miniMax: DisplaySection {
+        row([
+            window("general:interval", label: "general (4h window)", token: "4h", remaining: 92,
+                   resetIn: 3 * 3_600, model: "general"),
+            window("general:weekly", label: "general (1w window)", token: "1w", remaining: 81,
+                   resetIn: 6 * 86_400, model: "general"),
+            window("video:interval", label: "video (1d window)", token: "1d", remaining: 100,
+                   resetIn: 20 * 3_600, model: "video"),
+            window("video:weekly", label: "video (1w window)", token: "1w", remaining: 97,
+                   resetIn: 5 * 86_400, model: "video"),
+        ])
+    }
+
+    func testMiniMaxExpandsToOneVideoLineAndNeverRepeatsTheGeneralWindows() {
+        let pair = glanceMeterPair(for: miniMax, now: now)
+        XCTAssertEqual(pair.short?.window.id, "general:interval")
+        XCTAssertEqual(pair.long?.window.id, "general:weekly")
+
+        let lines = glanceExpandedLines(for: miniMax, now: now)
+        XCTAssertEqual(lines.count, 1)
+        XCTAssertEqual(lines.first?.label, "Video")
+        XCTAssertEqual(lines.first?.short?.window.id, "video:interval", "the shorter cadence takes the first column")
+        XCTAssertEqual(lines.first?.long?.window.id, "video:weekly")
+        let shownIds = lines.flatMap { [$0.short, $0.long].compactMap { $0?.window.id } }
+        XCTAssertFalse(shownIds.contains { $0.hasPrefix("general") }, "the row already shows the general windows")
+        XCTAssertEqual(lines.first.map { [$0.short, $0.long].compactMap { $0 }.map(glanceMeterCaption) },
+                       ["1d", "7d"])
+    }
+
+    func testARowWithOnlyItsTwoMetersHasNothingToExpand() {
+        let twoWindows = row([
+            window("5h", provider: "anthropic", label: "5h window", token: "5h"),
+            window("7d", provider: "anthropic", label: "7d window", token: "7d", resetIn: 3 * 86_400),
+        ])
+        XCTAssertTrue(glanceExpandedLines(for: twoWindows, now: now).isEmpty)
+    }
+
+    func testALoneWeeklyExtraSitsUnderTheRowsWeeklyMeter() {
+        let claude = row([
+            window("five_hour", provider: "anthropic", label: "5h window", token: "5h", remaining: 40),
+            window("seven_day", provider: "anthropic", label: "7d window", token: "7d", remaining: 60,
+                   resetIn: 3 * 86_400),
+            window("seven_day_sonnet", provider: "anthropic", label: "7d window (Sonnet)", token: "7d",
+                   remaining: 90, resetIn: 3 * 86_400, model: "sonnet"),
+        ])
+        let lines = glanceExpandedLines(for: claude, now: now)
+        XCTAssertEqual(lines.count, 1)
+        XCTAssertEqual(lines.first?.label, "Sonnet")
+        XCTAssertNil(lines.first?.short, "the first column stays empty")
+        XCTAssertEqual(lines.first?.long?.window.id, "seven_day_sonnet")
+    }
+
+    func testLineLabelsSayWhatTheWindowMeasures() {
+        func label(_ label: String, model: String? = nil) -> String {
+            glanceLineLabel(QuotaWindowSnapshot(window: window("x", label: label, token: nil, model: model), now: now))
+        }
+        XCTAssertEqual(label("video (1d window)", model: "video"), "Video")
+        XCTAssertEqual(label("video (1d window)"), "Video")
+        XCTAssertEqual(label("7-day window (Sonnet)"), "Sonnet")
+        XCTAssertEqual(label("5h window (gpt-5-codex)", model: "gpt-5-codex"), "gpt-5-codex")
+        XCTAssertEqual(label("Kimi Code (5h)"), "Kimi Code")
+        XCTAssertEqual(label("Third-Party Models · Weekly"), "Third-Party")
+        XCTAssertEqual(label("7d window"), "Overall")
+        XCTAssertEqual(label("Included plan"), "Included plan")
+    }
+
+    func testASecondSourcesCopyOfAShownWindowIsNotAnExtraLine() {
+        func claude(_ id: String, source: String, token: String, remaining: Double, resetIn: TimeInterval,
+                    model: String? = nil, label: String) -> QuotaWindow {
+            var w = window(id, provider: "anthropic", label: label, token: token, remaining: remaining,
+                           resetIn: resetIn, model: model)
+            w.source = source
+            return w
+        }
+        let twoReaders = row([
+            claude("a:5h", source: "claude-oauth", token: "5h", remaining: 40, resetIn: 3_600, label: "5h window"),
+            claude("a:7d", source: "claude-oauth", token: "7d", remaining: 60, resetIn: 3 * 86_400,
+                   label: "7d window"),
+            claude("b:5h", source: "claude-cli", token: "5h", remaining: 42, resetIn: 3_600, label: "5h window"),
+            claude("b:7d", source: "claude-cli", token: "7d", remaining: 61, resetIn: 3 * 86_400,
+                   label: "7d window"),
+        ])
+        XCTAssertTrue(glanceExpandedLines(for: twoReaders, now: now).isEmpty,
+                      "the second reader's 5h and weekly are the row's own numbers again")
+
+        let withSonnet = row([
+            claude("a:5h", source: "claude-oauth", token: "5h", remaining: 40, resetIn: 3_600, label: "5h window"),
+            claude("a:7d", source: "claude-oauth", token: "7d", remaining: 60, resetIn: 3 * 86_400,
+                   label: "7d window"),
+            claude("b:5h", source: "claude-cli", token: "5h", remaining: 42, resetIn: 3_600, label: "5h window"),
+            claude("b:sonnet", source: "claude-cli", token: "7d", remaining: 90, resetIn: 3 * 86_400,
+                   model: "sonnet", label: "7d window (Sonnet)"),
+        ])
+        XCTAssertEqual(glanceExpandedLines(for: withSonnet, now: now).map(\.label), ["Sonnet"],
+                       "a window the row does not show still gets its line")
+    }
+
+    func testTwoWindowsFromOneSourceWithTheSameNameAreBothKept() {
+        let one = row([
+            window("m:a", label: "general (4h window)", token: "4h", remaining: 10, resetIn: 3_600, model: "general"),
+            window("m:b", label: "general (1w window)", token: "1w", remaining: 10, resetIn: 86_400, model: "general"),
+            window("m:c", label: "video (1d window)", token: "1d", remaining: 100, resetIn: 3_600, model: "video"),
+            window("m:d", label: "video (1d window)", token: "1d", remaining: 90, resetIn: 7_200, model: "video"),
+        ])
+        XCTAssertEqual(glanceExpandedLines(for: one, now: now).flatMap { [$0.short, $0.long].compactMap { $0 } }.count,
+                       2, "windows that share a source are windows, not copies")
+    }
+
+    func testAnExpandedLineIsSpokenWithItsCaptionsAndResets() throws {
+        let lines = glanceExpandedLines(for: miniMax, now: now)
+        let line = try XCTUnwrap(lines.first)
+        let speech = glanceMetersSpeech([line.short, line.long], now: now)
+        XCTAssertTrue(speech.hasPrefix("1d 100 percent remaining"), speech)
+        XCTAssertTrue(speech.contains("; 7d 97 percent remaining"), speech)
+        XCTAssertTrue(speech.contains("resets in 20h"), speech)
+        XCTAssertTrue(speech.contains("resets in 5d"), speech)
+        XCTAssertEqual(glanceMetersSpeech([nil, nil], now: now), "")
+    }
+
+    func testAMaskedAntigravityWindowIsNeverAnExtraLine() {
+        let windows = [
+            QuotaWindowSnapshot(window: window("5h", provider: "anthropic", label: "Gemini · 5-hour", token: "5h",
+                                               remaining: 80), now: now),
+            QuotaWindowSnapshot(window: window("weekly", provider: "anthropic", label: "Gemini · Weekly",
+                                               token: "weekly", remaining: 0, resetIn: 3 * 86_400), now: now),
+        ]
+        let masked = DisplaySection(
+            id: "google-antigravity:gemini", providerKey: "google-antigravity", title: "Antigravity · Gemini",
+            platformTitle: "Antigravity",
+            section: QuotaPlatformSection(providerKey: "google-antigravity", providerLabel: "Antigravity",
+                                          via: nil, expected: true, windows: windows),
+            poolKey: "gemini", remainingPercent: 0, resetAt: nil, maskedWindowIds: ["5h"])
+        XCTAssertTrue(glanceExpandedLines(for: masked, now: now).isEmpty)
     }
 }
 

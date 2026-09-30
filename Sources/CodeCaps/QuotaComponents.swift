@@ -37,8 +37,7 @@ enum Theme {
     static let selection = dyn(hex(0x087370).withAlphaComponent(0.12),
                                hex(0x4FD1C5).withAlphaComponent(0.18))
 
-    /// The outline of a small header control: the This Mac / Fleet Reported
-    /// switch and the All bell.
+    /// The outline of a small header control: the From Mac / From Fleet switch.
     static let controlBorder = dyn(NSColor.black.withAlphaComponent(0.16),
                                    NSColor.white.withAlphaComponent(0.22))
 
@@ -46,6 +45,20 @@ enum Theme {
     /// visible enough to find, quiet enough not to read as a setting.
     static let faint = dyn(NSColor.black.withAlphaComponent(0.26),
                            NSColor.white.withAlphaComponent(0.30))
+
+    /// The band behind a source's heading in From Fleet: darker than the list
+    /// background in both appearances, so each source reads as a section.
+    static let groupBand = dyn(hex(0xE1E6E7), hex(0x111214))
+
+    /// Text on that band: the source's name and its "reported" time.  The
+    /// system secondary and tertiary greys are tuned for the list background
+    /// and fall under 3:1 on the darker band, so the band carries its own
+    /// label colour (at least 4.5:1 in both appearances; a test measures it).
+    static let groupBandLabel = dyn(hex(0x4A5663), hex(0xB7BEC7))
+
+    /// A one-colour brand mark that has to read as solid, not as body text:
+    /// pure black on Light and pure white on Dark, never the ink's grey.
+    static let solidMark = dyn(NSColor.black, NSColor.white)
 
     private static func dyn(_ light: NSColor, _ dark: NSColor) -> Color {
         Color(nsColor: NSColor(name: nil) {
@@ -71,30 +84,36 @@ enum Metrics {
     /// percentage, its countdown and the second meter.  It was 560pt until the
     /// owner found the row "a bit too cramped" (2026-09-30): the percentage and
     /// the countdown touched ("100%4h 41m"), and the two meters nearly did.
-    /// See `glanceRowIntrinsicWidth` for the arithmetic this width has to
-    /// satisfy, which `GlanceRowTests` pins, together with the measured widths
-    /// of the longest realistic values.
+    /// The doubled gap between the two meters fits without widening again,
+    /// because a countdown now carries only its two largest units.  See
+    /// `glanceRowIntrinsicWidth` for the arithmetic this width has to satisfy,
+    /// which `GlanceRowTests` pins, together with the measured widths of the
+    /// longest realistic values.
     static let glanceWidth: CGFloat = 624
     static let glanceMinHeight: CGFloat = 200
     static let glanceGutter: CGFloat = 12
     static let glanceHeaderHeight: CGFloat = 36
-    /// Height of the This Mac / Fleet Reported switch and the All bell.
+    /// Height of the From Mac / From Fleet switch.
     static let glanceHeaderControlHeight: CGFloat = 20
     static let glanceFooterHeight: CGFloat = 38
-    static let glanceGroupHeaderHeight: CGFloat = 18
+    /// A source's heading band in From Fleet.
+    static let glanceGroupHeaderHeight: CGFloat = 22
     /// The list's own padding above the first row and below the last.
     static let glanceListPadding: CGFloat = 8
     /// The hairline between two rows, and the `Divider` under the header and
     /// above the footer.
     static let glanceDividerHeight: CGFloat = 1
     /// The gap above the Set Up Fleet Sync card (and the gap between two
-    /// machines' groups in Fleet Reported).
+    /// sources' groups in From Fleet).
     static let glanceSetupGap: CGFloat = 12
     static let glanceGroupGap: CGFloat = 6
-    /// Every row, This Mac or Fleet Reported: a fleet row's "reported at"
-    /// moved to its machine's heading, so it no longer needs a taller row.
+    /// Every row, From Mac or From Fleet: a fleet row's "reported at"
+    /// moved to its source's heading, so it no longer needs a taller row.
     static let glanceLocalRowHeight: CGFloat = 38
     static let glanceCTARowHeight: CGFloat = 52
+    /// One extra line of meters under an expanded row: the windows the row's
+    /// own two meters leave out, in the same columns.
+    static let glanceExpandedLineHeight: CGFloat = 28
     /// What an empty list's explanation needs: icon, title, two lines, button.
     static let glanceEmptyStateHeight: CGFloat = 170
 
@@ -108,29 +127,41 @@ enum Metrics {
     static let glanceRowTitleWidth: CGFloat = 80
     /// Fits "Plan" and "24h" at 11pt medium; "Quota" fits at its 0.8 scale.
     static let glanceMeterCaptionWidth: CGFloat = 26
+    /// The gap between the parts inside one meter: caption, bar, percentage
+    /// and countdown.
+    static let glanceMeterGap: CGFloat = 4
     static let glanceMeterBarWidth: CGFloat = 50
+    /// The bar's thickness: 1.5x the 4pt it was before the 2026-09-30 delta.
+    static let glanceMeterBarHeight: CGFloat = 6
+    /// The elapsed marker's full height, twice the 8pt it was, so the black
+    /// tick reads at a glance against the thicker bar.  Same 2pt width.
+    static let glanceMeterMarkerHeight: CGFloat = 16
     /// "100%" is 32.2pt at 11pt medium with monospaced digits.  The rest of
     /// the column is the gap before the countdown, so the two never touch.
     static let glanceMeterPercentWidth: CGFloat = 44
-    /// "29d 23h 59m", the longest monthly countdown, is 72.1pt at 11pt medium;
-    /// "6d 23h 59m" is 65.3pt and "17d 4h 57m" 61.9pt.
-    static let glanceMeterCountdownWidth: CGFloat = 74
-    /// The status text shown in place of the meters when a row has no reading.
-    static let glanceRowTrailingWideWidth: CGFloat = 100
+    /// A countdown carries at most its two largest units ("17d 4h", "2h 42m"),
+    /// so the widest realistic value is "31d 23h" or "23h 59m", about 46pt at
+    /// 11pt medium.  The full value lives in the countdown's tooltip.
+    static let glanceMeterCountdownWidth: CGFloat = 54
     static let glanceChevronWidth: CGFloat = 10
     /// The fixed gap between the row's columns, used by every spacer so one
     /// change re-tunes the whole row.
     static let glanceColumnGap: CGFloat = 8
     /// The gap between the two meters: from the end of the first countdown to
-    /// the second meter's caption.  Wider than the column gap so the two
-    /// windows read as two groups.
-    static let glanceMeterGroupGap: CGFloat = 24
+    /// the second meter's caption.  Twice the 24pt it was (owner delta,
+    /// 2026-09-30), so the two windows read as two separate columns.
+    static let glanceMeterGroupGap: CGFloat = 48
     /// The gap right after the logo, which is tighter than the rest.
     static let glanceLogoGap: CGFloat = 6
 
     /// How wide one meter is: caption, gap, bar, gap, percent, gap, countdown.
-    static let glanceMeterWidth: CGFloat = glanceMeterCaptionWidth + 4 + glanceMeterBarWidth
-        + 4 + glanceMeterPercentWidth + 4 + glanceMeterCountdownWidth
+    static let glanceMeterWidth: CGFloat = glanceMeterCaptionWidth + glanceMeterGap + glanceMeterBarWidth
+        + glanceMeterGap + glanceMeterPercentWidth + glanceMeterGap + glanceMeterCountdownWidth
+
+    /// Where a meter's bar starts, measured from the start of its column.  A
+    /// row with no reading puts its status text here, so "not signed in" sits
+    /// exactly where a single bar (Cursor's) would begin.
+    static let glanceMeterBarInset: CGFloat = glanceMeterCaptionWidth + glanceMeterGap
 
     /// The width a two-meter row actually occupies: the alarm bell, logo,
     /// title, two meters, the chevron, their gaps, and the popover's own
@@ -206,6 +237,11 @@ struct QuotaUsageBar: View {
     /// Extra words spoken after the metrics, such as the pace verdict.
     var accessibilitySuffix: String? = nil
 
+    /// The marker's full height, when a surface wants it taller than the
+    /// bar plus `markerOverhang` above and below.  Glance's thicker bar sets
+    /// it; the Console keeps the default.
+    var markerHeight: CGFloat? = nil
+
     /// How far the marker stands proud of the bar above and below.
     static let markerOverhang: CGFloat = 2
     static let markerWidth: CGFloat = 2
@@ -227,7 +263,7 @@ struct QuotaUsageBar: View {
                     Capsule().fill(Theme.track)
                 }
                 if let x = metrics.markerOffset(in: width) {
-                    let markerHeight = geometry.size.height + Self.markerOverhang * 2
+                    let markerHeight = self.markerHeight ?? geometry.size.height + Self.markerOverhang * 2
                     ZStack {
                         Rectangle().fill(Theme.pacingMarkerHalo)
                             .frame(width: Self.markerWidth + 2, height: markerHeight + 2)
@@ -386,10 +422,10 @@ extension QuotaPlatformSection {
 /// Glance's height is computed from the EXPECTED provider count rather than the
 /// reporting count, so the popover cannot resize under the pointer when a
 /// platform appears or disappears between refreshes.  It is the taller of the
-/// two views, so flipping between This Mac and Fleet Reported while the
+/// two views, so flipping between From Mac and From Fleet while the
 /// popover is open never resizes it either.
 enum QuotaGlanceMetrics {
-    /// The height of the This Mac list: its rows, the hairline between each
+    /// The height of the From Mac list: its rows, the hairline between each
     /// pair, and the Set Up Fleet Sync card with its gap when it is shown.
     static func localListHeight(rows: Int, showsSetupCard: Bool, isEmpty: Bool) -> CGFloat {
         let body = isEmpty
@@ -399,7 +435,7 @@ enum QuotaGlanceMetrics {
         return body + card
     }
 
-    /// The height of the Fleet Reported list: a heading per group, its rows and
+    /// The height of the From Fleet list: a heading band per source, its rows and
     /// the hairlines between them, and a gap between one group and the next.
     static func fleetListHeight(rowsPerGroup: [Int]) -> CGFloat {
         guard !rowsPerGroup.isEmpty else { return Metrics.glanceEmptyStateHeight }

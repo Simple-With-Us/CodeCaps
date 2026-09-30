@@ -550,7 +550,9 @@ struct AllPlatformsPage: View {
                         symbol: "gauge.with.dots.needle.100percent",
                         detail: "at 20% or less")
             SummaryTile(label: "Next Reset",
-                        value: model.nextReset.map { glanceResetCountdown($0, now: model.now) } ?? "—",
+                        // The whole countdown: the two-unit form is Glance's, and this tile
+                        // has no tooltip to carry the minutes.
+                        value: model.nextReset.map { glanceResetFullCountdown($0, now: model.now) } ?? "—",
                         symbol: "clock",
                         detail: nextResetDetail)
             SummaryTile(label: "Fleet",
