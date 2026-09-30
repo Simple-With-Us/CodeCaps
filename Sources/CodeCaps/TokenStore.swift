@@ -27,24 +27,37 @@ enum TokenStore {
     static let readService = serviceName(suffix: "read-token")
     static let syncService = serviceName(suffix: "sync-token")
 
-    /// Whether `service` names one of CodeCaps's own two items.  The store
+    /// The two service names this build owns: its Read Token and its Ingest
+    /// Token.  A `.dev` build's names differ from the release app's, so neither
+    /// can reach the other's items.
+    static var ownServices: Set<String> { [readService, syncService] }
+
+    /// Whether `service` is exactly one of CodeCaps's own two items.  The store
     /// refuses every other name before any Keychain call is made, so nothing
-    /// here can read, overwrite or delete Claude Code's saved login or any
-    /// other app's item.
+    /// here can read, overwrite or delete Claude Code's saved login, another
+    /// app's item, or a service that merely ends the same way.
     static func isOwnService(_ service: String) -> Bool {
-        service.hasSuffix(".read-token") || service.hasSuffix(".sync-token")
+        ownServices.contains(service)
     }
+
+    /// Posted, on an arbitrary thread, when a token becomes available without
+    /// any caller waiting for it: a read that was parked behind a panel came
+    /// back after its bound, or a save that outlived its bound finished.  The
+    /// model re-checks its saved-token state so the Re-Authorize button clears.
+    static let tokenBecameAvailable = Notification.Name("CodeCapsTokenBecameAvailable")
 
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? defaultBundleIdentifier,
                                        category: "keychain")
 
     /// The app's one token cache.  Tests build their own over fake calls and
     /// never reach this one, so no test touches the real Keychain.
-    static let shared = TokenCache(calls: .live) { message in
+    static let shared = TokenCache(calls: .live, changed: {
+        NotificationCenter.default.post(name: tokenBecameAvailable, object: nil)
+    }, log: { message in
         // Status codes and service names only, at notice level so they persist
         // in the log store.  `TokenCache` never hands this a token.
         logger.notice("\(message, privacy: .public)")
-    }
+    })
 
     /// The token this launch already holds, or — the first time it is asked
     /// for — one silent, bounded Keychain read.  A read that fails is not
@@ -190,21 +203,35 @@ struct KeychainCalls: Sendable {
 /// missing from the partition list — an item written by a differently signed
 /// build, for example — securityd puts up its own panel.  No query flag stops
 /// it (see `KeychainCalls.live`).  The refresh loop used to make that read on
-/// every refresh, so one such item could raise a panel each minute and park a
-/// thread behind every one of them.  So each token is read at most once:
+/// every refresh (every five minutes, plus the refreshes a reset alarm and
+/// Settings trigger), so one such item could raise a panel each time and park
+/// a thread behind every one of them.  So each token is read at most once:
 ///
 /// - The first request makes one silent, bounded read.  Any request that
 ///   arrives while it runs waits for that same read.
 /// - A token that was read, saved or re-authorized is handed out from memory
-///   with no Keychain call at all, for the rest of the launch.
+///   with no Keychain call at all, for the rest of the launch.  That includes
+///   Re-Authorize Saved Token: a token already held is never asked for again.
 /// - A read that fails or runs past its bound marks the token unavailable,
 ///   which Settings shows as Re-Authorize Saved Token.  Nothing retries on its
 ///   own, so the refresh loop can never queue a second call behind a panel
 ///   nobody has answered.  Only a save or Re-Authorize Saved Token asks the
 ///   Keychain again.  If the parked call does come back later with the token
-///   — somebody answered that panel — it is taken.
+///   — somebody answered that panel — it is taken, and `changed` fires so the
+///   button clears at once.
+/// - A locked login Keychain at the first read is treated like any other
+///   failure.  A status code cannot tell a locked Keychain from a partition
+///   panel that was about to appear, so a second silent read after an unlock
+///   could raise the very panel this cache exists to avoid.  Re-Authorize
+///   Saved Token is the one place macOS may show its unlock panel, and only
+///   because the owner pressed it.
 /// - A save deletes CodeCaps's own item and adds a fresh one, so the item is
 ///   always created by the running build and later launches read it silently.
+///   Saves and deletes run one after another, in the order they were asked
+///   for.  A save that fails after its delete went through, or that outlives
+///   its bound, leaves the token unavailable rather than remembering a value
+///   the Keychain no longer holds; one that finishes after its bound is taken
+///   unless something newer has been asked for since.
 ///
 /// The single-flight gate is per token and opens at the read's bound, not
 /// when a stuck `SecItem` call finally returns, so one call parked behind a
@@ -246,6 +273,19 @@ actor TokenCache {
         }
     }
 
+    /// How a save or delete ended.
+    private enum WriteOutcome: Sendable {
+        /// The Keychain now holds what was asked for.
+        case done
+        /// The Keychain refused and changed nothing; the old item is intact.
+        case refused(OSStatus)
+        /// A save's delete went through and its add did not: no item is left.
+        case lostItem(OSStatus)
+        /// The call was still running at its bound, so the Keychain's state is
+        /// not known.
+        case timedOut
+    }
+
     private enum Entry {
         case reading(attempt: UInt64, Task<Void, Never>)
         case cached(String)
@@ -259,14 +299,32 @@ actor TokenCache {
 
     private let calls: KeychainCalls
     private let bounds: Bounds
+    private let ownServices: Set<String>
+    private let changed: @Sendable () -> Void
     private let log: @Sendable (String) -> Void
+    /// Saves and deletes run here one at a time, so a write that outlives its
+    /// bound cannot interleave its delete and add with the next one's.
+    private let writeQueue = DispatchQueue(label: "CodeCaps.TokenCache.writes", qos: .utility)
     private var entries: [Key: Entry] = [:]
     private var interactive: [Key: Task<Void, Never>] = [:]
+    /// The newest save or delete asked for, per token.  A read or a late write
+    /// that began before it is older than it and gives way.
+    private var newestWrite: [Key: UInt64] = [:]
+    private var writeTail: Task<Void, Never>?
     private var attempts: UInt64 = 0
 
-    init(calls: KeychainCalls, bounds: Bounds = Bounds(), log: @escaping @Sendable (String) -> Void) {
+    /// `ownServices` is the only set of service names this cache will touch.
+    /// `changed` fires when a token becomes available with nobody waiting for
+    /// it (see `TokenStore.tokenBecameAvailable`).
+    init(calls: KeychainCalls,
+         bounds: Bounds = Bounds(),
+         ownServices: Set<String> = TokenStore.ownServices,
+         changed: @escaping @Sendable () -> Void = {},
+         log: @escaping @Sendable (String) -> Void) {
         self.calls = calls
         self.bounds = bounds
+        self.ownServices = ownServices
+        self.changed = changed
         self.log = log
     }
 
@@ -280,7 +338,7 @@ actor TokenCache {
     }
 
     func token(server: String, service: String) async -> String? {
-        guard TokenStore.isOwnService(service) else { return nil }
+        guard ownServices.contains(service) else { return nil }
         let key = Key(service: service, server: server)
         switch entries[key] {
         case let .cached(token)?:
@@ -302,57 +360,108 @@ actor TokenCache {
     }
 
     func readAllowingInteraction(server: String, service: String) async -> String? {
-        guard TokenStore.isOwnService(service) else { return nil }
+        guard ownServices.contains(service) else { return nil }
         let key = Key(service: service, server: server)
+        // The silent read, if one is running, settles first: two Keychain
+        // requests for one item never run at once.
+        if case let .reading(_, running)? = entries[key] { await running.value }
+        // A token this launch already holds needs no panel.  Asking again
+        // would be the Keychain data request this cache exists to avoid.
+        if let token = cachedToken(key) { return token }
         if let running = interactive[key] {
             await running.value
             return cachedToken(key)
         }
         let attempt = nextAttempt()
-        let running = Task { await self.interactiveRead(key, attempt: attempt) }
+        // A token being re-authorized is not also read silently behind it.
+        if entries[key] == nil { entries[key] = .unavailable(attempt: attempt) }
+        let since = newestWrite[key]
+        let running = Task { await self.interactiveRead(key, attempt: attempt, since: since) }
         interactive[key] = running
         await running.value
         return cachedToken(key)
     }
 
     func save(_ token: String, server: String, service: String) async throws {
-        guard TokenStore.isOwnService(service) else {
+        guard ownServices.contains(service) else {
             throw TokenStore.Failure.write(status: errSecParam, service: service)
         }
-        let calls = calls
-        let log = log
-        let status: OSStatus? = await Self.bounded(seconds: bounds.write, fallback: nil) {
-            let deleted = calls.delete(service, server)
-            log("keychain \(service) delete-before-add status \(deleted)")
-            guard TokenStore.canAdd(afterDelete: deleted) else { return deleted }
-            let added = calls.add(service, server, Data(token.utf8))
-            log("keychain \(service) add status \(added)")
-            return added
-        }
-        guard status == errSecSuccess else {
-            if status == nil { log("keychain \(service) save timed out after \(bounds.write)s") }
-            throw TokenStore.Failure.write(status: status, service: service)
-        }
-        // A read still in flight, or a late one, finds this entry and leaves it.
-        entries[Key(service: service, server: server)] = .cached(token)
+        try Self.check(await write(Key(service: service, server: server), token: token), service: service)
     }
 
     func delete(server: String, service: String) async throws {
-        guard TokenStore.isOwnService(service) else {
+        guard ownServices.contains(service) else {
             throw TokenStore.Failure.write(status: errSecParam, service: service)
         }
+        try Self.check(await write(Key(service: service, server: server), token: nil), service: service)
+    }
+
+    private static func check(_ outcome: WriteOutcome, service: String) throws {
+        switch outcome {
+        case .done: return
+        case let .refused(status), let .lostItem(status): throw TokenStore.Failure.write(status: status, service: service)
+        case .timedOut: throw TokenStore.Failure.write(status: nil, service: service)
+        }
+    }
+
+    // MARK: Writes
+
+    /// Saves `token`, or deletes the item when it is nil.  Each write starts
+    /// after the one before it has ended, so their results land in the order
+    /// they were asked for.
+    private func write(_ key: Key, token: String?) async -> WriteOutcome {
+        let attempt = nextAttempt()
+        newestWrite[key] = attempt
+        let previous = writeTail
+        let running = Task { () -> WriteOutcome in
+            await previous?.value
+            return await self.perform(key, token: token, attempt: attempt)
+        }
+        writeTail = Task { _ = await running.value }
+        return await running.value
+    }
+
+    private func perform(_ key: Key, token: String?, attempt: UInt64) async -> WriteOutcome {
         let calls = calls
         let log = log
-        let status: OSStatus? = await Self.bounded(seconds: bounds.write, fallback: nil) {
+        let (service, server) = (key.service, key.server)
+        let kind = token == nil ? "delete" : "save"
+        let outcome: WriteOutcome = await Self.bounded(seconds: bounds.write, fallback: .timedOut, queue: writeQueue, late: { late in
+            Task { await self.acceptLateWrite(late, key: key, token: token, attempt: attempt) }
+        }) {
             let deleted = calls.delete(service, server)
-            log("keychain \(service) delete status \(deleted)")
-            return deleted
+            guard let token else {
+                log("keychain \(service) delete status \(deleted)")
+                return deleted == errSecSuccess || deleted == errSecItemNotFound ? .done : .refused(deleted)
+            }
+            log("keychain \(service) delete-before-add status \(deleted)")
+            guard TokenStore.canAdd(afterDelete: deleted) else { return .refused(deleted) }
+            let added = calls.add(service, server, Data(token.utf8))
+            log("keychain \(service) add status \(added)")
+            return added == errSecSuccess ? .done : .lostItem(added)
         }
-        guard let status, status == errSecSuccess || status == errSecItemNotFound else {
-            throw TokenStore.Failure.write(status: status, service: service)
+        switch outcome {
+        case .done:
+            // A read still in flight, or a late one, finds this entry and leaves it.
+            entries[key] = token.map(Entry.cached) ?? .unavailable(attempt: nextAttempt())
+        case .refused:
+            break // Nothing changed, so what this launch holds is still true.
+        case .lostItem:
+            entries[key] = .unavailable(attempt: nextAttempt())
+        case .timedOut:
+            log("keychain \(service) \(kind) timed out after \(bounds.write)s")
+            entries[key] = .unavailable(attempt: nextAttempt())
         }
-        // Nothing is left to read, so nothing will be read.
-        entries[Key(service: service, server: server)] = .unavailable(attempt: nextAttempt())
+        return outcome
+    }
+
+    /// A save or delete that finished after its bound.  Taken only while nothing
+    /// newer has been asked for since it began.
+    private func acceptLateWrite(_ outcome: WriteOutcome, key: Key, token: String?, attempt: UInt64) {
+        guard newestWrite[key] == attempt, case .done = outcome else { return }
+        entries[key] = token.map(Entry.cached) ?? .unavailable(attempt: nextAttempt())
+        log("keychain \(key.service) write finished after its bound")
+        if token != nil { changed() }
     }
 
     // MARK: Reads
@@ -364,19 +473,14 @@ actor TokenCache {
         entries[key] = outcome.token.map(Entry.cached) ?? .unavailable(attempt: attempt)
     }
 
-    private func interactiveRead(_ key: Key, attempt: UInt64) async {
+    private func interactiveRead(_ key: Key, attempt: UInt64, since: UInt64?) async {
         let outcome = await read(key, attempt: attempt, allowInteraction: true, seconds: bounds.interactiveRead)
         interactive[key] = nil
-        switch (outcome.token, entries[key]) {
-        case (_, .cached?):
-            return // A save landed meanwhile, and it is newer.
-        case let (token?, _):
-            entries[key] = .cached(token)
-        case (nil, .reading?):
-            return // The silent read still running settles it.
-        case (nil, _):
-            entries[key] = .unavailable(attempt: attempt)
-        }
+        // A save or Forget asked for while the panel was open is newer than
+        // this read, and its result stands: a forgotten token is not put back.
+        guard newestWrite[key] == since else { return }
+        if case .cached? = entries[key] { return }
+        entries[key] = outcome.token.map(Entry.cached) ?? .unavailable(attempt: attempt)
     }
 
     private func read(_ key: Key, attempt: UInt64, allowInteraction: Bool, seconds: Double) async -> Outcome {
@@ -409,6 +513,7 @@ actor TokenCache {
         }
         entries[key] = .cached(token)
         log("keychain \(key.service) read answered after its bound; token held")
+        changed()
     }
 
     private func cachedToken(_ key: Key) -> String? {
@@ -427,14 +532,16 @@ actor TokenCache {
     /// it at `seconds`.  A `SecItem` call can block well past that — waiting
     /// on a panel nobody has answered — and the caller moves on with
     /// `fallback`, costing one parked thread and nothing else.  When the call
-    /// does return after the bound, `late` gets its answer.
+    /// does return after the bound, `late` gets its answer.  Calls handed the
+    /// same serial `queue` run one at a time, in the order they were handed in.
     static func bounded<Value: Sendable>(seconds: Double,
                                          fallback: Value,
+                                         queue: DispatchQueue = .global(qos: .utility),
                                          late: (@Sendable (Value) -> Void)? = nil,
                                          operation: @escaping @Sendable () -> Value) async -> Value {
         await withCheckedContinuation { continuation in
             let completion = Completion(continuation)
-            DispatchQueue.global(qos: .utility).async {
+            queue.async {
                 let value = operation()
                 if !completion.finish(value) { late?(value) }
             }

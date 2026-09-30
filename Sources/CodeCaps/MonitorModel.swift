@@ -227,6 +227,9 @@ final class MonitorModel: ObservableObject {
     /// Re-publishes the alarm manager's changes, so a view that observes this
     /// model redraws when All or a provider's bell flips.
     private var alarmChanges: AnyCancellable?
+    /// Re-checks the saved-token states when `TokenStore` gains a token nobody
+    /// was waiting for, so the Re-Authorize button clears without a refresh.
+    private var tokenChanges: AnyCancellable?
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -273,6 +276,13 @@ final class MonitorModel: ObservableObject {
         alarmChanges = alarmManager.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
         }
+        tokenChanges = NotificationCenter.default.publisher(for: TokenStore.tokenBecameAvailable)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                // Answered from the cache: a token already held, or already
+                // failed, is not asked for again.
+                Task { @MainActor in await self?.refreshSavedTokenStates() }
+            }
     }
 
     var sections: [QuotaPlatformSection] {

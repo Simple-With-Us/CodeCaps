@@ -92,9 +92,19 @@ final class TokenStoreTests: XCTestCase {
     func testOnlyCodeCapsItemsAreOwn() {
         XCTAssertTrue(TokenStore.isOwnService(TokenStore.readService))
         XCTAssertTrue(TokenStore.isOwnService(TokenStore.syncService))
-        XCTAssertTrue(TokenStore.isOwnService("com.jays.agent-bar.mac.dev.sync-token"))
         XCTAssertFalse(TokenStore.isOwnService("Claude Code-credentials"))
         XCTAssertFalse(TokenStore.isOwnService(""))
+    }
+
+    /// Matching on the suffix would accept any app's `.sync-token`, and a
+    /// `.dev` build would accept the release app's names.  Only this build's
+    /// own two names count.
+    func testServicesThatMerelyEndTheSameWayAreNotOwn() {
+        XCTAssertFalse(TokenStore.isOwnService("com.other.app.sync-token"))
+        XCTAssertFalse(TokenStore.isOwnService("com.other.app.read-token"))
+        XCTAssertFalse(TokenStore.isOwnService(TokenStore.readService + ".extra"))
+        XCTAssertFalse(TokenStore.isOwnService(TokenStore.serviceName(suffix: "read-token", bundleIdentifier: "com.other.app")))
+        XCTAssertEqual(TokenStore.ownServices, [TokenStore.readService, TokenStore.syncService])
     }
 
     // MARK: Failure wording
