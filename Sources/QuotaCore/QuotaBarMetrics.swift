@@ -18,8 +18,23 @@ public enum QuotaPeriod: Equatable, Sendable {
     /// "30 days".
     case calendarMonths(Int)
 
-    /// When a window of this length that ends at `end` began.
-    public func start(endingAt end: Date, calendar: Calendar = .current) -> Date? {
+    /// The calendar whole months are counted on: Gregorian, fixed to UTC.
+    ///
+    /// Provider billing anchors are UTC instants, so "one month before the
+    /// reset" has to be worked out in UTC.  On the Mac's local calendar the same
+    /// reset lands on a different local date depending on where the Mac is, which
+    /// skews the period length (a Mar 1 03:00Z reset would start on Jan 29 in
+    /// Chicago) and puts the marker in the wrong place.  A fixed calendar also
+    /// means two Macs in different time zones draw the same bar.
+    public static let billingCalendar: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .gmt
+        return calendar
+    }()
+
+    /// When a window of this length that ends at `end` began.  Months are counted
+    /// on `billingCalendar` unless a caller passes another.
+    public func start(endingAt end: Date, calendar: Calendar = QuotaPeriod.billingCalendar) -> Date? {
         switch self {
         case .fixed(let seconds):
             guard seconds.isFinite, seconds > 0 else { return nil }
@@ -115,7 +130,7 @@ public struct QuotaPeriodSpan: Equatable, Sendable {
         label: String,
         resetAt: Date?,
         explicitStart: Date? = nil,
-        calendar: Calendar = .current
+        calendar: Calendar = QuotaPeriod.billingCalendar
     ) -> QuotaPeriodSpan? {
         guard let resetAt else { return nil }
         if let explicitStart, isPlausible(start: explicitStart, end: resetAt) {
@@ -136,7 +151,7 @@ public struct QuotaPeriodSpan: Equatable, Sendable {
 public extension QuotaWindowSnapshot {
     /// The interval this window covers, or nil when its reset or its period is
     /// unknown.  Such a window draws no elapsed-time marker.
-    func periodSpan(calendar: Calendar = .current) -> QuotaPeriodSpan? {
+    func periodSpan(calendar: Calendar = QuotaPeriod.billingCalendar) -> QuotaPeriodSpan? {
         QuotaPeriodSpan.resolve(
             token: window.window,
             label: window.label,
@@ -147,7 +162,7 @@ public extension QuotaWindowSnapshot {
     }
 
     /// How far through its period the window is, 0...1, or nil when unknown.
-    func elapsedFraction(now: Date, calendar: Calendar = .current) -> Double? {
+    func elapsedFraction(now: Date, calendar: Calendar = QuotaPeriod.billingCalendar) -> Double? {
         periodSpan(calendar: calendar)?.elapsedFraction(at: now)
     }
 }
@@ -180,7 +195,7 @@ public struct QuotaBarMetrics: Equatable, Sendable {
         }
     }
 
-    public init(snapshot: QuotaWindowSnapshot, now: Date, calendar: Calendar = .current) {
+    public init(snapshot: QuotaWindowSnapshot, now: Date, calendar: Calendar = QuotaPeriod.billingCalendar) {
         self.init(remainingPercent: snapshot.remainingPercent,
                   elapsedFraction: snapshot.elapsedFraction(now: now, calendar: calendar))
     }
@@ -189,9 +204,6 @@ public struct QuotaBarMetrics: Equatable, Sendable {
 
     /// Share used, 0...1: `100 - remaining`.
     public var usedFraction: Double? { remainingPercent.map { (100 - $0) / 100 } }
-
-    /// Share left, 0...1.
-    public var remainingFraction: Double? { remainingPercent.map { $0 / 100 } }
 
     /// The remaining percentage exactly as the row prints it.
     public var remainingPercentRounded: Int? { remainingPercent.map { Int($0.rounded()) } }

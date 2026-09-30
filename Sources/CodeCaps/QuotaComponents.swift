@@ -78,7 +78,10 @@ enum Metrics {
     static let glanceRowTitleWidth: CGFloat = 72
     static let glanceMeterCaptionWidth: CGFloat = 22
     static let glanceMeterBarWidth: CGFloat = 50
-    static let glanceMeterPercentWidth: CGFloat = 28
+    /// Wide enough for "100%" at 11pt, which measures about 30pt: at 28pt it
+    /// spilled into the gap and touched the reset countdown, and 100% is the
+    /// state everyone sees right after a reset.
+    static let glanceMeterPercentWidth: CGFloat = 32
     static let glanceMeterCountdownWidth: CGFloat = 46
     static let glanceRowTrailingWidth: CGFloat = 40
     static let glanceRowTrailingWideWidth: CGFloat = 100

@@ -46,7 +46,7 @@ final class QuotaBarMetricsTests: XCTestCase {
     func testUsedIsOneHundredMinusRemaining() throws {
         let metrics = QuotaBarMetrics(remainingPercent: 85, elapsedFraction: nil)
         XCTAssertEqual(try XCTUnwrap(metrics.usedFraction), 0.15, accuracy: 1e-9)
-        XCTAssertEqual(try XCTUnwrap(metrics.remainingFraction), 0.85, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(metrics.remainingPercent), 85, accuracy: 1e-9)
         XCTAssertEqual(metrics.usedPercentRounded, 15)
         XCTAssertEqual(metrics.remainingPercentRounded, 85)
     }
@@ -220,6 +220,91 @@ final class QuotaBarMetricsTests: XCTestCase {
             token: "monthly", label: "", resetAt: date("2026-03-15T00:00:00Z"), calendar: calendar))
         XCTAssertEqual(long.duration, 31 * 86_400, accuracy: 1)
         XCTAssertEqual(short.duration, 28 * 86_400, accuracy: 1)
+    }
+
+    // MARK: Months are counted in UTC, whatever the Mac's time zone is
+
+    /// Runs `body` with the process time zone set to `identifier`, so the default
+    /// calendar paths are exercised the way a Mac outside UTC would run them.
+    private func withTimeZone<T>(_ identifier: String, _ body: () throws -> T) rethrows -> T {
+        let saved = NSTimeZone.default
+        NSTimeZone.default = TimeZone(identifier: identifier)!
+        defer { NSTimeZone.default = saved }
+        return try body()
+    }
+
+    private var chicago: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/Chicago")!
+        return calendar
+    }
+
+    func testTheDefaultBillingCalendarIsGregorianUTC() {
+        XCTAssertEqual(QuotaPeriod.billingCalendar.identifier, .gregorian)
+        XCTAssertEqual(QuotaPeriod.billingCalendar.timeZone.secondsFromGMT(), 0)
+    }
+
+    func testAMarch1ResetAtThreeAMUTCStartsOnFebruary1ForAMacInChicago() throws {
+        // On a Chicago calendar this reset is Feb 28 at 9pm, so "one month
+        // earlier" is Jan 29 and the period is 31 days.  In UTC it is Mar 1 and
+        // Feb 1, 28 days.  The default path has to give the UTC answer.
+        let reset = date("2026-03-01T03:00:00Z")
+        let chicagoStart = try XCTUnwrap(QuotaPeriod.calendarMonths(1).start(endingAt: reset, calendar: chicago))
+        XCTAssertEqual(chicagoStart, date("2026-01-29T03:00:00Z"), "guard: a local calendar really does skew this reset")
+
+        try withTimeZone("America/Chicago") {
+            let span = try XCTUnwrap(QuotaPeriodSpan.resolve(token: "billing-cycle", label: "Included plan", resetAt: reset))
+            XCTAssertEqual(span.start, date("2026-02-01T03:00:00Z"))
+            XCTAssertEqual(span.duration, 28 * 86_400, accuracy: 1)
+
+            // Feb 15 at 03:00Z is exactly halfway through a 28-day February.
+            let now = date("2026-02-15T03:00:00Z")
+            let plan = snapshot(token: "billing-cycle", label: "Included plan", reset: "2026-03-01T03:00:00Z", now: now)
+            XCTAssertEqual(try XCTUnwrap(plan.elapsedFraction(now: now)), 0.5, accuracy: 1e-9)
+            XCTAssertEqual(try XCTUnwrap(QuotaBarMetrics(snapshot: plan, now: now).elapsedFraction), 0.5, accuracy: 1e-9)
+            XCTAssertEqual(try XCTUnwrap(plan.pacing(now: now)).timeElapsedLabel, "Day 14 of 28")
+        }
+    }
+
+    func testAMay1ResetAtTwoAMUTCStartsOnApril1ForAMacInChicago() throws {
+        let reset = date("2026-05-01T02:00:00Z")
+        let chicagoStart = try XCTUnwrap(QuotaPeriod.calendarMonths(1).start(endingAt: reset, calendar: chicago))
+        XCTAssertEqual(chicagoStart, date("2026-03-31T02:00:00Z"), "guard: a local calendar really does skew this reset")
+
+        try withTimeZone("America/Chicago") {
+            let span = try XCTUnwrap(QuotaPeriodSpan.resolve(token: "monthly", label: "", resetAt: reset))
+            XCTAssertEqual(span.start, date("2026-04-01T02:00:00Z"))
+            XCTAssertEqual(span.duration, 30 * 86_400, accuracy: 1)
+        }
+    }
+
+    func testAMarch31ResetFindsFebruary28ForAMacInChicago() throws {
+        let reset = date("2026-03-31T04:00:00Z")
+        try withTimeZone("America/Chicago") {
+            let span = try XCTUnwrap(QuotaPeriodSpan.resolve(token: "billing-cycle", label: "", resetAt: reset))
+            XCTAssertEqual(span.start, date("2026-02-28T04:00:00Z"))
+            XCTAssertEqual(span.duration, 31 * 86_400, accuracy: 1)
+        }
+    }
+
+    func testAPeriodAcrossDaylightSavingLastsExactlyWholeDaysForAMacInChicago() throws {
+        // Chicago leaves daylight time on Nov 1, 2026, inside this window.  A
+        // local calendar would make the month 31 days plus an hour.
+        let reset = date("2026-11-15T12:00:00Z")
+        try withTimeZone("America/Chicago") {
+            let span = try XCTUnwrap(QuotaPeriodSpan.resolve(token: "billing-cycle", label: "", resetAt: reset))
+            XCTAssertEqual(span.start, date("2026-10-15T12:00:00Z"))
+            XCTAssertEqual(span.duration, 31 * 86_400, accuracy: 1)
+        }
+    }
+
+    func testTheMarkerIsTheSameInEveryTimeZone() throws {
+        let now = date("2026-02-15T03:00:00Z")
+        let plan = snapshot(token: "billing-cycle", label: "Included plan", reset: "2026-03-01T03:00:00Z", now: now)
+        let fractions = try ["UTC", "America/Chicago", "Asia/Tokyo", "Pacific/Auckland"].map { zone in
+            try withTimeZone(zone) { try XCTUnwrap(plan.elapsedFraction(now: now)) }
+        }
+        for fraction in fractions { XCTAssertEqual(fraction, fractions[0], accuracy: 1e-12) }
     }
 
     // MARK: Span and elapsed fraction

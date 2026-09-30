@@ -16,7 +16,9 @@ Owner request: the black elapsed-time line sat in the right place but did not re
 - An explicit period start wins when the provider gives one: `QuotaWindow.periodStart` (local only, not a wire field) is filled from Cursor's `billingCycleStart`, Grok's period start and MiniMax's window start times.
 - VoiceOver says "85 percent remaining, 15 percent used, 40 percent of period elapsed".
 - Tests: `QuotaBarMetricsTests` (QuotaCore), `QuotaUsageBarTests` and `QuotaBarRenderTests` (CodeCaps); the render test writes light and dark PNGs when `CODECAPS_BAR_RENDER_DIR` is set and skips otherwise.
-- iOS companion and widgets draw remaining-only bars with no elapsed marker, so they are unchanged.
+- Months are counted on a Gregorian calendar fixed to UTC (`QuotaPeriod.billingCalendar`), because provider resets are UTC instants.  On the Mac's local calendar a Mar 1 03:00Z reset started on Jan 29 in Chicago and skewed the marker and the "Day N of M" caption; tests now run the default path under America/Chicago and across a daylight-saving change.
+- The percent column is 32pt wide (was 28pt) so "100%" no longer touches the reset countdown.
+- iOS companion and widgets draw remaining-only bars with no elapsed marker, so they are unchanged.  Whether they should get the red-used and green-remaining split (no marker needed) is an open owner question.
 
 ---
 

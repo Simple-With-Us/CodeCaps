@@ -36,7 +36,7 @@ final class QuotaUsageBarTests: XCTestCase {
         // The Plan window has no cadence token a duration parser recognises, only
         // "billing-cycle", and used to draw no marker at all.
         let plan = makeWindow(label: "Included plan", token: "billing-cycle", remaining: 15, resetIn: 15 * 86_400)
-        let fraction = try XCTUnwrap(glanceElapsedFraction(for: plan, now: now))
+        let fraction = try XCTUnwrap(plan.elapsedFraction(now: now))
         // Roughly half a 30-day cycle is gone; the exact figure depends on the
         // length of the month the reset falls in.
         XCTAssertEqual(fraction, 0.5, accuracy: 0.05)
@@ -44,14 +44,14 @@ final class QuotaUsageBarTests: XCTestCase {
 
     func testGlanceDrawsNoMarkerForAWindowWithNoDerivablePeriod() {
         let plan = makeWindow(label: "Included plan", token: "plan", resetIn: 15 * 86_400)
-        XCTAssertNil(glanceElapsedFraction(for: plan, now: now))
+        XCTAssertNil(plan.elapsedFraction(now: now))
     }
 
     func testGlanceReadsTokensTheOldParserMisread() throws {
         // "31d" used to parse as one day, which pinned the marker at the right
         // edge for a Grok subscription that spans thirty-one days.
         let grok = makeWindow(label: "31d window", token: "31d", resetIn: 15.5 * 86_400)
-        XCTAssertEqual(try XCTUnwrap(glanceElapsedFraction(for: grok, now: now)), 0.5, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(grok.elapsedFraction(now: now)), 0.5, accuracy: 0.001)
     }
 
     // MARK: Spoken value

@@ -553,7 +553,7 @@ public struct WindowPacing: Equatable, Sendable {
         remainingPercent: Double?,
         now: Date = Date(),
         periodStart: Date? = nil,
-        calendar: Calendar = .current
+        calendar: Calendar = QuotaPeriod.billingCalendar
     ) -> WindowPacing? {
         guard let resetAt, let remainingPercent else { return nil }
         // The same span the elapsed-time marker draws, so the bar and its
@@ -664,7 +664,7 @@ public struct WindowPacing: Equatable, Sendable {
 }
 
 public extension QuotaWindowSnapshot {
-    func pacing(now: Date = Date(), calendar: Calendar = .current) -> WindowPacing? {
+    func pacing(now: Date = Date(), calendar: Calendar = QuotaPeriod.billingCalendar) -> WindowPacing? {
         WindowPacing.calculate(
             windowToken: window.window,
             windowLabel: window.label,

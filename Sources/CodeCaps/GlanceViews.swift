@@ -359,14 +359,6 @@ func glanceDurationSeconds(_ token: String) -> TimeInterval? {
     }
 }
 
-/// Computes the fraction of time elapsed in the quota window (0.0 ... 1.0).
-/// Returns nil if the window's period cannot be determined or its reset date is
-/// unknown.  The period math lives in QuotaCore (`QuotaPeriodSpan`), so Glance,
-/// the Console and the tests all measure a window the same way.
-func glanceElapsedFraction(for snapshot: QuotaWindowSnapshot, now: Date) -> Double? {
-    snapshot.elapsedFraction(now: now)
-}
-
 /// What VoiceOver says for one meter on a row: its caption, then both shares and
 /// how far through the period we are, for example "5h 85 percent remaining, 15
 /// percent used, 40 percent of period elapsed".
