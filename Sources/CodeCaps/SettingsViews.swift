@@ -845,6 +845,7 @@ struct SettingsLogoStylePage: View {
 struct SettingsAboutPage: View {
     @ObservedObject var model: MonitorModel
     @ObservedObject var state: ConsoleState
+    @ObservedObject private var updater = AppUpdater.shared
 
     private static let projectPage = URL(string: "https://github.com/jaywedgeworth22/codecaps")!
 
@@ -880,6 +881,23 @@ struct SettingsAboutPage: View {
                 LabeledContent("Pushing quota") { Text(pushingDetail) }
                 LabeledContent("Pulling quota") { Text(pullingDetail) }
                 LabeledContent("Local readers") { Text(model.localEnabled ? "On" : "Off") }
+            }
+
+            Section {
+                LabeledContent("Automatic updates") { Text(updater.availability.summary) }
+                Button("Check For Updates…") { updater.checkForUpdates() }
+                    .disabled(!updater.canCheckForUpdates)
+                    .help("Check For Updates")
+                    .accessibilityLabel("Check For Updates")
+            } footer: {
+                Text(updater.availability.isEnabled
+                     ? "CodeCaps checks for a new signed release every hour and installs it in the background." + sentenceGap
+                        + "If CodeCaps is in front when an update is ready, it waits until you switch away."
+                     : "Development builds do not update themselves." + sentenceGap
+                        + "Install a release from the project page to get automatic updates.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Section {

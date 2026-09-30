@@ -145,6 +145,10 @@ brew install --cask jaywedgeworth22/tap/codecaps
 
 Grab the signed and notarized `CodeCaps.dmg` from the [latest release](https://github.com/jaywedgeworth22/codecaps/releases/latest).
 
+**Updates**
+
+CodeCaps updates itself.  Every change merged to `main` becomes a signed, notarized release, and an installed copy checks hourly, downloads it in the background, and installs it the next time CodeCaps is not in front.  Settings ▸ About has **Check For Updates…** for the impatient.  How it works, and how to roll a release back: [`docs/AUTO-UPDATE.md`](docs/AUTO-UPDATE.md).
+
 **Build From Source**
 
 Requirements: macOS 14+, Apple silicon or Intel, Xcode Command Line Tools with a Swift 5.9+ toolchain.

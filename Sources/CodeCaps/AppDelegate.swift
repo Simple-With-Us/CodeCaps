@@ -25,7 +25,7 @@ enum CodeCapsMain {
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDelegate, NSMenuItemValidation {
     let model = MonitorModel()
     let consoleState = ConsoleState()
     private var statusItem: NSStatusItem?
@@ -35,6 +35,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private var subscriptions = Set<AnyCancellable>()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Read before anything can open a window: the launch Sparkle performs
+        // after installing an update stays in the background.
+        let relaunchedForUpdate = UpdateRelaunchMarker().consume()
+        AppUpdater.shared.start()
         configureMenu()
         popover.behavior = .transient
         let glance = NSHostingController(rootView:
@@ -69,7 +73,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         model.objectWillChange.sink { [weak self] _ in
             DispatchQueue.main.async { self?.updateStatus() }
         }.store(in: &subscriptions)
-        if model.displayMode != .menuBar { showConsole(page: nil) }
+        if model.displayMode != .menuBar && !relaunchedForUpdate { showConsole(page: nil) }
         model.start()
         NSWorkspace.shared.notificationCenter.addObserver(
             self, selector: #selector(refresh), name: NSWorkspace.didWakeNotification, object: nil)
@@ -170,6 +174,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         add("Settings…", #selector(showSettings), ",")
         menu.addItem(.separator())
         add("About CodeCaps", #selector(showAbout))
+        add("Check For Updates…", #selector(checkForUpdates))
         add("Quit CodeCaps", #selector(quit), "q")
         statusMenu = menu
         item.menu = menu
@@ -243,6 +248,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     @objc func showSettings() { showConsole(page: consoleState.lastSettingsPage) }
 
     @objc private func showAbout() { showConsole(page: .settingsAbout) }
+    @objc private func checkForUpdates() { AppUpdater.shared.checkForUpdates() }
+
+    /// "Check For Updates…" is greyed out while Sparkle is busy, and on a build
+    /// that cannot update itself (Settings ▸ About says why).
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(checkForUpdates) { return AppUpdater.shared.canCheckForUpdates }
+        return true
+    }
     @objc private func refresh() { model.refresh() }
     @objc private func quit() { NSApp.terminate(nil) }
     @objc private func toggleKeepInFront() { model.keepConsoleInFront.toggle() }
@@ -264,6 +277,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         add("Keep In Front", #selector(toggleKeepInFront), "p")
         appMenu.addItem(.separator())
         add("About CodeCaps", #selector(showAbout))
+        add("Check For Updates…", #selector(checkForUpdates))
         add("Quit CodeCaps", #selector(quit), "q")
         appItem.submenu = appMenu
         menu.addItem(appItem)

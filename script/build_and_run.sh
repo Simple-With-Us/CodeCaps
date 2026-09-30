@@ -16,6 +16,7 @@ APP_BUNDLE="$DIST_DIR/$APP_NAME.app"
 APP_CONTENTS="$APP_BUNDLE/Contents"
 APP_MACOS="$APP_CONTENTS/MacOS"
 APP_RESOURCES="$APP_CONTENTS/Resources"
+APP_FRAMEWORKS="$APP_CONTENTS/Frameworks"
 APP_EXECUTABLE="$APP_MACOS/$PRODUCT_NAME"
 INFO_PLIST="$APP_CONTENTS/Info.plist"
 ICON_MASTER="$ROOT_DIR/assets/icon-1024.png"
@@ -28,6 +29,25 @@ VERSION_FILE="$ROOT_DIR/VERSION"
 ZIP_FILE="$DIST_DIR/$APP_NAME.zip"
 DMG_FILE="$DIST_DIR/$APP_NAME.dmg"
 NOTARY_PROFILE="${CODECAPS_NOTARY_PROFILE:-${AGENTBAR_NOTARY_PROFILE:-agentbar-notary}}"
+
+# --- Auto-update (Sparkle 2) -------------------------------------------------
+# docs/AUTO-UPDATE.md is the whole pattern: keys, hosting, CI, rollback, and how
+# to copy it to another app.  CI publishes a signed release for every merge to
+# main that changes the app, and this feed always names the newest one.  The
+# public key is not a secret; its private half is the SPARKLE_ED_PRIVATE_KEY
+# repository secret, backed up in the owner's login Keychain (account
+# "codecaps") and in the secrets handoff folder.
+SPARKLE_FEED_URL_DEFAULT="https://github.com/jaywedgeworth22/CodeCaps/releases/latest/download/appcast.xml"
+SPARKLE_PUBLIC_ED_KEY="${CODECAPS_SPARKLE_PUBLIC_KEY:-Ou2J0syHZawPSY3JLTLVyhbOylmtyr0QnZPbq7acETQ=}"
+SPARKLE_CHECK_INTERVAL="${CODECAPS_SPARKLE_CHECK_INTERVAL:-3600}"
+
+# notarytool signs in with an App Store Connect API key when all three of
+# NOTARY_KEY_PATH, NOTARY_KEY_ID and NOTARY_ISSUER_ID are set (that is how CI
+# does it), and with the keychain profile above otherwise.
+NOTARY_AUTH=(--keychain-profile "$NOTARY_PROFILE")
+if [[ -n "${NOTARY_KEY_PATH:-}" && -n "${NOTARY_KEY_ID:-}" && -n "${NOTARY_ISSUER_ID:-}" ]]; then
+  NOTARY_AUTH=(--key "$NOTARY_KEY_PATH" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID")
+fi
 # Release artifacts are universal.  A build that only runs on the machine that
 # made it is not a release, and an Intel Mac has no Rosetta for arm64 code.
 UNIVERSAL_ARCHS=(arm64 x86_64)
@@ -61,7 +81,9 @@ usage: script/build_and_run.sh [mode]
                  from the stapled bundle, and build, sign, notarize and staple
                  dist/CodeCaps.dmg.  Both artifacts get a .sha256 beside them.
                  Notarization uses the keychain profile named by
-                 $AGENTBAR_NOTARY_PROFILE, default "agentbar-notary"
+                 $AGENTBAR_NOTARY_PROFILE, default "agentbar-notary", or an
+                 App Store Connect API key when NOTARY_KEY_PATH, NOTARY_KEY_ID
+                 and NOTARY_ISSUER_ID are all set
   --build-only   stage dist/CodeCaps.app and stop
   --debug        stage and run under lldb
   --logs         stage, launch, and stream the process log
@@ -88,6 +110,14 @@ usage: script/build_and_run.sh [mode]
   Versions: CFBundleShortVersionString is the VERSION file at the repo root, so
   cutting a release is one edit.  CFBundleVersion is `git rev-list --count
   HEAD`, which only ever goes up.
+
+  Auto-update: Sparkle.framework is embedded in Contents/Frameworks and signed
+  inside-out.  A build with the release identifier carries the update feed and
+  key, so it updates itself from the signed releases CI publishes; a build with
+  any other identifier does not, unless CODECAPS_SPARKLE_FEED_URL names a feed
+  explicitly (that is how an update is rehearsed locally, see
+  docs/AUTO-UPDATE.md).  CODECAPS_SPARKLE_FEED_URL= (set but empty) turns it
+  off for any build.
 USAGE
 }
 
@@ -106,6 +136,79 @@ kill_owned_app() {
 
 kill_installed_app() {
   kill_owned_process "$INSTALLED_APP/Contents/MacOS/$PRODUCT_NAME"
+}
+
+# A release-identifier build updates itself from the published feed.  Any other
+# identifier gets no feed unless one is named explicitly, so a --dev copy never
+# replaces itself with the release build.  Set-but-empty turns updates off.
+sparkle_feed_url() {
+  if [[ -n "${CODECAPS_SPARKLE_FEED_URL+set}" ]]; then
+    printf '%s\n' "$CODECAPS_SPARKLE_FEED_URL"
+  elif [[ "$BUNDLE_ID" == "$RELEASE_BUNDLE_ID" ]]; then
+    printf '%s\n' "$SPARKLE_FEED_URL_DEFAULT"
+  fi
+}
+
+# Info.plist entries for Sparkle.  Updates are checked hourly, then downloaded
+# and installed without asking (AppUpdater installs the moment CodeCaps is not
+# frontmost).  An archive must pass its EdDSA check before it is even
+# unpacked.  No feed, no entries: AutoUpdateAvailability then keeps Sparkle
+# switched off rather than letting it raise a launch-time alert.
+sparkle_plist_entries() {
+  local feed
+  feed="$(sparkle_feed_url)"
+  [[ -n "$feed" ]] || return 0
+  cat <<ENTRIES
+  <key>SUFeedURL</key>
+  <string>$feed</string>
+  <key>SUPublicEDKey</key>
+  <string>$SPARKLE_PUBLIC_ED_KEY</string>
+  <key>SUEnableAutomaticChecks</key>
+  <true/>
+  <key>SUAutomaticallyUpdate</key>
+  <true/>
+  <key>SUAllowsAutomaticUpdates</key>
+  <true/>
+  <key>SUScheduledCheckInterval</key>
+  <integer>$SPARKLE_CHECK_INTERVAL</integer>
+  <key>SUVerifyUpdateBeforeExtraction</key>
+  <true/>
+ENTRIES
+  # A rehearsal feed on this Mac is plain HTTP, which App Transport Security
+  # refuses unless local networking is allowed.  Release feeds are HTTPS and
+  # never get this key.
+  if [[ "$feed" == http://127.0.0.1* || "$feed" == http://localhost* ]]; then
+    cat <<ENTRIES
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsLocalNetworking</key>
+    <true/>
+  </dict>
+ENTRIES
+  fi
+}
+
+# SwiftPM puts a binary-target framework (Sparkle) beside the executable, where
+# the executable's @loader_path rpath finds it.  In the bundle it lives in
+# Contents/Frameworks, so that rpath is added as well.  ditto keeps the
+# framework's Versions symlinks, which codesign requires.
+embed_frameworks() {
+  local bin_dir="$1" framework
+  rm -rf "$APP_FRAMEWORKS"
+  for framework in "$bin_dir"/*.framework; do
+    [[ -d "$framework" ]] || continue
+    mkdir -p "$APP_FRAMEWORKS"
+    /usr/bin/ditto "$framework" "$APP_FRAMEWORKS/$(basename "$framework")"
+    echo "embedded $(basename "$framework")"
+  done
+  if [[ ! -d "$APP_FRAMEWORKS/Sparkle.framework" ]]; then
+    echo "error: Sparkle.framework was not found in $bin_dir." >&2
+    echo "error: refusing to stage an app that would crash at launch looking for it." >&2
+    exit 1
+  fi
+  if ! /usr/bin/otool -l "$APP_EXECUTABLE" | /usr/bin/grep -q '@executable_path/../Frameworks'; then
+    /usr/bin/install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP_EXECUTABLE"
+  fi
 }
 
 # --- Signing -----------------------------------------------------------------
@@ -156,8 +259,28 @@ nested_code_paths() {
     -prune -print 2>/dev/null | sort -r
 }
 
+# Helpers that live inside a framework (Sparkle's Installer.xpc and
+# Downloader.xpc, Updater.app, and the bare Autoupdate executable) are signed
+# before the framework that holds them, which is the order Sparkle's own
+# code-signing guide gives.  Entitlements are preserved because Downloader.xpc
+# carries its own.
+framework_helper_paths() {
+  local framework name
+  for framework in "$APP_FRAMEWORKS"/*.framework; do
+    [[ -d "$framework" ]] || continue
+    name="$(basename "$framework" .framework)"
+    find "$framework/Versions" -mindepth 3 -maxdepth 3 -path '*/XPCServices/*.xpc' -type d 2>/dev/null
+    find "$framework/Versions" -mindepth 2 -maxdepth 2 -name '*.app' -type d 2>/dev/null
+    find "$framework/Versions" -mindepth 2 -maxdepth 2 -type f -perm -u+x ! -name "$name" 2>/dev/null
+  done
+}
+
 sign_with_identity() {
   local identity="$1" target status
+  while IFS= read -r target; do
+    [[ -n "$target" ]] || continue
+    codesign_bounded --force ${SIGN_OPTIONS[@]+"${SIGN_OPTIONS[@]}"} --preserve-metadata=entitlements --sign "$identity" "$target" || return 1
+  done < <(framework_helper_paths)
   while IFS= read -r target; do
     [[ -n "$target" ]] || continue
     codesign_bounded --force ${SIGN_OPTIONS[@]+"${SIGN_OPTIONS[@]}"} --sign "$identity" "$target" && continue
@@ -181,6 +304,15 @@ describe_signature() {
   /usr/bin/codesign -d -r- "$APP_BUNDLE" 2>&1 | /usr/bin/sed 's/^/  /'
 }
 
+# The check notarization makes of the nesting: every helper signed, every seal
+# intact, nothing unsealed.  A bundle that fails it is never installed.
+verify_app_signature() {
+  if ! /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"; then
+    echo "error: codesign --verify --deep --strict failed for $APP_BUNDLE" >&2
+    exit 1
+  fi
+}
+
 sign_app_bundle() {
   local identity
   identity="$(resolve_codesign_identity)"
@@ -188,6 +320,7 @@ sign_app_bundle() {
     if sign_with_identity "$identity"; then
       echo "signed with $identity"
       describe_signature
+      verify_app_signature
       return 0
     fi
     echo "warning: signing with '$identity' failed or timed out." >&2
@@ -202,6 +335,7 @@ sign_app_bundle() {
   # workable shape.
   /usr/bin/codesign --force --deep --sign - "$APP_BUNDLE"
   describe_signature
+  verify_app_signature
 }
 
 # The marketing version lives in one file so a release is a one-line edit, and
@@ -302,6 +436,7 @@ build_and_stage() {
   mkdir -p "$APP_MACOS" "$APP_RESOURCES"
   cp "$build_binary" "$APP_EXECUTABLE"
   chmod +x "$APP_EXECUTABLE"
+  embed_frameworks "$build_bin_dir"
   if [[ "$UNIVERSAL" == "1" ]]; then
     local archs
     archs="$(/usr/bin/lipo -archs "$APP_EXECUTABLE" 2>/dev/null || true)"
@@ -350,6 +485,7 @@ build_and_stage() {
   <string>$MIN_SYSTEM_VERSION</string>
   <key>NSPrincipalClass</key>
   <string>NSApplication</string>
+$(sparkle_plist_entries)
 </dict>
 </plist>
 PLIST
@@ -474,9 +610,13 @@ notarize_file() {
   local file="$1"
   local response submission status
   echo "Submitting $(basename "$file") to Apple for notarization.  This takes a few minutes."
-  if ! response="$(xcrun notarytool submit "$file" --keychain-profile "$NOTARY_PROFILE" --wait --output-format json 2>/dev/null)"; then
+  if ! response="$(xcrun notarytool submit "$file" "${NOTARY_AUTH[@]}" --wait --output-format json 2>/dev/null)"; then
     echo "notarization could not be submitted for $(basename "$file")." >&2
-    echo "check that the keychain profile '$NOTARY_PROFILE' exists (xcrun notarytool store-credentials)." >&2
+    if [[ -n "${NOTARY_KEY_PATH:-}" ]]; then
+      echo "check NOTARY_KEY_PATH, NOTARY_KEY_ID and NOTARY_ISSUER_ID (an App Store Connect API key)." >&2
+    else
+      echo "check that the keychain profile '$NOTARY_PROFILE' exists (xcrun notarytool store-credentials)." >&2
+    fi
     exit 1
   fi
   submission="$(printf '%s' "$response" | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))')"
@@ -485,7 +625,7 @@ notarize_file() {
   echo "notarization status: $status"
   if [[ "$status" != "Accepted" ]]; then
     echo "notarization was not accepted for $(basename "$file").  Apple's log follows." >&2
-    xcrun notarytool log "$submission" --keychain-profile "$NOTARY_PROFILE" >&2 || true
+    xcrun notarytool log "$submission" "${NOTARY_AUTH[@]}" >&2 || true
     exit 1
   fi
 }
@@ -522,6 +662,8 @@ release_dist() {
   # Stapling writes Apple's ticket into the bundle, which is what lets a Mac
   # that is offline, or behind a firewall, still open it without a warning.
   /usr/bin/xcrun stapler staple "$APP_BUNDLE"
+  # What a downloaded copy will face: Gatekeeper must accept the stapled app.
+  /usr/sbin/spctl --assess --type execute -vv "$APP_BUNDLE"
   # The zip that was submitted holds the unstapled bundle, so it is rebuilt
   # from the stapled one.  Whoever downloads the zip gets the ticket too.
   write_zip
@@ -529,6 +671,7 @@ release_dist() {
   build_dmg
   notarize_file "$DMG_FILE"
   /usr/bin/xcrun stapler staple "$DMG_FILE"
+  /usr/sbin/spctl --assess --type open --context context:primary-signature -vv "$DMG_FILE"
 
   local zip_sha dmg_sha
   zip_sha="$(write_sha_file "$ZIP_FILE")"

@@ -5,6 +5,14 @@ PR (when shipped), follow-ups (when parked).
 
 ---
 
+## 2026-09-29 — Sparkle 2 auto-update pilot (fleet Mac apps auto-update) [CLAUDE, completed]
+
+Lane: `claude/sparkle-auto-update` at `~/apps/codecaps-claude-sparkle` (board `7d27a555`).
+
+Owner ruling today: every fleet Mac app updates itself through Sparkle 2 from signed releases CI publishes on each merge to `main`, with CodeCaps as the pilot.  Sparkle 2.10.0 via SwiftPM; `AppUpdater` checks hourly, downloads in the background and installs the moment CodeCaps is not frontmost, relaunching without reopening the Console.  **Check For Updates…** is in both menus and Settings ▸ About.  `build_and_run.sh` embeds and inside-out signs `Sparkle.framework`, verifies with `codesign --verify --deep --strict`, notarizes with the App Store Connect API key when `NOTARY_KEY_*` are set, and runs `spctl` on the stapled app and DMG.  `mac-release.yml` publishes `v<VERSION>-build.<N>` releases (ZIP, DMG, appcast) marked latest; the feed is `releases/latest/download/appcast.xml`.  A local rehearsal notarized build 66 and watched it update itself to build 67 in about ten seconds.  Publishing stays gated until `MAC_CERT_P12_BASE64` and `MAC_CERT_PASSWORD` are reachable (Infisical or repository secrets).  The pattern and the copy-to-another-app recipe are in `docs/AUTO-UPDATE.md`.
+
+---
+
 ## 2026-09-28 — iOS Settings refresh button responsiveness, visual press feedback, and pull-to-refresh on main and settings screens [AG, in progress]
 
 Lane: `ag/ios-pull-to-refresh-and-button-polish` (issue #70, board `30d3165e`).
