@@ -85,5 +85,32 @@ final class GbuQuotaReaderTests: XCTestCase {
         ])
         XCTAssertEqual(result.windows.map(\.source), ["gbu", "gbu"])
     }
+
+    func testEveryWindowNamesItsAccountSoTheAlarmCanTellWhoOwnsTheSharedId() async {
+        // The active account's window keeps the shared "gbu-weekly" id, so the
+        // id alone cannot say whose quota it is when the active account changes.
+        func idToAccount(active: String) async -> [String: String?] {
+            let json = """
+            {"active":"\(active)","accounts":[{"account":"a@example.com","email":"a@example.com","weeklyUsagePercent":10,"available":true,"resetsAt":"2026-09-28T18:35:19.304Z"},{"account":"b@example.com","email":"b@example.com","weeklyUsagePercent":50,"available":true,"resetsAt":"2026-10-02T18:35:19.304Z"}]}
+            """
+            let reader = GbuQuotaReader(now: { self.observedAt }, runGbu: { Data(json.utf8) })
+            let windows = await reader.read().windows
+            return Dictionary(uniqueKeysWithValues: windows.map { ($0.id, $0.accountKey) })
+        }
+        let first = await idToAccount(active: "a@example.com")
+        XCTAssertEqual(first["local-mac:grok-bot:gbu-weekly"], "a@example.com")
+        XCTAssertEqual(first["local-mac:grok-bot:gbu-weekly:b@example.com"], "b@example.com")
+        let second = await idToAccount(active: "b@example.com")
+        XCTAssertEqual(second["local-mac:grok-bot:gbu-weekly"], "b@example.com")
+        XCTAssertEqual(second["local-mac:grok-bot:gbu-weekly:a@example.com"], "a@example.com")
+    }
+
+    func testTheAccountKeyStaysOffTheWire() throws {
+        let window = QuotaWindow(id: "x", provider: "Grok Bot", label: "Grok Bot weekly",
+                                 occurredAt: "2026-09-28T18:35:19Z", accountKey: "a@example.com")
+        let json = String(decoding: try JSONEncoder().encode(window), as: UTF8.self)
+        XCTAssertFalse(json.contains("a@example.com"))
+        XCTAssertFalse(json.contains("accountKey"))
+    }
 }
 

@@ -129,7 +129,8 @@ private func gbuWindow(_ account: [String: Any], active: String?, sole: Bool, ob
         skip: exhausted,
         skipReason: exhausted ? "quota exhausted" : nil,
         occurredAt: gbuISOFormatter.string(from: observedAt),
-        source: "gbu"
+        source: "gbu",
+        accountKey: accountName
     ).normalizedForExport()
 }
 

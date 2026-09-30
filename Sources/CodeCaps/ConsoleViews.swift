@@ -227,7 +227,7 @@ struct ConsoleView: View {
                 // Without layout priority the title loses its space to the
                 // fixed-width controls on the right and gets truncated in the
                 // middle by default.  Tail truncation plus priority keeps the
-                // start of "Antigravity · Gemini · Claude & GPT" legible.
+                // start of "Antigravity · Gemini · Third-Party" legible.
                 .layoutPriority(1)
                 .truncationMode(.tail)
             Spacer(minLength: 8)
@@ -412,7 +412,7 @@ struct ConsoleSidebar: View {
     /// row views is what stops `.listStyle(.sidebar)` aligning them identically.
     private func quotaRow(_ row: DisplaySection) -> some View {
         HStack(spacing: 6) {
-            PlatformLogo(providerKey: row.providerKey, size: 16,
+            PlatformLogo(providerKey: row.id, size: 16,
                          style: model.markStyle(for: row.providerKey))
             // A pool name is half again as long as a platform name, and
             // "Antigravity · Cl…" hides the very thing the row adds, so the
@@ -431,11 +431,11 @@ struct ConsoleSidebar: View {
                 }
             }
             Spacer(minLength: 2)
-            if model.isAlarmArmed(for: row.id) {
+            if !model.alarmsAll && model.isProviderAlarmSelected(row.id) {
                 Image(systemName: "bell.fill")
                     .font(.system(size: 10))
                     .foregroundStyle(Theme.accent)
-                    .accessibilityLabel("Reset alarm armed")
+                    .accessibilityLabel("Reset alarm on")
             }
             if model.issues[row.providerKey] != nil {
                 Image(systemName: "exclamationmark.circle")
@@ -444,11 +444,14 @@ struct ConsoleSidebar: View {
                     .accessibilityLabel("Quota unavailable")
             } else if let remaining = row.remainingPercent {
                 // A fixed column keeps the percentage on screen when the label
-                // is long enough to want every point of the row.
+                // is long enough to want every point of the row.  "100%" is
+                // about 31pt at 11pt, so 30pt truncated it to "100…".
                 Text("\(Int(remaining.rounded()))%")
                     .font(.system(size: 11).monospacedDigit())
                     .foregroundStyle(.secondary)
-                    .frame(width: 30, alignment: .trailing)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .frame(width: 36, alignment: .trailing)
             } else if model.lastChecked == nil {
                 Capsule().fill(Theme.track).frame(width: 28, height: 10)
                     .accessibilityHidden(true)
@@ -665,8 +668,8 @@ struct AllPlatformsPage: View {
                      origin: origin,
                      customInfo: model.platformCustomInfo[row.providerKey],
                      markStyle: model.markStyle(for: row.providerKey),
-                     isAlarmArmed: model.isAlarmArmed(for: row.id),
-                     onToggleAlarm: { model.toggleAlarm(for: row.id) },
+                     isAlarmArmed: model.isAlarmEnabled(for: row.id),
+                     onToggleAlarm: model.alarmsAll ? nil : { model.toggleAlarm(for: row.id) },
                      onOpenSettings: model.consentNeeded.contains(row.providerKey)
                         ? { state.page = .settingsSourcesFleet } : nil)
     }
@@ -712,8 +715,8 @@ struct PlatformDetailPage: View {
                              origin: model.originByProvider[row.providerKey] ?? .local,
                              customInfo: model.platformCustomInfo[row.providerKey],
                              markStyle: model.markStyle(for: row.providerKey),
-                             isAlarmArmed: model.isAlarmArmed(for: row.id),
-                             onToggleAlarm: { model.toggleAlarm(for: row.id) },
+                             isAlarmArmed: model.isAlarmEnabled(for: row.id),
+                             onToggleAlarm: model.alarmsAll ? nil : { model.toggleAlarm(for: row.id) },
                              onOpenSettings: model.consentNeeded.contains(row.providerKey)
                                 ? { state.page = .settingsSourcesFleet } : nil)
             } else {
@@ -825,9 +828,11 @@ struct PlatformDetailPage: View {
     }
 }
 
-/// Version string, read once from the bundle the build script writes.
+/// Version string, read once from the bundle the build script writes.  `var`
+/// only so the screenshot test, which runs inside Xcode's test host and would
+/// otherwise print Xcode's own version, can put a release's string in the footer.
 enum CodeCapsVersion {
-    static let display: String = {
+    static var display: String = {
         let info = Bundle.main.infoDictionary
         let short = info?["CFBundleShortVersionString"] as? String ?? "1.0"
         let build = info?["CFBundleVersion"] as? String ?? "1"

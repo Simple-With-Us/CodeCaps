@@ -97,14 +97,15 @@ final class GlanceMeterTests: XCTestCase {
         label: String,
         token: String? = nil,
         remaining: Double? = 50,
-        resetIn: TimeInterval? = nil
+        resetIn: TimeInterval? = nil,
+        provider: String = "anthropic"
     ) -> QuotaWindowSnapshot {
         let iso = ISO8601DateFormatter()
         return QuotaWindowSnapshot(window: QuotaWindow(
             id: id,
-            provider: "Claude",
-            providerKey: "anthropic",
-            providerLabel: "Claude",
+            provider: provider,
+            providerKey: provider,
+            providerLabel: provider,
             label: label,
             remainingPercent: remaining,
             remainingUnknown: remaining == nil,
@@ -212,8 +213,8 @@ final class GlanceMeterTests: XCTestCase {
         // because the 5h reading must not be believed.  A masked window in a
         // meter is worse than no meter.
         let row = makeRow([
-            makeWindow(id: "5h", label: "Claude & GPT · 5-hour", token: "5h", remaining: 80),
-            makeWindow(id: "weekly", label: "Claude & GPT · Weekly", token: "weekly", remaining: 0),
+            makeWindow(id: "5h", label: "Third-Party · 5-hour", token: "5h", remaining: 80),
+            makeWindow(id: "weekly", label: "Third-Party · Weekly", token: "weekly", remaining: 0),
         ], masked: ["5h"])
         let pair = glanceMeterPair(for: row, now: now)
         XCTAssertEqual(pair.short?.window.id, "weekly")
@@ -266,11 +267,11 @@ final class GlanceMeterTests: XCTestCase {
     // MARK: Captions
 
     func testWeeklyTokensCaptionAsSevenDays() {
-        // Antigravity's pool labels are long ("Claude & GPT · Weekly"), so the
+        // Antigravity's pool labels are long ("Third-Party · Weekly"), so the
         // caption has to come from the cadence token, and a weekly window has
         // to read the same way next to a 5h one.
         for token in ["weekly", "1w", "168h", "10080m"] {
-            XCTAssertEqual(glanceMeterCaption(makeWindow(id: token, label: "Claude & GPT · Weekly", token: token)), "7d",
+            XCTAssertEqual(glanceMeterCaption(makeWindow(id: token, label: "Third-Party · Weekly", token: token)), "7d",
                 "token '\(token)' should caption as 7d")
         }
     }
@@ -282,19 +283,38 @@ final class GlanceMeterTests: XCTestCase {
         }
     }
 
-    func testMonthlyTokensCaptionAsThirtyDays() {
-        for token in ["monthly", "30d", "43200m"] {
-            XCTAssertEqual(glanceMeterCaption(makeWindow(id: token, label: "Plan", token: token)), "30d",
-                "token '\(token)' should caption as 30d")
+    func testMonthlyTokensCaptionAsOneMonth() {
+        // Owner ruling 2026-09-30: a month reads "1m" on every row, never
+        // "30d" and never "Plan".
+        for token in ["monthly", "30d", "31d", "28d", "43200m", "month", "billing-cycle"] {
+            XCTAssertEqual(glanceMeterCaption(makeWindow(id: token, label: "Plan", token: token)), "1m",
+                "token '\(token)' should caption as 1m")
         }
     }
 
+    func testCursorIncludedPlanCaptionsAsOneMonth() {
+        // Cursor's plan resets with its monthly billing cycle.  Its reader tags
+        // the window "billing-cycle"; the unknown-reading fallback has no token
+        // at all, and both used to caption as "Plan".
+        XCTAssertEqual(glanceMeterCaption(makeWindow(id: "c", label: "Included plan", token: "billing-cycle",
+                                                     provider: "cursor")), "1m")
+        XCTAssertEqual(glanceMeterCaption(makeWindow(id: "c", label: "Included plan", token: nil,
+                                                     provider: "cursor")), "1m")
+    }
+
     func testTokenlessWindowCaptionsFromItsLabelThenAsPlan() {
-        // Cursor's included plan and Kimi's plan quota both arrive with no
-        // cadence token at all.
-        XCTAssertEqual(glanceMeterCaption(makeWindow(id: "c", label: "Included plan", token: nil)), "Plan")
+        // Kimi's plan quota arrives with no cadence token and no known period,
+        // so it still says "Plan" rather than guessing a month.
         XCTAssertEqual(glanceMeterCaption(makeWindow(id: "k", label: "Plan quota", token: nil)), "Plan")
+        XCTAssertEqual(glanceMeterCaption(makeWindow(id: "m", label: "Monthly allowance", token: nil)), "1m")
         XCTAssertEqual(glanceMeterCaption(makeWindow(id: "u", label: "Something else", token: nil)), "Quota")
+    }
+
+    func testCompactConsoleNameSaysOneMonthForMonthlyWindows() {
+        XCTAssertEqual(compactWindowName("Included plan"), "1m")
+        XCTAssertEqual(compactWindowName("Monthly window"), "1m")
+        XCTAssertEqual(compactWindowName("Billing cycle"), "1m")
+        XCTAssertEqual(compactWindowName("5-hour window"), "5h")
     }
 
     func testCaptionFallsBackToTheLabelWhenTheTokenIsNotADuration() {

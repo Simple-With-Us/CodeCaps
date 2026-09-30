@@ -33,6 +33,14 @@ targets:
           - "CodeCapsCompanionMac.entitlements"
           - "CodeCapsCompanion.Release.entitlements"
       - path: Assets.xcassets
+      # The reset alarm's rules and wording are shared with the Mac app, so the
+      # two cannot drift apart.  Plain Foundation; no other QuotaCore type.
+      - path: ../../Sources/QuotaCore/ResetAlarmTracker.swift
+        group: Shared
+      - path: ../../Sources/QuotaCore/ResetAlarmMessage.swift
+        group: Shared
+      - path: ../../Sources/QuotaCore/ResetAlarmCadence.swift
+        group: Shared
     dependencies:
       - target: CodeCapsWidgets
         embed: true
@@ -94,6 +102,12 @@ targets:
           - "CodeCapsCompanion.entitlements"
           - "CodeCapsCompanion.Release.entitlements"
       - path: Assets.xcassets
+      - path: ../../Sources/QuotaCore/ResetAlarmTracker.swift
+        group: Shared
+      - path: ../../Sources/QuotaCore/ResetAlarmMessage.swift
+        group: Shared
+      - path: ../../Sources/QuotaCore/ResetAlarmCadence.swift
+        group: Shared
     dependencies:
       - target: CodeCapsWidgetsMac
         embed: true

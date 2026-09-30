@@ -398,7 +398,7 @@ public enum WidgetPresentation {
             id: "antigravity-\(poolKey)",
             providerKey: "google-antigravity",
             title: title,
-            subtitle: poolKey == "gemini" ? "Gemini Models" : "Claude & GPT",
+            subtitle: poolKey == "gemini" ? "Gemini Models" : "Third-Party Models",
             remainingPercent: controllingPct,
             resetAt: nearestReset,
             isExhausted: isExhausted,

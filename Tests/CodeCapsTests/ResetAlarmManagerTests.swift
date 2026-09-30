@@ -2,19 +2,17 @@ import XCTest
 @testable import CodeCaps
 import QuotaCore
 
-/// Verifies quota reset alerts and alarms.
+/// Verifies the reset-alarm model the Glance header and rows drive: All or
+/// per-provider choices, their persistence and the migration from the two old
+/// mechanisms, and the notifications the tracker's decisions turn into.
 ///
-/// Specifically pins:
-/// 1. Baseline initialization does not fire false alerts.
-/// 2. Transition from exhausted to usable dispatches an alert.
-/// 3. Controlling-cap rule: if an Antigravity 5-hour limit resets while the weekly limit
-///    is still at 0% (masked), the alert is suppressed until all controlling caps clear.
-/// 4. Plain multi-window providers suppress alerts if any non-masked window is still 0%.
-/// 5. Explicitly user-armed alarms fire even if global notifications are disabled.
+/// The rules themselves (largest window always, smaller windows only near the
+/// cap) are pinned in `QuotaCoreTests/ResetAlarmTrackerTests`.
 @MainActor
 final class ResetAlarmManagerTests: XCTestCase {
     private var suiteName = ""
     private var defaults: UserDefaults!
+    private let t0 = Date(timeIntervalSince1970: 1_790_000_000)
 
     override func setUp() {
         super.setUp()
@@ -30,229 +28,271 @@ final class ResetAlarmManagerTests: XCTestCase {
 
     // MARK: - Helpers
 
-    private func makeWindow(id: String, providerKey: String, remaining: Double, isFresh: Bool = true) -> QuotaWindowSnapshot {
-        let window = QuotaWindow(
-            id: id,
-            provider: providerKey,
-            providerKey: providerKey,
-            providerLabel: providerKey,
-            label: id,
-            remainingPercent: remaining,
-            remainingUnknown: false,
-            occurredAt: ISO8601DateFormatter().string(from: Date())
-        )
-        return QuotaWindowSnapshot(window: window, now: Date())
+    private func week(_ provider: String, resetAt: Date, remaining: Double, at now: Date,
+                      title: String = "Claude") -> ResetAlarmObservation {
+        ResetAlarmObservation(scope: "local", providerId: provider, providerTitle: title,
+                              windowId: "\(provider):7d", windowLabel: "7d", periodSeconds: 7 * 86_400,
+                              resetAt: resetAt, remainingPercent: remaining, observedAt: now)
     }
 
-    private func makeSection(
-        id: String,
-        providerKey: String,
-        title: String,
-        windows: [QuotaWindowSnapshot],
-        remainingPercent: Double?,
-        maskedWindowIds: Set<String> = []
-    ) -> DisplaySection {
-        let platform = QuotaPlatformSection(
-            providerKey: providerKey,
-            providerLabel: title,
-            expected: true,
-            windows: windows
-        )
-        let poolKey = id.contains(":") ? String(id.split(separator: ":").last!) : nil
-        return DisplaySection(
-            id: id,
-            providerKey: providerKey,
-            title: title,
-            platformTitle: title,
-            section: platform,
-            poolKey: poolKey,
-            remainingPercent: remainingPercent,
-            resetAt: nil,
-            maskedWindowIds: maskedWindowIds
-        )
+    private func fiveHour(_ provider: String, resetAt: Date, remaining: Double, at now: Date,
+                          title: String = "Claude") -> ResetAlarmObservation {
+        ResetAlarmObservation(scope: "local", providerId: provider, providerTitle: title,
+                              windowId: "\(provider):5h", windowLabel: "5h", periodSeconds: 5 * 3_600,
+                              resetAt: resetAt, remainingPercent: remaining, observedAt: now)
     }
 
-    // MARK: - Tests
+    /// Runs one weekly reset for each of `providers` through `manager`.
+    private func runWeeklyReset(_ manager: ResetAlarmManager, providers: [String]) -> [ResetAlarmNotification] {
+        let end = t0.addingTimeInterval(3_600)
+        manager.evaluate(observations: providers.map { week($0, resetAt: end, remaining: 60, at: t0) }, now: t0)
+        let later = end.addingTimeInterval(600)
+        return manager.evaluate(
+            observations: providers.map { week($0, resetAt: end.addingTimeInterval(7 * 86_400), remaining: 100, at: later) },
+            now: later)
+    }
 
-    func testInitialEvaluationEstablishesBaselineWithoutAlerts() {
+    // MARK: - Choices and persistence
+
+    func testFreshInstallTurnsAllOnWithNoProvidersPicked() {
         let manager = ResetAlarmManager(defaults: defaults)
-        var receivedAlerts: [ResetAlarmNotification] = []
-        manager.onNotification = { receivedAlerts.append($0) }
-
-        let exhaustedWindow = makeWindow(id: "claude-5h", providerKey: "anthropic", remaining: 0)
-        let section = makeSection(
-            id: "anthropic",
-            providerKey: "anthropic",
-            title: "Claude Code",
-            windows: [exhaustedWindow],
-            remainingPercent: 0
-        )
-
-        manager.evaluate(currentSections: [section])
-
-        XCTAssertTrue(receivedAlerts.isEmpty, "Initial pass should establish baseline and not fire an alert")
-        XCTAssertTrue(manager.isSectionExhausted(section))
-        XCTAssertFalse(manager.isSectionUsable(section))
+        XCTAssertTrue(manager.allProvidersEnabled)
+        XCTAssertTrue(manager.enabledProviderIds.isEmpty)
+        XCTAssertTrue(manager.isAlarmEnabled(for: "anthropic"))
+        XCTAssertEqual(defaults.object(forKey: ResetAlarmManager.Keys.all) as? Bool, true)
     }
 
-    func testTransitionFromExhaustedToUsableDispatchesAlert() {
+    func testAllAndEachProviderChoicePersistAcrossLaunches() {
+        let first = ResetAlarmManager(defaults: defaults)
+        first.allProvidersEnabled = false
+        first.setProviderAlarm(true, for: "anthropic")
+        first.setProviderAlarm(true, for: "google-antigravity:gemini")
+        first.toggleProviderAlarm(for: "cursor")
+        first.toggleProviderAlarm(for: "cursor")
+
+        let relaunched = ResetAlarmManager(defaults: defaults)
+        XCTAssertFalse(relaunched.allProvidersEnabled)
+        XCTAssertEqual(relaunched.enabledProviderIds, ["anthropic", "google-antigravity:gemini"])
+        XCTAssertTrue(relaunched.isAlarmEnabled(for: "anthropic"))
+        XCTAssertFalse(relaunched.isAlarmEnabled(for: "cursor"))
+        XCTAssertFalse(relaunched.isAlarmEnabled(for: "google-antigravity:third-party"))
+    }
+
+    func testTurningAllOnKeepsThePerProviderPicksForLater() {
         let manager = ResetAlarmManager(defaults: defaults)
-        var receivedAlerts: [ResetAlarmNotification] = []
-        manager.onNotification = { receivedAlerts.append($0) }
+        manager.allProvidersEnabled = false
+        manager.setProviderAlarm(true, for: "openai")
+        manager.allProvidersEnabled = true
+        XCTAssertTrue(manager.isAlarmEnabled(for: "cursor"), "All covers every provider")
 
-        let exhaustedWindow = makeWindow(id: "claude-5h", providerKey: "anthropic", remaining: 0)
-        let exhaustedSection = makeSection(
-            id: "anthropic",
-            providerKey: "anthropic",
-            title: "Claude Code",
-            windows: [exhaustedWindow],
-            remainingPercent: 0
-        )
-
-        // Baseline pass
-        manager.evaluate(currentSections: [exhaustedSection])
-        XCTAssertTrue(receivedAlerts.isEmpty)
-
-        // Second pass: quota has reset to 100%
-        let resetWindow = makeWindow(id: "claude-5h", providerKey: "anthropic", remaining: 100)
-        let resetSection = makeSection(
-            id: "anthropic",
-            providerKey: "anthropic",
-            title: "Claude Code",
-            windows: [resetWindow],
-            remainingPercent: 100
-        )
-
-        manager.evaluate(currentSections: [resetSection])
-
-        XCTAssertEqual(receivedAlerts.count, 1)
-        XCTAssertEqual(receivedAlerts.first?.sectionId, "anthropic")
-        XCTAssertEqual(receivedAlerts.first?.remainingPercent, 100)
-        XCTAssertTrue(receivedAlerts.first?.title.contains("Claude Code") ?? false)
-        // The payload carries the picked sound so a custom handler can
-        // verify the Settings picker was honoured without inspecting
-        // the (private) UNNotificationSound it eventually translates to.
-        XCTAssertEqual(receivedAlerts.first?.sound, .systemDefault)
+        let relaunched = ResetAlarmManager(defaults: defaults)
+        relaunched.allProvidersEnabled = false
+        XCTAssertEqual(relaunched.enabledProviderIds, ["openai"], "turning All off restores the owner's own picks")
     }
 
-    func testTransitionPicksUpPickedSound() {
+    func testMigratesTheOldGlobalSwitchAndArmedBells() {
+        // An owner who had turned the global switch off and armed two rows.
+        defaults.set(false, forKey: ResetAlarmManager.Keys.legacyNotifyOnReset)
+        defaults.set(["anthropic", "google-antigravity:third-party"],
+                     forKey: ResetAlarmManager.Keys.legacyArmedSectionIds)
+
+        let manager = ResetAlarmManager(defaults: defaults)
+        XCTAssertFalse(manager.allProvidersEnabled)
+        XCTAssertEqual(manager.enabledProviderIds, ["anthropic", "google-antigravity:third-party"])
+        XCTAssertEqual(defaults.object(forKey: ResetAlarmManager.Keys.all) as? Bool, false)
+        XCTAssertEqual(defaults.stringArray(forKey: ResetAlarmManager.Keys.providers),
+                       ["anthropic", "google-antigravity:third-party"])
+    }
+
+    func testMigratesTheOldDefaultOnSwitchToAll() {
+        defaults.set(true, forKey: ResetAlarmManager.Keys.legacyNotifyOnReset)
+        let manager = ResetAlarmManager(defaults: defaults)
+        XCTAssertTrue(manager.allProvidersEnabled)
+    }
+
+    func testMigrationRunsOnceAndNeverOverridesTheNewKeys() {
+        defaults.set(false, forKey: ResetAlarmManager.Keys.legacyNotifyOnReset)
+        defaults.set(["openai"], forKey: ResetAlarmManager.Keys.legacyArmedSectionIds)
+        let first = ResetAlarmManager(defaults: defaults)
+        first.allProvidersEnabled = true
+        first.setProviderAlarm(false, for: "openai")
+
+        // The legacy keys are still on disk; they must not win again.
+        let relaunched = ResetAlarmManager(defaults: defaults)
+        XCTAssertTrue(relaunched.allProvidersEnabled)
+        XCTAssertTrue(relaunched.enabledProviderIds.isEmpty)
+    }
+
+    // MARK: - Gating and delivery
+
+    func testAllOnAlarmsEveryProvider() {
+        let manager = ResetAlarmManager(defaults: defaults)
+        var received: [ResetAlarmNotification] = []
+        manager.onNotification = { received.append($0) }
+
+        let sent = runWeeklyReset(manager, providers: ["anthropic", "openai"])
+        XCTAssertEqual(sent.map(\.providerId), ["anthropic", "openai"])
+        XCTAssertEqual(received.count, 2)
+    }
+
+    func testAllOffAlarmsOnlyThePickedProviders() {
+        let manager = ResetAlarmManager(defaults: defaults)
+        manager.allProvidersEnabled = false
+        manager.setProviderAlarm(true, for: "openai")
+        var received: [ResetAlarmNotification] = []
+        manager.onNotification = { received.append($0) }
+
+        _ = runWeeklyReset(manager, providers: ["anthropic", "openai"])
+        XCTAssertEqual(received.map(\.providerId), ["openai"])
+    }
+
+    func testAPickedProviderStaysPickedAfterItRings() {
+        // The old bells were one-shot and disarmed themselves; a provider pick
+        // is a standing choice.
+        let manager = ResetAlarmManager(defaults: defaults)
+        manager.allProvidersEnabled = false
+        manager.setProviderAlarm(true, for: "openai")
+        manager.onNotification = { _ in }
+        _ = runWeeklyReset(manager, providers: ["openai"])
+        XCTAssertTrue(manager.isProviderSelected("openai"))
+    }
+
+    func testTrackerStateIsSavedSoARelaunchDoesNotRefire() {
+        let manager = ResetAlarmManager(defaults: defaults)
+        var received: [ResetAlarmNotification] = []
+        manager.onNotification = { received.append($0) }
+        _ = runWeeklyReset(manager, providers: ["anthropic"])
+        XCTAssertEqual(received.count, 1)
+        XCTAssertNotNil(defaults.data(forKey: ResetAlarmManager.Keys.trackerState))
+
+        let relaunched = ResetAlarmManager(defaults: defaults)
+        relaunched.onNotification = { received.append($0) }
+        let later = t0.addingTimeInterval(3 * 3_600)
+        relaunched.evaluate(observations: [week("anthropic", resetAt: t0.addingTimeInterval(3_600 + 7 * 86_400),
+                                                remaining: 99, at: later)], now: later)
+        XCTAssertEqual(received.count, 1, "the week that already rang must not ring again after a relaunch")
+    }
+
+    func testAPendingResetSurvivesARelaunch() {
+        let first = ResetAlarmManager(defaults: defaults)
+        first.onNotification = { _ in XCTFail("nothing has reset yet") }
+        let end = t0.addingTimeInterval(3_600)
+        first.evaluate(observations: [week("anthropic", resetAt: end, remaining: 40, at: t0)], now: t0)
+
+        // The week resets while the app is down.
+        let relaunched = ResetAlarmManager(defaults: defaults)
+        var received: [ResetAlarmNotification] = []
+        relaunched.onNotification = { received.append($0) }
+        let later = end.addingTimeInterval(2 * 3_600)
+        relaunched.evaluate(observations: [week("anthropic", resetAt: end.addingTimeInterval(7 * 86_400),
+                                                remaining: 100, at: later)], now: later)
+        XCTAssertEqual(received.count, 1)
+    }
+
+    // MARK: - Notification words
+
+    func testWeeklyResetNotificationSaysANewWeekBegan() {
         let manager = ResetAlarmManager(defaults: defaults)
         manager.alarmSound = .frog
-        var receivedAlerts: [ResetAlarmNotification] = []
-        manager.onNotification = { receivedAlerts.append($0) }
+        var received: [ResetAlarmNotification] = []
+        manager.onNotification = { received.append($0) }
+        _ = runWeeklyReset(manager, providers: ["anthropic"])
 
-        let exhausted = makeSection(id: "anthropic", providerKey: "anthropic", title: "Claude Code",
-                                    windows: [makeWindow(id: "claude-5h", providerKey: "anthropic", remaining: 0)],
-                                    remainingPercent: 0)
-        manager.evaluate(currentSections: [exhausted])
-
-        let reset = makeSection(id: "anthropic", providerKey: "anthropic", title: "Claude Code",
-                                windows: [makeWindow(id: "claude-5h", providerKey: "anthropic", remaining: 100)],
-                                remainingPercent: 100)
-        manager.evaluate(currentSections: [reset])
-
-        XCTAssertEqual(receivedAlerts.first?.sound, .frog)
+        let alert = try? XCTUnwrap(received.first)
+        XCTAssertEqual(alert?.title, "Quota Reset: Claude")
+        XCTAssertEqual(alert?.body, "The 7d window reset." + sentenceGap + "A new week of quota is available.")
+        XCTAssertEqual(alert?.windowLabels, ["7d"])
+        XCTAssertEqual(alert?.remainingPercent, 100)
+        // The payload carries the picked sound so a custom handler can verify
+        // the Settings picker was honoured.
+        XCTAssertEqual(alert?.sound, .frog)
     }
 
-    func testControllingCapSuppressionInAntigravityPool() {
-        let manager = ResetAlarmManager(defaults: defaults)
-        var receivedAlerts: [ResetAlarmNotification] = []
-        manager.onNotification = { receivedAlerts.append($0) }
+    func testNearCapResetNotificationSaysHowCloseItCame() {
+        let event = ResetAlarmEvent(scope: "local", providerId: "anthropic", providerTitle: "Claude",
+                                    windowId: "5h", windowLabel: "5h", periodSeconds: 5 * 3_600,
+                                    endedPeriodResetAt: t0, remainingPercent: 100,
+                                    reason: .nearCap(minimumRemaining: 8))
+        let content = ResetAlarmManager.notificationContent(for: [event])
+        XCTAssertEqual(content.body, "The 5h window reset after reaching 8% remaining." + sentenceGap + "Ready to use again.")
 
-        let poolId = "google-antigravity:third-party"
-
-        // Step 1: Both 5h and weekly limits are exhausted (0%).
-        // Because weekly is 0%, the 5h window is masked.
-        let w5hExhausted = makeWindow(id: "antigravity:third-party:5h", providerKey: "google-antigravity", remaining: 0)
-        let wWeeklyExhausted = makeWindow(id: "antigravity:third-party:weekly", providerKey: "google-antigravity", remaining: 0)
-
-        let initialSection = makeSection(
-            id: poolId,
-            providerKey: "google-antigravity",
-            title: "Antigravity · Claude & GPT",
-            windows: [w5hExhausted, wWeeklyExhausted],
-            remainingPercent: 0,
-            maskedWindowIds: [w5hExhausted.window.id]
-        )
-
-        manager.evaluate(currentSections: [initialSection])
-        XCTAssertTrue(receivedAlerts.isEmpty)
-        XCTAssertTrue(manager.isSectionExhausted(initialSection))
-        XCTAssertFalse(manager.isSectionUsable(initialSection))
-
-        // Step 2: 5-hour window resets to 100%, BUT weekly is STILL at 0%.
-        // The 5-hour window remains masked by the weekly cap.
-        let w5hReset = makeWindow(id: "antigravity:third-party:5h", providerKey: "google-antigravity", remaining: 100)
-        let intermediateSection = makeSection(
-            id: poolId,
-            providerKey: "google-antigravity",
-            title: "Antigravity · Claude & GPT",
-            windows: [w5hReset, wWeeklyExhausted],
-            remainingPercent: 0, // headline stays 0 because weekly is exhausted
-            maskedWindowIds: [w5hReset.window.id]
-        )
-
-        manager.evaluate(currentSections: [intermediateSection])
-
-        XCTAssertTrue(receivedAlerts.isEmpty, "Alert MUST be suppressed because weekly cap is still in effect")
-        XCTAssertFalse(manager.isSectionUsable(intermediateSection))
-
-        // Step 3: Weekly window also resets to 80%.
-        // Both caps are now clear, and maskedWindowIds is empty.
-        let wWeeklyReset = makeWindow(id: "antigravity:third-party:weekly", providerKey: "google-antigravity", remaining: 80)
-        let finalSection = makeSection(
-            id: poolId,
-            providerKey: "google-antigravity",
-            title: "Antigravity · Claude & GPT",
-            windows: [w5hReset, wWeeklyReset],
-            remainingPercent: 80,
-            maskedWindowIds: []
-        )
-
-        manager.evaluate(currentSections: [finalSection])
-
-        XCTAssertEqual(receivedAlerts.count, 1, "Alert should fire now that all controlling caps are cleared")
-        XCTAssertEqual(receivedAlerts.first?.sectionId, poolId)
-        XCTAssertEqual(receivedAlerts.first?.remainingPercent, 80)
+        var capped = event
+        capped.reason = .nearCap(minimumRemaining: 0)
+        XCTAssertEqual(ResetAlarmManager.notificationContent(for: [capped]).body,
+                       "The 5h window reset after hitting its cap." + sentenceGap + "Ready to use again.")
     }
 
-    func testUserArmedAlarmFiresEvenIfNotifyOnResetIsDisabled() {
+    func testMonthlyAndCombinedResetsShareOneNotification() {
+        let month = ResetAlarmEvent(scope: "local", providerId: "cursor", providerTitle: "Cursor",
+                                    windowId: "plan", windowLabel: "1m", periodSeconds: 30 * 86_400,
+                                    endedPeriodResetAt: t0, remainingPercent: 100, reason: .newPeriod)
+        XCTAssertEqual(ResetAlarmManager.notificationContent(for: [month]).body,
+                       "The 1m window reset." + sentenceGap + "A new month of quota is available.")
+
+        let weekEvent = ResetAlarmEvent(scope: "local", providerId: "anthropic", providerTitle: "Claude",
+                                        windowId: "7d", windowLabel: "7d", periodSeconds: 7 * 86_400,
+                                        endedPeriodResetAt: t0, remainingPercent: 100, reason: .newPeriod)
+        let fiveEvent = ResetAlarmEvent(scope: "local", providerId: "anthropic", providerTitle: "Claude",
+                                        windowId: "5h", windowLabel: "5h", periodSeconds: 5 * 3_600,
+                                        endedPeriodResetAt: t0, remainingPercent: 100,
+                                        reason: .nearCap(minimumRemaining: 3))
+        let combined = ResetAlarmManager.notificationContent(for: [weekEvent, fiveEvent])
+        XCTAssertEqual(combined.body, "The 7d and 5h windows reset." + sentenceGap + "A new week of quota is available.")
+        XCTAssertEqual(combined.windowLabels, ["7d", "5h"])
+    }
+
+    func testBothWindowsResettingTogetherSendOneNotification() {
         let manager = ResetAlarmManager(defaults: defaults)
-        manager.notifyOnReset = false // Global reset alerts disabled
-        var receivedAlerts: [ResetAlarmNotification] = []
-        manager.onNotification = { receivedAlerts.append($0) }
+        var received: [ResetAlarmNotification] = []
+        manager.onNotification = { received.append($0) }
+        let end = t0.addingTimeInterval(3_600)
+        manager.evaluate(observations: [
+            week("anthropic", resetAt: end, remaining: 30, at: t0),
+            fiveHour("anthropic", resetAt: end, remaining: 2, at: t0),
+        ], now: t0)
+        let later = end.addingTimeInterval(60)
+        manager.evaluate(observations: [
+            week("anthropic", resetAt: end.addingTimeInterval(7 * 86_400), remaining: 100, at: later),
+            fiveHour("anthropic", resetAt: later.addingTimeInterval(5 * 3_600), remaining: 100, at: later),
+        ], now: later)
+        XCTAssertEqual(received.count, 1)
+        XCTAssertEqual(received.first?.windowLabels, ["7d", "5h"])
+    }
 
-        let sectionId = "openai"
-        manager.toggleAlarm(for: sectionId)
-        XCTAssertTrue(manager.isAlarmArmed(for: sectionId))
+    // MARK: - Readings handed to the tracker
 
-        let exhaustedWindow = makeWindow(id: "codex-fast", providerKey: "openai", remaining: 0)
-        let exhaustedSection = makeSection(
-            id: sectionId,
-            providerKey: "openai",
-            title: "Codex",
-            windows: [exhaustedWindow],
-            remainingPercent: 0
-        )
+    func testObservationsCoverEveryWindowWithItsPeriodAndMaskedWindowsReportNoPercentage() {
+        let iso = ISO8601DateFormatter()
+        func window(_ id: String, _ label: String, _ token: String?, _ remaining: Double) -> QuotaWindowSnapshot {
+            QuotaWindowSnapshot(window: QuotaWindow(
+                id: id, provider: "Antigravity", providerKey: "google-antigravity", label: label,
+                remainingPercent: remaining, resetAt: iso.string(from: t0.addingTimeInterval(3_600)),
+                window: token, occurredAt: iso.string(from: t0)), now: t0)
+        }
+        let five = window("ag:tp:5h", "Third-Party · 5-hour", "5h", 80)
+        let weekly = window("ag:tp:weekly", "Third-Party · Weekly", "weekly", 0)
+        let row = DisplaySection(
+            id: "google-antigravity:third-party", providerKey: "google-antigravity",
+            title: "Antigravity · Third-Party", platformTitle: "Antigravity",
+            section: QuotaPlatformSection(providerKey: "google-antigravity", providerLabel: "Antigravity",
+                                          expected: true, windows: [five, weekly]),
+            poolKey: "third-party", remainingPercent: 0, resetAt: nil, maskedWindowIds: ["ag:tp:5h"])
 
-        // Baseline pass
-        manager.evaluate(currentSections: [exhaustedSection])
-        XCTAssertTrue(receivedAlerts.isEmpty)
+        let observations = resetAlarmObservations(for: row, scope: "local")
+        XCTAssertEqual(observations.map(\.windowLabel), ["5h", "7d"])
+        XCTAssertEqual(observations.map(\.periodSeconds), [5 * 3_600, 7 * 86_400])
+        XCTAssertEqual(observations.map(\.providerId), ["google-antigravity:third-party", "google-antigravity:third-party"])
+        XCTAssertNil(observations[0].remainingPercent, "a masked 5h percentage must not be believed")
+        XCTAssertEqual(observations[1].remainingPercent, 0)
+    }
 
-        // Reset pass
-        let resetWindow = makeWindow(id: "codex-fast", providerKey: "openai", remaining: 90)
-        let resetSection = makeSection(
-            id: sectionId,
-            providerKey: "openai",
-            title: "Codex",
-            windows: [resetWindow],
-            remainingPercent: 90
-        )
-
-        manager.evaluate(currentSections: [resetSection])
-
-        XCTAssertEqual(receivedAlerts.count, 1, "User-armed alarm must fire even when global notifyOnReset is false")
-        XCTAssertFalse(manager.isAlarmArmed(for: sectionId), "Armed alarm should automatically disarm after firing")
+    func testCursorPlanIsAMonthLongPeriod() {
+        let iso = ISO8601DateFormatter()
+        let plan = QuotaWindowSnapshot(window: QuotaWindow(
+            id: "local-mac:cursor:plan", provider: "Cursor", providerKey: "cursor", label: "Included plan",
+            remainingPercent: 40, window: "billing-cycle", occurredAt: iso.string(from: t0)), now: t0)
+        XCTAssertEqual(quotaWindowPeriodSeconds(plan), 30 * 86_400)
+        XCTAssertEqual(glanceMeterCaption(plan), "1m")
     }
 
     func testSendTestNotification() async {
@@ -263,7 +303,7 @@ final class ResetAlarmManagerTests: XCTestCase {
         await manager.sendTestNotification()
 
         XCTAssertEqual(receivedAlerts.count, 1)
-        XCTAssertEqual(receivedAlerts.first?.sectionId, "test")
+        XCTAssertEqual(receivedAlerts.first?.providerId, "test")
         XCTAssertEqual(receivedAlerts.first?.sound, .systemDefault)
         XCTAssertEqual(manager.testNotificationOutcome, .sent)
     }

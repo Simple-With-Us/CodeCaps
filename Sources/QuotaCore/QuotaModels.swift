@@ -69,6 +69,11 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
     /// unchanged.  A window that arrives over the wire has none and falls back
     /// to the derived start.
     public var periodStart: String? = nil
+    /// Whose quota this window is, for a reader that reuses one window id for
+    /// whichever account is active (Grok Bot's `gbu`).  The reset alarm restarts
+    /// a window's history when this changes, so switching accounts is never
+    /// mistaken for a reset.  Local only, like `periodStart`: not a coding key.
+    public var accountKey: String? = nil
 
     private enum CodingKeys: String, CodingKey {
         case id, provider, providerKey, providerLabel, via, sourceApp, modelId, modelType, label
@@ -101,7 +106,8 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
         skipReason: String? = nil,
         occurredAt: String,
         source: String? = nil,
-        periodStart: String? = nil
+        periodStart: String? = nil,
+        accountKey: String? = nil
     ) {
         self.id = id
         self.provider = provider
@@ -127,6 +133,7 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
         self.occurredAt = occurredAt
         self.source = source
         self.periodStart = periodStart
+        self.accountKey = accountKey
     }
 
     public init(from decoder: Decoder) throws {

@@ -5,6 +5,22 @@ PR (when shipped), follow-ups (when parked).
 
 ---
 
+## 2026-09-30 — Glance view switch, per-provider reset alarms, Third-Party pool, 1m, roomier rows [CLAUDE, in review]
+
+Lane: `claude/glance-toggle-alarms` (worktree `~/apps/codecaps-claude-glance-toggle`, board `e551b867`).
+
+- Glance header: a two-box `THIS MAC | FLEET REPORTED` switch beside the name shows one set of rows at a time and is remembered across launches (`glanceView`).  The in-list "THIS MAC" heading is gone; fleet sources keep a heading each, now carrying their "reported" time, and the header counts "N sources".  Fleet Reported with nothing connected explains how to connect an endpoint.
+- Reset alarms are one model.  The header's **All** bell turns every provider's alarm on; with All off a faint bell at the left of each row picks providers one by one.  `ResetAlarmTracker` (QuotaCore, pure, persisted) decides: the largest window alarms on every reset, a smaller one only after reaching 20% or less remaining, never on a first reading, once per reset across restarts and across This Mac and Fleet Reported.  Nothing else suppresses an alarm: a first draft held a smaller window's alarm back while a larger window read 0%, but that is not the owner's rule and it swallowed alarms whenever a model-only cap (Claude's Sonnet weekly, another MiniMax model's weekly) was spent.
+- The tracker also restarts a window silently when its owner changes (Grok Bot's `gbu` reuses one id for whichever account is active; `QuotaWindow.accountKey`, local only), ignores stamps more than five minutes in the future, and counts an early provider reset with a short reset-time move when the percentage climbs back by 10 points or more.
+- The iOS companion and its Mac build use the same tracker and wording (`ResetAlarmTracker`, `ResetAlarmMessage`, `ResetAlarmCadence` are compiled into the companion targets from `Sources/QuotaCore`).  Its per-row armed bells and "Notify on Quota Reset" switch are gone, replaced by the same All switch (Settings) and per-provider bells; old choices migrate once.
+- Antigravity's "Claude & GPT" pool is "Third-Party" on Mac, iOS and in the docs.  The Gemini pool wears the colour Gemini star, the Third-Party pool the same star in one adaptive colour.  OpenAI, Cursor, Grok and MiniMax marks now follow light and dark like the Third-Party star, so they no longer draw black on the dark Glance surface.
+- Monthly and billing-cycle windows caption as `1m` (Cursor's plan was "Plan").
+- Rows: the percentage column fits "100%" plus a real gap, the two meter groups sit 24pt apart, and the countdown matches the caption's type (11pt medium, secondary, not italic), in the inline expansion too.  Popover 560 → 624pt; widths measured in tests.  The popover height now counts the row hairlines, so the list no longer scrolls by 7pt; a test lays the real view out and compares.  The Console sidebar's percent column fits "100%".
+- Docs: `glance-light`, `glance-dark`, `glance-fleet`, `console-light`, `console-dark`, `platform-antigravity` and `settings-sources-fleet` are redrawn from invented demo readings by `DocsScreenshotTests` (opt-in, `CODECAPS_DOCS_RENDER_DIR`), so none still says "AgentBar" or "Claude & GPT".
+- Known gaps: the Sources list in Console Settings describes Grok Bot as "Cursor app session" (old copy, not touched here).
+
+---
+
 ## 2026-09-30 — CodeCaps iOS Release signs with the App Store profiles [GROK, completed]
 
 Lane: `grok/codecaps-ios-sign` at `~/apps/codecaps-grok-ios-sign` (board `0f6b32c1`).
