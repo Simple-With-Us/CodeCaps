@@ -161,9 +161,9 @@ final class ResetAlarmTrackerTests: XCTestCase {
         XCTAssertEqual(events.first?.reason, .nearCap(minimumRemaining: 12))
     }
 
-    func testSmallerWindowStaysQuietWhileALargerWindowIsStillAtItsCap() {
-        // The 5h reset changes nothing the owner can act on: the week is spent.
-        // The week's own reset announces when the provider is usable again.
+    func testSmallerWindowStillFiresWhileALargerWindowIsAtItsCap() {
+        // Owner rule 2 as written: nothing but the window's own minimum decides.
+        // A spent week does not silence the 5h window's reset.
         var tracker = ResetAlarmTracker()
         let fiveEnd = t0 + hour
         let weekEnd = t0 + 3 * day
@@ -171,7 +171,46 @@ final class ResetAlarmTrackerTests: XCTestCase {
         let later = fiveEnd + 60
         let events = tracker.process(claude(at: later, fiveResetAt: later + 5 * hour, five: 100,
                                             weekResetAt: weekEnd, week: 0), now: later)
-        XCTAssertTrue(events.isEmpty)
+        XCTAssertEqual(events.map(\.windowId), ["5h"])
+        XCTAssertEqual(events.first?.reason, .nearCap(minimumRemaining: 0))
+    }
+
+    func testAModelOnlyWeeklyAtItsCapDoesNotSilenceTheFiveHourWindow() {
+        // Claude reports a 7d window per model family beside the overall one.
+        // The Sonnet cap can be spent while Claude is perfectly usable.
+        var tracker = ResetAlarmTracker()
+        let fiveEnd = t0 + hour
+        let weekEnd = t0 + 4 * day
+        func batch(at now: Date, five: Double, fiveReset: Date) -> [ResetAlarmObservation] {
+            [
+                reading("5h", period: 5 * hour, resetAt: fiveReset, remaining: five, observedAt: now),
+                reading("7d", period: 7 * day, resetAt: weekEnd, remaining: 60, observedAt: now),
+                reading("7d_sonnet", period: 7 * day, resetAt: weekEnd, remaining: 0, observedAt: now),
+            ]
+        }
+        _ = tracker.process(batch(at: t0, five: 10, fiveReset: fiveEnd), now: t0)
+        let later = fiveEnd + 60
+        let events = tracker.process(batch(at: later, five: 100, fiveReset: later + 5 * hour), now: later)
+        XCTAssertEqual(events.map(\.windowId), ["5h"])
+    }
+
+    func testAnotherModelsWeeklyAtItsCapDoesNotSilenceAModelsIntervalWindow() {
+        // MiniMax reports an interval and a weekly window per model.
+        var tracker = ResetAlarmTracker()
+        let intervalEnd = t0 + hour
+        let weekEnd = t0 + 4 * day
+        func batch(at now: Date, intervalB: Double, intervalReset: Date) -> [ResetAlarmObservation] {
+            [
+                reading("A:weekly", period: 7 * day, resetAt: weekEnd, remaining: 0, observedAt: now, provider: "minimax"),
+                reading("A:interval", period: 5 * hour, resetAt: intervalReset, remaining: 70, observedAt: now, provider: "minimax"),
+                reading("B:weekly", period: 7 * day, resetAt: weekEnd, remaining: 50, observedAt: now, provider: "minimax"),
+                reading("B:interval", period: 5 * hour, resetAt: intervalReset, remaining: intervalB, observedAt: now, provider: "minimax"),
+            ]
+        }
+        _ = tracker.process(batch(at: t0, intervalB: 5, intervalReset: intervalEnd), now: t0)
+        let later = intervalEnd + 60
+        let events = tracker.process(batch(at: later, intervalB: 100, intervalReset: later + 5 * hour), now: later)
+        XCTAssertTrue(events.contains { $0.windowId == "B:interval" }, "model B's interval came within 20% and reset")
     }
 
     func testBothWindowsResettingTogetherFireLargestFirst() {
@@ -352,6 +391,77 @@ final class ResetAlarmTrackerTests: XCTestCase {
         XCTAssertEqual(events.map(\.windowId), ["7d"])
     }
 
+    func testAnEarlyResetWithAShortJumpStillCountsWhenThePercentageClimbsBack() {
+        // The week is at 30% with 5 days left; the provider resets it and the
+        // new reset time is 7 days away, a move of 2 days, well under half a
+        // 7-day period.  The percentage going back to 100 settles it.
+        var tracker = ResetAlarmTracker()
+        _ = tracker.process(claude(at: t0, fiveResetAt: t0 + 4 * hour, five: 90,
+                                   weekResetAt: t0 + 5 * day, week: 30), now: t0)
+        let later = t0 + hour
+        let events = tracker.process(claude(at: later, fiveResetAt: t0 + 4 * hour, five: 90,
+                                            weekResetAt: later + 7 * day, week: 100), now: later)
+        XCTAssertEqual(events.map(\.windowId), ["7d"])
+        XCTAssertEqual(tracker.state.windows["local|anthropic|7d"]?.minimumRemaining, 100,
+                       "the new period starts from the new reading, not the old minimum")
+    }
+
+    func testAShortJumpWithoutAClimbIsStillJustADrift() {
+        var tracker = ResetAlarmTracker()
+        _ = tracker.process(claude(at: t0, fiveResetAt: t0 + 4 * hour, five: 90,
+                                   weekResetAt: t0 + 5 * day, week: 30), now: t0)
+        let later = t0 + hour
+        // The reset time moved two days, but the percentage did not recover.
+        let events = tracker.process(claude(at: later, fiveResetAt: t0 + 4 * hour, five: 90,
+                                            weekResetAt: t0 + 7 * day, week: 32), now: later)
+        XCTAssertTrue(events.isEmpty)
+    }
+
+    // MARK: Whose window it is
+
+    func testAWindowThatChangesHandsStartsOverWithoutFiring() {
+        // Grok Bot reuses one window id for whichever account is active.  The
+        // other account's reset is six days out; it is not this one's reset.
+        var tracker = ResetAlarmTracker()
+        func gbu(account: String, remaining: Double, resetAt: Date, at now: Date) -> [ResetAlarmObservation] {
+            [ResetAlarmObservation(scope: "local", providerId: "grok-bot", providerTitle: "Grok Bot",
+                                   windowId: "gbu-weekly", windowLabel: "7d", periodSeconds: 7 * day,
+                                   resetAt: resetAt, remainingPercent: remaining, observedAt: now,
+                                   identity: account)]
+        }
+        _ = tracker.process(gbu(account: "a", remaining: 0, resetAt: t0 + 2 * day, at: t0), now: t0)
+        let later = t0 + hour
+        XCTAssertTrue(tracker.process(gbu(account: "b", remaining: 80, resetAt: t0 + 6 * day, at: later),
+                                      now: later).isEmpty)
+        XCTAssertEqual(tracker.state.windows["local|grok-bot|gbu-weekly"]?.identity, "b")
+        XCTAssertEqual(tracker.state.windows["local|grok-bot|gbu-weekly"]?.minimumRemaining, 80,
+                       "account a's 0% must not leak into account b's period")
+        // Account b then resets for real, and the largest window announces it.
+        let reset = t0 + 6 * day + 60
+        XCTAssertEqual(tracker.process(gbu(account: "b", remaining: 100, resetAt: t0 + 13 * day, at: reset),
+                                       now: reset).map(\.windowId), ["gbu-weekly"])
+    }
+
+    func testAWindowWithoutAnIdentityAdoptsTheFirstOneWithoutRestarting() {
+        var tracker = ResetAlarmTracker()
+        var first = reading("7d", period: 7 * day, resetAt: t0 + 2 * day, remaining: 40, observedAt: t0)
+        _ = tracker.process([first], now: t0)
+        first.identity = "a"
+        first.observedAt = t0 + hour
+        _ = tracker.process([first], now: t0 + hour)
+        XCTAssertEqual(tracker.state.windows["local|anthropic|7d"]?.identity, "a")
+        XCTAssertEqual(tracker.state.windows["local|anthropic|7d"]?.minimumRemaining, 40)
+    }
+
+    func testStateSavedBeforeIdentitiesExistedStillDecodes() throws {
+        let old = """
+        {"version":1,"recentFires":[],"windows":{"local|anthropic|7d":{"periodResetAt":1790100000,"minimumRemaining":40,"lastRemaining":40,"lastSeenAt":1790000000,"periodSeconds":604800}}}
+        """
+        let decoded = ResetAlarmTrackerState.decoded(from: Data(old.utf8))
+        XCTAssertEqual(decoded.windows["local|anthropic|7d"]?.minimumRemaining, 40)
+        XCTAssertNil(decoded.windows["local|anthropic|7d"]?.identity)
+    }
+
     // MARK: Missing and late readings
 
     func testReadingsWithNoPercentageOrNoResetAreTolerated() {
@@ -389,6 +499,29 @@ final class ResetAlarmTrackerTests: XCTestCase {
                                              weekResetAt: weekEnd, week: 10), now: later + 60).isEmpty)
         XCTAssertTrue(tracker.process(claude(at: later + 120, fiveResetAt: later + 5 * hour, five: 99,
                                              weekResetAt: weekEnd + 7 * day, week: 99), now: later + 120).isEmpty)
+    }
+
+    func testOneFutureStampedReadingDoesNotFreezeTheWindow() {
+        // A fleet producer with a wrong clock stamps a reading a day ahead.
+        // Every honest reading after it must still count.
+        var tracker = ResetAlarmTracker()
+        let fiveEnd = t0 + 2 * hour
+        let weekEnd = t0 + 3 * day
+        _ = tracker.process(claude(at: t0, fiveResetAt: fiveEnd, five: 60, weekResetAt: weekEnd, week: 50,
+                                   scope: "fleet:mini"), now: t0)
+        let skewed = t0 + 10 * 60
+        _ = tracker.process(claude(at: t0 + day, fiveResetAt: fiveEnd, five: 55, weekResetAt: weekEnd, week: 50,
+                                   scope: "fleet:mini"), now: skewed)
+        // The honest readings take the 5h window to 5%, then it resets.
+        let low = t0 + hour
+        _ = tracker.process(claude(at: low, fiveResetAt: fiveEnd, five: 5, weekResetAt: weekEnd, week: 50,
+                                   scope: "fleet:mini"), now: low)
+        XCTAssertEqual(tracker.state.windows["fleet:mini|anthropic|5h"]?.minimumRemaining, 5)
+        let later = fiveEnd + 60
+        let events = tracker.process(claude(at: later, fiveResetAt: later + 5 * hour, five: 100,
+                                            weekResetAt: weekEnd, week: 50, scope: "fleet:mini"), now: later)
+        XCTAssertEqual(events.map(\.windowId), ["5h"])
+        XCTAssertEqual(events.first?.reason, .nearCap(minimumRemaining: 5))
     }
 
     func testForgottenWindowsArePrunedAfterTheRetentionPeriod() {

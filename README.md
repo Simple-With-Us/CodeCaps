@@ -16,7 +16,8 @@ CodeCaps has two surfaces.  Nothing renders in both.
 
 **Glance** is the menu bar popover — the two-second check.  One row per platform, each with its short and long quota windows side by side: a caption (`5h`, `7d`, `1m`), a usage bar, the percentage remaining, and the reset countdown.  A two-box switch beside the name shows either `This Mac` or `Fleet Reported`, one set at a time, and remembers the choice across launches.  Beside it, the **All** bell turns reset alarms on for every provider; turn it off and a faint bell appears at the left of each row, so providers can be picked one by one.  Read-only aside from those switches, Refresh, Settings, and Open CodeCaps.
 
-<img src="docs/screenshots/glance-light.png" width="380" alt="Glance, light"> <img src="docs/screenshots/glance-dark.png" width="380" alt="Glance, dark">
+<img src="docs/screenshots/glance-light.png" width="760" alt="Glance, light">
+<img src="docs/screenshots/glance-dark.png" width="760" alt="Glance, dark">
 
 **Console** is a resizable window, sidebar split into Quotas and Settings: Quotas is an all-platforms overview plus a per-platform drill-down with search; Settings holds the five pages below.
 
@@ -40,7 +41,7 @@ Antigravity sells two independent model pools, shown as two rows, **Gemini** (th
 A reset alarm is a notification, with the sound picked in Settings → Alerts & Alarms, when a quota window starts a new period:
 
 - A provider's **largest** window — the weekly or monthly one — alarms every time it resets, even if usage never came near the cap, so you know a new week or month began.
-- A **smaller** window — the 5-hour one — alarms on reset only if, during the period that just ended, it hit its cap or came within 20% of it.  It stays quiet while a larger window of the same provider is still at 0%, because the provider cannot be used yet.
+- A **smaller** window — the 5-hour one — alarms on reset only if, during the period that just ended, it hit its cap or came within 20% of it.
 
 Each reset alarms once.  The state behind it is saved on every refresh, so a reset that lands while CodeCaps is closed, or during an update, still alarms on the next reading, and one that already alarmed never repeats.  This Mac and Fleet Reported rows both alarm, keyed by provider; the same reset reported by both alarms once.
 

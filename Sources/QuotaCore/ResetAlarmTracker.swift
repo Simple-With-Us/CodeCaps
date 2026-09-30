@@ -35,6 +35,12 @@ public struct ResetAlarmObservation: Equatable, Sendable {
     /// When the reading was taken.  Readings older than one already processed
     /// are ignored, so a late fleet report cannot rewind a window.
     public var observedAt: Date?
+    /// Whose quota the window is, when one window id is shared by several
+    /// accounts in turn: Grok Bot's `gbu` reuses one id for whichever account is
+    /// active.  When the identity of a window changes, its state starts over
+    /// without firing, because another account's reset time and percentage are
+    /// not a reset of this one.  `nil` for every window with a fixed owner.
+    public var identity: String?
 
     public init(
         scope: String,
@@ -45,7 +51,8 @@ public struct ResetAlarmObservation: Equatable, Sendable {
         periodSeconds: TimeInterval?,
         resetAt: Date?,
         remainingPercent: Double?,
-        observedAt: Date?
+        observedAt: Date?,
+        identity: String? = nil
     ) {
         self.scope = scope
         self.providerId = providerId
@@ -56,6 +63,7 @@ public struct ResetAlarmObservation: Equatable, Sendable {
         self.resetAt = resetAt
         self.remainingPercent = remainingPercent
         self.observedAt = observedAt
+        self.identity = identity
     }
 }
 
@@ -125,6 +133,8 @@ public struct ResetAlarmTrackerState: Codable, Equatable, Sendable {
         /// When the tracker last saw this window at all, for pruning.
         public var lastSeenAt: Date
         public var periodSeconds: TimeInterval?
+        /// Whose quota the window last described, for windows that change hands.
+        public var identity: String?
 
         public init(
             periodResetAt: Date?,
@@ -132,7 +142,8 @@ public struct ResetAlarmTrackerState: Codable, Equatable, Sendable {
             lastRemaining: Double?,
             lastObservedAt: Date?,
             lastSeenAt: Date,
-            periodSeconds: TimeInterval?
+            periodSeconds: TimeInterval?,
+            identity: String? = nil
         ) {
             self.periodResetAt = periodResetAt
             self.minimumRemaining = minimumRemaining
@@ -140,6 +151,7 @@ public struct ResetAlarmTrackerState: Codable, Equatable, Sendable {
             self.lastObservedAt = lastObservedAt
             self.lastSeenAt = lastSeenAt
             self.periodSeconds = periodSeconds
+            self.identity = identity
         }
     }
 
@@ -201,6 +213,15 @@ public enum ResetAlarmPolicy {
     public static let earlyResetShareOfPeriod: Double = 0.5
     /// The jump required before the old reset time when the period is unknown.
     public static let earlyResetUnknownPeriod: TimeInterval = 2 * 3_600
+    /// A provider that resets a limit early can move its reset time by less
+    /// than half a period.  The reset is still certain when the percentage
+    /// remaining also climbed by at least this many points: a fixed-period
+    /// window cannot regain quota inside one period.
+    public static let earlyResetRiseMargin: Double = 10
+    /// A reading stamped further ahead than this is treated as unstamped.  A
+    /// fleet producer with a wrong clock, or this Mac stepping its own clock
+    /// back, would otherwise freeze a window until the clock caught up.
+    public static let maximumFutureSkew: TimeInterval = 5 * 60
     /// "Remaining rose" means by more than this, so rounding is not a reset.
     public static let riseEpsilon: Double = 1
     /// Windows and fires not seen for this long are forgotten.
@@ -222,9 +243,12 @@ public enum ResetAlarmPolicy {
 /// 1. The provider's largest window (longest period) fires on every reset,
 ///    even if it was never near its cap: a new week or month began.
 /// 2. Any smaller window fires only if, in the period that just ended, it hit
-///    its cap or came within `nearCapThreshold` of it.  It stays quiet while a
-///    larger window of the same provider still reads 0%, because the provider
-///    cannot be used yet — the larger window's own reset announces that.
+///    its cap or came within `nearCapThreshold` of it.
+///
+/// Nothing else suppresses an alarm.  In particular a smaller window still
+/// fires while a larger one reads 0%: a provider's larger windows include
+/// model-only caps (Claude's Sonnet and Opus weeklies, one MiniMax weekly per
+/// model) that say nothing about whether the provider is usable.
 ///
 /// A window's very first reading never fires, readings with no reset time or
 /// no percentage are tolerated, and each reset fires at most once.
@@ -291,14 +315,6 @@ public struct ResetAlarmTracker: Sendable {
                 reason = .newPeriod
             } else if let minimum = transition.previous.minimumRemaining,
                       minimum <= ResetAlarmPolicy.nearCapThreshold {
-                // A larger window still at its cap means the provider cannot be
-                // used; this reset changes nothing the owner can act on.
-                let blockedByLarger = seen.values.contains { other in
-                    other.windowId != observation.windowId
-                        && Self.isLonger(other.periodSeconds, than: observation.periodSeconds, largestPeriod: largestPeriod)
-                        && (other.remainingPercent ?? 100) <= 0
-                }
-                if blockedByLarger { continue }
                 reason = .nearCap(minimumRemaining: minimum)
             } else {
                 continue
@@ -333,28 +349,45 @@ public struct ResetAlarmTracker: Sendable {
                                  providerId: observation.providerId,
                                  windowId: observation.windowId)
         let reading = observation.remainingPercent.flatMap { $0.isFinite ? min(max($0, 0), 100) : nil }
+        // A stamp from the future is a clock error, not a newer reading: taking
+        // it at face value would make every honest reading after it look old.
+        let observedAt = observation.observedAt.flatMap {
+            $0 <= now.addingTimeInterval(ResetAlarmPolicy.maximumFutureSkew) ? $0 : nil
+        }
+
+        func firstReading() -> ResetAlarmTrackerState.Window {
+            .init(periodResetAt: observation.resetAt,
+                  minimumRemaining: reading,
+                  lastRemaining: reading,
+                  lastObservedAt: observedAt,
+                  lastSeenAt: now,
+                  periodSeconds: observation.periodSeconds,
+                  identity: observation.identity)
+        }
 
         guard var window = state.windows[key] else {
             // First reading ever: remember it, never fire.
-            state.windows[key] = .init(
-                periodResetAt: observation.resetAt,
-                minimumRemaining: reading,
-                lastRemaining: reading,
-                lastObservedAt: observation.observedAt,
-                lastSeenAt: now,
-                periodSeconds: observation.periodSeconds)
+            state.windows[key] = firstReading()
             return nil
         }
+        // The window now describes someone else's quota (Grok Bot's active
+        // account changed): start over, because that account's reset time and
+        // percentage are not a reset of this one.
+        if let identity = observation.identity, let known = window.identity, identity != known {
+            state.windows[key] = firstReading()
+            return nil
+        }
+        if window.identity == nil { window.identity = observation.identity }
         window.lastSeenAt = now
         if let period = observation.periodSeconds { window.periodSeconds = period }
 
         // A reading older than one already processed cannot say anything new.
-        if let observed = observation.observedAt, let last = window.lastObservedAt, observed < last {
+        if let observed = observedAt, let last = window.lastObservedAt, observed < last {
             state.windows[key] = window
             return nil
         }
 
-        let readAt = observation.observedAt ?? now
+        let readAt = observedAt ?? now
         var isReset = false
         var nextResetAt = window.periodResetAt
 
@@ -367,7 +400,13 @@ public struct ResetAlarmTracker: Sendable {
                     : max(ResetAlarmPolicy.resetDriftTolerance,
                           window.periodSeconds.map { $0 * ResetAlarmPolicy.earlyResetShareOfPeriod }
                               ?? ResetAlarmPolicy.earlyResetUnknownPeriod)
-                if jump > required {
+                // A provider that resets early may move the reset time by less
+                // than `required`; the percentage jumping back up settles it.
+                var climbed = false
+                if let reading, let last = window.lastRemaining {
+                    climbed = reading >= last + ResetAlarmPolicy.earlyResetRiseMargin
+                }
+                if jump > required || (jump > ResetAlarmPolicy.resetDriftTolerance && climbed) {
                     isReset = true
                     nextResetAt = reported
                 } else if jump > -ResetAlarmPolicy.resetDriftTolerance || reported > readAt {
@@ -402,7 +441,7 @@ public struct ResetAlarmTracker: Sendable {
                 window.lastRemaining = reading
             }
         }
-        if let observed = observation.observedAt { window.lastObservedAt = observed }
+        if let observed = observedAt { window.lastObservedAt = observed }
         state.windows[key] = window
         return isReset ? Transition(observation: observation, previous: previous) : nil
     }
@@ -430,12 +469,6 @@ public struct ResetAlarmTracker: Sendable {
         guard let largestPeriod else { return true }
         guard let period else { return false }
         return period >= largestPeriod - 1
-    }
-
-    static func isLonger(_ period: TimeInterval?, than other: TimeInterval?, largestPeriod: TimeInterval?) -> Bool {
-        guard let period else { return false }
-        guard let other else { return isLargest(period, largestPeriod: largestPeriod) }
-        return period > other + 1
     }
 
     // MARK: Bookkeeping

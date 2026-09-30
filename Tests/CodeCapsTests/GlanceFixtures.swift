@@ -1,0 +1,170 @@
+import AppKit
+import SwiftUI
+import XCTest
+@testable import CodeCaps
+import QuotaCore
+
+private final class ActiveWindow: NSWindow {
+    override var isKeyWindow: Bool { true }
+    override var isMainWindow: Bool { true }
+}
+
+/// Demo readings and a snapshot helper shared by the two tests that draw the
+/// Glance popover and the Console to PNG.  The numbers are invented: they are
+/// chosen to show the longest realistic values ("100%", "6d 23h 59m",
+/// "17d 4h 57m"), not to describe anyone's real accounts.
+@MainActor
+enum GlanceFixtures {
+    static let now = Date(timeIntervalSince1970: 1_790_000_000)
+    static let hour: TimeInterval = 3_600
+    static let day: TimeInterval = 86_400
+    private static let iso = ISO8601DateFormatter()
+
+    static func window(
+        _ id: String,
+        provider: String,
+        label: String,
+        token: String?,
+        remaining: Double?,
+        resetIn: TimeInterval?,
+        source: String? = nil
+    ) -> QuotaWindow {
+        QuotaWindow(
+            id: id,
+            provider: provider,
+            providerKey: provider,
+            label: label,
+            remainingPercent: remaining,
+            remainingUnknown: remaining == nil,
+            resetAt: resetIn.map { iso.string(from: now.addingTimeInterval($0)) },
+            window: token,
+            occurredAt: iso.string(from: now.addingTimeInterval(-60)),
+            source: source ?? (provider == "google-antigravity" ? "Antigravity quota summary" : provider))
+    }
+
+    /// Every provider, with the longest realistic values and a monthly Cursor plan.
+    static var localWindows: [QuotaWindow] {
+        [
+            window("claude-5h", provider: "anthropic", label: "5-hour window", token: "5h",
+                   remaining: 13, resetIn: hour + 47 * 60),
+            window("claude-7d", provider: "anthropic", label: "7-day window", token: "168h",
+                   remaining: 98, resetIn: 4 * day + 10 * hour + 47 * 60),
+            window("codex-5h", provider: "openai", label: "5-hour window", token: "5h",
+                   remaining: 100, resetIn: 4 * hour + 41 * 60),
+            window("codex-7d", provider: "openai", label: "Weekly window", token: "weekly",
+                   remaining: 100, resetIn: 6 * day + 23 * hour + 59 * 60),
+            window("antigravity:gemini:5h", provider: "google-antigravity", label: "Gemini Models · 5-hour",
+                   token: "5h", remaining: 87, resetIn: 4 * hour + 54 * 60),
+            window("antigravity:gemini:weekly", provider: "google-antigravity", label: "Gemini Models · Weekly",
+                   token: "weekly", remaining: 64, resetIn: 5 * day + 2 * hour),
+            window("antigravity:third-party:5h", provider: "google-antigravity", label: "Third-Party Models · 5-hour",
+                   token: "5h", remaining: 40, resetIn: 2 * hour + 5 * 60),
+            window("antigravity:third-party:weekly", provider: "google-antigravity", label: "Third-Party Models · Weekly",
+                   token: "weekly", remaining: 18, resetIn: 3 * day + 7 * hour),
+            window("local-mac:cursor:plan", provider: "cursor", label: "Included plan", token: "billing-cycle",
+                   remaining: 62, resetIn: 17 * day + 4 * hour + 57 * 60),
+            window("grok-weekly", provider: "xai", label: "Weekly credits", token: "weekly",
+                   remaining: 71, resetIn: 2 * day + 3 * hour),
+            window("grok-bot-weekly", provider: "grok-bot", label: "Grok Bot weekly", token: "weekly",
+                   remaining: 44, resetIn: 5 * day + 12 * hour),
+            window("minimax-5h", provider: "minimax", label: "MiniMax Code (5h window)", token: "5h",
+                   remaining: 92, resetIn: 3 * hour + 10 * 60),
+            window("minimax-weekly", provider: "minimax", label: "Weekly", token: "weekly",
+                   remaining: 81, resetIn: 6 * day + 1 * hour),
+        ]
+    }
+
+    /// A third window on Claude, as its real reports carry, so the row has
+    /// something to expand.
+    static var claudeSonnetWindow: QuotaWindow {
+        window("claude-7d-sonnet", provider: "anthropic", label: "7-day window (Sonnet)", token: "168h",
+               remaining: 99, resetIn: 4 * day + 10 * hour + 47 * 60)
+    }
+
+    static var fleetGroups: [FleetWindowGroup] {
+        [
+            FleetWindowGroup(id: "mac-mini", title: "Mac mini", windows: [
+                window("mini:claude-5h", provider: "anthropic", label: "5-hour window", token: "5h",
+                       remaining: 0, resetIn: 38 * 60),
+                window("mini:claude-7d", provider: "anthropic", label: "7-day window", token: "168h",
+                       remaining: 22, resetIn: 2 * day + 5 * hour),
+                window("mini:antigravity:gemini:5h", provider: "google-antigravity", label: "Gemini Models · 5-hour",
+                       token: "5h", remaining: 100, resetIn: 5 * hour),
+                window("mini:antigravity:gemini:weekly", provider: "google-antigravity",
+                       label: "Gemini Models · Weekly", token: "weekly", remaining: 90, resetIn: 6 * day),
+                window("mini:antigravity:third-party:5h", provider: "google-antigravity",
+                       label: "Third-Party Models · 5-hour", token: "5h", remaining: 55, resetIn: 3 * hour),
+                window("mini:antigravity:third-party:weekly", provider: "google-antigravity",
+                       label: "Third-Party Models · Weekly", token: "weekly", remaining: 47, resetIn: 4 * day),
+            ]),
+            FleetWindowGroup(id: "build-box", title: "build-box", windows: [
+                window("bb:codex-5h", provider: "openai", label: "5-hour window", token: "5h",
+                       remaining: 76, resetIn: 1 * hour + 12 * 60),
+                window("bb:codex-7d", provider: "openai", label: "Weekly window", token: "weekly",
+                       remaining: 58, resetIn: 3 * day + 9 * hour),
+            ]),
+        ]
+    }
+
+    /// A model with the demo readings and its own throwaway defaults.  The
+    /// caller removes `suite` from `defaults` when done.
+    static func makeModel(
+        view: GlanceViewMode,
+        alarmsAll: Bool,
+        fleet: Bool,
+        pickedAlarms: [String] = ["anthropic", "google-antigravity:gemini", "cursor"],
+        localReadersOn: Bool = false,
+        extraWindows: [QuotaWindow] = []
+    ) -> (model: MonitorModel, defaults: UserDefaults, suite: String) {
+        let suite = "com.jays.codecaps.render." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        // Nothing here calls `start()`, so no reader runs either way; this only
+        // decides what the footer and the empty states say.
+        defaults.set(localReadersOn, forKey: "localEnabled")
+        let model = MonitorModel(defaults: defaults)
+        model.injectForTests(sections: QuotaResponse(generatedAt: "", windows: localWindows + extraWindows).platformSections(now: now),
+                             now: now)
+        model.injectFleetForTests(groups: fleet ? fleetGroups : [], checkedAt: now)
+        model.glanceView = view
+        model.alarmsAll = alarmsAll
+        if !alarmsAll {
+            for id in pickedAlarms {
+                model.alarmManager.setProviderAlarm(true, for: id)
+            }
+        }
+        return (model, defaults, suite)
+    }
+
+    /// Draws a SwiftUI view into a PNG the way AppKit would on screen —
+    /// scroll views, lists and text fields included, which `ImageRenderer`
+    /// leaves blank.  `nil` when the session cannot draw offscreen.
+    static func png<V: View>(of view: V, size: CGSize, dark: Bool) -> Data? {
+        // `controlActiveState` makes SwiftUI draw switches and prominent buttons
+        // as they look in the frontmost window rather than greyed out.
+        let host = NSHostingView(rootView: view
+            .frame(width: size.width, height: size.height)
+            .environment(\.controlActiveState, .key))
+        host.frame = NSRect(origin: .zero, size: size)
+        // A window that claims to be key, so the prominent button draws in its
+        // accent colour as it does on screen rather than greyed out.
+        let window = ActiveWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        window.contentView = host
+        host.layoutSubtreeIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        host.layoutSubtreeIfNeeded()
+
+        // Twice the points, so the PNG is sharp at 2x.
+        let scale: CGFloat = 2
+        guard let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: Int(size.width * scale), pixelsHigh: Int(size.height * scale),
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
+        rep.size = size
+        window.appearance?.performAsCurrentDrawingAppearance {
+            host.cacheDisplay(in: host.bounds, to: rep)
+        }
+        return rep.representation(using: .png, properties: [:])
+    }
+}

@@ -16,6 +16,7 @@
 		15B3EE6BAA0DB41A14ED38A6 /* AlarmSoundPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 674BB9709E48A6D00D4EE92C /* AlarmSoundPlayer.swift */; };
 		170FA7844615930B5A1D4CBD /* CodeCapsWidgetBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6316FA88D130531D99C73AEE /* CodeCapsWidgetBundle.swift */; };
 		1C938ECE1998071D65A908EA /* WidgetViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A40D20353A8D6C1D9E9D349 /* WidgetViews.swift */; };
+		1D4D70BAAB091F8992DB1693 /* ResetAlarmCadence.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B76200EBE871E29BAC8A41B /* ResetAlarmCadence.swift */; };
 		1E390605C8A820FFB895AA0F /* alarm-tink.wav in Resources */ = {isa = PBXBuildFile; fileRef = 4FE56A36DCE8762AD17C6776 /* alarm-tink.wav */; };
 		1F27C36495D3FB241A242476 /* alarm-blow.wav in Resources */ = {isa = PBXBuildFile; fileRef = 0638A6007D4E7A392FD7D595 /* alarm-blow.wav */; };
 		2018A85587B07653EFF5445C /* CompanionContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84C4C2C5DC3AA20234129F15 /* CompanionContentView.swift */; };
@@ -24,6 +25,7 @@
 		2440D143F835BAD99240BE8D /* CompanionContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84C4C2C5DC3AA20234129F15 /* CompanionContentView.swift */; };
 		2AA3DE1AA8DD20DD5AD6E403 /* WidgetViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A40D20353A8D6C1D9E9D349 /* WidgetViews.swift */; };
 		2CA370B5E2149BEA3FCB3F6C /* CodeCapsCompanionApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34CE8BC7DF9DCF088BF1B805 /* CodeCapsCompanionApp.swift */; };
+		31CFC3813E00700F4A1D0E2F /* ResetAlarmCadence.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B76200EBE871E29BAC8A41B /* ResetAlarmCadence.swift */; };
 		346906A2DDABDF60AF9D4F62 /* alarm-submarine.wav in Resources */ = {isa = PBXBuildFile; fileRef = 5F63EE805947E5707E2A0C3F /* alarm-submarine.wav */; };
 		4D9258D010AD16F059277D93 /* alarm-submarine.wav in Resources */ = {isa = PBXBuildFile; fileRef = 5F63EE805947E5707E2A0C3F /* alarm-submarine.wav */; };
 		6447965E07907E9AA3407123 /* alarm-sosumi.wav in Resources */ = {isa = PBXBuildFile; fileRef = 4FA72166D5E5A0F726B4DF18 /* alarm-sosumi.wav */; };
@@ -32,15 +34,19 @@
 		7F3D6663EA86FDE73EA17DCB /* alarm-sosumi.wav in Resources */ = {isa = PBXBuildFile; fileRef = 4FA72166D5E5A0F726B4DF18 /* alarm-sosumi.wav */; };
 		831B4D460D912E65E3D869D3 /* ResetAlarmSound.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89A5807594DFD989CADCC6F2 /* ResetAlarmSound.swift */; };
 		99A788DAEA41B4AB83A93501 /* CodeCapsCompanionApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34CE8BC7DF9DCF088BF1B805 /* CodeCapsCompanionApp.swift */; };
+		99E4B46415A2BCB252FAA6C0 /* ResetAlarmMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5ECFD3E9DC2728ACB5FB5488 /* ResetAlarmMessage.swift */; };
 		9D826DF8BA1D0C240F17EAFC /* ResetAlarmSound.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89A5807594DFD989CADCC6F2 /* ResetAlarmSound.swift */; };
 		AB8C667473DF14CCF7B48F2A /* WidgetDataProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = F281E65EF7010842967CD100 /* WidgetDataProvider.swift */; };
 		AFBBFB2FD8EEA9DA9EF40042 /* alarm-bottle.wav in Resources */ = {isa = PBXBuildFile; fileRef = 302C44DD0C87899C354A914C /* alarm-bottle.wav */; };
 		BD4C31C68641BA2ED6BE8798 /* alarm-bottle.wav in Resources */ = {isa = PBXBuildFile; fileRef = 302C44DD0C87899C354A914C /* alarm-bottle.wav */; };
+		BF0A24BA7D7B70B182950DA9 /* ResetAlarmTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5FD1EFF75431229A669FC5A /* ResetAlarmTracker.swift */; };
 		C23393B11365D16E8ECA5D8E /* alarm-blow.wav in Resources */ = {isa = PBXBuildFile; fileRef = 0638A6007D4E7A392FD7D595 /* alarm-blow.wav */; };
 		C48D9F8052E4F39044504C84 /* CompanionQuotaModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1371DB889435F70346FB6AF /* CompanionQuotaModel.swift */; };
 		C7498C0ACDD5320564DE32B0 /* WidgetPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 716F800EA9DEDFC597BD08BB /* WidgetPresentation.swift */; };
 		D3C30EA2E4A6B59A22E086DB /* WidgetDataProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = F281E65EF7010842967CD100 /* WidgetDataProvider.swift */; };
+		DA221384FC017A40031C0446 /* ResetAlarmMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5ECFD3E9DC2728ACB5FB5488 /* ResetAlarmMessage.swift */; };
 		DD572CC08FCFC7414D7236B7 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = DF46F01EE0931315955EE9AF /* Assets.xcassets */; };
+		E0EE20CDC3987E143A3FCB48 /* ResetAlarmTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5FD1EFF75431229A669FC5A /* ResetAlarmTracker.swift */; };
 		E4F68F451FCE5A7069DA052D /* alarm-frog.wav in Resources */ = {isa = PBXBuildFile; fileRef = 881BAB30A7762A0170BE4FD8 /* alarm-frog.wav */; };
 		E77E1CAAEDCB9C3AAD706144 /* alarm-frog.wav in Resources */ = {isa = PBXBuildFile; fileRef = 881BAB30A7762A0170BE4FD8 /* alarm-frog.wav */; };
 		EA984A6E75520CAB2639A8B4 /* CodeCapsWidgetBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6316FA88D130531D99C73AEE /* CodeCapsWidgetBundle.swift */; };
@@ -103,10 +109,12 @@
 		4FA72166D5E5A0F726B4DF18 /* alarm-sosumi.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "alarm-sosumi.wav"; sourceTree = "<group>"; };
 		4FE56A36DCE8762AD17C6776 /* alarm-tink.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "alarm-tink.wav"; sourceTree = "<group>"; };
 		5087F87CE3B2EDD3B9E1309C /* CodeCapsWidgets.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = CodeCapsWidgets.entitlements; sourceTree = "<group>"; };
+		5ECFD3E9DC2728ACB5FB5488 /* ResetAlarmMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ResetAlarmMessage.swift; path = ../../Sources/QuotaCore/ResetAlarmMessage.swift; sourceTree = "<group>"; };
 		5F63EE805947E5707E2A0C3F /* alarm-submarine.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "alarm-submarine.wav"; sourceTree = "<group>"; };
 		6316FA88D130531D99C73AEE /* CodeCapsWidgetBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeCapsWidgetBundle.swift; sourceTree = "<group>"; };
 		674BB9709E48A6D00D4EE92C /* AlarmSoundPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlarmSoundPlayer.swift; sourceTree = "<group>"; };
 		6992E7C7086CA631814CCD87 /* CodeCapsCompanionMac.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = CodeCapsCompanionMac.entitlements; sourceTree = "<group>"; };
+		6B76200EBE871E29BAC8A41B /* ResetAlarmCadence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ResetAlarmCadence.swift; path = ../../Sources/QuotaCore/ResetAlarmCadence.swift; sourceTree = "<group>"; };
 		716F800EA9DEDFC597BD08BB /* WidgetPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetPresentation.swift; sourceTree = "<group>"; };
 		84C4C2C5DC3AA20234129F15 /* CompanionContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionContentView.swift; sourceTree = "<group>"; };
 		881BAB30A7762A0170BE4FD8 /* alarm-frog.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "alarm-frog.wav"; sourceTree = "<group>"; };
@@ -116,6 +124,7 @@
 		C1371DB889435F70346FB6AF /* CompanionQuotaModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionQuotaModel.swift; sourceTree = "<group>"; };
 		C2EA171A442F77D9348C68D4 /* InfoMac.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = InfoMac.plist; sourceTree = "<group>"; };
 		C679EF2BE96C94E938E56DC1 /* CodeCapsCompanionMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CodeCapsCompanionMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		D5FD1EFF75431229A669FC5A /* ResetAlarmTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ResetAlarmTracker.swift; path = ../../Sources/QuotaCore/ResetAlarmTracker.swift; sourceTree = "<group>"; };
 		DF46F01EE0931315955EE9AF /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		E124B68EB2FF725D59E2EC1F /* SentenceGap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SentenceGap.swift; sourceTree = "<group>"; };
 		E53A47DB2534669DD3BEE62E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
@@ -173,10 +182,21 @@
 			path = Views;
 			sourceTree = "<group>";
 		};
+		51F59F827B59B2A9F342F07F /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				6B76200EBE871E29BAC8A41B /* ResetAlarmCadence.swift */,
+				5ECFD3E9DC2728ACB5FB5488 /* ResetAlarmMessage.swift */,
+				D5FD1EFF75431229A669FC5A /* ResetAlarmTracker.swift */,
+			);
+			name = Shared;
+			sourceTree = "<group>";
+		};
 		8E8ACB61F08661AAACE99C81 = {
 			isa = PBXGroup;
 			children = (
 				2C7829A5D8BD9EF9C122A4F2 /* App */,
+				51F59F827B59B2A9F342F07F /* Shared */,
 				9ACCF0D01A7CB67BFD256AC8 /* Widgets */,
 				DF46F01EE0931315955EE9AF /* Assets.xcassets */,
 				C53A412A4B40988009B93D1B /* Products */,
@@ -393,7 +413,10 @@
 				99A788DAEA41B4AB83A93501 /* CodeCapsCompanionApp.swift in Sources */,
 				2018A85587B07653EFF5445C /* CompanionContentView.swift in Sources */,
 				0BDDE676F287EA3372B9D24B /* CompanionQuotaModel.swift in Sources */,
+				1D4D70BAAB091F8992DB1693 /* ResetAlarmCadence.swift in Sources */,
+				99E4B46415A2BCB252FAA6C0 /* ResetAlarmMessage.swift in Sources */,
 				831B4D460D912E65E3D869D3 /* ResetAlarmSound.swift in Sources */,
+				E0EE20CDC3987E143A3FCB48 /* ResetAlarmTracker.swift in Sources */,
 				135997B0E383FB2D00C87CB0 /* SentenceGap.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -406,7 +429,10 @@
 				2CA370B5E2149BEA3FCB3F6C /* CodeCapsCompanionApp.swift in Sources */,
 				2440D143F835BAD99240BE8D /* CompanionContentView.swift in Sources */,
 				C48D9F8052E4F39044504C84 /* CompanionQuotaModel.swift in Sources */,
+				31CFC3813E00700F4A1D0E2F /* ResetAlarmCadence.swift in Sources */,
+				DA221384FC017A40031C0446 /* ResetAlarmMessage.swift in Sources */,
 				9D826DF8BA1D0C240F17EAFC /* ResetAlarmSound.swift in Sources */,
+				BF0A24BA7D7B70B182950DA9 /* ResetAlarmTracker.swift in Sources */,
 				137C79F45750F4FA04219AFE /* SentenceGap.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

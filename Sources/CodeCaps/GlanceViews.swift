@@ -15,15 +15,24 @@ struct GlancePopover: View {
     /// Settings has its own entry point rather than a fixed page, so the gear
     /// and `⌘,` land in the same place: the Settings page last used.
     var openSettings: () -> Void
-    /// Lays the list out without its ScrollView, which SwiftUI's
-    /// `ImageRenderer` draws empty.  Only the PNG render test sets it.
-    var laysOutForSnapshot = false
 
     /// Rows the owner has expanded inline.  Lives in the popover so it survives
     /// re-renders while the popover is open, and is cleared when the popover
     /// dismisses — persisting across launches would imply the popover remembers
     /// state about platforms that may not even be installed tomorrow.
-    @State private var expandedIds: Set<String> = []
+    @State private var expandedIds: Set<String>
+
+    /// `initiallyExpanded` exists for the PNG render test, which has no pointer
+    /// to click a row with.
+    init(model: MonitorModel,
+         openConsole: @escaping (ConsolePage) -> Void,
+         openSettings: @escaping () -> Void,
+         initiallyExpanded: Set<String> = []) {
+        self.model = model
+        self.openConsole = openConsole
+        self.openSettings = openSettings
+        _expandedIds = State(initialValue: initiallyExpanded)
+    }
 
     private var localSections: [DisplaySection] { model.displaySections }
     private var fleetGroups: [FleetGroup] { model.fleetGroups }
@@ -33,14 +42,8 @@ struct GlancePopover: View {
         VStack(spacing: 0) {
             header
             Divider()
-            if laysOutForSnapshot {
-                content.padding(.vertical, 8)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                    .background(Theme.background)
-            } else {
-                ScrollView { content.padding(.vertical, 8) }
-                    .background(Theme.background)
-            }
+            ScrollView { content.padding(.vertical, Metrics.glanceListPadding) }
+                .background(Theme.background)
             Divider()
             footer
         }
@@ -98,7 +101,7 @@ struct GlancePopover: View {
         glanceHeaderStatus(view: model.glanceView,
                            reporting: model.reportingCount,
                            total: model.sections.count,
-                           machines: fleetGroups.count,
+                           sources: fleetGroups.count,
                            checked: model.glanceView == .fleetReported
                                ? (model.lastPullTime ?? model.lastChecked)
                                : model.lastChecked)
@@ -146,7 +149,7 @@ struct GlancePopover: View {
                     .padding(.horizontal, Metrics.glanceGutter)
             }
             if showsFleetSetup {
-                Spacer().frame(height: 12)
+                Spacer().frame(height: Metrics.glanceSetupGap)
                 FleetSetupRow { openConsole(.settingsSourcesFleet) }
                     .padding(.horizontal, Metrics.glanceGutter)
             }
@@ -162,7 +165,7 @@ struct GlancePopover: View {
                         symbol: "arrow.down.circle",
                         title: "No fleet readings yet",
                         message: model.serverError
-                            ?? ("Your fleet endpoint has not reported another machine yet." + sentenceGap
+                            ?? ("Your fleet endpoint has not reported any readings yet." + sentenceGap
                                 + "Readings appear here after the next pull."),
                         actionTitle: "Open Fleet Settings") { openConsole(.settingsSourcesFleet) }
                 } else {
@@ -174,11 +177,11 @@ struct GlancePopover: View {
                         actionTitle: "Connect Fleet Endpoint") { openConsole(.settingsSourcesFleet) }
                 }
             } else {
-                // One header per machine, so a row always says which machine
+                // One header per reporting source, so a row always says who
                 // reported it.  The toggle already says these are fleet rows.
                 ForEach(Array(fleetGroups.enumerated()), id: \.element.id) { groupIndex, group in
                     if groupIndex > 0 {
-                        Spacer().frame(height: 6)
+                        Spacer().frame(height: Metrics.glanceGroupGap)
                     }
                     groupHeader(fleetGroupTitle(group))
                     ForEach(Array(group.rows.enumerated()), id: \.element.id) { index, row in
@@ -207,7 +210,7 @@ struct GlancePopover: View {
                          onToggleAlarm: { model.toggleAlarm(for: row.id) })
     }
 
-    /// "MAC MINI  ·  REPORTED 9:12 AM": the machine, and its latest reading.
+    /// "MAC MINI  ·  REPORTED 9:12 AM": the reporting source, and its latest reading.
     /// The time lives here rather than under every row, where it truncated.
     private func fleetGroupTitle(_ group: FleetGroup) -> String {
         let latest = group.rows.flatMap(\.section.windows).compactMap(\.observedAt).max()
@@ -226,7 +229,7 @@ struct GlancePopover: View {
     private var rowDivider: some View {
         Rectangle()
             .fill(Theme.hairline)
-            .frame(height: 1)
+            .frame(height: Metrics.glanceDividerHeight)
             .padding(.horizontal, Metrics.glanceGutter)
     }
 
@@ -272,16 +275,21 @@ struct GlancePopover: View {
 }
 
 /// The count and time on the right of the header.  This Mac counts the
-/// providers reporting; Fleet Reported counts the machines.  Two literal
-/// spaces either side of the dot, the fleet convention for a phrase break.
-func glanceHeaderStatus(view: GlanceViewMode, reporting: Int, total: Int, machines: Int, checked: Date?) -> String {
+/// providers reporting; Fleet Reported counts the sources that reported them.
+/// Two literal spaces either side of the dot, the fleet convention for a
+/// phrase break.
+///
+/// A source, not a machine: the fleet pull groups readings by the collector or
+/// app that reported them (`FleetOrigin.identity`), and that is a machine only
+/// some of the time.
+func glanceHeaderStatus(view: GlanceViewMode, reporting: Int, total: Int, sources: Int, checked: Date?) -> String {
     let counted: String?
     switch view {
     case .thisMac:
         counted = "\(reporting) of \(total)"
     case .fleetReported:
-        // With no machine to count, the empty list below already says why.
-        counted = machines == 0 ? nil : (machines == 1 ? "1 machine" : "\(machines) machines")
+        // With no source to count, the empty list below already says why.
+        counted = sources == 0 ? nil : (sources == 1 ? "1 source" : "\(sources) sources")
     }
     let time = checked.map { $0.formatted(date: .omitted, time: .shortened) }
     return [counted, time].compactMap { $0 }.joined(separator: "  ·  ")
@@ -858,10 +866,14 @@ struct GlanceRow: View {
                         .font(.system(size: 11).monospacedDigit())
                         .foregroundStyle(.secondary)
                         .frame(width: 40, alignment: .trailing)
+                    // The row's own countdown type and column, so "6d 23h 59m"
+                    // and "29d 23h 59m" fit on one line instead of wrapping.
                     Text(glanceResetCountdown(snapshot.resetAt, now: now))
-                        .font(.system(size: 11).monospacedDigit())
-                        .foregroundStyle(.tertiary)
-                        .frame(width: 56, alignment: .trailing)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .frame(width: Metrics.glanceMeterCountdownWidth, alignment: .trailing)
                 }
                 .padding(.trailing, 22)
             }

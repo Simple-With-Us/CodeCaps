@@ -221,16 +221,22 @@ public struct CompanionContentView: View {
                 }
                 Spacer()
                 HStack(spacing: 10) {
-                    Button {
-                        model.toggleAlarm(for: item.id)
-                    } label: {
-                        Image(systemName: item.isAlarmArmed ? "bell.fill" : "bell")
-                            .font(.system(size: 14))
-                            .foregroundStyle(item.isAlarmArmed ? Color.accentColor : .secondary)
-                            .frame(width: 28, height: 28)
+                    // The per-provider reset alarm, offered only while All is
+                    // off: under All every provider alarms and there is
+                    // nothing to choose.  Solid when on, faint when off.
+                    if !model.alarmsAll {
+                        Button {
+                            model.toggleProviderAlarm(for: item.id)
+                        } label: {
+                            Image(systemName: item.isAlarmEnabled ? "bell.fill" : "bell")
+                                .font(.system(size: 14))
+                                .foregroundStyle(item.isAlarmEnabled ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.tertiary))
+                                .frame(width: 28, height: 28)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Reset alarm for \(item.title)")
+                        .accessibilityValue(item.isAlarmEnabled ? "on" : "off")
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(item.isAlarmArmed ? "Disarm reset alert" : "Arm reset alert")
 
                     Text(item.displayPercent)
                         .font(.system(size: 17, weight: .bold, design: .rounded).monospacedDigit())
@@ -437,7 +443,12 @@ public struct CompanionContentView: View {
                 }
 
                 Section("Alerts & Notifications") {
-                    Toggle("Notify on Quota Reset", isOn: $model.notifyOnReset)
+                    Toggle("Reset Alarms For All Providers", isOn: $model.alarmsAll)
+                    Text("A provider's longest window alarms every time it resets." + sentenceGap
+                         + "A shorter window alarms only if it came within 20% of its cap first."
+                         + sentenceGap + "Turn this off to pick providers one by one with the bell on each card.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                     Picker("Reset Alert Sound", selection: $model.alarmSound) {
                         ForEach(ResetAlarmSound.defaultPickerOrder, id: \.self) { sound in
                             Text(sound.displayName).tag(sound)

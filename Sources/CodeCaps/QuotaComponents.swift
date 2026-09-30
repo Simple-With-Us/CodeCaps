@@ -82,6 +82,15 @@ enum Metrics {
     static let glanceHeaderControlHeight: CGFloat = 20
     static let glanceFooterHeight: CGFloat = 38
     static let glanceGroupHeaderHeight: CGFloat = 18
+    /// The list's own padding above the first row and below the last.
+    static let glanceListPadding: CGFloat = 8
+    /// The hairline between two rows, and the `Divider` under the header and
+    /// above the footer.
+    static let glanceDividerHeight: CGFloat = 1
+    /// The gap above the Set Up Fleet Sync card (and the gap between two
+    /// machines' groups in Fleet Reported).
+    static let glanceSetupGap: CGFloat = 12
+    static let glanceGroupGap: CGFloat = 6
     /// Every row, This Mac or Fleet Reported: a fleet row's "reported at"
     /// moved to its machine's heading, so it no longer needs a taller row.
     static let glanceLocalRowHeight: CGFloat = 38
@@ -380,28 +389,53 @@ extension QuotaPlatformSection {
 /// two views, so flipping between This Mac and Fleet Reported while the
 /// popover is open never resizes it either.
 enum QuotaGlanceMetrics {
+    /// The height of the This Mac list: its rows, the hairline between each
+    /// pair, and the Set Up Fleet Sync card with its gap when it is shown.
+    static func localListHeight(rows: Int, showsSetupCard: Bool, isEmpty: Bool) -> CGFloat {
+        let body = isEmpty
+            ? Metrics.glanceEmptyStateHeight
+            : CGFloat(rows) * Metrics.glanceLocalRowHeight + CGFloat(max(0, rows - 1)) * Metrics.glanceDividerHeight
+        let card = showsSetupCard ? Metrics.glanceSetupGap + Metrics.glanceCTARowHeight : 0
+        return body + card
+    }
+
+    /// The height of the Fleet Reported list: a heading per group, its rows and
+    /// the hairlines between them, and a gap between one group and the next.
+    static func fleetListHeight(rowsPerGroup: [Int]) -> CGFloat {
+        guard !rowsPerGroup.isEmpty else { return Metrics.glanceEmptyStateHeight }
+        let rows = rowsPerGroup.reduce(0, +)
+        let hairlines = rowsPerGroup.reduce(0) { $0 + max(0, $1 - 1) }
+        return CGFloat(rowsPerGroup.count) * Metrics.glanceGroupHeaderHeight
+            + CGFloat(rowsPerGroup.count - 1) * Metrics.glanceGroupGap
+            + CGFloat(rows) * Metrics.glanceLocalRowHeight
+            + CGFloat(hairlines) * Metrics.glanceDividerHeight
+    }
+
+    /// The popover around a list: header, footer, the two dividers beside
+    /// them, and the list's padding above and below.
+    static func popoverHeight(forListHeight list: CGFloat) -> CGFloat {
+        Metrics.glanceHeaderHeight + Metrics.glanceFooterHeight
+            + 2 * Metrics.glanceDividerHeight
+            + 2 * Metrics.glanceListPadding
+            + list
+    }
+
     @MainActor
-    static func popoverHeight(for model: MonitorModel, on screen: NSScreen? = nil) -> CGFloat {
+    static func expectedLocalRows(for model: MonitorModel) -> Int {
         let reported = Set(model.sections.map(\.providerKey))
         let expectedKeys = Set(expectedQuotaProviderKeys).union(reported)
         // Antigravity draws one row per model pool, so it counts twice.
-        let expectedCount = expectedKeys.count
-            + (expectedKeys.contains(AntigravityDisplay.providerKey) ? 1 : 0)
-        let ctaRows = (!model.syncEnabled && !model.serverEnabled) ? 1 : 0
-        let localContent = model.localEnabled || !model.displaySections.isEmpty
-            ? CGFloat(expectedCount) * Metrics.glanceLocalRowHeight
-                + CGFloat(ctaRows) * (Metrics.glanceCTARowHeight + 12)
-            : Metrics.glanceEmptyStateHeight + CGFloat(ctaRows) * (Metrics.glanceCTARowHeight + 12)
+        return expectedKeys.count + (expectedKeys.contains(AntigravityDisplay.providerKey) ? 1 : 0)
+    }
 
-        let groups = model.fleetGroups
-        let fleetRows = groups.reduce(0) { $0 + $1.rows.count }
-        let fleetContent = groups.isEmpty
-            ? Metrics.glanceEmptyStateHeight
-            : CGFloat(groups.count) * (Metrics.glanceGroupHeaderHeight + 6)
-                + CGFloat(fleetRows) * Metrics.glanceLocalRowHeight
-
-        let content = max(localContent, fleetContent)
-        let total = Metrics.glanceHeaderHeight + Metrics.glanceFooterHeight + 18 + content
+    @MainActor
+    static func popoverHeight(for model: MonitorModel, on screen: NSScreen? = nil) -> CGFloat {
+        let local = localListHeight(
+            rows: expectedLocalRows(for: model),
+            showsSetupCard: !model.syncEnabled && !model.serverEnabled,
+            isEmpty: !(model.localEnabled || !model.displaySections.isEmpty))
+        let fleet = fleetListHeight(rowsPerGroup: model.fleetGroups.map { $0.rows.count })
+        let total = popoverHeight(forListHeight: max(local, fleet))
         return min(Metrics.glanceMaxHeight(on: screen), max(Metrics.glanceMinHeight, total))
     }
 }

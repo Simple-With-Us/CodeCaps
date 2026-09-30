@@ -67,8 +67,7 @@
   a:hover{color:var(--accent-dark);}
   :focus-visible{outline:3px solid var(--focus);outline-offset:2px;}
 
-  .glance-row{display:grid;grid-template-columns:1fr 1fr;gap:20px;max-width:600px;margin:0 auto 28px;}
-  @media (max-width:520px){.glance-row{grid-template-columns:1fr;max-width:320px;}}
+  .glance-row{display:grid;grid-template-columns:1fr;gap:20px;max-width:840px;margin:0 auto 28px;}
 
   figure{margin:0 0 24px;}
   figure:last-child{margin-bottom:0;}
@@ -112,15 +111,15 @@
 
   <section id="screenshots" class="container">
     <h2>Screenshots</h2>
-    <p class="fine-print">These examples are from an earlier AgentBar build; current CodeCaps branding and controls may differ.</p>
+    <p class="fine-print">These screenshots are drawn by CodeCaps itself from invented demo readings, not from anyone's accounts.</p>
     <h3>Glance</h3>
     <div class="glance-row">
       <figure>
-        <img src="screenshots/glance-light.png" width="772" height="964" alt="Glance popover in light mode: one row per platform under This Mac, each with a percentage, a usage bar, and a reset countdown">
+        <img src="screenshots/glance-light.png" width="1248" height="934" alt="Glance popover in light mode: a This Mac and Fleet Reported switch and an All alarms bell in the header, then one row per platform with its 5-hour and weekly windows, each a bar, a percentage, and a reset countdown">
         <figcaption>Light</figcaption>
       </figure>
       <figure>
-        <img src="screenshots/glance-dark.png" width="772" height="964" alt="Glance popover in dark mode: one row per platform under This Mac, each with a percentage, a usage bar, and a reset countdown">
+        <img src="screenshots/glance-dark.png" width="1248" height="934" alt="Glance popover in dark mode: a This Mac and Fleet Reported switch and an All alarms bell in the header, then one row per platform with its 5-hour and weekly windows, each a bar, a percentage, and a reset countdown">
         <figcaption>Dark</figcaption>
       </figure>
     </div>
@@ -154,12 +153,12 @@
     <h2>Fleet Push And Pull</h2>
     <p>CodeCaps can push this Mac's quota readings to a collector you configure and pull readings from other configured Macs into the same view.&nbsp; Both connections are off by default.&nbsp; Enabling either one makes requests to your chosen endpoint; its ingest or read token is stored in the macOS Keychain.</p>
     <figure>
-      <img src="screenshots/settings-sources-fleet.png" width="1280" height="896" loading="lazy" decoding="async" alt="Console Settings, Sources and Fleet page, with This Mac, Share This Mac, and Pull The Fleet groups">
+      <img src="screenshots/settings-sources-fleet.png" width="1280" height="896" loading="lazy" decoding="async" alt="Console Settings, Sources and Fleet page, with the This Mac and Share This Mac groups">
       <figcaption>Settings → Sources &amp; Fleet</figcaption>
     </figure>
     <figure>
-      <img src="screenshots/glance-fleet.png" width="772" height="808" loading="lazy" decoding="async" alt="Glance popover with a Fleet section beneath This Mac, showing another machine's Antigravity usage pulled in and labeled Fleet">
-      <figcaption>Glance, with another machine's quota pulled into the same view</figcaption>
+      <img src="screenshots/glance-fleet.png" width="1248" height="934" loading="lazy" decoding="async" alt="Glance popover switched to Fleet Reported: quotas pulled from two other machines, grouped under each machine's name">
+      <figcaption>Glance on Fleet Reported, with other machines' quota pulled into the same popover</figcaption>
     </figure>
   </section>
 

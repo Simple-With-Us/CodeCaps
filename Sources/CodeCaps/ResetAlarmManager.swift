@@ -341,41 +341,9 @@ public final class ResetAlarmManager: ObservableObject {
         }
     }
 
-    /// The words of one provider's notification.  Every event in `events`
-    /// belongs to the same provider; the largest window comes first.
+    /// The words of one provider's notification; shared with the iOS companion.
     static func notificationContent(for events: [ResetAlarmEvent]) -> (title: String, body: String, windowLabels: [String]) {
-        let title = "Quota Reset: \(events.first?.providerTitle ?? "Quota")"
-        var labels: [String] = []
-        for event in events where !labels.contains(event.windowLabel) {
-            labels.append(event.windowLabel)
-        }
-        let joined: String
-        switch labels.count {
-        case 0, 1: joined = labels.first ?? "quota"
-        case 2: joined = "\(labels[0]) and \(labels[1])"
-        default: joined = labels.dropLast().joined(separator: ", ") + " and " + (labels.last ?? "")
-        }
-
-        if let largest = events.first(where: { $0.reason == .newPeriod }) {
-            let reset = labels.count > 1 ? "The \(joined) windows reset." : "The \(joined) window reset."
-            return (title, reset + sentenceGap + newPeriodSentence(largest.periodSeconds), labels)
-        }
-        if events.count == 1, case .nearCap(let minimum) = events[0].reason {
-            let reached = minimum <= 0
-                ? "after hitting its cap"
-                : "after reaching \(Int(minimum.rounded()))% remaining"
-            return (title, "The \(joined) window reset \(reached)." + sentenceGap + "Ready to use again.", labels)
-        }
-        return (title, "The \(joined) windows reset." + sentenceGap + "Ready to use again.", labels)
-    }
-
-    /// "A new week of quota is available." and friends, by period length.
-    private static func newPeriodSentence(_ period: TimeInterval?) -> String {
-        guard let period else { return "A new period of quota is available." }
-        if period >= 27 * 86_400 { return "A new month of quota is available." }
-        if period >= 6 * 86_400 { return "A new week of quota is available." }
-        if period >= 20 * 3_600 { return "A new day of quota is available." }
-        return "A new period of quota is available."
+        ResetAlarmMessage.content(for: events)
     }
 
     // MARK: - Dispatch
@@ -540,6 +508,7 @@ func resetAlarmObservations(for row: DisplaySection, scope: String) -> [ResetAla
                 periodSeconds: quotaWindowPeriodSeconds(snapshot),
                 resetAt: snapshot.resetAt,
                 remainingPercent: row.isMasked(snapshot) ? nil : snapshot.remainingPercent,
-                observedAt: snapshot.observedAt)
+                observedAt: snapshot.observedAt,
+                identity: snapshot.window.accountKey)
         }
 }

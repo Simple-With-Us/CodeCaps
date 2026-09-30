@@ -64,7 +64,7 @@ final class QuotaUsageBarTests: XCTestCase {
 
     func testMeterSpeechForAWindowWithNoMarkerOmitsElapsed() {
         let plan = makeWindow(label: "Included plan", token: "plan", remaining: 85, resetIn: 15 * 86_400)
-        XCTAssertEqual(glanceMeterSpeech(plan, now: now), "Plan 85 percent remaining, 15 percent used")
+        XCTAssertEqual(glanceMeterSpeech(plan, now: now), "1m 85 percent remaining, 15 percent used")
     }
 
     func testMeterSpeechForAnUnknownReading() {

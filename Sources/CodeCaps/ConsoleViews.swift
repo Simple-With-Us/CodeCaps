@@ -444,11 +444,14 @@ struct ConsoleSidebar: View {
                     .accessibilityLabel("Quota unavailable")
             } else if let remaining = row.remainingPercent {
                 // A fixed column keeps the percentage on screen when the label
-                // is long enough to want every point of the row.
+                // is long enough to want every point of the row.  "100%" is
+                // about 31pt at 11pt, so 30pt truncated it to "100…".
                 Text("\(Int(remaining.rounded()))%")
                     .font(.system(size: 11).monospacedDigit())
                     .foregroundStyle(.secondary)
-                    .frame(width: 30, alignment: .trailing)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .frame(width: 36, alignment: .trailing)
             } else if model.lastChecked == nil {
                 Capsule().fill(Theme.track).frame(width: 28, height: 10)
                     .accessibilityHidden(true)
@@ -825,9 +828,11 @@ struct PlatformDetailPage: View {
     }
 }
 
-/// Version string, read once from the bundle the build script writes.
+/// Version string, read once from the bundle the build script writes.  `var`
+/// only so the screenshot test, which runs inside Xcode's test host and would
+/// otherwise print Xcode's own version, can put a release's string in the footer.
 enum CodeCapsVersion {
-    static let display: String = {
+    static var display: String = {
         let info = Bundle.main.infoDictionary
         let short = info?["CFBundleShortVersionString"] as? String ?? "1.0"
         let build = info?["CFBundleVersion"] as? String ?? "1"

@@ -44,17 +44,17 @@ final class GlanceToggleTests: XCTestCase {
         XCTAssertEqual(GlanceViewMode.allCases.map(\.title), ["This Mac", "Fleet Reported"])
     }
 
-    func testHeaderCountsProvidersOnThisMacAndMachinesInTheFleet() {
+    func testHeaderCountsProvidersOnThisMacAndReportingSourcesInTheFleet() {
         let checked = Date(timeIntervalSince1970: 1_790_000_000)
         let time = checked.formatted(date: .omitted, time: .shortened)
-        XCTAssertEqual(glanceHeaderStatus(view: .thisMac, reporting: 6, total: 7, machines: 2, checked: checked),
+        XCTAssertEqual(glanceHeaderStatus(view: .thisMac, reporting: 6, total: 7, sources: 2, checked: checked),
                        "6 of 7  ·  \(time)")
-        XCTAssertEqual(glanceHeaderStatus(view: .fleetReported, reporting: 6, total: 7, machines: 2, checked: checked),
-                       "2 machines  ·  \(time)")
-        XCTAssertEqual(glanceHeaderStatus(view: .fleetReported, reporting: 0, total: 0, machines: 1, checked: nil),
-                       "1 machine")
-        XCTAssertEqual(glanceHeaderStatus(view: .fleetReported, reporting: 6, total: 7, machines: 0, checked: checked),
-                       time, "no machines: just the time")
+        XCTAssertEqual(glanceHeaderStatus(view: .fleetReported, reporting: 6, total: 7, sources: 2, checked: checked),
+                       "2 sources  ·  \(time)")
+        XCTAssertEqual(glanceHeaderStatus(view: .fleetReported, reporting: 0, total: 0, sources: 1, checked: nil),
+                       "1 source")
+        XCTAssertEqual(glanceHeaderStatus(view: .fleetReported, reporting: 6, total: 7, sources: 0, checked: checked),
+                       time, "no sources: just the time")
     }
 
     func testAlarmsAllIsSharedWithTheManagerAndPersists() {
@@ -117,6 +117,18 @@ final class GlanceToggleTests: XCTestCase {
         XCTAssertFalse(PlatformLogoImage.isMonochromeMark("google-antigravity:gemini"))
         XCTAssertNotNil(PlatformLogoImage.load(providerKey: "google-antigravity:some-new-pool", style: .template),
                         "a pool with no mark of its own falls back to the platform's mark")
+    }
+
+    func testOneColourMarksFollowLightAndDarkAndBrandColoursStay() {
+        // Near-black on the dark Glance surface was the bug for these four.
+        for key in ["openai", "codex", "cursor", "minimax", "xai", "grok", "grok-cli", "grok-bot"] {
+            XCTAssertTrue(PlatformLogoImage.isMonochromeMark(key), "\(key) is a one-colour mark")
+            XCTAssertEqual(PlatformLogoImage.load(providerKey: key, style: .standard)?.isTemplate, true,
+                           "\(key) must adapt to a dark surface in the default Glance style")
+        }
+        for key in ["anthropic", "claude", "google-antigravity:gemini", "google-antigravity"] {
+            XCTAssertFalse(PlatformLogoImage.isMonochromeMark(key), "\(key) keeps its brand colour")
+        }
     }
 
     // MARK: - Spacing, measured

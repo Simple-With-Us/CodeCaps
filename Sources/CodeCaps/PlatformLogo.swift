@@ -222,10 +222,19 @@ public enum PlatformLogoImage {
     /// Marks that are a single colour by design: they carry no brand colour to
     /// preserve, so they always render as templates and follow the surface —
     /// near-black on Light, light grey on Dark.
+    ///
+    /// OpenAI, Cursor, Grok and MiniMax ship as plain black marks, which drew
+    /// near-black on the dark Glance surface until they joined this set.
+    /// Claude and the colour Gemini star keep their brand colour.
     public static func isMonochromeMark(_ providerKey: String) -> Bool {
         let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return ["grok-bot", "google-antigravity:third-party"].contains(key)
+        return monochromeKeys.contains(key)
     }
+
+    private static let monochromeKeys: Set<String> = [
+        "grok-bot", "google-antigravity:third-party",
+        "openai", "codex", "cursor", "minimax", "xai", "grok", "grok-cli",
+    ]
 
     /// The platform a pool-scoped key belongs to: `google-antigravity:gemini`
     /// is `google-antigravity`.  A custom mark is chosen per platform, so both

@@ -106,7 +106,9 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
     public let remainingPercent: Double?
     public let resetAt: Date?
     public let isExhausted: Bool
-    public var isAlarmArmed: Bool
+    /// This provider's own reset-alarm pick, shown by its row's bell while
+    /// All is off.  Whether the alarm is actually on also depends on All.
+    public var isAlarmEnabled: Bool
     public let windows: [CompanionWindowItem]
     public let duplicateWindows: [CompanionWindowItem]
 
@@ -118,7 +120,7 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
         remainingPercent: Double?,
         resetAt: Date?,
         isExhausted: Bool,
-        isAlarmArmed: Bool,
+        isAlarmEnabled: Bool,
         windows: [CompanionWindowItem] = [],
         duplicateWindows: [CompanionWindowItem] = []
     ) {
@@ -129,7 +131,7 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
         self.remainingPercent = remainingPercent
         self.resetAt = resetAt
         self.isExhausted = isExhausted
-        self.isAlarmArmed = isAlarmArmed
+        self.isAlarmEnabled = isAlarmEnabled
         self.windows = windows
         self.duplicateWindows = duplicateWindows
     }
@@ -218,7 +220,8 @@ public final class CompanionNotificationDelegate: NSObject, UNUserNotificationCe
 /// Designed to be lightweight and zero-cloud or endpoint-driven:
 /// 1. Can pull directly from the Mac's QuotaPublisher sync endpoint.
 /// 2. Can read quota snapshots synced via iCloud Drive / App Group container.
-/// 3. Manages iOS local notifications and Apple Watch alerts when quotas reset.
+/// 3. Manages iOS local notifications and Apple Watch alerts when quotas reset,
+///    by the same rules as the Mac app (`ResetAlarmTracker`, shared).
 /// 4. Groups windows into overarching platforms with multiple expandable time periods.
 /// 5. Folds duplicate sources for the same data under the overarching platform.
 /// 6. Supports customizable platform ordering matching the macOS preference.
@@ -264,11 +267,30 @@ public final class CompanionQuotaModel: ObservableObject {
             sharedDefaults.set(syncToken, forKey: "companionSyncToken")
         }
     }
-    @Published public var notifyOnReset: Bool {
+    /// All: every provider's reset alarm is on, and rows show no bells.  Off:
+    /// only the providers in `alarmProviderIds` alarm.  The same model as the
+    /// Mac app's All bell.
+    @Published public var alarmsAll: Bool {
         didSet {
-            UserDefaults.standard.set(notifyOnReset, forKey: "companionNotifyOnReset")
-            sharedDefaults.set(notifyOnReset, forKey: "companionNotifyOnReset")
+            sharedDefaults.set(alarmsAll, forKey: AlarmKeys.all)
+            if alarmsAll && !oldValue { Task { await requestNotificationPermission() } }
         }
+    }
+
+    /// The providers picked one by one.  Kept while All is on, so turning All
+    /// off again restores the owner's own selection.
+    @Published public private(set) var alarmProviderIds: Set<String> {
+        didSet { sharedDefaults.set(alarmProviderIds.sorted(), forKey: AlarmKeys.providers) }
+    }
+
+    /// Keys for the alarm choices and the tracker's state.
+    enum AlarmKeys {
+        static let all = "companionResetAlarmAll"
+        static let providers = "companionResetAlarmProviders"
+        static let trackerState = "companionResetAlarmTrackerState"
+        /// Read once, by the migration, and removed.
+        static let legacyNotifyOnReset = "companionNotifyOnReset"
+        static let legacyArmedIds = "armedResetAlarmSectionIds"
     }
 
     /// The sound the reset alarm plays.  Persisted into the App Group
@@ -281,11 +303,10 @@ public final class CompanionQuotaModel: ObservableObject {
         }
     }
 
-    private var previouslyExhaustedIds: Set<String> = []
-    private var hasInitialized = false
-
-    /// Ids armed on a previous launch, restored from the App Group.
-    private var persistedArmedIds: Set<String> = []
+    /// The reset detector, shared with the Mac app.  Its state is saved after
+    /// every evaluation, so a relaunch neither loses a reset that came due nor
+    /// announces one twice.
+    private var alarmTracker: ResetAlarmTracker
 
     public init() {
         let defaults = UserDefaults(suiteName: Self.appGroupId) ?? UserDefaults.standard
@@ -293,8 +314,26 @@ public final class CompanionQuotaModel: ObservableObject {
             ?? UserDefaults.standard.string(forKey: "companionSyncEndpoint") ?? ""
         self.syncToken = defaults.string(forKey: "companionSyncToken")
             ?? UserDefaults.standard.string(forKey: "companionSyncToken") ?? ""
-        self.notifyOnReset = defaults.object(forKey: "companionNotifyOnReset") as? Bool
-            ?? UserDefaults.standard.object(forKey: "companionNotifyOnReset") as? Bool ?? true
+
+        // One-time migration of the two old mechanisms: a global "notify on
+        // quota reset" switch, and one-shot bells armed per row.  The switch
+        // meant "every provider", which is All; the bells meant "this row",
+        // which is a per-provider pick.  A fresh install lands on All, like the
+        // old switch's default.
+        let legacyGlobal = defaults.object(forKey: AlarmKeys.legacyNotifyOnReset) as? Bool
+            ?? UserDefaults.standard.object(forKey: AlarmKeys.legacyNotifyOnReset) as? Bool
+        let all = defaults.object(forKey: AlarmKeys.all) as? Bool ?? legacyGlobal ?? true
+        let providers = Set(defaults.stringArray(forKey: AlarmKeys.providers)
+                            ?? defaults.stringArray(forKey: AlarmKeys.legacyArmedIds) ?? [])
+        defaults.set(all, forKey: AlarmKeys.all)
+        defaults.set(providers.sorted(), forKey: AlarmKeys.providers)
+        defaults.removeObject(forKey: AlarmKeys.legacyNotifyOnReset)
+        defaults.removeObject(forKey: AlarmKeys.legacyArmedIds)
+        UserDefaults.standard.removeObject(forKey: AlarmKeys.legacyNotifyOnReset)
+        self.alarmsAll = all
+        self.alarmProviderIds = providers
+        self.alarmTracker = ResetAlarmTracker(
+            state: ResetAlarmTrackerState.decoded(from: defaults.data(forKey: AlarmKeys.trackerState)))
 
         let sharedRaw = defaults.string(forKey: "alarmSound")
             ?? UserDefaults.standard.string(forKey: "companionAlarmSound")
@@ -304,7 +343,6 @@ public final class CompanionQuotaModel: ObservableObject {
             self.alarmSound = .systemDefault
         }
 
-        self.persistedArmedIds = Set(defaults.stringArray(forKey: "armedResetAlarmSectionIds") ?? [])
         self.platformOrder = defaults.stringArray(forKey: "platformOrder")
             ?? UserDefaults.standard.stringArray(forKey: "platformOrder") ?? []
 
@@ -374,12 +412,23 @@ public final class CompanionQuotaModel: ObservableObject {
         }
     }
 
-    public func toggleAlarm(for itemId: String) {
-        guard let index = items.firstIndex(where: { $0.id == itemId }) else { return }
-        items[index].isAlarmArmed.toggle()
-        persistArmedIds()
-        if items[index].isAlarmArmed {
+    /// Whether `itemId`'s reset alarm is on: every provider under All,
+    /// otherwise only the ones picked.
+    public func isAlarmOn(for itemId: String) -> Bool {
+        alarmsAll || alarmProviderIds.contains(itemId)
+    }
+
+    /// Turns one provider's alarm on or off; what a row's bell does while All is off.
+    public func toggleProviderAlarm(for itemId: String) {
+        let enabled = !alarmProviderIds.contains(itemId)
+        if enabled {
+            alarmProviderIds.insert(itemId)
             Task { await requestNotificationPermission() }
+        } else {
+            alarmProviderIds.remove(itemId)
+        }
+        if let index = items.firstIndex(where: { $0.id == itemId }) {
+            items[index].isAlarmEnabled = enabled
         }
     }
 
@@ -580,9 +629,6 @@ public final class CompanionQuotaModel: ObservableObject {
         title: String,
         rawWindows: [WireRawWindow]
     ) -> CompanionQuotaItem {
-        let existingArmed = items.first(where: { $0.id == id })?.isAlarmArmed
-            ?? persistedArmedIds.contains(id)
-
         var primaryWindows: [CompanionWindowItem] = []
         var duplicateWindows: [CompanionWindowItem] = []
         var seenCadenceKeys: Set<String> = []
@@ -664,7 +710,7 @@ public final class CompanionQuotaModel: ObservableObject {
             remainingPercent: controllingPct,
             resetAt: nearestReset,
             isExhausted: isExhausted,
-            isAlarmArmed: existingArmed,
+            isAlarmEnabled: alarmProviderIds.contains(id),
             windows: primaryWindows,
             duplicateWindows: duplicateWindows
         )
@@ -679,9 +725,6 @@ public final class CompanionQuotaModel: ObservableObject {
         guard !windows.isEmpty else { return nil }
 
         let itemId = "antigravity:\(poolKey)"
-        let existingArmed = items.first(where: { $0.id == itemId })?.isAlarmArmed
-            ?? persistedArmedIds.contains(itemId)
-
         let weeklyWin = windows.first {
             let s = ($0.id + " " + $0.label).lowercased()
             return s.contains("weekly") || s.contains("1w") || s.contains("7d")
@@ -753,7 +796,7 @@ public final class CompanionQuotaModel: ObservableObject {
             remainingPercent: controllingPct,
             resetAt: nearestReset,
             isExhausted: isExhausted,
-            isAlarmArmed: existingArmed,
+            isAlarmEnabled: alarmProviderIds.contains(itemId),
             windows: childWindows,
             duplicateWindows: []
         )
@@ -892,44 +935,63 @@ public final class CompanionQuotaModel: ObservableObject {
         return label
     }
 
+    /// Feeds one snapshot's windows through the tracker, saves its state, and
+    /// notifies once per provider for every alarm that is on.
+    ///
+    /// Every provider is tracked whether or not its alarm is on, so turning one
+    /// on later starts from a real history rather than a blank one.
     private func evaluateResets(newItems: [CompanionQuotaItem]) {
-        guard hasInitialized else {
-            previouslyExhaustedIds = Set(newItems.filter(\.isExhausted).map(\.id))
-            hasInitialized = true
-            return
+        let now = Date()
+        let before = alarmTracker.state
+        let events = alarmTracker.process(Self.resetAlarmObservations(for: newItems), now: now)
+        if alarmTracker.state != before, let data = alarmTracker.state.encoded() {
+            sharedDefaults.set(data, forKey: AlarmKeys.trackerState)
         }
 
-        var fired = Set<String>()
-        for item in newItems {
-            let wasExhausted = previouslyExhaustedIds.contains(item.id)
-            let isArmed = item.isAlarmArmed
-
-            if !item.isExhausted && (wasExhausted || isArmed) {
-                if notifyOnReset || isArmed {
-                    sendResetAlert(item: item)
-                    fired.insert(item.id)
-                }
-            }
+        var order: [String] = []
+        var byProvider: [String: [ResetAlarmEvent]] = [:]
+        for event in events where isAlarmOn(for: event.providerId) {
+            if byProvider[event.providerId] == nil { order.append(event.providerId) }
+            byProvider[event.providerId, default: []].append(event)
         }
-
-        if !fired.isEmpty {
-            for index in items.indices where fired.contains(items[index].id) {
-                items[index].isAlarmArmed = false
-            }
-            persistArmedIds()
+        for providerId in order {
+            guard let group = byProvider[providerId], !group.isEmpty else { continue }
+            sendResetAlert(providerId: providerId, events: group)
         }
-
-        previouslyExhaustedIds = Set(newItems.filter(\.isExhausted).map(\.id))
     }
 
-    private func sendResetAlert(item: CompanionQuotaItem) {
+    /// One observation per primary window; a masked window reports no
+    /// percentage, because its percentage must not be believed.
+    static func resetAlarmObservations(for items: [CompanionQuotaItem]) -> [ResetAlarmObservation] {
+        items.flatMap { item in
+            item.windows.map { window in
+                let period = ResetAlarmCadence.periodSeconds(
+                    token: nil,
+                    label: window.cadence,
+                    monthlyHint: item.providerKey == "cursor" && window.cadence.lowercased().contains("plan"))
+                return ResetAlarmObservation(
+                    scope: "companion",
+                    providerId: item.id,
+                    providerTitle: item.title,
+                    windowId: window.id,
+                    windowLabel: period.map(ResetAlarmCadence.caption(forPeriod:)) ?? window.cadence,
+                    periodSeconds: period,
+                    resetAt: window.resetAt,
+                    remainingPercent: window.isMasked ? nil : window.remainingPercent,
+                    observedAt: nil)
+            }
+        }
+    }
+
+    private func sendResetAlert(providerId: String, events: [ResetAlarmEvent]) {
+        let message = ResetAlarmMessage.content(for: events)
         let content = UNMutableNotificationContent()
-        content.title = "Quota Reset: \(item.title)"
-        content.body = "Quota has cleared (\(item.displayPercent) remaining)." + sentenceGap + "Ready for prompt turns."
+        content.title = message.title
+        content.body = message.body
         content.sound = AlarmSoundPlayer.notificationSound(for: alarmSound)
 
         let request = UNNotificationRequest(
-            identifier: "codecaps.companion.reset.\(item.id).\(Date().timeIntervalSince1970)",
+            identifier: "codecaps.companion.reset.\(providerId).\(Date().timeIntervalSince1970)",
             content: content,
             trigger: nil
         )
@@ -937,8 +999,8 @@ public final class CompanionQuotaModel: ObservableObject {
             do {
                 try await UNUserNotificationCenter.current().add(request)
             } catch {
-                lastError = "A reset alert for \(item.title) could not be delivered." + sentenceGap
-                    + error.localizedDescription
+                lastError = "A reset alert for \(events.first?.providerTitle ?? "a provider") could not be delivered."
+                    + sentenceGap + error.localizedDescription
             }
         }
     }
@@ -1050,12 +1112,5 @@ public final class CompanionQuotaModel: ObservableObject {
             let cacheFile = caches.appendingPathComponent("quota-windows.json")
             try? data.write(to: cacheFile, options: .atomic)
         }
-    }
-
-    // MARK: - Arm persistence
-
-    private func persistArmedIds() {
-        let armed = items.filter(\.isAlarmArmed).map(\.id)
-        sharedDefaults.set(armed, forKey: "armedResetAlarmSectionIds")
     }
 }
