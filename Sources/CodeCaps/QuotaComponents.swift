@@ -14,8 +14,18 @@ enum Theme {
     static let surface = dyn(hex(0xFFFFFF), hex(0x26292C))
     static let hairline = dyn(NSColor.black.withAlphaComponent(0.06),
                               NSColor.white.withAlphaComponent(0.10))
-    static let pacingTrack = dyn(hex(0x2659A6), hex(0x7FA8E8))
+    /// The elapsed-time marker on a quota bar.  Black on the light surface and
+    /// white on the dark one, so it reads against both the red and green segments.
     static let pacingMarker = dyn(NSColor.black, NSColor.white)
+    /// A thin outline around the marker in the opposite tone, so a black marker
+    /// stays visible on the dark teal segment and a white one on the red.
+    static let pacingMarkerHalo = dyn(NSColor.white.withAlphaComponent(0.7),
+                                      NSColor.black.withAlphaComponent(0.7))
+    /// The share of a quota window already used: the left segment of the bar.
+    static let barUsed = danger
+    /// The share still available: the right segment of the bar.  This is the
+    /// same teal as the "% remaining" text, which the owner reads as green.
+    static let barRemaining = accent
     static let fleet = dyn(hex(0x4B4FA8), hex(0x8A8EE0))
 
     /// Unfilled portion of any progress bar.  A black 6% track disappears on a
@@ -68,7 +78,10 @@ enum Metrics {
     static let glanceRowTitleWidth: CGFloat = 72
     static let glanceMeterCaptionWidth: CGFloat = 22
     static let glanceMeterBarWidth: CGFloat = 50
-    static let glanceMeterPercentWidth: CGFloat = 28
+    /// Wide enough for "100%" at 11pt, which measures about 30pt: at 28pt it
+    /// spilled into the gap and touched the reset countdown, and 100% is the
+    /// state everyone sees right after a reset.
+    static let glanceMeterPercentWidth: CGFloat = 32
     static let glanceMeterCountdownWidth: CGFloat = 46
     static let glanceRowTrailingWidth: CGFloat = 40
     static let glanceRowTrailingWideWidth: CGFloat = 100
@@ -130,6 +143,86 @@ func quotaStatusColor(for snapshot: QuotaWindowSnapshot, sourceFailed: Bool) -> 
     if snapshot.status == .exhausted { return Theme.danger }
     if (snapshot.remainingPercent ?? 100) <= 20 { return Theme.warning }
     return Theme.accent
+}
+
+/// Whether a bar should be drawn dimmed: the reading is old, or its source
+/// failed.  These are the same cases that turn the "% remaining" text grey, so a
+/// last-reported bar never looks as live as a fresh one.
+func quotaBarIsDimmed(for snapshot: QuotaWindowSnapshot, sourceFailed: Bool) -> Bool {
+    !snapshot.isFresh || sourceFailed
+}
+
+/// The one quota bar every surface draws: a full-width track that starts with a
+/// red segment for the share used and ends with a green segment for the share
+/// left, so 0% remaining is all red and 100% is all green.  A black marker sits
+/// at the fraction of the period that has elapsed; red reaching past it means
+/// the window is being burned faster than time passes.
+///
+/// An unknown reading keeps the neutral empty track and no segments.
+struct QuotaUsageBar: View {
+    let metrics: QuotaBarMetrics
+    var height: CGFloat = 4
+    var dimmed = false
+    /// When set, the bar is its own accessibility element and speaks both shares
+    /// and the elapsed fraction.  Left nil where the parent already speaks for
+    /// the bar, so it is not read twice.
+    var accessibilityLabel: String? = nil
+    /// Extra words spoken after the metrics, such as the pace verdict.
+    var accessibilitySuffix: String? = nil
+
+    /// How far the marker stands proud of the bar above and below.
+    static let markerOverhang: CGFloat = 2
+    static let markerWidth: CGFloat = 2
+
+    var body: some View {
+        GeometryReader { geometry in
+            let width = Double(geometry.size.width)
+            ZStack(alignment: .leading) {
+                if let widths = metrics.segmentWidths(in: width) {
+                    HStack(spacing: 0) {
+                        Rectangle().fill(Theme.barUsed)
+                            .frame(width: CGFloat(widths.used))
+                        Rectangle().fill(Theme.barRemaining)
+                            .frame(width: CGFloat(widths.remaining))
+                    }
+                    .clipShape(Capsule())
+                    .opacity(dimmed ? 0.45 : 1)
+                } else {
+                    Capsule().fill(Theme.track)
+                }
+                if let x = metrics.markerOffset(in: width) {
+                    let markerHeight = geometry.size.height + Self.markerOverhang * 2
+                    ZStack {
+                        Rectangle().fill(Theme.pacingMarkerHalo)
+                            .frame(width: Self.markerWidth + 2, height: markerHeight + 2)
+                        Rectangle().fill(Theme.pacingMarker)
+                            .frame(width: Self.markerWidth, height: markerHeight)
+                    }
+                    .position(x: CGFloat(x), y: geometry.size.height / 2)
+                }
+            }
+        }
+        .frame(height: height)
+        .modifier(QuotaUsageBarAccessibility(
+            label: accessibilityLabel,
+            value: ([metrics.spokenSummary] + [accessibilitySuffix].compactMap { $0 }).joined(separator: ", ")))
+    }
+}
+
+private struct QuotaUsageBarAccessibility: ViewModifier {
+    let label: String?
+    let value: String
+
+    func body(content: Content) -> some View {
+        if let label {
+            content
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(label)
+                .accessibilityValue(value)
+        } else {
+            content.accessibilityHidden(true)
+        }
+    }
 }
 
 func compactWindowName(_ label: String) -> String {
@@ -499,6 +592,8 @@ struct QuotaRow: View {
         if masked { return AntigravityDisplay.maskedValue }
         return snapshot.remainingPercent.map { "\(Int($0.rounded()))%" } ?? "—"
     }
+    private var barMetrics: QuotaBarMetrics { QuotaBarMetrics(snapshot: snapshot, now: now) }
+    private var barDimmed: Bool { quotaBarIsDimmed(for: snapshot, sourceFailed: sourceFailed) }
     private var stateText: String {
         if masked { return "not applicable" }
         if snapshot.remainingPercent == nil { return "unavailable" }
@@ -530,17 +625,9 @@ struct QuotaRow: View {
                     .fixedSize(horizontal: false, vertical: true)
             } else if let pacing = snapshot.pacing(now: now), !compact {
                 pacingBar(pacing)
-            } else if let remaining = snapshot.remainingPercent {
-                GeometryReader { geometry in
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(Theme.track)
-                        Capsule().fill(tint)
-                            .frame(width: geometry.size.width * CGFloat(min(max(remaining, 0), 100)) / 100)
-                    }
-                }
-                .frame(height: 5)
-                .accessibilityLabel("Quota Remaining")
-                .accessibilityValue("\(Int(remaining.rounded())) percent remaining")
+            } else if barMetrics.hasReading {
+                QuotaUsageBar(metrics: barMetrics, height: 5, dimmed: barDimmed,
+                              accessibilityLabel: "Quota Usage")
             }
 
             if let remaining = snapshot.window.absoluteRemaining,
@@ -590,31 +677,19 @@ struct QuotaRow: View {
     private func pacingBar(_ pacing: WindowPacing) -> some View {
         let paceLabel = pacing.isUnderCapPace ? "Under cap pace" : "Over cap pace"
         return VStack(alignment: .leading, spacing: 5) {
-            GeometryReader { geometry in
-                let width = geometry.size.width
-                let timeWidth = max(0, min(width, width * CGFloat(pacing.timeElapsedPercent) / 100))
-                let usedWidth = max(0, min(width, width * CGFloat(pacing.quotaUsedPercent) / 100))
-                ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 3).fill(Theme.track)
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(Theme.pacingTrack.opacity(0.14))
-                        .frame(width: timeWidth)
-                    Rectangle()
-                        .fill(Theme.pacingTrack.opacity(0.75))
-                        .frame(width: 2, height: 10)
-                        .offset(x: max(0, min(width - 2, timeWidth - 1)))
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(pacing.isUnderCapPace ? Theme.accent : Theme.warning)
-                        .frame(width: usedWidth, height: 5)
-                }
-            }
-            .frame(height: 10)
-            .accessibilityLabel("Quota Pacing")
-            .accessibilityValue("\(Int((snapshot.remainingPercent ?? 0).rounded())) percent remaining, \(pacing.timeElapsedLabel.lowercased()), \(paceLabel.lowercased())")
+            // The same red-used, green-remaining bar Glance draws, with the
+            // marker at how far through the period we are.  The frame leaves
+            // room for the marker to stand proud of the bar.
+            QuotaUsageBar(metrics: barMetrics, height: 5, dimmed: barDimmed,
+                          accessibilityLabel: "Quota Pacing",
+                          accessibilitySuffix: paceLabel.lowercased())
+                .frame(height: 10)
 
             HStack(spacing: 6) {
-                HStack(spacing: 3) {
-                    Circle().fill(Theme.pacingTrack.opacity(0.8)).frame(width: 5, height: 5)
+                HStack(spacing: 4) {
+                    Rectangle().fill(Theme.pacingMarker)
+                        .frame(width: QuotaUsageBar.markerWidth, height: 9)
+                        .accessibilityHidden(true)
                     Text("time elapsed · \(pacing.timeElapsedLabel.lowercased())")
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)

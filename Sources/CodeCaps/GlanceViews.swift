@@ -359,16 +359,11 @@ func glanceDurationSeconds(_ token: String) -> TimeInterval? {
     }
 }
 
-/// Computes the fraction of time elapsed in the quota window (0.0 ... 1.0).
-/// Returns nil if window duration cannot be determined or reset date is unknown.
-func glanceElapsedFraction(for snapshot: QuotaWindowSnapshot, now: Date) -> Double? {
-    guard let resetAt = snapshot.resetAt else { return nil }
-    guard let duration = WindowPacing.parseDurationSeconds(token: snapshot.window.window, label: snapshot.window.label)
-        ?? glanceDurationSeconds(snapshot.window.window ?? "") else { return nil }
-    guard duration > 0 else { return nil }
-    let windowStart = resetAt.addingTimeInterval(-duration)
-    let elapsed = max(0, min(duration, now.timeIntervalSince(windowStart)))
-    return min(1.0, max(0.0, elapsed / duration))
+/// What VoiceOver says for one meter on a row: its caption, then both shares and
+/// how far through the period we are, for example "5h 85 percent remaining, 15
+/// percent used, 40 percent of period elapsed".
+func glanceMeterSpeech(_ snapshot: QuotaWindowSnapshot, now: Date) -> String {
+    "\(glanceMeterCaption(snapshot)) \(QuotaBarMetrics(snapshot: snapshot, now: now).spokenSummary)"
 }
 
 /// Rounds a duration to the largest whole unit that divides it, days first so
@@ -391,6 +386,7 @@ struct GlanceMeter: View {
     private var percent: Double? { snapshot.remainingPercent }
     private var tint: Color { quotaStatusColor(for: snapshot, sourceFailed: false) }
     private var countdown: String { glanceResetCountdown(snapshot.resetAt, now: now) }
+    private var metrics: QuotaBarMetrics { QuotaBarMetrics(snapshot: snapshot, now: now) }
 
     var body: some View {
         HStack(spacing: 4) {
@@ -400,7 +396,11 @@ struct GlanceMeter: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
                 .frame(width: Metrics.glanceMeterCaptionWidth, alignment: .trailing)
-            bar
+            // Red for the share used, green for the share left, and a marker
+            // for how far through the period we are.  The percentage beside it
+            // keeps its own status colour.
+            QuotaUsageBar(metrics: metrics, height: 4,
+                          dimmed: quotaBarIsDimmed(for: snapshot, sourceFailed: false))
                 .frame(width: Metrics.glanceMeterBarWidth, height: 4)
             Text(percent.map { "\(Int($0.rounded()))%" } ?? "—")
                 .font(.system(size: 11, weight: .medium).monospacedDigit())
@@ -425,30 +425,11 @@ struct GlanceMeter: View {
     }
 
     private var spokenValue: String {
-        let reading = percent.map { "\(Int($0.rounded())) percent remaining" } ?? "no reading"
+        let reading = metrics.spokenSummary
         if !countdown.isEmpty {
             return "\(reading), resets in \(countdown)"
         }
         return reading
-    }
-
-    private var bar: some View {
-        GeometryReader { geometry in
-            ZStack(alignment: .leading) {
-                Capsule().fill(Theme.track)
-                if let percent {
-                    Capsule().fill(tint)
-                        .frame(width: geometry.size.width * CGFloat(min(max(percent, 0), 100)) / 100)
-                }
-                if let fraction = glanceElapsedFraction(for: snapshot, now: now) {
-                    let x = min(max(geometry.size.width * CGFloat(fraction), 1), geometry.size.width - 1)
-                    Rectangle()
-                        .fill(Theme.pacingMarker)
-                        .frame(width: 2, height: geometry.size.height + 4)
-                        .position(x: x, y: geometry.size.height / 2)
-                }
-            }
-        }
     }
 }
 
@@ -688,12 +669,14 @@ struct GlanceRow: View {
     /// same two numbers an owner reads at a glance.
     private var spokenValue: String {
         var parts: [String] = []
-        for meter in [meters.short, meters.long].compactMap({ $0 }) {
-            let caption = glanceMeterCaption(meter)
-            let reading = meter.remainingPercent.map { "\(Int($0.rounded())) percent remaining" } ?? "no reading"
-            parts.append("\(caption) \(reading)")
+        let meterSpeech = [meters.short, meters.long].compactMap { $0 }.map { glanceMeterSpeech($0, now: now) }
+        if meterSpeech.isEmpty {
+            parts.append(QuotaBarMetrics(remainingPercent: percent, elapsedFraction: nil).spokenSummary)
+        } else {
+            // Each meter already carries commas of its own, so the meters are
+            // set apart with semicolons.
+            parts.append(meterSpeech.joined(separator: "; "))
         }
-        if parts.isEmpty { parts.append(percent.map { "\(Int($0.rounded())) percent remaining" } ?? "no reading") }
         if let reset = row.resetAt ?? driving?.resetAt, percent != nil {
             parts.append(resetCountdown(reset, now: now).lowercased())
         }
