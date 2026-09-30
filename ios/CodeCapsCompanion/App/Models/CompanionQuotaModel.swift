@@ -1,6 +1,9 @@
 import Foundation
 import SwiftUI
 import UserNotifications
+#if canImport(WidgetKit)
+import WidgetKit
+#endif
 
 /// Formats dates from ISO8601 strings or timestamp numbers.
 public enum CompanionDateFormatter {

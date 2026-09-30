@@ -1,5 +1,37 @@
 # CodeCaps — Effort Log
 
+## 2026-09-29 — WidgetKit widgets for CodeCaps (iOS Home Screen, Lock Screen & Mac desktop) [AG, completed]
+
+Lane: `ag/widgets-ios-mac` (issue #76).
+
+WidgetKit widget extension for CodeCaps across iOS and macOS:
+- Overview widget (`systemSmall`, `systemMedium`, `systemLarge`): displays active AI provider quotas, remaining percentages, and reset countdowns.
+- Single Provider Focus widget (`systemSmall`, `systemMedium`): dedicated circular/linear gauge tracking a chosen AI provider or closest-to-cap provider.
+- Lock Screen / StandBy accessory widgets (`accessoryCircular`, `accessoryRectangular`, `accessoryInline`) for at-a-glance monitoring on iOS.
+- App Group container data bridge (`group.com.simplewithus.codecaps`) reading `quota-windows.json` and UserDefaults platform order.
+- Live timeline reloads wired into `MonitorModel.swift` (macOS) and `CompanionQuotaModel.swift` (iOS).
+- Verified via `xcodebuild` (iOS simulator and macOS targets) and unit tests in `WidgetTests.swift` (all 285 tests passing).
+
+
+## 2026-09-29 — Sparkle 2 auto-update pilot (fleet Mac apps auto-update) [CLAUDE, merged]
+
+Lane: `claude/sparkle-auto-update` at `~/apps/codecaps-claude-sparkle` (board `7d27a555`).  PR #75, squash `eba1706`.
+
+Owner ruling today: every fleet Mac app updates itself through Sparkle 2 from signed releases CI publishes on each merge to `main`; CodeCaps is the pilot and `docs/AUTO-UPDATE.md` is the pattern to copy.  Sparkle 2.10.0 via SwiftPM, `AppUpdater` installs as soon as CodeCaps is not frontmost, **Check For Updates…** in both menus and Settings ▸ About.  `build_and_run.sh` embeds and inside-out signs `Sparkle.framework` and verifies strictly; `mac-release.yml` publishes `v<VERSION>-build.<N>` releases marked latest, feed `releases/latest/download/appcast.xml`.  Local rehearsal: notarized build 66 updated itself to build 67 in about ten seconds.  Main run 36653509344 built and verified the bundle on CI, then skipped publishing: `MAC_CERT_P12_BASE64` and `MAC_CERT_PASSWORD` are not reachable (no Infisical wiring or repository secrets on CodeCaps yet).  `SPARKLE_ED_PRIVATE_KEY` was set; `ASC_*` already existed.
+
+## 2026-09-29 — Glance popover shows the 4-5hr and weekly/monthly bar on every row [MINIMAX, merged]
+
+Lane: `mm/glance-dual-bars` at `~/apps/codecaps-mm-glance-bars` (board `792f3427`).  PR #74, squash `4bc714e`.
+
+The compact row spoke for one window only — the one closest to its cap — so seeing both cadences meant expanding every row.  A plan could read 92% on the 5h window while the weekly cap sat at 11%, and the glanceable surface hid that.
+
+- Popover widened 400pt to 560pt.  Each row carries two meters on the collapsed line: caption, bar, percentage, one per cadence.  Both stay on one line, so `QuotaGlanceMetrics.popoverHeight` and the popover's height behaviour are unchanged.
+- Windows pair by cadence, not array order: short = closest to cap among sub-day cadences, long = closest among weekly-or-longer, read from each reader's own token and falling back to time-to-reset.  Captions come from the token, so Antigravity's "Claude & GPT · Weekly" renders as "7d".
+- Antigravity masked 5h windows stay out of a meter; a row with every window masked falls back to its driving window rather than rendering blank.  Single-cadence providers fill slot one only — they used to be able to resolve both slots to the same snapshot, which renders one meter duplicated.  MiniMax supplementary video quota never displaces a real cap.
+- Column widths are `Metrics` constants and `glanceRowIntrinsicWidth` is computed from them, so a widened column fails a test instead of clipping the `Open CodeCaps ⌘1` footer the way the old 360pt width did.
+- 269/269 `swift test` green, 19 new in `GlanceMeterTests`.  Rendering the real rows at 560pt caught a collision no test could see: `meterArea` is a single child of the row's `HStack`, so the gap written outside it never landed between the two meters and the first meter's percentage ran into the second meter's caption.
+- The chevron stays.  The expansion is now for detail the meters leave out: a third cadence, or a per-model split inside a pool.
+
 ## 2026-09-26 — Public site quota and fleet copy — DEPLOYED
 
 Lane: `codex/public-copy` at `~/apps/codecaps-codex-public-copy` (board `90d3d40a`, issue #52).  PRs #53 and #54 aligned the GitHub Pages product copy with supported AI plan windows, existing local sign-ins, and optional collector push/pull.  Pages run 36281399171 deployed the gh-pages merge, and the live page and screenshot assets were verified.  No reader or app behavior changed.

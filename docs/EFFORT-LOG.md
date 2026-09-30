@@ -5,6 +5,20 @@ PR (when shipped), follow-ups (when parked).
 
 ---
 
+## 2026-09-29 — WidgetKit widgets for CodeCaps (iOS Home Screen, Lock Screen & Mac desktop) [AG, completed]
+
+Lane: `ag/widgets-ios-mac` (issue #76).
+
+WidgetKit widget extension for CodeCaps across iOS and macOS:
+- Overview widget (`systemSmall`, `systemMedium`, `systemLarge`): displays active AI provider quotas, remaining percentages, and reset countdowns.
+- Single Provider Focus widget (`systemSmall`, `systemMedium`): dedicated circular/linear gauge tracking a chosen AI provider or closest-to-cap provider.
+- Lock Screen / StandBy accessory widgets (`accessoryCircular`, `accessoryRectangular`, `accessoryInline`) for at-a-glance monitoring on iOS.
+- App Group container data bridge (`group.com.simplewithus.codecaps`) reading `quota-windows.json` and UserDefaults platform order.
+- Live timeline reloads wired into `MonitorModel.swift` (macOS) and `CompanionQuotaModel.swift` (iOS).
+- Verified via `xcodebuild` (iOS simulator and macOS targets) and unit tests in `WidgetTests.swift` (all 285 tests passing).
+
+---
+
 ## 2026-09-29 — Sparkle 2 auto-update pilot (fleet Mac apps auto-update) [CLAUDE, completed]
 
 Lane: `claude/sparkle-auto-update` at `~/apps/codecaps-claude-sparkle` (board `7d27a555`).
