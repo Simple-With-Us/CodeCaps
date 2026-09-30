@@ -32,13 +32,36 @@ targets:
           - "InfoMac.plist"
           - "CodeCapsCompanionMac.entitlements"
       - path: Assets.xcassets
+    dependencies:
+      - target: CodeCapsWidgets
+        embed: true
     settings:
       base:
         INFOPLIST_FILE: App/Info.plist
         PRODUCT_BUNDLE_IDENTIFIER: com.simplewithus.codecaps.ios
         DEVELOPMENT_TEAM: CC8UTF7ATG
         CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_ENTITLEMENTS: App/CodeCapsCompanion.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        GENERATE_INFOPLIST_FILE: NO
+        ITSAppUsesNonExemptEncryption: false
+
+  CodeCapsWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Widgets
+        excludes:
+          - "InfoMac.plist"
+          - "CodeCapsWidgetsMac.entitlements"
+      - path: Assets.xcassets
+    settings:
+      base:
+        INFOPLIST_FILE: Widgets/Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: com.simplewithus.codecaps.ios.widgets
+        DEVELOPMENT_TEAM: CC8UTF7ATG
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_ENTITLEMENTS: Widgets/CodeCapsWidgets.entitlements
         GENERATE_INFOPLIST_FILE: NO
         ITSAppUsesNonExemptEncryption: false
 
@@ -52,6 +75,9 @@ targets:
           - "Info.plist"
           - "CodeCapsCompanion.entitlements"
       - path: Assets.xcassets
+    dependencies:
+      - target: CodeCapsWidgetsMac
+        embed: true
     settings:
       base:
         INFOPLIST_FILE: App/InfoMac.plist
@@ -63,3 +89,49 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: NO
         ITSAppUsesNonExemptEncryption: false
+
+  CodeCapsWidgetsMac:
+    type: app-extension
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: Widgets
+        excludes:
+          - "Info.plist"
+          - "CodeCapsWidgets.entitlements"
+      - path: Assets.xcassets
+    settings:
+      base:
+        INFOPLIST_FILE: Widgets/InfoMac.plist
+        PRODUCT_BUNDLE_IDENTIFIER: com.simplewithus.codecaps.macos.widgets
+        PRODUCT_NAME: CodeCapsWidgets
+        DEVELOPMENT_TEAM: CC8UTF7ATG
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_ENTITLEMENTS: Widgets/CodeCapsWidgetsMac.entitlements
+        GENERATE_INFOPLIST_FILE: NO
+        ITSAppUsesNonExemptEncryption: false
+
+schemes:
+  CodeCapsCompanion:
+    build:
+      targets:
+        CodeCapsCompanion: all
+        CodeCapsWidgets: all
+    run:
+      config: Debug
+    profile:
+      config: Release
+    archive:
+      config: Release
+
+  CodeCapsCompanionMac:
+    build:
+      targets:
+        CodeCapsCompanionMac: all
+        CodeCapsWidgetsMac: all
+    run:
+      config: Debug
+    profile:
+      config: Release
+    archive:
+      config: Release

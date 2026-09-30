@@ -9,54 +9,118 @@
 /* Begin PBXBuildFile section */
 		034780ECDDEB89E523E7E1B7 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = DF46F01EE0931315955EE9AF /* Assets.xcassets */; };
 		056BC4016EE14B5CDADD58E1 /* alarm-glass.wav in Resources */ = {isa = PBXBuildFile; fileRef = 185B2FA090E97F0B48E3E9A8 /* alarm-glass.wav */; };
+		0BA20AB9771ACD744FE1DA95 /* CodeCapsWidgetsMac.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 1981252E1F614DC809CAB013 /* CodeCapsWidgetsMac.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		0BDDE676F287EA3372B9D24B /* CompanionQuotaModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1371DB889435F70346FB6AF /* CompanionQuotaModel.swift */; };
 		135997B0E383FB2D00C87CB0 /* SentenceGap.swift in Sources */ = {isa = PBXBuildFile; fileRef = E124B68EB2FF725D59E2EC1F /* SentenceGap.swift */; };
 		137C79F45750F4FA04219AFE /* SentenceGap.swift in Sources */ = {isa = PBXBuildFile; fileRef = E124B68EB2FF725D59E2EC1F /* SentenceGap.swift */; };
 		15B3EE6BAA0DB41A14ED38A6 /* AlarmSoundPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 674BB9709E48A6D00D4EE92C /* AlarmSoundPlayer.swift */; };
+		170FA7844615930B5A1D4CBD /* CodeCapsWidgetBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6316FA88D130531D99C73AEE /* CodeCapsWidgetBundle.swift */; };
+		1C938ECE1998071D65A908EA /* WidgetViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A40D20353A8D6C1D9E9D349 /* WidgetViews.swift */; };
 		1E390605C8A820FFB895AA0F /* alarm-tink.wav in Resources */ = {isa = PBXBuildFile; fileRef = 4FE56A36DCE8762AD17C6776 /* alarm-tink.wav */; };
 		1F27C36495D3FB241A242476 /* alarm-blow.wav in Resources */ = {isa = PBXBuildFile; fileRef = 0638A6007D4E7A392FD7D595 /* alarm-blow.wav */; };
 		2018A85587B07653EFF5445C /* CompanionContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84C4C2C5DC3AA20234129F15 /* CompanionContentView.swift */; };
 		2300043111EDF02526E8D53B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = DF46F01EE0931315955EE9AF /* Assets.xcassets */; };
 		238EE47D0BA13D2064CE6DE6 /* alarm-tink.wav in Resources */ = {isa = PBXBuildFile; fileRef = 4FE56A36DCE8762AD17C6776 /* alarm-tink.wav */; };
 		2440D143F835BAD99240BE8D /* CompanionContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84C4C2C5DC3AA20234129F15 /* CompanionContentView.swift */; };
+		2AA3DE1AA8DD20DD5AD6E403 /* WidgetViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A40D20353A8D6C1D9E9D349 /* WidgetViews.swift */; };
 		2CA370B5E2149BEA3FCB3F6C /* CodeCapsCompanionApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34CE8BC7DF9DCF088BF1B805 /* CodeCapsCompanionApp.swift */; };
 		346906A2DDABDF60AF9D4F62 /* alarm-submarine.wav in Resources */ = {isa = PBXBuildFile; fileRef = 5F63EE805947E5707E2A0C3F /* alarm-submarine.wav */; };
 		4D9258D010AD16F059277D93 /* alarm-submarine.wav in Resources */ = {isa = PBXBuildFile; fileRef = 5F63EE805947E5707E2A0C3F /* alarm-submarine.wav */; };
 		6447965E07907E9AA3407123 /* alarm-sosumi.wav in Resources */ = {isa = PBXBuildFile; fileRef = 4FA72166D5E5A0F726B4DF18 /* alarm-sosumi.wav */; };
+		7A59C4CE14A8C4532A6C9327 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = DF46F01EE0931315955EE9AF /* Assets.xcassets */; };
+		7DFD68E2400E127E11B80471 /* CodeCapsWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = FD27E95016C7BDDE19F6C6E2 /* CodeCapsWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		7F3D6663EA86FDE73EA17DCB /* alarm-sosumi.wav in Resources */ = {isa = PBXBuildFile; fileRef = 4FA72166D5E5A0F726B4DF18 /* alarm-sosumi.wav */; };
 		831B4D460D912E65E3D869D3 /* ResetAlarmSound.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89A5807594DFD989CADCC6F2 /* ResetAlarmSound.swift */; };
 		99A788DAEA41B4AB83A93501 /* CodeCapsCompanionApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34CE8BC7DF9DCF088BF1B805 /* CodeCapsCompanionApp.swift */; };
 		9D826DF8BA1D0C240F17EAFC /* ResetAlarmSound.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89A5807594DFD989CADCC6F2 /* ResetAlarmSound.swift */; };
+		AB8C667473DF14CCF7B48F2A /* WidgetDataProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = F281E65EF7010842967CD100 /* WidgetDataProvider.swift */; };
 		AFBBFB2FD8EEA9DA9EF40042 /* alarm-bottle.wav in Resources */ = {isa = PBXBuildFile; fileRef = 302C44DD0C87899C354A914C /* alarm-bottle.wav */; };
 		BD4C31C68641BA2ED6BE8798 /* alarm-bottle.wav in Resources */ = {isa = PBXBuildFile; fileRef = 302C44DD0C87899C354A914C /* alarm-bottle.wav */; };
 		C23393B11365D16E8ECA5D8E /* alarm-blow.wav in Resources */ = {isa = PBXBuildFile; fileRef = 0638A6007D4E7A392FD7D595 /* alarm-blow.wav */; };
 		C48D9F8052E4F39044504C84 /* CompanionQuotaModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1371DB889435F70346FB6AF /* CompanionQuotaModel.swift */; };
+		C7498C0ACDD5320564DE32B0 /* WidgetPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 716F800EA9DEDFC597BD08BB /* WidgetPresentation.swift */; };
+		D3C30EA2E4A6B59A22E086DB /* WidgetDataProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = F281E65EF7010842967CD100 /* WidgetDataProvider.swift */; };
+		DD572CC08FCFC7414D7236B7 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = DF46F01EE0931315955EE9AF /* Assets.xcassets */; };
 		E4F68F451FCE5A7069DA052D /* alarm-frog.wav in Resources */ = {isa = PBXBuildFile; fileRef = 881BAB30A7762A0170BE4FD8 /* alarm-frog.wav */; };
 		E77E1CAAEDCB9C3AAD706144 /* alarm-frog.wav in Resources */ = {isa = PBXBuildFile; fileRef = 881BAB30A7762A0170BE4FD8 /* alarm-frog.wav */; };
+		EA984A6E75520CAB2639A8B4 /* CodeCapsWidgetBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6316FA88D130531D99C73AEE /* CodeCapsWidgetBundle.swift */; };
+		F3C6891672DADC0AD9667E90 /* WidgetPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 716F800EA9DEDFC597BD08BB /* WidgetPresentation.swift */; };
 		FC810FA7900F297E014083A5 /* AlarmSoundPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 674BB9709E48A6D00D4EE92C /* AlarmSoundPlayer.swift */; };
 		FE52A4A8D224D9DBB320ABCC /* alarm-glass.wav in Resources */ = {isa = PBXBuildFile; fileRef = 185B2FA090E97F0B48E3E9A8 /* alarm-glass.wav */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		C06286BC3DBD67B84C50CDDC /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 6952667DEF0FAD0771A6E8A9 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 27F7C2D31B71471EDEB75F09;
+			remoteInfo = CodeCapsWidgetsMac;
+		};
+		E94C06D0ADD5A088050A08DD /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 6952667DEF0FAD0771A6E8A9 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = B8CBE2BF110881FA5BE5725B;
+			remoteInfo = CodeCapsWidgets;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		3101B2E13CD6120DF91E6796 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				7DFD68E2400E127E11B80471 /* CodeCapsWidgets.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A5CDFCA78778D754F2C17BC0 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				0BA20AB9771ACD744FE1DA95 /* CodeCapsWidgetsMac.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
 		0638A6007D4E7A392FD7D595 /* alarm-blow.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "alarm-blow.wav"; sourceTree = "<group>"; };
+		0A40D20353A8D6C1D9E9D349 /* WidgetViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetViews.swift; sourceTree = "<group>"; };
+		10FF587176549AAC4A616E3B /* InfoMac.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = InfoMac.plist; sourceTree = "<group>"; };
 		154D17A5A492536F43729222 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		185B2FA090E97F0B48E3E9A8 /* alarm-glass.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "alarm-glass.wav"; sourceTree = "<group>"; };
+		1981252E1F614DC809CAB013 /* CodeCapsWidgetsMac.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = CodeCapsWidgetsMac.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		302C44DD0C87899C354A914C /* alarm-bottle.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "alarm-bottle.wav"; sourceTree = "<group>"; };
 		34CE8BC7DF9DCF088BF1B805 /* CodeCapsCompanionApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeCapsCompanionApp.swift; sourceTree = "<group>"; };
 		4FA72166D5E5A0F726B4DF18 /* alarm-sosumi.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "alarm-sosumi.wav"; sourceTree = "<group>"; };
 		4FE56A36DCE8762AD17C6776 /* alarm-tink.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "alarm-tink.wav"; sourceTree = "<group>"; };
+		5087F87CE3B2EDD3B9E1309C /* CodeCapsWidgets.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = CodeCapsWidgets.entitlements; sourceTree = "<group>"; };
 		5F63EE805947E5707E2A0C3F /* alarm-submarine.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "alarm-submarine.wav"; sourceTree = "<group>"; };
+		6316FA88D130531D99C73AEE /* CodeCapsWidgetBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeCapsWidgetBundle.swift; sourceTree = "<group>"; };
 		674BB9709E48A6D00D4EE92C /* AlarmSoundPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlarmSoundPlayer.swift; sourceTree = "<group>"; };
 		6992E7C7086CA631814CCD87 /* CodeCapsCompanionMac.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = CodeCapsCompanionMac.entitlements; sourceTree = "<group>"; };
+		716F800EA9DEDFC597BD08BB /* WidgetPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetPresentation.swift; sourceTree = "<group>"; };
 		84C4C2C5DC3AA20234129F15 /* CompanionContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionContentView.swift; sourceTree = "<group>"; };
 		881BAB30A7762A0170BE4FD8 /* alarm-frog.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "alarm-frog.wav"; sourceTree = "<group>"; };
 		89A5807594DFD989CADCC6F2 /* ResetAlarmSound.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResetAlarmSound.swift; sourceTree = "<group>"; };
+		AC1ED96526BA3E7B9E43084F /* CodeCapsWidgetsMac.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = CodeCapsWidgetsMac.entitlements; sourceTree = "<group>"; };
 		B47E0485E1902045DBFE06B1 /* CodeCapsCompanion.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = CodeCapsCompanion.entitlements; sourceTree = "<group>"; };
 		C1371DB889435F70346FB6AF /* CompanionQuotaModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionQuotaModel.swift; sourceTree = "<group>"; };
 		C2EA171A442F77D9348C68D4 /* InfoMac.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = InfoMac.plist; sourceTree = "<group>"; };
 		C679EF2BE96C94E938E56DC1 /* CodeCapsCompanionMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CodeCapsCompanionMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		DF46F01EE0931315955EE9AF /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		E124B68EB2FF725D59E2EC1F /* SentenceGap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SentenceGap.swift; sourceTree = "<group>"; };
+		E53A47DB2534669DD3BEE62E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		F281E65EF7010842967CD100 /* WidgetDataProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetDataProvider.swift; sourceTree = "<group>"; };
+		FD27E95016C7BDDE19F6C6E2 /* CodeCapsWidgets.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = CodeCapsWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		FFD1407F089F595B7B485517 /* CodeCapsCompanion.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = CodeCapsCompanion.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -113,9 +177,25 @@
 			isa = PBXGroup;
 			children = (
 				2C7829A5D8BD9EF9C122A4F2 /* App */,
+				9ACCF0D01A7CB67BFD256AC8 /* Widgets */,
 				DF46F01EE0931315955EE9AF /* Assets.xcassets */,
 				C53A412A4B40988009B93D1B /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		9ACCF0D01A7CB67BFD256AC8 /* Widgets */ = {
+			isa = PBXGroup;
+			children = (
+				6316FA88D130531D99C73AEE /* CodeCapsWidgetBundle.swift */,
+				5087F87CE3B2EDD3B9E1309C /* CodeCapsWidgets.entitlements */,
+				AC1ED96526BA3E7B9E43084F /* CodeCapsWidgetsMac.entitlements */,
+				E53A47DB2534669DD3BEE62E /* Info.plist */,
+				10FF587176549AAC4A616E3B /* InfoMac.plist */,
+				F281E65EF7010842967CD100 /* WidgetDataProvider.swift */,
+				716F800EA9DEDFC597BD08BB /* WidgetPresentation.swift */,
+				0A40D20353A8D6C1D9E9D349 /* WidgetViews.swift */,
+			);
+			path = Widgets;
 			sourceTree = "<group>";
 		};
 		C53A412A4B40988009B93D1B /* Products */ = {
@@ -123,6 +203,8 @@
 			children = (
 				FFD1407F089F595B7B485517 /* CodeCapsCompanion.app */,
 				C679EF2BE96C94E938E56DC1 /* CodeCapsCompanionMac.app */,
+				FD27E95016C7BDDE19F6C6E2 /* CodeCapsWidgets.appex */,
+				1981252E1F614DC809CAB013 /* CodeCapsWidgetsMac.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -136,10 +218,12 @@
 			buildPhases = (
 				5D95C7E939C75DD1BC3FB9A4 /* Sources */,
 				F6BBA5E1D41955121FAB7BDB /* Resources */,
+				3101B2E13CD6120DF91E6796 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				54E5710BFD0BC6C25C506026 /* PBXTargetDependency */,
 			);
 			name = CodeCapsCompanion;
 			packageProductDependencies = (
@@ -148,16 +232,36 @@
 			productReference = FFD1407F089F595B7B485517 /* CodeCapsCompanion.app */;
 			productType = "com.apple.product-type.application";
 		};
+		27F7C2D31B71471EDEB75F09 /* CodeCapsWidgetsMac */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B718E812FE20144C01505FCD /* Build configuration list for PBXNativeTarget "CodeCapsWidgetsMac" */;
+			buildPhases = (
+				95315282F3ECB977BD97B7D7 /* Sources */,
+				3B2A3E8116C65A1C258A8871 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = CodeCapsWidgetsMac;
+			packageProductDependencies = (
+			);
+			productName = CodeCapsWidgetsMac;
+			productReference = 1981252E1F614DC809CAB013 /* CodeCapsWidgetsMac.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 		7B3804F93936EEE96F26551D /* CodeCapsCompanionMac */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = BE16BE186885ED1305D6FD08 /* Build configuration list for PBXNativeTarget "CodeCapsCompanionMac" */;
 			buildPhases = (
 				05C6704BA23A5E8CD1A8412F /* Sources */,
 				30E6F3D60263C25E6403C9E4 /* Resources */,
+				A5CDFCA78778D754F2C17BC0 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				F227E7FCE401469B8ED88E59 /* PBXTargetDependency */,
 			);
 			name = CodeCapsCompanionMac;
 			packageProductDependencies = (
@@ -165,6 +269,24 @@
 			productName = CodeCapsCompanionMac;
 			productReference = C679EF2BE96C94E938E56DC1 /* CodeCapsCompanionMac.app */;
 			productType = "com.apple.product-type.application";
+		};
+		B8CBE2BF110881FA5BE5725B /* CodeCapsWidgets */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B2C759019FF7548005F6820B /* Build configuration list for PBXNativeTarget "CodeCapsWidgets" */;
+			buildPhases = (
+				9BB0829B5B1374452F9B65E0 /* Sources */,
+				15B94C2528C401A1073DC61D /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = CodeCapsWidgets;
+			packageProductDependencies = (
+			);
+			productName = CodeCapsWidgets;
+			productReference = FD27E95016C7BDDE19F6C6E2 /* CodeCapsWidgets.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -179,7 +301,15 @@
 						DevelopmentTeam = CC8UTF7ATG;
 						ProvisioningStyle = Automatic;
 					};
+					27F7C2D31B71471EDEB75F09 = {
+						DevelopmentTeam = CC8UTF7ATG;
+						ProvisioningStyle = Automatic;
+					};
 					7B3804F93936EEE96F26551D = {
+						DevelopmentTeam = CC8UTF7ATG;
+						ProvisioningStyle = Automatic;
+					};
+					B8CBE2BF110881FA5BE5725B = {
 						DevelopmentTeam = CC8UTF7ATG;
 						ProvisioningStyle = Automatic;
 					};
@@ -200,12 +330,22 @@
 			projectRoot = "";
 			targets = (
 				176BC6FE9533347AC12DA6E4 /* CodeCapsCompanion */,
+				B8CBE2BF110881FA5BE5725B /* CodeCapsWidgets */,
 				7B3804F93936EEE96F26551D /* CodeCapsCompanionMac */,
+				27F7C2D31B71471EDEB75F09 /* CodeCapsWidgetsMac */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		15B94C2528C401A1073DC61D /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				DD572CC08FCFC7414D7236B7 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		30E6F3D60263C25E6403C9E4 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -218,6 +358,14 @@
 				7F3D6663EA86FDE73EA17DCB /* alarm-sosumi.wav in Resources */,
 				346906A2DDABDF60AF9D4F62 /* alarm-submarine.wav in Resources */,
 				1E390605C8A820FFB895AA0F /* alarm-tink.wav in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		3B2A3E8116C65A1C258A8871 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7A59C4CE14A8C4532A6C9327 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -265,7 +413,42 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		95315282F3ECB977BD97B7D7 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				170FA7844615930B5A1D4CBD /* CodeCapsWidgetBundle.swift in Sources */,
+				AB8C667473DF14CCF7B48F2A /* WidgetDataProvider.swift in Sources */,
+				C7498C0ACDD5320564DE32B0 /* WidgetPresentation.swift in Sources */,
+				1C938ECE1998071D65A908EA /* WidgetViews.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		9BB0829B5B1374452F9B65E0 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EA984A6E75520CAB2639A8B4 /* CodeCapsWidgetBundle.swift in Sources */,
+				D3C30EA2E4A6B59A22E086DB /* WidgetDataProvider.swift in Sources */,
+				F3C6891672DADC0AD9667E90 /* WidgetPresentation.swift in Sources */,
+				2AA3DE1AA8DD20DD5AD6E403 /* WidgetViews.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		54E5710BFD0BC6C25C506026 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = B8CBE2BF110881FA5BE5725B /* CodeCapsWidgets */;
+			targetProxy = E94C06D0ADD5A088050A08DD /* PBXContainerItemProxy */;
+		};
+		F227E7FCE401469B8ED88E59 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 27F7C2D31B71471EDEB75F09 /* CodeCapsWidgetsMac */;
+			targetProxy = C06286BC3DBD67B84C50CDDC /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		2D36FA9F2E5CB4083D3F725D /* Debug */ = {
@@ -309,6 +492,48 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.simplewithus.codecaps.macos;
 				PRODUCT_NAME = CodeCaps;
 				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		481A43C1726DF2E076C7D0FC /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Widgets/CodeCapsWidgetsMac.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = CC8UTF7ATG;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Widgets/InfoMac.plist;
+				ITSAppUsesNonExemptEncryption = NO;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.simplewithus.codecaps.macos.widgets;
+				PRODUCT_NAME = CodeCapsWidgets;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		5082405FCA542C7693943313 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Widgets/CodeCapsWidgets.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = CC8UTF7ATG;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Widgets/Info.plist;
+				ITSAppUsesNonExemptEncryption = NO;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.simplewithus.codecaps.ios.widgets;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
 		};
@@ -373,6 +598,26 @@
 				SWIFT_VERSION = 5.0;
 			};
 			name = Release;
+		};
+		9FC20FFFD818C7F0D1F36259 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Widgets/CodeCapsWidgets.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = CC8UTF7ATG;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Widgets/Info.plist;
+				ITSAppUsesNonExemptEncryption = NO;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.simplewithus.codecaps.ios.widgets;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
 		};
 		BFD612422B0B284AA4E41858 /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -443,10 +688,33 @@
 			};
 			name = Debug;
 		};
+		C6FB5227A12EFD3A01CDEBE0 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Widgets/CodeCapsWidgetsMac.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = CC8UTF7ATG;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Widgets/InfoMac.plist;
+				ITSAppUsesNonExemptEncryption = NO;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.simplewithus.codecaps.macos.widgets;
+				PRODUCT_NAME = CodeCapsWidgets;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
 		F04AA9126915F0106031444C /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = App/CodeCapsCompanion.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = CC8UTF7ATG;
@@ -467,6 +735,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = App/CodeCapsCompanion.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = CC8UTF7ATG;
@@ -500,6 +769,24 @@
 			buildConfigurations = (
 				BFD612422B0B284AA4E41858 /* Debug */,
 				74B215A8BDABF0123A54A993 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		B2C759019FF7548005F6820B /* Build configuration list for PBXNativeTarget "CodeCapsWidgets" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				9FC20FFFD818C7F0D1F36259 /* Debug */,
+				5082405FCA542C7693943313 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		B718E812FE20144C01505FCD /* Build configuration list for PBXNativeTarget "CodeCapsWidgetsMac" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C6FB5227A12EFD3A01CDEBE0 /* Debug */,
+				481A43C1726DF2E076C7D0FC /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
