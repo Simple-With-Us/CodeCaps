@@ -1,0 +1,461 @@
+import Foundation
+
+// MARK: - Inputs and outputs
+
+/// One reading of one quota window, as the reset alarm sees it.
+///
+/// The tracker is deliberately ignorant of rows, views and providers' own
+/// shapes: the app turns whatever it shows into these, and the tracker decides
+/// from them alone whether a window has reset and whether that reset is worth
+/// an alarm.  That keeps the rules pure, and keeps them testable without a
+/// notification centre, a clock or a refresh loop.
+public struct ResetAlarmObservation: Equatable, Sendable {
+    /// Where the reading came from: `local` for this Mac, `fleet:<origin>` for
+    /// one machine's pulled readings.  Two scopes never share window state, so
+    /// another machine's account cannot fake a reset on this one.
+    public var scope: String
+    /// The alarm's owner: a provider key such as `anthropic`, or a pool-scoped
+    /// key such as `google-antigravity:gemini`.  Per-provider choices are keyed
+    /// by this, and the largest-window rule is applied within it.
+    public var providerId: String
+    /// The owner-facing name used in the notification: "Claude", "Antigravity · Gemini".
+    public var providerTitle: String
+    /// Stable identity of the window within its provider.
+    public var windowId: String
+    /// The short cadence label the owner already reads in Glance: "5h", "7d", "1m".
+    public var windowLabel: String
+    /// How long one period of the window lasts, when the reader says.  Decides
+    /// which window is the provider's largest.
+    public var periodSeconds: TimeInterval?
+    /// When the current period ends.
+    public var resetAt: Date?
+    /// Percentage remaining, or `nil` when the reading is unknown or must not
+    /// be believed (an Antigravity five-hour window under a spent weekly cap).
+    public var remainingPercent: Double?
+    /// When the reading was taken.  Readings older than one already processed
+    /// are ignored, so a late fleet report cannot rewind a window.
+    public var observedAt: Date?
+
+    public init(
+        scope: String,
+        providerId: String,
+        providerTitle: String,
+        windowId: String,
+        windowLabel: String,
+        periodSeconds: TimeInterval?,
+        resetAt: Date?,
+        remainingPercent: Double?,
+        observedAt: Date?
+    ) {
+        self.scope = scope
+        self.providerId = providerId
+        self.providerTitle = providerTitle
+        self.windowId = windowId
+        self.windowLabel = windowLabel
+        self.periodSeconds = periodSeconds
+        self.resetAt = resetAt
+        self.remainingPercent = remainingPercent
+        self.observedAt = observedAt
+    }
+}
+
+/// One alarm the tracker decided should fire.
+public struct ResetAlarmEvent: Equatable, Sendable {
+    public enum Reason: Equatable, Sendable {
+        /// The provider's largest window reset: a new week or month began.
+        case newPeriod
+        /// A smaller window reset after getting within the near-cap threshold
+        /// of its cap during the period that just ended.  Carries the lowest
+        /// percentage remaining that was observed in that period.
+        case nearCap(minimumRemaining: Double)
+    }
+
+    public var scope: String
+    public var providerId: String
+    public var providerTitle: String
+    public var windowId: String
+    public var windowLabel: String
+    public var periodSeconds: TimeInterval?
+    /// When the period that just ended was due to end.
+    public var endedPeriodResetAt: Date?
+    /// The reading that revealed the reset.
+    public var remainingPercent: Double?
+    public var reason: Reason
+
+    public init(
+        scope: String,
+        providerId: String,
+        providerTitle: String,
+        windowId: String,
+        windowLabel: String,
+        periodSeconds: TimeInterval?,
+        endedPeriodResetAt: Date?,
+        remainingPercent: Double?,
+        reason: Reason
+    ) {
+        self.scope = scope
+        self.providerId = providerId
+        self.providerTitle = providerTitle
+        self.windowId = windowId
+        self.windowLabel = windowLabel
+        self.periodSeconds = periodSeconds
+        self.endedPeriodResetAt = endedPeriodResetAt
+        self.remainingPercent = remainingPercent
+        self.reason = reason
+    }
+}
+
+// MARK: - Persisted state
+
+/// Everything the tracker remembers between readings.  Codable so the app can
+/// persist it after every evaluation: a restart or a Sparkle relaunch picks up
+/// the period each window was in, so a reset that lands while the app is down
+/// still fires once on the next reading, and a reset already announced never
+/// fires again.
+public struct ResetAlarmTrackerState: Codable, Equatable, Sendable {
+    public struct Window: Codable, Equatable, Sendable {
+        /// When the current period ends, as last reported.
+        public var periodResetAt: Date?
+        /// The lowest percentage remaining observed in the current period.
+        public var minimumRemaining: Double?
+        /// The latest known percentage remaining.
+        public var lastRemaining: Double?
+        /// When the latest processed reading was taken.
+        public var lastObservedAt: Date?
+        /// When the tracker last saw this window at all, for pruning.
+        public var lastSeenAt: Date
+        public var periodSeconds: TimeInterval?
+
+        public init(
+            periodResetAt: Date?,
+            minimumRemaining: Double?,
+            lastRemaining: Double?,
+            lastObservedAt: Date?,
+            lastSeenAt: Date,
+            periodSeconds: TimeInterval?
+        ) {
+            self.periodResetAt = periodResetAt
+            self.minimumRemaining = minimumRemaining
+            self.lastRemaining = lastRemaining
+            self.lastObservedAt = lastObservedAt
+            self.lastSeenAt = lastSeenAt
+            self.periodSeconds = periodSeconds
+        }
+    }
+
+    /// A fired alarm, remembered so the same reset reported by two scopes —
+    /// this Mac and the fleet copy of this Mac's own account — rings once.
+    public struct Fire: Codable, Equatable, Sendable {
+        public var key: String
+        public var periodResetAt: Date?
+        public var firedAt: Date
+
+        public init(key: String, periodResetAt: Date?, firedAt: Date) {
+            self.key = key
+            self.periodResetAt = periodResetAt
+            self.firedAt = firedAt
+        }
+    }
+
+    public var version: Int
+    /// Keyed by `scope|providerId|windowId`.
+    public var windows: [String: Window]
+    public var recentFires: [Fire]
+
+    public init(version: Int = 1, windows: [String: Window] = [:], recentFires: [Fire] = []) {
+        self.version = version
+        self.windows = windows
+        self.recentFires = recentFires
+    }
+
+    /// Encodes for `UserDefaults`.  Never throws to the caller: a state that
+    /// cannot be encoded is simply not saved, which costs at most one alarm.
+    public func encoded() -> Data? {
+        try? JSONEncoder().encode(self)
+    }
+
+    /// Decodes a saved state, or returns an empty one for missing or corrupt
+    /// data.  An empty state is safe: no window fires on its first reading.
+    public static func decoded(from data: Data?) -> ResetAlarmTrackerState {
+        guard let data, let state = try? JSONDecoder().decode(ResetAlarmTrackerState.self, from: data) else {
+            return ResetAlarmTrackerState()
+        }
+        return state
+    }
+}
+
+// MARK: - Policy
+
+/// The numbers the rules use, in one place.
+public enum ResetAlarmPolicy {
+    /// A smaller window alarms on reset only if, during the period that just
+    /// ended, it came at least this close to its cap.  0 means it hit the cap.
+    public static let nearCapThreshold: Double = 20
+    /// How far a reported reset time may wander between readings of the same
+    /// period.  Readers that compute a reset as "now plus the seconds left"
+    /// jitter by a few seconds; nothing real moves a period by this much.
+    public static let resetDriftTolerance: TimeInterval = 15 * 60
+    /// Before its old reset time has passed, a window only counts as reset when
+    /// its reset time jumps by at least this share of a period.  A rolling
+    /// window whose reset creeps forward while the Mac sleeps is not a reset.
+    public static let earlyResetShareOfPeriod: Double = 0.5
+    /// The jump required before the old reset time when the period is unknown.
+    public static let earlyResetUnknownPeriod: TimeInterval = 2 * 3_600
+    /// "Remaining rose" means by more than this, so rounding is not a reset.
+    public static let riseEpsilon: Double = 1
+    /// Windows and fires not seen for this long are forgotten.
+    public static let retention: TimeInterval = 45 * 86_400
+    /// A window's period counts toward "largest" for this long after it was
+    /// last seen, so one refresh that misses the weekly window cannot promote
+    /// the five-hour window to largest.
+    public static let largestMemory: TimeInterval = 8 * 86_400
+}
+
+// MARK: - Tracker
+
+/// The reset alarm's state machine.
+///
+/// For every provider and window it tracks the current period (by its reset
+/// time) and the lowest percentage remaining observed in it.  When a reading
+/// shows the window has moved to a later period it decides:
+///
+/// 1. The provider's largest window (longest period) fires on every reset,
+///    even if it was never near its cap: a new week or month began.
+/// 2. Any smaller window fires only if, in the period that just ended, it hit
+///    its cap or came within `nearCapThreshold` of it.  It stays quiet while a
+///    larger window of the same provider still reads 0%, because the provider
+///    cannot be used yet — the larger window's own reset announces that.
+///
+/// A window's very first reading never fires, readings with no reset time or
+/// no percentage are tolerated, and each reset fires at most once.
+public struct ResetAlarmTracker: Sendable {
+    public private(set) var state: ResetAlarmTrackerState
+
+    public init(state: ResetAlarmTrackerState = ResetAlarmTrackerState()) {
+        self.state = state
+    }
+
+    public static func windowKey(scope: String, providerId: String, windowId: String) -> String {
+        "\(scope)|\(providerId)|\(windowId)"
+    }
+
+    /// Processes one refresh worth of readings and returns the alarms to fire.
+    public mutating func process(_ observations: [ResetAlarmObservation], now: Date) -> [ResetAlarmEvent] {
+        var events: [ResetAlarmEvent] = []
+        let groups = Dictionary(grouping: observations) { "\($0.scope)|\($0.providerId)" }
+        for groupKey in groups.keys.sorted() {
+            guard let group = groups[groupKey] else { continue }
+            events += processGroup(group, groupKey: groupKey, now: now)
+        }
+        prune(now: now)
+        return events
+    }
+
+    // MARK: One provider in one scope
+
+    private struct Transition {
+        let observation: ResetAlarmObservation
+        let previous: ResetAlarmTrackerState.Window
+    }
+
+    private mutating func processGroup(
+        _ group: [ResetAlarmObservation],
+        groupKey: String,
+        now: Date
+    ) -> [ResetAlarmEvent] {
+        var transitions: [Transition] = []
+        // Duplicate readings of one window in one batch: keep the latest.
+        var seen: [String: ResetAlarmObservation] = [:]
+        for observation in group {
+            if let existing = seen[observation.windowId],
+               (existing.observedAt ?? .distantPast) > (observation.observedAt ?? .distantPast) {
+                continue
+            }
+            seen[observation.windowId] = observation
+        }
+        for windowId in seen.keys.sorted() {
+            guard let observation = seen[windowId] else { continue }
+            if let transition = advance(observation, now: now) {
+                transitions.append(transition)
+            }
+        }
+        guard !transitions.isEmpty else { return [] }
+
+        let largestPeriod = self.largestPeriod(groupKey: groupKey, batch: Array(seen.values), now: now)
+        var events: [ResetAlarmEvent] = []
+        for transition in transitions {
+            let observation = transition.observation
+            let isLargest = Self.isLargest(observation.periodSeconds, largestPeriod: largestPeriod)
+            let reason: ResetAlarmEvent.Reason
+            if isLargest {
+                reason = .newPeriod
+            } else if let minimum = transition.previous.minimumRemaining,
+                      minimum <= ResetAlarmPolicy.nearCapThreshold {
+                // A larger window still at its cap means the provider cannot be
+                // used; this reset changes nothing the owner can act on.
+                let blockedByLarger = seen.values.contains { other in
+                    other.windowId != observation.windowId
+                        && Self.isLonger(other.periodSeconds, than: observation.periodSeconds, largestPeriod: largestPeriod)
+                        && (other.remainingPercent ?? 100) <= 0
+                }
+                if blockedByLarger { continue }
+                reason = .nearCap(minimumRemaining: minimum)
+            } else {
+                continue
+            }
+
+            let fireKey = "\(observation.providerId)|\(observation.windowLabel)"
+            let ended = transition.previous.periodResetAt
+            if alreadyFired(key: fireKey, periodResetAt: ended) { continue }
+            state.recentFires.append(.init(key: fireKey, periodResetAt: ended, firedAt: now))
+            events.append(ResetAlarmEvent(
+                scope: observation.scope,
+                providerId: observation.providerId,
+                providerTitle: observation.providerTitle,
+                windowId: observation.windowId,
+                windowLabel: observation.windowLabel,
+                periodSeconds: observation.periodSeconds ?? transition.previous.periodSeconds,
+                endedPeriodResetAt: ended,
+                remainingPercent: observation.remainingPercent,
+                reason: reason))
+        }
+        // Largest first, so a combined notification leads with the new week.
+        return events.sorted { lhs, rhs in
+            if (lhs.reason == .newPeriod) != (rhs.reason == .newPeriod) { return lhs.reason == .newPeriod }
+            return (lhs.periodSeconds ?? 0) > (rhs.periodSeconds ?? 0)
+        }
+    }
+
+    /// Folds one reading into its window's state, returning the previous state
+    /// when the reading reveals a new period.
+    private mutating func advance(_ observation: ResetAlarmObservation, now: Date) -> Transition? {
+        let key = Self.windowKey(scope: observation.scope,
+                                 providerId: observation.providerId,
+                                 windowId: observation.windowId)
+        let reading = observation.remainingPercent.flatMap { $0.isFinite ? min(max($0, 0), 100) : nil }
+
+        guard var window = state.windows[key] else {
+            // First reading ever: remember it, never fire.
+            state.windows[key] = .init(
+                periodResetAt: observation.resetAt,
+                minimumRemaining: reading,
+                lastRemaining: reading,
+                lastObservedAt: observation.observedAt,
+                lastSeenAt: now,
+                periodSeconds: observation.periodSeconds)
+            return nil
+        }
+        window.lastSeenAt = now
+        if let period = observation.periodSeconds { window.periodSeconds = period }
+
+        // A reading older than one already processed cannot say anything new.
+        if let observed = observation.observedAt, let last = window.lastObservedAt, observed < last {
+            state.windows[key] = window
+            return nil
+        }
+
+        let readAt = observation.observedAt ?? now
+        var isReset = false
+        var nextResetAt = window.periodResetAt
+
+        if let previousReset = window.periodResetAt {
+            let hasPassed = readAt >= previousReset.addingTimeInterval(-60)
+            if let reported = observation.resetAt {
+                let jump = reported.timeIntervalSince(previousReset)
+                let required = hasPassed
+                    ? ResetAlarmPolicy.resetDriftTolerance
+                    : max(ResetAlarmPolicy.resetDriftTolerance,
+                          window.periodSeconds.map { $0 * ResetAlarmPolicy.earlyResetShareOfPeriod }
+                              ?? ResetAlarmPolicy.earlyResetUnknownPeriod)
+                if jump > required {
+                    isReset = true
+                    nextResetAt = reported
+                } else if jump > -ResetAlarmPolicy.resetDriftTolerance || reported > readAt {
+                    // Jitter, or a correction to a reset still ahead: follow it
+                    // so slow drift never adds up to a false reset.
+                    nextResetAt = reported
+                }
+            }
+            // The old period is over and the percentage went back up, even
+            // though the reader has not published the next reset time yet.
+            if !isReset, hasPassed, let reading, let last = window.lastRemaining,
+               reading > last + ResetAlarmPolicy.riseEpsilon {
+                isReset = true
+                nextResetAt = observation.resetAt.flatMap { $0 > readAt ? $0 : nil }
+            }
+        } else if let reported = observation.resetAt, reported > readAt {
+            // No period end known — a reset was just detected without the next
+            // one being published.  Adopt the first reset time still ahead; a
+            // stale one would read as a second reset of the same period.
+            nextResetAt = reported
+        }
+
+        let previous = window
+        if isReset {
+            window.periodResetAt = nextResetAt
+            window.minimumRemaining = reading
+            window.lastRemaining = reading
+        } else {
+            window.periodResetAt = nextResetAt
+            if let reading {
+                window.minimumRemaining = min(window.minimumRemaining ?? reading, reading)
+                window.lastRemaining = reading
+            }
+        }
+        if let observed = observation.observedAt { window.lastObservedAt = observed }
+        state.windows[key] = window
+        return isReset ? Transition(observation: observation, previous: previous) : nil
+    }
+
+    // MARK: Largest window
+
+    /// The longest known period among this provider's windows in this scope:
+    /// the ones in this batch, plus any seen recently, so a refresh that
+    /// happens to miss the weekly window does not promote the five-hour one.
+    private func largestPeriod(groupKey: String, batch: [ResetAlarmObservation], now: Date) -> TimeInterval? {
+        var periods = batch.compactMap(\.periodSeconds)
+        let prefix = groupKey + "|"
+        for (key, window) in state.windows where key.hasPrefix(prefix) {
+            guard now.timeIntervalSince(window.lastSeenAt) <= ResetAlarmPolicy.largestMemory,
+                  let period = window.periodSeconds else { continue }
+            periods.append(period)
+        }
+        return periods.max()
+    }
+
+    /// A window with a known period is the largest when nothing longer is
+    /// known.  A window whose period is unknown is the largest only when no
+    /// window of the provider has a known period — a lone plan meter.
+    static func isLargest(_ period: TimeInterval?, largestPeriod: TimeInterval?) -> Bool {
+        guard let largestPeriod else { return true }
+        guard let period else { return false }
+        return period >= largestPeriod - 1
+    }
+
+    static func isLonger(_ period: TimeInterval?, than other: TimeInterval?, largestPeriod: TimeInterval?) -> Bool {
+        guard let period else { return false }
+        guard let other else { return isLargest(period, largestPeriod: largestPeriod) }
+        return period > other + 1
+    }
+
+    // MARK: Bookkeeping
+
+    private func alreadyFired(key: String, periodResetAt: Date?) -> Bool {
+        state.recentFires.contains { fire in
+            guard fire.key == key else { return false }
+            switch (fire.periodResetAt, periodResetAt) {
+            case let (a?, b?):
+                return abs(a.timeIntervalSince(b)) <= ResetAlarmPolicy.resetDriftTolerance
+            default:
+                return false
+            }
+        }
+    }
+
+    private mutating func prune(now: Date) {
+        state.windows = state.windows.filter {
+            now.timeIntervalSince($0.value.lastSeenAt) <= ResetAlarmPolicy.retention
+        }
+        state.recentFires.removeAll { now.timeIntervalSince($0.firedAt) > ResetAlarmPolicy.retention }
+    }
+}

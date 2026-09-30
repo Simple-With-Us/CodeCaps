@@ -5,12 +5,19 @@ import SwiftUI
 /// The status-item popover.  Read-only, one row per platform, plus three
 /// affordances in the footer.  Glance never renders a `PlatformCard`; the
 /// Console never renders a `GlanceRow`.
+///
+/// The header carries two switches beside the name: which readings the list
+/// shows (This Mac or Fleet Reported, one at a time), and whether every
+/// provider's reset alarm is on (All) or the owner picks them per row.
 struct GlancePopover: View {
     @ObservedObject var model: MonitorModel
     var openConsole: (ConsolePage) -> Void
     /// Settings has its own entry point rather than a fixed page, so the gear
     /// and `⌘,` land in the same place: the Settings page last used.
     var openSettings: () -> Void
+    /// Lays the list out without its ScrollView, which SwiftUI's
+    /// `ImageRenderer` draws empty.  Only the PNG render test sets it.
+    var laysOutForSnapshot = false
 
     /// Rows the owner has expanded inline.  Lives in the popover so it survives
     /// re-renders while the popover is open, and is cleared when the popover
@@ -21,18 +28,17 @@ struct GlancePopover: View {
     private var localSections: [DisplaySection] { model.displaySections }
     private var fleetGroups: [FleetGroup] { model.fleetGroups }
     private var showsFleetSetup: Bool { !model.syncEnabled && !model.serverEnabled }
-    private var hasAnySource: Bool { model.localEnabled || model.serverEnabled }
 
     var body: some View {
         VStack(spacing: 0) {
             header
             Divider()
-            if hasAnySource {
-                ScrollView { content.padding(.vertical, 8) }
+            if laysOutForSnapshot {
+                content.padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                     .background(Theme.background)
             } else {
-                emptyState
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                ScrollView { content.padding(.vertical, 8) }
                     .background(Theme.background)
             }
             Divider()
@@ -49,14 +55,18 @@ struct GlancePopover: View {
     // MARK: - Header
 
     private var header: some View {
-        HStack(spacing: 8) {
-            Text("CodeCaps").font(.system(size: 13, weight: .semibold))
+        HStack(spacing: 10) {
+            Text("CodeCaps")
+                .font(.system(size: 13, weight: .semibold))
+                .fixedSize()
+            GlanceViewToggle(selection: $model.glanceView)
+            GlanceAlarmAllToggle(isOn: $model.alarmsAll)
             Spacer(minLength: 8)
             Text(headerStatus)
                 .font(.system(size: 11).monospacedDigit())
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
-                .minimumScaleFactor(0.85)
+                .fixedSize()
             // Auto-refresh fires every 5 min (see MonitorModel.refreshTimer) and
             // a 30-second clock ticks every time `now` updates, so the manual
             // button used to live in the footer for redundancy.  It now sits
@@ -79,16 +89,19 @@ struct GlancePopover: View {
         }
         .padding(.horizontal, Metrics.glanceGutter)
         .frame(height: Metrics.glanceHeaderHeight)
-        .accessibilityElement(children: .combine)
     }
 
     /// Two literal ASCII spaces on either side of the dot — the fleet "two spaces
     /// between sentences" convention reads just as well between phrases inside a
     /// single string, so the header breathes without a heavier separator.
     private var headerStatus: String {
-        let counted = "\(model.reportingCount) of \(model.sections.count)"
-        guard let checked = model.lastChecked else { return counted }
-        return "\(counted)  ·  \(checked.formatted(date: .omitted, time: .shortened))"
+        glanceHeaderStatus(view: model.glanceView,
+                           reporting: model.reportingCount,
+                           total: model.sections.count,
+                           machines: fleetGroups.count,
+                           checked: model.glanceView == .fleetReported
+                               ? (model.lastPullTime ?? model.lastChecked)
+                               : model.lastChecked)
     }
 
     private func toggleExpanded(_ id: String) {
@@ -103,50 +116,29 @@ struct GlancePopover: View {
 
     @ViewBuilder
     private var content: some View {
+        switch model.glanceView {
+        case .thisMac: thisMacContent
+        case .fleetReported: fleetContent
+        }
+    }
+
+    @ViewBuilder
+    private var thisMacContent: some View {
         VStack(alignment: .leading, spacing: 0) {
-            groupHeader("THIS MAC")
-            ForEach(Array(localSections.enumerated()), id: \.element.id) { index, row in
-                if index > 0 {
-                    rowDivider
-                }
-                GlanceRow(row: row,
-                          now: model.now,
-                          issue: model.issues[row.providerKey],
-                          origin: .local,
-                          markStyle: model.glanceMarkStyle(for: row.providerKey),
-                          isAlarmArmed: model.isAlarmArmed(for: row.id),
-                          isExpanded: expandedIds.contains(row.id),
-                          onTap: { toggleExpanded(row.id) },
-                          onToggleAlarm: { model.toggleAlarm(for: row.id) })
-            }
-            if !fleetGroups.isEmpty {
-                Spacer().frame(height: 12)
-                HStack(alignment: .top, spacing: 0) {
-                    Rectangle().fill(Theme.fleet)
-                        .frame(width: 2)
-                    VStack(alignment: .leading, spacing: 0) {
-                        // One header per machine, so a row always says which
-                        // machine reported it.
-                        ForEach(fleetGroups) { group in
-                            groupHeader("FLEET · \(group.title.uppercased())")
-                            ForEach(Array(group.rows.enumerated()), id: \.element.id) { index, row in
-                                if index > 0 {
-                                    rowDivider
-                                }
-                                GlanceRow(row: row,
-                                          now: model.now,
-                                          issue: nil,
-                                          origin: .fleet,
-                                          markStyle: model.glanceMarkStyle(for: row.providerKey),
-                                          isAlarmArmed: model.isAlarmArmed(for: row.id),
-                                          isExpanded: expandedIds.contains(row.id),
-                                          onTap: { toggleExpanded(row.id) },
-                                          onToggleAlarm: { model.toggleAlarm(for: row.id) })
-                            }
-                        }
+            if localSections.isEmpty && !model.localEnabled {
+                GlanceEmptyState(
+                    symbol: "laptopcomputer",
+                    title: "Local readers are off",
+                    message: "This Mac is not reading any AI plan right now." + sentenceGap
+                        + "Turn local readers on in Settings to see them here.",
+                    actionTitle: "Open Settings") { openConsole(.settingsSourcesFleet) }
+            } else {
+                ForEach(Array(localSections.enumerated()), id: \.element.id) { index, row in
+                    if index > 0 {
+                        rowDivider
                     }
+                    glanceRow(row, issue: model.issues[row.providerKey], origin: .local)
                 }
-                .fixedSize(horizontal: false, vertical: true)
             }
             if let consentMessage {
                 Spacer().frame(height: 10)
@@ -159,6 +151,69 @@ struct GlancePopover: View {
                     .padding(.horizontal, Metrics.glanceGutter)
             }
         }
+    }
+
+    @ViewBuilder
+    private var fleetContent: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if fleetGroups.isEmpty {
+                if model.serverEnabled {
+                    GlanceEmptyState(
+                        symbol: "arrow.down.circle",
+                        title: "No fleet readings yet",
+                        message: model.serverError
+                            ?? ("Your fleet endpoint has not reported another machine yet." + sentenceGap
+                                + "Readings appear here after the next pull."),
+                        actionTitle: "Open Fleet Settings") { openConsole(.settingsSourcesFleet) }
+                } else {
+                    GlanceEmptyState(
+                        symbol: "arrow.up.arrow.down.circle",
+                        title: "No fleet endpoint connected",
+                        message: "Fleet Reported shows the quotas your other machines push to an endpoint you run."
+                            + sentenceGap + "Add the endpoint and its Read Token in Settings to connect it.",
+                        actionTitle: "Connect Fleet Endpoint") { openConsole(.settingsSourcesFleet) }
+                }
+            } else {
+                // One header per machine, so a row always says which machine
+                // reported it.  The toggle already says these are fleet rows.
+                ForEach(Array(fleetGroups.enumerated()), id: \.element.id) { groupIndex, group in
+                    if groupIndex > 0 {
+                        Spacer().frame(height: 6)
+                    }
+                    groupHeader(fleetGroupTitle(group))
+                    ForEach(Array(group.rows.enumerated()), id: \.element.id) { index, row in
+                        if index > 0 {
+                            rowDivider
+                        }
+                        glanceRow(row, issue: nil, origin: .fleet, expansionKey: "\(group.id)|\(row.id)")
+                    }
+                }
+            }
+        }
+    }
+
+    private func glanceRow(_ row: DisplaySection, issue: String?, origin: QuotaOrigin,
+                           expansionKey: String? = nil) -> some View {
+        let key = expansionKey ?? row.id
+        return GlanceRow(row: row,
+                         now: model.now,
+                         issue: issue,
+                         origin: origin,
+                         markStyle: model.glanceMarkStyle(for: row.providerKey),
+                         showsAlarmToggle: !model.alarmsAll,
+                         isAlarmEnabled: model.isProviderAlarmSelected(row.id),
+                         isExpanded: expandedIds.contains(key),
+                         onTap: { toggleExpanded(key) },
+                         onToggleAlarm: { model.toggleAlarm(for: row.id) })
+    }
+
+    /// "MAC MINI  ·  REPORTED 9:12 AM": the machine, and its latest reading.
+    /// The time lives here rather than under every row, where it truncated.
+    private func fleetGroupTitle(_ group: FleetGroup) -> String {
+        let latest = group.rows.flatMap(\.section.windows).compactMap(\.observedAt).max()
+        guard let latest else { return group.title.uppercased() }
+        let time = latest.formatted(date: .omitted, time: .shortened)
+        return "\(group.title.uppercased())  ·  REPORTED \(time.uppercased())"
     }
 
     /// The short issue text for a reader whose saved login is on this Mac but
@@ -184,22 +239,6 @@ struct GlancePopover: View {
             .frame(height: Metrics.glanceGroupHeaderHeight, alignment: .leading)
             .padding(.horizontal, Metrics.glanceGutter)
             .accessibilityAddTraits(.isHeader)
-    }
-
-    private var emptyState: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "arrow.up.arrow.down.circle")
-                .font(.system(size: 26))
-                .foregroundStyle(.secondary)
-            Text("No quota report yet")
-                .font(.system(size: 13, weight: .semibold))
-            Text("Turn on local readers or connect a fleet server.")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-        }
-        .padding(Metrics.glanceGutter)
-        .accessibilityElement(children: .combine)
     }
 
     // MARK: - Footer
@@ -229,6 +268,144 @@ struct GlancePopover: View {
         }
         .padding(.horizontal, Metrics.glanceGutter)
         .frame(height: Metrics.glanceFooterHeight)
+    }
+}
+
+/// The count and time on the right of the header.  This Mac counts the
+/// providers reporting; Fleet Reported counts the machines.  Two literal
+/// spaces either side of the dot, the fleet convention for a phrase break.
+func glanceHeaderStatus(view: GlanceViewMode, reporting: Int, total: Int, machines: Int, checked: Date?) -> String {
+    let counted: String?
+    switch view {
+    case .thisMac:
+        counted = "\(reporting) of \(total)"
+    case .fleetReported:
+        // With no machine to count, the empty list below already says why.
+        counted = machines == 0 ? nil : (machines == 1 ? "1 machine" : "\(machines) machines")
+    }
+    let time = checked.map { $0.formatted(date: .omitted, time: .shortened) }
+    return [counted, time].compactMap { $0 }.joined(separator: "  ·  ")
+}
+
+// MARK: - Header controls
+
+/// The two-box switch between This Mac and Fleet Reported.  It uses the same
+/// small caps as the group headings it replaces, so it reads as the heading of
+/// the list below it.
+struct GlanceViewToggle: View {
+    @Binding var selection: GlanceViewMode
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(Array(GlanceViewMode.allCases.enumerated()), id: \.element) { index, mode in
+                if index > 0 {
+                    Rectangle()
+                        .fill(Theme.controlBorder)
+                        .frame(width: 1, height: Metrics.glanceHeaderControlHeight)
+                }
+                segment(mode)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 5))
+        .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Theme.controlBorder))
+        .fixedSize()
+    }
+
+    private func segment(_ mode: GlanceViewMode) -> some View {
+        let selected = selection == mode
+        return Button { selection = mode } label: {
+            Text(mode.eyebrow)
+                .font(.system(size: 10, weight: .bold))
+                .tracking(0.8)
+                .lineLimit(1)
+                .fixedSize()
+                .foregroundStyle(selected ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(.secondary))
+                .padding(.horizontal, 8)
+                .frame(height: Metrics.glanceHeaderControlHeight)
+                .background(selected ? Theme.selection : Color.clear)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(mode.title)
+        .accessibilityLabel(mode.title)
+        .accessibilityAddTraits(selected ? [.isSelected] : [])
+    }
+}
+
+/// The header's bell: every provider's reset alarm on (All), or picked one by
+/// one with the faint bell at the left of each row.
+struct GlanceAlarmAllToggle: View {
+    @Binding var isOn: Bool
+
+    private var helpText: String {
+        if isOn {
+            return "Reset alarms are on for every provider." + sentenceGap + "Click to choose providers one by one."
+        }
+        return "Reset alarms are chosen per provider." + sentenceGap + "Click to turn them on for every provider."
+    }
+
+    private var tint: AnyShapeStyle {
+        isOn ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(.secondary)
+    }
+
+    private var label: some View {
+        HStack(spacing: 3) {
+            Image(systemName: isOn ? "bell.fill" : "bell")
+                .font(.system(size: 10, weight: .semibold))
+            Text("All")
+                .font(.system(size: 10, weight: .bold))
+                .tracking(0.4)
+        }
+        .foregroundStyle(tint)
+        .padding(.horizontal, 7)
+        .frame(height: Metrics.glanceHeaderControlHeight)
+        .background(isOn ? Theme.selection : Color.clear, in: RoundedRectangle(cornerRadius: 5))
+        .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Theme.controlBorder))
+        .contentShape(Rectangle())
+        .fixedSize()
+    }
+
+    var body: some View {
+        Button { isOn.toggle() } label: { label }
+            .buttonStyle(.plain)
+            .help(helpText)
+            .accessibilityLabel("All Reset Alarms")
+            .accessibilityValue(isOn ? "on" : "off")
+            .accessibilityAddTraits(isOn ? [.isSelected] : [])
+    }
+}
+
+/// A short explanation and one button, in place of an empty list.
+struct GlanceEmptyState: View {
+    let symbol: String
+    let title: String
+    let message: String
+    let actionTitle: String
+    var action: () -> Void
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Image(systemName: symbol)
+                .font(.system(size: 26))
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            Text(title)
+                .font(.system(size: 13, weight: .semibold))
+            Text(message)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: 380)
+            Button(actionTitle, action: action)
+                .controlSize(.small)
+                .padding(.top, 2)
+                .help(actionTitle)
+                .accessibilityLabel(actionTitle)
+        }
+        .padding(.horizontal, Metrics.glanceGutter)
+        .padding(.vertical, 24)
+        .frame(maxWidth: .infinity)
     }
 }
 
@@ -321,10 +498,14 @@ func glanceCadence(_ snapshot: QuotaWindowSnapshot, now: Date) -> GlanceCadence 
     return .long
 }
 
-/// The unit tag above a meter: "5h", "7d", "30d".  Kept to five characters so
+/// The unit tag beside a meter: "5h", "7d", "1m".  Kept to five characters so
 /// the caption column never has to truncate, and derived from the window's own
 /// cadence token rather than its label alone, because a label is allowed to be
-/// "Claude & GPT · Weekly" while its caption has to be "7d".
+/// "Third-Party · Weekly" while its caption has to be "7d".
+///
+/// Every monthly or billing-cycle window reads "1m" — Cursor's included plan
+/// among them — so a month is spelled one way on every row (owner ruling
+/// 2026-09-30, replacing "Plan" and "30d").
 func glanceMeterCaption(_ snapshot: QuotaWindowSnapshot) -> String {
     let token = (snapshot.window.window ?? "")
         .lowercased()
@@ -332,13 +513,28 @@ func glanceMeterCaption(_ snapshot: QuotaWindowSnapshot) -> String {
     if let seconds = glanceDurationSeconds(token) {
         return glanceDurationTag(seconds)
     }
+    if glanceIsMonthly(snapshot) { return "1m" }
     let named = token + " " + snapshot.window.label.lowercased()
     if named.contains("weekly") || named.contains("7-day") { return "7d" }
-    if named.contains("month") { return "30d" }
     if named.contains("5-hour") || named.contains("5 hour") { return "5h" }
     if named.contains("daily") { return "24h" }
     if named.contains("plan") || named.contains("quota") { return "Plan" }
     return "Quota"
+}
+
+/// Whether a window resets once a month: a monthly token or label, a billing
+/// cycle, a 28-31 day duration, or Cursor's included plan, which resets with
+/// Cursor's monthly billing cycle and carries no cadence of its own.
+func glanceIsMonthly(_ snapshot: QuotaWindowSnapshot) -> Bool {
+    let token = (snapshot.window.window ?? "")
+        .lowercased()
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    if let seconds = glanceDurationSeconds(token) {
+        return (27 * 86_400...31 * 86_400).contains(seconds)
+    }
+    let named = token + " " + snapshot.window.label.lowercased()
+    if named.contains("month") || named.contains("billing") || named.contains("cycle") { return true }
+    return snapshot.window.canonicalProviderKey == "cursor" && named.contains("plan")
 }
 
 /// Reads a duration token such as "5h", "300m", "168h" or "1w" into seconds.
@@ -372,7 +568,10 @@ func glanceMeterSpeech(_ snapshot: QuotaWindowSnapshot, now: Date) -> String {
 /// inconsistency worth avoiding.
 private func glanceDurationTag(_ seconds: TimeInterval) -> String {
     let whole = max(1, Int(seconds.rounded()))
-    if whole % 86_400 == 0 { return "\(whole / 86_400)d" }
+    if whole % 86_400 == 0 {
+        let days = whole / 86_400
+        return (28...31).contains(days) ? "1m" : "\(days)d"
+    }
     if whole % 3_600 == 0 { return "\(whole / 3_600)h" }
     if whole % 60 == 0 { return "\(whole / 60)m" }
     return "\(whole)s"
@@ -410,11 +609,12 @@ struct GlanceMeter: View {
                 .fixedSize(horizontal: true, vertical: false)
                 .frame(width: Metrics.glanceMeterPercentWidth, alignment: .leading)
             if !countdown.isEmpty {
+                // The same type as the caption on the left, so the row reads
+                // as one line of labels rather than a label and a footnote.
                 Text(countdown)
-                    .font(.system(size: 10, weight: .regular).italic())
+                    .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.75)
                     .fixedSize(horizontal: true, vertical: false)
                     .frame(width: Metrics.glanceMeterCountdownWidth, alignment: .leading)
             }
@@ -440,14 +640,19 @@ struct GlanceRow: View {
     let issue: String?
     let origin: QuotaOrigin
     let markStyle: MarkStyle
-    var isAlarmArmed: Bool = false
+    /// Whether the per-provider reset-alarm bell sits at the very left of the
+    /// row.  Shown only while the header's All is off; with All on, every
+    /// provider alarms and a per-row bell would have nothing to choose.
+    var showsAlarmToggle: Bool = false
+    /// This provider's own pick: a solid bell when on, a faint outline when off.
+    var isAlarmEnabled: Bool = false
     /// Whether the inline expansion is shown below this row.  Driven by the
     /// popover's `expandedIds` set, threaded down here so the chevron and the
     /// detail list animate together.
     var isExpanded: Bool = false
     /// Tap handler for the row's body — opening or closing the expansion.
-    /// Alarm-arm toggles short-circuit the gesture so a stray tap on the bell
-    /// never expands a row.
+    /// The bell is a sibling of the tappable body, so a tap on the bell never
+    /// expands a row.
     var onTap: (() -> Void)? = nil
     var onToggleAlarm: (() -> Void)? = nil
 
@@ -486,7 +691,7 @@ struct GlanceRow: View {
                     .frame(width: Metrics.glanceMeterWidth, alignment: .leading)
             }
             if let long = meters.long {
-                Spacer().frame(width: Metrics.glanceColumnGap)
+                Spacer().frame(width: Metrics.glanceMeterGroupGap)
                 GlanceMeter(snapshot: long, now: now)
                     .frame(width: Metrics.glanceMeterWidth, alignment: .leading)
             }
@@ -513,72 +718,15 @@ struct GlanceRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 0) {
-                PlatformLogo(providerKey: section.providerKey, size: 16, style: markStyle)
-                    .frame(width: Metrics.glanceLogoWidth, height: Metrics.glanceLogoWidth)
-                Spacer().frame(width: Metrics.glanceLogoGap)
-                VStack(alignment: .leading, spacing: 1) {
-                    // An Antigravity row names its pool, which does not fit beside
-                    // the platform in a 136pt column, so the pool takes the second
-                    // line rather than being truncated away.
-                    Text(row.poolTitle == nil ? row.title : row.platformTitle)
-                        .font(.system(size: 13, weight: .medium))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    if let subtitle = [row.poolTitle, attribution].compactMap({ $0 }).first {
-                        Text(subtitle)
-                            .font(.system(size: 10))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.85)
-                            .truncationMode(.tail)
-                    }
+                if showsAlarmToggle {
+                    alarmToggle
+                    Spacer().frame(width: Metrics.glanceLogoGap)
                 }
-                .frame(width: Metrics.glanceRowTitleWidth, alignment: .leading)
-                Spacer().frame(width: Metrics.glanceColumnGap)
-                if percent != nil {
-                    // Both cadences, always.  The 4-5hr window and the
-                    // weekly/monthly window are the two numbers an owner
-                    // actually routes on, and hiding the second one behind a
-                    // click made the compact row say half the truth.
-                    meterArea
-                }
-                Spacer(minLength: Metrics.glanceColumnGap)
-                if percent != nil || driving?.remainingPercent != nil {
-                    trailingColumn
-                        .frame(width: Metrics.glanceRowTrailingWidth, alignment: .trailing)
-                } else {
-                    trailingColumn
-                        .frame(width: Metrics.glanceRowTrailingWideWidth, alignment: .trailing)
-                }
-                Spacer().frame(width: Metrics.glanceLogoGap)
-                // Chevron signals click-to-expand only when the row has more than
-                // two windows to inspect.  When false, an invisible spacer preserves
-                // trailing margin so rows stay perfectly left-aligned.
-                if canExpand {
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(.tertiary)
-                        .frame(width: Metrics.glanceChevronWidth)
-                        .rotationEffect(.degrees(isExpanded ? 180 : 0))
-                        .accessibilityHidden(true)
-                } else {
-                    Spacer().frame(width: Metrics.glanceChevronWidth)
-                }
+                rowBody
             }
             .padding(.horizontal, Metrics.glanceGutter)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .frame(height: origin == .fleet ? Metrics.glanceFleetRowHeight : Metrics.glanceLocalRowHeight)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                if canExpand {
-                    onTap?()
-                }
-            }
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel(row.title)
-            .accessibilityValue(spokenValue)
-            .accessibilityHint(canExpand ? (isExpanded ? "Double-tap to collapse." : "Double-tap to expand.") : "")
-            .help(issue ?? row.title)
+            .frame(height: Metrics.glanceLocalRowHeight)
             if isExpanded && canExpand {
                 expandedSection
                     .transition(.opacity)
@@ -588,43 +736,104 @@ struct GlanceRow: View {
         .animation(.easeInOut(duration: 0.18), value: isExpanded)
     }
 
-    @ViewBuilder
-    private var trailingColumn: some View {
-        HStack(spacing: 4) {
-            if isAlarmArmed {
-                Button {
-                    onToggleAlarm?()
-                } label: {
-                    Image(systemName: "bell.fill")
-                        .font(.system(size: 10))
-                        .foregroundStyle(Theme.accent)
-                }
-                .buttonStyle(.plain)
-                .help("Reset alarm is armed." + sentenceGap + "Click to disarm.")
-                .accessibilityLabel("Disarm reset alarm")
-            } else if (percent != nil && percent! <= 0) && onToggleAlarm != nil {
-                Button {
-                    onToggleAlarm?()
-                } label: {
-                    Image(systemName: "bell")
+    /// The logo, the name, the two meters and the chevron: the part a tap
+    /// expands, and the part VoiceOver reads as one element.
+    private var rowBody: some View {
+        HStack(spacing: 0) {
+            // Keyed by the row, not the platform, so each Antigravity pool
+            // wears its own mark: the colour Gemini star, or the one-colour
+            // Third-Party star.
+            PlatformLogo(providerKey: row.id, size: 16, style: markStyle)
+                .frame(width: Metrics.glanceLogoWidth, height: Metrics.glanceLogoWidth)
+            Spacer().frame(width: Metrics.glanceLogoGap)
+            VStack(alignment: .leading, spacing: 1) {
+                // An Antigravity row names its pool, which does not fit beside
+                // the platform in the title column, so the pool takes the second
+                // line rather than being truncated away.
+                Text(row.poolTitle == nil ? row.title : row.platformTitle)
+                    .font(.system(size: 13, weight: .medium))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                if let subtitle = row.poolTitle {
+                    Text(subtitle)
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                        .truncationMode(.tail)
                 }
-                .buttonStyle(.plain)
-                .help("Arm alarm when quota resets and all caps clear.")
-                .accessibilityLabel("Arm reset alarm")
             }
+            .frame(width: Metrics.glanceRowTitleWidth, alignment: .leading)
+            Spacer().frame(width: Metrics.glanceColumnGap)
+            if percent != nil {
+                // Both cadences, always.  The 4-5hr window and the
+                // weekly/monthly window are the two numbers an owner
+                // actually routes on, and hiding the second one behind a
+                // click made the compact row say half the truth.
+                meterArea
+            }
+            Spacer(minLength: Metrics.glanceColumnGap)
             if percent == nil {
                 Text(statusText)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
+                    .frame(width: Metrics.glanceRowTrailingWideWidth, alignment: .trailing)
+                Spacer().frame(width: Metrics.glanceLogoGap)
             }
-            if origin == .fleet {
-                StatusBadge(kind: .fleet)
+            // Chevron signals click-to-expand only when the row has more than
+            // two windows to inspect.  When false, an invisible spacer preserves
+            // trailing margin so rows stay perfectly left-aligned.
+            if canExpand {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                    .frame(width: Metrics.glanceChevronWidth)
+                    .rotationEffect(.degrees(isExpanded ? 180 : 0))
+                    .accessibilityHidden(true)
+            } else {
+                Spacer().frame(width: Metrics.glanceChevronWidth)
             }
         }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if canExpand {
+                onTap?()
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(row.title)
+        .accessibilityValue(spokenValue)
+        .accessibilityHint(canExpand ? (isExpanded ? "Double-tap to collapse." : "Double-tap to expand.") : "")
+        .help(helpText)
+    }
+
+    /// The row's tooltip: the issue when there is one, and for a fleet row
+    /// the source and time it was reported, which the row itself leaves to
+    /// the machine's heading.
+    private var helpText: String {
+        if let issue { return issue }
+        return [row.title, attribution].compactMap { $0 }.joined(separator: " · ")
+    }
+
+    /// The per-provider reset-alarm switch: solid when this provider alarms,
+    /// faint when it does not.
+    private var alarmToggle: some View {
+        Button { onToggleAlarm?() } label: {
+            Image(systemName: isAlarmEnabled ? "bell.fill" : "bell")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(isAlarmEnabled ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(Theme.faint))
+                .frame(width: Metrics.glanceAlarmBellWidth, height: Metrics.glanceAlarmBellWidth)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(isAlarmEnabled
+              ? "Reset alarm is on for \(row.title)." + sentenceGap + "Click to turn it off."
+              : "Reset alarm is off for \(row.title)." + sentenceGap + "Click to turn it on.")
+        .accessibilityLabel("Reset Alarm For \(row.title)")
+        .accessibilityValue(isAlarmEnabled ? "on" : "off")
+        .accessibilityAddTraits(isAlarmEnabled ? [.isSelected] : [])
     }
 
     /// Inline expansion: every quota window the local reader (or the fleet pull)

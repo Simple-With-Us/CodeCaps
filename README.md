@@ -14,7 +14,7 @@ CodeCaps keeps local readings visible in the menu bar.  If you run a collector, 
 
 CodeCaps has two surfaces.  Nothing renders in both.
 
-**Glance** is the menu bar popover — the two-second check.  One row per platform, grouped under `This Mac` and `Fleet`, each with a percentage, a usage bar, and a reset countdown.  Read-only aside from Refresh, Settings, and Open CodeCaps.
+**Glance** is the menu bar popover — the two-second check.  One row per platform, each with its short and long quota windows side by side: a caption (`5h`, `7d`, `1m`), a usage bar, the percentage remaining, and the reset countdown.  A two-box switch beside the name shows either `This Mac` or `Fleet Reported`, one set at a time, and remembers the choice across launches.  Beside it, the **All** bell turns reset alarms on for every provider; turn it off and a faint bell appears at the left of each row, so providers can be picked one by one.  Read-only aside from those switches, Refresh, Settings, and Open CodeCaps.
 
 <img src="docs/screenshots/glance-light.png" width="380" alt="Glance, light"> <img src="docs/screenshots/glance-dark.png" width="380" alt="Glance, dark">
 
@@ -31,9 +31,18 @@ A platform can carry more than one quota window, so each surface has its own rul
 - The **menu bar** has its own picker (Menu Bar → Displayed Quota): *Lowest active quota* (default, lowest percent above 0%), *Lowest quota* (lowest percent outright, zero included), or one window pinned by name.
 - The Console's **Next Reset** tile is the soonest reset across every fresh window on every platform — not scoped to whichever is near its cap.
 
-Antigravity sells two independent model pools, shown as two rows, **Gemini** and **Claude & GPT**.  Collapsing them used to show "Antigravity 0%" the moment the Claude/GPT weekly cap was spent, while Gemini still had most of its allowance.  Whenever a pool's weekly window hits zero, its 5-hour percentage is withheld — shown as `n/a` rather than a number that can't mean anything until the week rolls over.
+Antigravity sells two independent model pools, shown as two rows, **Gemini** (the colour Gemini star) and **Third-Party** (the same star in one colour).  Collapsing them used to show "Antigravity 0%" the moment the Third-Party weekly cap was spent, while Gemini still had most of its allowance.  Whenever a pool's weekly window hits zero, its 5-hour percentage is withheld — shown as `n/a` rather than a number that can't mean anything until the week rolls over.
 
 <img src="docs/screenshots/platform-antigravity.png" width="760" alt="Antigravity, Gemini pool">
+
+## Reset Alarms
+
+A reset alarm is a notification, with the sound picked in Settings → Alerts & Alarms, when a quota window starts a new period:
+
+- A provider's **largest** window — the weekly or monthly one — alarms every time it resets, even if usage never came near the cap, so you know a new week or month began.
+- A **smaller** window — the 5-hour one — alarms on reset only if, during the period that just ended, it hit its cap or came within 20% of it.  It stays quiet while a larger window of the same provider is still at 0%, because the provider cannot be used yet.
+
+Each reset alarms once.  The state behind it is saved on every refresh, so a reset that lands while CodeCaps is closed, or during an update, still alarms on the next reading, and one that already alarmed never repeats.  This Mac and Fleet Reported rows both alarm, keyed by provider; the same reset reported by both alarms once.
 
 ## Providers
 
@@ -41,7 +50,7 @@ Antigravity sells two independent model pools, shown as two rows, **Gemini** and
 |---|---|---|
 | Claude | Quota windows (5h, weekly) | `~/.claude/.credentials.json`, or the `Claude Code-credentials` Keychain item |
 | Codex | Rate-limit windows | `~/.codex/auth.json` |
-| Antigravity / Gemini | Pooled Gemini and Claude & GPT quota, two rows (above) | The `antigravity-usage` CLI, plus an RPC to Antigravity's own language server |
+| Antigravity / Gemini | Pooled Gemini and Third-Party quota, two rows (above) | The `antigravity-usage` CLI, plus an RPC to Antigravity's own language server |
 | Cursor | Included-plan usage | Cursor.app's local session database (`state.vscdb`) |
 | Grok CLI | Billing/credits, via Grok's CLI proxy | `~/.grok/auth.json` |
 | Grok Bot | Weekly usage, via Cursor's dashboard service | Same Cursor session database, a different endpoint |

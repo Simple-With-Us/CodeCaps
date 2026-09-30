@@ -928,14 +928,16 @@ struct SettingsNotificationsPage: View {
     var body: some View {
         SettingsPage {
             Section {
-                Toggle("Notify When Quota Resets", isOn: $model.notifyOnReset)
+                Toggle("Reset Alarms For All Providers", isOn: $model.alarmsAll)
+                    .help("The same switch as the All bell at the top of Glance.")
+                    .accessibilityLabel("Reset Alarms For All Providers")
                 Picker("Alert Sound", selection: $model.alarmSound) {
                     ForEach(ResetAlarmSound.defaultPickerOrder, id: \.self) { sound in
                         Text(sound.displayName).tag(sound)
                     }
                 }
                 .pickerStyle(.menu)
-                .help("The sound played when an exhausted quota clears." + sentenceGap
+                .help("The sound played when a quota window resets." + sentenceGap
                       + "\"Silent\" mutes the alert sound entirely while keeping the notification banner.")
                 .accessibilityLabel("Alert Sound")
 
@@ -953,8 +955,9 @@ struct SettingsNotificationsPage: View {
             } header: {
                 Eyebrow("RESET ALERTS")
             } footer: {
-                Text("CodeCaps alerts you when an exhausted model or pool resets and can be used once again." + sentenceGap
-                     + "If another quota or cap is still in effect (such as an exhausted weekly cap), the alert is suppressed until all controlling limits are cleared.")
+                Text("A provider's longest window, such as its weekly or monthly limit, alerts every time it resets, so you know a new week or month began." + sentenceGap
+                     + "A shorter window, such as a 5-hour limit, alerts only if it reached its cap or came within 20% of it before resetting." + sentenceGap
+                     + "Turn All off to choose providers one by one with the bell at the left of each row in Glance.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

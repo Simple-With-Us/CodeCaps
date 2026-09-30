@@ -585,9 +585,13 @@ public struct CompanionProviderLogo: View {
         self.size = size
     }
 
+    /// One-colour marks render as templates so they follow Light and Dark.
+    /// `provider-antigravity` is the Antigravity Third-Party pool's solid star;
+    /// the Gemini pool's `provider-gemini` keeps its colour gradient.
     private var isMonochrome: Bool {
         guard let name = item.providerLogoName else { return false }
-        return name == "provider-openai" || name == "provider-cursor" || name == "provider-grok" || name == "provider-grok-bot"
+        return ["provider-openai", "provider-cursor", "provider-grok", "provider-grok-bot", "provider-antigravity"]
+            .contains(name)
     }
 
     public var body: some View {

@@ -141,7 +141,7 @@
     <ul class="provider-list">
       <li><strong>Claude</strong> — quota windows (5-hour and weekly), read from <code>~/.claude/.credentials.json</code> or the Keychain.</li>
       <li><strong>Codex</strong> — rate-limit windows, read from <code>~/.codex/auth.json</code>.</li>
-      <li><strong>Antigravity</strong> — pooled Gemini and Claude &amp; GPT quota, read via the antigravity-usage CLI and Antigravity's own language server.</li>
+      <li><strong>Antigravity</strong> — pooled Gemini and Third-Party quota, read via the antigravity-usage CLI and Antigravity's own language server.</li>
       <li><strong>Cursor</strong> — included-plan usage, read from Cursor.app's local session database.</li>
       <li><strong>Grok CLI</strong> — billing and credits, read via Grok's CLI proxy from <code>~/.grok/auth.json</code>.</li>
       <li><strong>Grok Bot</strong> — weekly usage, read via Cursor's dashboard service, from that same session database.</li>
@@ -167,8 +167,8 @@
     <h2>How The Headline Number Is Chosen</h2>
     <p>Each supported source reports its own usage measure and reset window; a quota percentage is not a bill or subscription charge.&nbsp; A collapsed row shows the fresh window with the lowest remaining percentage and that window's reset time.&nbsp; Menu Bar → Displayed Quota lets you choose the lowest active quota, the lowest quota overall, or a named window.&nbsp; Console's Next Reset tile shows the soonest reset among fresh windows.</p>
     <figure>
-      <img src="screenshots/platform-antigravity.png" width="1280" height="896" loading="lazy" decoding="async" alt="Antigravity platform detail, showing separate Gemini and Claude and GPT pools">
-      <figcaption>Antigravity splits into two pools, Gemini and Claude &amp; GPT, so one hitting zero does not hide the other.</figcaption>
+      <img src="screenshots/platform-antigravity.png" width="1280" height="896" loading="lazy" decoding="async" alt="Antigravity platform detail, showing separate Gemini and Third-Party pools">
+      <figcaption>Antigravity splits into two pools, Gemini and Third-Party, so one hitting zero does not hide the other.</figcaption>
     </figure>
   </section>
 

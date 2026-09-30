@@ -3,8 +3,9 @@ import QuotaCore
 
 /// Antigravity sells two independent model pools.  QuotaCore exports them under
 /// the names BotFleet and Usage Monitor already consume — `third-party`, and the
-/// label `Third-Party Models` — so the rename the owner asked for lives here, in
-/// the display layer, and never touches a wire string.
+/// label `Third-Party Models` — so the display names live here, in the display
+/// layer, and never touch a wire string.  The pools read "Gemini" and
+/// "Third-Party" (owner ruling 2026-09-30).
 enum AntigravityDisplay {
     static let providerKey = "google-antigravity"
 
@@ -12,12 +13,12 @@ enum AntigravityDisplay {
     static func poolTitle(_ poolKey: String) -> String {
         switch poolKey {
         case "gemini": return "Gemini"
-        case "third-party": return "Claude & GPT"
+        case "third-party": return "Third-Party"
         default: return poolKey
         }
     }
 
-    /// The row title for one pool: "Antigravity · Claude & GPT".
+    /// The row title for one pool: "Antigravity · Third-Party".
     static func rowTitle(_ poolKey: String) -> String {
         "Antigravity · \(poolTitle(poolKey))"
     }
@@ -35,7 +36,7 @@ enum AntigravityDisplay {
     static func poolName(in displayLabel: String) -> String? {
         guard let separator = displayLabel.range(of: " · ") else { return nil }
         let head = String(displayLabel[..<separator.lowerBound])
-        return ["Gemini", "Claude & GPT"].contains(head) ? head : nil
+        return [poolTitle("gemini"), poolTitle("third-party")].contains(head) ? head : nil
     }
 
     /// The caption shown in place of a five-hour percentage that cannot mean
@@ -56,7 +57,7 @@ func windowCadenceName(_ window: QuotaWindow) -> String {
 /// One row in Glance, in the Console sidebar and in the Console's card grid.
 ///
 /// Every platform is one row except Antigravity, which is two: collapsing its
-/// pools into a single number showed "Antigravity 0%" whenever the Claude/GPT
+/// pools into a single number showed "Antigravity 0%" whenever the Third-Party
 /// weekly cap was spent, while Gemini was still nearly full.
 struct DisplaySection: Identifiable, Equatable {
     /// The selection key, unique per row: a provider key, or a pool-qualified
@@ -78,7 +79,7 @@ struct DisplaySection: Identifiable, Equatable {
     let maskedWindowIds: Set<String>
 
     var isPool: Bool { poolKey != nil }
-    /// The pool's name on its own: "Gemini", "Claude & GPT".  A narrow row puts
+    /// The pool's name on its own: "Gemini", "Third-Party".  A narrow row puts
     /// this on a second line rather than truncating the joined title.
     var poolTitle: String? { poolKey.map(AntigravityDisplay.poolTitle) }
 

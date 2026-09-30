@@ -5,6 +5,18 @@ PR (when shipped), follow-ups (when parked).
 
 ---
 
+## 2026-09-30 — Glance view switch, per-provider reset alarms, Third-Party pool, 1m, roomier rows [CLAUDE, in review]
+
+Lane: `claude/glance-toggle-alarms` (worktree `~/apps/codecaps-claude-glance-toggle`).
+
+- Glance header: a two-box `THIS MAC | FLEET REPORTED` switch beside the name shows one set of rows at a time and is remembered across launches (`glanceView`).  The in-list "THIS MAC" heading is gone; fleet machines keep a heading each, now carrying their "reported" time.  Fleet Reported with nothing connected explains how to connect an endpoint.
+- Reset alarms are one model.  The header's **All** bell turns every provider's alarm on; with All off a faint bell at the left of each row picks providers one by one.  `ResetAlarmTracker` (QuotaCore, pure, persisted) decides: the largest window alarms on every reset, a smaller one only after reaching 20% or less remaining, never on a first reading, once per reset across restarts and across This Mac and fleet copies.  The old global switch and one-shot row bells migrate into All and the per-provider picks.
+- Antigravity's "Claude & GPT" pool is "Third-Party" on Mac, iOS and in the docs.  The Gemini pool wears the colour Gemini star, the Third-Party pool the same star in one adaptive colour.
+- Monthly and billing-cycle windows caption as `1m` (Cursor's plan was "Plan").
+- Rows: the percentage column fits "100%" plus a real gap, the two meter groups sit 24pt apart, and the countdown matches the caption's type (11pt medium, secondary, not italic).  Popover 560 → 624pt; widths measured in tests.
+
+---
+
 ## 2026-09-30 — CodeCaps iOS Release signs with the App Store profiles [GROK, completed]
 
 Lane: `grok/codecaps-ios-sign` at `~/apps/codecaps-grok-ios-sign` (board `0f6b32c1`).

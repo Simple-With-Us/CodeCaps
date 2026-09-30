@@ -562,7 +562,7 @@ public final class CompanionQuotaModel: ObservableObject {
             if let thirdPartyItem = consolidateAntigravityPool(
                 poolKey: "third-party",
                 title: "Antigravity · Third-Party",
-                defaultSubtitle: "Claude & GPT",
+                defaultSubtitle: "Third-Party Models",
                 windows: thirdPartyWindows
             ) {
                 newItems.append(thirdPartyItem)

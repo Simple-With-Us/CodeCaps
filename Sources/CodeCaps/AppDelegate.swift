@@ -121,8 +121,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             let providerKey = target?.window.canonicalProviderKey ?? "auto"
             let markStyle = target != nil ? model.markStyle(for: providerKey) : .template
             var iconImage: NSImage?
-            if target != nil {
-                iconImage = PlatformLogoImage.menuBarImage(providerKey: providerKey, style: markStyle)
+            if let target {
+                // The row's key, so an Antigravity pool shows its own mark.
+                let markKey = model.displayRow(for: target.window)?.id ?? providerKey
+                iconImage = PlatformLogoImage.menuBarImage(providerKey: markKey, style: markStyle)
             }
             if iconImage == nil {
                 let symbolName = target != nil

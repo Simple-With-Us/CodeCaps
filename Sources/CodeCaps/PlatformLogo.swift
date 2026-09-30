@@ -118,11 +118,17 @@ public struct PlatformLogo: View {
         self.tint = tint
     }
 
+    /// A mark that is one colour by design renders as a template in every
+    /// style, so it follows Light and Dark instead of drawing black on black.
+    private var rendersAsTemplate: Bool {
+        style != .standard || PlatformLogoImage.isMonochromeMark(providerKey)
+    }
+
     public var body: some View {
         Group {
             if let image = PlatformLogoImage.load(providerKey: providerKey, style: style) {
                 Image(nsImage: image)
-                    .renderingMode(style == .standard ? .original : .template)
+                    .renderingMode(rendersAsTemplate ? .template : .original)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .foregroundStyle(tint ?? Theme.ink)
@@ -170,6 +176,11 @@ public enum PlatformLogoImage {
         "codex": ("openai", "svg"),
         "google-antigravity": ("gemini", "svg"),
         "antigravity": ("gemini", "svg"),
+        // The two Antigravity pools are told apart by their mark as well as
+        // their name: the Gemini pool wears the colour Gemini star, and the
+        // Third-Party pool the same star as a solid one-colour glyph.
+        "google-antigravity:gemini": ("gemini-color", "png"),
+        "google-antigravity:third-party": ("gemini-mono", "svg"),
         "gemini": ("gemini", "svg"),
         "xai": ("grok", "svg"),
         "grok": ("grok", "svg"),
@@ -187,7 +198,7 @@ public enum PlatformLogoImage {
         let cache = (style == .standard) ? standardCache : templateCache
         if let cached = cache.object(forKey: key) { return cached }
         guard let bundle = ResourceBundle.resolved,
-              let resource = resourceNames[key as String],
+              let resource = resourceNames[key as String] ?? resourceNames[platformKey(of: key as String)],
               let url = bundle.url(forResource: resource.name, withExtension: resource.ext)
                   ?? bundle.url(
                       forResource: resource.name,
@@ -199,17 +210,28 @@ public enum PlatformLogoImage {
         }
         // Keep the brand color cached separately from the template copy.
         let colorCopy = NSImage(contentsOf: url)
-        if (key as String) == "grok-bot" {
-            // Grok Bot is monochrome; adapt to Light and Dark mode across all styles.
-            colorCopy?.isTemplate = true
-        } else {
-            colorCopy?.isTemplate = false
-        }
+        // A monochrome mark adapts to Light and Dark mode across all styles.
+        colorCopy?.isTemplate = isMonochromeMark(key as String)
         standardCache.setObject(colorCopy ?? image, forKey: key)
         let templateCopy = NSImage(contentsOf: url)
         templateCopy?.isTemplate = true
         templateCache.setObject(templateCopy ?? image, forKey: key)
         return cache.object(forKey: key)
+    }
+
+    /// Marks that are a single colour by design: they carry no brand colour to
+    /// preserve, so they always render as templates and follow the surface —
+    /// near-black on Light, light grey on Dark.
+    public static func isMonochromeMark(_ providerKey: String) -> Bool {
+        let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return ["grok-bot", "google-antigravity:third-party"].contains(key)
+    }
+
+    /// The platform a pool-scoped key belongs to: `google-antigravity:gemini`
+    /// is `google-antigravity`.  A custom mark is chosen per platform, so both
+    /// pools show it.
+    static func platformKey(of providerKey: String) -> String {
+        providerKey.split(separator: ":", maxSplits: 1).first.map(String.init) ?? providerKey
     }
 
     /// Return a mark for `providerKey` honoring `style`.  Custom marks are
@@ -224,7 +246,9 @@ public enum PlatformLogoImage {
         case .template:
             return bundledImage(providerKey: key, style: .template)
         case .custom:
-            if let custom = loadCustom(providerKey: key) { return custom }
+            if let custom = loadCustom(providerKey: key) ?? loadCustom(providerKey: platformKey(of: key)) {
+                return custom
+            }
             return bundledImage(providerKey: key, style: .standard)
         }
     }
@@ -301,7 +325,7 @@ public enum PlatformLogoImage {
                       operation: .copy,
                       fraction: 1.0)
         img.unlockFocus()
-        img.isTemplate = (style == .template)
+        img.isTemplate = (style == .template) || isMonochromeMark(key)
         menuBarCache.setObject(img, forKey: cacheKey)
         return img
     }
@@ -311,7 +335,8 @@ public enum PlatformLogoImage {
         switch key {
         case "anthropic", "claude": return "sparkles"
         case "openai", "codex": return "cpu"
-        case "google-antigravity", "antigravity", "gemini": return "sparkle"
+        case "google-antigravity", "antigravity", "gemini",
+             "google-antigravity:gemini", "google-antigravity:third-party": return "sparkle"
         case "xai", "grok", "grok-cli": return "bolt"
         case "grok-bot": return "bolt.badge.a"
         case "minimax": return "m.square"

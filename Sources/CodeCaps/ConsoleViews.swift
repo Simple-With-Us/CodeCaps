@@ -227,7 +227,7 @@ struct ConsoleView: View {
                 // Without layout priority the title loses its space to the
                 // fixed-width controls on the right and gets truncated in the
                 // middle by default.  Tail truncation plus priority keeps the
-                // start of "Antigravity · Gemini · Claude & GPT" legible.
+                // start of "Antigravity · Gemini · Third-Party" legible.
                 .layoutPriority(1)
                 .truncationMode(.tail)
             Spacer(minLength: 8)
@@ -412,7 +412,7 @@ struct ConsoleSidebar: View {
     /// row views is what stops `.listStyle(.sidebar)` aligning them identically.
     private func quotaRow(_ row: DisplaySection) -> some View {
         HStack(spacing: 6) {
-            PlatformLogo(providerKey: row.providerKey, size: 16,
+            PlatformLogo(providerKey: row.id, size: 16,
                          style: model.markStyle(for: row.providerKey))
             // A pool name is half again as long as a platform name, and
             // "Antigravity · Cl…" hides the very thing the row adds, so the
@@ -431,11 +431,11 @@ struct ConsoleSidebar: View {
                 }
             }
             Spacer(minLength: 2)
-            if model.isAlarmArmed(for: row.id) {
+            if !model.alarmsAll && model.isProviderAlarmSelected(row.id) {
                 Image(systemName: "bell.fill")
                     .font(.system(size: 10))
                     .foregroundStyle(Theme.accent)
-                    .accessibilityLabel("Reset alarm armed")
+                    .accessibilityLabel("Reset alarm on")
             }
             if model.issues[row.providerKey] != nil {
                 Image(systemName: "exclamationmark.circle")
@@ -665,8 +665,8 @@ struct AllPlatformsPage: View {
                      origin: origin,
                      customInfo: model.platformCustomInfo[row.providerKey],
                      markStyle: model.markStyle(for: row.providerKey),
-                     isAlarmArmed: model.isAlarmArmed(for: row.id),
-                     onToggleAlarm: { model.toggleAlarm(for: row.id) },
+                     isAlarmArmed: model.isAlarmEnabled(for: row.id),
+                     onToggleAlarm: model.alarmsAll ? nil : { model.toggleAlarm(for: row.id) },
                      onOpenSettings: model.consentNeeded.contains(row.providerKey)
                         ? { state.page = .settingsSourcesFleet } : nil)
     }
@@ -712,8 +712,8 @@ struct PlatformDetailPage: View {
                              origin: model.originByProvider[row.providerKey] ?? .local,
                              customInfo: model.platformCustomInfo[row.providerKey],
                              markStyle: model.markStyle(for: row.providerKey),
-                             isAlarmArmed: model.isAlarmArmed(for: row.id),
-                             onToggleAlarm: { model.toggleAlarm(for: row.id) },
+                             isAlarmArmed: model.isAlarmEnabled(for: row.id),
+                             onToggleAlarm: model.alarmsAll ? nil : { model.toggleAlarm(for: row.id) },
                              onOpenSettings: model.consentNeeded.contains(row.providerKey)
                                 ? { state.page = .settingsSourcesFleet } : nil)
             } else {

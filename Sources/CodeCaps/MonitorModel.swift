@@ -57,6 +57,26 @@ enum AppAppearance: String, CaseIterable, Identifiable {
     }
 }
 
+/// Which readings the Glance list shows.  One set at a time: the header's
+/// two-box switch flips between them, and the choice survives a relaunch.
+enum GlanceViewMode: String, CaseIterable, Identifiable {
+    case thisMac
+    case fleetReported
+
+    var id: String { rawValue }
+
+    /// Title Case, for help text and VoiceOver.
+    var title: String {
+        switch self {
+        case .thisMac: return "This Mac"
+        case .fleetReported: return "Fleet Reported"
+        }
+    }
+
+    /// The small-caps label on the switch itself.
+    var eyebrow: String { title.uppercased() }
+}
+
 /// Whether a provider's windows were read on this Mac or pulled from the fleet.
 enum QuotaOrigin: Equatable, Sendable {
     case local, fleet
@@ -164,6 +184,10 @@ final class MonitorModel: ObservableObject {
     @Published var keepConsoleInFront: Bool {
         didSet { defaults.set(keepConsoleInFront, forKey: "consoleKeepInFront") }
     }
+    /// This Mac or Fleet Reported, remembered across launches.
+    @Published var glanceView: GlanceViewMode {
+        didSet { defaults.set(glanceView.rawValue, forKey: "glanceView") }
+    }
 
     /// Where each provider's windows came from on the last refresh.
     @Published private(set) var originByProvider: [String: QuotaOrigin] = [:]
@@ -200,6 +224,9 @@ final class MonitorModel: ObservableObject {
     private var request: Task<Void, Never>?
     private var revision = 0
     private let publisher = QuotaPublisher()
+    /// Re-publishes the alarm manager's changes, so a view that observes this
+    /// model redraws when All or a provider's bell flips.
+    private var alarmChanges: AnyCancellable?
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -242,6 +269,10 @@ final class MonitorModel: ObservableObject {
 
         appearance = AppAppearance(rawValue: defaults.string(forKey: "appearance") ?? "") ?? .system
         keepConsoleInFront = defaults.bool(forKey: "consoleKeepInFront")
+        glanceView = GlanceViewMode(rawValue: defaults.string(forKey: "glanceView") ?? "") ?? .thisMac
+        alarmChanges = alarmManager.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
     }
 
     var sections: [QuotaPlatformSection] {
@@ -478,6 +509,16 @@ final class MonitorModel: ObservableObject {
         self.now = now
     }
 
+    /// The fleet half of the seam: pulled windows grouped by origin, plus the
+    /// time the header shows, for the Glance tests and renders.
+    func injectFleetForTests(groups: [FleetWindowGroup], checkedAt: Date? = nil) {
+        self.fleetWindowGroups = groups
+        if let checkedAt {
+            self.lastChecked = checkedAt
+            self.lastPullTime = checkedAt
+        }
+    }
+
     var menuBarDetail: String {
         guard let target = menuBarTargetSnapshot else { return "No current quota report" }
         let title = displayRow(for: target.window)?.title
@@ -489,20 +530,16 @@ final class MonitorModel: ObservableObject {
 
     // MARK: - Reset Alarms
 
-    var notifyOnReset: Bool {
-        get { alarmManager.notifyOnReset }
-        set {
-            alarmManager.notifyOnReset = newValue
-            objectWillChange.send()
-        }
+    /// All: every provider's reset alarm is on.  Bound to the Glance header's
+    /// bell and to Settings → Alerts & Alarms.
+    var alarmsAll: Bool {
+        get { alarmManager.allProvidersEnabled }
+        set { alarmManager.allProvidersEnabled = newValue }
     }
 
     var soundOnReset: Bool {
         get { alarmManager.alarmSound.isAudible }
-        set {
-            alarmManager.alarmSound = newValue ? .systemDefault : .silent
-            objectWillChange.send()
-        }
+        set { alarmManager.alarmSound = newValue ? .systemDefault : .silent }
     }
 
     /// The picked sound for the reset alarm.  Backed by the same
@@ -512,10 +549,7 @@ final class MonitorModel: ObservableObject {
     /// `Sources/QuotaCore/ResetAlarmSound.swift` for the catalogue.
     var alarmSound: ResetAlarmSound {
         get { alarmManager.alarmSound }
-        set {
-            alarmManager.alarmSound = newValue
-            objectWillChange.send()
-        }
+        set { alarmManager.alarmSound = newValue }
     }
 
     /// Previews the picked sound.  Wraps the underlying manager method
@@ -523,13 +557,29 @@ final class MonitorModel: ObservableObject {
     /// without exposing the manager.
     func previewResetSound() { alarmManager.previewChosenSound() }
 
-    func isAlarmArmed(for sectionId: String) -> Bool {
-        alarmManager.isAlarmArmed(for: sectionId)
+    /// Whether `rowId`'s reset alarm will ring: under All, always.
+    func isAlarmEnabled(for rowId: String) -> Bool {
+        alarmManager.isAlarmEnabled(for: rowId)
     }
 
-    func toggleAlarm(for sectionId: String) {
-        alarmManager.toggleAlarm(for: sectionId)
-        objectWillChange.send()
+    /// The owner's own pick for `rowId`, which the per-row bell shows.
+    func isProviderAlarmSelected(_ rowId: String) -> Bool {
+        alarmManager.isProviderSelected(rowId)
+    }
+
+    func toggleAlarm(for rowId: String) {
+        alarmManager.toggleProviderAlarm(for: rowId)
+    }
+
+    /// Every reading the reset alarm watches: this Mac's rows, and each fleet
+    /// machine's rows in a scope of their own.  Keyed by row, so a provider's
+    /// bell covers it in both views.
+    func resetAlarmObservationsForCurrentReadings() -> [ResetAlarmObservation] {
+        var observations = displaySections.flatMap { resetAlarmObservations(for: $0, scope: "local") }
+        for group in fleetGroups {
+            observations += group.rows.flatMap { resetAlarmObservations(for: $0, scope: "fleet:\(group.id)") }
+        }
+        return observations
     }
 
     func start() {
@@ -541,9 +591,15 @@ final class MonitorModel: ObservableObject {
             Task { @MainActor in
                 guard let self else { return }
                 self.now = Date()
-                let pendingReset = self.displaySections.contains {
-                    (self.alarmManager.isAlarmArmed(for: $0.id) || self.alarmManager.isSectionExhausted($0))
-                        && ($0.resetAt != nil && $0.resetAt! <= self.now)
+                // A window with an alarm on whose reset time has come since the
+                // last refresh: read again now, so the alarm rings on time
+                // rather than up to five minutes late.
+                let lastChecked = self.lastChecked ?? .distantPast
+                let pendingReset = self.displaySections.contains { row in
+                    self.isAlarmEnabled(for: row.id) && row.section.windows.contains { snapshot in
+                        guard let reset = snapshot.resetAt else { return false }
+                        return reset <= self.now && reset > lastChecked
+                    }
                 }
                 if pendingReset {
                     self.refresh()
@@ -999,7 +1055,7 @@ final class MonitorModel: ObservableObject {
             self.originByProvider = origins
             if newServer != nil { self.lastPullTime = self.now }
             self.response = QuotaResponse(generatedAt: ISO8601DateFormatter().string(from: self.now), windows: merged)
-            self.alarmManager.evaluate(currentSections: self.displaySections, now: self.now)
+            self.alarmManager.evaluate(observations: self.resetAlarmObservationsForCurrentReadings(), now: self.now)
             self.isRefreshing = false
             self.request = nil
         }

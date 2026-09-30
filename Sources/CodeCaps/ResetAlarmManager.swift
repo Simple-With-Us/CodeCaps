@@ -10,11 +10,15 @@ import UserNotifications
 /// instead of trusting an external `UNNotificationSound` round-trip.
 public struct ResetAlarmNotification: Equatable, Sendable {
     public let id: String
-    public let sectionId: String
+    /// The row the alarm belongs to: a provider key, or a pool-scoped key such
+    /// as `google-antigravity:gemini`.
+    public let providerId: String
     public let title: String
     public let body: String
     public let remainingPercent: Int
     public let sound: ResetAlarmSound
+    /// The windows whose reset this notification announces, largest first.
+    public let windowLabels: [String]
 }
 
 /// What happened when the owner pressed "Send Test Notification".
@@ -79,18 +83,47 @@ public struct TestNotificationPlanner {
     }
 }
 
-/// Manages reset alerts and alarms when exhausted quotas clear.
+/// The one reset-alarm model: which providers alarm, what they sound like, and
+/// the notification that carries them.
 ///
-/// Ensures that an alert is only fired when ALL controlling quotas for a model
-/// or platform are clear and the model can actually be used again.  For example,
-/// if an Antigravity 5-hour window resets while the weekly limit is still at 0%
-/// (exhausted/masked), the alert is suppressed until the weekly cap also clears.
+/// Whether a reset is worth an alarm is decided by `ResetAlarmTracker` in
+/// QuotaCore — the provider's largest window on every reset, a smaller window
+/// only after it came within 20% of its cap — and this manager only adds the
+/// owner's choices on top: every provider (All), or the providers picked one by
+/// one with the bell beside each Glance row.
+///
+/// It replaces two older mechanisms that disagreed with each other: a global
+/// "notify when an exhausted quota clears" switch, and one-shot bells armed per
+/// row.  `init` migrates both into the new keys once.
 @MainActor
 public final class ResetAlarmManager: ObservableObject {
+    /// UserDefaults keys, in one place so the migration tests can seed them.
+    public enum Keys {
+        public static let all = "resetAlarmAll"
+        public static let providers = "resetAlarmProviders"
+        public static let trackerState = "resetAlarmTrackerState"
+        public static let sound = "alarmSound"
+        /// Read once, by the migration, and never written again.
+        public static let legacyNotifyOnReset = "notifyOnReset"
+        public static let legacyArmedSectionIds = "armedResetAlarmSectionIds"
+        public static let legacySoundOnReset = "soundOnReset"
+    }
+
     private let defaults: UserDefaults
 
-    @Published public var notifyOnReset: Bool {
-        didSet { defaults.set(notifyOnReset, forKey: "notifyOnReset") }
+    /// All: every provider's reset alarm is on, and Glance shows no per-row
+    /// bells.  Off: only the providers in `enabledProviderIds` alarm.
+    @Published public var allProvidersEnabled: Bool {
+        didSet {
+            defaults.set(allProvidersEnabled, forKey: Keys.all)
+            if allProvidersEnabled && !oldValue { requestPermissionSoon() }
+        }
+    }
+
+    /// The providers picked one by one.  Kept while All is on, so turning All
+    /// off again restores the owner's own selection rather than a blank one.
+    @Published public private(set) var enabledProviderIds: Set<String> {
+        didSet { defaults.set(enabledProviderIds.sorted(), forKey: Keys.providers) }
     }
 
     /// Which sound the alarm plays.  Persisted as the raw value (a system
@@ -99,11 +132,7 @@ public final class ResetAlarmManager: ObservableObject {
     /// `systemDefault` so a fresh install lands on the platform chime,
     /// matching the previous behaviour when `soundOnReset` was true.
     @Published public var alarmSound: ResetAlarmSound {
-        didSet { defaults.set(alarmSound.rawValue, forKey: "alarmSound") }
-    }
-
-    @Published public var armedSectionIds: Set<String> {
-        didSet { defaults.set(Array(armedSectionIds), forKey: "armedResetAlarmSectionIds") }
+        didSet { defaults.set(alarmSound.rawValue, forKey: Keys.sound) }
     }
 
     /// Result of the most recent "Send Test Notification", or `nil` before the
@@ -115,11 +144,10 @@ public final class ResetAlarmManager: ObservableObject {
     /// the "Open System Settings" affordance.
     @Published public private(set) var notificationsDenied = false
 
-    /// The IDs of sections observed as exhausted/blocked on previous evaluations.
-    public private(set) var exhaustedSectionIds: Set<String> = []
-
-    /// Whether this manager has performed its initial baseline pass.
-    private var hasInitialized = false
+    /// The reset detector.  Its state is saved after every evaluation, so a
+    /// restart or a Sparkle relaunch neither loses a reset that is due nor
+    /// announces one twice.
+    public private(set) var tracker: ResetAlarmTracker
 
     /// Injectable notification handler for unit testing.
     var onNotification: ((ResetAlarmNotification) -> Void)?
@@ -133,27 +161,75 @@ public final class ResetAlarmManager: ObservableObject {
 
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        self.notifyOnReset = defaults.object(forKey: "notifyOnReset") as? Bool ?? true
-        // One-time migration from the legacy boolean: a fresh owner who
+
+        // One-time migration of the two old mechanisms.  The global switch
+        // meant "alert on every provider", which is exactly All; the one-shot
+        // bells meant "I want this row", which is exactly a per-provider pick.
+        // A fresh install lands on All, like the old switch's default.
+        let all: Bool
+        if let saved = defaults.object(forKey: Keys.all) as? Bool {
+            all = saved
+        } else {
+            all = defaults.object(forKey: Keys.legacyNotifyOnReset) as? Bool ?? true
+            defaults.set(all, forKey: Keys.all)
+        }
+        self.allProvidersEnabled = all
+
+        let providers: Set<String>
+        if let saved = defaults.stringArray(forKey: Keys.providers) {
+            providers = Set(saved)
+        } else {
+            providers = Set(defaults.stringArray(forKey: Keys.legacyArmedSectionIds) ?? [])
+            defaults.set(providers.sorted(), forKey: Keys.providers)
+        }
+        self.enabledProviderIds = providers
+
+        // One-time migration from the legacy sound boolean: an owner who
         // previously had `soundOnReset = true` lands on `.systemDefault`;
-        // one who had turned it off lands on `.silent`.  Once the new key
-        // is written, the legacy key is never read again.  Resolve the
-        // value into a local first because reading `self.alarmSound`
-        // inside `didSet` before every stored property is initialised
-        // makes Swift reject the init.
+        // one who had turned it off lands on `.silent`.  Once the new key is
+        // written, the legacy key is never read again.
         let resolved: ResetAlarmSound
-        if let raw = defaults.string(forKey: "alarmSound"),
+        if let raw = defaults.string(forKey: Keys.sound),
            let migrated = ResetAlarmSound(rawValue: raw) {
             resolved = migrated
-        } else if let legacySoundOn = defaults.object(forKey: "soundOnReset") as? Bool {
+        } else if let legacySoundOn = defaults.object(forKey: Keys.legacySoundOnReset) as? Bool {
             resolved = legacySoundOn ? .systemDefault : .silent
-            defaults.set(resolved.rawValue, forKey: "alarmSound")
+            defaults.set(resolved.rawValue, forKey: Keys.sound)
         } else {
             resolved = .systemDefault
         }
         self.alarmSound = resolved
-        let savedArmed = defaults.stringArray(forKey: "armedResetAlarmSectionIds") ?? []
-        self.armedSectionIds = Set(savedArmed)
+
+        self.tracker = ResetAlarmTracker(
+            state: ResetAlarmTrackerState.decoded(from: defaults.data(forKey: Keys.trackerState)))
+    }
+
+    // MARK: - Choices
+
+    /// Whether `providerId`'s reset alarm is on: every provider under All,
+    /// otherwise only the ones picked.
+    public func isAlarmEnabled(for providerId: String) -> Bool {
+        allProvidersEnabled || enabledProviderIds.contains(providerId)
+    }
+
+    /// The owner's own pick for `providerId`, regardless of All.  This is what
+    /// a per-row bell shows.
+    public func isProviderSelected(_ providerId: String) -> Bool {
+        enabledProviderIds.contains(providerId)
+    }
+
+    public func setProviderAlarm(_ enabled: Bool, for providerId: String) {
+        guard enabled != enabledProviderIds.contains(providerId) else { return }
+        if enabled {
+            enabledProviderIds.insert(providerId)
+            requestPermissionSoon()
+        } else {
+            enabledProviderIds.remove(providerId)
+        }
+    }
+
+    public func toggleProviderAlarm(for providerId: String) {
+        setProviderAlarm(!enabledProviderIds.contains(providerId), for: providerId)
     }
 
     /// Plays the picked sound.  Used by the Settings "Preview" button so
@@ -210,6 +286,11 @@ public final class ResetAlarmManager: ObservableObject {
         }
     }
 
+    private func requestPermissionSoon() {
+        guard Self.canUseUserNotifications else { return }
+        Task { await requestNotificationPermission() }
+    }
+
     /// Refreshes the denied flag from the system so the Settings affordance
     /// reflects reality on open rather than only after a failed send.
     public func refreshNotificationAuthorization() async {
@@ -225,101 +306,76 @@ public final class ResetAlarmManager: ObservableObject {
         string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension"
     )!
 
-    // MARK: - Arming
+    // MARK: - Evaluation
 
-    public func isAlarmArmed(for sectionId: String) -> Bool {
-        armedSectionIds.contains(sectionId)
-    }
+    /// Feeds one refresh's readings through the tracker, saves its state, and
+    /// sends a notification per provider for every alarm that is on.  Returns
+    /// what was sent, for the tests.
+    @discardableResult
+    func evaluate(observations: [ResetAlarmObservation], now: Date = Date()) -> [ResetAlarmNotification] {
+        let before = tracker.state
+        let events = tracker.process(observations, now: now)
+        if tracker.state != before, let data = tracker.state.encoded() {
+            defaults.set(data, forKey: Keys.trackerState)
+        }
 
-    public func toggleAlarm(for sectionId: String) {
-        if armedSectionIds.contains(sectionId) {
-            armedSectionIds.remove(sectionId)
-        } else {
-            armedSectionIds.insert(sectionId)
-            Task { await requestNotificationPermission() }
+        var order: [String] = []
+        var byProvider: [String: [ResetAlarmEvent]] = [:]
+        for event in events where isAlarmEnabled(for: event.providerId) {
+            if byProvider[event.providerId] == nil { order.append(event.providerId) }
+            byProvider[event.providerId, default: []].append(event)
+        }
+        return order.compactMap { providerId in
+            guard let group = byProvider[providerId], !group.isEmpty else { return nil }
+            let content = Self.notificationContent(for: group)
+            let payload = ResetAlarmNotification(
+                id: UUID().uuidString,
+                providerId: providerId,
+                title: content.title,
+                body: content.body,
+                remainingPercent: Int((group.first?.remainingPercent ?? 100).rounded()),
+                sound: alarmSound,
+                windowLabels: content.windowLabels)
+            deliver(payload)
+            return payload
         }
     }
 
-    // MARK: - Usability Evaluation
-
-    /// Whether a section is currently exhausted or blocked.
-    func isSectionExhausted(_ section: DisplaySection) -> Bool {
-        // If headline remaining percent is zero, it is definitely exhausted.
-        if let pct = section.remainingPercent, pct <= 0 {
-            return true
+    /// The words of one provider's notification.  Every event in `events`
+    /// belongs to the same provider; the largest window comes first.
+    static func notificationContent(for events: [ResetAlarmEvent]) -> (title: String, body: String, windowLabels: [String]) {
+        let title = "Quota Reset: \(events.first?.providerTitle ?? "Quota")"
+        var labels: [String] = []
+        for event in events where !labels.contains(event.windowLabel) {
+            labels.append(event.windowLabel)
+        }
+        let joined: String
+        switch labels.count {
+        case 0, 1: joined = labels.first ?? "quota"
+        case 2: joined = "\(labels[0]) and \(labels[1])"
+        default: joined = labels.dropLast().joined(separator: ", ") + " and " + (labels.last ?? "")
         }
 
-        // For Antigravity pools, if any window is masked, the weekly cap is exhausted.
-        if !section.maskedWindowIds.isEmpty {
-            return true
+        if let largest = events.first(where: { $0.reason == .newPeriod }) {
+            let reset = labels.count > 1 ? "The \(joined) windows reset." : "The \(joined) window reset."
+            return (title, reset + sentenceGap + newPeriodSentence(largest.periodSeconds), labels)
         }
-
-        // Check all primary fresh windows in this section.
-        let activeWindows = section.section.windows.filter {
-            $0.isFresh && !$0.window.isSupplementaryVideoQuota && !section.isMasked($0)
+        if events.count == 1, case .nearCap(let minimum) = events[0].reason {
+            let reached = minimum <= 0
+                ? "after hitting its cap"
+                : "after reaching \(Int(minimum.rounded()))% remaining"
+            return (title, "The \(joined) window reset \(reached)." + sentenceGap + "Ready to use again.", labels)
         }
-        guard !activeWindows.isEmpty else { return false }
-
-        return activeWindows.contains { ($0.remainingPercent ?? 100) <= 0 }
+        return (title, "The \(joined) windows reset." + sentenceGap + "Ready to use again.", labels)
     }
 
-    /// Whether a section can genuinely be used again (all controlling caps cleared).
-    func isSectionUsable(_ section: DisplaySection) -> Bool {
-        // Headline remaining percent must be present and greater than zero.
-        guard let headline = section.remainingPercent, headline > 0 else {
-            return false
-        }
-
-        // Antigravity: if weekly is exhausted, 5-hour is masked, so maskedWindowIds must be empty.
-        guard section.maskedWindowIds.isEmpty else {
-            return false
-        }
-
-        // Every unmasked active window must have positive remaining percentage.
-        let activeWindows = section.section.windows.filter {
-            $0.isFresh && !$0.window.isSupplementaryVideoQuota && !section.isMasked($0)
-        }
-        guard !activeWindows.isEmpty else {
-            return headline > 0
-        }
-
-        return activeWindows.allSatisfy { ($0.remainingPercent ?? 100) > 0 }
-    }
-
-    // MARK: - Evaluation Cycle
-
-    /// Evaluates current sections against previous states and dispatches alerts
-    /// when a previously exhausted or user-armed model becomes usable again.
-    func evaluate(currentSections: [DisplaySection], now: Date = Date()) {
-        var currentExhausted: Set<String> = []
-
-        for section in currentSections {
-            let blocked = isSectionExhausted(section)
-            let usable = isSectionUsable(section)
-
-            if blocked {
-                currentExhausted.insert(section.id)
-            }
-
-            // On initial run, record baseline exhaustion without triggering alerts.
-            guard hasInitialized else { continue }
-
-            let wasExhausted = exhaustedSectionIds.contains(section.id)
-            let isArmed = armedSectionIds.contains(section.id)
-
-            // Alert triggers when a previously exhausted or user-armed model is now usable
-            // AND all controlling caps are completely clear.
-            if usable && (wasExhausted || isArmed) {
-                if notifyOnReset || isArmed {
-                    dispatchAlert(for: section)
-                }
-                // Clear the one-shot alarm if it was armed.
-                armedSectionIds.remove(section.id)
-            }
-        }
-
-        exhaustedSectionIds = currentExhausted
-        hasInitialized = true
+    /// "A new week of quota is available." and friends, by period length.
+    private static func newPeriodSentence(_ period: TimeInterval?) -> String {
+        guard let period else { return "A new period of quota is available." }
+        if period >= 27 * 86_400 { return "A new month of quota is available." }
+        if period >= 6 * 86_400 { return "A new week of quota is available." }
+        if period >= 20 * 3_600 { return "A new day of quota is available." }
+        return "A new period of quota is available."
     }
 
     // MARK: - Dispatch
@@ -340,43 +396,37 @@ public final class ResetAlarmManager: ObservableObject {
         }
     }
 
-    private func dispatchAlert(for section: DisplaySection) {
-        let pct = Int((section.remainingPercent ?? 100).rounded())
-        let title = "Quota Reset: \(section.title)"
-        let body = "All quotas have cleared (\(pct)% remaining)." + sentenceGap + "Ready to use again."
-
-        let payload = ResetAlarmNotification(
-            id: UUID().uuidString,
-            sectionId: section.id,
-            title: title,
-            body: body,
-            remainingPercent: pct,
-            sound: alarmSound
-        )
-
+    private func deliver(_ payload: ResetAlarmNotification) {
         // Deliver via custom test handler if installed
         if let onNotification {
             onNotification(payload)
-        } else if Self.canUseUserNotifications {
-            let content = UNMutableNotificationContent()
-            content.title = title
-            content.body = body
-            content.sound = notificationSound(for: alarmSound)
+            return
+        }
+        guard Self.canUseUserNotifications else { return }
+        let content = UNMutableNotificationContent()
+        content.title = payload.title
+        content.body = payload.body
+        content.sound = notificationSound(for: payload.sound)
 
-            let request = UNNotificationRequest(
-                identifier: "codecaps.reset.\(section.id).\(Date().timeIntervalSince1970)",
-                content: content,
-                trigger: nil
-            )
-            // A real alert that the centre refuses is worth recording for the
-            // same reason the test button is: a silent no-op reads as "the app
-            // is broken" when it is actually a permission problem.
-            Task { [weak self] in
-                do {
-                    try await UNUserNotificationCenter.current().add(request)
-                } catch {
-                    self?.testNotificationOutcome = .failed(error.localizedDescription)
-                }
+        let request = UNNotificationRequest(
+            identifier: "codecaps.reset.\(payload.providerId).\(Date().timeIntervalSince1970)",
+            content: content,
+            trigger: nil
+        )
+        // A real alert that the centre refuses is worth recording for the
+        // same reason the test button is: a silent no-op reads as "the app
+        // is broken" when it is actually a permission problem.  All is on by
+        // default, so the first alarm may be the first time anyone asked.
+        Task { [weak self] in
+            let center = UNUserNotificationCenter.current()
+            let settings = await center.notificationSettings()
+            if settings.authorizationStatus == .notDetermined {
+                guard await self?.requestNotificationPermission() == true else { return }
+            }
+            do {
+                try await center.add(request)
+            } catch {
+                self?.testNotificationOutcome = .failed(error.localizedDescription)
             }
         }
     }
@@ -396,11 +446,12 @@ public final class ResetAlarmManager: ObservableObject {
         if let onNotification {
             onNotification(ResetAlarmNotification(
                 id: UUID().uuidString,
-                sectionId: "test",
+                providerId: "test",
                 title: title,
                 body: body,
                 remainingPercent: 100,
-                sound: alarmSound
+                sound: alarmSound,
+                windowLabels: []
             ))
             testNotificationOutcome = .sent
             return
@@ -451,4 +502,44 @@ public final class ResetAlarmManager: ObservableObject {
             testNotificationOutcome = .failed(error.localizedDescription)
         }
     }
+}
+
+// MARK: - Readings for the tracker
+
+/// How long one period of a window lasts, from its cadence token, its label,
+/// or — for Cursor's plan, which carries neither — its provider.  `nil` when
+/// nothing says, which the tracker treats as "not the largest window" unless
+/// the provider has nothing better.
+func quotaWindowPeriodSeconds(_ snapshot: QuotaWindowSnapshot) -> TimeInterval? {
+    let token = (snapshot.window.window ?? "").lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+    if let seconds = glanceDurationSeconds(token) { return seconds }
+    if glanceIsMonthly(snapshot) { return 30 * 86_400 }
+    if let parsed = WindowPacing.parseDurationSeconds(token: snapshot.window.window, label: snapshot.window.label) {
+        return parsed
+    }
+    switch token {
+    case "session": return 5 * 3_600
+    case "daily", "day": return 86_400
+    default: return nil
+    }
+}
+
+/// The tracker's view of one row: one observation per quota window, skipping
+/// supplementary allowances.  A masked window reports no percentage, because
+/// its percentage must not be believed.
+func resetAlarmObservations(for row: DisplaySection, scope: String) -> [ResetAlarmObservation] {
+    row.section.windows
+        .filter { !$0.window.isSupplementaryVideoQuota }
+        .map { snapshot in
+            ResetAlarmObservation(
+                scope: scope,
+                providerId: row.id,
+                providerTitle: row.title,
+                windowId: snapshot.window.id,
+                windowLabel: glanceMeterCaption(snapshot),
+                periodSeconds: quotaWindowPeriodSeconds(snapshot),
+                resetAt: snapshot.resetAt,
+                remainingPercent: row.isMasked(snapshot) ? nil : snapshot.remainingPercent,
+                observedAt: snapshot.observedAt)
+        }
 }

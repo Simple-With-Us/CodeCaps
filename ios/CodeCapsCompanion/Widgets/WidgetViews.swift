@@ -47,7 +47,17 @@ enum WidgetColors {
 
 struct ProviderMarkView: View {
     let providerKey: String
+    /// The row's own id, which names the Antigravity pool: `antigravity-gemini`
+    /// wears the colour Gemini star, `antigravity-third-party` the one-colour
+    /// star (a template asset, so it follows Light and Dark).
+    var itemId: String? = nil
     let size: CGFloat
+
+    init(providerKey: String, itemId: String? = nil, size: CGFloat) {
+        self.providerKey = providerKey
+        self.itemId = itemId
+        self.size = size
+    }
 
     var body: some View {
         let assetName = assetName(for: providerKey)
@@ -101,6 +111,9 @@ struct ProviderMarkView: View {
 
     private func assetName(for key: String) -> String {
         let low = key.lowercased()
+        let pool = (itemId ?? "").lowercased()
+        if low.contains("antigravity") && pool.contains("gemini") { return "provider-gemini" }
+        if low.contains("antigravity") && pool.contains("third-party") { return "provider-antigravity" }
         if low.contains("claude") || low.contains("anthropic") { return "provider-claude" }
         if low.contains("openai") || low.contains("codex") { return "provider-openai" }
         if low.contains("cursor") { return "provider-cursor" }
@@ -171,7 +184,7 @@ struct OverviewSmallView: View {
                     ForEach(displayed) { platform in
                         VStack(alignment: .leading, spacing: 3) {
                             HStack(spacing: 5) {
-                                ProviderMarkView(providerKey: platform.providerKey, size: 14)
+                                ProviderMarkView(providerKey: platform.providerKey, itemId: platform.id, size: 14)
                                 Text(platform.title)
                                     .font(.system(size: 12, weight: .semibold))
                                     .lineLimit(1)
@@ -247,7 +260,7 @@ struct OverviewMediumView: View {
                 ForEach(displayed) { platform in
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: 5) {
-                            ProviderMarkView(providerKey: platform.providerKey, size: 16)
+                            ProviderMarkView(providerKey: platform.providerKey, itemId: platform.id, size: 16)
                             Text(platform.title)
                                 .font(.system(size: 12, weight: .semibold))
                                 .lineLimit(1)
@@ -314,7 +327,7 @@ struct OverviewLargeView: View {
             VStack(spacing: 8) {
                 ForEach(displayed) { platform in
                     HStack(spacing: 10) {
-                        ProviderMarkView(providerKey: platform.providerKey, size: 24)
+                        ProviderMarkView(providerKey: platform.providerKey, itemId: platform.id, size: 24)
 
                         VStack(alignment: .leading, spacing: 2) {
                             HStack {
@@ -391,7 +404,7 @@ struct ProviderFocusView: View {
     private func smallFocusView(for platform: WidgetPlatformItem) -> some View {
         VStack(spacing: 6) {
             HStack(spacing: 5) {
-                ProviderMarkView(providerKey: platform.providerKey, size: 14)
+                ProviderMarkView(providerKey: platform.providerKey, itemId: platform.id, size: 14)
                 Text(platform.title)
                     .font(.system(size: 12, weight: .semibold))
                     .lineLimit(1)
@@ -456,7 +469,7 @@ struct ProviderFocusView: View {
                         .rotationEffect(.degrees(-90))
 
                     VStack(spacing: 1) {
-                        ProviderMarkView(providerKey: platform.providerKey, size: 20)
+                        ProviderMarkView(providerKey: platform.providerKey, itemId: platform.id, size: 20)
                         Text(platform.displayPercent)
                             .font(.system(size: 16, weight: .bold, design: .rounded))
                     }

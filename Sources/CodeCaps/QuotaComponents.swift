@@ -37,6 +37,16 @@ enum Theme {
     static let selection = dyn(hex(0x087370).withAlphaComponent(0.12),
                                hex(0x4FD1C5).withAlphaComponent(0.18))
 
+    /// The outline of a small header control: the This Mac / Fleet Reported
+    /// switch and the All bell.
+    static let controlBorder = dyn(NSColor.black.withAlphaComponent(0.16),
+                                   NSColor.white.withAlphaComponent(0.22))
+
+    /// A control that is present but off, such as an unchecked row bell:
+    /// visible enough to find, quiet enough not to read as a setting.
+    static let faint = dyn(NSColor.black.withAlphaComponent(0.26),
+                           NSColor.white.withAlphaComponent(0.30))
+
     private static func dyn(_ light: NSColor, _ dark: NSColor) -> Color {
         Color(nsColor: NSColor(name: nil) {
             $0.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light
@@ -55,40 +65,57 @@ enum Theme {
 /// site and the SwiftUI root cannot disagree the way the old 580x510 window and
 /// its 620x560 content did.
 enum Metrics {
-    /// 560pt carries TWO quota meters per row — the short 4-5hr window and the
-    /// long weekly/monthly window — beside the platform name, so neither
-    /// cadence needs the click-to-expand.  It replaced a 400pt width that
-    /// fitted one bar, and still clears the 1280pt-wide screen minimum with
-    /// room to spare.  See `glanceRowIntrinsicWidth` for the arithmetic this
-    /// width has to satisfy, which `GlanceRowTests` pins.
-    static let glanceWidth: CGFloat = 560
+    /// 624pt carries TWO quota meters per row — the short 4-5hr window and the
+    /// long weekly/monthly window — beside the platform name, with the
+    /// per-provider alarm bell in front of the logo and real gaps between the
+    /// percentage, its countdown and the second meter.  It was 560pt until the
+    /// owner found the row "a bit too cramped" (2026-09-30): the percentage and
+    /// the countdown touched ("100%4h 41m"), and the two meters nearly did.
+    /// See `glanceRowIntrinsicWidth` for the arithmetic this width has to
+    /// satisfy, which `GlanceRowTests` pins, together with the measured widths
+    /// of the longest realistic values.
+    static let glanceWidth: CGFloat = 624
     static let glanceMinHeight: CGFloat = 200
     static let glanceGutter: CGFloat = 12
-    static let glanceHeaderHeight: CGFloat = 32
+    static let glanceHeaderHeight: CGFloat = 36
+    /// Height of the This Mac / Fleet Reported switch and the All bell.
+    static let glanceHeaderControlHeight: CGFloat = 20
     static let glanceFooterHeight: CGFloat = 38
     static let glanceGroupHeaderHeight: CGFloat = 18
+    /// Every row, This Mac or Fleet Reported: a fleet row's "reported at"
+    /// moved to its machine's heading, so it no longer needs a taller row.
     static let glanceLocalRowHeight: CGFloat = 38
-    static let glanceFleetRowHeight: CGFloat = 50
     static let glanceCTARowHeight: CGFloat = 52
+    /// What an empty list's explanation needs: icon, title, two lines, button.
+    static let glanceEmptyStateHeight: CGFloat = 170
 
     // Per-row column widths.  The two-meter row used to be laid out from
     // whatever space was left over, which is how a percentage ends up
     // truncated after a long platform name; these are fixed instead.
+    /// The per-provider reset-alarm bell at the very left, shown while All is off.
+    static let glanceAlarmBellWidth: CGFloat = 16
     static let glanceLogoWidth: CGFloat = 16
-    static let glanceRowTitleWidth: CGFloat = 72
-    static let glanceMeterCaptionWidth: CGFloat = 22
+    /// Fits "Claude Code" (79.5pt at 13pt medium), the longest platform name.
+    static let glanceRowTitleWidth: CGFloat = 80
+    /// Fits "Plan" and "24h" at 11pt medium; "Quota" fits at its 0.8 scale.
+    static let glanceMeterCaptionWidth: CGFloat = 26
     static let glanceMeterBarWidth: CGFloat = 50
-    /// Wide enough for "100%" at 11pt, which measures about 30pt: at 28pt it
-    /// spilled into the gap and touched the reset countdown, and 100% is the
-    /// state everyone sees right after a reset.
-    static let glanceMeterPercentWidth: CGFloat = 32
-    static let glanceMeterCountdownWidth: CGFloat = 46
-    static let glanceRowTrailingWidth: CGFloat = 40
+    /// "100%" is 32.2pt at 11pt medium with monospaced digits.  The rest of
+    /// the column is the gap before the countdown, so the two never touch.
+    static let glanceMeterPercentWidth: CGFloat = 44
+    /// "29d 23h 59m", the longest monthly countdown, is 72.1pt at 11pt medium;
+    /// "6d 23h 59m" is 65.3pt and "17d 4h 57m" 61.9pt.
+    static let glanceMeterCountdownWidth: CGFloat = 74
+    /// The status text shown in place of the meters when a row has no reading.
     static let glanceRowTrailingWideWidth: CGFloat = 100
     static let glanceChevronWidth: CGFloat = 10
     /// The fixed gap between the row's columns, used by every spacer so one
     /// change re-tunes the whole row.
     static let glanceColumnGap: CGFloat = 8
+    /// The gap between the two meters: from the end of the first countdown to
+    /// the second meter's caption.  Wider than the column gap so the two
+    /// windows read as two groups.
+    static let glanceMeterGroupGap: CGFloat = 24
     /// The gap right after the logo, which is tighter than the rest.
     static let glanceLogoGap: CGFloat = 6
 
@@ -96,19 +123,19 @@ enum Metrics {
     static let glanceMeterWidth: CGFloat = glanceMeterCaptionWidth + 4 + glanceMeterBarWidth
         + 4 + glanceMeterPercentWidth + 4 + glanceMeterCountdownWidth
 
-    /// The width a two-meter row actually occupies: logo, title, two meters,
-    /// the trailing countdown column, the chevron, their gaps, and the
-    /// popover's own horizontal gutter on both sides.
+    /// The width a two-meter row actually occupies: the alarm bell, logo,
+    /// title, two meters, the chevron, their gaps, and the popover's own
+    /// horizontal gutter on both sides.
     ///
     /// This is the contract `glanceWidth` has to honour.  It is computed rather
     /// than restated so a column change cannot silently overflow the popover —
     /// a wider row inside a fixed frame is what truncated "Open CodeCaps ⌘1"
     /// in the footer once already.
-    static let glanceRowIntrinsicWidth: CGFloat = glanceLogoWidth + glanceLogoGap
+    static let glanceRowIntrinsicWidth: CGFloat = glanceAlarmBellWidth + glanceLogoGap
+        + glanceLogoWidth + glanceLogoGap
         + glanceRowTitleWidth + glanceColumnGap
+        + glanceMeterWidth + glanceMeterGroupGap
         + glanceMeterWidth + glanceColumnGap
-        + glanceMeterWidth + glanceColumnGap
-        + glanceRowTrailingWidth + glanceLogoGap
         + glanceChevronWidth
         + glanceGutter * 2
 
@@ -116,7 +143,7 @@ enum Metrics {
     static let consoleMin = NSSize(width: 820, height: 560)
     /// Default sidebar width, 40pt wider than the old fixed 200pt column.
     /// Was raised because the user found the original column too narrow
-    /// for "Antigravity · Claude & GPT" rows with their subtitle pool line,
+    /// for "Antigravity · Third-Party" rows with their subtitle pool line,
     /// and a trailing percent that had no breathing room.  See F-01 of
     /// `docs/design/2026-09-22-app-audit.md` for the audit this came from.
     static let sidebarWidthDefault: CGFloat = 240
@@ -236,6 +263,8 @@ func compactWindowName(_ label: String) -> String {
         return "\(pool) · \(shortCadence)"
     }
     let lower = display.lowercased()
+    // A month is "1m" on every compact surface, Glance's captions included.
+    if lower.contains("month") || lower.contains("billing") || lower == "included plan" { return "1m" }
     if lower.contains("5-hour") || lower.contains("5 hour") { return "5h" }
     if lower.contains("7-day") || lower.contains("7 day") { return "7d" }
     if lower.contains("weekly") { return "Weekly" }
@@ -347,28 +376,31 @@ extension QuotaPlatformSection {
 
 /// Glance's height is computed from the EXPECTED provider count rather than the
 /// reporting count, so the popover cannot resize under the pointer when a
-/// platform appears or disappears between refreshes.
+/// platform appears or disappears between refreshes.  It is the taller of the
+/// two views, so flipping between This Mac and Fleet Reported while the
+/// popover is open never resizes it either.
 enum QuotaGlanceMetrics {
     @MainActor
     static func popoverHeight(for model: MonitorModel, on screen: NSScreen? = nil) -> CGFloat {
-        guard model.localEnabled || model.serverEnabled else {
-            return Metrics.glanceMinHeight
-        }
-        let fleetCount = model.originByProvider.values.filter { $0 == .fleet }.count
         let reported = Set(model.sections.map(\.providerKey))
         let expectedKeys = Set(expectedQuotaProviderKeys).union(reported)
         // Antigravity draws one row per model pool, so it counts twice.
         let expectedCount = expectedKeys.count
             + (expectedKeys.contains(AntigravityDisplay.providerKey) ? 1 : 0)
-        let localRows = max(0, expectedCount - fleetCount)
-        let groups = fleetCount > 0 ? 2 : 1
         let ctaRows = (!model.syncEnabled && !model.serverEnabled) ? 1 : 0
+        let localContent = model.localEnabled || !model.displaySections.isEmpty
+            ? CGFloat(expectedCount) * Metrics.glanceLocalRowHeight
+                + CGFloat(ctaRows) * (Metrics.glanceCTARowHeight + 12)
+            : Metrics.glanceEmptyStateHeight + CGFloat(ctaRows) * (Metrics.glanceCTARowHeight + 12)
 
-        let content = CGFloat(groups) * Metrics.glanceGroupHeaderHeight
-            + CGFloat(localRows) * Metrics.glanceLocalRowHeight
-            + CGFloat(fleetCount) * Metrics.glanceFleetRowHeight
-            + CGFloat(ctaRows) * (Metrics.glanceCTARowHeight + 26)
-            + (fleetCount > 0 ? 12 : 0)
+        let groups = model.fleetGroups
+        let fleetRows = groups.reduce(0) { $0 + $1.rows.count }
+        let fleetContent = groups.isEmpty
+            ? Metrics.glanceEmptyStateHeight
+            : CGFloat(groups.count) * (Metrics.glanceGroupHeaderHeight + 6)
+                + CGFloat(fleetRows) * Metrics.glanceLocalRowHeight
+
+        let content = max(localContent, fleetContent)
         let total = Metrics.glanceHeaderHeight + Metrics.glanceFooterHeight + 18 + content
         return min(Metrics.glanceMaxHeight(on: screen), max(Metrics.glanceMinHeight, total))
     }
@@ -416,6 +448,8 @@ struct PlatformCard: View {
     var origin: QuotaOrigin = .local
     var customInfo: PlatformCustomInfo? = nil
     var markStyle: MarkStyle = .template
+    /// Whether this provider's reset alarm is on.  The bell shows only while
+    /// alarms are picked per provider; under All there is nothing to pick.
     var isAlarmArmed: Bool = false
     var onToggleAlarm: (() -> Void)? = nil
     /// Set only when the issue is one the owner can actually fix in Settings —
@@ -475,7 +509,7 @@ struct PlatformCard: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            PlatformLogo(providerKey: section.providerKey, size: compact ? 22 : 28, style: markStyle)
+            PlatformLogo(providerKey: row.id, size: compact ? 22 : 28, style: markStyle)
                 .frame(width: compact ? 24 : 30, height: compact ? 24 : 30)
             VStack(alignment: .leading, spacing: 2) {
                 Text(section.providerLabel)
@@ -506,8 +540,11 @@ struct PlatformCard: View {
                         .foregroundStyle(isAlarmArmed ? Theme.accent : .secondary)
                 }
                 .buttonStyle(.plain)
-                .help(isAlarmArmed ? "Reset alarm is armed." + sentenceGap + "Click to disarm." : "Arm alarm when quota resets.")
-                .accessibilityLabel(isAlarmArmed ? "Disarm reset alarm" : "Arm reset alarm")
+                .help(isAlarmArmed
+                      ? "Reset alarm is on for this provider." + sentenceGap + "Click to turn it off."
+                      : "Reset alarm is off for this provider." + sentenceGap + "Click to turn it on.")
+                .accessibilityLabel("Reset Alarm")
+                .accessibilityValue(isAlarmArmed ? "on" : "off")
             }
             if !section.windows.isEmpty { StatusBadge(kind: badge) }
         }
