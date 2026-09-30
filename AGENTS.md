@@ -47,6 +47,17 @@ icon-making and notarial profile.
 `AGENTBAR_BUNDLE_ID` overrides the default bundle id when more than one
 checkout is on the same Mac — keep it stable per worktree.
 
+## Auto-update (Sparkle 2)
+
+Installed copies update themselves from the signed, notarized GitHub release
+that `.github/workflows/mac-release.yml` publishes for every merge to `main`
+that changes the app.  [`docs/AUTO-UPDATE.md`](docs/AUTO-UPDATE.md) is the
+whole pattern — keys, hosting, CI secrets, rollback, the local update
+rehearsal, and the recipe for copying it to another fleet Mac app.  Do not
+change `SUFeedURL`, `SUPublicEDKey` or the `CFBundleVersion` scheme in
+`script/build_and_run.sh` without reading it; a wrong key or a build number
+that goes backwards silently strands every installed copy.
+
 ## Branch and worktree conventions
 
 - Default branch is `main`.
