@@ -15,6 +15,7 @@ enum Theme {
     static let hairline = dyn(NSColor.black.withAlphaComponent(0.06),
                               NSColor.white.withAlphaComponent(0.10))
     static let pacingTrack = dyn(hex(0x2659A6), hex(0x7FA8E8))
+    static let pacingMarker = dyn(NSColor.black, NSColor.white)
     static let fleet = dyn(hex(0x4B4FA8), hex(0x8A8EE0))
 
     /// Unfilled portion of any progress bar.  A black 6% track disappears on a
@@ -56,30 +57,31 @@ enum Metrics {
     static let glanceHeaderHeight: CGFloat = 32
     static let glanceFooterHeight: CGFloat = 38
     static let glanceGroupHeaderHeight: CGFloat = 18
-    static let glanceLocalRowHeight: CGFloat = 34
-    static let glanceFleetRowHeight: CGFloat = 46
+    static let glanceLocalRowHeight: CGFloat = 38
+    static let glanceFleetRowHeight: CGFloat = 50
     static let glanceCTARowHeight: CGFloat = 52
 
     // Per-row column widths.  The two-meter row used to be laid out from
     // whatever space was left over, which is how a percentage ends up
     // truncated after a long platform name; these are fixed instead.
     static let glanceLogoWidth: CGFloat = 16
-    static let glanceRowTitleWidth: CGFloat = 136
-    static let glanceMeterCaptionWidth: CGFloat = 26
-    static let glanceMeterBarWidth: CGFloat = 56
-    static let glanceMeterPercentWidth: CGFloat = 38
-    static let glanceRowTrailingWidth: CGFloat = 64
-    static let glanceRowTrailingWideWidth: CGFloat = 112
+    static let glanceRowTitleWidth: CGFloat = 72
+    static let glanceMeterCaptionWidth: CGFloat = 22
+    static let glanceMeterBarWidth: CGFloat = 50
+    static let glanceMeterPercentWidth: CGFloat = 28
+    static let glanceMeterCountdownWidth: CGFloat = 46
+    static let glanceRowTrailingWidth: CGFloat = 40
+    static let glanceRowTrailingWideWidth: CGFloat = 100
     static let glanceChevronWidth: CGFloat = 10
     /// The fixed gap between the row's columns, used by every spacer so one
     /// change re-tunes the whole row.
-    static let glanceColumnGap: CGFloat = 10
+    static let glanceColumnGap: CGFloat = 8
     /// The gap right after the logo, which is tighter than the rest.
     static let glanceLogoGap: CGFloat = 6
 
-    /// How wide one meter is: caption, gap, bar, gap, percent.
+    /// How wide one meter is: caption, gap, bar, gap, percent, gap, countdown.
     static let glanceMeterWidth: CGFloat = glanceMeterCaptionWidth + 4 + glanceMeterBarWidth
-        + 4 + glanceMeterPercentWidth
+        + 4 + glanceMeterPercentWidth + 4 + glanceMeterCountdownWidth
 
     /// The width a two-meter row actually occupies: logo, title, two meters,
     /// the trailing countdown column, the chevron, their gaps, and the

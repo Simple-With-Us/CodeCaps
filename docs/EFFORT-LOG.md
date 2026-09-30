@@ -5,6 +5,20 @@ PR (when shipped), follow-ups (when parked).
 
 ---
 
+## 2026-09-30 — Glance popover row spacing, left-alignment, pacing indicators, and per-meter countdowns [AG, completed]
+
+Lane: `ag/glance-row-polish-and-pacing` (issue #78, board `0766f1a9`).
+
+Glance popover UI refinements per user requirements:
+- Row expansion and strict left-alignment: Restricted inline row expansion to platforms with more than 2 windows (`canExpand`), eliminating unnecessary expansion and chevron clutter for 1- or 2-window providers.  Enforced `alignment: .leading` and `.frame(maxWidth: .infinity, alignment: .leading)` across all row containers, preventing any horizontal shift or centering when expanded.
+- Platform title gap and timeframe label styling: Halved the whitespace gap between provider logos and the first quota bar by reducing `glanceRowTitleWidth` from 136pt to 72pt.  Restyled timeframe labels ("5h", "7d", "Plan") to 11pt medium weight with secondary opacity, matching percentage clarity and balancing spacing before and after each bar.
+- Per-meter reset countdowns: Embedded italicized reset countdowns in secondary gray directly to the right of every meter percentage, showing hours/minutes for short cadences and days/hours/minutes for weekly/monthly allowances.  Removed the single formulaic trailing countdown from the row's right edge.
+- Window pacing indicators: Added a medium 2pt vertical pacing line crossing each bar vertically at the exact point in time elapsed within that window, calculated from window duration and time to reset via `glanceElapsedFraction`.
+- Row dividers and vertical spacing: Increased row vertical spacing (`glanceLocalRowHeight` to 38pt, `glanceFleetRowHeight` to 50pt) and added faint hairline divider lines between rows on the main view.
+- Tests: Added 4 unit tests in `GlanceRowTests.swift` covering `glanceElapsedFraction` calculations and weekly countdown formatting with minutes.  All 289 tests passing.
+
+---
+
 ## 2026-09-29 — WidgetKit widgets for CodeCaps (iOS Home Screen, Lock Screen & Mac desktop) [AG, completed]
 
 Lane: `ag/widgets-ios-mac` (issue #76).
