@@ -105,7 +105,10 @@ struct GlancePopover: View {
     private var content: some View {
         VStack(alignment: .leading, spacing: 0) {
             groupHeader("THIS MAC")
-            ForEach(localSections) { row in
+            ForEach(Array(localSections.enumerated()), id: \.element.id) { index, row in
+                if index > 0 {
+                    rowDivider
+                }
                 GlanceRow(row: row,
                           now: model.now,
                           issue: model.issues[row.providerKey],
@@ -126,7 +129,10 @@ struct GlancePopover: View {
                         // machine reported it.
                         ForEach(fleetGroups) { group in
                             groupHeader("FLEET · \(group.title.uppercased())")
-                            ForEach(group.rows) { row in
+                            ForEach(Array(group.rows.enumerated()), id: \.element.id) { index, row in
+                                if index > 0 {
+                                    rowDivider
+                                }
                                 GlanceRow(row: row,
                                           now: model.now,
                                           issue: nil,
@@ -160,6 +166,13 @@ struct GlancePopover: View {
     /// surface that actually gets opened, so it has to say so.
     private var consentMessage: String? {
         model.consentNeeded.sorted().compactMap { model.issues[$0] }.first
+    }
+
+    private var rowDivider: some View {
+        Rectangle()
+            .fill(Theme.hairline)
+            .frame(height: 1)
+            .padding(.horizontal, Metrics.glanceGutter)
     }
 
     private func groupHeader(_ title: String) -> some View {
@@ -331,7 +344,7 @@ func glanceMeterCaption(_ snapshot: QuotaWindowSnapshot) -> String {
 /// Reads a duration token such as "5h", "300m", "168h" or "1w" into seconds.
 /// Returns nil for anything that is not a number followed by a time unit, so
 /// a free-text label falls through to the caption's other rules.
-private func glanceDurationSeconds(_ token: String) -> TimeInterval? {
+func glanceDurationSeconds(_ token: String) -> TimeInterval? {
     let digits = token.prefix { $0.isNumber || $0 == "." }
     guard !digits.isEmpty, let value = Double(digits), value > 0 else { return nil }
     let unit = String(token.dropFirst(digits.count))
@@ -346,6 +359,18 @@ private func glanceDurationSeconds(_ token: String) -> TimeInterval? {
     }
 }
 
+/// Computes the fraction of time elapsed in the quota window (0.0 ... 1.0).
+/// Returns nil if window duration cannot be determined or reset date is unknown.
+func glanceElapsedFraction(for snapshot: QuotaWindowSnapshot, now: Date) -> Double? {
+    guard let resetAt = snapshot.resetAt else { return nil }
+    guard let duration = WindowPacing.parseDurationSeconds(token: snapshot.window.window, label: snapshot.window.label)
+        ?? glanceDurationSeconds(snapshot.window.window ?? "") else { return nil }
+    guard duration > 0 else { return nil }
+    let windowStart = resetAt.addingTimeInterval(-duration)
+    let elapsed = max(0, min(duration, now.timeIntervalSince(windowStart)))
+    return min(1.0, max(0.0, elapsed / duration))
+}
+
 /// Rounds a duration to the largest whole unit that divides it, days first so
 /// a weekly window reads "7d" rather than "1w" — the fleet copy already
 /// shortens a 7-day window to "7d", and "1w" next to a "5h" was the
@@ -358,39 +383,53 @@ private func glanceDurationTag(_ seconds: TimeInterval) -> String {
     return "\(whole)s"
 }
 
-/// One caption, one bar, one percentage.  Two of these sit in a row's meter
-/// area, which is why the popover is 560pt rather than 400pt.
+/// One caption, one bar, one percentage, and one reset countdown.
 struct GlanceMeter: View {
     let snapshot: QuotaWindowSnapshot
+    let now: Date
 
     private var percent: Double? { snapshot.remainingPercent }
     private var tint: Color { quotaStatusColor(for: snapshot, sourceFailed: false) }
+    private var countdown: String { glanceResetCountdown(snapshot.resetAt, now: now) }
 
     var body: some View {
         HStack(spacing: 4) {
             Text(glanceMeterCaption(snapshot))
-                .font(.system(size: 9, weight: .medium))
-                .foregroundStyle(.tertiary)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
-                .frame(width: Metrics.glanceMeterCaptionWidth, alignment: .leading)
+                .frame(width: Metrics.glanceMeterCaptionWidth, alignment: .trailing)
             bar
-                .frame(width: Metrics.glanceMeterBarWidth, height: 3)
+                .frame(width: Metrics.glanceMeterBarWidth, height: 4)
             Text(percent.map { "\(Int($0.rounded()))%" } ?? "—")
-                .font(.system(size: 12, weight: .medium).monospacedDigit())
+                .font(.system(size: 11, weight: .medium).monospacedDigit())
                 .foregroundStyle(tint)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
                 .fixedSize(horizontal: true, vertical: false)
-                // Leading, not trailing: the percentage belongs beside ITS
-                // bar.  Trailing-aligning it inside the column pushed it into
-                // the slack at the far end, so a bar at 11% read as though
-                // its number belonged to the next meter over.
                 .frame(width: Metrics.glanceMeterPercentWidth, alignment: .leading)
+            if !countdown.isEmpty {
+                Text(countdown)
+                    .font(.system(size: 10, weight: .regular).italic())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .frame(width: Metrics.glanceMeterCountdownWidth, alignment: .leading)
+            }
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(glanceMeterCaption(snapshot))
-        .accessibilityValue(percent.map { "\(Int($0.rounded())) percent remaining" } ?? "no reading")
+        .accessibilityValue(spokenValue)
+    }
+
+    private var spokenValue: String {
+        let reading = percent.map { "\(Int($0.rounded())) percent remaining" } ?? "no reading"
+        if !countdown.isEmpty {
+            return "\(reading), resets in \(countdown)"
+        }
+        return reading
     }
 
     private var bar: some View {
@@ -401,9 +440,15 @@ struct GlanceMeter: View {
                     Capsule().fill(tint)
                         .frame(width: geometry.size.width * CGFloat(min(max(percent, 0), 100)) / 100)
                 }
+                if let fraction = glanceElapsedFraction(for: snapshot, now: now) {
+                    let x = min(max(geometry.size.width * CGFloat(fraction), 1), geometry.size.width - 1)
+                    Rectangle()
+                        .fill(Theme.pacingMarker)
+                        .frame(width: 2, height: geometry.size.height + 4)
+                        .position(x: x, y: geometry.size.height / 2)
+                }
             }
         }
-        .clipShape(Capsule())
     }
 }
 
@@ -426,6 +471,10 @@ struct GlanceRow: View {
     var onToggleAlarm: (() -> Void)? = nil
 
     private var section: QuotaPlatformSection { row.section }
+
+    private var canExpand: Bool {
+        row.section.windows.count > 2
+    }
 
     /// The window the row speaks for: the one closest to its cap, ignoring any
     /// window whose percentage cannot mean anything.
@@ -452,25 +501,18 @@ struct GlanceRow: View {
         // meter's percentage runs into the second meter's caption.
         HStack(spacing: 0) {
             if let short = meters.short {
-                GlanceMeter(snapshot: short)
+                GlanceMeter(snapshot: short, now: now)
                     .frame(width: Metrics.glanceMeterWidth, alignment: .leading)
             }
             if let long = meters.long {
                 Spacer().frame(width: Metrics.glanceColumnGap)
-                GlanceMeter(snapshot: long)
+                GlanceMeter(snapshot: long, now: now)
                     .frame(width: Metrics.glanceMeterWidth, alignment: .leading)
             }
         }
     }
 
-    /// The trailing column is 64pt wide, or 112pt with no percentage, and one
-    /// line tall.  A reader's issue is a sentence or two, so the column carries
-    /// a token and the sentence goes to the tooltip and the spoken value.
-    private var trailingText: String {
-        if percent != nil {
-            let countdown = glanceResetCountdown(row.resetAt ?? driving?.resetAt, now: now)
-            return countdown.isEmpty ? "no reset time" : countdown
-        }
+    private var statusText: String {
         if let issue {
             if issue == ClaudeLoginState.idle.issue { return "login idle" }
             if issue.localizedCaseInsensitiveContains("permission") { return "needs permission" }
@@ -488,7 +530,7 @@ struct GlanceRow: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
+        VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 0) {
                 PlatformLogo(providerKey: section.providerKey, size: 16, style: markStyle)
                     .frame(width: Metrics.glanceLogoWidth, height: Metrics.glanceLogoWidth)
@@ -519,7 +561,7 @@ struct GlanceRow: View {
                     // click made the compact row say half the truth.
                     meterArea
                 }
-                Spacer().frame(width: Metrics.glanceColumnGap)
+                Spacer(minLength: Metrics.glanceColumnGap)
                 if percent != nil || driving?.remainingPercent != nil {
                     trailingColumn
                         .frame(width: Metrics.glanceRowTrailingWidth, alignment: .trailing)
@@ -528,30 +570,40 @@ struct GlanceRow: View {
                         .frame(width: Metrics.glanceRowTrailingWideWidth, alignment: .trailing)
                 }
                 Spacer().frame(width: Metrics.glanceLogoGap)
-                // Chevron on the rightmost edge signals click-to-expand without
-                // claiming space from any of the value columns.  Rotates 180°
-                // when the row is expanded.  With both cadences already on the
-                // line, the expansion is now for the detail list — every
-                // window's reset countdown — rather than for seeing a second
-                // meter at all.
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(.tertiary)
-                    .frame(width: Metrics.glanceChevronWidth)
-                    .rotationEffect(.degrees(isExpanded ? 180 : 0))
-                    .accessibilityHidden(true)
+                // Chevron signals click-to-expand only when the row has more than
+                // two windows to inspect.  When false, an invisible spacer preserves
+                // trailing margin so rows stay perfectly left-aligned.
+                if canExpand {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                        .frame(width: Metrics.glanceChevronWidth)
+                        .rotationEffect(.degrees(isExpanded ? 180 : 0))
+                        .accessibilityHidden(true)
+                } else {
+                    Spacer().frame(width: Metrics.glanceChevronWidth)
+                }
             }
             .padding(.horizontal, Metrics.glanceGutter)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .frame(height: origin == .fleet ? Metrics.glanceFleetRowHeight : Metrics.glanceLocalRowHeight)
             .contentShape(Rectangle())
-            .onTapGesture { onTap?() }
+            .onTapGesture {
+                if canExpand {
+                    onTap?()
+                }
+            }
             .accessibilityElement(children: .combine)
             .accessibilityLabel(row.title)
             .accessibilityValue(spokenValue)
-            .accessibilityHint(isExpanded ? "Double-tap to collapse." : "Double-tap to expand.")
+            .accessibilityHint(canExpand ? (isExpanded ? "Double-tap to collapse." : "Double-tap to expand.") : "")
             .help(issue ?? row.title)
-            if isExpanded { expandedSection.transition(.opacity.combined(with: .move(edge: .top))) }
+            if isExpanded && canExpand {
+                expandedSection
+                    .transition(.opacity)
+            }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .animation(.easeInOut(duration: 0.18), value: isExpanded)
     }
 
@@ -581,15 +633,15 @@ struct GlanceRow: View {
                 .help("Arm alarm when quota resets and all caps clear.")
                 .accessibilityLabel("Arm reset alarm")
             }
-            VStack(alignment: .trailing, spacing: 2) {
-                Text(trailingText)
+            if percent == nil {
+                Text(statusText)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                if origin == .fleet {
-                    StatusBadge(kind: .fleet)
-                }
+            }
+            if origin == .fleet {
+                StatusBadge(kind: .fleet)
             }
         }
     }
@@ -726,13 +778,23 @@ struct FleetSetupRow: View {
     }
 }
 
-/// Reset countdown without the "Resets in" prefix, for a 58pt column.
+/// Reset countdown without the "Resets in" prefix.  Formats in hours/min for
+/// short windows, and days/hours/min for weekly/monthly windows.
 func glanceResetCountdown(_ reset: Date?, now: Date) -> String {
     guard let reset else { return "" }
     let seconds = reset.timeIntervalSince(now)
     guard seconds > 0 else { return "due" }
     let minutes = max(1, Int(ceil(seconds / 60)))
-    if minutes >= 1440 { return "\(minutes / 1440)d \((minutes % 1440) / 60)h" }
+    if minutes >= 1440 {
+        let days = minutes / 1440
+        let hours = (minutes % 1440) / 60
+        let mins = (minutes % 1440) % 60
+        if mins > 0 {
+            return "\(days)d \(hours)h \(mins)m"
+        } else {
+            return "\(days)d \(hours)h"
+        }
+    }
     if minutes >= 60 { return "\(minutes / 60)h \(minutes % 60)m" }
     return "\(minutes)m"
 }

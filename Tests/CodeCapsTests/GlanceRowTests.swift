@@ -52,6 +52,12 @@ final class GlanceRowTests: XCTestCase {
         XCTAssertEqual(glanceResetCountdown(in25h, now: now), "1d 1h")
     }
 
+    func testCountdownIncludesMinutesForWeeklyWhenNonZero() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let in2d5h30m = now.addingTimeInterval(2 * 86_400 + 5 * 3_600 + 30 * 60)
+        XCTAssertEqual(glanceResetCountdown(in2d5h30m, now: now), "2d 5h 30m")
+    }
+
     func testCountdownFitsInTrailingColumnForCodepath() {
         // The trailing column on the popover is fixed at 64pt wide.  Any
         // countdown value that would clip in that column is a layout bug;
@@ -318,5 +324,51 @@ final class GlanceMeterTests: XCTestCase {
         // A subscription-wide allowance with neither a cadence nor a reset is
         // the long side of the pair far more often than the short one.
         XCTAssertEqual(glanceCadence(makeWindow(id: "u", label: "Included plan", token: nil), now: now), .long)
+    }
+
+    // MARK: Pacing Marker
+
+    func testElapsedFractionForFiveHourWindow() {
+        // 5-hour window with 2.5 hours remaining -> 50% elapsed
+        let window5hHalf = makeWindow(id: "5h", label: "5h window", token: "5h", resetIn: 2.5 * 3_600)
+        let fractionHalf = glanceElapsedFraction(for: window5hHalf, now: now)
+        XCTAssertNotNil(fractionHalf)
+        if let fractionHalf {
+            XCTAssertEqual(fractionHalf, 0.5, accuracy: 0.01)
+        }
+
+        // 5-hour window with 5 hours remaining -> 0% elapsed
+        let window5hFull = makeWindow(id: "5h", label: "5h window", token: "5h", resetIn: 5.0 * 3_600)
+        let fractionFull = glanceElapsedFraction(for: window5hFull, now: now)
+        XCTAssertNotNil(fractionFull)
+        if let fractionFull {
+            XCTAssertEqual(fractionFull, 0.0, accuracy: 0.01)
+        }
+
+        // 5-hour window with 0 hours remaining -> 100% elapsed
+        let window5hZero = makeWindow(id: "5h", label: "5h window", token: "5h", resetIn: 0)
+        let fractionZero = glanceElapsedFraction(for: window5hZero, now: now)
+        XCTAssertNotNil(fractionZero)
+        if let fractionZero {
+            XCTAssertEqual(fractionZero, 1.0, accuracy: 0.01)
+        }
+    }
+
+    func testElapsedFractionForWeeklyWindow() {
+        // 7-day window with 3.5 days remaining -> 50% elapsed
+        let window7dHalf = makeWindow(id: "7d", label: "Weekly window", token: "weekly", resetIn: 3.5 * 86_400)
+        let fractionHalf = glanceElapsedFraction(for: window7dHalf, now: now)
+        XCTAssertNotNil(fractionHalf)
+        if let fractionHalf {
+            XCTAssertEqual(fractionHalf, 0.5, accuracy: 0.01)
+        }
+    }
+
+    func testElapsedFractionNilWhenResetOrDurationUnknown() {
+        let windowNoReset = makeWindow(id: "x", label: "No reset", token: "5h", resetIn: nil)
+        XCTAssertNil(glanceElapsedFraction(for: windowNoReset, now: now))
+
+        let windowNoDuration = makeWindow(id: "y", label: "Unknown", token: nil, resetIn: 3_600)
+        XCTAssertNil(glanceElapsedFraction(for: windowNoDuration, now: now))
     }
 }
