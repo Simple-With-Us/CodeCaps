@@ -50,7 +50,7 @@ Antigravity sells two independent model pools, shown as two rows, **Gemini** and
 
 None of the above ever asks for a typed credential — every reader reuses a session or file the CLI already created.
 
-The first time a freshly installed CodeCaps needs Claude Code's Keychain item, macOS asks whether to let it through: the login Keychain grants access per app, and a newly installed CodeCaps is a new app to it, so Claude can show as signed out even while Claude Code is signed in.  Open Console → Settings → Sources & Fleet, press **Allow Access To Claude Code** on the Claude row, and choose **Always Allow** in the panel macOS puts up — it is asked once, it is a read, and CodeCaps never writes to or removes Claude Code's saved login.
+CodeCaps reads Claude Code's saved login through macOS's own `security` tool, so a fresh install needs no setup and never raises a Keychain panel of its own.  The **Allow Access To Claude Code** button on the Claude row (Console → Settings → Sources & Fleet) appears only if macOS explicitly refuses that read; press it and choose **Always Allow** in the panel macOS puts up.  On a heavily loaded Mac the Claude row may briefly read "temporarily unavailable" and recover on the next refresh.  CodeCaps only ever reads Claude Code's saved login: it never writes to, re-permissions, or removes it.
 
 ## Fleet Push And Pull
 

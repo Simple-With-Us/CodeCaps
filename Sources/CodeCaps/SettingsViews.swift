@@ -287,9 +287,10 @@ struct SettingsSourcesFleetPage: View {
         .accessibilityElement(children: needsConsent ? .contain : .combine)
     }
 
-    /// The one-time consent step.  macOS guards another app's Keychain item
-    /// per code identity, so a freshly installed CodeCaps has to be allowed
-    /// once before it can read Claude Code's saved login.
+    /// The consent step, shown only when macOS explicitly refuses the
+    /// `security` read the refresh loop makes.  The button runs that same
+    /// `security` read without a short deadline, so the panel macOS shows, and
+    /// the Always Allow answered in it, apply to the program the loop reads as.
     @ViewBuilder
     private var claudeConsentControls: some View {
         VStack(alignment: .leading, spacing: 4) {

@@ -38,6 +38,7 @@ public struct LocalQuotaReader: Sendable {
     private let readClaudeCredential: @Sendable () async -> ClaudeCredentialAccess
     private let renewClaudeLogin: @Sendable () async -> Void
     private let renewalThrottle: ClaudeRenewalThrottle
+    private let claudeKeychainTimeout: TimeInterval
 
     private static let maxCredentialBytes = 1_048_576
     private static let maxResponseBytes = 1_048_576
@@ -56,7 +57,8 @@ public struct LocalQuotaReader: Sendable {
         runAntigravity: (@Sendable () async throws -> Data)? = nil,
         readClaudeCredential: (@Sendable () async -> ClaudeCredentialAccess)? = nil,
         renewClaudeLogin: (@Sendable () async -> Void)? = nil,
-        renewalThrottle: ClaudeRenewalThrottle = .shared
+        renewalThrottle: ClaudeRenewalThrottle = .shared,
+        claudeKeychainTimeout: TimeInterval = ClaudeCredentialSource.boundedAccessTimeout
     ) {
         self.homeDirectory = homeDirectory.standardizedFileURL
         self.now = now
@@ -71,6 +73,7 @@ public struct LocalQuotaReader: Sendable {
             self.renewClaudeLogin = Self.makeClaudeRenewer(homeDirectory: self.homeDirectory)
         } else { self.renewClaudeLogin = {} }
         self.renewalThrottle = renewalThrottle
+        self.claudeKeychainTimeout = claudeKeychainTimeout
     }
 
     /// Reads all configured local sources concurrently.  This method never
@@ -123,7 +126,15 @@ public struct LocalQuotaReader: Sendable {
         var access = ClaudeCredentialAccess.missing
         var renewable = false
         if candidate == nil {
-            access = await ClaudeCredentialSource.boundedAccess { await readClaudeCredential() }
+            access = await ClaudeCredentialSource.boundedAccess(timeout: claudeKeychainTimeout) { await readClaudeCredential() }
+            // A read that could not finish says nothing about the login, so
+            // stop here: no renewal run and no second read on a Mac that is
+            // already too loaded to answer, and the row says "temporarily
+            // unavailable" rather than "sign in" or "needs permission".
+            if access == .temporarilyUnavailable {
+                return ProviderRead(provider: provider, windows: [],
+                                    issue: ClaudeLoginState.temporarilyUnavailable.issue)
+            }
             var keychainRoot = credentialRoot(access)
             candidate = ClaudeOAuthParser.validOAuth(in: keychainRoot, now: now())
             renewable = ClaudeOAuthParser.isRenewable(in: file, now: now())
@@ -135,7 +146,7 @@ public struct LocalQuotaReader: Sendable {
             if candidate == nil, renewable,
                await renewalThrottle.perform(now: now(), action: renewClaudeLogin) {
                 file = (try? readJSONObject(relativePath: ".claude/.credentials.json")) ?? [:]
-                access = await ClaudeCredentialSource.boundedAccess { await readClaudeCredential() }
+                access = await ClaudeCredentialSource.boundedAccess(timeout: claudeKeychainTimeout) { await readClaudeCredential() }
                 keychainRoot = credentialRoot(access)
                 candidate = ClaudeOAuthParser.validOAuth(in: file, now: now())
                     ?? ClaudeOAuthParser.validOAuth(in: keychainRoot, now: now())

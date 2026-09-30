@@ -723,10 +723,12 @@ final class MonitorModel: ObservableObject {
 
     // MARK: - Claude Code Consent
 
-    /// One interactive Keychain read of Claude Code's own saved login, so
-    /// macOS can show its panel and the owner can press Always Allow.  Reached
-    /// only from Allow Access To Claude Code; the refresh loop never gets
-    /// here, and nothing on this path writes to or deletes Claude Code's item.
+    /// One interactive read of Claude Code's own saved login, through the same
+    /// `security` tool the refresh loop reads with, so macOS can show its panel
+    /// and an Always Allow applies to the identity the loop actually uses.
+    /// Reached only from Allow Access To Claude Code; the refresh loop never
+    /// gets here, and nothing on this path writes to or deletes Claude Code's
+    /// item.
     func allowClaudeCodeAccess() async -> (success: Bool, message: String) {
         let granted = await ClaudeCredentialSource.readAllowingInteraction()
         if granted {
