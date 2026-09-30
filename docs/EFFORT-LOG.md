@@ -5,6 +5,21 @@ PR (when shipped), follow-ups (when parked).
 
 ---
 
+## 2026-09-30 — Quota bars show used (red) then remaining (green), with the elapsed-time marker on every window [CLAUDE, in review]
+
+Lane: `claude/quota-bar-used-remaining`.
+
+Owner request: the black elapsed-time line sat in the right place but did not read against a bar that only filled for what was left.  Every quota bar is now one full-width two-segment bar: a red segment for the share used (`100 - remaining`) starting at the left, then a green segment for the rest.  Red reaching past the marker means a window is being burned faster than time.  The "% remaining" text and the reset countdown are unchanged.
+- One bar, three surfaces: `QuotaUsageBar` (`QuotaComponents.swift`) now draws the Glance meters and both Console rows (paced and compact).  The Console's separate time-shaded pacing bar is gone.
+- The math is pure and lives in QuotaCore (`QuotaBarMetrics.swift`): `QuotaPeriod` reads a window's period from its token, `QuotaPeriodSpan` turns that and the reset into a start, and `QuotaBarMetrics` gives segment widths, marker offset and the spoken value.  A monthly or billing-cycle window starts one calendar month before its reset, never 30 days.
+- The marker is now on Cursor's monthly Plan and on any window whose period can be read, including tokens the old substring parser misread (`31d` as one day, `15h` as five hours) and `1w`.  A window with no derivable period has no marker.
+- An explicit period start wins when the provider gives one: `QuotaWindow.periodStart` (local only, not a wire field) is filled from Cursor's `billingCycleStart`, Grok's period start and MiniMax's window start times.
+- VoiceOver says "85 percent remaining, 15 percent used, 40 percent of period elapsed".
+- Tests: `QuotaBarMetricsTests` (QuotaCore), `QuotaUsageBarTests` and `QuotaBarRenderTests` (CodeCaps); the render test writes light and dark PNGs when `CODECAPS_BAR_RENDER_DIR` is set and skips otherwise.
+- iOS companion and widgets draw remaining-only bars with no elapsed marker, so they are unchanged.
+
+---
+
 ## 2026-09-30 — Glance popover row spacing, left-alignment, pacing indicators, and per-meter countdowns [AG, completed]
 
 Lane: `ag/glance-row-polish-and-pacing` (issue #78, board `0766f1a9`).

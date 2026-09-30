@@ -414,6 +414,7 @@ private func window(
     absoluteLimit: Double? = nil,
     quotaUnit: String? = nil,
     planName: String? = nil,
+    periodStart: String? = nil,
     observedAt: Date
 ) -> QuotaWindow {
     let bounded = percentage(remaining)
@@ -424,7 +425,8 @@ private func window(
         remainingPercent: bounded, absoluteRemaining: absoluteRemaining, absoluteLimit: absoluteLimit,
         quotaUnit: quotaUnit, planName: planName,
         resetAt: resetAt, window: windowToken,
-        occurredAt: isoFormatter.string(from: observedAt), source: provider.label
+        occurredAt: isoFormatter.string(from: observedAt), source: provider.label,
+        periodStart: periodStart
     ).normalizedForExport()
 }
 
@@ -505,7 +507,7 @@ private func parseGrok(_ root: [String: Any], observedAt: Date) -> [QuotaWindow]
         } else { nil }
         // On-demand caps and prepaid balances are separate from this subscription.
         return [window(provider: .grok, id: "subscription", label: cadence.map { "\($0) window" } ?? "Subscription window",
-                       remaining: 100 - used, resetAt: reset, windowToken: cadence, observedAt: observedAt)]
+                       remaining: 100 - used, resetAt: reset, windowToken: cadence, periodStart: start, observedAt: observedAt)]
     }
     let nested = record(root["credits"] ?? root["usage"] ?? root["billing"] ?? root["data"])
     var merged = nested; for (key, value) in root { merged[key] = value }
@@ -581,10 +583,10 @@ private func parseMiniMax(_ root: [String: Any], observedAt: Date) -> [QuotaWind
         let weeklyLabel = weeklyToken.map { "\(model) (\($0) window)" } ?? "\(model) (weekly window)"
 
         if intervalPercent != nil || intervalCounts != nil || intervalReset != nil {
-            result.append(window(provider: .minimax, id: "\(model):interval", label: intervalLabel, remaining: intervalRemaining, resetAt: intervalReset, windowToken: intervalToken, modelId: model, absoluteRemaining: intervalCounts?.remaining, absoluteLimit: intervalCounts?.limit, quotaUnit: intervalCounts == nil ? nil : "requests", planName: planName, observedAt: observedAt))
+            result.append(window(provider: .minimax, id: "\(model):interval", label: intervalLabel, remaining: intervalRemaining, resetAt: intervalReset, windowToken: intervalToken, modelId: model, absoluteRemaining: intervalCounts?.remaining, absoluteLimit: intervalCounts?.limit, quotaUnit: intervalCounts == nil ? nil : "requests", planName: planName, periodStart: intervalStart, observedAt: observedAt))
         }
         if weeklyPercent != nil || weeklyCounts != nil || weeklyReset != nil {
-            result.append(window(provider: .minimax, id: "\(model):weekly", label: weeklyLabel, remaining: weeklyRemaining, resetAt: weeklyReset, windowToken: weeklyToken, modelId: model, absoluteRemaining: weeklyCounts?.remaining, absoluteLimit: weeklyCounts?.limit, quotaUnit: weeklyCounts == nil ? nil : "requests", planName: planName, observedAt: observedAt))
+            result.append(window(provider: .minimax, id: "\(model):weekly", label: weeklyLabel, remaining: weeklyRemaining, resetAt: weeklyReset, windowToken: weeklyToken, modelId: model, absoluteRemaining: weeklyCounts?.remaining, absoluteLimit: weeklyCounts?.limit, quotaUnit: weeklyCounts == nil ? nil : "requests", planName: planName, periodStart: weeklyStart, observedAt: observedAt))
         }
         if intervalPercent == nil, intervalCounts == nil, intervalReset == nil, weeklyPercent == nil, weeklyCounts == nil, weeklyReset == nil {
             result.append(window(provider: .minimax, id: "\(model):unknown", label: model, remaining: nil, resetAt: nil, windowToken: nil, modelId: model, planName: planName, observedAt: observedAt))

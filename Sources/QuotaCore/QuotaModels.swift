@@ -59,6 +59,16 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
     public var skipReason: String?
     public var occurredAt: String
     public var source: String?
+    /// When this window's period began, as an ISO-8601 string, when the provider
+    /// says so explicitly (Cursor's `billingCycleStart`, Grok's and MiniMax's
+    /// period start).  The elapsed-time marker prefers it over a start derived
+    /// from the reset and the window's cadence.
+    ///
+    /// Deliberately not a coding key: it is a local display input, not part of
+    /// the wire schema, so the fleet ingest payload and the handoff file are
+    /// unchanged.  A window that arrives over the wire has none and falls back
+    /// to the derived start.
+    public var periodStart: String? = nil
 
     private enum CodingKeys: String, CodingKey {
         case id, provider, providerKey, providerLabel, via, sourceApp, modelId, modelType, label
@@ -90,7 +100,8 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
         skip: Bool = false,
         skipReason: String? = nil,
         occurredAt: String,
-        source: String? = nil
+        source: String? = nil,
+        periodStart: String? = nil
     ) {
         self.id = id
         self.provider = provider
@@ -115,6 +126,7 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
         self.skipReason = skipReason
         self.occurredAt = occurredAt
         self.source = source
+        self.periodStart = periodStart
     }
 
     public init(from decoder: Decoder) throws {
@@ -146,6 +158,7 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
 
     public var occurredDate: Date? { ISO8601Date.parse(occurredAt) }
     public var resetDate: Date? { resetAt.flatMap(ISO8601Date.parse) }
+    public var periodStartDate: Date? { periodStart.flatMap(ISO8601Date.parse) }
 
     /// The canonical key used by native grouping and display.
     public var canonicalProviderKey: String {
@@ -538,14 +551,27 @@ public struct WindowPacing: Equatable, Sendable {
         windowLabel: String,
         resetAt: Date?,
         remainingPercent: Double?,
-        now: Date = Date()
+        now: Date = Date(),
+        periodStart: Date? = nil,
+        calendar: Calendar = .current
     ) -> WindowPacing? {
         guard let resetAt, let remainingPercent else { return nil }
-        guard let durationSeconds = parseDurationSeconds(token: windowToken, label: windowLabel), durationSeconds > 0 else {
+        // The same span the elapsed-time marker draws, so the bar and its
+        // "Day 3 of 7" caption can never disagree: an explicit start wins, and a
+        // monthly window is a calendar month rather than a flat 30 days.
+        guard let span = QuotaPeriodSpan.resolve(
+            token: windowToken,
+            label: windowLabel,
+            resetAt: resetAt,
+            explicitStart: periodStart,
+            calendar: calendar
+        ) else {
             return nil
         }
+        let durationSeconds = span.duration
+        guard durationSeconds > 0 else { return nil }
 
-        let windowStart = resetAt.addingTimeInterval(-durationSeconds)
+        let windowStart = span.start
         let elapsed = max(0, min(durationSeconds, now.timeIntervalSince(windowStart)))
         let timePercent = min(100, max(0, (elapsed / durationSeconds) * 100))
         let usedPercent = min(100, max(0, 100 - remainingPercent))
@@ -638,13 +664,15 @@ public struct WindowPacing: Equatable, Sendable {
 }
 
 public extension QuotaWindowSnapshot {
-    func pacing(now: Date = Date()) -> WindowPacing? {
+    func pacing(now: Date = Date(), calendar: Calendar = .current) -> WindowPacing? {
         WindowPacing.calculate(
             windowToken: window.window,
             windowLabel: window.label,
             resetAt: resetAt,
             remainingPercent: remainingPercent,
-            now: now
+            now: now,
+            periodStart: window.periodStartDate,
+            calendar: calendar
         )
     }
 }

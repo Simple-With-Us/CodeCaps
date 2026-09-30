@@ -41,6 +41,28 @@ final class MiniMaxQuotaTests: XCTestCase {
         XCTAssertNil(weekly.absoluteLimit)
     }
 
+    /// Each window's own start time is carried through as its explicit period
+    /// start for the elapsed-time marker, and a window the API gives no start
+    /// time for has none, so its marker is derived from its cadence or omitted.
+    func testWindowStartTimesBecomeExplicitPeriodStarts() async throws {
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        try write(#"{"api_key":"test-key"}"#, to: home.appendingPathComponent(".mmx/config.json"))
+        let body = #"{"base_resp":{"status_code":0},"model_remains":[{"model_name":"general","current_interval_remaining_percent":60,"current_weekly_remaining_percent":90,"current_interval_start_time":"2026-09-30T05:00:00Z","current_interval_end_time":"2026-09-30T10:00:00Z","current_weekly_start_time":"2026-09-28T00:00:00Z","current_weekly_end_time":"2026-10-05T00:00:00Z"}]}"#
+        let result = await makeReader(home: home, body: body).read()
+        let windows = result.windows.filter { $0.providerKey == "minimax" }
+        let interval = try XCTUnwrap(windows.first { $0.id.hasSuffix(":interval") })
+        let weekly = try XCTUnwrap(windows.first { $0.id.hasSuffix(":weekly") })
+        XCTAssertEqual(interval.periodStart, "2026-09-30T05:00:00Z")
+        XCTAssertEqual(interval.window, "5h")
+        XCTAssertEqual(weekly.periodStart, "2026-09-28T00:00:00Z")
+        XCTAssertEqual(weekly.window, "1w")
+
+        let noStarts = #"{"base_resp":{"status_code":0},"model_remains":[{"model_name":"general","current_interval_remaining_percent":99,"current_weekly_remaining_percent":97,"remains_time":14998196,"weekly_remains_time":547798196}]}"#
+        let bare = await makeReader(home: home, body: noStarts).read().windows.filter { $0.providerKey == "minimax" }
+        XCTAssertTrue(bare.allSatisfy { $0.periodStart == nil })
+    }
+
     func testNonPositiveCountsDoNotBecomeAQuota() async throws {
         let home = try makeHome()
         defer { try? FileManager.default.removeItem(at: home) }
