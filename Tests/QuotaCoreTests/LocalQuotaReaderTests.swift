@@ -46,6 +46,10 @@ final class LocalQuotaReaderTests: XCTestCase {
     }
 
     func testRealClaudeCredentialSourceReadsValidData() async throws {
+        // Opt-in only.  This reads the owner's live Claude Code login through
+        // `security`, which a routine `swift test` on their Mac must not do.
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["CODECAPS_LIVE_KEYCHAIN_TESTS"] == "1",
+                          "Set CODECAPS_LIVE_KEYCHAIN_TESTS=1 to read the live Claude Code Keychain item.")
         guard case .authorized(let data) = await ClaudeCredentialSource.access() else { return }
         // Assert the shape, not a byte count.  This reads the live keychain
         // item, whose size depends on how many MCP OAuth servers are registered
@@ -173,12 +177,14 @@ final class LocalQuotaReaderTests: XCTestCase {
             readClaudeCredential: {
                 try? await Task.sleep(nanoseconds: 10_000_000_000)
                 return .authorized(Data(#"{"claudeAiOauth":{"accessToken":"never-used"}}"#.utf8))
-            }
+            },
+            claudeKeychainTimeout: 0.5
         )
         let result = await reader.read()
         let elapsed = started.duration(to: .now)
         XCTAssertLessThan(elapsed, .seconds(5))
-        XCTAssertEqual(result.issues["anthropic"], ClaudeLoginState.signedOut.issue)
+        // A read that did not finish is not a signed-out Mac.
+        XCTAssertEqual(result.issues["anthropic"], ClaudeLoginState.temporarilyUnavailable.issue)
         XCTAssertTrue(result.consentNeeded.isEmpty)
     }
 
