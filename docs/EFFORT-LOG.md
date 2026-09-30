@@ -5,6 +5,14 @@ PR (when shipped), follow-ups (when parked).
 
 ---
 
+## 2026-09-30 — CodeCaps iOS Release signs with the App Store profiles [GROK, completed]
+
+Lane: `grok/codecaps-ios-sign` at `~/apps/codecaps-grok-ios-sign` (board `0f6b32c1`).
+
+Xcode 26 automatic signing calls the developer provisioning service, and this API key gets 401 there.  The App Store Connect API still works, but every CodeCaps App Store profile has an empty App Group list, so a signature that requests `group.com.simplewithus.codecaps` cannot match.  Release now uses manual signing with "CodeCaps Companion AppStore" and "CodeCaps Companion Widgets AppStore", and those configurations omit the group entitlement.  Debug keeps the group for a logged-in Xcode session.  Widgets fall back to standard defaults, so a TestFlight build will not share quota data with the widget until the group is assigned on both App IDs and the profiles are regenerated.  Local Release archive succeeded with Apple Distribution and `get-task-allow` false.  GitHub-hosted ios-ship run 36768356017 uploaded build 202609301951, and App Store Connect reports it VALID.
+
+---
+
 ## 2026-09-30 — Quota bars show used (red) then remaining (green), with the elapsed-time marker on every window [CLAUDE, in review]
 
 Lane: `claude/quota-bar-used-remaining`.

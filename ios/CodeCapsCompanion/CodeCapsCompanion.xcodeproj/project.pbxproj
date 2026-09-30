@@ -299,7 +299,6 @@
 				TargetAttributes = {
 					176BC6FE9533347AC12DA6E4 = {
 						DevelopmentTeam = CC8UTF7ATG;
-						ProvisioningStyle = Automatic;
 					};
 					27F7C2D31B71471EDEB75F09 = {
 						DevelopmentTeam = CC8UTF7ATG;
@@ -311,7 +310,6 @@
 					};
 					B8CBE2BF110881FA5BE5725B = {
 						DevelopmentTeam = CC8UTF7ATG;
-						ProvisioningStyle = Automatic;
 					};
 				};
 			};
@@ -520,8 +518,9 @@
 		5082405FCA542C7693943313 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CODE_SIGN_ENTITLEMENTS = Widgets/CodeCapsWidgets.entitlements;
-				CODE_SIGN_STYLE = Automatic;
+				CODE_SIGN_ENTITLEMENTS = Widgets/CodeCapsWidgets.Release.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Distribution";
+				CODE_SIGN_STYLE = Manual;
 				DEVELOPMENT_TEAM = CC8UTF7ATG;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Widgets/Info.plist;
@@ -532,6 +531,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.simplewithus.codecaps.ios.widgets;
+				PROVISIONING_PROFILE_SPECIFIER = "CodeCaps Companion Widgets AppStore";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -735,9 +735,9 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ENTITLEMENTS = App/CodeCapsCompanion.entitlements;
-				CODE_SIGN_IDENTITY = "iPhone Developer";
-				CODE_SIGN_STYLE = Automatic;
+				CODE_SIGN_ENTITLEMENTS = App/CodeCapsCompanion.Release.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Distribution";
+				CODE_SIGN_STYLE = Manual;
 				DEVELOPMENT_TEAM = CC8UTF7ATG;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = App/Info.plist;
@@ -747,6 +747,7 @@
 					"@executable_path/Frameworks",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.simplewithus.codecaps.ios;
+				PROVISIONING_PROFILE_SPECIFIER = "CodeCaps Companion AppStore";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
