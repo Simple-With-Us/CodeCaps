@@ -8,17 +8,17 @@ import XCTest
 private let server = "https://usage.example.com/api/quota"
 private let service = "com.jays.agent-bar.mac.read-token"
 private let syncService = "com.jays.agent-bar.mac.sync-token"
-private let secret = "tok_live_0123456789abcdef"
+private let sentinel = "sentinel-value-0123"
 
 final class TokenCacheTests: XCTestCase {
     // MARK: Cache
 
     func testCacheHitMakesNoSecondKeychainRead() async {
-        let keychain = FakeKeychain(stored: secret)
+        let keychain = FakeKeychain(stored: sentinel)
         let cache = keychain.cache()
         for _ in 0..<10 {
             let token = await cache.token(server: server, service: service)
-            XCTAssertEqual(token, secret)
+            XCTAssertEqual(token, sentinel)
         }
         XCTAssertEqual(keychain.readCount, 1)
         let status = await cache.status(server: server, service: service)
@@ -28,7 +28,7 @@ final class TokenCacheTests: XCTestCase {
     /// Each token is its own entry, so the Read Token and the Ingest Token are
     /// each read once, and a new endpoint is read once too.
     func testEachTokenIsReadOncePerLaunch() async {
-        let keychain = FakeKeychain(stored: secret)
+        let keychain = FakeKeychain(stored: sentinel)
         let cache = keychain.cache()
         for _ in 0..<3 {
             _ = await cache.token(server: server, service: service)
@@ -43,7 +43,7 @@ final class TokenCacheTests: XCTestCase {
     /// Every request that arrives while the first read runs waits for that
     /// same read instead of starting its own.
     func testConcurrentRequestsShareOneRead() async throws {
-        let keychain = FakeKeychain(stored: secret, holdReads: true)
+        let keychain = FakeKeychain(stored: sentinel, holdReads: true)
         let cache = keychain.cache()
         let first = Task { await cache.token(server: server, service: service) }
         try await waitUntil { keychain.readCount == 1 }
@@ -55,10 +55,10 @@ final class TokenCacheTests: XCTestCase {
         XCTAssertEqual(midway, .reading)
         keychain.releaseReads()
         let firstToken = await first.value
-        XCTAssertEqual(firstToken, secret)
+        XCTAssertEqual(firstToken, sentinel)
         for joiner in joiners {
             let token = await joiner.value
-            XCTAssertEqual(token, secret)
+            XCTAssertEqual(token, sentinel)
         }
         XCTAssertEqual(keychain.readCount, 1)
     }
@@ -86,7 +86,7 @@ final class TokenCacheTests: XCTestCase {
     /// A read parked behind a panel returns at its bound, and nothing queues a
     /// second call behind it.
     func testTimedOutReadIsNotRetried() async {
-        let keychain = FakeKeychain(stored: secret, holdReads: true)
+        let keychain = FakeKeychain(stored: sentinel, holdReads: true)
         let cache = keychain.cache(silentRead: 0.05)
         let started = Date()
         let firstToken = await cache.token(server: server, service: service)
@@ -105,14 +105,14 @@ final class TokenCacheTests: XCTestCase {
     /// If somebody answers the panel after the bound, the token that read
     /// brings back is kept — still without another Keychain call.
     func testReadAnsweredAfterItsBoundIsKept() async throws {
-        let keychain = FakeKeychain(stored: secret, holdReads: true)
+        let keychain = FakeKeychain(stored: sentinel, holdReads: true)
         let cache = keychain.cache(silentRead: 0.05)
         let early = await cache.token(server: server, service: service)
         XCTAssertNil(early)
         keychain.releaseReads()
         try await waitUntil { await cache.status(server: server, service: service) == .cached }
         let token = await cache.token(server: server, service: service)
-        XCTAssertEqual(token, secret)
+        XCTAssertEqual(token, sentinel)
         XCTAssertEqual(keychain.readCount, 1)
     }
 
@@ -121,12 +121,12 @@ final class TokenCacheTests: XCTestCase {
     func testSaveRefreshesTheCacheWithoutARead() async throws {
         let keychain = FakeKeychain(stored: "old-token")
         let cache = keychain.cache()
-        try await cache.save(secret, server: server, service: service)
+        try await cache.save(sentinel, server: server, service: service)
         let token = await cache.token(server: server, service: service)
-        XCTAssertEqual(token, secret)
+        XCTAssertEqual(token, sentinel)
         XCTAssertEqual(keychain.readCount, 0)
         XCTAssertEqual(keychain.operations, ["delete \(service)", "add \(service)"])
-        XCTAssertEqual(keychain.stored, secret)
+        XCTAssertEqual(keychain.stored, sentinel)
     }
 
     /// Saving after a failure clears the Re-Authorize state and replaces the
@@ -135,9 +135,9 @@ final class TokenCacheTests: XCTestCase {
         let keychain = FakeKeychain(stored: nil, readStatus: errSecAuthFailed)
         let cache = keychain.cache()
         _ = await cache.token(server: server, service: service)
-        try await cache.save(secret, server: server, service: service)
+        try await cache.save(sentinel, server: server, service: service)
         let token = await cache.token(server: server, service: service)
-        XCTAssertEqual(token, secret)
+        XCTAssertEqual(token, sentinel)
         XCTAssertEqual(keychain.readCount, 1)
     }
 
@@ -149,7 +149,7 @@ final class TokenCacheTests: XCTestCase {
         let cache = keychain.cache()
         _ = await cache.token(server: server, service: service)
         do {
-            try await cache.save(secret, server: server, service: service)
+            try await cache.save(sentinel, server: server, service: service)
             XCTFail("a refused delete must fail the save")
         } catch {
             XCTAssertEqual(error as? TokenStore.Failure,
@@ -162,16 +162,16 @@ final class TokenCacheTests: XCTestCase {
     }
 
     func testReauthorizeHoldsTheTokenAndStopsSilentReads() async {
-        let keychain = FakeKeychain(stored: secret, readStatus: errSecAuthFailed)
+        let keychain = FakeKeychain(stored: sentinel, readStatus: errSecAuthFailed)
         let cache = keychain.cache()
         let silent = await cache.token(server: server, service: service)
         XCTAssertNil(silent)
         keychain.setReadStatus(nil)
         let authorized = await cache.readAllowingInteraction(server: server, service: service)
-        XCTAssertEqual(authorized, secret)
+        XCTAssertEqual(authorized, sentinel)
         for _ in 0..<5 {
             let token = await cache.token(server: server, service: service)
-            XCTAssertEqual(token, secret)
+            XCTAssertEqual(token, sentinel)
         }
         XCTAssertEqual(keychain.readFlags, [false, true])
     }
@@ -189,7 +189,7 @@ final class TokenCacheTests: XCTestCase {
     }
 
     func testDeleteLeavesNothingToRead() async throws {
-        let keychain = FakeKeychain(stored: secret)
+        let keychain = FakeKeychain(stored: sentinel)
         let cache = keychain.cache()
         _ = await cache.token(server: server, service: service)
         try await cache.delete(server: server, service: service)
@@ -204,7 +204,7 @@ final class TokenCacheTests: XCTestCase {
     /// appear, so nothing retries it by itself.  Re-Authorize Saved Token is
     /// the way back.
     func testLockedKeychainAtFirstReadIsNotRetried() async {
-        let keychain = FakeKeychain(stored: secret, readStatus: errSecInteractionNotAllowed)
+        let keychain = FakeKeychain(stored: sentinel, readStatus: errSecInteractionNotAllowed)
         let cache = keychain.cache()
         for _ in 0..<5 {
             let token = await cache.token(server: server, service: service)
@@ -213,7 +213,7 @@ final class TokenCacheTests: XCTestCase {
         XCTAssertEqual(keychain.readFlags, [false])
         keychain.setReadStatus(nil)
         let authorized = await cache.readAllowingInteraction(server: server, service: service)
-        XCTAssertEqual(authorized, secret)
+        XCTAssertEqual(authorized, sentinel)
         XCTAssertEqual(keychain.readFlags, [false, true])
     }
 
@@ -221,12 +221,12 @@ final class TokenCacheTests: XCTestCase {
     /// launch already holds — not after a successful read, and not after a
     /// save.
     func testReauthorizeWithAHeldTokenMakesNoKeychainRead() async throws {
-        let keychain = FakeKeychain(stored: secret)
+        let keychain = FakeKeychain(stored: sentinel)
         let changes = ChangeCounter()
         let cache = keychain.cache(changed: { changes.bump() })
         _ = await cache.token(server: server, service: service)
         let afterRead = await cache.readAllowingInteraction(server: server, service: service)
-        XCTAssertEqual(afterRead, secret)
+        XCTAssertEqual(afterRead, sentinel)
         try await cache.save("newer-token", server: server, service: service)
         let afterSave = await cache.readAllowingInteraction(server: server, service: service)
         XCTAssertEqual(afterSave, "newer-token")
@@ -238,7 +238,7 @@ final class TokenCacheTests: XCTestCase {
     /// is held, the model is told so its button clears at once, and pressing
     /// the button afterwards makes no second, interactive request.
     func testLateAnswerClearsTheStateAndNeedsNoInteractiveRead() async throws {
-        let keychain = FakeKeychain(stored: secret, holdReads: true)
+        let keychain = FakeKeychain(stored: sentinel, holdReads: true)
         let changes = ChangeCounter()
         let cache = keychain.cache(silentRead: 0.05, changed: { changes.bump() })
         let early = await cache.token(server: server, service: service)
@@ -246,14 +246,14 @@ final class TokenCacheTests: XCTestCase {
         keychain.releaseReads()
         try await waitUntil { changes.count == 1 }
         let authorized = await cache.readAllowingInteraction(server: server, service: service)
-        XCTAssertEqual(authorized, secret)
+        XCTAssertEqual(authorized, sentinel)
         XCTAssertEqual(keychain.readFlags, [false])
     }
 
     /// Re-Authorize Saved Token waits for a silent read that is still running
     /// instead of starting a second Keychain request beside it.
     func testReauthorizeJoinsARunningSilentRead() async throws {
-        let keychain = FakeKeychain(stored: secret, holdReads: true)
+        let keychain = FakeKeychain(stored: sentinel, holdReads: true)
         let cache = keychain.cache()
         let silent = Task { await cache.token(server: server, service: service) }
         try await waitUntil { keychain.readCount == 1 }
@@ -263,8 +263,8 @@ final class TokenCacheTests: XCTestCase {
         keychain.releaseReads()
         let silentToken = await silent.value
         let reauthorizedToken = await reauthorize.value
-        XCTAssertEqual(silentToken, secret)
-        XCTAssertEqual(reauthorizedToken, secret)
+        XCTAssertEqual(silentToken, sentinel)
+        XCTAssertEqual(reauthorizedToken, sentinel)
         XCTAssertEqual(keychain.readFlags, [false])
     }
 
@@ -272,7 +272,7 @@ final class TokenCacheTests: XCTestCase {
     /// is still open.  The read that comes back afterwards must not put the
     /// forgotten token back in memory.
     func testForgetDuringReauthorizeIsNotUndone() async throws {
-        let keychain = FakeKeychain(stored: secret, readStatus: errSecAuthFailed)
+        let keychain = FakeKeychain(stored: sentinel, readStatus: errSecAuthFailed)
         let cache = keychain.cache()
         _ = await cache.token(server: server, service: service)
         keychain.setReadStatus(nil)
@@ -299,11 +299,11 @@ final class TokenCacheTests: XCTestCase {
         keychain.setHoldReads(true)
         let reauthorize = Task { await cache.readAllowingInteraction(server: server, service: service) }
         try await waitUntil { keychain.readCount == 2 }
-        try await cache.save(secret, server: server, service: service)
+        try await cache.save(sentinel, server: server, service: service)
         keychain.releaseReads()
         _ = await reauthorize.value
         let token = await cache.token(server: server, service: service)
-        XCTAssertEqual(token, secret)
+        XCTAssertEqual(token, sentinel)
     }
 
     // MARK: Writes that do not finish cleanly
@@ -317,7 +317,7 @@ final class TokenCacheTests: XCTestCase {
         let held = await cache.token(server: server, service: service)
         XCTAssertEqual(held, "old-token")
         do {
-            try await cache.save(secret, server: server, service: service)
+            try await cache.save(sentinel, server: server, service: service)
             XCTFail("a failed add must fail the save")
         } catch {
             XCTAssertEqual(error as? TokenStore.Failure,
@@ -340,7 +340,7 @@ final class TokenCacheTests: XCTestCase {
         let cache = keychain.cache(write: 0.05, changed: { changes.bump() })
         _ = await cache.token(server: server, service: service)
         do {
-            try await cache.save(secret, server: server, service: service)
+            try await cache.save(sentinel, server: server, service: service)
             XCTFail("a save past its bound must fail")
         } catch {
             XCTAssertEqual(error as? TokenStore.Failure, .write(status: nil, service: service))
@@ -350,8 +350,8 @@ final class TokenCacheTests: XCTestCase {
         keychain.releaseWrites()
         try await waitUntil { await cache.status(server: server, service: service) == .cached }
         let token = await cache.token(server: server, service: service)
-        XCTAssertEqual(token, secret)
-        XCTAssertEqual(keychain.stored, secret)
+        XCTAssertEqual(token, sentinel)
+        XCTAssertEqual(keychain.stored, sentinel)
         XCTAssertEqual(changes.count, 1)
         XCTAssertEqual(keychain.readCount, 1)
     }
@@ -362,12 +362,12 @@ final class TokenCacheTests: XCTestCase {
         let keychain = FakeKeychain(stored: nil, holdWrites: true)
         let cache = keychain.cache(write: 0.05)
         do { try await cache.save("first-token", server: server, service: service); XCTFail("times out") } catch {}
-        do { try await cache.save(secret, server: server, service: service); XCTFail("times out") } catch {}
+        do { try await cache.save(sentinel, server: server, service: service); XCTFail("times out") } catch {}
         keychain.releaseWrites()
         try await waitUntil { await cache.status(server: server, service: service) == .cached }
-        try await waitUntil { keychain.stored == secret }
+        try await waitUntil { keychain.stored == sentinel }
         let token = await cache.token(server: server, service: service)
-        XCTAssertEqual(token, secret)
+        XCTAssertEqual(token, sentinel)
         XCTAssertEqual(keychain.operations,
                        ["delete \(service)", "add \(service)", "delete \(service)", "add \(service)"])
     }
@@ -394,14 +394,14 @@ final class TokenCacheTests: XCTestCase {
     /// Claude Code's saved login, or any other app's item, is refused before
     /// any Keychain call is made.
     func testNeverTouchesAnotherAppsItem() async {
-        let keychain = FakeKeychain(stored: secret)
+        let keychain = FakeKeychain(stored: sentinel)
         let cache = keychain.cache()
         let claude = "Claude Code-credentials"
         let silent = await cache.token(server: server, service: claude)
         XCTAssertNil(silent)
         let interactive = await cache.readAllowingInteraction(server: server, service: claude)
         XCTAssertNil(interactive)
-        do { try await cache.save(secret, server: server, service: claude); XCTFail("save must refuse") } catch {}
+        do { try await cache.save(sentinel, server: server, service: claude); XCTFail("save must refuse") } catch {}
         do { try await cache.delete(server: server, service: claude); XCTFail("delete must refuse") } catch {}
         XCTAssertEqual(keychain.operations, [])
     }
@@ -409,7 +409,7 @@ final class TokenCacheTests: XCTestCase {
     /// A name that merely ends like one of ours is not ours, and a release
     /// build's names are not a `.dev` build's.
     func testOnlyExactOwnNamesAreTouched() async {
-        let keychain = FakeKeychain(stored: secret)
+        let keychain = FakeKeychain(stored: sentinel)
         let dev = ["com.jays.agent-bar.mac.dev.read-token", "com.jays.agent-bar.mac.dev.sync-token"]
         let cache = keychain.cache(ownServices: Set(dev))
         for name in ["com.other.app.sync-token", "com.other.app.read-token", service, syncService,
@@ -418,38 +418,38 @@ final class TokenCacheTests: XCTestCase {
             XCTAssertNil(silent, name)
             let interactive = await cache.readAllowingInteraction(server: server, service: name)
             XCTAssertNil(interactive, name)
-            do { try await cache.save(secret, server: server, service: name); XCTFail("save must refuse \(name)") } catch {}
+            do { try await cache.save(sentinel, server: server, service: name); XCTFail("save must refuse \(name)") } catch {}
             do { try await cache.delete(server: server, service: name); XCTFail("delete must refuse \(name)") } catch {}
         }
         XCTAssertEqual(keychain.operations, [])
         let own = await cache.token(server: server, service: dev[0])
-        XCTAssertEqual(own, secret)
+        XCTAssertEqual(own, sentinel)
     }
 
     // MARK: Logs
 
     /// Every path logs something, and nothing it logs carries the token.
     func testTokensNeverReachTheLog() async throws {
-        let keychain = FakeKeychain(stored: secret, holdReads: true)
+        let keychain = FakeKeychain(stored: sentinel, holdReads: true)
         let sink = LogSink()
         let cache = keychain.cache(silentRead: 0.05, log: { sink.append($0) })
         _ = await cache.token(server: server, service: service) // times out
         keychain.releaseReads()
         try await waitUntil { await cache.status(server: server, service: service) == .cached }
-        try await cache.save(secret, server: server, service: service)
+        try await cache.save(sentinel, server: server, service: service)
         _ = await cache.readAllowingInteraction(server: server, service: service)
         try await cache.delete(server: server, service: service)
         keychain.setDeleteStatus(errSecInvalidOwnerEdit)
         do {
-            try await cache.save(secret, server: server, service: service)
+            try await cache.save(sentinel, server: server, service: service)
         } catch {
-            XCTAssertFalse((error as? LocalizedError)?.errorDescription?.contains(secret) ?? false)
+            XCTAssertFalse((error as? LocalizedError)?.errorDescription?.contains(sentinel) ?? false)
         }
 
         let lines = sink.lines
         XCTAssertGreaterThanOrEqual(lines.count, 6, "\(lines)")
         for line in lines {
-            XCTAssertFalse(line.contains(secret), line)
+            XCTAssertFalse(line.contains(sentinel), line)
             XCTAssertFalse(line.contains(server), line)
         }
     }
