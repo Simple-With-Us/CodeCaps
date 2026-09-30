@@ -73,16 +73,20 @@ enum TokenStore {
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         if !allowInteraction {
-            // Never prompt: a locked Keychain, or an item this build is not yet
-            // trusted for, must fail fast rather than block the refresh loop
-            // behind a system dialog.  Both keys are set, because they cover
-            // different dialogs.  `LAContext.interactionNotAllowed` suppresses
+            // Ask macOS not to prompt.  Both keys are set, because they cover
+            // different dialogs: `LAContext.interactionNotAllowed` suppresses
             // LocalAuthentication UI, but only for an item carrying an access
             // control policy — these are added with none, so on macOS they
             // resolve against the file-based login Keychain, whose unlock panel
-            // is governed by `kSecUseAuthenticationUIFail` instead.  Deprecated,
-            // and still the only thing that fails the query rather than showing
-            // that panel.
+            // is governed by `kSecUseAuthenticationUIFail` instead (deprecated).
+            // Neither key suppresses the legacy ACL/partition panel: on
+            // Sep 30 2026 securityd logged `ACL partition mismatch` and
+            // `displaying keychain prompt` for a data read that carried both.
+            // That panel appears whenever this build's team ID is missing from
+            // the item's partition list, for example an item written by a
+            // differently signed build.  The refresh loop still makes this
+            // read, so it can raise that panel; board item 116f1cd8 tracks
+            // moving it off the legacy Keychain or caching the token.
             let context = LAContext()
             context.interactionNotAllowed = true
             query[kSecUseAuthenticationContext as String] = context

@@ -1,4 +1,5 @@
 import Foundation
+import LocalAuthentication
 import Security
 import XCTest
 @testable import QuotaCore
@@ -10,11 +11,11 @@ import XCTest
 /// is there" and "something is there that I may not read" used to arrive as
 /// the same empty result, and a signed-in owner was told to sign in.
 ///
-/// Every test here is offline and never touches Claude Code's item: the state
-/// mapping is pure, the reader takes an injected credential closure, and the
-/// silent read takes an injected Keychain probe.  Two tests run the real
-/// `security` tool, only ever against a service name nobody uses.  No
-/// credential value is ever asserted on.
+/// Every test here is offline and never touches a Keychain: the state mapping
+/// is pure, the reader takes an injected credential closure, the silent read
+/// takes an injected Keychain probe, and the child-process handling runs
+/// throwaway `/bin/sh` and `/usr/bin/yes` children instead of the real
+/// `security` tool.  No credential value is ever asserted on.
 final class ClaudeConsentTests: XCTestCase {
 
     // MARK: - The pure mapping
@@ -374,20 +375,88 @@ final class ClaudeConsentTests: XCTestCase {
         XCTAssertEqual(SecurityCLIOutcome.classify(exitStatus: 1), .failed)
     }
 
-    /// Runs the real `security` tool against a service name nobody uses, so
-    /// no real item is found, read, or prompted for.
-    func testRealSecurityToolReportsNotFoundForAnUnknownService() {
-        let outcome = ClaudeCredentialSource.runSecurityCLI(
-            deadline: 10, serviceName: "codecaps-test-no-such-item-\(UUID().uuidString)", shouldStop: { false })
-        XCTAssertEqual(outcome, .notFound)
+    // MARK: - The real child-process handling, with a stand-in child
+
+    private func shell(_ script: String) -> SecurityCommand {
+        SecurityCommand(executable: "/bin/sh", arguments: ["-c", script])
     }
 
-    func testRealSecurityToolIsKilledWhenTheCallerStops() {
+    private func runCLI(_ command: SecurityCommand, deadline: TimeInterval = 10,
+                        shouldStop: @escaping @Sendable () -> Bool = { false }) -> SecurityCLIOutcome {
+        ClaudeCredentialSource.runSecurityCLI(deadline: deadline, command: command, shouldStop: shouldStop)
+    }
+
+    func testProductionCommandIsTheSecurityToolReadingOnlyClaudesItem() {
+        let command = SecurityCommand.findClaudeLogin
+        XCTAssertEqual(command.executable, "/usr/bin/security")
+        XCTAssertEqual(command.arguments, ["find-generic-password", "-s", "Claude Code-credentials", "-w"])
+    }
+
+    func testChildExitStatusesBecomeOutcomes() {
+        XCTAssertEqual(runCLI(shell("exit 44")), .notFound)
+        XCTAssertEqual(runCLI(shell("exit 51")), .denied)
+        XCTAssertEqual(runCLI(shell("exit 36")), .denied)
+        XCTAssertEqual(runCLI(shell("exit 128")), .denied)
+        XCTAssertEqual(runCLI(shell("exit 1")), .failed)
+    }
+
+    func testChildOutputIsReturnedTrimmedAndHexIsDecoded() {
+        XCTAssertEqual(runCLI(shell("printf '{\"a\":1}\\n'")), .found(Data(#"{"a":1}"#.utf8)))
+        // `security` prints hex when the stored value holds non-ASCII bytes.
+        XCTAssertEqual(runCLI(shell("printf 7b2261223a317d")), .found(Data(#"{"a":1}"#.utf8)))
+    }
+
+    func testEmptyOutputSignalsAndLaunchErrorsAreFailures() {
+        XCTAssertEqual(runCLI(shell("exit 0")), .failed, "a success with nothing in it is not a login")
+        XCTAssertEqual(runCLI(shell("kill -9 $$")), .failed, "a child ended by a signal is not an answer")
+        XCTAssertEqual(runCLI(SecurityCommand(executable: "/nonexistent/security", arguments: [])), .failed)
+    }
+
+    func testChildIsTimedOutAtItsDeadline() {
         let started = Date()
-        let outcome = ClaudeCredentialSource.runSecurityCLI(
-            deadline: 10, serviceName: "codecaps-test-no-such-item-\(UUID().uuidString)", shouldStop: { true })
-        XCTAssertEqual(outcome, .timedOut)
+        XCTAssertEqual(runCLI(shell("exec /bin/sleep 30"), deadline: 0.3), .timedOut)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 5)
+    }
+
+    func testChildIsKilledAtOnceWhenTheCallerStops() {
+        let started = Date()
+        XCTAssertEqual(runCLI(shell("exec /bin/sleep 30"), deadline: 10, shouldStop: { true }), .timedOut)
         XCTAssertLessThan(Date().timeIntervalSince(started), 3)
+    }
+
+    /// A child that ignores SIGTERM has to be ended with SIGKILL, and be gone
+    /// (reaped, not merely signalled) by the time the call returns.
+    func testChildThatIgnoresSIGTERMIsKilledAndGone() throws {
+        let pidFile = FileManager.default.temporaryDirectory.appendingPathComponent("claude-cli-pid-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: pidFile) }
+        let script = "trap '' TERM; echo $$ > '\(pidFile.path)'; exec /bin/sleep 30"
+        let outcome = runCLI(shell(script), deadline: 2)
+        XCTAssertEqual(outcome, .timedOut)
+        let pid = try XCTUnwrap(Int32(String(contentsOfFile: pidFile.path, encoding: .utf8)
+                                        .trimmingCharacters(in: .whitespacesAndNewlines)),
+                                "the child never wrote its pid, so the test proved nothing")
+        try XCTAssertProcessGone(pid)
+    }
+
+    /// A child that never stops writing is cut off at the size cap, killed,
+    /// and reported as a failure rather than buffered without bound.
+    func testRunawayOutputIsCappedAndTheChildKilled() throws {
+        let pidFile = FileManager.default.temporaryDirectory.appendingPathComponent("claude-cli-pid-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: pidFile) }
+        let started = Date()
+        let outcome = runCLI(shell("echo $$ > '\(pidFile.path)'; exec /usr/bin/yes"), deadline: 20)
+        XCTAssertEqual(outcome, .failed)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 10)
+        let pid = try XCTUnwrap(Int32(String(contentsOfFile: pidFile.path, encoding: .utf8)
+                                        .trimmingCharacters(in: .whitespacesAndNewlines)))
+        try XCTAssertProcessGone(pid)
+    }
+
+    private func XCTAssertProcessGone(_ pid: Int32, file: StaticString = #filePath, line: UInt = #line) throws {
+        let end = Date().addingTimeInterval(1.5)
+        while kill(pid, 0) == 0 && Date() < end { usleep(20_000) }
+        XCTAssertEqual(kill(pid, 0), -1, "child \(pid) is still alive", file: file, line: line)
+        XCTAssertEqual(errno, ESRCH, file: file, line: line)
     }
 
     func testBusyReadIsTransientAndTouchesNoKeychain() async {
@@ -428,6 +497,81 @@ final class ClaudeConsentTests: XCTestCase {
         XCTAssertEqual(gate.wait(timeout: .now() + 5), .success)
         gate.signal()
         XCTAssertEqual(log.calls, ["cli"])
+    }
+
+    // MARK: - The existence check asks for attributes only
+
+    func testExistenceQueryNeverRequestsTheSecret() {
+        let query = ClaudeCredentialSource.attributesQuery(context: LAContext())
+        for forbidden in [kSecReturnData, kSecReturnRef, kSecReturnPersistentRef] {
+            XCTAssertNil(query[forbidden as String], "\(forbidden) would make the refresh loop request the secret")
+        }
+        XCTAssertEqual(query[kSecReturnAttributes as String] as? Bool, true)
+        XCTAssertEqual(query[kSecClass as String] as? String, kSecClassGenericPassword as String)
+        XCTAssertEqual(query[kSecAttrService as String] as? String, "Claude Code-credentials")
+        XCTAssertEqual(query[kSecUseAuthenticationUI as String] as? String,
+                       kSecUseAuthenticationUIFail as String)
+        XCTAssertNotNil(query[kSecUseAuthenticationContext as String])
+    }
+
+    // MARK: - Allow Access runs the same `security` read the refresh loop does
+
+    func testAllowAccessReadsThroughTheSecurityCLIOnly() async {
+        let log = ProbeLog()
+        let deadlines = DeadlineLog()
+        let probe = ClaudeKeychainProbe(
+            readViaSecurityCLI: { deadline, _ in
+                log.record("cli")
+                deadlines.record(deadline)
+                return .found(Data("{}".utf8))
+            },
+            lookUpItem: {
+                log.record("lookup")
+                return .present
+            })
+        let granted = await ClaudeCredentialSource.readAllowingInteraction(
+            probe: probe, deadline: ClaudeCredentialSource.interactiveDeadline)
+        XCTAssertTrue(granted)
+        XCTAssertEqual(log.calls, ["cli"], "no in-process read: a grant must apply to the identity the loop uses")
+        XCTAssertEqual(deadlines.values, [ClaudeCredentialSource.interactiveDeadline])
+        XCTAssertGreaterThan(ClaudeCredentialSource.interactiveDeadline, ClaudeCredentialSource.cliAttemptDeadline,
+                             "the button must leave time to answer the panel")
+    }
+
+    func testAllowAccessIsNotGrantedUnlessTheSecurityCLIReadIt() async {
+        for outcome in [SecurityCLIOutcome.denied, .notFound, .timedOut, .failed] {
+            let probe = ClaudeKeychainProbe(readViaSecurityCLI: { _, _ in outcome }, lookUpItem: { .present })
+            let granted = await ClaudeCredentialSource.readAllowingInteraction(probe: probe, deadline: 5)
+            XCTAssertFalse(granted, "\(outcome) must not report a grant")
+        }
+    }
+
+    /// The button's wait gives up after the child's deadline plus its kill
+    /// grace, and tells a still-waiting child to stop.
+    func testAllowAccessStopsTheChildWhenItsWaitEnds() async {
+        let sawStop = ProbeFlag()
+        let probe = ClaudeKeychainProbe(
+            readViaSecurityCLI: { _, shouldStop in
+                let end = Date().addingTimeInterval(5)
+                while !shouldStop() && Date() < end { usleep(5_000) }
+                if shouldStop() { sawStop.set() }
+                return .timedOut
+            },
+            lookUpItem: { .present })
+        let started = Date()
+        let granted = await ClaudeCredentialSource.readAllowingInteraction(probe: probe, deadline: 30, wait: 0.2)
+        XCTAssertFalse(granted)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 3)
+        let end = Date().addingTimeInterval(2)
+        while !sawStop.value && Date() < end { usleep(10_000) }
+        XCTAssertTrue(sawStop.value)
+    }
+
+    private final class DeadlineLog: @unchecked Sendable {
+        private let lock = NSLock()
+        private var entries: [TimeInterval] = []
+        func record(_ value: TimeInterval) { lock.lock(); entries.append(value); lock.unlock() }
+        var values: [TimeInterval] { lock.lock(); defer { lock.unlock() }; return entries }
     }
 
     func testOuterWaitsOutlastTheCLIBudget() {

@@ -77,6 +77,20 @@ enum SecurityCLIOutcome: Equatable, Sendable {
     }
 }
 
+/// The child process behind one `security` run.  Production only ever runs
+/// `findClaudeLogin`; the type exists so a test can stand in a controllable
+/// child (one that ignores SIGTERM, floods its output, or exits with a chosen
+/// status) and exercise the real launch, deadline, cap and kill handling
+/// without touching any Keychain.
+struct SecurityCommand: Sendable {
+    var executable: String
+    var arguments: [String]
+
+    static let findClaudeLogin = SecurityCommand(
+        executable: "/usr/bin/security",
+        arguments: ["find-generic-password", "-s", ClaudeCredentialSource.service, "-w"])
+}
+
 /// What the attributes-only lookup found.  It never asks for the secret.
 enum ClaudeItemPresence: Equatable, Sendable {
     case present
@@ -136,7 +150,9 @@ public enum ClaudeCredentialSource {
 
     /// Long enough for someone to read and answer a system panel, short enough
     /// that a wedged Keychain does not leave the button spinning forever.
-    private static let interactiveTimeout: Double = 60
+    /// Only the Allow Access button uses it, and its `security` run is not
+    /// killed at the refresh loop's 12 seconds, so the panel can be answered.
+    static let interactiveDeadline: TimeInterval = 60
     private static let maxCredentialBytes = 1_048_576
 
     private static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.jays.agent-bar.mac",
@@ -195,16 +211,36 @@ public enum ClaudeCredentialSource {
     /// reached from Allow Access To Claude Code — never from the refresh loop,
     /// which must stay prompt-free.
     ///
+    /// It runs the same `security find-generic-password` child the refresh loop
+    /// runs, only without the refresh loop's 12 second kill.  The identity
+    /// matters: an Always Allow answers for the program that asked, and the
+    /// refresh loop reads as `security`, never in this process.  An in-process
+    /// read here would grant CodeCaps's team ID, which the loop never uses, and
+    /// the button would report success while the next refresh asked again.
+    ///
     /// Returns whether access was granted rather than the credential itself.
     /// Nothing outside this type has any use for Claude Code's saved login, so
     /// nothing outside this type is handed it.
     public static func readAllowingInteraction() async -> Bool {
-        await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+        await readAllowingInteraction(probe: .live, deadline: interactiveDeadline)
+    }
+
+    /// `readAllowingInteraction()` with its collaborator injected, for tests.
+    /// The outer wait outlasts the child's own deadline and kill grace.
+    static func readAllowingInteraction(probe: ClaudeKeychainProbe,
+                                        deadline: TimeInterval,
+                                        wait: TimeInterval? = nil) async -> Bool {
+        let outerWait = wait ?? deadline + 2 * cliKillGrace + 2
+        return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
             let gate = KeychainReadGate(continuation)
             // Deliberately not behind `activeRead`: a call parked on a panel
             // nobody has answered must not make every later silent read fail.
-            DispatchQueue.global(qos: .userInitiated).async { gate.finish(readInteractively()) }
-            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + interactiveTimeout) {
+            DispatchQueue.global(qos: .userInitiated).async {
+                let outcome = probe.readViaSecurityCLI(deadline, { gate.isFinished })
+                log.notice("claude keychain interactive security CLI: \(outcome.logLabel, privacy: .public)")
+                if case .found = outcome { gate.finish(true) } else { gate.finish(false) }
+            }
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + outerWait) {
                 gate.finish(false)
             }
         }
@@ -266,16 +302,8 @@ public enum ClaudeCredentialSource {
     static func lookUpItemAttributes() -> ClaudeItemPresence {
         let context = LAContext()
         context.interactionNotAllowed = true
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecReturnAttributes as String: true,
-            kSecMatchLimit as String: kSecMatchLimitAll,
-            kSecUseAuthenticationContext as String: context,
-            kSecUseAuthenticationUI as String: kSecUseAuthenticationUIFail,
-        ]
         var result: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        let status = SecItemCopyMatching(attributesQuery(context: context) as CFDictionary, &result)
         // Status codes only, at notice level so they persist in the log store.
         // Nothing here ever logs the credential.
         log.notice("claude keychain silent attributes status \(status, privacy: .public)")
@@ -286,42 +314,21 @@ public enum ClaudeCredentialSource {
         }
     }
 
-    /// The one call allowed to raise the system panel: no `LAContext`, no
-    /// `interactionNotAllowed`, no `kSecUseAuthenticationUIFail`.  It only ever
-    /// reads — the item is never added, updated, or deleted.
-    private static func readInteractively() -> Bool {
-        let query: [String: Any] = [
+    /// The exact query the existence check sends, kept pure so a test can pin
+    /// it.  It asks for attributes and nothing else: never `kSecReturnData`,
+    /// `kSecReturnRef` or `kSecReturnPersistentRef`, any of which would make
+    /// the refresh loop request the secret again.  The interaction flags are
+    /// belt and braces for the locked-Keychain panel; they are not what keeps
+    /// this query silent (see `resolveSilently`).
+    static func attributesQuery(context: LAContext) -> [String: Any] {
+        [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecReturnAttributes as String: true,
             kSecMatchLimit as String: kSecMatchLimitAll,
+            kSecUseAuthenticationContext as String: context,
+            kSecUseAuthenticationUI as String: kSecUseAuthenticationUIFail,
         ]
-        var result: CFTypeRef?
-        let found = SecItemCopyMatching(query as CFDictionary, &result)
-        // Status codes only, at notice level so they persist in the log store.
-        // Nothing here ever logs the credential.
-        log.notice("claude keychain attributes status \(found, privacy: .public)")
-        guard found == errSecSuccess,
-              let items = result as? [[String: Any]],
-              let newest = items.max(by: {
-                  ($0[kSecAttrModificationDate as String] as? Date ?? .distantPast)
-                    < ($1[kSecAttrModificationDate as String] as? Date ?? .distantPast)
-              }) else { return false }
-
-        var dataQuery: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        if let account = newest[kSecAttrAccount as String] {
-            dataQuery[kSecAttrAccount as String] = account
-        }
-        var payload: CFTypeRef?
-        let status = SecItemCopyMatching(dataQuery as CFDictionary, &payload)
-        log.notice("claude keychain interactive read status \(status, privacy: .public)")
-        guard status == errSecSuccess, let data = payload as? Data else { return false }
-        return !data.isEmpty && data.count <= maxCredentialBytes
     }
 
     /// One bounded `security find-generic-password -w` run.  The child is
@@ -329,14 +336,17 @@ public enum ClaudeCredentialSource {
     /// so it reads silently and can never raise a panel as CodeCaps.  Output
     /// is capped, the child is killed at the deadline or as soon as
     /// `shouldStop` turns true, and it is never waited on without a bound.
-    /// `serviceName` is overridable only so a test can ask for an item that
-    /// does not exist; production always reads `service`.
+    /// `command` is overridable only so a test can run a controllable child;
+    /// production always runs `.findClaudeLogin`.
+    ///
+    /// Every `.failed` return logs why, as status codes only, so a failure
+    /// that never goes away can be told apart from a Mac that is merely slow.
     static func runSecurityCLI(deadline seconds: TimeInterval,
-                               serviceName: String = service,
+                               command: SecurityCommand = .findClaudeLogin,
                                shouldStop: @Sendable () -> Bool) -> SecurityCLIOutcome {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-        process.arguments = ["find-generic-password", "-s", serviceName, "-w"]
+        process.executableURL = URL(fileURLWithPath: command.executable)
+        process.arguments = command.arguments
         process.environment = ["HOME": FileManager.default.homeDirectoryForCurrentUser.path]
         process.standardInput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
@@ -348,7 +358,8 @@ public enum ClaudeCredentialSource {
         } catch {
             try? output.fileHandleForWriting.close()
             try? reader.close()
-            return .failed
+            let code = (error as NSError).code
+            return failed("could not launch (error \(code))")
         }
         // Our copy of the write end has to close, or EOF never arrives.
         try? output.fileHandleForWriting.close()
@@ -369,7 +380,7 @@ public enum ClaudeCredentialSource {
             if !reachedEOF {
                 let count = Darwin.read(descriptor, &buffer, buffer.count)
                 if count > 0 {
-                    guard data.count + count <= maxCredentialBytes else { return .failed }
+                    guard data.count + count <= maxCredentialBytes else { return failed("output over the size cap") }
                     data.append(contentsOf: buffer.prefix(count))
                     continue
                 }
@@ -377,18 +388,31 @@ public enum ClaudeCredentialSource {
                     reachedEOF = true
                     continue
                 }
-                if errno != EAGAIN && errno != EINTR { return .failed }
+                if errno != EAGAIN && errno != EINTR { return failed("read error (errno \(errno))") }
             } else if !process.isRunning {
                 break
             }
             usleep(5_000)
         }
 
-        guard process.terminationReason == .exit else { return .failed }
+        guard process.terminationReason == .exit else {
+            return failed("ended by signal \(process.terminationStatus)")
+        }
         let status = process.terminationStatus
-        guard status == 0 else { return SecurityCLIOutcome.classify(exitStatus: status) }
-        guard let decoded = decodeOutput(data) else { return .failed }
+        guard status == 0 else {
+            let outcome = SecurityCLIOutcome.classify(exitStatus: status)
+            if outcome == .failed { return failed("exit status \(status)") }
+            return outcome
+        }
+        guard let decoded = decodeOutput(data) else { return failed("empty output") }
         return .found(decoded)
+    }
+
+    /// `.failed`, with the reason in the log.  Reasons are status codes and
+    /// fixed words; nothing the child printed is ever passed in.
+    private static func failed(_ reason: String) -> SecurityCLIOutcome {
+        log.notice("claude keychain security CLI failed: \(reason, privacy: .public)")
+        return .failed
     }
 
     /// SIGTERM, then SIGKILL, each with a short bounded wait.  A child that
