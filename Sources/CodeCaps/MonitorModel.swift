@@ -59,17 +59,21 @@ enum AppAppearance: String, CaseIterable, Identifiable {
 
 /// Which readings the Glance list shows.  One set at a time: the header's
 /// two-box switch flips between them, and the choice survives a relaunch.
+///
+/// The raw values predate the "From Mac" / "From Fleet" names (owner ruling
+/// 2026-09-30) and are what an existing install's defaults already hold, so
+/// they stay as they are.
 enum GlanceViewMode: String, CaseIterable, Identifiable {
-    case thisMac
-    case fleetReported
+    case fromMac = "thisMac"
+    case fromFleet = "fleetReported"
 
     var id: String { rawValue }
 
     /// Title Case, for help text and VoiceOver.
     var title: String {
         switch self {
-        case .thisMac: return "This Mac"
-        case .fleetReported: return "Fleet Reported"
+        case .fromMac: return "From Mac"
+        case .fromFleet: return "From Fleet"
         }
     }
 
@@ -184,7 +188,7 @@ final class MonitorModel: ObservableObject {
     @Published var keepConsoleInFront: Bool {
         didSet { defaults.set(keepConsoleInFront, forKey: "consoleKeepInFront") }
     }
-    /// This Mac or Fleet Reported, remembered across launches.
+    /// From Mac or From Fleet, remembered across launches.
     @Published var glanceView: GlanceViewMode {
         didSet { defaults.set(glanceView.rawValue, forKey: "glanceView") }
     }
@@ -272,7 +276,7 @@ final class MonitorModel: ObservableObject {
 
         appearance = AppAppearance(rawValue: defaults.string(forKey: "appearance") ?? "") ?? .system
         keepConsoleInFront = defaults.bool(forKey: "consoleKeepInFront")
-        glanceView = GlanceViewMode(rawValue: defaults.string(forKey: "glanceView") ?? "") ?? .thisMac
+        glanceView = GlanceViewMode(rawValue: defaults.string(forKey: "glanceView") ?? "") ?? .fromMac
         alarmChanges = alarmManager.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
         }
@@ -511,12 +515,14 @@ final class MonitorModel: ObservableObject {
     // known set of windows inject through this seam so the rank/filter logic
     // can be exercised in isolation.
 
-    func injectForTests(sections: [QuotaPlatformSection], now: Date = Date()) {
+    func injectForTests(sections: [QuotaPlatformSection], now: Date = Date(),
+                        issues: [String: String] = [:]) {
         self.response = QuotaResponse(
             generatedAt: ISO8601DateFormatter().string(from: now),
             windows: sections.flatMap { $0.windows.map(\.window) }
         )
         self.now = now
+        self.issues = issues
     }
 
     /// The fleet half of the seam: pulled windows grouped by origin, plus the

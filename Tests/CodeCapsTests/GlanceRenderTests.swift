@@ -5,9 +5,10 @@ import XCTest
 import QuotaCore
 
 /// Renders the Glance popover to PNG so a person can look at it: both views of
-/// the This Mac / Fleet Reported switch, All on and All off with a mix of
-/// per-row bells, the two Antigravity pool marks, Cursor's "1m" window, the
-/// fleet empty state, in Light and Dark.
+/// the From Mac / From Fleet switch (two sources under From Fleet), All on and
+/// All off with a mix of per-row bells, MiniMax expanded, Claude signed out,
+/// the two Antigravity pool marks, Cursor's "1m" window and the fleet empty
+/// state, in Light and Dark.
 ///
 /// Evidence, not an assertion about pixels, and CI does not depend on it: with
 /// `CODECAPS_GLANCE_RENDER_DIR` unset the test skips.  Nothing it writes is
@@ -17,12 +18,19 @@ import QuotaCore
 @MainActor
 final class GlanceRenderTests: XCTestCase {
     private func render(_ name: String, view: GlanceViewMode, alarmsAll: Bool, fleet: Bool = true,
-                        expanded: Set<String> = [], dark: Bool, into directory: URL) throws {
+                        expanded: Set<String> = [], signedOut: Set<String> = [],
+                        dark: Bool, into directory: URL) throws {
         let (model, defaults, suite) = GlanceFixtures.makeModel(
             view: view, alarmsAll: alarmsAll, fleet: fleet,
-            extraWindows: expanded.isEmpty ? [] : [GlanceFixtures.claudeSonnetWindow])
+            extraWindows: expanded.contains("anthropic") ? [GlanceFixtures.claudeSonnetWindow] : [],
+            signedOut: signedOut)
         defer { defaults.removePersistentDomain(forName: suite) }
-        let height = QuotaGlanceMetrics.popoverHeight(for: model)
+        // The popover budgets its height for collapsed rows; an open row's
+        // extra lines scroll.  The render adds them so the PNG shows them.
+        let expandedLines = model.displaySections.filter { expanded.contains($0.id) }
+            .map { CGFloat(glanceExpandedLines(for: $0, now: model.now).count) * Metrics.glanceExpandedLineHeight + 4 }
+            .reduce(0, +)
+        let height = QuotaGlanceMetrics.popoverHeight(for: model) + (view == .fromMac ? expandedLines : 0)
         let popover = GlancePopover(model: model, openConsole: { _ in }, openSettings: {},
                                     initiallyExpanded: expanded)
         guard let png = GlanceFixtures.png(of: popover, size: CGSize(width: Metrics.glanceWidth, height: height),
@@ -39,13 +47,15 @@ final class GlanceRenderTests: XCTestCase {
         let directory = URL(fileURLWithPath: path, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         for dark in [false, true] {
-            try render("glance-thismac-all-on", view: .thisMac, alarmsAll: true, dark: dark, into: directory)
-            try render("glance-thismac-all-off", view: .thisMac, alarmsAll: false, dark: dark, into: directory)
-            try render("glance-thismac-expanded", view: .thisMac, alarmsAll: true, expanded: ["anthropic"],
-                       dark: dark, into: directory)
-            try render("glance-fleet-all-on", view: .fleetReported, alarmsAll: true, dark: dark, into: directory)
-            try render("glance-fleet-all-off", view: .fleetReported, alarmsAll: false, dark: dark, into: directory)
-            try render("glance-fleet-empty", view: .fleetReported, alarmsAll: true, fleet: false,
+            try render("glance-frommac-all-on", view: .fromMac, alarmsAll: true, dark: dark, into: directory)
+            try render("glance-frommac-all-off", view: .fromMac, alarmsAll: false, dark: dark, into: directory)
+            try render("glance-frommac-minimax-expanded", view: .fromMac, alarmsAll: true,
+                       expanded: ["minimax", "anthropic"], dark: dark, into: directory)
+            try render("glance-frommac-claude-signed-out", view: .fromMac, alarmsAll: false,
+                       signedOut: ["anthropic"], dark: dark, into: directory)
+            try render("glance-fromfleet-all-on", view: .fromFleet, alarmsAll: true, dark: dark, into: directory)
+            try render("glance-fromfleet-all-off", view: .fromFleet, alarmsAll: false, dark: dark, into: directory)
+            try render("glance-fromfleet-empty", view: .fromFleet, alarmsAll: true, fleet: false,
                        dark: dark, into: directory)
         }
     }

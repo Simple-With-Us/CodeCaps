@@ -6,9 +6,9 @@ import SwiftUI
 /// affordances in the footer.  Glance never renders a `PlatformCard`; the
 /// Console never renders a `GlanceRow`.
 ///
-/// The header carries two switches beside the name: which readings the list
-/// shows (This Mac or Fleet Reported, one at a time), and whether every
-/// provider's reset alarm is on (All) or the owner picks them per row.
+/// The header carries the From Mac / From Fleet switch beside the name, and on
+/// the right one line: the All reset-alarm bell, the count, the time and the
+/// refresh button — "ALL   •   6 of 7   •   4:27 PM".
 struct GlancePopover: View {
     @ObservedObject var model: MonitorModel
     var openConsole: (ConsolePage) -> Void
@@ -63,13 +63,19 @@ struct GlancePopover: View {
                 .font(.system(size: 13, weight: .semibold))
                 .fixedSize()
             GlanceViewToggle(selection: $model.glanceView)
-            GlanceAlarmAllToggle(isOn: $model.alarmsAll)
             Spacer(minLength: 8)
-            Text(headerStatus)
-                .font(.system(size: 11).monospacedDigit())
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .fixedSize()
+            // One line, right-aligned: the All bell, then the count and the
+            // time, set apart by bullets with three spaces either side.
+            HStack(spacing: 0) {
+                GlanceAlarmAllToggle(isOn: $model.alarmsAll)
+                if !headerStatus.isEmpty {
+                    Text(glanceHeaderSeparator + headerStatus)
+                        .font(.system(size: 11).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .fixedSize()
+                }
+            }
             // Auto-refresh fires every 5 min (see MonitorModel.refreshTimer) and
             // a 30-second clock ticks every time `now` updates, so the manual
             // button used to live in the footer for redundancy.  It now sits
@@ -94,15 +100,13 @@ struct GlancePopover: View {
         .frame(height: Metrics.glanceHeaderHeight)
     }
 
-    /// Two literal ASCII spaces on either side of the dot — the fleet "two spaces
-    /// between sentences" convention reads just as well between phrases inside a
-    /// single string, so the header breathes without a heavier separator.
+    /// "6 of 7   •   4:27 PM", live: the count and the time of the last read.
     private var headerStatus: String {
         glanceHeaderStatus(view: model.glanceView,
                            reporting: model.reportingCount,
                            total: model.sections.count,
                            sources: fleetGroups.count,
-                           checked: model.glanceView == .fleetReported
+                           checked: model.glanceView == .fromFleet
                                ? (model.lastPullTime ?? model.lastChecked)
                                : model.lastChecked)
     }
@@ -120,13 +124,13 @@ struct GlancePopover: View {
     @ViewBuilder
     private var content: some View {
         switch model.glanceView {
-        case .thisMac: thisMacContent
-        case .fleetReported: fleetContent
+        case .fromMac: fromMacContent
+        case .fromFleet: fleetContent
         }
     }
 
     @ViewBuilder
-    private var thisMacContent: some View {
+    private var fromMacContent: some View {
         VStack(alignment: .leading, spacing: 0) {
             if localSections.isEmpty && !model.localEnabled {
                 GlanceEmptyState(
@@ -172,18 +176,19 @@ struct GlancePopover: View {
                     GlanceEmptyState(
                         symbol: "arrow.up.arrow.down.circle",
                         title: "No fleet endpoint connected",
-                        message: "Fleet Reported shows the quotas your other machines push to an endpoint you run."
+                        message: "From Fleet shows the quotas your other machines push to an endpoint you run."
                             + sentenceGap + "Add the endpoint and its Read Token in Settings to connect it.",
                         actionTitle: "Connect Fleet Endpoint") { openConsole(.settingsSourcesFleet) }
                 }
             } else {
-                // One header per reporting source, so a row always says who
-                // reported it.  The toggle already says these are fleet rows.
+                // One heading band per reporting source, so a row always says
+                // who reported it without a per-row badge.  The toggle already
+                // says these are fleet rows, so "FLEET" is never repeated.
                 ForEach(Array(fleetGroups.enumerated()), id: \.element.id) { groupIndex, group in
                     if groupIndex > 0 {
                         Spacer().frame(height: Metrics.glanceGroupGap)
                     }
-                    groupHeader(fleetGroupTitle(group))
+                    groupHeader(group)
                     ForEach(Array(group.rows.enumerated()), id: \.element.id) { index, row in
                         if index > 0 {
                             rowDivider
@@ -205,18 +210,18 @@ struct GlancePopover: View {
                          markStyle: model.glanceMarkStyle(for: row.providerKey),
                          showsAlarmToggle: !model.alarmsAll,
                          isAlarmEnabled: model.isProviderAlarmSelected(row.id),
+                         allowsExpansion: glanceRowAllowsExpansion(row, origin: origin),
                          isExpanded: expandedIds.contains(key),
                          onTap: { toggleExpanded(key) },
                          onToggleAlarm: { model.toggleAlarm(for: row.id) })
     }
 
-    /// "MAC MINI  ·  REPORTED 9:12 AM": the reporting source, and its latest reading.
-    /// The time lives here rather than under every row, where it truncated.
-    private func fleetGroupTitle(_ group: FleetGroup) -> String {
+    /// "REPORTED 9:12 AM": the source's latest reading, on the right of its
+    /// heading band.  The time lives here rather than under every row, where
+    /// it truncated.
+    private func fleetGroupReported(_ group: FleetGroup) -> String? {
         let latest = group.rows.flatMap(\.section.windows).compactMap(\.observedAt).max()
-        guard let latest else { return group.title.uppercased() }
-        let time = latest.formatted(date: .omitted, time: .shortened)
-        return "\(group.title.uppercased())  ·  REPORTED \(time.uppercased())"
+        return latest.map { "REPORTED \($0.formatted(date: .omitted, time: .shortened).uppercased())" }
     }
 
     /// The short issue text for a reader whose saved login is on this Mac but
@@ -233,15 +238,30 @@ struct GlancePopover: View {
             .padding(.horizontal, Metrics.glanceGutter)
     }
 
-    private func groupHeader(_ title: String) -> some View {
-        Text(title)
-            .font(.system(size: 10, weight: .bold))
-            .tracking(0.8)
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-            .frame(height: Metrics.glanceGroupHeaderHeight, alignment: .leading)
-            .padding(.horizontal, Metrics.glanceGutter)
-            .accessibilityAddTraits(.isHeader)
+    /// A source's heading: its name in small caps on a band darker than the
+    /// list, full width, with the time of its latest reading on the right.
+    private func groupHeader(_ group: FleetGroup) -> some View {
+        HStack(spacing: 8) {
+            Text(glanceFleetGroupHeading(group.title))
+                .font(.system(size: 10, weight: .bold))
+                .tracking(0.8)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .accessibilityAddTraits(.isHeader)
+            Spacer(minLength: 8)
+            if let reported = fleetGroupReported(group) {
+                Text(reported)
+                    .font(.system(size: 9, weight: .semibold).monospacedDigit())
+                    .tracking(0.6)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+        }
+        .padding(.horizontal, Metrics.glanceGutter)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: Metrics.glanceGroupHeaderHeight)
+        .background(Theme.groupBand)
     }
 
     // MARK: - Footer
@@ -274,10 +294,12 @@ struct GlancePopover: View {
     }
 }
 
-/// The count and time on the right of the header.  This Mac counts the
-/// providers reporting; Fleet Reported counts the sources that reported them.
-/// Two literal spaces either side of the dot, the fleet convention for a
-/// phrase break.
+/// The bullet between the header's phrases, three spaces either side:
+/// "ALL   •   6 of 7   •   4:27 PM".
+let glanceHeaderSeparator = "   •   "
+
+/// The count and time on the right of the header.  From Mac counts the
+/// providers reporting; From Fleet counts the sources that reported them.
 ///
 /// A source, not a machine: the fleet pull groups readings by the collector or
 /// app that reported them (`FleetOrigin.identity`), and that is a machine only
@@ -285,21 +307,26 @@ struct GlancePopover: View {
 func glanceHeaderStatus(view: GlanceViewMode, reporting: Int, total: Int, sources: Int, checked: Date?) -> String {
     let counted: String?
     switch view {
-    case .thisMac:
+    case .fromMac:
         counted = "\(reporting) of \(total)"
-    case .fleetReported:
+    case .fromFleet:
         // With no source to count, the empty list below already says why.
         counted = sources == 0 ? nil : (sources == 1 ? "1 source" : "\(sources) sources")
     }
     let time = checked.map { $0.formatted(date: .omitted, time: .shortened) }
-    return [counted, time].compactMap { $0 }.joined(separator: "  ·  ")
+    return [counted, time].compactMap { $0 }.joined(separator: glanceHeaderSeparator)
+}
+
+/// A source's heading in From Fleet: its name as reported, in capitals —
+/// "CHATGPT.COM", "MAC MINI".
+func glanceFleetGroupHeading(_ title: String) -> String {
+    title.uppercased()
 }
 
 // MARK: - Header controls
 
-/// The two-box switch between This Mac and Fleet Reported.  It uses the same
-/// small caps as the group headings it replaces, so it reads as the heading of
-/// the list below it.
+/// The two-box switch between From Mac and From Fleet.  It uses the same small
+/// caps as the source headings, so it reads as the heading of the list below.
 struct GlanceViewToggle: View {
     @Binding var selection: GlanceViewMode
 
@@ -340,8 +367,9 @@ struct GlanceViewToggle: View {
     }
 }
 
-/// The header's bell: every provider's reset alarm on (All), or picked one by
-/// one with the faint bell at the left of each row.
+/// The header's bell and "ALL": every provider's reset alarm on, or picked one
+/// by one with the faint bell at the left of each row.  It sits inline with
+/// the count and the time, so it is drawn as text rather than a boxed control.
 struct GlanceAlarmAllToggle: View {
     @Binding var isOn: Bool
 
@@ -357,18 +385,15 @@ struct GlanceAlarmAllToggle: View {
     }
 
     private var label: some View {
-        HStack(spacing: 3) {
+        HStack(spacing: 4) {
             Image(systemName: isOn ? "bell.fill" : "bell")
-                .font(.system(size: 10, weight: .semibold))
-            Text("All")
-                .font(.system(size: 10, weight: .bold))
+                .font(.system(size: 11, weight: .semibold))
+            Text("ALL")
+                .font(.system(size: 11, weight: .semibold))
                 .tracking(0.4)
         }
         .foregroundStyle(tint)
-        .padding(.horizontal, 7)
         .frame(height: Metrics.glanceHeaderControlHeight)
-        .background(isOn ? Theme.selection : Color.clear, in: RoundedRectangle(cornerRadius: 5))
-        .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Theme.controlBorder))
         .contentShape(Rectangle())
         .fixedSize()
     }
@@ -603,12 +628,13 @@ struct GlanceMeter: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
                 .frame(width: Metrics.glanceMeterCaptionWidth, alignment: .trailing)
-            // Red for the share used, green for the share left, and a marker
-            // for how far through the period we are.  The percentage beside it
-            // keeps its own status colour.
-            QuotaUsageBar(metrics: metrics, height: 4,
-                          dimmed: quotaBarIsDimmed(for: snapshot, sourceFailed: false))
-                .frame(width: Metrics.glanceMeterBarWidth, height: 4)
+            // Red for the share used, green for the share left, and a black
+            // marker for how far through the period we are.  The percentage
+            // beside it keeps its own status colour.
+            QuotaUsageBar(metrics: metrics, height: Metrics.glanceMeterBarHeight,
+                          dimmed: quotaBarIsDimmed(for: snapshot, sourceFailed: false),
+                          markerHeight: Metrics.glanceMeterMarkerHeight)
+                .frame(width: Metrics.glanceMeterBarWidth, height: Metrics.glanceMeterBarHeight)
             Text(percent.map { "\(Int($0.rounded()))%" } ?? "—")
                 .font(.system(size: 11, weight: .medium).monospacedDigit())
                 .foregroundStyle(tint)
@@ -616,17 +642,19 @@ struct GlanceMeter: View {
                 .minimumScaleFactor(0.8)
                 .fixedSize(horizontal: true, vertical: false)
                 .frame(width: Metrics.glanceMeterPercentWidth, alignment: .leading)
-            if !countdown.isEmpty {
-                // The same type as the caption on the left, so the row reads
-                // as one line of labels rather than a label and a footnote.
-                Text(countdown)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .frame(width: Metrics.glanceMeterCountdownWidth, alignment: .leading)
-            }
+            // The same type as the caption on the left, so the row reads as
+            // one line of labels rather than a label and a footnote.  At most
+            // two units on the line; the full value and the reset's own time
+            // are one hover away.
+            Text(countdown)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+                .frame(width: Metrics.glanceMeterCountdownWidth, alignment: .leading)
+                .help(glanceResetHelp(snapshot.resetAt, now: now) ?? "")
         }
+        .frame(width: Metrics.glanceMeterWidth, alignment: .leading)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(glanceMeterCaption(snapshot))
         .accessibilityValue(spokenValue)
@@ -635,10 +663,156 @@ struct GlanceMeter: View {
     private var spokenValue: String {
         let reading = metrics.spokenSummary
         if !countdown.isEmpty {
-            return "\(reading), resets in \(countdown)"
+            return "\(reading), resets in \(glanceResetFullCountdown(snapshot.resetAt, now: now))"
         }
         return reading
     }
+}
+
+/// The two meter columns every Glance line shares: the row itself, and each
+/// extra line under an expanded row.  The first column is always reserved, so
+/// a line with only a long window still puts it under the row's long meter.
+struct GlanceMeterColumns: View {
+    let short: QuotaWindowSnapshot?
+    let long: QuotaWindowSnapshot?
+    let now: Date
+
+    var body: some View {
+        // The gap belongs in here, not between this view and its neighbours:
+        // this is a single child of the row's HStack, so a spacer outside it
+        // leaves the two meters touching and the first meter's percentage
+        // runs into the second meter's caption.
+        HStack(spacing: 0) {
+            if let short {
+                GlanceMeter(snapshot: short, now: now)
+            } else {
+                Spacer().frame(width: Metrics.glanceMeterWidth)
+            }
+            if let long {
+                Spacer().frame(width: Metrics.glanceMeterGroupGap)
+                GlanceMeter(snapshot: long, now: now)
+            }
+        }
+    }
+}
+
+/// One extra line of meters under an expanded row: a model's or a pool's
+/// windows that the row's own two meters leave out, in the same two columns.
+struct GlanceMeterLine: Identifiable, Equatable {
+    /// "Video", "Sonnet", "Overall": what these windows measure.
+    let label: String
+    let short: QuotaWindowSnapshot?
+    let long: QuotaWindowSnapshot?
+
+    var id: String {
+        [label, short?.window.id ?? "-", long?.window.id ?? "-"].joined(separator: "|")
+    }
+}
+
+/// The lines an expanded row shows: every window the row's own two meters do
+/// not, and nothing the row already shows.  Windows are grouped by what they
+/// measure (MiniMax's "video" model, Claude's Sonnet family), shortest cadence
+/// first, two to a line.  A group with one window puts it in the column that
+/// matches its cadence, so a lone weekly sits under the row's weekly meter.
+///
+/// A masked Antigravity window is left out: its number cannot mean anything,
+/// and the row already skips it for the same reason.
+func glanceExpandedLines(for row: DisplaySection, now: Date) -> [GlanceMeterLine] {
+    let pair = glanceMeterPair(for: row, now: now)
+    let shown = Set([pair.short, pair.long].compactMap { $0?.window.id })
+    let rest = row.section.windows.filter { !shown.contains($0.window.id) && !row.isMasked($0) }
+
+    var order: [String] = []
+    var grouped: [String: [QuotaWindowSnapshot]] = [:]
+    for snapshot in rest {
+        let label = glanceLineLabel(snapshot)
+        if grouped[label] == nil { order.append(label) }
+        grouped[label, default: []].append(snapshot)
+    }
+
+    return order.flatMap { label -> [GlanceMeterLine] in
+        let windows = (grouped[label] ?? []).enumerated().sorted { lhs, rhs in
+            let left = glanceWindowLength(lhs.element, now: now)
+            let right = glanceWindowLength(rhs.element, now: now)
+            return left == right ? lhs.offset < rhs.offset : left < right
+        }.map(\.element)
+        if windows.count == 1, let only = windows.first {
+            return glanceCadence(only, now: now) == .short
+                ? [GlanceMeterLine(label: label, short: only, long: nil)]
+                : [GlanceMeterLine(label: label, short: nil, long: only)]
+        }
+        return stride(from: 0, to: windows.count, by: 2).map { index in
+            GlanceMeterLine(label: label,
+                            short: windows[index],
+                            long: index + 1 < windows.count ? windows[index + 1] : nil)
+        }
+    }
+}
+
+/// What a window measures, for the label at the start of an extra line: its
+/// model ("video" reads "Video"), the name in its label's parentheses
+/// ("7d window (Sonnet)" reads "Sonnet"), or its pool.  A window that names
+/// only its cadence covers the whole subscription, so it reads "Overall".
+func glanceLineLabel(_ snapshot: QuotaWindowSnapshot) -> String {
+    let window = snapshot.window
+    if let model = window.modelId?.trimmingCharacters(in: .whitespacesAndNewlines), !model.isEmpty {
+        return glanceModelName(model)
+    }
+    let label = AntigravityDisplay.windowLabel(window.label).trimmingCharacters(in: .whitespacesAndNewlines)
+    if let open = label.firstIndex(of: "("), let close = label.lastIndex(of: ")"), open < close {
+        let inner = label[label.index(after: open)..<close].trimmingCharacters(in: .whitespacesAndNewlines)
+        let head = label[..<open].trimmingCharacters(in: .whitespacesAndNewlines)
+        let innerIsCadence = inner.lowercased().contains("window") || glanceDurationSeconds(inner.lowercased()) != nil
+        if !inner.isEmpty, !innerIsCadence { return glanceModelName(inner) }
+        if !head.isEmpty, !head.lowercased().hasSuffix("window") { return glanceModelName(head) }
+    }
+    if let separator = label.range(of: " · ") {
+        return String(label[..<separator.lowerBound])
+    }
+    return label.isEmpty || label.lowercased().hasSuffix("window") ? "Overall" : label
+}
+
+/// A model or family name as a person reads it: a single lower-case word
+/// gains a capital ("video" reads "Video"), and anything else — "gpt-5-codex",
+/// "Gemini 3 Pro" — is left exactly as the provider wrote it.
+private func glanceModelName(_ name: String) -> String {
+    guard !name.isEmpty, name.allSatisfy({ $0.isLetter && $0.isLowercase }) else { return name }
+    return name.prefix(1).uppercased() + name.dropFirst()
+}
+
+/// How long a window's period is, for putting a group's shorter cadence in the
+/// first column.  Unknown lengths sort last.
+private func glanceWindowLength(_ snapshot: QuotaWindowSnapshot, now: Date) -> TimeInterval {
+    let token = (snapshot.window.window ?? "")
+        .lowercased()
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    if let seconds = glanceDurationSeconds(token) { return seconds }
+    if glanceIsMonthly(snapshot) { return 30 * 86_400 }
+    switch glanceMeterCaption(snapshot) {
+    case "5h": return 5 * 3_600
+    case "24h": return 86_400
+    case "7d": return 7 * 86_400
+    default: break
+    }
+    if let reset = snapshot.resetAt, reset > now { return reset.timeIntervalSince(now) }
+    return .greatestFiniteMagnitude
+}
+
+/// Whether a row may open inline.  A MiniMax row pulled from the fleet never
+/// does: the fleet copy of its per-model windows is what used to list
+/// "general" and "video" windows as a wall of text (owner delta, 2026-09-30).
+func glanceRowAllowsExpansion(_ row: DisplaySection, origin: QuotaOrigin) -> Bool {
+    !(origin == .fleet && row.providerKey == "minimax")
+}
+
+/// The short status a row shows in place of its meters when it has no reading.
+func glanceRowStatusText(issue: String?, hasWindows: Bool) -> String {
+    if let issue {
+        if issue == ClaudeLoginState.idle.issue { return "login idle" }
+        if issue.localizedCaseInsensitiveContains("permission") { return "needs permission" }
+        return issue.localizedCaseInsensitiveContains("sign in") ? "not signed in" : "unavailable"
+    }
+    return hasWindows ? "not signed in" : "no report"
 }
 
 /// One platform, one line.  The only compact row type in the app.
@@ -654,9 +828,11 @@ struct GlanceRow: View {
     var showsAlarmToggle: Bool = false
     /// This provider's own pick: a solid bell when on, a faint outline when off.
     var isAlarmEnabled: Bool = false
+    /// Whether this row may open at all.  See `glanceRowAllowsExpansion`.
+    var allowsExpansion: Bool = true
     /// Whether the inline expansion is shown below this row.  Driven by the
     /// popover's `expandedIds` set, threaded down here so the chevron and the
-    /// detail list animate together.
+    /// detail lines animate together.
     var isExpanded: Bool = false
     /// Tap handler for the row's body — opening or closing the expansion.
     /// The bell is a sibling of the tappable body, so a tap on the bell never
@@ -666,8 +842,14 @@ struct GlanceRow: View {
 
     private var section: QuotaPlatformSection { row.section }
 
+    /// The windows the row's own meters leave out, as extra lines of meters.
+    /// A row showing an issue instead of meters has nothing to open.
+    private var extraLines: [GlanceMeterLine] {
+        issue == nil ? glanceExpandedLines(for: row, now: now) : []
+    }
+
     private var canExpand: Bool {
-        row.section.windows.count > 2
+        allowsExpansion && !extraLines.isEmpty
     }
 
     /// The window the row speaks for: the one closest to its cap, ignoring any
@@ -680,39 +862,14 @@ struct GlanceRow: View {
 
     private var isLive: Bool { issue == nil && section.hasFreshReport }
 
-    /// The two meters this row shows.  Nil only when the row has no window at
-    /// all, in which case the row already shows "no report" in its trailing
-    /// column.
+    /// The two meters this row shows.  Empty only when the row has no window
+    /// at all, in which case the row shows its status where the meters go.
     private var meters: GlanceMeterPair {
         issue == nil ? glanceMeterPair(for: row, now: now) : GlanceMeterPair()
     }
 
-    @ViewBuilder
-    private var meterArea: some View {
-        // The gap belongs in here, not between `meterArea` and its
-        // neighbours: this view is a single child of the row's HStack, so a
-        // spacer outside it leaves the two meters touching and the first
-        // meter's percentage runs into the second meter's caption.
-        HStack(spacing: 0) {
-            if let short = meters.short {
-                GlanceMeter(snapshot: short, now: now)
-                    .frame(width: Metrics.glanceMeterWidth, alignment: .leading)
-            }
-            if let long = meters.long {
-                Spacer().frame(width: Metrics.glanceMeterGroupGap)
-                GlanceMeter(snapshot: long, now: now)
-                    .frame(width: Metrics.glanceMeterWidth, alignment: .leading)
-            }
-        }
-    }
-
     private var statusText: String {
-        if let issue {
-            if issue == ClaudeLoginState.idle.issue { return "login idle" }
-            if issue.localizedCaseInsensitiveContains("permission") { return "needs permission" }
-            return issue.localizedCaseInsensitiveContains("sign in") ? "not signed in" : "unavailable"
-        }
-        return section.windows.isEmpty ? "no report" : "not signed in"
+        glanceRowStatusText(issue: issue, hasWindows: !section.windows.isEmpty)
     }
 
     private var attribution: String? {
@@ -749,7 +906,7 @@ struct GlanceRow: View {
     private var rowBody: some View {
         HStack(spacing: 0) {
             // Keyed by the row, not the platform, so each Antigravity pool
-            // wears its own mark: the colour Gemini star, or the one-colour
+            // wears its own mark: the colour Gemini star, or the solid
             // Third-Party star.
             PlatformLogo(providerKey: row.id, size: 16, style: markStyle)
                 .frame(width: Metrics.glanceLogoWidth, height: Metrics.glanceLogoWidth)
@@ -778,21 +935,20 @@ struct GlanceRow: View {
                 // weekly/monthly window are the two numbers an owner
                 // actually routes on, and hiding the second one behind a
                 // click made the compact row say half the truth.
-                meterArea
-            }
-            Spacer(minLength: Metrics.glanceColumnGap)
-            if percent == nil {
+                GlanceMeterColumns(short: meters.short, long: meters.long, now: now)
+            } else {
+                // Where a single meter would start, left-aligned, so a row
+                // without a reading still lines up with every other row.
                 Text(statusText)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(width: Metrics.glanceRowTrailingWideWidth, alignment: .trailing)
-                Spacer().frame(width: Metrics.glanceLogoGap)
+                    .fixedSize()
             }
-            // Chevron signals click-to-expand only when the row has more than
-            // two windows to inspect.  When false, an invisible spacer preserves
-            // trailing margin so rows stay perfectly left-aligned.
+            Spacer(minLength: Metrics.glanceColumnGap)
+            // Chevron signals click-to-expand only when the row has windows
+            // its two meters leave out.  When false, an invisible spacer
+            // preserves trailing margin so rows stay perfectly left-aligned.
             if canExpand {
                 Image(systemName: "chevron.down")
                     .font(.system(size: 9, weight: .semibold))
@@ -819,7 +975,7 @@ struct GlanceRow: View {
 
     /// The row's tooltip: the issue when there is one, and for a fleet row
     /// the source and time it was reported, which the row itself leaves to
-    /// the machine's heading.
+    /// the source's heading.
     private var helpText: String {
         if let issue { return issue }
         return [row.title, attribution].compactMap { $0 }.joined(separator: " · ")
@@ -844,43 +1000,37 @@ struct GlanceRow: View {
         .accessibilityAddTraits(isAlarmEnabled ? [.isSelected] : [])
     }
 
-    /// Inline expansion: every quota window the local reader (or the fleet pull)
-    /// has for this provider, one row each, with label · percent remaining ·
-    /// reset countdown.  Mirrors what the Console cards show, minus the chart.
-    ///
-    /// This is the detail the collapsed row no longer needs for its two
-    /// meters, so it earns its keep on the windows the meters leave out — a
-    /// third cadence, or a per-model split inside a pool.
+    /// Inline expansion: the windows the row's two meters leave out, as more
+    /// lines of meters in exactly the row's format and columns — a label where
+    /// the name sits, then caption, bar, percentage and countdown under each
+    /// of the row's two meters.  Nothing the row already shows is repeated.
     @ViewBuilder
     private var expandedSection: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            ForEach(Array(row.section.windows.enumerated()), id: \.offset) { _, snapshot in
-                HStack(spacing: 8) {
-                    Text(AntigravityDisplay.windowLabel(snapshot.window.label))
-                        .font(.system(size: 11))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    Spacer(minLength: 4)
-                    Text(snapshot.remainingPercent.map { "\(Int(($0).rounded()))%" } ?? "—")
-                        .font(.system(size: 11).monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        .frame(width: 40, alignment: .trailing)
-                    // The row's own countdown type and column, so "6d 23h 59m"
-                    // and "29d 23h 59m" fit on one line instead of wrapping.
-                    Text(glanceResetCountdown(snapshot.resetAt, now: now))
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(extraLines) { line in
+                HStack(spacing: 0) {
+                    if showsAlarmToggle {
+                        Spacer().frame(width: Metrics.glanceAlarmBellWidth + Metrics.glanceLogoGap)
+                    }
+                    Spacer().frame(width: Metrics.glanceLogoWidth + Metrics.glanceLogoGap)
+                    Text(line.label)
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
-                        .fixedSize(horizontal: true, vertical: false)
-                        .frame(width: Metrics.glanceMeterCountdownWidth, alignment: .trailing)
+                        .truncationMode(.tail)
+                        .frame(width: Metrics.glanceRowTitleWidth, alignment: .leading)
+                    Spacer().frame(width: Metrics.glanceColumnGap)
+                    GlanceMeterColumns(short: line.short, long: line.long, now: now)
+                    Spacer(minLength: 0)
                 }
-                .padding(.trailing, 22)
+                .padding(.horizontal, Metrics.glanceGutter)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(height: Metrics.glanceExpandedLineHeight)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(line.label)
             }
         }
-        .padding(.leading, 22 + Metrics.glanceGutter)
-        .padding(.top, 2)
-        .padding(.bottom, 8)
+        .padding(.bottom, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.surface.opacity(0.55))
     }
@@ -892,7 +1042,9 @@ struct GlanceRow: View {
         var parts: [String] = []
         let meterSpeech = [meters.short, meters.long].compactMap { $0 }.map { glanceMeterSpeech($0, now: now) }
         if meterSpeech.isEmpty {
-            parts.append(QuotaBarMetrics(remainingPercent: percent, elapsedFraction: nil).spokenSummary)
+            parts.append(percent == nil
+                         ? statusText
+                         : QuotaBarMetrics(remainingPercent: percent, elapsedFraction: nil).spokenSummary)
         } else {
             // Each meter already carries commas of its own, so the meters are
             // set apart with semicolons.
@@ -982,23 +1134,45 @@ struct FleetSetupRow: View {
     }
 }
 
-/// Reset countdown without the "Resets in" prefix.  Formats in hours/min for
-/// short windows, and days/hours/min for weekly/monthly windows.
+/// Reset countdown without the "Resets in" prefix, in at most its two largest
+/// units: "4d 2h", "17d 4h", "2h 42m", "45m", "<1m".  A unit that is zero is
+/// dropped rather than shown, so a countdown never reads "1d 0h" or "0h".
+/// Minutes are whole minutes left, so the line never claims more time than
+/// there is.  The full value is `glanceResetFullCountdown`, one hover away.
 func glanceResetCountdown(_ reset: Date?, now: Date) -> String {
     guard let reset else { return "" }
-    let seconds = reset.timeIntervalSince(now)
+    let seconds = Int(reset.timeIntervalSince(now).rounded())
     guard seconds > 0 else { return "due" }
-    let minutes = max(1, Int(ceil(seconds / 60)))
-    if minutes >= 1440 {
-        let days = minutes / 1440
-        let hours = (minutes % 1440) / 60
-        let mins = (minutes % 1440) % 60
-        if mins > 0 {
-            return "\(days)d \(hours)h \(mins)m"
-        } else {
-            return "\(days)d \(hours)h"
-        }
-    }
-    if minutes >= 60 { return "\(minutes / 60)h \(minutes % 60)m" }
-    return "\(minutes)m"
+    guard seconds >= 60 else { return "<1m" }
+    let minutes = seconds / 60
+    let days = minutes / 1_440
+    let hours = (minutes % 1_440) / 60
+    let mins = minutes % 60
+    if days > 0 { return hours > 0 ? "\(days)d \(hours)h" : "\(days)d" }
+    if hours > 0 { return mins > 0 ? "\(hours)h \(mins)m" : "\(hours)h" }
+    return "\(mins)m"
+}
+
+/// The whole countdown, down to the minute: "4d 2h 42m", "2h 42m", "45m".
+func glanceResetFullCountdown(_ reset: Date?, now: Date) -> String {
+    guard let reset else { return "" }
+    let seconds = Int(reset.timeIntervalSince(now).rounded())
+    guard seconds > 0 else { return "due" }
+    guard seconds >= 60 else { return "less than a minute" }
+    let minutes = seconds / 60
+    let days = minutes / 1_440
+    let hours = (minutes % 1_440) / 60
+    let mins = minutes % 60
+    if days > 0 { return "\(days)d \(hours)h \(mins)m" }
+    if hours > 0 { return "\(hours)h \(mins)m" }
+    return "\(mins)m"
+}
+
+/// The countdown's tooltip: the full value and the reset's own date and time,
+/// "Resets in 4d 2h 42m, on Fri, Oct 3, 7:09 PM".  Nil when there is no reset.
+func glanceResetHelp(_ reset: Date?, now: Date) -> String? {
+    guard let reset else { return nil }
+    let when = reset.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().hour().minute())
+    guard reset > now else { return "Reset was due \(when)" }
+    return "Resets in \(glanceResetFullCountdown(reset, now: now)), on \(when)"
 }

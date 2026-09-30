@@ -11,8 +11,8 @@ private final class ActiveWindow: NSWindow {
 
 /// Demo readings and a snapshot helper shared by the two tests that draw the
 /// Glance popover and the Console to PNG.  The numbers are invented: they are
-/// chosen to show the longest realistic values ("100%", "6d 23h 59m",
-/// "17d 4h 57m"), not to describe anyone's real accounts.
+/// chosen to show the longest realistic values ("100%", "6d 23h",
+/// "17d 4h"), not to describe anyone's real accounts.
 @MainActor
 enum GlanceFixtures {
     static let now = Date(timeIntervalSince1970: 1_790_000_000)
@@ -27,12 +27,14 @@ enum GlanceFixtures {
         token: String?,
         remaining: Double?,
         resetIn: TimeInterval?,
-        source: String? = nil
+        source: String? = nil,
+        model: String? = nil
     ) -> QuotaWindow {
         QuotaWindow(
             id: id,
             provider: provider,
             providerKey: provider,
+            modelId: model,
             label: label,
             remainingPercent: remaining,
             remainingUnknown: remaining == nil,
@@ -67,10 +69,21 @@ enum GlanceFixtures {
                    remaining: 71, resetIn: 2 * day + 3 * hour),
             window("grok-bot-weekly", provider: "grok-bot", label: "Grok Bot weekly", token: "weekly",
                    remaining: 44, resetIn: 5 * day + 12 * hour),
-            window("minimax-5h", provider: "minimax", label: "MiniMax Code (5h window)", token: "5h",
-                   remaining: 92, resetIn: 3 * hour + 10 * 60),
-            window("minimax-weekly", provider: "minimax", label: "Weekly", token: "weekly",
-                   remaining: 81, resetIn: 6 * day + 1 * hour),
+        ] + miniMaxWindows(prefix: "")
+    }
+
+    /// MiniMax as its reader reports it: a "general" 4h and weekly pair, which
+    /// the row meters, and a "video" daily and weekly pair, which it does not.
+    static func miniMaxWindows(prefix: String) -> [QuotaWindow] {
+        [
+            window("\(prefix)general:interval", provider: "minimax", label: "general (4h window)", token: "4h",
+                   remaining: 92, resetIn: 3 * hour + 10 * 60, model: "general"),
+            window("\(prefix)general:weekly", provider: "minimax", label: "general (1w window)", token: "1w",
+                   remaining: 81, resetIn: 4 * day + 2 * hour + 42 * 60, model: "general"),
+            window("\(prefix)video:interval", provider: "minimax", label: "video (1d window)", token: "1d",
+                   remaining: 100, resetIn: 17 * hour + 5 * 60, model: "video"),
+            window("\(prefix)video:weekly", provider: "minimax", label: "video (1w window)", token: "1w",
+                   remaining: 96, resetIn: 4 * day + 2 * hour + 42 * 60, model: "video"),
         ]
     }
 
@@ -83,7 +96,7 @@ enum GlanceFixtures {
 
     static var fleetGroups: [FleetWindowGroup] {
         [
-            FleetWindowGroup(id: "mac-mini", title: "Mac mini", windows: [
+            FleetWindowGroup(id: "mac-mini", title: "Mac mini", windows: miniMaxWindows(prefix: "mini:") + [
                 window("mini:claude-5h", provider: "anthropic", label: "5-hour window", token: "5h",
                        remaining: 0, resetIn: 38 * 60),
                 window("mini:claude-7d", provider: "anthropic", label: "7-day window", token: "168h",
@@ -97,11 +110,11 @@ enum GlanceFixtures {
                 window("mini:antigravity:third-party:weekly", provider: "google-antigravity",
                        label: "Third-Party Models · Weekly", token: "weekly", remaining: 47, resetIn: 4 * day),
             ]),
-            FleetWindowGroup(id: "build-box", title: "build-box", windows: [
-                window("bb:codex-5h", provider: "openai", label: "5-hour window", token: "5h",
-                       remaining: 76, resetIn: 1 * hour + 12 * 60),
-                window("bb:codex-7d", provider: "openai", label: "Weekly window", token: "weekly",
-                       remaining: 58, resetIn: 3 * day + 9 * hour),
+            FleetWindowGroup(id: "chatgpt.com", title: FleetOrigin.title(for: "chatgpt.com"), windows: [
+                window("gpt:codex-5h", provider: "openai", label: "5-hour window", token: "5h",
+                       remaining: 76, resetIn: 1 * hour + 12 * 60, source: "chatgpt.com"),
+                window("gpt:codex-7d", provider: "openai", label: "Weekly window", token: "weekly",
+                       remaining: 58, resetIn: 3 * day + 9 * hour, source: "chatgpt.com"),
             ]),
         ]
     }
@@ -114,7 +127,8 @@ enum GlanceFixtures {
         fleet: Bool,
         pickedAlarms: [String] = ["anthropic", "google-antigravity:gemini", "cursor"],
         localReadersOn: Bool = false,
-        extraWindows: [QuotaWindow] = []
+        extraWindows: [QuotaWindow] = [],
+        signedOut: Set<String> = []
     ) -> (model: MonitorModel, defaults: UserDefaults, suite: String) {
         let suite = "com.jays.codecaps.render." + UUID().uuidString
         let defaults = UserDefaults(suiteName: suite)!
@@ -122,8 +136,13 @@ enum GlanceFixtures {
         // decides what the footer and the empty states say.
         defaults.set(localReadersOn, forKey: "localEnabled")
         let model = MonitorModel(defaults: defaults)
-        model.injectForTests(sections: QuotaResponse(generatedAt: "", windows: localWindows + extraWindows).platformSections(now: now),
-                             now: now)
+        // A signed-out provider reports no windows and the issue its reader
+        // gives, which is what the row turns into "not signed in".
+        let windows = (localWindows + extraWindows).filter { !signedOut.contains($0.providerKey ?? $0.provider) }
+        var issues: [String: String] = [:]
+        if signedOut.contains("anthropic") { issues["anthropic"] = ClaudeLoginState.signedOut.issue }
+        model.injectForTests(sections: QuotaResponse(generatedAt: "", windows: windows).platformSections(now: now),
+                             now: now, issues: issues)
         model.injectFleetForTests(groups: fleet ? fleetGroups : [], checkedAt: now)
         model.glanceView = view
         model.alarmsAll = alarmsAll

@@ -14,7 +14,7 @@ CodeCaps keeps local readings visible in the menu bar.  If you run a collector, 
 
 CodeCaps has two surfaces.  Nothing renders in both.
 
-**Glance** is the menu bar popover — the two-second check.  One row per platform, each with its short and long quota windows side by side: a caption (`5h`, `7d`, `1m`), a usage bar, the percentage remaining, and the reset countdown.  A two-box switch beside the name shows either `This Mac` or `Fleet Reported`, one set at a time, and remembers the choice across launches.  Beside it, the **All** bell turns reset alarms on for every provider; turn it off and a faint bell appears at the left of each row, so providers can be picked one by one.  Read-only aside from those switches, Refresh, Settings, and Open CodeCaps.
+**Glance** is the menu bar popover — the two-second check.  One row per platform, each with its short and long quota windows side by side: a caption (`5h`, `7d`, `1m`), a usage bar, the percentage remaining, and the reset countdown.  A two-box switch beside the name shows either `FROM MAC` or `FROM FLEET`, one set at a time, and remembers the choice across launches; `FROM FLEET` groups rows under a heading band per reporting source.  On the right of the header, the **ALL** bell turns reset alarms on for every provider; turn it off and a faint bell appears at the left of each row, so providers can be picked one by one.  Countdowns show their two largest units (`4d 2h`, `2h 42m`); hover one for the full value and the reset time.  A row with more windows than its two meters opens to show only the rest, as more meters in the same columns.  Read-only aside from those switches, Refresh, Settings, and Open CodeCaps.
 
 <img src="docs/screenshots/glance-light.png" width="760" alt="Glance, light">
 <img src="docs/screenshots/glance-dark.png" width="760" alt="Glance, dark">
@@ -43,7 +43,7 @@ A reset alarm is a notification, with the sound picked in Settings → Alerts & 
 - A provider's **largest** window — the weekly or monthly one — alarms every time it resets, even if usage never came near the cap, so you know a new week or month began.
 - A **smaller** window — the 5-hour one — alarms on reset only if, during the period that just ended, it hit its cap or came within 20% of it.
 
-Each reset alarms once.  The state behind it is saved on every refresh, so a reset that lands while CodeCaps is closed, or during an update, still alarms on the next reading, and one that already alarmed never repeats.  This Mac and Fleet Reported rows both alarm, keyed by provider; the same reset reported by both alarms once.
+Each reset alarms once.  The state behind it is saved on every refresh, so a reset that lands while CodeCaps is closed, or during an update, still alarms on the next reading, and one that already alarmed never repeats.  From Mac and From Fleet rows both alarm, keyed by provider; the same reset reported by both alarms once.
 
 ## Providers
 

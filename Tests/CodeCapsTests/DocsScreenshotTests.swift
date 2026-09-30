@@ -32,7 +32,7 @@ final class DocsScreenshotTests: XCTestCase {
     }
 
     private func console(page: ConsolePage, dark: Bool) -> Data? {
-        let (model, defaults, suite) = GlanceFixtures.makeModel(view: .thisMac, alarmsAll: true, fleet: false,
+        let (model, defaults, suite) = GlanceFixtures.makeModel(view: .fromMac, alarmsAll: true, fleet: false,
                                                                 localReadersOn: true)
         defer { defaults.removePersistentDomain(forName: suite) }
         let state = ConsoleState(defaults: defaults)
@@ -48,9 +48,9 @@ final class DocsScreenshotTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         CodeCapsVersion.display = "Version 1.0.0 (1)"
 
-        try write(glance(view: .thisMac, dark: false), "glance-light.png", to: directory)
-        try write(glance(view: .thisMac, dark: true), "glance-dark.png", to: directory)
-        try write(glance(view: .fleetReported, dark: false), "glance-fleet.png", to: directory)
+        try write(glance(view: .fromMac, dark: false), "glance-light.png", to: directory)
+        try write(glance(view: .fromMac, dark: true), "glance-dark.png", to: directory)
+        try write(glance(view: .fromFleet, dark: false), "glance-fleet.png", to: directory)
         try write(console(page: .allPlatforms, dark: false), "console-light.png", to: directory)
         try write(console(page: .allPlatforms, dark: true), "console-dark.png", to: directory)
         try write(console(page: .platform("google-antigravity:gemini"), dark: false),

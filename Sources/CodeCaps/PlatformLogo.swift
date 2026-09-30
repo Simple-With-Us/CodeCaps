@@ -131,7 +131,8 @@ public struct PlatformLogo: View {
                     .renderingMode(rendersAsTemplate ? .template : .original)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
-                    .foregroundStyle(tint ?? Theme.ink)
+                    .foregroundStyle(tint ?? (PlatformLogoImage.usesSolidTone(providerKey)
+                                              ? Theme.solidMark : Theme.ink))
             } else {
                 Image(systemName: PlatformLogoImage.fallbackSymbolName(for: providerKey))
                     .resizable()
@@ -230,6 +231,17 @@ public enum PlatformLogoImage {
         let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return monochromeKeys.contains(key)
     }
+
+    /// One-colour marks that draw pure black on Light and pure white on Dark
+    /// rather than in the ink's softer grey.  The Third-Party star sits beside
+    /// the colour Gemini star, and a grey one read as disabled (owner delta,
+    /// 2026-09-30).
+    public static func usesSolidTone(_ providerKey: String) -> Bool {
+        let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return solidToneKeys.contains(key)
+    }
+
+    private static let solidToneKeys: Set<String> = ["google-antigravity:third-party"]
 
     private static let monochromeKeys: Set<String> = [
         "grok-bot", "google-antigravity:third-party",
