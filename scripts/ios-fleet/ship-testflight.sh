@@ -1144,30 +1144,42 @@ if [[ "$EXPORT_ONLY" -eq 1 ]]; then
 fi
 
 # Prefer: export with destination=upload (uses Xcode session OR ASC if configured in Xcode)
-log "exporting + uploading to App Store Connect..."
-mkdir -p "$EXPORT_DIR"
-set +e
-xcodebuild -exportArchive \
-  -archivePath "$ARCHIVE_PATH" \
-  -exportPath "$EXPORT_DIR" \
-  -exportOptionsPlist "$EXPORT_PLIST_UPLOAD" \
-  ${PROVISION_UPDATE_FLAGS[@]:+"${PROVISION_UPDATE_FLAGS[@]}"} \
-  ${ASC_AUTH_FLAGS[@]:+"${ASC_AUTH_FLAGS[@]}"} \
-  2>&1 | tee "${LOG_DIR}/export-upload.log"
-EXPORT_RC=${PIPESTATUS[0]}
-set -e
-
-if [[ $EXPORT_RC -eq 0 ]]; then
-  log "upload path succeeded via xcodebuild export (destination=upload)"
-  log "build ${MARKETING} (${BUILD_NUM}) submitted for ${BUNDLE_ID}"
-  release_archive_lock
-  ensure_tf_ready
-  record_successful_ship
-  log "logs: ${LOG_DIR}"
-  exit 0
+# Mac manual ships skip destination=upload: hosted runners have no Xcode account
+# session, and that path has hung/failed with "Failed to Use Accounts". Go
+# straight to local .pkg export + altool with the ASC API key.
+SKIP_UPLOAD_DEST=0
+if [[ "$PLATFORM" == "macOS" && "$MANUAL_SIGN" -eq 1 ]]; then
+  SKIP_UPLOAD_DEST=1
+  log "macOS manual ship: skipping destination=upload; will export pkg + altool"
 fi
 
-log "xcodebuild upload export failed (rc=$EXPORT_RC); trying local export + altool"
+EXPORT_RC=1
+if [[ "$SKIP_UPLOAD_DEST" -eq 0 ]]; then
+  log "exporting + uploading to App Store Connect..."
+  mkdir -p "$EXPORT_DIR"
+  set +e
+  xcodebuild -exportArchive \
+    -archivePath "$ARCHIVE_PATH" \
+    -exportPath "$EXPORT_DIR" \
+    -exportOptionsPlist "$EXPORT_PLIST_UPLOAD" \
+    ${PROVISION_UPDATE_FLAGS[@]:+"${PROVISION_UPDATE_FLAGS[@]}"} \
+    ${ASC_AUTH_FLAGS[@]:+"${ASC_AUTH_FLAGS[@]}"} \
+    2>&1 | tee "${LOG_DIR}/export-upload.log"
+  EXPORT_RC=${PIPESTATUS[0]}
+  set -e
+
+  if [[ $EXPORT_RC -eq 0 ]]; then
+    log "upload path succeeded via xcodebuild export (destination=upload)"
+    log "build ${MARKETING} (${BUILD_NUM}) submitted for ${BUNDLE_ID}"
+    release_archive_lock
+    ensure_tf_ready
+    record_successful_ship
+    log "logs: ${LOG_DIR}"
+    exit 0
+  fi
+
+  log "xcodebuild upload export failed (rc=$EXPORT_RC); trying local export + altool"
+fi
 
 mkdir -p "$EXPORT_DIR"
 set +e
