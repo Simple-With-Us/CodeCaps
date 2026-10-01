@@ -57,10 +57,10 @@ security delete-keychain "$KC_PATH" >/dev/null 2>&1 || true
 security create-keychain -p "$KC_PASS" "$KC_PATH"
 security set-keychain-settings -lut 21600 "$KC_PATH"
 security unlock-keychain -p "$KC_PASS" "$KC_PATH"
-security import "$DIST_P12" -k "$KC_PATH" -P "$IOS_DIST_P12_PASSWORD" \
-  -T /usr/bin/codesign -T /usr/bin/security -T /usr/bin/xcodebuild -T /usr/bin/productsign >/dev/null
-security import "$INST_P12" -k "$KC_PATH" -P "$MAC_INSTALLER_P12_PASSWORD" \
-  -T /usr/bin/codesign -T /usr/bin/security -T /usr/bin/xcodebuild -T /usr/bin/productsign >/dev/null
+# -A: allow all apps (required for non-interactive productsign on hosted runners;
+# -T alone still prompts/hangs for the Installer identity).
+security import "$DIST_P12" -k "$KC_PATH" -P "$IOS_DIST_P12_PASSWORD" -A >/dev/null
+security import "$INST_P12" -k "$KC_PATH" -P "$MAC_INSTALLER_P12_PASSWORD" -A >/dev/null
 # productsign (Mac pkg) needs the same partition list as codesign; without it
 # xcodebuild -exportArchive can hang on a keychain ACL prompt on hosted runners.
 security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KC_PASS" "$KC_PATH" >/dev/null
