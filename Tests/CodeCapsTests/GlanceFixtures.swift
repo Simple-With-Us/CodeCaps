@@ -67,9 +67,23 @@ enum GlanceFixtures {
                    remaining: 62, resetIn: 17 * day + 4 * hour + 57 * 60),
             window("grok-weekly", provider: "xai", label: "Weekly credits", token: "weekly",
                    remaining: 71, resetIn: 2 * day + 3 * hour),
-            window("grok-bot-weekly", provider: "grok-bot", label: "Grok Bot weekly", token: "weekly",
-                   remaining: 44, resetIn: 5 * day + 12 * hour),
-        ] + miniMaxWindows(prefix: "")
+        ] + grokBotWindows + miniMaxWindows(prefix: "")
+    }
+
+    /// Grok Bot as the owner's Mac reports it: two readers speak for one weekly
+    /// allowance, Cursor's DashboardService and the `gbu` CLI, and a `gbu` that
+    /// cannot read adds a placeholder with no reading and no cadence on top.
+    /// The row must still draw ONE weekly meter (owner delta 2026-09-30: a stray
+    /// extra, empty "7d" bar).
+    static var grokBotWindows: [QuotaWindow] {
+        [
+            window("local-mac:grok-bot:weekly", provider: "grok-bot", label: "Grok Bot weekly", token: "weekly",
+                   remaining: 44.4, resetIn: 5 * day + 12 * hour, source: "Cursor DashboardService"),
+            window("local-mac:grok-bot:gbu-weekly", provider: "grok-bot", label: "Grok Bot weekly", token: "weekly",
+                   remaining: 44.38, resetIn: 5 * day + 12 * hour, source: "gbu"),
+            window("local-mac:grok-bot:gbu-unknown", provider: "grok-bot", label: "Grok Bot weekly", token: nil,
+                   remaining: nil, resetIn: nil, source: "gbu"),
+        ]
     }
 
     /// MiniMax as its reader reports it: a "general" 4h and weekly pair, which

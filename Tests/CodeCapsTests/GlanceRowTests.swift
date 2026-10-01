@@ -333,7 +333,8 @@ final class GlanceMeterTests: XCTestCase {
         token: String? = nil,
         remaining: Double? = 50,
         resetIn: TimeInterval? = nil,
-        provider: String = "anthropic"
+        provider: String = "anthropic",
+        source: String? = nil
     ) -> QuotaWindowSnapshot {
         let iso = ISO8601DateFormatter()
         return QuotaWindowSnapshot(window: QuotaWindow(
@@ -346,7 +347,8 @@ final class GlanceMeterTests: XCTestCase {
             remainingUnknown: remaining == nil,
             resetAt: resetIn.map { iso.string(from: now.addingTimeInterval($0)) },
             window: token,
-            occurredAt: iso.string(from: now)), now: now)
+            occurredAt: iso.string(from: now),
+            source: source), now: now)
     }
 
     /// A Claude-shaped 5h + weekly row: the exact pair the owner asked to see
@@ -423,7 +425,8 @@ final class GlanceMeterTests: XCTestCase {
         for windows in [
             [makeWindow(id: "a", label: "5h window", token: "5h"), makeWindow(id: "b", label: "7d window", token: "weekly")],
             [makeWindow(id: "a", label: "3h window", token: "3h"), makeWindow(id: "b", label: "24h window", token: "24h")],
-            [makeWindow(id: "a", label: "plan", remaining: nil), makeWindow(id: "b", label: "plan", remaining: nil)],
+            // Two readings of one cadence from one source are two windows.
+            [makeWindow(id: "a", label: "plan", remaining: 40), makeWindow(id: "b", label: "plan", remaining: 60)],
         ] {
             let pair = glanceMeterPair(for: makeRow(windows), now: now)
             XCTAssertNotNil(pair.long, "a two-window row must fill the second meter")
@@ -497,6 +500,142 @@ final class GlanceMeterTests: XCTestCase {
             makeWindow(id: "code", label: "MiniMax Code (5h window)", token: "5h", remaining: 70),
         ]), now: now)
         XCTAssertEqual(pair.short?.window.id, "code")
+    }
+
+    // MARK: Grok Bot's stray extra bar (owner delta 2026-09-30)
+
+    /// The windows the owner's Mac hands the Grok Bot row: DashboardService's
+    /// reading and `gbu`'s reading of the same weekly allowance, and the
+    /// placeholder `gbu` adds when it cannot read.
+    private func dashboardWeekly(remaining: Double? = 80.633422) -> QuotaWindowSnapshot {
+        makeWindow(id: "local-mac:grok-bot:weekly", label: "Grok Bot weekly", token: "weekly", remaining: remaining,
+                   resetIn: 4 * 86_400 + 18 * 3_600, provider: "grok-bot", source: "Cursor DashboardService")
+    }
+
+    private func gbuWeekly(remaining: Double? = 80.63) -> QuotaWindowSnapshot {
+        makeWindow(id: "local-mac:grok-bot:gbu-weekly", label: "Grok Bot weekly", token: "weekly", remaining: remaining,
+                   resetIn: 4 * 86_400 + 18 * 3_600, provider: "grok-bot", source: "gbu")
+    }
+
+    private var gbuPlaceholder: QuotaWindowSnapshot {
+        makeWindow(id: "local-mac:grok-bot:gbu-unknown", label: "Grok Bot weekly", token: nil, remaining: nil,
+                   provider: "grok-bot", source: "gbu")
+    }
+
+    private func grokBotRow(_ windows: [QuotaWindowSnapshot]) -> DisplaySection {
+        DisplaySection(
+            id: "grok-bot", providerKey: "grok-bot", title: "Grok Bot", platformTitle: "Grok Bot",
+            section: QuotaPlatformSection(providerKey: "grok-bot", providerLabel: "Grok Bot", via: "cursor",
+                                          expected: true, windows: windows),
+            poolKey: nil, remainingPercent: windows.compactMap(\.remainingPercent).min(),
+            resetAt: windows.compactMap(\.resetAt).min(), maskedWindowIds: [])
+    }
+
+    func testAPlaceholderBesideAReadingIsNotDrawnAsAnEmptySecondBar() {
+        // The root cause: the second slot took ANY other window of the row,
+        // and `gbu`'s no-reading "Grok Bot weekly" captions "7d" like the
+        // reading beside it, so it was drawn as an empty 7d bar with a dash.
+        let pair = glanceMeterPair(for: grokBotRow([dashboardWeekly(), gbuPlaceholder]), now: now)
+        XCTAssertEqual(pair.short?.window.id, "local-mac:grok-bot:weekly")
+        XCTAssertNil(pair.long, "no second bar for a window with no reading")
+    }
+
+    func testAPlaceholderIsNeverDrawnWhenAnythingOnItsCadenceHasAReading() {
+        // Whichever order the windows arrive in, and from whichever source.
+        let orders: [[QuotaWindowSnapshot]] = [
+            [gbuPlaceholder, dashboardWeekly()],
+            [gbuPlaceholder, gbuWeekly()],
+            [dashboardWeekly(), gbuPlaceholder, gbuWeekly()],
+            [gbuPlaceholder, gbuWeekly(), dashboardWeekly()],
+        ]
+        for windows in orders {
+            let pair = glanceMeterPair(for: grokBotRow(windows), now: now)
+            for drawn in [pair.short, pair.long].compactMap({ $0 }) {
+                XCTAssertNotNil(drawn.remainingPercent, "\(windows.map(\.window.id)): an empty bar was drawn")
+            }
+            XCTAssertNotNil(pair.short?.remainingPercent)
+        }
+    }
+
+    func testTwoSourcesReadingTheSameWeeklyDrawOneWeeklyMeter() {
+        // The live handoff right now: both readers report, to within a hundredth
+        // of a percent, and the row drew the same "7d 81%" twice.
+        let live = grokBotRow([dashboardWeekly(remaining: 80.585), gbuWeekly(remaining: 80.59)])
+        let pair = glanceMeterPair(for: live, now: now)
+        XCTAssertEqual(pair.short?.window.id, "local-mac:grok-bot:weekly", "the lower of the two, as the row always picks")
+        XCTAssertNil(pair.long, "the other source's copy of the same meter is not a second meter")
+        XCTAssertEqual(glanceMeterPair(for: grokBotRow([gbuWeekly(remaining: 80.59), dashboardWeekly(remaining: 80.585)]),
+                                       now: now), pair, "whichever order they arrive in")
+    }
+
+    func testBothSourcesAndAPlaceholderStillDrawOneMeter() {
+        let row = grokBotRow([dashboardWeekly(), gbuPlaceholder, gbuWeekly()])
+        let pair = glanceMeterPair(for: row, now: now)
+        XCTAssertNotNil(pair.short)
+        XCTAssertNil(pair.long)
+        XCTAssertTrue(glanceExpandedLines(for: row, now: now).isEmpty,
+                      "neither the copy nor the placeholder is an extra line under the row")
+        XCTAssertEqual(glanceMetersSpeech([pair.short, pair.long], now: now).components(separatedBy: ";").count, 1)
+    }
+
+    func testTheCopyDoesNotHideAWindowThatIsAnotherMeter() {
+        // A second source's report of the SAME meter is a copy; a different
+        // cadence from the same source is not.
+        let fiveHour = makeWindow(id: "gbu-5h", label: "Grok Bot 5-hour", token: "5h", remaining: 70,
+                                  resetIn: 3 * 3_600, provider: "grok-bot", source: "gbu")
+        let pair = glanceMeterPair(for: grokBotRow([dashboardWeekly(), gbuWeekly(), fiveHour]), now: now)
+        XCTAssertEqual(pair.short?.window.id, "gbu-5h")
+        XCTAssertEqual(pair.long?.window.id, "local-mac:grok-bot:gbu-weekly", "the lower of the two weekly reports")
+    }
+
+    func testTwoWindowsOfOneSourceAndCadenceAreStillTwoMeters() {
+        // A source that reports two windows with one label and one cadence has
+        // two windows, not a window and its copy.
+        let pair = glanceMeterPair(for: makeRow([
+            makeWindow(id: "a", label: "Included plan", token: "weekly", remaining: 30, source: "one"),
+            makeWindow(id: "b", label: "Included plan", token: "weekly", remaining: 60, source: "one"),
+        ]), now: now)
+        XCTAssertNotNil(pair.short)
+        XCTAssertNotNil(pair.long)
+    }
+
+    func testAPlaceholderOnAnotherCadenceKeepsItsEmptyBar() {
+        // Claude's weekly window is unknown while its 5h reads: that empty
+        // 7d bar is true, and says the weekly cap is not known.
+        let pair = glanceMeterPair(for: makeRow([
+            makeWindow(id: "5h", label: "5h window", token: "5h", remaining: 80, resetIn: 3_600),
+            makeWindow(id: "7d", label: "7d window", token: "168h", remaining: nil, resetIn: 86_400 * 3),
+        ]), now: now)
+        XCTAssertEqual(pair.short?.window.id, "5h")
+        XCTAssertEqual(pair.long?.window.id, "7d")
+        XCTAssertNil(pair.long?.remainingPercent)
+    }
+
+    func testOnlyPlaceholdersDrawAtMostOneEmptyBarPerCadence() {
+        let one = glanceMeterPair(for: grokBotRow([
+            gbuPlaceholder,
+            makeWindow(id: "cursor-unknown", label: "Grok Bot weekly", token: nil, remaining: nil,
+                       provider: "grok-bot", source: "Cursor DashboardService"),
+        ]), now: now)
+        XCTAssertNotNil(one.short)
+        XCTAssertNil(one.long, "an empty bar is never drawn twice")
+    }
+
+    func testAWindowThatNamesNoCadenceGivesWayToAnyReading() {
+        let pair = glanceMeterPair(for: makeRow([
+            makeWindow(id: "5h", label: "5h window", token: "5h", remaining: 80, resetIn: 3_600),
+            makeWindow(id: "q", label: "Something else", token: nil, remaining: nil),
+        ]), now: now)
+        XCTAssertEqual(pair.short?.window.id, "5h")
+        XCTAssertNil(pair.long, "\"Quota\" with no reading says nothing next to a real 5h reading")
+    }
+
+    func testDrawableWindowsKeepEveryReadingInOrder() {
+        let windows = [gbuWeekly(), gbuPlaceholder, dashboardWeekly(),
+                       makeWindow(id: "x", label: "5h window", token: "5h", remaining: nil, provider: "grok-bot")]
+        let drawable = glanceDrawableWindows(windows)
+        XCTAssertEqual(drawable.map(\.window.id),
+                       ["local-mac:grok-bot:gbu-weekly", "local-mac:grok-bot:weekly", "x"])
     }
 
     // MARK: Captions

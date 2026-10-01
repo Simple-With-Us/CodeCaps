@@ -85,7 +85,7 @@ final class QuotaBarMetricsTests: XCTestCase {
         XCTAssertNil(metrics.usedFraction)
         XCTAssertNil(metrics.segmentWidths(in: 50))
         // The marker is about time, not the reading, so it survives.
-        XCTAssertNotNil(metrics.markerOffset(in: 50))
+        XCTAssertNotNil(layout(metrics, in: 50))
     }
 
     func testOutOfRangeAndNonFiniteInputsAreBounded() {
@@ -100,25 +100,146 @@ final class QuotaBarMetricsTests: XCTestCase {
 
     // MARK: Marker position
 
+    /// The marker's layout on a bar as Glance draws it: 6pt thick, a 2pt
+    /// marker, a 1pt halo.
+    private func layout(_ metrics: QuotaBarMetrics, in width: Double, barHeight: Double = 6) -> QuotaMarkerLayout? {
+        metrics.markerLayout(in: width, barHeight: barHeight, markerWidth: 2, haloPadding: 1)
+    }
+
     func testMarkerSitsAtTheElapsedFractionFromTheLeft() throws {
         for fraction in [0.1, 0.5, 0.9] {
-            let offset = try XCTUnwrap(QuotaBarMetrics(remainingPercent: 50, elapsedFraction: fraction)
-                .markerOffset(in: 100))
-            XCTAssertEqual(offset, 100 * fraction, accuracy: 1e-9)
+            let placed = try XCTUnwrap(layout(QuotaBarMetrics(remainingPercent: 50, elapsedFraction: fraction), in: 100))
+            XCTAssertEqual(placed.center, 100 * fraction, accuracy: 1e-9)
         }
     }
 
-    func testMarkerStaysInsideBothEndsOfTheBar() throws {
-        XCTAssertEqual(try XCTUnwrap(QuotaBarMetrics(remainingPercent: 50, elapsedFraction: 0).markerOffset(in: 50)), 1)
-        XCTAssertEqual(try XCTUnwrap(QuotaBarMetrics(remainingPercent: 50, elapsedFraction: 1).markerOffset(in: 50)), 49)
+    func testMarkerStaysInsideBothEndsOfTheBarAndTheHaloIsCutOffAtThem() throws {
+        let start = try XCTUnwrap(layout(QuotaBarMetrics(remainingPercent: 50, elapsedFraction: 0), in: 50))
+        XCTAssertEqual(start.center, 1, "the 2pt marker stands flush with the left end")
+        XCTAssertEqual(start.haloStart, 0, "and its halo is cut off at the end rather than hanging past it")
+        XCTAssertEqual(start.haloEnd, 3)
+        let end = try XCTUnwrap(layout(QuotaBarMetrics(remainingPercent: 50, elapsedFraction: 1), in: 50))
+        XCTAssertEqual(end.center, 49)
+        XCTAssertEqual(end.haloStart, 47)
+        XCTAssertEqual(end.haloEnd, 50)
+        for fraction in stride(from: 0.0, through: 1.0, by: 0.01) {
+            let placed = try XCTUnwrap(layout(QuotaBarMetrics(remainingPercent: 50, elapsedFraction: fraction), in: 50))
+            XCTAssertGreaterThanOrEqual(placed.center - 1, 0, "elapsed \(fraction)")
+            XCTAssertLessThanOrEqual(placed.center + 1, 50, "elapsed \(fraction)")
+            XCTAssertGreaterThanOrEqual(placed.haloStart, 0, "elapsed \(fraction)")
+            XCTAssertLessThanOrEqual(placed.haloEnd, 50, "elapsed \(fraction)")
+            XCTAssertLessThanOrEqual(placed.haloStart, placed.center - 1, "the marker is inside its halo")
+            XCTAssertGreaterThanOrEqual(placed.haloEnd, placed.center + 1, "the marker is inside its halo")
+        }
+    }
+
+    func testNoSliverOfBarHangsOffTheMarker() throws {
+        // Codex's 5h window at 100% with the period 6% elapsed: the marker was
+        // 2pt in, which left a small "c" of bar to the left of it.  On either
+        // side of the marker there is now no bar at all, or at least a whole
+        // cap (half the bar's thickness).
+        let barHeight = 6.0
+        let cap = barHeight / 2
+        for fraction in stride(from: 0.0, through: 1.0, by: 0.005) {
+            let placed = try XCTUnwrap(layout(QuotaBarMetrics(remainingPercent: 100, elapsedFraction: fraction),
+                                              in: 50, barHeight: barHeight))
+            for leftover in [placed.center - 1, 50 - (placed.center + 1)] {
+                XCTAssertTrue(leftover == 0 || leftover >= cap,
+                              "elapsed \(fraction): \(leftover)pt of bar would hang off the marker")
+            }
+        }
+        // 6% elapsed: the marker moves the 2pt to the bar's end.
+        let early = try XCTUnwrap(layout(QuotaBarMetrics(remainingPercent: 100, elapsedFraction: 19.0 / 300), in: 50))
+        XCTAssertEqual(early.center, 1)
+        XCTAssertEqual(early.haloStart, 0)
+        let late = try XCTUnwrap(layout(QuotaBarMetrics(remainingPercent: 100, elapsedFraction: 0.97), in: 50))
+        XCTAssertEqual(late.center, 49)
+        XCTAssertEqual(late.haloEnd, 50)
+        // A stub of a whole cap or more is a real end of the bar: the marker stays put.
+        let kept = try XCTUnwrap(layout(QuotaBarMetrics(remainingPercent: 100, elapsedFraction: 0.12), in: 50))
+        XCTAssertEqual(kept.center, 6, accuracy: 1e-9)
+        // Mid-bar the halo is the marker plus its padding.
+        let middle = try XCTUnwrap(layout(QuotaBarMetrics(remainingPercent: 100, elapsedFraction: 0.5), in: 50))
+        XCTAssertEqual(middle.haloWidth, 4)
+        XCTAssertEqual(middle.center, 25)
+    }
+
+    func testTheMarkerNeverMovesMoreThanACapFromWhereTheTimeIs() throws {
+        let barHeight = 6.0
+        for width in [30.0, 50.0, 100.0, 240.0] {
+            for fraction in stride(from: 0.0, through: 1.0, by: 0.005) {
+                let placed = try XCTUnwrap(layout(QuotaBarMetrics(remainingPercent: 50, elapsedFraction: fraction),
+                                                  in: width, barHeight: barHeight))
+                let clamped = min(max(width * fraction, 1), width - 1)
+                XCTAssertLessThan(abs(placed.center - clamped), barHeight / 2,
+                                  "width \(width), elapsed \(fraction)")
+            }
+        }
+    }
+
+    func testTheLayoutNeverDependsOnTheReadingSoNoShareCanBeHiddenByIt() throws {
+        // The marker is placed from the time alone and the bar is never trimmed
+        // around it: the red and green a bar draws are the share it reads, at
+        // every elapsed fraction.  (A trim around the marker once erased the
+        // red of a bar that read 90% remaining with the period 14% elapsed.)
+        for fraction in stride(from: 0.0, through: 1.0, by: 0.01) {
+            let reference = layout(QuotaBarMetrics(remainingPercent: 100, elapsedFraction: fraction), in: 50)
+            for remaining in 1...99 {
+                let metrics = QuotaBarMetrics(remainingPercent: Double(remaining), elapsedFraction: fraction)
+                XCTAssertEqual(layout(metrics, in: 50), reference, "remaining \(remaining), elapsed \(fraction)")
+                let widths = try XCTUnwrap(metrics.segmentWidths(in: 50))
+                XCTAssertEqual(widths.used, 50 * Double(100 - remaining) / 100, accuracy: 1e-9,
+                               "the red is the share used at \(remaining)% remaining")
+                XCTAssertEqual(widths.remaining, 50 * Double(remaining) / 100, accuracy: 1e-9,
+                               "the green is the share left at \(remaining)% remaining")
+            }
+        }
+    }
+
+    func testABarTooShortForAMarkerAndTwoCapsKeepsTheMarkerWhereTheTimeIs() throws {
+        // 7pt cannot hold a 2pt marker with a 3pt cap either side, so nothing
+        // moves: 30% of 7pt is 2.1pt, not the 1pt a snap would give.
+        let tiny = try XCTUnwrap(layout(QuotaBarMetrics(remainingPercent: 100, elapsedFraction: 0.3), in: 7))
+        XCTAssertEqual(tiny.center, 2.1, accuracy: 1e-9)
     }
 
     func testNoElapsedFractionMeansNoMarker() {
-        XCTAssertNil(QuotaBarMetrics(remainingPercent: 50, elapsedFraction: nil).markerOffset(in: 50))
+        XCTAssertNil(layout(QuotaBarMetrics(remainingPercent: 50, elapsedFraction: nil), in: 50))
     }
 
     func testMarkerOnAVeryNarrowBarIsCentred() throws {
-        XCTAssertEqual(try XCTUnwrap(QuotaBarMetrics(remainingPercent: 50, elapsedFraction: 0.9).markerOffset(in: 2)), 1)
+        let placed = try XCTUnwrap(layout(QuotaBarMetrics(remainingPercent: 50, elapsedFraction: 0.9), in: 2))
+        XCTAssertEqual(placed.center, 1)
+    }
+
+    // MARK: Nothing drawn for a share that rounds away
+
+    func testAFullBarDrawsNoRedAtAll() throws {
+        let full = try XCTUnwrap(QuotaBarMetrics(remainingPercent: 100, elapsedFraction: 0.06).segmentWidths(in: 50))
+        XCTAssertEqual(full.used, 0)
+        XCTAssertEqual(full.remaining, 50)
+    }
+
+    func testABarThatReadsOneHundredPercentDrawsNoRedSliver() throws {
+        // 99.6% prints as "100%"; its 0.2pt of red is an anti-aliased smudge.
+        let almost = try XCTUnwrap(QuotaBarMetrics(remainingPercent: 99.6, elapsedFraction: nil).segmentWidths(in: 50))
+        XCTAssertEqual(almost.used, 0)
+        XCTAssertEqual(almost.remaining, 50)
+        // On a wide bar the same 0.4% is a visible 0.8pt, but the label still
+        // says "100%", so the bar agrees with it.
+        let wide = try XCTUnwrap(QuotaBarMetrics(remainingPercent: 99.6, elapsedFraction: nil).segmentWidths(in: 200))
+        XCTAssertEqual(wide.used, 0)
+    }
+
+    func testAnEmptyBarDrawsNoGreenAtAll() throws {
+        let empty = try XCTUnwrap(QuotaBarMetrics(remainingPercent: 0.3, elapsedFraction: nil).segmentWidths(in: 50))
+        XCTAssertEqual(empty.used, 50, "reads 0%")
+        XCTAssertEqual(empty.remaining, 0)
+    }
+
+    func testARealShareIsStillDrawn() throws {
+        let two = try XCTUnwrap(QuotaBarMetrics(remainingPercent: 98, elapsedFraction: nil).segmentWidths(in: 50))
+        XCTAssertEqual(two.used, 1, accuracy: 1e-9, "2% used of 50pt is a 1pt red segment, and it shows")
     }
 
     // MARK: Spoken value

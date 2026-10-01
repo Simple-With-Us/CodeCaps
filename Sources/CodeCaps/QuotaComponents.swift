@@ -98,9 +98,26 @@ enum Metrics {
     static let glanceWidth: CGFloat = 570
     static let glanceMinHeight: CGFloat = 200
     static let glanceGutter: CGFloat = 12
-    static let glanceHeaderHeight: CGFloat = 36
-    /// Height of the From Mac / From Fleet switch.
-    static let glanceHeaderControlHeight: CGFloat = 20
+    /// Tall enough that the 22pt controls have 9pt of air above and below.
+    static let glanceHeaderHeight: CGFloat = 40
+    /// Height of every control on the header's one line: the From Mac / From
+    /// Fleet switch, the All bell and the refresh button.  They share one
+    /// height so they share one centre line.
+    static let glanceHeaderControlHeight: CGFloat = 22
+    /// The space between "CodeCaps" and the From Mac / From Fleet switch.  It
+    /// was the 10pt every header gap used, which read as cramped (owner delta,
+    /// 2026-09-30); twice that sets the title apart from the controls.
+    static let glanceHeaderTitleGap: CGFloat = 20
+    /// The least space between the switch and the right-hand cluster.  The
+    /// popover is wide, so the two only get this close if the cluster grows.
+    static let glanceHeaderClusterGap: CGFloat = 16
+    /// The space between neighbours inside the right-hand cluster: the All
+    /// bell, a dot, the count, a dot, the time, and the refresh button.
+    static let glanceHeaderItemGap: CGFloat = 10
+    /// The side padding inside one segment of the switch.
+    static let glanceHeaderSegmentPadding: CGFloat = 11
+    /// The dots between the cluster's phrases.
+    static let glanceHeaderDotSize: CGFloat = 3
     static let glanceFooterHeight: CGFloat = 38
     /// A source's heading band in From Fleet.
     static let glanceGroupHeaderHeight: CGFloat = 22
@@ -263,32 +280,25 @@ struct QuotaUsageBar: View {
     /// How far the marker stands proud of the bar above and below.
     static let markerOverhang: CGFloat = 2
     static let markerWidth: CGFloat = 2
+    /// How far the pale halo stands proud of the marker on each side.
+    static let haloPadding: CGFloat = 1
 
     var body: some View {
         GeometryReader { geometry in
             let width = Double(geometry.size.width)
+            let layout = metrics.markerLayout(in: width, barHeight: Double(geometry.size.height),
+                                              markerWidth: Double(Self.markerWidth),
+                                              haloPadding: Double(Self.haloPadding))
             ZStack(alignment: .leading) {
-                if let widths = metrics.segmentWidths(in: width) {
-                    HStack(spacing: 0) {
-                        Rectangle().fill(Theme.barUsed)
-                            .frame(width: CGFloat(widths.used))
-                        Rectangle().fill(Theme.barRemaining)
-                            .frame(width: CGFloat(widths.remaining))
-                    }
-                    .clipShape(Capsule())
-                    .opacity(dimmed ? 0.45 : 1)
-                } else {
-                    Capsule().fill(Theme.track)
-                }
-                if let x = metrics.markerOffset(in: width) {
+                bar(width: width)
+                if let layout {
                     let markerHeight = self.markerHeight ?? geometry.size.height + Self.markerOverhang * 2
-                    ZStack {
-                        Rectangle().fill(Theme.pacingMarkerHalo)
-                            .frame(width: Self.markerWidth + 2, height: markerHeight + 2)
-                        Rectangle().fill(Theme.pacingMarker)
-                            .frame(width: Self.markerWidth, height: markerHeight)
-                    }
-                    .position(x: CGFloat(x), y: geometry.size.height / 2)
+                    Rectangle().fill(Theme.pacingMarkerHalo)
+                        .frame(width: CGFloat(layout.haloWidth), height: markerHeight + Self.haloPadding * 2)
+                        .position(x: CGFloat(layout.haloCenter), y: geometry.size.height / 2)
+                    Rectangle().fill(Theme.pacingMarker)
+                        .frame(width: Self.markerWidth, height: markerHeight)
+                        .position(x: CGFloat(layout.center), y: geometry.size.height / 2)
                 }
             }
         }
@@ -296,6 +306,29 @@ struct QuotaUsageBar: View {
         .modifier(QuotaUsageBarAccessibility(
             label: accessibilityLabel,
             value: ([metrics.spokenSummary] + [accessibilitySuffix].compactMap { $0 }).joined(separator: ", ")))
+    }
+}
+
+extension QuotaUsageBar {
+    /// The bar itself: red for the share used and green for the share left, or
+    /// the neutral track when there is no reading.  A share that is not drawn
+    /// (0% used, 0% left) is not in the view at all.
+    @ViewBuilder
+    fileprivate func bar(width: Double) -> some View {
+        if let widths = metrics.segmentWidths(in: width) {
+            HStack(spacing: 0) {
+                if widths.used > 0 {
+                    Rectangle().fill(Theme.barUsed).frame(width: CGFloat(widths.used))
+                }
+                if widths.remaining > 0 {
+                    Rectangle().fill(Theme.barRemaining).frame(width: CGFloat(widths.remaining))
+                }
+            }
+            .clipShape(Capsule())
+            .opacity(dimmed ? 0.45 : 1)
+        } else {
+            Capsule().fill(Theme.track)
+        }
     }
 }
 

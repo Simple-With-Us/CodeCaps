@@ -40,9 +40,25 @@ final class GlanceToggleTests: XCTestCase {
         XCTAssertEqual(MonitorModel(defaults: defaults).glanceView, .fromMac)
     }
 
-    func testSwitchLabelsReadFromMacAndFromFleet() {
-        XCTAssertEqual(GlanceViewMode.allCases.map(\.eyebrow), ["FROM MAC", "FROM FLEET"])
+    func testSwitchLabelsReadFromMacAndFromFleetInTitleCase() {
+        // The label on the switch is the title itself: not capitals, not small
+        // caps (owner delta 2026-09-30).
         XCTAssertEqual(GlanceViewMode.allCases.map(\.title), ["From Mac", "From Fleet"])
+        for mode in GlanceViewMode.allCases {
+            XCTAssertNotEqual(mode.title, mode.title.uppercased(), "\(mode.title) is not all capitals")
+            XCTAssertNotEqual(mode.title, mode.title.lowercased(), "\(mode.title) is not all lower case")
+            XCTAssertTrue(mode.title.split(separator: " ").allSatisfy { $0.first?.isUppercase == true },
+                          "\(mode.title) is Title Case")
+        }
+    }
+
+    func testTheSwitchTooltipsAreSentencesThatNameTheirSide() {
+        XCTAssertEqual(GlanceViewMode.fromMac.detail, "Quotas this Mac reads from the AI tools signed in on it.")
+        XCTAssertEqual(GlanceViewMode.fromFleet.detail, "Quotas your other machines report to your fleet endpoint.")
+        for mode in GlanceViewMode.allCases {
+            XCTAssertNotEqual(mode.detail, mode.title, "a tooltip that repeats the label says nothing")
+            XCTAssertFalse(mode.detail.contains("FROM"), "no capitals-only copy left over")
+        }
     }
 
     func testTheRenameKeepsTheStoredChoice() {
@@ -56,15 +72,14 @@ final class GlanceToggleTests: XCTestCase {
     func testHeaderCountsProvidersFromMacAndReportingSourcesFromTheFleet() {
         let checked = Date(timeIntervalSince1970: 1_790_000_000)
         let time = checked.formatted(date: .omitted, time: .shortened)
-        XCTAssertEqual(glanceHeaderSeparator, "   •   ", "a bullet with three spaces either side")
-        XCTAssertEqual(glanceHeaderStatus(view: .fromMac, reporting: 6, total: 7, sources: 2, checked: checked),
-                       "6 of 7   •   \(time)")
-        XCTAssertEqual(glanceHeaderStatus(view: .fromFleet, reporting: 6, total: 7, sources: 2, checked: checked),
-                       "2 sources   •   \(time)")
-        XCTAssertEqual(glanceHeaderStatus(view: .fromFleet, reporting: 0, total: 0, sources: 1, checked: nil),
-                       "1 source")
-        XCTAssertEqual(glanceHeaderStatus(view: .fromFleet, reporting: 6, total: 7, sources: 0, checked: checked),
-                       time, "no sources: just the time")
+        XCTAssertEqual(glanceHeaderParts(view: .fromMac, reporting: 6, total: 7, sources: 2, checked: checked),
+                       ["6 of 7", time])
+        XCTAssertEqual(glanceHeaderParts(view: .fromFleet, reporting: 6, total: 7, sources: 2, checked: checked),
+                       ["2 sources", time])
+        XCTAssertEqual(glanceHeaderParts(view: .fromFleet, reporting: 0, total: 0, sources: 1, checked: nil),
+                       ["1 source"])
+        XCTAssertEqual(glanceHeaderParts(view: .fromFleet, reporting: 6, total: 7, sources: 0, checked: checked),
+                       [time], "no sources: just the time")
     }
 
     func testTheHeaderIsSpokenWithCommasNotBullets() {
@@ -73,7 +88,7 @@ final class GlanceToggleTests: XCTestCase {
         let parts = glanceHeaderParts(view: .fromMac, reporting: 6, total: 7, sources: 2, checked: checked)
         XCTAssertEqual(parts, ["6 of 7", time])
         XCTAssertEqual(parts.joined(separator: ", "), "6 of 7, \(time)")
-        XCTAssertFalse(parts.contains { $0.contains("•") })
+        XCTAssertFalse(parts.contains { $0.contains("•") }, "the dots are drawn, not typed into the text")
     }
 
     func testAlarmsAllIsSharedWithTheManagerAndPersists() {
@@ -315,18 +330,88 @@ final class GlanceToggleTests: XCTestCase {
         XCTAssertEqual(QuotaUsageBar.markerWidth, 2, "the marker keeps its width")
     }
 
-    func testTheHeaderFitsOnOneLine() {
-        // "CodeCaps", the switch, and "ALL   •   6 of 7   •   4:27 PM" with
-        // the refresh button, gaps and gutters, at their real type sizes.
-        let switchWidth = GlanceViewMode.allCases.reduce(CGFloat(1)) {
-            $0 + width($1.eyebrow, size: 10, weight: .bold) + CGFloat($1.eyebrow.count) * 0.8 + 16
+    // MARK: - The header, laid out
+
+    /// The natural width of the header line at one count and time: everything
+    /// at its real type size, the springs at their minimum.
+    private func headerIdealWidth(parts: [String], view: GlanceViewMode = .fromMac) -> CGFloat {
+        let bar = GlanceHeaderBar(view: .constant(view), alarmsAll: .constant(true), parts: parts,
+                                  isRefreshing: false, refresh: {})
+        return NSHostingView(rootView: bar.fixedSize(horizontal: true, vertical: false)).fittingSize.width
+    }
+
+    func testTheHeaderFitsOnOneLineWithRoomToSpareAtTheWidestCountAndTime() {
+        // The widest realistic header: a double-digit count and a double-digit
+        // hour, in either view.
+        let cases: [(GlanceViewMode, [String])] = [
+            (.fromMac, ["12 of 12", "12:59 PM"]),
+            (.fromMac, ["88 of 88", "12:59 PM"]),
+            (.fromFleet, ["12 sources", "12:59 PM"]),
+            (.fromFleet, ["2 sources", "9:13 AM"]),
+            (.fromMac, ["7 of 7", "9:13 AM"]),
+            (.fromMac, []),
+        ]
+        for (view, parts) in cases {
+            let ideal = headerIdealWidth(parts: parts, view: view)
+            XCTAssertGreaterThan(ideal, 0)
+            // `ideal` already holds the spring at its minimum; what is left of
+            // the popover beyond it is the spring growing.
+            let spare = Metrics.glanceWidth - ideal
+            XCTAssertGreaterThanOrEqual(spare, 2 * Metrics.glanceHeaderClusterGap,
+                                        "\(view) \(parts): the title, switch and cluster must never crowd")
         }
-        let trailing = 11 + 4 + width("ALL", weight: .semibold)
-            + width(glanceHeaderSeparator + "88 of 88" + glanceHeaderSeparator + "12:59 PM", weight: .regular,
-                    monospacedDigits: true)
-        let total = Metrics.glanceGutter * 2 + width("CodeCaps", size: 13, weight: .semibold)
-            + switchWidth + trailing + 16 + 10 * 3 + 8
-        XCTAssertLessThanOrEqual(total, Metrics.glanceWidth)
+    }
+
+    func testAWiderCountOrTimeOnlyTakesSpaceFromTheSpring() {
+        let narrow = headerIdealWidth(parts: ["7 of 7", "9:13 AM"])
+        let wide = headerIdealWidth(parts: ["88 of 88", "12:59 PM"])
+        XCTAssertGreaterThan(wide, narrow)
+        // The title, the switch and every fixed gap are the same either way, so
+        // the difference is exactly the two phrases' extra text.
+        let extra = width("88 of 88", monospacedDigits: true) - width("7 of 7", monospacedDigits: true)
+            + width("12:59 PM", monospacedDigits: true) - width("9:13 AM", monospacedDigits: true)
+        XCTAssertEqual(wide - narrow, extra, accuracy: 4)
+    }
+
+    func testTheTitleIsSetClearlyApartFromTheSwitch() {
+        // Owner delta 2026-09-30: the switch sat cramped against "CodeCaps".
+        // It was the same 10pt as every other header gap.
+        XCTAssertGreaterThanOrEqual(Metrics.glanceHeaderTitleGap, 20)
+        XCTAssertGreaterThan(Metrics.glanceHeaderTitleGap, Metrics.glanceHeaderItemGap,
+                             "the title is a group of its own, not another neighbour")
+        // And the width really is spent.  With no count or time, the header is
+        // the gutters, the title, that gap, the switch, the spring at its
+        // minimum, the bell, one gap and the 16pt refresh button.
+        let toggle = NSHostingView(rootView: GlanceViewToggle(selection: .constant(.fromMac))).fittingSize.width
+        let bell = NSHostingView(rootView: GlanceAlarmAllToggle(isOn: .constant(true))).fittingSize.width
+        let expected = Metrics.glanceGutter * 2 + width("CodeCaps", size: 13, weight: .semibold)
+            + Metrics.glanceHeaderTitleGap + toggle + Metrics.glanceHeaderClusterGap
+            + bell + Metrics.glanceHeaderItemGap + 16
+        XCTAssertEqual(headerIdealWidth(parts: []), expected, accuracy: 3)
+    }
+
+    func testTheSwitchIsTwoEqualBoxesInTitleCase() {
+        let widest = GlanceViewMode.allCases.map { width($0.title, size: 11, weight: .semibold) }.max() ?? 0
+        let box = widest + 2 * Metrics.glanceHeaderSegmentPadding
+        let host = NSHostingView(rootView: GlanceViewToggle(selection: .constant(.fromMac)))
+        XCTAssertEqual(host.fittingSize.width, 2 * box + 1, accuracy: 2, "two equal boxes and the hairline between")
+        XCTAssertEqual(host.fittingSize.height, Metrics.glanceHeaderControlHeight)
+        // Flipping the selection must not change the switch's shape.
+        let flipped = NSHostingView(rootView: GlanceViewToggle(selection: .constant(.fromFleet)))
+        XCTAssertEqual(flipped.fittingSize, host.fittingSize)
+    }
+
+    func testEveryHeaderControlSharesOneHeightSoTheySitOnOneCentreLine() {
+        let bell = NSHostingView(rootView: GlanceAlarmAllToggle(isOn: .constant(true)))
+        XCTAssertEqual(bell.fittingSize.height, Metrics.glanceHeaderControlHeight)
+        let toggle = NSHostingView(rootView: GlanceViewToggle(selection: .constant(.fromMac)))
+        XCTAssertEqual(toggle.fittingSize.height, Metrics.glanceHeaderControlHeight)
+        let bar = GlanceHeaderBar(view: .constant(.fromMac), alarmsAll: .constant(true),
+                                  parts: ["7 of 7", "9:13 AM"], isRefreshing: false, refresh: {})
+        XCTAssertEqual(NSHostingView(rootView: bar.fixedSize(horizontal: true, vertical: false)).fittingSize.height,
+                       Metrics.glanceHeaderHeight)
+        XCTAssertGreaterThanOrEqual((Metrics.glanceHeaderHeight - Metrics.glanceHeaderControlHeight) / 2, 8,
+                                    "comfortable padding above and below the controls")
     }
 
     func testTheRowStillFitsThePopoverWithTheAlarmBellShowing() {
