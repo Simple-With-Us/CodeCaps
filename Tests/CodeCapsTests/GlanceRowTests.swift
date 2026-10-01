@@ -200,6 +200,49 @@ final class GlanceExpandedLineTests: XCTestCase {
         XCTAssertEqual(label("Included plan"), "Included plan")
     }
 
+    /// A Claude row whose own two meters are the healthiest-to-worst pair, plus
+    /// one extra model's windows with the given tokens, all healthier than the
+    /// row's so they never take a meter.
+    private func claudeWithOpus(_ tokens: [String]) -> DisplaySection {
+        let seconds: [String: TimeInterval] = ["1h": 3_600, "2h": 7_200, "3h": 10_800, "5h": 18_000,
+                                               "1d": 86_400, "3d": 3 * 86_400, "7d": 7 * 86_400]
+        var windows = [
+            window("five_hour", provider: "anthropic", label: "5h window", token: "5h", remaining: 10),
+            window("seven_day", provider: "anthropic", label: "7d window", token: "7d", remaining: 20,
+                   resetIn: 3 * 86_400),
+        ]
+        for token in tokens {
+            windows.append(window("opus:\(token)", provider: "anthropic", label: "opus (\(token) window)",
+                                  token: token, remaining: 60, resetIn: seconds[token] ?? 3_600, model: "opus"))
+        }
+        return row(windows)
+    }
+
+    private func ids(_ line: GlanceMeterLine) -> [String?] {
+        [line.short?.window.id, line.long?.window.id]
+    }
+
+    func testThreeExtraWindowsKeepEachCadenceInItsOwnColumn() {
+        // 5h is short; 1d and 7d are long.  The weekly must not land in the
+        // first column just because it is the third window.
+        let lines = glanceExpandedLines(for: claudeWithOpus(["5h", "1d", "7d"]), now: now)
+        XCTAssertEqual(lines.map(\.label), ["Opus", "Opus"])
+        XCTAssertEqual(ids(lines[0]), ["opus:5h", "opus:1d"])
+        XCTAssertEqual(ids(lines[1]), [nil, "opus:7d"], "the weekly sits under the weekly meter")
+    }
+
+    func testTwoExtraWindowsStillShareOneLine() {
+        let lines = glanceExpandedLines(for: claudeWithOpus(["1d", "7d"]), now: now)
+        XCTAssertEqual(lines.map(ids), [["opus:1d", "opus:7d"]], "MiniMax's video 1d and 1w read as a pair")
+    }
+
+    func testAGroupOfOneCadenceIsPairedInOrderAndALeftoverSitsInItsCadenceColumn() {
+        let longs = glanceExpandedLines(for: claudeWithOpus(["1d", "3d", "7d"]), now: now)
+        XCTAssertEqual(longs.map(ids), [["opus:1d", "opus:3d"], [nil, "opus:7d"]])
+        let shorts = glanceExpandedLines(for: claudeWithOpus(["1h", "2h", "3h"]), now: now)
+        XCTAssertEqual(shorts.map(ids), [["opus:1h", "opus:2h"], ["opus:3h", nil]])
+    }
+
     func testASecondSourcesCopyOfAShownWindowIsNotAnExtraLine() {
         func claude(_ id: String, source: String, token: String, remaining: Double, resetIn: TimeInterval,
                     model: String? = nil, label: String) -> QuotaWindow {

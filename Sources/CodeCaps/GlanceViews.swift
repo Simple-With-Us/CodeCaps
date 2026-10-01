@@ -750,7 +750,9 @@ struct GlanceMeterLine: Identifiable, Equatable {
 /// not, and nothing the row already shows.  Windows are grouped by what they
 /// measure (MiniMax's "video" model, Claude's Sonnet family), shortest cadence
 /// first, two to a line.  A group with one window puts it in the column that
-/// matches its cadence, so a lone weekly sits under the row's weekly meter.
+/// matches its cadence, so a lone weekly sits under the row's weekly meter, and
+/// a group of three or more keeps each cadence in its own column
+/// (`glanceMeterLines`).
 ///
 /// A masked Antigravity window is left out: its number cannot mean anything,
 /// and the row already skips it for the same reason.
@@ -790,15 +792,48 @@ func glanceExpandedLines(for row: DisplaySection, now: Date) -> [GlanceMeterLine
             let right = glanceWindowLength(rhs.element, now: now)
             return left == right ? lhs.offset < rhs.offset : left < right
         }.map(\.element)
-        if windows.count == 1, let only = windows.first {
-            return glanceCadence(only, now: now) == .short
-                ? [GlanceMeterLine(label: label, short: only, long: nil)]
-                : [GlanceMeterLine(label: label, short: nil, long: only)]
+        return glanceMeterLines(label: label, windows: windows, now: now)
+    }
+}
+
+/// One group's windows, shortest first, as lines of two meters.
+///
+/// - One window sits in the column its cadence names, so a lone weekly is
+///   under the row's weekly meter.
+/// - Two windows share one line, the shorter first, whatever their cadence:
+///   MiniMax's video 1d and 1w are both "long" by the row's rule and still
+///   read as a pair.
+/// - Three or more are split by cadence, short windows down the first column
+///   and long ones down the second, so a third window is never put under the
+///   wrong meter.  A group of a single cadence is paired in order, with a
+///   lone leftover in the column its cadence names.
+private func glanceMeterLines(label: String, windows: [QuotaWindowSnapshot], now: Date) -> [GlanceMeterLine] {
+    func alone(_ snapshot: QuotaWindowSnapshot) -> GlanceMeterLine {
+        glanceCadence(snapshot, now: now) == .short
+            ? GlanceMeterLine(label: label, short: snapshot, long: nil)
+            : GlanceMeterLine(label: label, short: nil, long: snapshot)
+    }
+    switch windows.count {
+    case 0:
+        return []
+    case 1:
+        return [alone(windows[0])]
+    case 2:
+        return [GlanceMeterLine(label: label, short: windows[0], long: windows[1])]
+    default:
+        let shorts = windows.filter { glanceCadence($0, now: now) == .short }
+        let longs = windows.filter { glanceCadence($0, now: now) == .long }
+        if !shorts.isEmpty && !longs.isEmpty {
+            return (0..<max(shorts.count, longs.count)).map { index in
+                GlanceMeterLine(label: label,
+                                short: index < shorts.count ? shorts[index] : nil,
+                                long: index < longs.count ? longs[index] : nil)
+            }
         }
         return stride(from: 0, to: windows.count, by: 2).map { index in
-            GlanceMeterLine(label: label,
-                            short: windows[index],
-                            long: index + 1 < windows.count ? windows[index + 1] : nil)
+            index + 1 < windows.count
+                ? GlanceMeterLine(label: label, short: windows[index], long: windows[index + 1])
+                : alone(windows[index])
         }
     }
 }
