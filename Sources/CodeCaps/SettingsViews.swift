@@ -774,6 +774,8 @@ struct SettingsLogoStylePage: View {
                     Text("Standard keeps the brand colors." + sentenceGap
                          + "Light/Dark shows a single silhouette that picks up the surface color, which reads on any menu bar tint." + sentenceGap
                          + "Custom replaces the bundled mark with a file you choose.")
+                    Text("For custom marks, choose Color Version to preserve full-color artwork or Light/Dark Version for adaptive monochrome." + sentenceGap
+                         + "An optional dark appearance variant can also be supplied.")
                     Text("Custom files are stored in ~/Library/Application Support/CodeCaps/CustomMarks/.")
                 }
                 .font(.system(size: 11))
@@ -786,7 +788,8 @@ struct SettingsLogoStylePage: View {
     @ViewBuilder
     private func row(for providerKey: String) -> some View {
         let style = model.markStyle(for: providerKey)
-        let customURL = model.customMarkPaths[providerKey].flatMap(URL.init(fileURLWithPath:))
+        let customURL = model.customMarkURL(for: providerKey, isDarkMode: false)
+        let customDarkURL = model.customMarkURL(for: providerKey, isDarkMode: true)
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
                 PlatformLogo(providerKey: providerKey, size: 18, style: style)
@@ -805,38 +808,88 @@ struct SettingsLogoStylePage: View {
                 .accessibilityLabel("Logo Style for \(label(for: providerKey))")
             }
             if style == .custom {
-                HStack(spacing: 8) {
-                    Button(customURL == nil ? "Choose File…" : "Replace…") { pickCustom(for: providerKey) }
-                        .buttonStyle(.bordered)
-                    if let customURL {
-                        Text(customURL.lastPathComponent)
-                            .font(.system(size: 11))
+                VStack(alignment: .leading, spacing: 8) {
+                    Picker("Custom Logo Mode", selection: Binding(
+                        get: { model.customMarkMode(for: providerKey) },
+                        set: { model.setCustomMarkMode($0, for: providerKey) })) {
+                        ForEach(CustomMarkMode.allCases) { Text($0.title).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(maxWidth: 260)
+
+                    HStack(spacing: 8) {
+                        Text(customDarkURL == nil ? "Image:" : "Light Appearance:")
+                            .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        Button("Show In Finder") {
-                            NSWorkspace.shared.activateFileViewerSelecting([customURL])
+                            .frame(width: 105, alignment: .leading)
+                        Button(customURL == nil ? "Choose File…" : "Replace…") {
+                            pickCustom(for: providerKey, isDarkMode: false)
                         }
-                        .buttonStyle(.borderless)
-                        .font(.system(size: 11))
-                        Button("Remove", role: .destructive) { model.clearCustomMark(for: providerKey) }
+                        .buttonStyle(.bordered)
+                        if let customURL {
+                            Text(customURL.lastPathComponent)
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Button("Show In Finder") {
+                                NSWorkspace.shared.activateFileViewerSelecting([customURL])
+                            }
                             .buttonStyle(.borderless)
                             .font(.system(size: 11))
+                            Button("Remove", role: .destructive) {
+                                model.clearCustomMark(for: providerKey, isDarkMode: false)
+                            }
+                            .buttonStyle(.borderless)
+                            .font(.system(size: 11))
+                        }
+                    }
+
+                    HStack(spacing: 8) {
+                        Text("Dark Appearance:")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 105, alignment: .leading)
+                        Button(customDarkURL == nil ? "Choose File (Optional)…" : "Replace Dark…") {
+                            pickCustom(for: providerKey, isDarkMode: true)
+                        }
+                        .buttonStyle(.bordered)
+                        if let customDarkURL {
+                            Text(customDarkURL.lastPathComponent)
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Button("Show In Finder") {
+                                NSWorkspace.shared.activateFileViewerSelecting([customDarkURL])
+                            }
+                            .buttonStyle(.borderless)
+                            .font(.system(size: 11))
+                            Button("Remove", role: .destructive) {
+                                model.clearCustomMark(for: providerKey, isDarkMode: true)
+                            }
+                            .buttonStyle(.borderless)
+                            .font(.system(size: 11))
+                        }
                     }
                 }
+                .padding(.leading, 28)
+                .padding(.vertical, 4)
             }
         }
         .padding(.vertical, 2)
     }
 
-    private func pickCustom(for providerKey: String) {
+    private func pickCustom(for providerKey: String, isDarkMode: Bool = false) {
         let panel = NSOpenPanel()
-        panel.title = "Choose a Mark for \(label(for: providerKey))"
+        let appearanceName = isDarkMode ? " (Dark Appearance)" : ""
+        panel.title = "Choose a Mark for \(label(for: providerKey))\(appearanceName)"
         panel.allowedContentTypes = [.svg, .png, .pdf]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         if panel.runModal() == .OK, let url = panel.url {
-            _ = model.setCustomMark(at: url, for: providerKey)
+            _ = model.setCustomMark(at: url, for: providerKey, isDarkMode: isDarkMode)
         }
     }
 }

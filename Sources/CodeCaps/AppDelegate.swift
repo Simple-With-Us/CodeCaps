@@ -124,7 +124,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             if let target {
                 // The row's key, so an Antigravity pool shows its own mark.
                 let markKey = model.displayRow(for: target.window)?.id ?? providerKey
-                iconImage = PlatformLogoImage.menuBarImage(providerKey: markKey, style: markStyle)
+                let isDark = button.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+                iconImage = PlatformLogoImage.menuBarImage(providerKey: markKey, style: markStyle, isDarkMode: isDark)
             }
             if iconImage == nil {
                 let symbolName = target != nil
