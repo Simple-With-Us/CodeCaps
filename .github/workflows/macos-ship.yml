@@ -1,0 +1,106 @@
+name: Mac TestFlight ship (GitHub-hosted macOS)
+
+# Archive + upload CodeCaps for Mac on GitHub-hosted macos-latest.
+# Manual only (workflow_dispatch) — same family as HogHunter ios-testflight.yml.
+# Signing + ASC keys from repo secrets (names only; values never printed):
+#   ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8,
+#   IOS_DIST_P12_BASE64, IOS_DIST_P12_PASSWORD,
+#   MAC_INSTALLER_P12_BASE64, MAC_INSTALLER_P12_PASSWORD
+# Bundle `com.simplewithus.codecaps.macos`, Apple ID 6814951477, team CC8UTF7ATG.
+# Marketing train is 0.1.N; build is UTC YYYYMMDDHHMM.
+# Extra-ship no. No --force-ship. No local Mac seat_launch.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-ship-codecaps
+  cancel-in-progress: false
+
+jobs:
+  ship:
+    name: Mac TestFlight archive + upload
+    if: github.event.repository.fork == false && github.ref == 'refs/heads/main'
+    runs-on: macos-latest
+    timeout-minutes: 90
+    env:
+      DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+      IOS_DIST_P12_BASE64: ${{ secrets.IOS_DIST_P12_BASE64 }}
+      IOS_DIST_P12_PASSWORD: ${{ secrets.IOS_DIST_P12_PASSWORD }}
+      MAC_INSTALLER_P12_BASE64: ${{ secrets.MAC_INSTALLER_P12_BASE64 }}
+      MAC_INSTALLER_P12_PASSWORD: ${{ secrets.MAC_INSTALLER_P12_PASSWORD }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Restore ship-state cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ios-fleet
+          key: ios-fleet-state-codecaps-mac-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ios-fleet-state-codecaps-mac-${{ github.run_id }}-
+            ios-fleet-state-codecaps-mac-
+
+      - name: Assert stable Xcode (never beta)
+        run: |
+          echo "DEVELOPER_DIR=${DEVELOPER_DIR}"
+          xcodebuild -version
+          ver=$(xcodebuild -version | awk 'NR==1{print $2}')
+          echo "Xcode version: ${ver}"
+          case "$DEVELOPER_DIR" in
+            *[Bb]eta*)
+              echo "::error::DEVELOPER_DIR resolves to a beta Xcode: $DEVELOPER_DIR"
+              exit 1
+              ;;
+          esac
+
+      - name: Install xcodegen
+        run: |
+          if command -v xcodegen >/dev/null 2>&1; then
+            xcodegen --version
+          else
+            brew install xcodegen
+          fi
+
+      - name: Import signing + ASC key
+        run: |
+          if [ -z "${ASC_KEY_ID:-}" ]; then
+            echo "::error::ASC_KEY_ID empty. Confirm ASC_/IOS_DIST_/MAC_INSTALLER_ secrets are configured."
+            exit 1
+          fi
+          bash "$GITHUB_WORKSPACE/scripts/mac-appstore-gm-prepare.sh"
+
+      - name: Install Mac App Store profiles
+        run: bash "$GITHUB_WORKSPACE/scripts/mac-install-appstore-profiles.sh"
+
+      - name: Ship CodeCaps for Mac to TestFlight
+        env:
+          IOS_TF_RELEASE_NOTES: "1"
+          MAC_MANUAL_SIGN: "1"
+        run: bash scripts/mac-ship-testflight.sh
+
+      - name: Save ship-state cache
+        if: always()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ios-fleet
+          key: ios-fleet-state-codecaps-mac-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Remove runner signing material
+        if: always()
+        run: |
+          set +o xtrace
+          security delete-keychain "$RUNNER_TEMP/app-signing.keychain-db" >/dev/null 2>&1 || true
+          rm -f "$RUNNER_TEMP/app-signing-kc-pass" \
+            "$HOME/.secrets/ios-distribution.p12" \
+            "$HOME/.secrets/mac-installer.p12" \
+            "$HOME/.secrets/appstore-connect.env" \
+            "$HOME/.secrets/AuthKey.p8"

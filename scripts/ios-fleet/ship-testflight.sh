@@ -1003,7 +1003,7 @@ ensure_tf_ready() {
 }
 
 write_manual_export_plists() {
-  local map="${REPO_ROOT}/ios/CodeCapsCompanion/appstore-profiles.json"
+  local map="$1"
   [[ -f "$map" ]] || die "manual signing profile map missing: $map"
   EXPORT_PLIST_UPLOAD="${LOG_DIR}/ExportOptions-manual-upload.plist"
   EXPORT_PLIST_IPA="${LOG_DIR}/ExportOptions-manual-ipa.plist"
@@ -1030,24 +1030,32 @@ with open(sys.argv[3], "wb") as handle:
 with open(sys.argv[4], "wb") as handle:
     plistlib.dump(ipa, handle, fmt=plistlib.FMT_XML)
 PY
-  log "manual export plists written"
+  log "manual export plists written ($map)"
 }
 
 MANUAL_SIGN=0
 PROVISION_UPDATE_FLAGS=(-allowProvisioningUpdates)
-# CodeCaps defaults to manual signing.  IOS_MANUAL_SIGN=0 forces the
+# CodeCaps iOS defaults to manual signing.  IOS_MANUAL_SIGN=0 forces the
 # automatic portal path after the App Group is actually on the profiles.
-if [[ "$PLATFORM" != "macOS" ]]; then
-  if [[ "${IOS_MANUAL_SIGN:-}" == "1" || ( "$APP_KEY" == "codecaps" && "${IOS_MANUAL_SIGN:-}" != "0" ) ]]; then
+# CodeCaps Mac uses MAC_MANUAL_SIGN (default on for codecaps-mac).
+if [[ "$PLATFORM" == "macOS" ]]; then
+  if [[ "${MAC_MANUAL_SIGN:-}" == "1" || ( "$APP_KEY" == "codecaps-mac" && "${MAC_MANUAL_SIGN:-}" != "0" ) ]]; then
     MANUAL_SIGN=1
   fi
+elif [[ "${IOS_MANUAL_SIGN:-}" == "1" || ( "$APP_KEY" == "codecaps" && "${IOS_MANUAL_SIGN:-}" != "0" ) ]]; then
+  MANUAL_SIGN=1
 fi
 if [[ "$MANUAL_SIGN" -eq 1 ]]; then
   PROVISION_UPDATE_FLAGS=()
   log "manual App Store signing: skipping Xcode provisioning portal"
-  bash "${REPO_ROOT}/scripts/ios-install-appstore-profiles.sh"
+  if [[ "$PLATFORM" == "macOS" ]]; then
+    bash "${REPO_ROOT}/scripts/mac-install-appstore-profiles.sh"
+    write_manual_export_plists "${REPO_ROOT}/ios/CodeCapsCompanion/mac-appstore-profiles.json"
+  else
+    bash "${REPO_ROOT}/scripts/ios-install-appstore-profiles.sh"
+    write_manual_export_plists "${REPO_ROOT}/ios/CodeCapsCompanion/appstore-profiles.json"
+  fi
   ASC_AUTH_FLAGS=()
-  write_manual_export_plists
 fi
 
 acquire_archive_lock
