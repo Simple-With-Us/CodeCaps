@@ -214,23 +214,61 @@ public struct QuotaBarMetrics: Equatable, Sendable {
 
     public var elapsedPercentRounded: Int? { elapsedFraction.map { Int(($0 * 100).rounded()) } }
 
+    /// A segment narrower than this is not drawn: at half a point it is an
+    /// anti-aliased smudge, not a colour.
+    public static let minimumSegmentWidth: Double = 0.5
+
     /// The widths of the red and green segments across `totalWidth`.  The green
     /// segment takes whatever the red one leaves, so the two always fill the bar
     /// with no seam.  Nil when the reading is unknown.
+    ///
+    /// A bar that reads 100% draws no red at all, and one that reads 0% draws
+    /// no green.  "Reads" means the printed, rounded figure, so a window at
+    /// 99.6% never shows a red sliver under a "100%" label; and any segment
+    /// narrower than `minimumSegmentWidth` is dropped for the same reason.
     public func segmentWidths(in totalWidth: Double) -> (used: Double, remaining: Double)? {
         guard let usedFraction else { return nil }
         let width = totalWidth.isFinite ? max(0, totalWidth) : 0
-        let used = width * usedFraction
+        var used = width * usedFraction
+        if remainingPercentRounded == 100 || used < Self.minimumSegmentWidth { used = 0 }
+        if remainingPercentRounded == 0 || width - used < Self.minimumSegmentWidth { used = width }
         return (used, width - used)
     }
 
-    /// Where the marker's centre sits across `totalWidth`, kept `inset` points
-    /// inside both ends so it stays visible at 0% and 100% elapsed.
-    public func markerOffset(in totalWidth: Double, inset: Double = 1) -> Double? {
+    /// Where the marker and the pale halo behind it are drawn on a bar
+    /// `totalWidth` wide and `barHeight` thick, or nil when there is no marker.
+    ///
+    /// The marker is kept wholly inside the bar's ends, and the halo, which
+    /// stands `haloPadding` proud of it on each side, is cut off at them.
+    ///
+    /// And the marker never leaves a sliver of bar hanging off it.  Next to an
+    /// end, the bar left over between the marker and that end is a rounded cap
+    /// and nothing more (at 100% remaining with the period just begun, it was a
+    /// small "c" left of the marker).  When that stub would be narrower than
+    /// the bar's own cap, the marker moves the few points to the end instead,
+    /// flush with it, where it stands over the cap as it does at 0% elapsed.
+    /// The bar itself is never trimmed or masked, so the red and green it draws
+    /// are always the share the reading says, and its end stays in line with
+    /// every other bar in its column.
+    public func markerLayout(in totalWidth: Double, barHeight: Double,
+                             markerWidth: Double, haloPadding: Double) -> QuotaMarkerLayout? {
         guard let elapsedFraction else { return nil }
         let width = totalWidth.isFinite ? max(0, totalWidth) : 0
-        guard width > inset * 2 else { return width / 2 }
-        return min(max(width * elapsedFraction, inset), width - inset)
+        guard width > markerWidth else {
+            return QuotaMarkerLayout(center: width / 2, haloStart: 0, haloEnd: width)
+        }
+        let half = markerWidth / 2
+        var center = min(max(width * elapsedFraction, half), width - half)
+        // A bar too short to hold the marker and a whole cap either side keeps
+        // the marker where the time is.
+        let cap = max(0, barHeight) / 2
+        if width >= (half + cap) * 2 {
+            if center - half < cap { center = half }
+            else if width - (center + half) < cap { center = width - half }
+        }
+        let reach = half + max(0, haloPadding)
+        return QuotaMarkerLayout(center: center,
+                                 haloStart: max(0, center - reach), haloEnd: min(width, center + reach))
     }
 
     /// What VoiceOver says: both shares and how far through the period we are,
@@ -249,4 +287,17 @@ public struct QuotaBarMetrics: Equatable, Sendable {
         }
         return parts.joined(separator: ", ")
     }
+}
+
+/// The horizontal extent of an elapsed-time marker and its halo, in points from
+/// the bar's left end.  See `QuotaBarMetrics.markerLayout`.
+public struct QuotaMarkerLayout: Equatable, Sendable {
+    /// The marker's centre.
+    public let center: Double
+    /// The halo's left and right edges.
+    public let haloStart: Double
+    public let haloEnd: Double
+
+    public var haloWidth: Double { haloEnd - haloStart }
+    public var haloCenter: Double { (haloStart + haloEnd) / 2 }
 }

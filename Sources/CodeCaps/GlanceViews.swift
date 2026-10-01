@@ -6,9 +6,10 @@ import SwiftUI
 /// affordances in the footer.  Glance never renders a `PlatformCard`; the
 /// Console never renders a `GlanceRow`.
 ///
-/// The header carries the From Mac / From Fleet switch beside the name, and on
-/// the right one line: the All reset-alarm bell, the count, the time and the
-/// refresh button — "ALL   •   6 of 7   •   4:27 PM".
+/// The header is one line on one centre line: the name, then the From Mac /
+/// From Fleet switch, and on the right the All reset-alarm bell, the count, the
+/// time and the refresh button — "All • 6 of 7 • 4:27 PM".  `GlanceHeaderBar`
+/// lays it out.
 struct GlancePopover: View {
     @ObservedObject var model: MonitorModel
     var openConsole: (ConsolePage) -> Void
@@ -58,66 +59,20 @@ struct GlancePopover: View {
     // MARK: - Header
 
     private var header: some View {
-        HStack(spacing: 10) {
-            Text("CodeCaps")
-                .font(.system(size: 13, weight: .semibold))
-                .fixedSize()
-            GlanceViewToggle(selection: $model.glanceView)
-            Spacer(minLength: 8)
-            // One line, right-aligned: the All bell, then the count and the
-            // time, set apart by bullets with three spaces either side.
-            HStack(spacing: 0) {
-                GlanceAlarmAllToggle(isOn: $model.alarmsAll)
-                if !headerStatus.isEmpty {
-                    Text(glanceHeaderSeparator + headerStatus)
-                        .font(.system(size: 11).monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .fixedSize()
-                        // The bullets are for the eye; VoiceOver would say "bullet".
-                        .accessibilityLabel(headerSpokenStatus)
-                }
-            }
-            // Auto-refresh fires every 5 min (see MonitorModel.refreshTimer) and
-            // a 30-second clock ticks every time `now` updates, so the manual
-            // button used to live in the footer for redundancy.  It now sits
-            // top-right next to the time — icon-only, with the spinner replacing
-            // it while a refresh is in flight.
-            Button { model.refresh() } label: {
-                if model.isRefreshing {
-                    ProgressView().controlSize(.small).frame(width: 14, height: 14)
-                } else {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 11, weight: .medium))
-                        .frame(width: 16, height: 16)
-                }
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .disabled(model.isRefreshing)
-            .help("Refresh Quotas")
-            .accessibilityLabel("Refresh Quotas")
-        }
-        .padding(.horizontal, Metrics.glanceGutter)
-        .frame(height: Metrics.glanceHeaderHeight)
+        GlanceHeaderBar(view: $model.glanceView,
+                        alarmsAll: $model.alarmsAll,
+                        parts: headerParts,
+                        isRefreshing: model.isRefreshing,
+                        refresh: { model.refresh() })
     }
 
-    /// "6 of 7   •   4:27 PM", live: the count and the time of the last read.
-    private var headerStatus: String {
+    /// "6 of 7" and "4:27 PM", live: the count and the time of the last read.
+    private var headerParts: [String] {
         glanceHeaderParts(view: model.glanceView,
                           reporting: model.reportingCount,
                           total: model.sections.count,
                           sources: fleetGroups.count,
-                          checked: headerChecked).joined(separator: glanceHeaderSeparator)
-    }
-
-    /// The same phrases set apart by commas, for VoiceOver.
-    private var headerSpokenStatus: String {
-        glanceHeaderParts(view: model.glanceView,
-                          reporting: model.reportingCount,
-                          total: model.sections.count,
-                          sources: fleetGroups.count,
-                          checked: headerChecked).joined(separator: ", ")
+                          checked: headerChecked)
     }
 
     private var headerChecked: Date? {
@@ -312,23 +267,16 @@ struct GlancePopover: View {
     }
 }
 
-/// The bullet between the header's phrases, three spaces either side:
-/// "ALL   •   6 of 7   •   4:27 PM".
-let glanceHeaderSeparator = "   •   "
-
 /// The count and time on the right of the header.  From Mac counts the
 /// providers reporting; From Fleet counts the sources that reported them.
 ///
 /// A source, not a machine: the fleet pull groups readings by the collector or
 /// app that reported them (`FleetOrigin.identity`), and that is a machine only
 /// some of the time.
-func glanceHeaderStatus(view: GlanceViewMode, reporting: Int, total: Int, sources: Int, checked: Date?) -> String {
-    glanceHeaderParts(view: view, reporting: reporting, total: total, sources: sources, checked: checked)
-        .joined(separator: glanceHeaderSeparator)
-}
-
-/// The phrases of `glanceHeaderStatus` before they are joined: the count, then
-/// the time.  Either is left out when there is nothing to say.
+///
+/// The phrases are returned apart: the header sets a dot between them at a fixed
+/// gap, and VoiceOver reads them with commas.  Either is left out when there is
+/// nothing to say.
 func glanceHeaderParts(view: GlanceViewMode, reporting: Int, total: Int, sources: Int, checked: Date?) -> [String] {
     let counted: String?
     switch view {
@@ -354,10 +302,98 @@ func glanceFleetGroupHeading(_ title: String) -> String {
 
 // MARK: - Header controls
 
-/// The two-box switch between From Mac and From Fleet.  It uses the same small
-/// caps as the source headings, so it reads as the heading of the list below.
+/// The header's one line.
+///
+///     CodeCaps   [ From Mac | From Fleet ]  . . .  [bell] All • 6 of 7 • 4:27 PM  [reload]
+///
+/// Every control is `Metrics.glanceHeaderControlHeight` tall and centred on the
+/// header's own centre line, so the title, the switch, the bell, the text and
+/// the refresh button all sit on one line.  The horizontal rhythm is three
+/// fixed gaps and one flexible one: `glanceHeaderTitleGap` between the title
+/// and the switch, `glanceHeaderItemGap` between neighbours in the right-hand
+/// cluster, and a spring between the two groups that is never narrower than
+/// `glanceHeaderClusterGap`.  A wider count or time ("12 of 12", "12:59 PM",
+/// "2 sources") only takes space from the spring.
+struct GlanceHeaderBar: View {
+    @Binding var view: GlanceViewMode
+    @Binding var alarmsAll: Bool
+    /// The count and the time ("6 of 7", "4:27 PM"); either may be missing.
+    let parts: [String]
+    let isRefreshing: Bool
+    var refresh: () -> Void
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Text("CodeCaps")
+                .font(.system(size: 13, weight: .semibold))
+                .lineLimit(1)
+                .fixedSize()
+            Spacer().frame(width: Metrics.glanceHeaderTitleGap)
+            GlanceViewToggle(selection: $view)
+            Spacer(minLength: Metrics.glanceHeaderClusterGap)
+            HStack(spacing: Metrics.glanceHeaderItemGap) {
+                GlanceAlarmAllToggle(isOn: $alarmsAll)
+                if !parts.isEmpty { status }
+                refreshButton
+            }
+        }
+        .padding(.horizontal, Metrics.glanceGutter)
+        .frame(height: Metrics.glanceHeaderHeight)
+    }
+
+    /// The count and the time, each after a dot.  The dots are for the eye;
+    /// VoiceOver would say "bullet", so it gets the phrases with commas.
+    private var status: some View {
+        HStack(spacing: Metrics.glanceHeaderItemGap) {
+            ForEach(Array(parts.enumerated()), id: \.offset) { _, part in
+                Circle()
+                    .fill(Theme.faint)
+                    .frame(width: Metrics.glanceHeaderDotSize, height: Metrics.glanceHeaderDotSize)
+                Text(part)
+                    .font(.system(size: 11).monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+        }
+        .frame(height: Metrics.glanceHeaderControlHeight)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(parts.joined(separator: ", "))
+    }
+
+    /// Auto-refresh fires every 5 min (see MonitorModel.refreshTimer) and a
+    /// 30-second clock ticks every time `now` updates, so the manual button
+    /// used to live in the footer for redundancy.  It sits top-right next to
+    /// the time — icon-only, with the spinner replacing it while a refresh is
+    /// in flight.
+    private var refreshButton: some View {
+        Button(action: refresh) {
+            Group {
+                if isRefreshing {
+                    ProgressView().controlSize(.small).frame(width: 14, height: 14)
+                } else {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 11, weight: .medium))
+                }
+            }
+            .frame(width: 16, height: Metrics.glanceHeaderControlHeight)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .disabled(isRefreshing)
+        .help("Refresh Quotas")
+        .accessibilityLabel("Refresh Quotas")
+    }
+}
+
+/// The two-box switch between From Mac and From Fleet, in Title Case.  The two
+/// boxes are the same width, so the switch does not change shape as it flips.
 struct GlanceViewToggle: View {
     @Binding var selection: GlanceViewMode
+
+    /// The label that sets both boxes' width.
+    private static let widest = GlanceViewMode.allCases.map(\.title).max { $0.count < $1.count } ?? ""
 
     var body: some View {
         HStack(spacing: 0) {
@@ -370,35 +406,43 @@ struct GlanceViewToggle: View {
                 segment(mode)
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 5))
-        .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Theme.controlBorder))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Theme.controlBorder))
         .fixedSize()
     }
 
     private func segment(_ mode: GlanceViewMode) -> some View {
         let selected = selection == mode
         return Button { selection = mode } label: {
-            Text(mode.eyebrow)
-                .font(.system(size: 10, weight: .bold))
-                .tracking(0.8)
-                .lineLimit(1)
-                .fixedSize()
-                .foregroundStyle(selected ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(.secondary))
-                .padding(.horizontal, 8)
-                .frame(height: Metrics.glanceHeaderControlHeight)
-                .background(selected ? Theme.selection : Color.clear)
-                .contentShape(Rectangle())
+            ZStack {
+                // Invisible, and not read by VoiceOver: it only holds the box
+                // open to the width of the longer label.
+                Text(Self.widest).hidden()
+                Text(mode.title)
+            }
+            .font(.system(size: 11, weight: .semibold))
+            .lineLimit(1)
+            .fixedSize()
+            .foregroundStyle(selected ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(.secondary))
+            .padding(.horizontal, Metrics.glanceHeaderSegmentPadding)
+            .frame(height: Metrics.glanceHeaderControlHeight)
+            .background(selected ? Theme.selection : Color.clear)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(mode.title)
+        .help(mode.detail)
         .accessibilityLabel(mode.title)
+        .accessibilityHint(mode.detail)
         .accessibilityAddTraits(selected ? [.isSelected] : [])
     }
 }
 
-/// The header's bell and "ALL": every provider's reset alarm on, or picked one
+/// The header's bell and "All": every provider's reset alarm on, or picked one
 /// by one with the faint bell at the left of each row.  It sits inline with
 /// the count and the time, so it is drawn as text rather than a boxed control.
+///
+/// "All" is Title Case, like the switch beside it; it used to be "ALL", which
+/// shouted next to two Title Case labels.
 struct GlanceAlarmAllToggle: View {
     @Binding var isOn: Bool
 
@@ -417,9 +461,8 @@ struct GlanceAlarmAllToggle: View {
         HStack(spacing: 4) {
             Image(systemName: isOn ? "bell.fill" : "bell")
                 .font(.system(size: 11, weight: .semibold))
-            Text("ALL")
+            Text("All")
                 .font(.system(size: 11, weight: .semibold))
-                .tracking(0.4)
         }
         .foregroundStyle(tint)
         .frame(height: Metrics.glanceHeaderControlHeight)
@@ -504,9 +547,9 @@ enum GlanceCadence: Equatable {
 /// that you can trust it.  If that leaves nothing, the row's own driving
 /// window is used so the row never renders blank.
 func glanceMeterPair(for row: DisplaySection, now: Date) -> GlanceMeterPair {
-    let trustworthy = row.section.windows.filter {
+    let trustworthy = glanceDrawableWindows(row.section.windows.filter {
         !$0.window.isSupplementaryVideoQuota && !row.isMasked($0)
-    }
+    })
     let candidates = trustworthy.isEmpty
         ? [row.driving].compactMap { $0 }
         : trustworthy
@@ -520,13 +563,58 @@ func glanceMeterPair(for row: DisplaySection, now: Date) -> GlanceMeterPair {
     // then falls back to the next window closest to its cap, so a provider
     // with two unnamed windows still gets two meters.
     let short = nearestToCap(shortest) ?? nearestToCap(candidates) ?? anchor
-    // Both fallbacks exclude the window the first slot already took.  A
-    // single-window provider that classifies as long — which every weekly
-    // meter does — would otherwise resolve `longest` to the same snapshot and
-    // render one meter twice, hiding the second cadence entirely.
-    let long = nearestToCap(longest.filter { $0.window.id != short.window.id })
-        ?? nearestToCap(candidates.filter { $0.window.id != short.window.id })
+    // Both fallbacks exclude the window the first slot already took, and any
+    // copy of it.  A single-window provider that classifies as long — which
+    // every weekly meter does — would otherwise resolve `longest` to the same
+    // snapshot and render one meter twice, hiding the second cadence entirely;
+    // and a second source's copy of the same meter (Grok Bot's weekly, read
+    // by both Cursor's DashboardService and `gbu`) would render it twice more.
+    func distinct(_ snapshot: QuotaWindowSnapshot) -> Bool {
+        snapshot.window.id != short.window.id && !glanceIsCopy(snapshot, of: short)
+    }
+    let long = nearestToCap(longest.filter(distinct))
+        ?? nearestToCap(candidates.filter(distinct))
     return GlanceMeterPair(short: short, long: long)
+}
+
+/// The meter a window is: what it measures and how often it resets, the same
+/// for a window and for another source's report of it.
+private func glanceMeterKey(_ snapshot: QuotaWindowSnapshot) -> String {
+    glanceLineLabel(snapshot) + "|" + glanceMeterCaption(snapshot)
+}
+
+/// Whether `snapshot` is another source's report of the meter `other` already
+/// shows.  Only a different source counts: two windows from one source that
+/// share a label and a cadence are two windows.
+private func glanceIsCopy(_ snapshot: QuotaWindowSnapshot, of other: QuotaWindowSnapshot) -> Bool {
+    glanceMeterKey(snapshot) == glanceMeterKey(other)
+        && (snapshot.window.source ?? "") != (other.window.source ?? "")
+}
+
+/// The windows a row may draw as a bar.  A window with no reading is a bar with
+/// nothing in it, so it is only drawn when it is the only word on its cadence:
+///
+/// - it is dropped when another window with the same cadence has a reading,
+///   because the reading already speaks for that cadence; and
+/// - when none has, one stands for them all, so an empty bar is never drawn
+///   twice.
+///
+/// A window that names no cadence of its own ("Quota", "Plan") is dropped when
+/// any window has a reading.  Everything with a reading is kept, in order.
+///
+/// This is what removed Grok Bot's stray empty "7d" bar: its `gbu` reader
+/// emits a no-reading "Grok Bot weekly" window whenever the CLI cannot read,
+/// beside DashboardService's real reading of the same weekly allowance.
+func glanceDrawableWindows(_ windows: [QuotaWindowSnapshot]) -> [QuotaWindowSnapshot] {
+    let readingCaptions = Set(windows.filter { $0.remainingPercent != nil }.map(glanceMeterCaption))
+    var emptyCaptions: Set<String> = []
+    return windows.filter { snapshot in
+        guard snapshot.remainingPercent == nil else { return true }
+        let caption = glanceMeterCaption(snapshot)
+        let namesNoCadence = caption == "Quota" || caption == "Plan"
+        if readingCaptions.contains(caption) || (namesNoCadence && !readingCaptions.isEmpty) { return false }
+        return emptyCaptions.insert(caption).inserted
+    }
 }
 
 /// The window closest to its cap, preferring one that reports a percentage.
@@ -797,13 +885,13 @@ func glanceExpandedLines(for row: DisplaySection, now: Date) -> [GlanceMeterLine
     // Only a different source is treated as a duplicate: two windows from one
     // source that share a label and cadence are two windows.
     var holders: [String: Set<String>] = [:]
-    func key(_ snapshot: QuotaWindowSnapshot) -> String {
-        glanceLineLabel(snapshot) + "|" + glanceMeterCaption(snapshot)
-    }
+    func key(_ snapshot: QuotaWindowSnapshot) -> String { glanceMeterKey(snapshot) }
     func source(_ snapshot: QuotaWindowSnapshot) -> String { snapshot.window.source ?? "" }
     for snapshot in shownWindows { holders[key(snapshot), default: []].insert(source(snapshot)) }
     var rest: [QuotaWindowSnapshot] = []
-    for snapshot in row.section.windows where !shown.contains(snapshot.window.id) && !row.isMasked(snapshot) {
+    // An empty duplicate is no more an extra line than it is a second meter.
+    let drawable = glanceDrawableWindows(row.section.windows.filter { !row.isMasked($0) })
+    for snapshot in drawable where !shown.contains(snapshot.window.id) {
         if let known = holders[key(snapshot)], !known.contains(source(snapshot)) { continue }
         holders[key(snapshot), default: []].insert(source(snapshot))
         rest.append(snapshot)

@@ -69,7 +69,7 @@ enum GlanceViewMode: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    /// Title Case, for help text and VoiceOver.
+    /// Title Case: the label on the switch itself, and what VoiceOver says.
     var title: String {
         switch self {
         case .fromMac: return "From Mac"
@@ -77,8 +77,14 @@ enum GlanceViewMode: String, CaseIterable, Identifiable {
         }
     }
 
-    /// The small-caps label on the switch itself.
-    var eyebrow: String { title.uppercased() }
+    /// What the list becomes when this side is picked: the switch's tooltip,
+    /// and the hint VoiceOver adds after the label.
+    var detail: String {
+        switch self {
+        case .fromMac: return "Quotas this Mac reads from the AI tools signed in on it."
+        case .fromFleet: return "Quotas your other machines report to your fleet endpoint."
+        }
+    }
 }
 
 /// Whether a provider's windows were read on this Mac or pulled from the fleet.
@@ -1107,7 +1113,11 @@ final class MonitorModel: ObservableObject {
             issues["google-antigravity"] = nil
         }
         let consentNeeded = results.reduce(into: Set<String>()) { $0.formUnion($1.consentNeeded) }
+        // One reader's "could not read" placeholder says nothing when another
+        // reader of the same provider has a reading (Grok Bot's gbu and
+        // DashboardService), and used to be drawn as an empty second bar.
         return LocalQuotaResult(windows: windows, issues: issues, consentNeeded: consentNeeded)
+            .droppingSupersededPlaceholders()
     }
 }
 

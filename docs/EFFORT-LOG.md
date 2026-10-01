@@ -5,6 +5,18 @@ PR (when shipped), follow-ups (when parked).
 
 ---
 
+## 2026-09-30 — Glance v3: top bar, Title Case switch, Grok Bot stray bar, bar ends [CLAUDE, local]
+
+Lane: `claude/glance-v3-topbar` (worktree `~/apps/codecaps-claude-glance-v3`).  Owner delta on top of Glance v2.
+
+- Header: one centre line.  `CodeCaps`, a 20pt gap, the switch, a spring (never under 16pt), then `[bell] All • 6 of 7 • 4:27 PM [reload]` at an even 10pt between neighbours.  The header is 40pt tall and every control is 22pt, so each has 9pt of air above and below.  The dots are drawn, not typed, so the rhythm holds at "12 of 12", "12:59 PM" and "12 sources".
+- Switch labels are Title Case, `From Mac` and `From Fleet`, in two equal boxes, with tooltips that say what the list becomes.  The bell label is `All`, not `ALL`.
+- Grok Bot's stray extra, empty `7d` bar: the second meter slot took any other window of the row, and `gbu`'s no-reading placeholder (or the second source's copy of the same weekly) captioned `7d` like the reading beside it.  Fixed in the reader merge (`droppingSupersededPlaceholders`) and in Glance (`glanceDrawableWindows`, `glanceIsCopy`).
+- Bars: 0% used draws no red (and 0% left no green); a marker near an end stands at the bar's end instead of leaving a cap of bar beside it.
+- Evidence: `GlanceRenderTests` (`CODECAPS_GLANCE_RENDER_DIR`).
+
+---
+
 ## 2026-09-30 — Glance v2: From Mac / From Fleet, source bands, thicker bars, two-unit countdowns, MiniMax expand [CLAUDE, in review]
 
 Lane: `claude/glance-v2-polish` (worktree `~/apps/codecaps-claude-glance-v2`, board `622653dd`).  Owner delta on top of the switch below, which this renames: `THIS MAC | FLEET REPORTED` is now `FROM MAC | FROM FLEET` everywhere (titles, VoiceOver, empty states, tests).  The stored `glanceView` values stay `thisMac` and `fleetReported`, so a saved choice survives.

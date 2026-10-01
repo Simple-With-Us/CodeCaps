@@ -105,9 +105,9 @@ final class GlanceHeightTests: XCTestCase {
     }
 
     func testThePopoverAddsItsChromeAroundTheList() {
-        // Header 36 + footer 38 + two 1pt dividers + 8pt above and below the list.
+        // Header 40 + footer 38 + two 1pt dividers + 8pt above and below the list.
         let total = QuotaGlanceMetrics.popoverHeight(forListHeight: 100)
-        let expected: CGFloat = 36 + 38 + 2 + 16 + 100
+        let expected: CGFloat = 40 + 38 + 2 + 16 + 100
         XCTAssertEqual(total, expected)
     }
 
