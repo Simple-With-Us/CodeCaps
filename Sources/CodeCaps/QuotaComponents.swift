@@ -78,18 +78,24 @@ enum Theme {
 /// site and the SwiftUI root cannot disagree the way the old 580x510 window and
 /// its 620x560 content did.
 enum Metrics {
-    /// 624pt carries TWO quota meters per row — the short 4-5hr window and the
+    /// 570pt carries TWO quota meters per row — the short 4-5hr window and the
     /// long weekly/monthly window — beside the platform name, with the
     /// per-provider alarm bell in front of the logo and real gaps between the
-    /// percentage, its countdown and the second meter.  It was 560pt until the
-    /// owner found the row "a bit too cramped" (2026-09-30): the percentage and
-    /// the countdown touched ("100%4h 41m"), and the two meters nearly did.
-    /// The doubled gap between the two meters fits without widening again,
-    /// because a countdown now carries only its two largest units.  See
-    /// `glanceRowIntrinsicWidth` for the arithmetic this width has to satisfy,
-    /// which `GlanceRowTests` pins, together with the measured widths of the
+    /// percentage, its countdown and the second meter.
+    ///
+    /// It went 400 → 560 → 624 → 570.  The 624pt version answered the owner
+    /// calling the row "a bit too cramped" (2026-09-30) by doubling the gap
+    /// between the two meters to 48pt; he then read the result as too wide
+    /// (2026-09-30 evening).  Most of that 48pt was buying slack the row did
+    /// not need: a countdown is left-aligned in its frame, so a 48pt column
+    /// showing "1h 7m" was really a 72pt gap.  Narrowing the countdown column
+    /// to its measured widest value and setting the group gap to 28pt gives
+    /// the same separation between the two windows for 20pt less width.
+    ///
+    /// See `glanceRowIntrinsicWidth` for the arithmetic this width has to
+    /// satisfy, which the tests pin, together with the measured widths of the
     /// longest realistic values.
-    static let glanceWidth: CGFloat = 624
+    static let glanceWidth: CGFloat = 570
     static let glanceMinHeight: CGFloat = 200
     static let glanceGutter: CGFloat = 12
     static let glanceHeaderHeight: CGFloat = 36
@@ -140,23 +146,35 @@ enum Metrics {
     /// the column is the gap before the countdown, so the two never touch.
     static let glanceMeterPercentWidth: CGFloat = 44
     /// A countdown carries at most its two largest units ("17d 4h", "2h 42m"),
-    /// so the widest realistic value is "31d 23h" or "23h 59m", about 46pt at
-    /// 11pt medium.  The full value lives in the countdown's tooltip.
-    static let glanceMeterCountdownWidth: CGFloat = 54
+    /// so the widest realistic value is "31d 23h" or "29d 59m", measured at
+    /// 49pt by `testTheLongestCountdownsFitTheirColumn`.  The full value lives
+    /// in the countdown's tooltip.
+    static let glanceMeterCountdownWidth: CGFloat = 50
     static let glanceChevronWidth: CGFloat = 10
     /// The fixed gap between the row's columns, used by every spacer so one
     /// change re-tunes the whole row.
     static let glanceColumnGap: CGFloat = 8
     /// The gap between the two meters: from the end of the first countdown to
-    /// the second meter's caption.  Twice the 24pt it was (owner delta,
-    /// 2026-09-30), so the two windows read as two separate columns.
-    static let glanceMeterGroupGap: CGFloat = 48
+    /// the second meter's caption.  It was doubled to 48pt on 2026-09-30 and
+    /// the owner then read the row as too sparse, so it came back down to 28pt
+    /// (owner delta, 2026-09-30 evening).  Still three and a half times the
+    /// 8pt column gap, so the two windows still read as two columns — the
+    /// countdown is left-aligned in its frame, which put a further ~18pt of
+    /// visual slack on the end of every 54pt column, and that is most of what
+    /// 48pt was actually buying.
+    static let glanceMeterGroupGap: CGFloat = 28
     /// The gap right after the logo, which is tighter than the rest.
     static let glanceLogoGap: CGFloat = 6
 
     /// How wide one meter is: caption, gap, bar, gap, percent, gap, countdown.
     static let glanceMeterWidth: CGFloat = glanceMeterCaptionWidth + glanceMeterGap + glanceMeterBarWidth
         + glanceMeterGap + glanceMeterPercentWidth + glanceMeterGap + glanceMeterCountdownWidth
+
+    /// Both meters and the gap between them, which is the width a row's meter
+    /// area occupies whether it holds two meters, one centred meter, or none.
+    /// Reserving it unconditionally is what stops a row with a single reading
+    /// from re-centring itself in the popover.
+    static let glanceMetersWidth: CGFloat = glanceMeterWidth * 2 + glanceMeterGroupGap
 
     /// Where a meter's bar starts, measured from the start of its column.  A
     /// row with no reading puts its status text here, so "not signed in" sits

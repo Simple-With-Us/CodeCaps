@@ -263,8 +263,13 @@ struct GlancePopover: View {
                 .accessibilityAddTraits(.isHeader)
             Spacer(minLength: 8)
             if let reported = fleetGroupReported(group) {
+                // Italic, per the owner: the reported time is provenance for
+                // the band above it, not a second heading.  Italic separates
+                // it from the source name at a glance without dropping the
+                // semibold weight it needs to stay legible at 9pt on a band.
                 Text(reported)
                     .font(.system(size: 9, weight: .semibold).monospacedDigit())
+                    .italic()
                     .tracking(0.6)
                     .foregroundStyle(Theme.groupBandLabel)
                     .lineLimit(1)
@@ -715,21 +720,47 @@ struct GlanceMeterColumns: View {
     let now: Date
 
     var body: some View {
-        // The gap belongs in here, not between this view and its neighbours:
-        // this is a single child of the row's HStack, so a spacer outside it
-        // leaves the two meters touching and the first meter's percentage
-        // runs into the second meter's caption.
-        HStack(spacing: 0) {
-            if let short {
-                GlanceMeter(snapshot: short, now: now)
-            } else {
-                Spacer().frame(width: Metrics.glanceMeterWidth)
-            }
-            if let long {
+        columns
+            // The meter area is always the full two-meter width, whatever it
+            // holds.  Without this the area competes with the row's own
+            // trailing spacer for the leftover space, and a lone meter's
+            // centring lands wherever that division happened to fall — 118pt
+            // from the first column in one render, 105pt in the next, with
+            // nothing in between to explain it.
+            .frame(width: Metrics.glanceMetersWidth, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var columns: some View {
+        if let short, let long {
+            HStack(spacing: 0) {
+                slot(short)
                 Spacer().frame(width: Metrics.glanceMeterGroupGap)
-                GlanceMeter(snapshot: long, now: now)
+                slot(long)
             }
+        } else if let only = short ?? long {
+            // A row that reports one window centres it across the two-meter
+            // span.  Leaving it in the first column left a hole the width of a
+            // whole meter, which is what the owner was reading as a missing
+            // second reading rather than as a deliberate gap.
+            HStack(spacing: 0) {
+                Spacer(minLength: 0)
+                slot(only)
+                Spacer(minLength: 0)
+            }
+        } else {
+            // No window at all.  The width is still reserved so a row with no
+            // reading does not re-centre itself in the popover.
+            Color.clear.frame(height: 1)
         }
+    }
+
+    /// A meter in a fixed-width column.  The frame is what makes the centring
+    /// above exact: without it the slot is as wide as its text, "1m" narrower
+    /// than "31d 23h", and a lone meter's offset moves with its own label.
+    private func slot(_ snapshot: QuotaWindowSnapshot) -> some View {
+        GlanceMeter(snapshot: snapshot, now: now)
+            .frame(width: Metrics.glanceMeterWidth, alignment: .leading)
     }
 }
 
