@@ -18,7 +18,7 @@ permissions:
 
 concurrency:
   group: macos-ship-codecaps
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   ship:
