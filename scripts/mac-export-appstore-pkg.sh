@@ -26,6 +26,13 @@ if ! security find-identity -v 2>/dev/null | grep -Fq "$INSTALLER_ID"; then
 fi
 log "installer identity ready (name length ${#INSTALLER_ID})"
 
+# Re-unlock throwaway keychain if the prepare step left one (hosted CI).
+if [[ -n "${RUNNER_TEMP:-}" && -f "${RUNNER_TEMP}/app-signing-kc-pass" && -f "${RUNNER_TEMP}/app-signing.keychain-db" ]]; then
+  KC_PASS="$(cat "${RUNNER_TEMP}/app-signing-kc-pass")"
+  security unlock-keychain -p "$KC_PASS" "${RUNNER_TEMP}/app-signing.keychain-db" >/dev/null
+  security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KC_PASS" "${RUNNER_TEMP}/app-signing.keychain-db" >/dev/null || true
+fi
+
 PKG_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/mac-pkgroot.XXXXXX")"
 trap 'rm -rf "$PKG_ROOT"' EXIT
 mkdir -p "$PKG_ROOT/Applications"
