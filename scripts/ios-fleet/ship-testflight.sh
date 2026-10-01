@@ -1007,10 +1007,14 @@ write_manual_export_plists() {
   [[ -f "$map" ]] || die "manual signing profile map missing: $map"
   EXPORT_PLIST_UPLOAD="${LOG_DIR}/ExportOptions-manual-upload.plist"
   EXPORT_PLIST_IPA="${LOG_DIR}/ExportOptions-manual-ipa.plist"
-  python3 - "$map" "$TEAM_ID" "$EXPORT_PLIST_UPLOAD" "$EXPORT_PLIST_IPA" <<'PY'
+  # Mac App Store pkgs need Apple Distribution for the app and a separate
+  # installerSigningCertificate for productsign.  Putting the Installer
+  # identity in signingCertificate makes codesign reject it.
+  python3 - "$map" "$TEAM_ID" "$PLATFORM" "$EXPORT_PLIST_UPLOAD" "$EXPORT_PLIST_IPA" <<'PY'
 import json, plistlib, sys
 profiles = json.load(open(sys.argv[1], encoding="utf-8"))
 team = sys.argv[2]
+platform = sys.argv[3]
 common = {
     "method": "app-store-connect",
     "teamID": team,
@@ -1021,16 +1025,18 @@ common = {
     "manageAppVersionAndBuildNumber": False,
     "stripSwiftSymbols": True,
 }
+if platform == "macOS":
+    common["installerSigningCertificate"] = "3rd Party Mac Developer Installer"
 upload = dict(common)
 upload["destination"] = "upload"
 ipa = dict(common)
 ipa["destination"] = "export"
-with open(sys.argv[3], "wb") as handle:
-    plistlib.dump(upload, handle, fmt=plistlib.FMT_XML)
 with open(sys.argv[4], "wb") as handle:
+    plistlib.dump(upload, handle, fmt=plistlib.FMT_XML)
+with open(sys.argv[5], "wb") as handle:
     plistlib.dump(ipa, handle, fmt=plistlib.FMT_XML)
 PY
-  log "manual export plists written ($map)"
+  log "manual export plists written ($map platform=$PLATFORM)"
 }
 
 MANUAL_SIGN=0
@@ -1051,11 +1057,13 @@ if [[ "$MANUAL_SIGN" -eq 1 ]]; then
   if [[ "$PLATFORM" == "macOS" ]]; then
     bash "${REPO_ROOT}/scripts/mac-install-appstore-profiles.sh"
     write_manual_export_plists "${REPO_ROOT}/ios/CodeCapsCompanion/mac-appstore-profiles.json"
+    # Keep ASC API auth for destination=upload; Mac export still needs the
+    # App Store Connect session even when profiles are pre-installed.
   else
     bash "${REPO_ROOT}/scripts/ios-install-appstore-profiles.sh"
     write_manual_export_plists "${REPO_ROOT}/ios/CodeCapsCompanion/appstore-profiles.json"
+    ASC_AUTH_FLAGS=()
   fi
-  ASC_AUTH_FLAGS=()
 fi
 
 acquire_archive_lock
