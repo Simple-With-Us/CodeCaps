@@ -586,34 +586,58 @@ private func glanceMeterKey(_ snapshot: QuotaWindowSnapshot) -> String {
 /// Whether `snapshot` is another source's report of the meter `other` already
 /// shows.  Only a different source counts: two windows from one source that
 /// share a label and a cadence are two windows.
+///
+/// And only a report of the same allowance counts (`glanceSameAllowance`): two
+/// accounts of one provider read by two sources, both labelled "Grok Bot
+/// weekly", are two meters.
 private func glanceIsCopy(_ snapshot: QuotaWindowSnapshot, of other: QuotaWindowSnapshot) -> Bool {
     glanceMeterKey(snapshot) == glanceMeterKey(other)
         && (snapshot.window.source ?? "") != (other.window.source ?? "")
+        && glanceSameAllowance(snapshot, other)
+}
+
+/// Whether two readings of one meter could be the same allowance read twice,
+/// rather than two accounts' allowances.  Readers of one allowance agree on
+/// when it resets, to within the seconds between their reads, and on how much
+/// is left, to within a point of drift between them.  A fact one side leaves
+/// out cannot tell them apart, so it does not.
+private func glanceSameAllowance(_ lhs: QuotaWindowSnapshot, _ rhs: QuotaWindowSnapshot) -> Bool {
+    if let left = lhs.window.accountKey, let right = rhs.window.accountKey, left != right { return false }
+    if let left = lhs.resetAt, let right = rhs.resetAt, abs(left.timeIntervalSince(right)) > 120 { return false }
+    if let left = lhs.remainingPercent, let right = rhs.remainingPercent, abs(left - right) > 2 { return false }
+    return true
 }
 
 /// The windows a row may draw as a bar.  A window with no reading is a bar with
-/// nothing in it, so it is only drawn when it is the only word on its cadence:
+/// nothing in it, so it is only drawn when it is the only word on its meter:
 ///
-/// - it is dropped when another window with the same cadence has a reading,
-///   because the reading already speaks for that cadence; and
+/// - it is dropped when another window of the same meter (what it measures and
+///   its cadence: `glanceMeterKey`) has a reading, because the reading already
+///   speaks for that meter; and
 /// - when none has, one stands for them all, so an empty bar is never drawn
 ///   twice.
 ///
-/// A window that names no cadence of its own ("Quota", "Plan") is dropped when
-/// any window has a reading.  Everything with a reading is kept, in order.
+/// A provider-wide window (one that names no model) that also names no cadence
+/// of its own ("Quota", "Plan") is dropped when any window has a reading.
+/// Everything with a reading is kept, in order.
+///
+/// The meter is the model and cadence, not the cadence alone: a model that
+/// returned no weekly reading stays visible beside another model's weekly one.
 ///
 /// This is what removed Grok Bot's stray empty "7d" bar: its `gbu` reader
 /// emits a no-reading "Grok Bot weekly" window whenever the CLI cannot read,
 /// beside DashboardService's real reading of the same weekly allowance.
 func glanceDrawableWindows(_ windows: [QuotaWindowSnapshot]) -> [QuotaWindowSnapshot] {
-    let readingCaptions = Set(windows.filter { $0.remainingPercent != nil }.map(glanceMeterCaption))
-    var emptyCaptions: Set<String> = []
+    let readingKeys = Set(windows.filter { $0.remainingPercent != nil }.map(glanceMeterKey))
+    var emptyKeys: Set<String> = []
     return windows.filter { snapshot in
         guard snapshot.remainingPercent == nil else { return true }
+        let key = glanceMeterKey(snapshot)
         let caption = glanceMeterCaption(snapshot)
-        let namesNoCadence = caption == "Quota" || caption == "Plan"
-        if readingCaptions.contains(caption) || (namesNoCadence && !readingCaptions.isEmpty) { return false }
-        return emptyCaptions.insert(caption).inserted
+        let namesNoCadence = (caption == "Quota" || caption == "Plan")
+            && (snapshot.window.modelId ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if readingKeys.contains(key) || (namesNoCadence && !readingKeys.isEmpty) { return false }
+        return emptyKeys.insert(key).inserted
     }
 }
 
@@ -882,18 +906,21 @@ func glanceExpandedLines(for row: DisplaySection, now: Date) -> [GlanceMeterLine
 
     // The same reading from a second source (two readers both reporting a 5h
     // and a weekly window) is the row's own number again, not another window.
-    // Only a different source is treated as a duplicate: two windows from one
-    // source that share a label and cadence are two windows.
-    var holders: [String: Set<String>] = [:]
+    // Only a different source is treated as a duplicate, and only when it
+    // reads the same allowance: two windows from one source that share a label
+    // and cadence are two windows, and so are two accounts'.
+    var holders: [String: [QuotaWindowSnapshot]] = [:]
     func key(_ snapshot: QuotaWindowSnapshot) -> String { glanceMeterKey(snapshot) }
     func source(_ snapshot: QuotaWindowSnapshot) -> String { snapshot.window.source ?? "" }
-    for snapshot in shownWindows { holders[key(snapshot), default: []].insert(source(snapshot)) }
+    for snapshot in shownWindows { holders[key(snapshot), default: []].append(snapshot) }
     var rest: [QuotaWindowSnapshot] = []
     // An empty duplicate is no more an extra line than it is a second meter.
     let drawable = glanceDrawableWindows(row.section.windows.filter { !row.isMasked($0) })
     for snapshot in drawable where !shown.contains(snapshot.window.id) {
-        if let known = holders[key(snapshot)], !known.contains(source(snapshot)) { continue }
-        holders[key(snapshot), default: []].insert(source(snapshot))
+        if let known = holders[key(snapshot)],
+           !known.contains(where: { source($0) == source(snapshot) }),
+           known.contains(where: { glanceSameAllowance($0, snapshot) }) { continue }
+        holders[key(snapshot), default: []].append(snapshot)
         rest.append(snapshot)
     }
 

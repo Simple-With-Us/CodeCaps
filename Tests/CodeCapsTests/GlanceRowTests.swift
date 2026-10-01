@@ -334,7 +334,9 @@ final class GlanceMeterTests: XCTestCase {
         remaining: Double? = 50,
         resetIn: TimeInterval? = nil,
         provider: String = "anthropic",
-        source: String? = nil
+        source: String? = nil,
+        model: String? = nil,
+        accountKey: String? = nil
     ) -> QuotaWindowSnapshot {
         let iso = ISO8601DateFormatter()
         return QuotaWindowSnapshot(window: QuotaWindow(
@@ -342,13 +344,15 @@ final class GlanceMeterTests: XCTestCase {
             provider: provider,
             providerKey: provider,
             providerLabel: provider,
+            modelId: model,
             label: label,
             remainingPercent: remaining,
             remainingUnknown: remaining == nil,
             resetAt: resetIn.map { iso.string(from: now.addingTimeInterval($0)) },
             window: token,
             occurredAt: iso.string(from: now),
-            source: source), now: now)
+            source: source,
+            accountKey: accountKey), now: now)
     }
 
     /// A Claude-shaped 5h + weekly row: the exact pair the owner asked to see
@@ -628,6 +632,61 @@ final class GlanceMeterTests: XCTestCase {
         ]), now: now)
         XCTAssertEqual(pair.short?.window.id, "5h")
         XCTAssertNil(pair.long, "\"Quota\" with no reading says nothing next to a real 5h reading")
+    }
+
+    func testAModelWithNoWeeklyReadingStaysBesideAnotherModelsWeeklyReading() {
+        // Cadence alone is not a meter's identity: Claude's Sonnet weekly with
+        // no reading is a different meter from the overall weekly beside it.
+        let fiveHour = makeWindow(id: "5h", label: "5h window", token: "5h", remaining: 70, resetIn: 3_600)
+        let overall = makeWindow(id: "7d", label: "7-day window", token: "168h", remaining: 80, resetIn: 3 * 86_400)
+        let sonnet = makeWindow(id: "7d-sonnet", label: "7-day window (Sonnet)", token: "168h", remaining: nil,
+                                resetIn: 3 * 86_400)
+        XCTAssertEqual(glanceDrawableWindows([overall, sonnet]).map(\.window.id), ["7d", "7d-sonnet"])
+        let lines = glanceExpandedLines(for: makeRow([fiveHour, overall, sonnet]), now: now)
+        XCTAssertEqual(lines.map(\.label), ["Sonnet"], "the unavailable model keeps its line under the row")
+        XCTAssertEqual(lines.first?.long?.window.id, "7d-sonnet")
+    }
+
+    func testAMiniMaxModelThatReturnedNothingStaysBesideAModelThatDid() {
+        // MiniMax's reader emits a tokenless "<model>:unknown" window for a
+        // model with no fields; it is a different meter from the readable one.
+        let general = makeWindow(id: "general:weekly", label: "general (1w window)", token: "1w", remaining: 81,
+                                 provider: "minimax", model: "general")
+        let speech = makeWindow(id: "speech:unknown", label: "speech", token: nil, remaining: nil,
+                                provider: "minimax", model: "speech")
+        XCTAssertEqual(glanceDrawableWindows([general, speech]).map(\.window.id),
+                       ["general:weekly", "speech:unknown"])
+    }
+
+    func testTwoAccountsReadByTwoSourcesAreTwoMeters() {
+        // Cursor's DashboardService is signed into one Grok Bot account and
+        // `gbu` reads another: the same label and cadence, but not the same
+        // allowance, so neither is a copy of the other.
+        let dashboard = dashboardWeekly(remaining: 80.6)
+        let other = makeWindow(id: "local-mac:grok-bot:gbu-weekly:b", label: "Grok Bot weekly", token: "weekly",
+                               remaining: 31, resetIn: 2 * 86_400, provider: "grok-bot", source: "gbu", accountKey: "b")
+        let pair = glanceMeterPair(for: grokBotRow([dashboard, other]), now: now)
+        XCTAssertEqual(pair.short?.window.id, other.window.id, "the one closer to its cap")
+        XCTAssertEqual(pair.long?.window.id, dashboard.window.id)
+    }
+
+    func testTwoAccountKeysAreTwoMeters() {
+        let first = makeWindow(id: "a", label: "Grok Bot weekly", token: "weekly", remaining: 80.6,
+                               resetIn: 4 * 86_400, provider: "grok-bot", source: "gbu", accountKey: "a")
+        let second = makeWindow(id: "b", label: "Grok Bot weekly", token: "weekly", remaining: 80.6,
+                                resetIn: 4 * 86_400, provider: "grok-bot", source: "Cursor DashboardService", accountKey: "b")
+        let pair = glanceMeterPair(for: grokBotRow([first, second]), now: now)
+        XCTAssertNotNil(pair.short)
+        XCTAssertNotNil(pair.long, "different accounts, even when their numbers happen to agree")
+    }
+
+    func testTwoReadingsWithDifferentResetsAreTwoMeters() {
+        let first = makeWindow(id: "a", label: "Grok Bot weekly", token: "weekly", remaining: 80.6,
+                               resetIn: 4 * 86_400, provider: "grok-bot", source: "gbu")
+        let second = makeWindow(id: "b", label: "Grok Bot weekly", token: "weekly", remaining: 80.6,
+                                resetIn: 2 * 86_400, provider: "grok-bot", source: "Cursor DashboardService")
+        let pair = glanceMeterPair(for: grokBotRow([first, second]), now: now)
+        XCTAssertNotNil(pair.long, "one allowance has one reset")
     }
 
     func testDrawableWindowsKeepEveryReadingInOrder() {
