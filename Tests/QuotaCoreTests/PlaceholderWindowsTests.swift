@@ -146,6 +146,49 @@ final class PlaceholderWindowsTests: XCTestCase {
         XCTAssertNotNil(kept.issues["grok-bot"], "nothing reads, so the row still says why")
     }
 
+    func testAModelThatReturnedNothingKeepsItsPlaceholderBesideAnotherModelsReading() {
+        // MiniMax emits a tokenless "<model>:unknown" window for a model with
+        // no fields.  Another model's reading does not supersede it: they are
+        // different meters, and the unavailable one stays visible as unknown.
+        let general = QuotaWindow(id: "general:weekly", provider: "MiniMax", providerKey: "minimax", modelId: "general",
+                                  label: "general (1w window)", remainingPercent: 81, window: "1w", occurredAt: "")
+        let speech = QuotaWindow(id: "speech:unknown", provider: "MiniMax", providerKey: "minimax", modelId: "speech",
+                                 label: "speech", remainingUnknown: true, occurredAt: "")
+        XCTAssertTrue(speech.isPlaceholder)
+        let result = LocalQuotaResult(windows: [general, speech], issues: ["minimax": "speech returned no quota."])
+        let kept = result.droppingSupersededPlaceholders()
+        XCTAssertEqual(kept.windows.map(\.id), ["general:weekly", "speech:unknown"])
+        XCTAssertNotNil(kept.issues["minimax"], "the model is still unreadable, so the row still says why")
+        XCTAssertNotEqual(general.meterIdentity, speech.meterIdentity)
+    }
+
+    func testAnAbsoluteOnlyReadingSupersedesTheSameMetersPlaceholderAndItsIssue() async {
+        // Another reader's credits-only window is a reading, so it speaks for
+        // the meter exactly as a percentage does.
+        let credits = QuotaWindow(id: "local-mac:grok-bot:credits", provider: "Grok Bot", providerKey: "grok-bot",
+                                  label: "Grok Bot weekly", absoluteRemaining: 6_099, absoluteLimit: 40_000,
+                                  quotaUnit: "credits", remainingUnknown: true, occurredAt: "")
+        XCTAssertTrue(credits.hasReading)
+        let all = merged([await dashboardUnreadable(), LocalQuotaResult(windows: [credits])])
+        XCTAssertNotNil(all.issues["grok-bot"])
+        let kept = all.droppingSupersededPlaceholders()
+        XCTAssertEqual(kept.windows.map(\.id), ["local-mac:grok-bot:credits"])
+        XCTAssertNil(kept.issues["grok-bot"])
+    }
+
+    func testMeterIdentityIgnoresCaseAndPaddingButNotModelOrLabel() {
+        func window(model: String?, label: String) -> QuotaWindow {
+            QuotaWindow(id: "x", provider: "Grok Bot", providerKey: "grok-bot", modelId: model, label: label,
+                        occurredAt: "")
+        }
+        XCTAssertEqual(window(model: nil, label: "Grok Bot weekly").meterIdentity,
+                       window(model: nil, label: " grok bot WEEKLY ").meterIdentity)
+        XCTAssertNotEqual(window(model: "a", label: "Grok Bot weekly").meterIdentity,
+                          window(model: "b", label: "Grok Bot weekly").meterIdentity)
+        XCTAssertNotEqual(window(model: nil, label: "Grok Bot weekly").meterIdentity,
+                          window(model: nil, label: "Grok Bot weekly (b@example.com)").meterIdentity)
+    }
+
     func testAnotherProvidersReadingDoesNotHideThisProvidersPlaceholder() async {
         let cursor = QuotaWindow(id: "local-mac:cursor:plan", provider: "Cursor", providerKey: "cursor", label: "Included plan",
                                  remainingPercent: 62, window: "billing-cycle", occurredAt: "")
