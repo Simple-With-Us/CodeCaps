@@ -1144,17 +1144,15 @@ if [[ "$EXPORT_ONLY" -eq 1 ]]; then
 fi
 
 # Prefer: export with destination=upload (uses Xcode session OR ASC if configured in Xcode)
-# Mac manual ships skip destination=upload: hosted runners have no Xcode account
-# session, and that path has hung/failed with "Failed to Use Accounts". Go
-# straight to local .pkg export + altool with the ASC API key.
-SKIP_UPLOAD_DEST=0
+# Mac manual ships: hosted xcodebuild -exportArchive has hung on productsign.
+# Build the .pkg with productbuild from the xcarchive, then altool upload.
 if [[ "$PLATFORM" == "macOS" && "$MANUAL_SIGN" -eq 1 ]]; then
-  SKIP_UPLOAD_DEST=1
-  log "macOS manual ship: skipping destination=upload; will export pkg + altool"
-fi
-
-EXPORT_RC=1
-if [[ "$SKIP_UPLOAD_DEST" -eq 0 ]]; then
+  log "macOS manual ship: productbuild pkg from xcarchive (skip xcodebuild -exportArchive)"
+  mkdir -p "$EXPORT_DIR"
+  PACKAGE="$(bash "${REPO_ROOT}/scripts/mac-export-appstore-pkg.sh" "$ARCHIVE_PATH" "$EXPORT_DIR" | tail -1)"
+  [[ -n "$PACKAGE" && -f "$PACKAGE" ]] || die "mac-export-appstore-pkg.sh failed"
+  log "Package ready: $PACKAGE"
+else
   log "exporting + uploading to App Store Connect..."
   mkdir -p "$EXPORT_DIR"
   set +e
@@ -1179,23 +1177,23 @@ if [[ "$SKIP_UPLOAD_DEST" -eq 0 ]]; then
   fi
 
   log "xcodebuild upload export failed (rc=$EXPORT_RC); trying local export + altool"
+
+  mkdir -p "$EXPORT_DIR"
+  set +e
+  xcodebuild -exportArchive \
+    -archivePath "$ARCHIVE_PATH" \
+    -exportPath "$EXPORT_DIR" \
+    -exportOptionsPlist "$EXPORT_PLIST_IPA" \
+    ${PROVISION_UPDATE_FLAGS[@]:+"${PROVISION_UPDATE_FLAGS[@]}"} \
+    ${ASC_AUTH_FLAGS[@]:+"${ASC_AUTH_FLAGS[@]}"} \
+    2>&1 | tee "${LOG_DIR}/export-ipa.log"
+  EXPORT_RC=${PIPESTATUS[0]}
+  set -e
+  [[ $EXPORT_RC -eq 0 ]] || die "export failed (rc=$EXPORT_RC); see ${LOG_DIR}/export-ipa.log and ${LOG_DIR}/export-upload.log"
+
+  PACKAGE="$(ls -1 "$EXPORT_DIR"/*.ipa "$EXPORT_DIR"/*.pkg 2>/dev/null | head -1 || true)"
+  [[ -n "$PACKAGE" ]] || die "no IPA or PKG produced in $EXPORT_DIR"
 fi
-
-mkdir -p "$EXPORT_DIR"
-set +e
-xcodebuild -exportArchive \
-  -archivePath "$ARCHIVE_PATH" \
-  -exportPath "$EXPORT_DIR" \
-  -exportOptionsPlist "$EXPORT_PLIST_IPA" \
-  ${PROVISION_UPDATE_FLAGS[@]:+"${PROVISION_UPDATE_FLAGS[@]}"} \
-  ${ASC_AUTH_FLAGS[@]:+"${ASC_AUTH_FLAGS[@]}"} \
-  2>&1 | tee "${LOG_DIR}/export-ipa.log"
-EXPORT_RC=${PIPESTATUS[0]}
-set -e
-[[ $EXPORT_RC -eq 0 ]] || die "export failed (rc=$EXPORT_RC); see ${LOG_DIR}/export-ipa.log and ${LOG_DIR}/export-upload.log"
-
-PACKAGE="$(ls -1 "$EXPORT_DIR"/*.ipa "$EXPORT_DIR"/*.pkg 2>/dev/null | head -1 || true)"
-[[ -n "$PACKAGE" ]] || die "no IPA or PKG produced in $EXPORT_DIR"
 
 # Re-load secrets before altool: long xcodebuild sessions can leave ASC_*
 # unset under `set -u` even when AUTH_MODE was api_key at plan time.
