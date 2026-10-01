@@ -81,6 +81,13 @@ jobs:
       - name: Install Mac App Store profiles
         run: bash "$GITHUB_WORKSPACE/scripts/mac-install-appstore-profiles.sh"
 
+      - name: Clear stale archive lock from ship-state cache
+        run: |
+          # Hosted runners restore ~/.cache/ios-fleet; a cancelled prior ship can
+          # leave archive.lockdir and block the next run for ~30 minutes.
+          rm -rf "${HOME}/.cache/ios-fleet/archive.lockdir"
+          echo "archive lock cleared"
+
       - name: Ship CodeCaps for Mac to TestFlight
         env:
           IOS_TF_RELEASE_NOTES: "1"
