@@ -300,8 +300,12 @@ final class GlanceToggleTests: XCTestCase {
 
     func testTheTwoMeterGroupsHaveClearlyMoreSpaceBetweenThemThanTheColumns() {
         XCTAssertGreaterThanOrEqual(Metrics.glanceMeterGroupGap, 2 * Metrics.glanceColumnGap)
-        // Owner delta 2026-09-30: clearly more than the 24pt it was.
-        XCTAssertGreaterThanOrEqual(Metrics.glanceMeterGroupGap, 48)
+        // Owner delta 2026-09-30, twice: the gap was doubled to 48pt because the
+        // row read cramped, then the 624pt popover that bought read too wide and
+        // it came back to 28pt.  What separates the two windows is the gap plus
+        // the countdown column's trailing slack, so 28pt is the floor that still
+        // reads as two columns rather than one run-on.
+        XCTAssertGreaterThanOrEqual(Metrics.glanceMeterGroupGap, 28)
     }
 
     func testTheBarsAreThickerAndTheElapsedMarkerTaller() {

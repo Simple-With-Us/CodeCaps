@@ -52,21 +52,40 @@ final class GlanceAlignmentTests: XCTestCase {
     }
 
     func testStatusTextStartsWhereASingleBarStarts() throws {
-        let cursor = section(GlanceFixtures.localWindows.filter { $0.providerKey == "cursor" })
-        let barRow = try rowImage(cursor, issue: nil)
-        // The used share of Cursor's bar is red, and nothing else in the row is.
+        // Measured on a TWO-window row.  A row with a single meter centres it
+        // across the two-meter span, so Cursor's bar no longer sits on the
+        // grid; Claude's first meter does, and that is the position the status
+        // text has to line up with.
+        let claude = section(GlanceFixtures.localWindows.filter { $0.providerKey == "anthropic" })
+        let barRow = try rowImage(claude, issue: nil)
+        // The used share of Claude's first bar is red, and nothing else in the
+        // row is.
         let barX = try XCTUnwrap(firstX(in: barRow, from: columnStart) { $0.redComponent > 0.6 && $0.greenComponent < 0.4 })
 
-        let claude = DisplaySection.rows(for: QuotaPlatformSection(
+        let signedOut = DisplaySection.rows(for: QuotaPlatformSection(
             providerKey: "anthropic", providerLabel: "Claude", via: nil, expected: true, windows: []), now: now)[0]
-        let statusRow = try rowImage(claude, issue: ClaudeLoginState.signedOut.issue)
+        let statusRow = try rowImage(signedOut, issue: ClaudeLoginState.signedOut.issue)
         let textX = try XCTUnwrap(firstX(in: statusRow, from: columnStart - 2) {
             abs($0.redComponent - 0.96) > 0.2 || abs($0.greenComponent - 0.97) > 0.2
         })
 
-        XCTAssertEqual(textX, barX, accuracy: 3, "\"not signed in\" starts where Cursor's bar starts")
+        XCTAssertEqual(textX, barX, accuracy: 3, "\"not signed in\" starts where a bar starts")
         XCTAssertEqual(barX - columnStart, Metrics.glanceMeterBarInset, accuracy: 3,
                        "the bar sits one caption column in from the start of the meter")
+    }
+
+    /// A single-meter row centres its meter, so its bar sits half a meter plus
+    /// half the group gap to the right of where a two-window row's first bar
+    /// does.  Pinned because that offset is the whole point of the change: the
+    /// lone meter reads as deliberate instead of as a missing second reading.
+    func testASingleMeterRowCentresItsBarBetweenTheTwoMeterColumns() throws {
+        let cursor = section(GlanceFixtures.localWindows.filter { $0.providerKey == "cursor" })
+        let barX = try XCTUnwrap(firstX(in: try rowImage(cursor, issue: nil), from: columnStart) {
+            $0.redComponent > 0.6 && $0.greenComponent < 0.4
+        })
+        let offset = (Metrics.glanceMeterWidth + Metrics.glanceMeterGroupGap) / 2
+        XCTAssertEqual(barX - columnStart, Metrics.glanceMeterBarInset + offset, accuracy: 3,
+                       "a lone meter is centred across the two-meter span")
     }
 
     func testTheBarInsetIsTheCaptionColumnAndItsGap() {
