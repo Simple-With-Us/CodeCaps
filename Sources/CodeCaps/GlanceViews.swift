@@ -824,8 +824,21 @@ struct GlanceMeter: View {
 }
 
 /// The two meter columns every Glance line shares: the row itself, and each
-/// extra line under an expanded row.  The first column is always reserved, so
-/// a line with only a long window still puts it under the row's long meter.
+/// extra line under an expanded row.
+///
+/// Two columns, always.  A meter sits in the column its cadence names and is
+/// never centred between them:
+///
+/// - A row with one meter puts it in the FIRST column, where a two-meter row's
+///   first meter is, and leaves the second column empty.  (The row's single
+///   meter is always its `short` slot; see `glanceMeterPair`.)  Owner ruling,
+///   restated 2026-10-01: single bars start in the first column, the same x as
+///   the "5h" bars of the rows above and below, so the bars, captions and
+///   percentages form one grid down the whole popover.  PR #88 centred them
+///   across the two columns; that is what this replaces.
+/// - A line with only a long window, which an expanded row uses for a lone
+///   weekly, keeps the first column reserved and puts the window under the
+///   second, so it sits under the row's weekly meter.
 struct GlanceMeterColumns: View {
     let short: QuotaWindowSnapshot?
     let long: QuotaWindowSnapshot?
@@ -834,31 +847,20 @@ struct GlanceMeterColumns: View {
     var body: some View {
         columns
             // The meter area is always the full two-meter width, whatever it
-            // holds.  Without this the area competes with the row's own
-            // trailing spacer for the leftover space, and a lone meter's
-            // centring lands wherever that division happened to fall — 118pt
-            // from the first column in one render, 105pt in the next, with
-            // nothing in between to explain it.
+            // holds, so the columns land at the same x on every row.  Without
+            // this the area competes with the row's own trailing spacer for the
+            // leftover space and a column's position depends on how that
+            // division happens to fall.
             .frame(width: Metrics.glanceMetersWidth, alignment: .leading)
     }
 
     @ViewBuilder
     private var columns: some View {
-        if let short, let long {
+        if short != nil || long != nil {
             HStack(spacing: 0) {
-                slot(short)
+                column(short)
                 Spacer().frame(width: Metrics.glanceMeterGroupGap)
-                slot(long)
-            }
-        } else if let only = short ?? long {
-            // A row that reports one window centres it across the two-meter
-            // span.  Leaving it in the first column left a hole the width of a
-            // whole meter, which is what the owner was reading as a missing
-            // second reading rather than as a deliberate gap.
-            HStack(spacing: 0) {
-                Spacer(minLength: 0)
-                slot(only)
-                Spacer(minLength: 0)
+                column(long)
             }
         } else {
             // No window at all.  The width is still reserved so a row with no
@@ -867,12 +869,17 @@ struct GlanceMeterColumns: View {
         }
     }
 
-    /// A meter in a fixed-width column.  The frame is what makes the centring
-    /// above exact: without it the slot is as wide as its text, "1m" narrower
-    /// than "31d 23h", and a lone meter's offset moves with its own label.
-    private func slot(_ snapshot: QuotaWindowSnapshot) -> some View {
-        GlanceMeter(snapshot: snapshot, now: now)
-            .frame(width: Metrics.glanceMeterWidth, alignment: .leading)
+    /// One column: a meter, or the same width left empty.  The fixed width is
+    /// what puts a meter at exactly the same x on every line: without it the
+    /// slot is as wide as its text, "1m" narrower than "31d 23h".
+    @ViewBuilder
+    private func column(_ snapshot: QuotaWindowSnapshot?) -> some View {
+        if let snapshot {
+            GlanceMeter(snapshot: snapshot, now: now)
+                .frame(width: Metrics.glanceMeterWidth, alignment: .leading)
+        } else {
+            Spacer().frame(width: Metrics.glanceMeterWidth)
+        }
     }
 }
 
