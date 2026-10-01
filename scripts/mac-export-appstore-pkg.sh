@@ -33,20 +33,24 @@ if [[ -n "${RUNNER_TEMP:-}" && -f "${RUNNER_TEMP}/app-signing-kc-pass" && -f "${
   security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KC_PASS" "${RUNNER_TEMP}/app-signing.keychain-db" >/dev/null || true
 fi
 
-PKG_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/mac-pkgroot.XXXXXX")"
-trap 'rm -rf "$PKG_ROOT"' EXIT
-mkdir -p "$PKG_ROOT/Applications"
-ditto "$APP" "$PKG_ROOT/Applications/${APP_NAME}.app"
+# Ensure Info.plist carries LSMinimumSystemVersion for the product definition
+# (ASC 90264: product min version must equal LSMinimumSystemVersion).
+INFO="$APP/Contents/Info.plist"
+if ! /usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$INFO" >/dev/null 2>&1; then
+  /usr/libexec/PlistBuddy -c 'Add :LSMinimumSystemVersion string 14.0' "$INFO"
+fi
+MIN_VER="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$INFO")"
+MARKETING="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$INFO" 2>/dev/null || echo 0.1.0)"
+log "LSMinimumSystemVersion=$MIN_VER marketing=$MARKETING"
 
 PKG_PATH="${OUT_DIR}/${APP_NAME}.pkg"
-# productbuild --root packages the tree; component installs under /Applications.
-# --synthesize + analyze is more complex; --root is what fleet Mac App Store needs.
+# --component + --product copies min-system-version into the product definition.
 productbuild \
-  --root "$PKG_ROOT" \
-  / \
+  --component "$APP" /Applications \
+  --product "$INFO" \
   --sign "$INSTALLER_ID" \
   --identifier "com.simplewithus.codecaps.macos" \
-  --version "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist" 2>/dev/null || echo 0.1.0)" \
+  --version "$MARKETING" \
   "$PKG_PATH"
 
 [[ -f "$PKG_PATH" ]] || die "pkg not produced"
