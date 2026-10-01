@@ -98,41 +98,78 @@ public enum MarkStyle: String, CaseIterable, Identifiable, Codable, Sendable {
     }
 }
 
+/// Presentation mode for a user-supplied custom logo.
+public enum CustomMarkMode: String, CaseIterable, Identifiable, Codable, Sendable {
+    case color
+    case template
+
+    public var id: String { rawValue }
+    public var title: String {
+        switch self {
+        case .color:    return "Color Version"
+        case .template: return "Light/Dark Version"
+        }
+    }
+}
+
 /// Displays the provider mark bundled with the menu bar application.
 ///
 /// The provider key is the canonical key used by QuotaCore.  Unknown keys
 /// deliberately use a neutral SF Symbol instead of guessing at a brand.
 public struct PlatformLogo: View {
+    @Environment(\.colorScheme) private var colorScheme
     public let providerKey: String
     public let size: CGFloat
     public let style: MarkStyle
+    public let customMode: CustomMarkMode?
     public let tint: Color?
 
     public init(providerKey: String,
                 size: CGFloat = 22,
                 style: MarkStyle = .template,
+                customMode: CustomMarkMode? = nil,
                 tint: Color? = nil) {
         self.providerKey = providerKey
         self.size = size
         self.style = style
+        self.customMode = customMode
         self.tint = tint
+    }
+
+    private var effectiveCustomMode: CustomMarkMode {
+        customMode ?? PlatformLogoImage.customMarkMode(for: providerKey)
     }
 
     /// A mark that is one colour by design renders as a template in every
     /// style, so it follows Light and Dark instead of drawing black on black.
+    /// Custom marks honor the user's customMode preference (Color vs Template).
     private var rendersAsTemplate: Bool {
-        style != .standard || PlatformLogoImage.isMonochromeMark(providerKey)
+        if style == .custom {
+            return effectiveCustomMode == .template
+        }
+        if style == .template {
+            return true
+        }
+        return PlatformLogoImage.isMonochromeMark(providerKey)
     }
 
     public var body: some View {
         Group {
-            if let image = PlatformLogoImage.load(providerKey: providerKey, style: style) {
-                Image(nsImage: image)
-                    .renderingMode(rendersAsTemplate ? .template : .original)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .foregroundStyle(tint ?? (PlatformLogoImage.usesSolidTone(providerKey)
-                                              ? Theme.solidMark : Theme.ink))
+            let isDark = colorScheme == .dark
+            if let image = PlatformLogoImage.load(providerKey: providerKey, style: style, isDarkMode: isDark) {
+                if rendersAsTemplate {
+                    Image(nsImage: image)
+                        .renderingMode(.template)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .foregroundStyle(tint ?? (PlatformLogoImage.usesSolidTone(providerKey)
+                                                  ? Theme.solidMark : Theme.ink))
+                } else {
+                    Image(nsImage: image)
+                        .renderingMode(.original)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                }
             } else {
                 Image(systemName: PlatformLogoImage.fallbackSymbolName(for: providerKey))
                     .resizable()
@@ -248,6 +285,34 @@ public enum PlatformLogoImage {
         "openai", "codex", "cursor", "minimax", "xai", "grok", "grok-cli",
     ]
 
+    /// Presentation mode for a user-supplied custom mark.  Defaults to `.color`
+    /// so an uploaded brand mark keeps its original colours rather than turning
+    /// into a monochrome template.
+    public static func customMarkMode(for providerKey: String) -> CustomMarkMode {
+        let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if let data = UserDefaults.standard.data(forKey: "customMarkModes"),
+           let dict = try? JSONDecoder().decode([String: CustomMarkMode].self, from: data),
+           let mode = dict[key] {
+            return mode
+        }
+        return .color
+    }
+
+    /// Persist the presentation mode for `providerKey` and invalidate caches.
+    public static func setCustomMarkMode(_ mode: CustomMarkMode, for providerKey: String) {
+        let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        var dict: [String: CustomMarkMode] = [:]
+        if let data = UserDefaults.standard.data(forKey: "customMarkModes"),
+           let decoded = try? JSONDecoder().decode([String: CustomMarkMode].self, from: data) {
+            dict = decoded
+        }
+        dict[key] = mode
+        if let encoded = try? JSONEncoder().encode(dict) {
+            UserDefaults.standard.set(encoded, forKey: "customMarkModes")
+        }
+        invalidateCache(for: key)
+    }
+
     /// The platform a pool-scoped key belongs to: `google-antigravity:gemini`
     /// is `google-antigravity`.  A custom mark is chosen per platform, so both
     /// pools show it.
@@ -259,7 +324,7 @@ public enum PlatformLogoImage {
     /// resolved relative to `customMarksDirectory`; an unreadable file falls
     /// back to the bundled asset so a stale selection does not blank the menu
     /// bar.
-    public static func load(providerKey: String, style: MarkStyle) -> NSImage? {
+    public static func load(providerKey: String, style: MarkStyle, isDarkMode: Bool = false) -> NSImage? {
         let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         switch style {
         case .standard:
@@ -267,16 +332,17 @@ public enum PlatformLogoImage {
         case .template:
             return bundledImage(providerKey: key, style: .template)
         case .custom:
-            if let custom = loadCustom(providerKey: key) ?? loadCustom(providerKey: platformKey(of: key)) {
+            if let custom = loadCustom(providerKey: key, isDarkMode: isDarkMode)
+                ?? loadCustom(providerKey: platformKey(of: key), isDarkMode: isDarkMode) {
                 return custom
             }
             return bundledImage(providerKey: key, style: .standard)
         }
     }
 
-    /// The on-disk path for a provider's custom mark, or `nil` if none has been
-    /// chosen yet.  Exposed so Settings can show the path and offer Remove.
-    public static func customMarkURL(providerKey: String) -> URL? {
+    /// The on-disk path for a provider's primary custom mark, or `nil` if none
+    /// has been chosen yet.
+    public static func customPrimaryMarkURL(providerKey: String) -> URL? {
         let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         for ext in ["svg", "png", "pdf"] {
             let url = customMarksDirectory.appendingPathComponent("\(key).\(ext)")
@@ -285,57 +351,96 @@ public enum PlatformLogoImage {
         return nil
     }
 
-    /// Copy `source` into `customMarksDirectory` as `<key>.<ext>`, removing any
-    /// older variant first so an owner swapping a PNG for an SVG never ends up
-    /// with two files and the wrong one cached.  Returns the new on-disk URL,
+    /// The on-disk path for a provider's dark-mode custom mark, or `nil` if none
+    /// has been imported yet.
+    public static func customDarkMarkURL(providerKey: String) -> URL? {
+        let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        for ext in ["svg", "png", "pdf"] {
+            let darkUrl = customMarksDirectory.appendingPathComponent("\(key)-dark.\(ext)")
+            if FileManager.default.fileExists(atPath: darkUrl.path) { return darkUrl }
+        }
+        return nil
+    }
+
+    /// The on-disk path for a provider's custom mark, or `nil` if none has been
+    /// chosen yet.  Checks for a dark variant (`<key>-dark.<ext>`) first when
+    /// `isDarkMode` is true, falling back to the primary custom file.
+    public static func customMarkURL(providerKey: String, isDarkMode: Bool = false) -> URL? {
+        if isDarkMode, let dark = customDarkMarkURL(providerKey: providerKey) {
+            return dark
+        }
+        return customPrimaryMarkURL(providerKey: providerKey)
+    }
+
+    /// Copy `source` into `customMarksDirectory` as `<key>.<ext>` or `<key>-dark.<ext>`,
+    /// removing any older variant first so an owner swapping a PNG for an SVG never
+    /// ends up with two files and the wrong one cached.  Returns the new on-disk URL,
     /// or `nil` if the source could not be read.
     @discardableResult
-    public static func importCustomMark(from source: URL, providerKey: String) -> URL? {
+    public static func importCustomMark(from source: URL, providerKey: String, isDarkMode: Bool = false) -> URL? {
         let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let ext = source.pathExtension.lowercased()
         guard ["svg", "png", "pdf"].contains(ext) else { return nil }
         guard let data = try? Data(contentsOf: source) else { return nil }
-        // Drop any older variant (PNG/SVG/PDF) so the menu bar never caches the
-        // wrong one.
+        let baseName = isDarkMode ? "\(key)-dark" : key
         for old in ["svg", "png", "pdf"] {
-            let url = customMarksDirectory.appendingPathComponent("\(key).\(old)")
+            let url = customMarksDirectory.appendingPathComponent("\(baseName).\(old)")
             try? FileManager.default.removeItem(at: url)
         }
-        let destination = customMarksDirectory.appendingPathComponent("\(key).\(ext)")
+        let destination = customMarksDirectory.appendingPathComponent("\(baseName).\(ext)")
         do {
             try data.write(to: destination, options: [.atomic])
         } catch {
             return nil
         }
-        // Bust the menu-bar render cache so the new file shows on the next draw.
-        for style in MarkStyle.allCases {
-            menuBarCache.removeObject(forKey: "\(key)|\(style.rawValue)" as NSString)
-        }
+        invalidateCache(for: key)
         return destination
     }
 
     /// Remove the custom mark for `providerKey`, if any.
-    public static func removeCustomMark(providerKey: String) {
+    public static func removeCustomMark(providerKey: String, isDarkMode: Bool? = nil) {
         let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        for ext in ["svg", "png", "pdf"] {
-            let url = customMarksDirectory.appendingPathComponent("\(key).\(ext)")
-            try? FileManager.default.removeItem(at: url)
+        let namesToRemove: [String]
+        if let isDarkMode {
+            namesToRemove = [isDarkMode ? "\(key)-dark" : key]
+        } else {
+            namesToRemove = [key, "\(key)-dark"]
         }
+        for name in namesToRemove {
+            for ext in ["svg", "png", "pdf"] {
+                let url = customMarksDirectory.appendingPathComponent("\(name).\(ext)")
+                try? FileManager.default.removeItem(at: url)
+            }
+        }
+        invalidateCache(for: key)
+    }
+
+    /// Bust the render cache so marks reload on the next draw.
+    public static func invalidateCache(for providerKey: String) {
+        let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        standardCache.removeObject(forKey: key as NSString)
+        templateCache.removeObject(forKey: key as NSString)
         for style in MarkStyle.allCases {
             menuBarCache.removeObject(forKey: "\(key)|\(style.rawValue)" as NSString)
+            menuBarCache.removeObject(forKey: "\(key)|\(style.rawValue)|dark" as NSString)
+            menuBarCache.removeObject(forKey: "\(key)|\(style.rawValue)|light" as NSString)
         }
     }
 
-    private static func loadCustom(providerKey: String) -> NSImage? {
-        guard let url = customMarkURL(providerKey: providerKey) else { return nil }
-        return NSImage(contentsOf: url)
+    private static func loadCustom(providerKey: String, isDarkMode: Bool = false) -> NSImage? {
+        guard let url = customMarkURL(providerKey: providerKey, isDarkMode: isDarkMode) else { return nil }
+        guard let image = NSImage(contentsOf: url) else { return nil }
+        let mode = customMarkMode(for: providerKey)
+        image.isTemplate = (mode == .template)
+        return image
     }
 
-    public static func menuBarImage(providerKey: String, size: CGFloat = 16, style: MarkStyle = .template) -> NSImage? {
+    public static func menuBarImage(providerKey: String, size: CGFloat = 16, style: MarkStyle = .template, isDarkMode: Bool? = nil) -> NSImage? {
         let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let cacheKey = "\(key)|\(style.rawValue)" as NSString
+        let isDark = isDarkMode ?? (NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua)
+        let cacheKey = "\(key)|\(style.rawValue)|\(isDark ? "dark" : "light")" as NSString
         if let cached = menuBarCache.object(forKey: cacheKey) { return cached }
-        guard let original = load(providerKey: key, style: style) else {
+        guard let original = load(providerKey: key, style: style, isDarkMode: isDark) else {
             return nil
         }
         let targetSize = NSSize(width: size, height: size)
@@ -346,7 +451,11 @@ public enum PlatformLogoImage {
                       operation: .copy,
                       fraction: 1.0)
         img.unlockFocus()
-        img.isTemplate = (style == .template) || isMonochromeMark(key)
+        if style == .custom {
+            img.isTemplate = (customMarkMode(for: key) == .template)
+        } else {
+            img.isTemplate = (style == .template) || isMonochromeMark(key)
+        }
         menuBarCache.setObject(img, forKey: cacheKey)
         return img
     }

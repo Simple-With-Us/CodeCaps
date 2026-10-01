@@ -151,6 +151,19 @@ final class MonitorModel: ObservableObject {
     @Published var customMarkPaths: [String: String] {
         didSet { defaults.set(customMarkPaths, forKey: "customMarkPaths") }
     }
+    /// Presentation mode for a custom mark: `.color` keeps original colors,
+    /// `.template` renders as adaptive light/dark silhouette.
+    @Published var customMarkModes: [String: CustomMarkMode] {
+        didSet {
+            if let data = try? JSONEncoder().encode(customMarkModes) {
+                defaults.set(data, forKey: "customMarkModes")
+            }
+        }
+    }
+    /// Optional Dark mode variant paths for custom marks.
+    @Published var customMarkDarkPaths: [String: String] {
+        didSet { defaults.set(customMarkDarkPaths, forKey: "customMarkDarkPaths") }
+    }
     @Published private(set) var response = QuotaResponse(generatedAt: "")
     @Published private(set) var isRefreshing = false
     @Published private(set) var lastChecked: Date?
@@ -263,6 +276,13 @@ final class MonitorModel: ObservableObject {
             markStyles = [:]
         }
         customMarkPaths = (defaults.dictionary(forKey: "customMarkPaths") as? [String: String]) ?? [:]
+        if let modeData = defaults.data(forKey: "customMarkModes"),
+           let decoded = try? JSONDecoder().decode([String: CustomMarkMode].self, from: modeData) {
+            customMarkModes = decoded
+        } else {
+            customMarkModes = [:]
+        }
+        customMarkDarkPaths = (defaults.dictionary(forKey: "customMarkDarkPaths") as? [String: String]) ?? [:]
         if let rankData = defaults.data(forKey: "sourceRank"),
            let decoded = try? JSONDecoder().decode([String: [String]].self, from: rankData) {
             sourceRank = decoded
@@ -690,27 +710,71 @@ final class MonitorModel: ObservableObject {
         markStyles[key] = style
     }
 
+    func customMarkMode(for providerKey: String) -> CustomMarkMode {
+        let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return customMarkModes[key] ?? .color
+    }
+
+    func setCustomMarkMode(_ mode: CustomMarkMode, for providerKey: String) {
+        let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        customMarkModes[key] = mode
+        PlatformLogoImage.setCustomMarkMode(mode, for: key)
+        objectWillChange.send()
+    }
+
+    func customMarkURL(for providerKey: String, isDarkMode: Bool = false) -> URL? {
+        let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if isDarkMode {
+            if let path = customMarkDarkPaths[key], FileManager.default.fileExists(atPath: path) {
+                return URL(fileURLWithPath: path)
+            }
+            return PlatformLogoImage.customDarkMarkURL(providerKey: key)
+        }
+        if let path = customMarkPaths[key], FileManager.default.fileExists(atPath: path) {
+            return URL(fileURLWithPath: path)
+        }
+        return PlatformLogoImage.customPrimaryMarkURL(providerKey: key)
+    }
+
     /// Persist a custom mark for `providerKey`.  Reads the file out of the
     /// picker URL into `~/Library/Application Support/CodeCaps/CustomMarks/`
     /// via `PlatformLogoImage.importCustomMark`, then records the path so the
     /// Settings UI can show "Open in Finder" and "Remove".
-    func setCustomMark(at source: URL, for providerKey: String) -> URL? {
-        guard let stored = PlatformLogoImage.importCustomMark(from: source, providerKey: providerKey) else {
+    @discardableResult
+    func setCustomMark(at source: URL, for providerKey: String, isDarkMode: Bool = false) -> URL? {
+        guard let stored = PlatformLogoImage.importCustomMark(from: source, providerKey: providerKey, isDarkMode: isDarkMode) else {
             return nil
         }
         let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        customMarkPaths[key] = stored.path
-        markStyles[key] = .custom
+        if isDarkMode {
+            customMarkDarkPaths[key] = stored.path
+        } else {
+            customMarkPaths[key] = stored.path
+            markStyles[key] = .custom
+        }
+        objectWillChange.send()
         return stored
     }
 
-    func clearCustomMark(for providerKey: String) {
+    func clearCustomMark(for providerKey: String, isDarkMode: Bool? = nil) {
         let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        PlatformLogoImage.removeCustomMark(providerKey: key)
-        customMarkPaths.removeValue(forKey: key)
-        // Falling back to the bundled asset is the safer choice: an owner who
-        // removes a custom mark presumably still wants *some* icon.
-        if markStyles[key] == .custom { markStyles[key] = .template }
+        PlatformLogoImage.removeCustomMark(providerKey: key, isDarkMode: isDarkMode)
+        if let isDarkMode {
+            if isDarkMode {
+                customMarkDarkPaths.removeValue(forKey: key)
+            } else {
+                customMarkPaths.removeValue(forKey: key)
+                if markStyles[key] == .custom { markStyles[key] = .template }
+            }
+        } else {
+            customMarkPaths.removeValue(forKey: key)
+            customMarkDarkPaths.removeValue(forKey: key)
+            customMarkModes.removeValue(forKey: key)
+            // Falling back to the bundled asset is the safer choice: an owner who
+            // removes a custom mark presumably still wants *some* icon.
+            if markStyles[key] == .custom { markStyles[key] = .template }
+        }
+        objectWillChange.send()
     }
 
     /// Live binding for the local-readers toggle.  Writing the default and
