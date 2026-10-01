@@ -5,6 +5,19 @@ PR (when shipped), follow-ups (when parked).
 
 ---
 
+## 2026-10-01 — Custom platform logo color version and light/dark variant modes [AG, completed]
+
+Lane: `ag/custom-logo-color-and-dark-mode` (board `6a375482`, issue #102, PR #103, squash `b1d38a7`).
+
+- Fixed bug where uploaded custom logos (such as MiniMax) were treated as monochrome template marks and tinted pure black `#1F2B3A` / `Theme.ink`.
+- Added `CustomMarkMode`: `.color` (Color Version, default) preserves full original artwork with `.renderingMode(.original)` and no tint; `.template` (Light/Dark Version) renders an adaptive silhouette.
+- Added support for dedicated Dark Appearance variant uploads (`<key>-dark.<ext>`) alongside primary custom logos (`<key>.<ext>`), resolving automatically across SwiftUI views and the status item when dark appearance is active.
+- Updated Settings `SettingsLogoStylePage` with segmented mode picker, distinct primary and dark variant action rows, and clear helper copy.
+- Updated menu bar status item in `AppDelegate` and `PlatformLogoImage.menuBarImage` to honor `CustomMarkMode` and appearance variants.
+- Verified with 557 passing tests in `swift test`, including new test cases for custom mark mode persistence, cache busting, and dark variant resolution.
+
+---
+
 ## 2026-09-30 — Glance v3: top bar, Title Case switch, Grok Bot stray bar, bar ends [CLAUDE, local]
 
 Lane: `claude/glance-v3-topbar` (worktree `~/apps/codecaps-claude-glance-v3`).  Owner delta on top of Glance v2.
