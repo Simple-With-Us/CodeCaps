@@ -188,14 +188,15 @@ enum Metrics {
         + glanceMeterGap + glanceMeterPercentWidth + glanceMeterGap + glanceMeterCountdownWidth
 
     /// Both meters and the gap between them, which is the width a row's meter
-    /// area occupies whether it holds two meters, one centred meter, or none.
-    /// Reserving it unconditionally is what stops a row with a single reading
-    /// from re-centring itself in the popover.
+    /// area occupies whether it holds two meters, one meter (in the first
+    /// column, never centred), or none.  Reserving it unconditionally is what
+    /// stops a row with a single reading from shifting in the popover.
     static let glanceMetersWidth: CGFloat = glanceMeterWidth * 2 + glanceMeterGroupGap
 
     /// Where a meter's bar starts, measured from the start of its column.  A
     /// row with no reading puts its status text here, so "not signed in" sits
-    /// exactly where a single bar (Cursor's) would begin.
+    /// exactly where the first bar of every row, single-meter rows included
+    /// (Cursor's), begins.
     static let glanceMeterBarInset: CGFloat = glanceMeterCaptionWidth + glanceMeterGap
 
     /// The width a two-meter row actually occupies: the alarm bell, logo,
