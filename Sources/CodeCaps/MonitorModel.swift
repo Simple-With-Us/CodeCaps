@@ -17,6 +17,38 @@ enum DisplayMode: String, CaseIterable, Identifiable {
     }
 }
 
+/// How the status item's own mark is drawn, independent of the per-provider
+/// Logo Style that governs the popover and sidebar.
+///
+/// The menu bar sits on a system surface the owner does not control, and the
+/// status item is selected and tinted by macOS, so an owner often wants the
+/// silhouette there even while the popover shows the brand colour.  That used
+/// to mean editing each provider one at a time.
+public enum MenuBarMarkStyle: String, CaseIterable, Identifiable {
+    case followProvider
+    case lightDark
+    case colour
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .followProvider: return "Match Provider"
+        case .lightDark: return "Light/Dark"
+        case .colour: return "Colour"
+        }
+    }
+
+    /// The style to actually draw with, given what the provider is set to.
+    public func resolved(_ providerStyle: MarkStyle) -> MarkStyle {
+        switch self {
+        case .followProvider: return providerStyle
+        case .lightDark: return .template
+        case .colour: return .standard
+        }
+    }
+}
+
 public enum MenuBarStyle: String, CaseIterable, Identifiable {
     case symbolOnly = "symbolOnly"
     case symbolAndPercent = "symbolAndPercent"
@@ -116,6 +148,9 @@ final class MonitorModel: ObservableObject {
     }
     @Published var menuBarStyle: MenuBarStyle {
         didSet { defaults.set(menuBarStyle.rawValue, forKey: "menuBarStyle") }
+    }
+    @Published var menuBarMarkStyle: MenuBarMarkStyle {
+        didSet { defaults.set(menuBarMarkStyle.rawValue, forKey: "menuBarMarkStyle") }
     }
     @Published var menuBarQuotaSelection: String {
         didSet { defaults.set(menuBarQuotaSelection, forKey: "menuBarQuotaSelection") }
@@ -260,6 +295,8 @@ final class MonitorModel: ObservableObject {
         self.defaults = defaults
         displayMode = DisplayMode(rawValue: defaults.string(forKey: "displayMode") ?? "") ?? .both
         menuBarStyle = MenuBarStyle(rawValue: defaults.string(forKey: "menuBarStyle") ?? "") ?? .symbolAndPercent
+        menuBarMarkStyle = MenuBarMarkStyle(rawValue: defaults.string(forKey: "menuBarMarkStyle") ?? "")
+            ?? .followProvider
         menuBarQuotaSelection = defaults.string(forKey: "menuBarQuotaSelection") ?? "auto_lowest_active"
         viewLayout = QuotaViewLayout(rawValue: defaults.string(forKey: "quotaViewLayout") ?? "") ?? .summary
         platformOrder = defaults.stringArray(forKey: "platformOrder") ?? []
@@ -693,7 +730,13 @@ final class MonitorModel: ObservableObject {
     /// Settings → Logo Style.
     func markStyle(for providerKey: String) -> MarkStyle {
         let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return markStyles[key] ?? .template
+        // Pool-qualified keys ("google-antigravity:gemini") fall back to the
+        // platform key, so a style the owner set for "Antigravity" before the
+        // pools were listed separately still applies to both pools instead of
+        // silently reverting them to the default.
+        if let style = markStyles[key] { return style }
+        let platform = key.split(separator: ":", maxSplits: 1).first.map(String.init) ?? key
+        return markStyles[platform] ?? .template
     }
 
     /// The mark style for the glance popover.  `standard` (colour) by
@@ -701,7 +744,9 @@ final class MonitorModel: ObservableObject {
     /// so the brand colours read better than a monochrome silhouette.
     func glanceMarkStyle(for providerKey: String) -> MarkStyle {
         let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return markStyles[key] ?? .standard
+        if let style = markStyles[key] { return style }
+        let platform = key.split(separator: ":", maxSplits: 1).first.map(String.init) ?? key
+        return markStyles[platform] ?? .standard
     }
 
     func setMarkStyle(_ style: MarkStyle, for providerKey: String) {
