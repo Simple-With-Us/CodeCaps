@@ -2,18 +2,85 @@ import AppKit
 import QuotaCore
 import SwiftUI
 
+/// The accent colours the owner can choose from, each with a light and a dark
+/// value chosen for contrast against `Theme.background` rather than converted
+/// from one another.
+///
+/// These are stored as raw values and read through `Theme.accent`, so changing
+/// the choice is a re-render rather than a re-layout.  Every one of these
+/// pairs clears 4.5:1 for its percentage text on its own background, because
+/// that number is the one the owner reads at a glance.
+enum AccentChoice: String, CaseIterable, Identifiable {
+    case teal, blue, violet, orange, green, magenta
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .teal: return "Teal"
+        case .blue: return "Blue"
+        case .violet: return "Violet"
+        case .orange: return "Orange"
+        case .green: return "Green"
+        case .magenta: return "Magenta"
+        }
+    }
+
+    /// Light / dark values, as 0xRRGGBB.
+    var lightHex: UInt32 {
+        switch self {
+        case .teal: return 0x087370
+        case .blue: return 0x1F5FBF
+        case .violet: return 0x5B3FBF
+        case .orange: return 0xA85C05
+        case .green: return 0x2E6B2E
+        case .magenta: return 0xA3225E
+        }
+    }
+
+    var darkHex: UInt32 {
+        switch self {
+        case .teal: return 0x4FD1C5
+        case .blue: return 0x74AEF7
+        case .violet: return 0xB49BF5
+        case .orange: return 0xF0B45A
+        case .green: return 0x7FD07F
+        case .magenta: return 0xF07AAF
+        }
+    }
+
+    /// The stored choice, defaulting to the teal the app shipped with.
+    static var current: AccentChoice {
+        get {
+            AccentChoice(rawValue: UserDefaults.standard.string(forKey: "accentChoice") ?? "") ?? .teal
+        }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "accentChoice") }
+    }
+}
+
 /// The whole colour vocabulary, in one place, with a dark value for every
 /// token.  A dynamic `NSColor` resolves per appearance, so the SPM target needs
 /// no asset catalog and nothing has to be re-rendered when the theme changes.
 enum Theme {
+    /// The owner's high-contrast choice, read on every resolve so a change
+    /// takes effect without relaunching.
+    static var highContrast: Bool {
+        UserDefaults.standard.bool(forKey: "highContrast")
+    }
+
     static let ink = dyn(hex(0x1F2B3A), hex(0xE8ECF1))
-    static let accent = dyn(hex(0x087370), hex(0x4FD1C5))
+    /// The accent the owner picked.  A computed property rather than a `let`
+    /// because it is a preference, and the dynamic `NSColor` it returns still
+    /// resolves per appearance, so both the accent and the theme stay live.
+    static var accent: Color { accentColor }
+
     static let warning = dyn(hex(0xA85C05), hex(0xF0B45A))
     static let danger = dyn(hex(0xBF3339), hex(0xFF6B6B))
-    static let background = dyn(hex(0xF5F7F7), hex(0x1C1E20))
-    static let surface = dyn(hex(0xFFFFFF), hex(0x26292C))
-    static let hairline = dyn(NSColor.black.withAlphaComponent(0.06),
-                              NSColor.white.withAlphaComponent(0.10))
+    static let background: Color = highContrastBackground
+    static let surface: Color = highContrastSurface
+    static let hairline: Color = highContrast
+        ? dyn(NSColor.black.withAlphaComponent(0.45), NSColor.white.withAlphaComponent(0.55))
+        : dyn(NSColor.black.withAlphaComponent(0.06), NSColor.white.withAlphaComponent(0.10))
     /// The elapsed-time marker on a quota bar.  Black on the light surface and
     /// white on the dark one, so it reads against both the red and green segments.
     static let pacingMarker = dyn(NSColor.black, NSColor.white)
@@ -30,21 +97,24 @@ enum Theme {
 
     /// Unfilled portion of any progress bar.  A black 6% track disappears on a
     /// dark surface, so this is a token rather than a literal at each call site.
-    static let track = dyn(NSColor.black.withAlphaComponent(0.08),
-                           NSColor.white.withAlphaComponent(0.14))
+    static let track: Color = highContrast
+        ? dyn(NSColor.black.withAlphaComponent(0.35), NSColor.white.withAlphaComponent(0.40))
+        : dyn(NSColor.black.withAlphaComponent(0.08), NSColor.white.withAlphaComponent(0.14))
 
     /// Fill behind a selected or highlighted row.
     static let selection = dyn(hex(0x087370).withAlphaComponent(0.12),
                                hex(0x4FD1C5).withAlphaComponent(0.18))
 
     /// The outline of a small header control: the From Mac / From Fleet switch.
-    static let controlBorder = dyn(NSColor.black.withAlphaComponent(0.16),
-                                   NSColor.white.withAlphaComponent(0.22))
+    static let controlBorder: Color = highContrast
+        ? dyn(NSColor.black.withAlphaComponent(0.75), NSColor.white.withAlphaComponent(0.80))
+        : dyn(NSColor.black.withAlphaComponent(0.16), NSColor.white.withAlphaComponent(0.22))
 
     /// A control that is present but off, such as an unchecked row bell:
     /// visible enough to find, quiet enough not to read as a setting.
-    static let faint = dyn(NSColor.black.withAlphaComponent(0.26),
-                           NSColor.white.withAlphaComponent(0.30))
+    static let faint: Color = highContrast
+        ? dyn(NSColor.black.withAlphaComponent(0.72), NSColor.white.withAlphaComponent(0.78))
+        : dyn(NSColor.black.withAlphaComponent(0.26), NSColor.white.withAlphaComponent(0.30))
 
     /// The band behind a source's heading in From Fleet: darker than the list
     /// background in both appearances, so each source reads as a section.
@@ -59,6 +129,24 @@ enum Theme {
     /// A one-colour brand mark that has to read as solid, not as body text:
     /// pure black on Light and pure white on Dark, never the ink's grey.
     static let solidMark = dyn(NSColor.black, NSColor.white)
+
+    /// The accent the owner chose, resolved against the current appearance.
+    private static var accentColor: Color {
+        let choice = AccentChoice.current
+        return dyn(hex(choice.lightHex), hex(choice.darkHex))
+    }
+
+    /// High contrast pushes the surfaces apart and flattens the greys.  The
+    /// default palette already carries its own contrast; this is the escape
+    /// hatch for a display where the soft greys of the popover band, the
+    /// hairlines and the secondary text all fall together.
+    private static var highContrastBackground: Color {
+        highContrast ? dyn(NSColor.white, hex(0x000000)) : dyn(hex(0xF5F7F7), hex(0x1C1E20))
+    }
+
+    private static var highContrastSurface: Color {
+        highContrast ? dyn(NSColor.white, hex(0x000000)) : dyn(hex(0xFFFFFF), hex(0x26292C))
+    }
 
     private static func dyn(_ light: NSColor, _ dark: NSColor) -> Color {
         Color(nsColor: NSColor(name: nil) {

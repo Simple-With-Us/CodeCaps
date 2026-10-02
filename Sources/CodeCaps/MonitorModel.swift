@@ -152,6 +152,14 @@ final class MonitorModel: ObservableObject {
     @Published var menuBarMarkStyle: MenuBarMarkStyle {
         didSet { defaults.set(menuBarMarkStyle.rawValue, forKey: "menuBarMarkStyle") }
     }
+    /// The accent colour.  Stored through `AccentChoice` so the swatch, the
+    /// default and the `Theme` lookup all read the same value.
+    @Published var accent: AccentChoice {
+        didSet { AccentChoice.current = accent }
+    }
+    @Published var highContrast: Bool {
+        didSet { defaults.set(highContrast, forKey: "highContrast") }
+    }
     @Published var menuBarQuotaSelection: String {
         didSet { defaults.set(menuBarQuotaSelection, forKey: "menuBarQuotaSelection") }
     }
@@ -297,6 +305,8 @@ final class MonitorModel: ObservableObject {
         menuBarStyle = MenuBarStyle(rawValue: defaults.string(forKey: "menuBarStyle") ?? "") ?? .symbolAndPercent
         menuBarMarkStyle = MenuBarMarkStyle(rawValue: defaults.string(forKey: "menuBarMarkStyle") ?? "")
             ?? .followProvider
+        accent = AccentChoice.current
+        highContrast = defaults.bool(forKey: "highContrast")
         menuBarQuotaSelection = defaults.string(forKey: "menuBarQuotaSelection") ?? "auto_lowest_active"
         viewLayout = QuotaViewLayout(rawValue: defaults.string(forKey: "quotaViewLayout") ?? "") ?? .summary
         platformOrder = defaults.stringArray(forKey: "platformOrder") ?? []
