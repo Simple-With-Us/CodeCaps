@@ -119,7 +119,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             button.imagePosition = .noImage
         } else {
             let providerKey = target?.window.canonicalProviderKey ?? "auto"
-            let markStyle = target != nil ? model.markStyle(for: providerKey) : .template
+            // The status item's mark can be forced independent of the popover's
+            // per-provider Logo Style; `matchProvider` is today's behaviour.
+            let markStyle = target != nil
+                ? model.menuBarMarkStyle.resolved(model.markStyle(for: providerKey))
+                : .template
             var iconImage: NSImage?
             if let target {
                 // The row's key, so an Antigravity pool shows its own mark.

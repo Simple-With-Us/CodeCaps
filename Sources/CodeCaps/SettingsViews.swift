@@ -46,8 +46,17 @@ struct SettingsMenuBarPage: View {
                         Text(item.label).tag(item.id)
                     }
                 }
+
+                Picker("Menu Bar Mark", selection: $model.menuBarMarkStyle) {
+                    ForEach(MenuBarMarkStyle.allCases) { Text($0.title).tag($0) }
+                }
             } header: {
                 Eyebrow("MENU BAR")
+            } footer: {
+                Text("Match Provider follows each platform's Logo Style." + sentenceGap
+                     + "Light/Dark and Colour override it for the menu bar only, leaving the popover and sidebar on whatever you set on Logo Style.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
             }
 
             Section {
@@ -746,19 +755,27 @@ struct SettingsLogoStylePage: View {
     @ObservedObject var model: MonitorModel
 
     private var orderedKeys: [String] {
-        let live = Set(model.sections.map(\.providerKey))
+        // The same identifiers every other surface uses: `displaySections` ids
+        // are pool-qualified, so Antigravity lists as two rows carrying the
+        // two marks it actually draws.  Keying this list on the bare
+        // `providerKey` made the page resolve the platform-level mark instead
+        // — a monochrome Gemini silhouette next to a colour Gemini star in the
+        // sidebar — which is why the two never agreed and why changing the
+        // style appeared to fix the list without fixing anything.
+        let live = Set(model.displaySections.map(\.id))
         let stored = model.platformOrder.filter(live.contains)
         let unsorted = live.filter { !stored.contains($0) }.sorted()
-        // `model.sections` already returns rows in the chosen order; mirror it
-        // for the unsorted tail so an owner who never opened Platforms sees the
-        // same list here as on the Platforms page.
-        let canonical = model.sections.map(\.providerKey)
-        let orderedUnsorted = unsorted.sorted { canonical.firstIndex(of: $0) ?? 0 < canonical.firstIndex(of: $1) ?? 0 }
+        let canonical = model.displaySections.map(\.id)
+        let orderedUnsorted = unsorted.sorted {
+            let left = canonical.firstIndex(of: $0) ?? 0
+            let right = canonical.firstIndex(of: $1) ?? 0
+            return left < right
+        }
         return stored + orderedUnsorted
     }
 
-    private func label(for providerKey: String) -> String {
-        model.sections.first { $0.providerKey == providerKey }?.providerLabel ?? providerKey
+    private func label(for rowId: String) -> String {
+        model.displaySections.first { $0.id == rowId }?.title ?? rowId
     }
 
     var body: some View {
@@ -806,6 +823,19 @@ struct SettingsLogoStylePage: View {
                 .frame(width: 130)
                 .help("Logo Style for \(label(for: providerKey))")
                 .accessibilityLabel("Logo Style for \(label(for: providerKey))")
+            }
+            // Say it rather than let it look broken.  Codex, Cursor, Grok, Grok
+            // Bot and MiniMax ship as single-colour marks, and the app renders
+            // them as templates in every style so they never draw black on a
+            // dark surface.  Choosing Standard for one of them therefore
+            // changes nothing visible, which reads as the setting being broken
+            // rather than as the artwork having no colour to keep.
+            if style != .custom, PlatformLogoImage.isMonochromeMark(providerKey) {
+                Text("Single-colour mark." + sentenceGap
+                     + "Standard and Light/Dark look the same here, because this artwork has no brand colour to preserve.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             if style == .custom {
                 VStack(alignment: .leading, spacing: 8) {
