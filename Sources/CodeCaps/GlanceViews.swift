@@ -175,7 +175,7 @@ struct GlancePopover: View {
                          now: model.now,
                          issue: issue,
                          origin: origin,
-                         markStyle: model.glanceMarkStyle(for: row.providerKey),
+                         markStyle: model.glanceMarkStyle(for: row.id),
                          showsAlarmToggle: !model.alarmsAll,
                          isAlarmEnabled: model.isProviderAlarmSelected(row.id),
                          allowsExpansion: glanceRowAllowsExpansion(row, origin: origin),

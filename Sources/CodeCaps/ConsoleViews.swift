@@ -413,7 +413,7 @@ struct ConsoleSidebar: View {
     private func quotaRow(_ row: DisplaySection) -> some View {
         HStack(spacing: 6) {
             PlatformLogo(providerKey: row.id, size: 16,
-                         style: model.markStyle(for: row.providerKey))
+                         style: model.markStyle(for: row.id))
             // A pool name is half again as long as a platform name, and
             // "Antigravity · Cl…" hides the very thing the row adds, so the
             // pool takes a second line in this 200pt column.
@@ -679,7 +679,7 @@ struct AllPlatformsPage: View {
                      wide: false,
                      origin: origin,
                      customInfo: model.platformCustomInfo[row.providerKey],
-                     markStyle: model.markStyle(for: row.providerKey),
+                     markStyle: model.markStyle(for: row.id),
                      isAlarmArmed: model.isAlarmEnabled(for: row.id),
                      onToggleAlarm: model.alarmsAll ? nil : { model.toggleAlarm(for: row.id) },
                      onOpenSettings: model.consentNeeded.contains(row.providerKey)
@@ -726,7 +726,7 @@ struct PlatformDetailPage: View {
                              wide: true,
                              origin: model.originByProvider[row.providerKey] ?? .local,
                              customInfo: model.platformCustomInfo[row.providerKey],
-                             markStyle: model.markStyle(for: row.providerKey),
+                             markStyle: model.markStyle(for: row.id),
                              isAlarmArmed: model.isAlarmEnabled(for: row.id),
                              onToggleAlarm: model.alarmsAll ? nil : { model.toggleAlarm(for: row.id) },
                              onOpenSettings: model.consentNeeded.contains(row.providerKey)
