@@ -728,6 +728,44 @@ struct ReaderStatus {
 
 // MARK: - Appearance
 
+/// The accent swatches.  A swatch shows the colour rather than naming it,
+/// because the choice is "which colour" and a list of six names is six rows of
+/// something the owner has to read to find the one they want.
+private struct AccentPicker: View {
+    @ObservedObject var model: MonitorModel
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text("Accent")
+                .font(.system(size: 12))
+            ForEach(AccentChoice.allCases) { choice in
+                Circle()
+                    .fill(Color(nsColor: NSColor(name: nil) {
+                        $0.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+                            ? NSColor(srgbRed: CGFloat((choice.darkHex >> 16) & 0xFF) / 255,
+                                      green: CGFloat((choice.darkHex >> 8) & 0xFF) / 255,
+                                      blue: CGFloat(choice.darkHex & 0xFF) / 255, alpha: 1)
+                            : NSColor(srgbRed: CGFloat((choice.lightHex >> 16) & 0xFF) / 255,
+                                      green: CGFloat((choice.lightHex >> 8) & 0xFF) / 255,
+                                      blue: CGFloat(choice.lightHex & 0xFF) / 255, alpha: 1)
+                    }))
+                    .frame(width: 18, height: 18)
+                    .overlay(
+                        Circle().strokeBorder(.primary.opacity(model.accent == choice ? 1 : 0),
+                                              lineWidth: model.accent == choice ? 2 : 0)
+                    )
+                    .contentShape(Circle())
+                    .onTapGesture { model.accent = choice }
+                    .help(choice.title)
+                    .accessibilityLabel(choice.title)
+                    .accessibilityAddTraits(model.accent == choice ? [.isSelected] : [])
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 2)
+    }
+}
+
 struct SettingsAppearancePage: View {
     @ObservedObject var model: MonitorModel
 
@@ -740,6 +778,12 @@ struct SettingsAppearancePage: View {
                 .pickerStyle(.segmented)
                 .help("Theme")
                 .accessibilityLabel("Theme")
+
+                AccentPicker(model: model)
+
+                Toggle("High Contrast", isOn: $model.highContrast)
+                    .help("Stronger surfaces, borders and greys, for a display where the soft defaults fall together.")
+                    .accessibilityLabel("High Contrast")
             } footer: {
                 Text("System is the default." + sentenceGap + "Light and Dark ignore your Mac's setting.")
                     .font(.system(size: 11))
