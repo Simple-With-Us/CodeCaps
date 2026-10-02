@@ -1091,6 +1091,60 @@ struct SettingsNotificationsPage: View {
             }
 
             Section {
+                Toggle("Alert on Runaway Usage", isOn: $model.burnRateAlertsEnabled)
+                    .help("Alert when quota is being spent far faster than your own recent pattern.")
+                    .accessibilityLabel("Alert on runaway usage")
+
+                if model.burnRateAlertsEnabled {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("Versus Your 7-Day Average")
+                            Slider(value: $model.anomalyBaselineMultiplier,
+                                   in: BurnRateMonitor.baselineRange,
+                                   step: 0.5)
+                            Text(String(format: "%.1f×", model.anomalyBaselineMultiplier))
+                                .font(.system(size: 11).monospacedDigit())
+                                .frame(width: 38, alignment: .trailing)
+                        }
+                        .help("Alerts when the current hour is spending this many times faster than your average hour of the past week. Recommended 5×.")
+                        .accessibilityLabel("Alert threshold versus your 7-day average")
+
+                        HStack {
+                            Text("Versus Your Worst Hour")
+                            Slider(value: $model.anomalyPeakMultiplier,
+                                   in: BurnRateMonitor.peakRange,
+                                   step: 0.1)
+                            Text(String(format: "%.1f×", model.anomalyPeakMultiplier))
+                                .font(.system(size: 11).monospacedDigit())
+                                .frame(width: 38, alignment: .trailing)
+                        }
+                        .help("Alerts when the current hour is spending this many times faster than the fastest hour you had last week. Recommended 2×.")
+                        .accessibilityLabel("Alert threshold versus your worst hour")
+
+                        let history = BurnRateMonitor.historySummary()
+                        Text(history.days < 1
+                             ? "Still Learning." + sentenceGap
+                               + String(format: "%.0f hours of history so far. ", history.days * 24)
+                               + "The worst-hour check starts working once there is a few hours to compare against; the 7-day check needs about a week."
+                             : String(format: "Learning for %.1f days.", history.days))
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.top, 2)
+                }
+            } header: {
+                Eyebrow("RUNAWAY AGENTS")
+            } footer: {
+                Text("5× the average is the recommended starting point." + sentenceGap
+                     + "At 3× a long agent run looks exactly like a runaway, and an alert that cries wolf on a normal afternoon gets muted within a week." + sentenceGap
+                     + "The worst-hour check fires far more readily and is the one that catches a stuck loop, so it is the first to lower if you want to hear from it.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Section {
                 HStack(spacing: 8) {
                     Button("Send Test Notification") {
                         Task { await model.alarmManager.sendTestNotification() }
