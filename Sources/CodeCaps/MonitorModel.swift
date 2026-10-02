@@ -160,6 +160,19 @@ final class MonitorModel: ObservableObject {
     @Published var highContrast: Bool {
         didSet { defaults.set(highContrast, forKey: "highContrast") }
     }
+    /// Runaway-agent detection.  `AnomalyDetector` shipped in QuotaCore pure
+    /// and tested but nothing called it; these are its two thresholds, exposed
+    /// because "5x my average" is the wrong number for someone who writes long
+    /// agents on purpose and the right one for someone who does not.
+    @Published var anomalyBaselineMultiplier: Double {
+        didSet { defaults.set(anomalyBaselineMultiplier, forKey: "anomalyBaselineMultiplier") }
+    }
+    @Published var anomalyPeakMultiplier: Double {
+        didSet { defaults.set(anomalyPeakMultiplier, forKey: "anomalyPeakMultiplier") }
+    }
+    @Published var burnRateAlertsEnabled: Bool {
+        didSet { defaults.set(burnRateAlertsEnabled, forKey: "burnRateAlertsEnabled") }
+    }
     @Published var menuBarQuotaSelection: String {
         didSet { defaults.set(menuBarQuotaSelection, forKey: "menuBarQuotaSelection") }
     }
@@ -307,6 +320,11 @@ final class MonitorModel: ObservableObject {
             ?? .followProvider
         accent = AccentChoice.current
         highContrast = defaults.bool(forKey: "highContrast")
+        burnRateAlertsEnabled = defaults.object(forKey: "burnRateAlertsEnabled") as? Bool ?? false
+        anomalyBaselineMultiplier = defaults.object(forKey: "anomalyBaselineMultiplier") as? Double
+            ?? BurnRateMonitor.recommendedBaselineMultiplier
+        anomalyPeakMultiplier = defaults.object(forKey: "anomalyPeakMultiplier") as? Double
+            ?? BurnRateMonitor.recommendedPeakMultiplier
         menuBarQuotaSelection = defaults.string(forKey: "menuBarQuotaSelection") ?? "auto_lowest_active"
         viewLayout = QuotaViewLayout(rawValue: defaults.string(forKey: "quotaViewLayout") ?? "") ?? .summary
         platformOrder = defaults.stringArray(forKey: "platformOrder") ?? []
@@ -1146,6 +1164,13 @@ final class MonitorModel: ObservableObject {
                 self.issues = local.issues
                 self.consentNeeded = local.consentNeeded
                 self.localWindows = AntigravityQuotaGroups.normalize(local.windows)
+                // One sample per window per refresh.  This is what the runaway
+                // detector compares against, so it has to be recorded whether
+                // or not the alert is on — turning the alert on after a week of
+                // running should not mean a week of nothing to compare to.
+                if !local.windows.isEmpty {
+                    BurnRateMonitor.record(AntigravityQuotaGroups.normalize(local.windows), now: self.now)
+                }
             } else {
                 self.issues = [:]
                 self.consentNeeded = []

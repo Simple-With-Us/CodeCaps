@@ -461,12 +461,22 @@ struct ConsoleSidebar: View {
 
     private var footer: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Label(model.localEnabled ? "Local readings on" : "Local readings off",
-                  systemImage: "desktopcomputer")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .help("Local Quota Readers Status")
-                .accessibilityLabel("Local Quota Readers Status")
+            Toggle(isOn: Binding(
+                get: { model.localEnabled },
+                set: { model.setLocalEnabled($0) })) {
+                Text("Read From This Mac")
+            }
+            .toggleStyle(.switch)
+            .controlSize(.mini)
+            .font(.system(size: 11))
+            .help("""
+                Reads the quota files your AI CLIs already wrote on this Mac — \
+                no API keys, and no separate Usage Monitor app.  Turning it off \
+                hides every From Mac row; it does not stop this Mac sharing its \
+                quota, which is under Sources & Fleet.
+                """)
+            .accessibilityLabel("Read quota from this Mac")
+            .accessibilityValue(model.localEnabled ? "On" : "Off")
             if let handoffError = model.handoffError {
                 Text(handoffError)
                     .font(.system(size: 11))
