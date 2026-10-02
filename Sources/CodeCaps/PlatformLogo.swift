@@ -124,9 +124,15 @@ public struct PlatformLogo: View {
     public let customMode: CustomMarkMode?
     public let tint: Color?
 
+    /// `style` deliberately has **no default**.  A call site that forgets it
+    /// used to compile and silently draw a monochrome template — which is how
+    /// the Sources & Fleet list showed every mark in grey while the Logo Style
+    /// page, using the same provider, showed the brand colour.  Every surface
+    /// now has to say which style it means, and the compiler finds the ones
+    /// that do not.
     public init(providerKey: String,
                 size: CGFloat = 22,
-                style: MarkStyle = .template,
+                style: MarkStyle,
                 customMode: CustomMarkMode? = nil,
                 tint: Color? = nil) {
         self.providerKey = providerKey

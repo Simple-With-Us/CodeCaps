@@ -376,7 +376,12 @@ struct SettingsSourcesFleetPage: View {
     private func sourceGroup(for providerKey: String, label: String, sources: [String]) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
-                PlatformLogo(providerKey: providerKey, size: 16)
+                // This one shipped without a `style:`, so it drew the init's
+                // old default of `.template` and every mark here came out grey
+                // no matter what the Logo Style page had set.  The init no
+                // longer has a default for exactly this reason.
+                PlatformLogo(providerKey: providerKey, size: 16,
+                             style: model.markStyle(for: providerKey))
                 Text(label)
                     .font(.system(size: 13, weight: .medium))
                 Spacer()
