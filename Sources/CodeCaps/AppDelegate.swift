@@ -322,8 +322,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     /// Reopening a window that is already open brings it forward instead of
     /// building a second one.
-    @objc private func toggleKeepInFront() { model.keepConsoleInFront.toggle() }
-
     private func configureMenu() {
         let menu = NSMenu()
         let appItem = NSMenuItem()
@@ -338,7 +336,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         add("Glance", #selector(togglePopover), "2")
         add("Settings…", #selector(showSettings), ",")
         add("Refresh Quotas", #selector(refresh), "r")
-        add("Keep In Front", #selector(toggleKeepInFront), "p")
         appMenu.addItem(.separator())
         add("About CodeCaps", #selector(showAbout))
         add("Check For Updates…", #selector(checkForUpdates))

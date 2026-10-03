@@ -203,7 +203,7 @@ Console's sidebar has five Settings pages.
 
 ## Provider Marks
 
-Every mark is a template image — only its silhouette is used, colored from the label.  `claude.svg`, `openai.svg`, `grok.svg`, `minimax.svg` and `gemini.svg` are BotFleet's own assets (subject to their source licenses); Antigravity reuses the Gemini mark, Grok CLI/Grok Bot the Grok mark.  `cursor.svg` is from [Simple Icons](https://cdn.simpleicons.org/cursor), CC0 1.0; details in `Sources/CodeCaps/Resources/ProviderMarks/README.md`.
+Standard style preserves bundled brand colors except for monochrome marks, which adapt to the current appearance; Light/Dark style renders a template.  MiniMax uses `minimax.png` and is treated as monochrome.  Antigravity uses the Gemini mark, and Grok CLI/Grok Bot use the Grok marks.  `cursor.svg` is from [Simple Icons](https://cdn.simpleicons.org/cursor), CC0 1.0.  See `Sources/CodeCaps/Resources/ProviderMarks/README.md` for resource mappings and source notes.
 
 ## Development
 

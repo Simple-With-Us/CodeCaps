@@ -262,9 +262,6 @@ final class MonitorModel: ObservableObject {
     @Published var appearance: AppAppearance {
         didSet { defaults.set(appearance.rawValue, forKey: "appearance") }
     }
-    @Published var keepConsoleInFront: Bool {
-        didSet { defaults.set(keepConsoleInFront, forKey: "consoleKeepInFront") }
-    }
     /// From Mac or From Fleet, remembered across launches.
     @Published var glanceView: GlanceViewMode {
         didSet { defaults.set(glanceView.rawValue, forKey: "glanceView") }
@@ -368,7 +365,6 @@ final class MonitorModel: ObservableObject {
         alarmManager = ResetAlarmManager(defaults: defaults)
 
         appearance = AppAppearance(rawValue: defaults.string(forKey: "appearance") ?? "") ?? .system
-        keepConsoleInFront = defaults.bool(forKey: "consoleKeepInFront")
         glanceView = GlanceViewMode(rawValue: defaults.string(forKey: "glanceView") ?? "") ?? .fromMac
         alarmChanges = alarmManager.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
