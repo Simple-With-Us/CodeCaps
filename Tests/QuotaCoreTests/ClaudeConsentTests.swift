@@ -505,11 +505,12 @@ final class ClaudeConsentTests: XCTestCase {
     func testAllowAccessReadsThroughTheSecurityCLIOnly() async {
         let log = ProbeLog()
         let deadlines = DeadlineLog()
+        let payload = Data(#"{"claudeAiOauth":{"accessToken":"fixture","expiresAt":4102444800000}}"#.utf8)
         let probe = ClaudeKeychainProbe(
             readViaSecurityCLI: { deadline, _ in
                 log.record("cli")
                 deadlines.record(deadline)
-                return .found(Data("{}".utf8))
+                return .found(payload)
             },
             lookUpItem: {
                 log.record("lookup")
@@ -523,7 +524,7 @@ final class ClaudeConsentTests: XCTestCase {
         XCTAssertGreaterThan(ClaudeCredentialSource.interactiveDeadline, ClaudeCredentialSource.cliAttemptDeadline,
                              "the button must leave time to answer the panel")
         let silent = ClaudeCredentialSource.resolveSilently(probe: probe)
-        XCTAssertEqual(silent, .authorized(Data("{}".utf8)))
+        XCTAssertEqual(silent, .authorized(payload))
         XCTAssertEqual(log.calls, ["cli", "lookup"], "the next refresh serves the remembered bytes and does not start security again")
     }
 
