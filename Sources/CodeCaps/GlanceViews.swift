@@ -630,6 +630,36 @@ func glanceMeterPair(for row: DisplaySection, now: Date) -> GlanceMeterPair {
     return GlanceMeterPair(short: short, long: long)
 }
 
+/// Why a fleet Antigravity row has a five-hour meter and a blank weekly
+/// column.  Nil when the weekly reading is already on screen, when the row
+/// is not a fleet Antigravity row, or when some other meter already fills
+/// the second column.
+///
+/// A pulled Antigravity window can arrive with only the short pool.  The
+/// second column used to stay blank, which reads as "this pool has no weekly
+/// cap" rather than "the payload did not include one".  The string is the
+/// reason, so the row can say it.
+func fleetWeeklyGap(for row: DisplaySection, origin: QuotaOrigin, now: Date) -> String? {
+    guard origin == .fleet, row.providerKey == AntigravityDisplay.providerKey else { return nil }
+    let pair = glanceMeterPair(for: row, now: now)
+    let shown = [pair.short, pair.long].compactMap { $0 }
+    if shown.contains(where: reportsWeeklyCadence) { return nil }
+    guard pair.long == nil else { return nil }
+    let weekly = row.section.windows.filter(reportsWeeklyCadence)
+    if weekly.isEmpty { return "no weekly reading reported" }
+    if weekly.allSatisfy({ row.isMasked($0) }) { return AntigravityDisplay.maskedCaption }
+    if weekly.allSatisfy({ $0.remainingPercent == nil }) { return "weekly reading was not measurable" }
+    if weekly.allSatisfy({ !$0.isFresh }) { return "weekly reading is stale" }
+    return "no weekly reading reported"
+}
+
+/// A weekly Antigravity cap, whether the reader set a cadence token the
+/// grouper knows or only a caption the meter would have drawn as "7d".
+private func reportsWeeklyCadence(_ snapshot: QuotaWindowSnapshot) -> Bool {
+    AntigravityQuotaGroups.cadenceKey(for: snapshot.window) == "weekly"
+        || glanceMeterCaption(snapshot) == "7d"
+}
+
 /// The meter a window is: what it measures and how often it resets, the same
 /// for a window and for another source's report of it.
 private func glanceMeterKey(_ snapshot: QuotaWindowSnapshot) -> String {
@@ -905,6 +935,10 @@ struct GlanceMeterColumns: View {
     let short: QuotaWindowSnapshot?
     let long: QuotaWindowSnapshot?
     let now: Date
+    /// Shown in the empty long column when a fleet row has no weekly meter.
+    /// A nil gap leaves that column blank, which is what a one-meter provider
+    /// (Grok Bot's weekly, in the first column) still wants.
+    var longGap: String? = nil
 
     var body: some View {
         columns
@@ -922,7 +956,7 @@ struct GlanceMeterColumns: View {
             HStack(spacing: 0) {
                 column(short)
                 Spacer().frame(width: Metrics.glanceMeterGroupGap)
-                column(long)
+                column(long, gap: long == nil ? longGap : nil)
             }
         } else {
             // No window at all.  The width is still reserved so a row with no
@@ -935,10 +969,19 @@ struct GlanceMeterColumns: View {
     /// what puts a meter at exactly the same x on every line: without it the
     /// slot is as wide as its text, "1m" narrower than "31d 23h".
     @ViewBuilder
-    private func column(_ snapshot: QuotaWindowSnapshot?) -> some View {
+    private func column(_ snapshot: QuotaWindowSnapshot?, gap: String? = nil) -> some View {
         if let snapshot {
             GlanceMeter(snapshot: snapshot, now: now)
                 .frame(width: Metrics.glanceMeterWidth, alignment: .leading)
+        } else if let gap, !gap.isEmpty {
+            Text(gap)
+                .font(.system(size: 10))
+                .foregroundStyle(Theme.ink.opacity(0.62))
+                .multilineTextAlignment(.leading)
+                .lineLimit(3)
+                .minimumScaleFactor(0.7)
+                .frame(width: Metrics.glanceMeterWidth, alignment: .leading)
+                .accessibilityLabel(gap)
         } else {
             Spacer().frame(width: Metrics.glanceMeterWidth)
         }
@@ -1176,6 +1219,11 @@ struct GlanceRow: View {
         glanceRowStatusText(issue: issue, hasWindows: !section.windows.isEmpty)
     }
 
+    /// The long column's explanation when this fleet row has no weekly meter.
+    private var weeklyGap: String? {
+        fleetWeeklyGap(for: row, origin: origin, now: now)
+    }
+
     private var attribution: String? {
         guard origin == .fleet else { return nil }
         let source = driving?.window.source?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1249,7 +1297,7 @@ struct GlanceRow: View {
                 // weekly/monthly window are the two numbers an owner
                 // actually routes on, and hiding the second one behind a
                 // click made the compact row say half the truth.
-                GlanceMeterColumns(short: meters.short, long: meters.long, now: now)
+                GlanceMeterColumns(short: meters.short, long: meters.long, now: now, longGap: weeklyGap)
             } else {
                 // Where a single meter's bar would start (Cursor's, say),
                 // left-aligned, so a row without a reading still lines up
@@ -1300,7 +1348,7 @@ struct GlanceRow: View {
     /// the source's heading.
     private var helpText: String {
         if let issue { return issue }
-        return [row.title, attribution].compactMap { $0 }.joined(separator: " · ")
+        return [row.title, attribution, weeklyGap].compactMap { $0 }.joined(separator: " · ")
     }
 
     /// The per-provider reset-alarm switch: solid when this provider alarms,
@@ -1379,6 +1427,7 @@ struct GlanceRow: View {
         case .local: parts.append(isLive ? "live" : "last report")
         }
         if let issue { parts.append(issue) }
+        if let weeklyGap { parts.append(weeklyGap) }
         return parts.joined(separator: ", ")
     }
 }
