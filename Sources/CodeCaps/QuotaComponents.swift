@@ -86,8 +86,12 @@ enum Theme {
     static let background: Color = highContrastBackground
     static let surface: Color = highContrastSurface
     static let hairline: Color = highContrast
+        // AG's #112 raised the default hairline from 6%/10% to 12%/18%, which
+        // is the better default and is kept.  High contrast is pushed further
+        // on top of it: the owner had high contrast on and said there was
+        // still not enough, and at 45%/55% it was still a grey.
         ? dyn(NSColor.black.withAlphaComponent(0.72), NSColor.white.withAlphaComponent(0.85))
-        : dyn(NSColor.black.withAlphaComponent(0.06), NSColor.white.withAlphaComponent(0.10))
+        : dyn(NSColor.black.withAlphaComponent(0.12), NSColor.white.withAlphaComponent(0.18))
     /// The elapsed-time marker on a quota bar.  Black on the light surface and
     /// white on the dark one, so it reads against both the red and green segments.
     static let pacingMarker = dyn(NSColor.black, NSColor.white)
@@ -227,7 +231,7 @@ enum Metrics {
     static let glanceGroupGap: CGFloat = 6
     /// Every row, From Mac or From Fleet: a fleet row's "reported at"
     /// moved to its source's heading, so it no longer needs a taller row.
-    static let glanceLocalRowHeight: CGFloat = 38
+    static let glanceLocalRowHeight: CGFloat = 42
     static let glanceCTARowHeight: CGFloat = 52
     /// One extra line of meters under an expanded row: the windows the row's
     /// own two meters leave out, in the same columns.
@@ -769,19 +773,16 @@ struct PlatformCard: View {
 
     @ViewBuilder
     private var windowsBody: some View {
-        if wide && displayedWindows.count > 1 {
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())],
-                      alignment: .leading, spacing: 16) {
+        if displayedWindows.count > 1 {
+            HStack(alignment: .top, spacing: 16) {
                 ForEach(displayedWindows, id: \.window.id) { snapshot in
                     QuotaRow(snapshot: snapshot, now: now, sourceFailed: issue != nil, compact: compact,
                              masked: row.isMasked(snapshot))
-                        .padding(12)
-                        .background(Theme.background, in: RoundedRectangle(cornerRadius: 8))
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         } else {
-            ForEach(Array(displayedWindows.enumerated()), id: \.offset) { index, snapshot in
-                if index > 0 { Divider() }
+            ForEach(displayedWindows, id: \.window.id) { snapshot in
                 QuotaRow(snapshot: snapshot, now: now, sourceFailed: issue != nil, compact: compact,
                          masked: row.isMasked(snapshot))
             }
@@ -914,12 +915,6 @@ struct QuotaRow: View {
                     Spacer(minLength: 6)
                     if snapshot.observedAt == nil { Text("not reported") }
                     else if snapshot.isStale { Text("stale").foregroundStyle(Theme.warning) }
-                    else if let source = snapshot.window.source {
-                        Text(source)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                            .foregroundStyle(.tertiary)
-                    }
                 }
                 .font(.system(size: 10))
                 .foregroundStyle(.tertiary)
@@ -930,25 +925,21 @@ struct QuotaRow: View {
 
     private func pacingBar(_ pacing: WindowPacing) -> some View {
         let paceLabel = pacing.isUnderCapPace ? "Under Pace" : "Over Pace"
-        return VStack(alignment: .leading, spacing: 5) {
+        return VStack(alignment: .leading, spacing: 12) {
             // The same red-used, green-remaining bar Glance draws, with the
             // marker at how far through the period we are.  The frame leaves
             // room for the marker to stand proud of the bar.
-            QuotaUsageBar(metrics: barMetrics, height: 5, dimmed: barDimmed,
+            QuotaUsageBar(metrics: barMetrics, height: 7, dimmed: barDimmed,
                           accessibilityLabel: "Quota Pacing",
-                          accessibilitySuffix: paceLabel.lowercased())
-                .frame(height: 10)
+                          accessibilitySuffix: paceLabel.lowercased(),
+                          markerHeight: 18)
+                .frame(height: 20)
 
             HStack(spacing: 6) {
-                HStack(spacing: 4) {
-                    Rectangle().fill(Theme.pacingMarker)
-                        .frame(width: QuotaUsageBar.markerWidth, height: 9)
-                        .accessibilityHidden(true)
-                    Text("time elapsed · \(pacing.timeElapsedLabel.lowercased())")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
+                Text("time elapsed · \(pacing.timeElapsedLabel.lowercased())")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
                 Spacer(minLength: 4)
                 HStack(spacing: 3) {
                     Image(systemName: pacing.isUnderCapPace ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")

@@ -84,11 +84,11 @@ final class GlanceHeightTests: XCTestCase {
     // MARK: Arithmetic
 
     func testRowsCountTheirHairlinesAndTheCardItsGap() {
-        // Eight rows: 8 * 38 + 7 hairlines, then a 12pt gap and the 52pt card.
+        // Eight rows: 8 * Metrics.glanceLocalRowHeight + 7 hairlines, then a 12pt gap and the 52pt card.
         let withCard = QuotaGlanceMetrics.localListHeight(rows: 8, showsSetupCard: true, isEmpty: false)
         let withoutCard = QuotaGlanceMetrics.localListHeight(rows: 8, showsSetupCard: false, isEmpty: false)
         let none = QuotaGlanceMetrics.localListHeight(rows: 0, showsSetupCard: false, isEmpty: false)
-        let rows: CGFloat = 304 + 7
+        let rows: CGFloat = 8 * Metrics.glanceLocalRowHeight + 7
         XCTAssertEqual(withCard, rows + 12 + 52)
         XCTAssertEqual(withoutCard, rows)
         XCTAssertEqual(none, 0)
@@ -99,7 +99,7 @@ final class GlanceHeightTests: XCTestCase {
         // 4 rows, 2 hairlines.
         let two = QuotaGlanceMetrics.fleetListHeight(rowsPerGroup: [3, 1])
         let empty = QuotaGlanceMetrics.fleetListHeight(rowsPerGroup: [])
-        let expected: CGFloat = 44 + 6 + 152 + 2
+        let expected: CGFloat = 44 + 6 + (4 * Metrics.glanceLocalRowHeight) + 2
         XCTAssertEqual(two, expected)
         XCTAssertEqual(empty, Metrics.glanceEmptyStateHeight)
     }

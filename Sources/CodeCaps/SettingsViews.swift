@@ -980,7 +980,7 @@ struct SettingsAboutPage: View {
     @ObservedObject var state: ConsoleState
     @ObservedObject private var updater = AppUpdater.shared
 
-    private static let projectPage = URL(string: "https://github.com/jaywedgeworth22/codecaps")!
+    private static let projectPage = URL(string: "https://github.com/Simple-With-Us/codecaps")!
 
     private var pushingDetail: String {
         guard model.syncEnabled else { return "Off" }

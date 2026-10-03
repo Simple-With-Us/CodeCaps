@@ -178,7 +178,7 @@ struct GlancePopover: View {
                          markStyle: model.glanceMarkStyle(for: row.id),
                          showsAlarmToggle: !model.alarmsAll,
                          isAlarmEnabled: model.isProviderAlarmSelected(row.id),
-                         allowsExpansion: glanceRowAllowsExpansion(row, origin: origin),
+                         allowsExpansion: origin == .fleet && glanceRowAllowsExpansion(row, origin: origin),
                          isExpanded: expandedIds.contains(key),
                          onTap: { toggleExpanded(key) },
                          onToggleAlarm: { model.toggleAlarm(for: row.id) })
@@ -795,10 +795,11 @@ struct GlanceMeter: View {
         HStack(spacing: Metrics.glanceMeterGap) {
             Text(glanceMeterCaption(snapshot))
                 .font(.system(size: 11, weight: .medium))
-                // Ink, not the status colour and not secondary.  The caption
-                // and the percentage are the numbers the owner reads, and a
-                // number that changes colour with its own value is a number
-                // that has to be re-read.  Accent belongs on the bar.
+                // Ink, not `.primary` and not the status colour.  AG's #112
+                // set this to `.primary`, which is very close; the owner asked
+                // for the caption and the percentage to be black (white in
+                // dark) specifically, so this is `Theme.ink` — which also
+                // means it follows the high-contrast pure black/white.
                 .foregroundStyle(Theme.ink)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
@@ -810,24 +811,28 @@ struct GlanceMeter: View {
                           dimmed: quotaBarIsDimmed(for: snapshot, sourceFailed: false),
                           markerHeight: Metrics.glanceMeterMarkerHeight)
                 .frame(width: Metrics.glanceMeterBarWidth, height: Metrics.glanceMeterBarHeight)
-            Text(percent.map { "\(Int($0.rounded()))%" } ?? "—")
-                .font(.system(size: 11, weight: .medium).monospacedDigit())
-                .foregroundStyle(Theme.ink)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-                .fixedSize(horizontal: true, vertical: false)
-                .frame(width: Metrics.glanceMeterPercentWidth, alignment: .leading)
-            // The same type as the caption on the left, so the row reads as
-            // one line of labels rather than a label and a footnote.  At most
-            // two units on the line; the full value and the reset's own time
-            // are one hover away.
-            Text(countdown)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(Theme.ink.opacity(0.72))
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
-                .frame(width: Metrics.glanceMeterCountdownWidth, alignment: .leading)
-                .help(glanceResetHelp(snapshot.resetAt, now: now) ?? "")
+            // AG's #112 grouped the percentage and the countdown and
+            // italicised the countdown; that structure is kept.  The colour
+            // is the owner's ruling: the percentage is the number the row
+            // exists to convey, and a number that changes colour with its own
+            // value has to be re-read every time.  Accent belongs on the bar.
+            HStack(spacing: 3) {
+                Text(percent.map { "\(Int($0.rounded()))%" } ?? "—")
+                    .font(.system(size: 11, weight: .medium).monospacedDigit())
+                    .foregroundStyle(Theme.ink)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .fixedSize(horizontal: true, vertical: false)
+                if !countdown.isEmpty {
+                    Text(countdown)
+                        .font(.system(size: 10, weight: .regular).italic())
+                        .foregroundStyle(Theme.ink.opacity(0.62))
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .help(glanceResetHelp(snapshot.resetAt, now: now) ?? "")
+                }
+            }
+            .frame(width: Metrics.glanceMeterPercentWidth + Metrics.glanceMeterGap + Metrics.glanceMeterCountdownWidth, alignment: .leading)
         }
         .frame(width: Metrics.glanceMeterWidth, alignment: .leading)
         .accessibilityElement(children: .ignore)

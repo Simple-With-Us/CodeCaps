@@ -14,13 +14,13 @@
 #
 # Writes:
 #   /Users/jay/apps/ios-fleet/ios-app-versions.json
-#   https://github.com/jaywedgeworth22/ai-fleet-coordinator  (site/ios-versions.json)
+#   https://github.com/Simple-With-Us/ai-fleet-coordinator  (site/ios-versions.json)
 
 set -euo pipefail
 
 FLEET_DIR="$(cd "$(dirname "$0")" && pwd)"
 LOCAL_JSON="${FLEET_DIR}/ios-app-versions.json"
-REPO="jaywedgeworth22/ai-fleet-coordinator"
+REPO="Simple-With-Us/ai-fleet-coordinator"
 REMOTE_PATH="site/ios-versions.json"
 
 BUNDLE_ID=""

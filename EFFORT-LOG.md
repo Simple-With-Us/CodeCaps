@@ -1,5 +1,18 @@
 # CodeCaps — Effort Log
 
+## 2026-10-02 — Mac widget embedding, honest widget empty state, Glance and Settings UI polish, and custom logo fixes [AG, In Progress]
+
+Lane: `ag/ui-widgets-polish-and-embed` (issue #111).
+
+- Embedded macOS widget extension: Updated `script/build_and_run.sh` to compile `CodeCapsWidgetsMac` universal target (`arm64`/`x86_64`) and embed `CodeCapsWidgets.appex` inside `Contents/PlugIns/`, signed and validated with Developer ID.
+- Honest widget presentation: Eliminated misleading sample/placeholder numbers (e.g. 94%, 74%, 91%) across iOS and macOS widgets (`WidgetDataProvider.swift`, `WidgetViews.swift`); unconfigured or un-synced widgets now render an explicit, honest `WidgetEmptyStateView`.
+- Platform marks & fallback hygiene: Added `CustomMarkMode` (`.color` vs `.template`) and dark appearance variant support (`<key>-dark.<ext>`).  Enforced fleet-wide rule replacing sneaky SF Symbol lookalikes (`sparkles`, `cpu`, `bolt`, `cursorarrow.rays`) with `"questionmark.square.dashed"` across all unresolved logos.
+- Glance popover polish: Increased row spacing (`glanceLocalRowHeight = 42pt`) with a visible faint grey hairline divider (`Theme.hairline`), high-contrast timeframe label styling, and italic reset countdowns placed directly adjacent to percentages.
+- Settings & console layout: Removed dark tick before time elapsed; enforced strict Title Case "Under Pace" / "Over Pace" (dropped "cap"); removed duplicative provider names in footer; enlarged pacing marker (18pt height) standing proud of the quota bar; arranged multi-window models side-by-side in `HStack`.
+- Coordination: Polled and posted progress on `#agent-sync` (`[AG->MM]`), collaborating with MiniMax (`[MM]`) in `~/apps/codecaps-mm-finish`.
+- Verification: 576/576 unit tests green in `swift test`; staged bundle validated by `codesign --verify --deep --strict`.
+- Local installation: Staged, signed, and launched into `/Users/jay/Applications/CodeCaps.app` (PID 35926), replacing stale Oct 1 build.
+
 ## 2026-10-01 — Custom platform logo color version and light/dark variant modes [AG, completed]
 
 Lane: `ag/custom-logo-color-and-dark-mode` (board `6a375482`, issue #102, PR #103, squash `b1d38a7`).
@@ -124,7 +137,7 @@ Configured App Group `group.com.simplewithus.codecaps` across iOS companion and 
 ## 2026-09-20 — Comprehensive audit, tier-1 implementation — MERGED 28b802f via PR #20
 
 Lane: `mm/audit-2026-09-20`.  Audit: `docs/audits/2026-09-20-comprehensive.md`.
-GitHub umbrella: [#19](https://github.com/jaywedgeworth22/codecaps/issues/19).
+GitHub umbrella: [#19](https://github.com/Simple-With-Us/codecaps/issues/19).
 Board item: filed under app `codecaps`, kind `github-issue`.
 
 Swept every Swift file in `Sources/CodeCaps/` and `Sources/QuotaCore/`, the

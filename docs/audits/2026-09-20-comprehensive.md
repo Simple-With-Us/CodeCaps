@@ -12,7 +12,7 @@ endpoint (v2 ingest), and an HTTP pull endpoint.
 
 Numbering continues from the prior audit batches.  The previous audits (#4–#8)
 shipped in PR #18.  Umbrella GH issue:
-[#19](https://github.com/jaywedgeworth22/codecaps/issues/19).  Board item
+[#19](https://github.com/Simple-With-Us/codecaps/issues/19).  Board item
 filed under app `codecaps`, kind `github-issue`.
 
 ---
