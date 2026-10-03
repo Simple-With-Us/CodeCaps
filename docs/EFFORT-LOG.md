@@ -5,6 +5,39 @@ PR (when shipped), follow-ups (when parked).
 
 ---
 
+## 2026-10-03 — Coordinated Board Reconciliation [CODEX, in progress]
+
+Lane: `codex/board-completion-20261003` at
+`/Users/jay/.codex/worktrees/codecaps-board/CodeCaps`.  Board `45805a06`.
+Owner requested joint completion with AG, MM, GROK, and CODEX.
+Coordination packet: https://fleetlink.online/codecaps-board-20261003.
+
+- Baseline `87544c2` has no open PRs and successful Swift CI, secret scan,
+  and Mac Release checks.  The initial board has 24 open/in-progress rows;
+  GitHub has 11 open issues.  Each stale item is checked against current code.
+- Confirmed completed and reconciled on the board: runaway alerts
+  `20dc3a22` (#109), contrast `966fdffc` and row alignment `01b6d75a`
+  (#111), custom marks `6a375482` (#103/#115), visual assets `eafb250b`
+  (#113/#115/#117/#118), and reset sound options `2b922851` (#43).
+  Cross-device push remains separately tracked in issue #42.
+- External TestFlight `a464226b` is complete: live App Store Connect reports
+  public group enabled with assigned build `202609240254` externally
+  `IN_BETA_TESTING`.  Newest build `202610031929` is valid but still
+  `READY_FOR_BETA_SUBMISSION`; external beta enablement does not imply that
+  every subsequent build has been promoted.
+- GROK-BUILD acknowledged read-only reconciliation of issues #8/#10/#12/#13.
+  AG and MM were contacted for iOS and Mac UI reconciliation respectively;
+  their proposed assignments are not accepted claims until acknowledged.
+- Remaining discrepancies include the inert Keep In Front menu command,
+  missing alert-enabled copy, and obsolete MiniMax SVG documentation.
+  PR #117 explicitly preserves menu-bar-only mode without a Dock icon;
+  confirm later owner intent before reversing that behavior to match an
+  older board description.
+- Monetization awaits the requested owner product choice.  Public embeds
+  and cross-device push require a concrete server/privacy contract before
+  implementation.  They remain open, not silently counted as complete.
+
+
 ## 2026-10-02 — Custom mark sync, updated app icons, quota bar parity, cadence fix, and honest fallbacks [AG, completed]
 
 Lane: `feat/ios-icons-bar-parity-glance-logos` (PR #115, squash `f48fbda`).
