@@ -1,5 +1,18 @@
 # CodeCaps — Effort Log
 
+## 2026-10-03 — Console sidebar arrow navigation, window min size bump, iOS settings detents, and board completion [AG, completed]
+
+Lane: `ag/arrow-nav-and-board-parity`.
+
+- Console sidebar arrow navigation: added focus-aware keyboard navigation to `ConsoleSidebar` (`ConsoleViews.swift`) using `@FocusState`, `.focusable()`, and `.onMoveCommand`, allowing Up/Down arrow keys to navigate seamlessly between All Platforms, platform detail rows, and Settings pages while preserving custom button styling and accent highlights (closes issue #9).
+- Console window minimum size: bumped `Metrics.consoleMin` in `QuotaComponents.swift` from 820 × 560 to 880 × 600 per app-wide design audit finding F-07 (issue #41).
+- iOS companion settings presentation: added `.presentationDetents([.medium, .large])` to the settings sheet on iOS in `CompanionContentView.swift` so the underlying quota list remains visible (finding F-05, issue #41).
+- Unit tests: added `ConsoleNavigationTests.swift` covering `Metrics.consoleMin`, page serialization round-trip, and settings page filtering; all 581 tests green in `swift test`.
+- AGENTS.md coordination protocol: documented inter-agent coordination stanzas, `#agent-sync` header formats, and per-bot routing policies per fleet instruction.
+- Board & issue reconciliation: conducted full board review against shipping codebase.  Verified and reconciled completed work: closed issue #44 (iOS preview sound shipped in #65) and issue #57 (public site screenshots redrawn by Claude on Sep 30); resolved 17 open board items confirmed landed in previous PRs (#40, #43, #53, #65, #67, #74, #75, #103, #109, #110, #111, #112, #113, #115, #117, #118).
+
+---
+
 ## 2026-10-02 — Custom mark sync, updated app icons, quota bar parity, cadence fix, and honest fallbacks [AG, completed]
 
 Lane: `feat/ios-icons-bar-parity-glance-logos` (PR #115, squash `f48fbda`).

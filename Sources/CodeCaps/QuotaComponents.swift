@@ -320,7 +320,7 @@ enum Metrics {
         + glanceGutter * 2
 
     static let consoleDefault = NSSize(width: 960, height: 640)
-    static let consoleMin = NSSize(width: 820, height: 560)
+    static let consoleMin = NSSize(width: 880, height: 600)
     /// Default sidebar width, 40pt wider than the old fixed 200pt column.
     /// Was raised because the user found the original column too narrow
     /// for "Antigravity · Third-Party" rows with their subtitle pool line,

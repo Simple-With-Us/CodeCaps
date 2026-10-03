@@ -78,7 +78,12 @@ public struct CompanionContentView: View {
                 }
             }
             .sheet(isPresented: $showingSettings) {
+                #if os(iOS)
                 companionSettingsView
+                    .presentationDetents([.medium, .large])
+                #else
+                companionSettingsView
+                #endif
             }
         }
     }
