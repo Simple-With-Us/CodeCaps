@@ -589,11 +589,11 @@ public struct CompanionUsageBar: View {
     @Environment(\.colorScheme) private var colorScheme
 
     private var barUsedColor: Color {
-        Color(red: 0.86, green: 0.22, blue: 0.22)
+        CompanionTheme.barUsed
     }
 
     private var barRemainingColor: Color {
-        Color(red: 0.10, green: 0.70, blue: 0.45)
+        CompanionTheme.barRemaining
     }
 
     private var trackColor: Color {

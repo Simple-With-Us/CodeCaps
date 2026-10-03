@@ -1,5 +1,16 @@
 # CodeCaps — Effort Log
 
+## 2026-10-03 — App design audit F-02 iOS Theme tokens & F-06 Console toolbar density [AG, completed]
+
+Lane: `ag/design-audit-f02-f06`.
+
+- iOS Companion Theme tokens (F-02, issue #41): added `CompanionTheme.swift` providing appearance-sensitive dynamic color tokens (`accent`, `warning`, `danger`, `barUsed`, `barRemaining`) matching macOS `Theme` (0x087370 teal, 0xA85C05 warning, 0xBF3339 danger).  Replaced hardcoded red/orange/green values across `CompanionQuotaModel.swift` and `CompanionContentView.swift`.
+- Console toolbar density (F-06, issue #41): replaced the segmented Compact / Detailed layout control with a borderless View Options gear menu on All Platforms; repositioned the Find a Platform search field immediately adjacent to the page title; added `minWidth: 200` to the page title to prevent middle truncation at minimum window width.
+- Unit tests & build verification: verified clean builds on macOS (`swift build`) and iOS Simulator (`xcodebuild`); extended `ConsoleNavigationTests.swift` with layout test coverage; 581/581 unit tests passing.
+- Board & audit reconciliation: closed remaining actionable items for design audit issue #41 / board `4cef1b89`.
+
+---
+
 ## 2026-10-03 — Console sidebar arrow navigation, window min size bump, iOS settings detents, and board completion [AG, completed]
 
 Lane: `ag/arrow-nav-and-board-parity`.

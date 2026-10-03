@@ -25,6 +25,7 @@
 		2440D143F835BAD99240BE8D /* CompanionContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84C4C2C5DC3AA20234129F15 /* CompanionContentView.swift */; };
 		2AA3DE1AA8DD20DD5AD6E403 /* WidgetViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A40D20353A8D6C1D9E9D349 /* WidgetViews.swift */; };
 		2CA370B5E2149BEA3FCB3F6C /* CodeCapsCompanionApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34CE8BC7DF9DCF088BF1B805 /* CodeCapsCompanionApp.swift */; };
+		311AB846015F2FEDF0014C43 /* CompanionTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C1CF45BE162CC9B8CD968DC /* CompanionTheme.swift */; };
 		31CFC3813E00700F4A1D0E2F /* ResetAlarmCadence.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B76200EBE871E29BAC8A41B /* ResetAlarmCadence.swift */; };
 		346906A2DDABDF60AF9D4F62 /* alarm-submarine.wav in Resources */ = {isa = PBXBuildFile; fileRef = 5F63EE805947E5707E2A0C3F /* alarm-submarine.wav */; };
 		4D9258D010AD16F059277D93 /* alarm-submarine.wav in Resources */ = {isa = PBXBuildFile; fileRef = 5F63EE805947E5707E2A0C3F /* alarm-submarine.wav */; };
@@ -50,6 +51,7 @@
 		E4F68F451FCE5A7069DA052D /* alarm-frog.wav in Resources */ = {isa = PBXBuildFile; fileRef = 881BAB30A7762A0170BE4FD8 /* alarm-frog.wav */; };
 		E77E1CAAEDCB9C3AAD706144 /* alarm-frog.wav in Resources */ = {isa = PBXBuildFile; fileRef = 881BAB30A7762A0170BE4FD8 /* alarm-frog.wav */; };
 		EA984A6E75520CAB2639A8B4 /* CodeCapsWidgetBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6316FA88D130531D99C73AEE /* CodeCapsWidgetBundle.swift */; };
+		F245CD4AA6FA8D9C23A5D373 /* CompanionTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C1CF45BE162CC9B8CD968DC /* CompanionTheme.swift */; };
 		F3C6891672DADC0AD9667E90 /* WidgetPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 716F800EA9DEDFC597BD08BB /* WidgetPresentation.swift */; };
 		FC810FA7900F297E014083A5 /* AlarmSoundPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 674BB9709E48A6D00D4EE92C /* AlarmSoundPlayer.swift */; };
 		FE52A4A8D224D9DBB320ABCC /* alarm-glass.wav in Resources */ = {isa = PBXBuildFile; fileRef = 185B2FA090E97F0B48E3E9A8 /* alarm-glass.wav */; };
@@ -104,6 +106,7 @@
 		154D17A5A492536F43729222 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		185B2FA090E97F0B48E3E9A8 /* alarm-glass.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "alarm-glass.wav"; sourceTree = "<group>"; };
 		1981252E1F614DC809CAB013 /* CodeCapsWidgetsMac.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = CodeCapsWidgetsMac.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		1C1CF45BE162CC9B8CD968DC /* CompanionTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionTheme.swift; sourceTree = "<group>"; };
 		302C44DD0C87899C354A914C /* alarm-bottle.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "alarm-bottle.wav"; sourceTree = "<group>"; };
 		34CE8BC7DF9DCF088BF1B805 /* CodeCapsCompanionApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeCapsCompanionApp.swift; sourceTree = "<group>"; };
 		4FA72166D5E5A0F726B4DF18 /* alarm-sosumi.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "alarm-sosumi.wav"; sourceTree = "<group>"; };
@@ -153,6 +156,7 @@
 			children = (
 				674BB9709E48A6D00D4EE92C /* AlarmSoundPlayer.swift */,
 				C1371DB889435F70346FB6AF /* CompanionQuotaModel.swift */,
+				1C1CF45BE162CC9B8CD968DC /* CompanionTheme.swift */,
 				89A5807594DFD989CADCC6F2 /* ResetAlarmSound.swift */,
 				E124B68EB2FF725D59E2EC1F /* SentenceGap.swift */,
 			);
@@ -322,11 +326,9 @@
 					};
 					27F7C2D31B71471EDEB75F09 = {
 						DevelopmentTeam = CC8UTF7ATG;
-						ProvisioningStyle = Automatic;
 					};
 					7B3804F93936EEE96F26551D = {
 						DevelopmentTeam = CC8UTF7ATG;
-						ProvisioningStyle = Automatic;
 					};
 					B8CBE2BF110881FA5BE5725B = {
 						DevelopmentTeam = CC8UTF7ATG;
@@ -413,6 +415,7 @@
 				99A788DAEA41B4AB83A93501 /* CodeCapsCompanionApp.swift in Sources */,
 				2018A85587B07653EFF5445C /* CompanionContentView.swift in Sources */,
 				0BDDE676F287EA3372B9D24B /* CompanionQuotaModel.swift in Sources */,
+				F245CD4AA6FA8D9C23A5D373 /* CompanionTheme.swift in Sources */,
 				1D4D70BAAB091F8992DB1693 /* ResetAlarmCadence.swift in Sources */,
 				99E4B46415A2BCB252FAA6C0 /* ResetAlarmMessage.swift in Sources */,
 				831B4D460D912E65E3D869D3 /* ResetAlarmSound.swift in Sources */,
@@ -429,6 +432,7 @@
 				2CA370B5E2149BEA3FCB3F6C /* CodeCapsCompanionApp.swift in Sources */,
 				2440D143F835BAD99240BE8D /* CompanionContentView.swift in Sources */,
 				C48D9F8052E4F39044504C84 /* CompanionQuotaModel.swift in Sources */,
+				311AB846015F2FEDF0014C43 /* CompanionTheme.swift in Sources */,
 				31CFC3813E00700F4A1D0E2F /* ResetAlarmCadence.swift in Sources */,
 				DA221384FC017A40031C0446 /* ResetAlarmMessage.swift in Sources */,
 				9D826DF8BA1D0C240F17EAFC /* ResetAlarmSound.swift in Sources */,
@@ -501,8 +505,9 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ENTITLEMENTS = App/CodeCapsCompanionMac.entitlements;
-				CODE_SIGN_STYLE = Automatic;
+				CODE_SIGN_ENTITLEMENTS = App/CodeCapsCompanionMac.Release.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Distribution";
+				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = CC8UTF7ATG;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -515,6 +520,7 @@
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.simplewithus.codecaps.macos;
 				PRODUCT_NAME = CodeCaps;
+				PROVISIONING_PROFILE_SPECIFIER = "CodeCaps for Mac AppStore";
 				SDKROOT = macosx;
 			};
 			name = Release;
@@ -522,8 +528,9 @@
 		481A43C1726DF2E076C7D0FC /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CODE_SIGN_ENTITLEMENTS = Widgets/CodeCapsWidgetsMac.entitlements;
-				CODE_SIGN_STYLE = Automatic;
+				CODE_SIGN_ENTITLEMENTS = Widgets/CodeCapsWidgetsMac.Release.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Distribution";
+				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = CC8UTF7ATG;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -537,6 +544,7 @@
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.simplewithus.codecaps.macos.widgets;
 				PRODUCT_NAME = CodeCapsWidgets;
+				PROVISIONING_PROFILE_SPECIFIER = "CodeCaps Mac Widgets AppStore";
 				SDKROOT = macosx;
 			};
 			name = Release;
