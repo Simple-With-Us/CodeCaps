@@ -5,9 +5,25 @@ PR (when shipped), follow-ups (when parked).
 
 ---
 
-## 2026-10-02 — Mac widget embedding, honest widget empty state, Glance and Settings UI polish, and custom logo fixes [AG, In Progress]
+## 2026-10-02 — Custom mark sync, updated app icons, quota bar parity, cadence fix, and honest fallbacks [AG, completed]
 
-Lane: `ag/ui-widgets-polish-and-embed` (issue #111).
+Lane: `feat/ios-icons-bar-parity-glance-logos` (PR #115, squash `f48fbda`).
+
+- Custom mark sync over wire: added `CustomMarkPayload` transport in `LocalQuotaSnapshot.swift` and `WireEnvelope`.  Mac `LocalQuotaSnapshot.write` auto-exports loaded custom provider marks to `group.com.simplewithus.codecaps/CustomMarks/` using private 0600 file descriptors; iOS companion unmarshals and renders them in-app.
+- Glance popover custom logo resolution: resolved bug where custom marks loaded in Settings but failed to render in the docked Glance popover/menu bar; added multi-extension lookup and candidate pool matching in `PlatformLogoImage`.  Updated `markStyle` and `glanceMarkStyle` to detect disk-resident custom marks and return `.custom`.
+- App icons regenerated: updated all 26 sizes across iPhone, iPad, and macOS AppIcon sets in `ios/CodeCapsCompanion/Assets.xcassets/AppIcon.appiconset/` from `assets/icon-1024.png`.  Staged and running on Mac at `/Users/jay/Applications/CodeCaps.app` (PID 51106).
+- Real MiniMax mark on iOS: replaced SVG monogram in `ios/CodeCapsCompanion/Assets.xcassets/provider-minimax.imageset/` with official raster waveform scales (`@1x`, `@2x`, `@3x`).
+- MiniMax cadence fix: updated `formatCadence` in `CompanionQuotaModel.swift` and `WidgetPresentation.swift` to inspect `w.window` first and correctly parse `4h`, `5h`, `1d`, and `1w` intervals.
+- Quota bar parity: added `CompanionUsageBar` with two-tone segments (red used + green remaining) and vertical pacing indicator with white halo to iOS companion cards and widget `MiniProgressBar`.
+- Fleet-wide fallback rule: replaced lookalike SF Symbols with `"questionmark.square.dashed"` across Mac and iOS.
+- Remote runner CI: iOS TestFlight build dispatched to GitHub-hosted macOS runner (`ios-ship.yml`, run 37087309918).
+- Coordination: briefed MiniMax (`[MM]`) in Slack `#agent-sync` (thread `1790990134.027879`); Apple Note created and pinned headlessly in iCloud folder `Coding`.
+
+---
+
+## 2026-10-02 — Mac widget embedding, honest widget empty state, Glance and Settings UI polish, and custom logo fixes [AG, completed]
+
+Lane: `ag/ui-widgets-polish-and-embed` (issue #111, PR #112, squash `7c25e14`).
 
 - Embedded macOS widget extension: Updated `script/build_and_run.sh` to compile `CodeCapsWidgetsMac` universal target (`arm64`/`x86_64`) and embed `CodeCapsWidgets.appex` inside `Contents/PlugIns/`, signed and validated with Developer ID.
 - Honest widget presentation: Eliminated misleading sample/placeholder numbers (e.g. 94%, 74%, 91%) across iOS and macOS widgets (`WidgetDataProvider.swift`, `WidgetViews.swift`); unconfigured or un-synced widgets now render an explicit, honest `WidgetEmptyStateView`.
