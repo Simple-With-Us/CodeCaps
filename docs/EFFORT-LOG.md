@@ -5,6 +5,18 @@ PR (when shipped), follow-ups (when parked).
 
 ---
 
+## 2026-10-03 — Runtime Alerts and Machine Provenance [CODEX, in review]
+
+Lane: `codex/alerts-provenance-20261003`.  Boards `20dc3a22`, `d4673e2f`, `5af89c7c`.
+
+- Connected refresh to runaway evaluation and opted-in notifications, with a persisted one-hour per-window cooldown and a centered Glance alert status.  Stale, missing, masked, and disabled readings cannot create active alerts.
+- Added stable installation identities and machine labels to uploads, round-trip decoding, and source grouping.  Different Macs cannot share an ingest event ID merely because their quota timestamps match.  Backend projection is Usage-Monitor PR #1583; end-to-end deployment remains pending.
+- Fixed the PR #125 test reference to the actual `QuotaViewLayout.summary` case.
+- Validation: 28 focused tests and enabled-anomaly Glance render passed before main sync.  Hosted checks cover the integrated branch.
+
+---
+
+
 ## 2026-10-03 — App design audit F-02 iOS Theme tokens & F-06 Console toolbar density [AG, completed]
 
 Lane: `ag/design-audit-f02-f06`.

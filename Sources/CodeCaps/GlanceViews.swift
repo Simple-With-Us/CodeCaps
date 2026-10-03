@@ -240,30 +240,66 @@ struct GlancePopover: View {
     // MARK: - Footer
 
     private var footer: some View {
-        HStack(spacing: 8) {
-            Button { openSettings() } label: {
-                Image(systemName: "gearshape")
-                    .font(.system(size: 13, weight: .medium))
-                    .frame(width: 24, height: 24)
-            }
-            .buttonStyle(.plain)
-            .help("Settings")
-            .accessibilityLabel("Settings")
-
-            Spacer(minLength: 4)
-
-            Button { openConsole(.allPlatforms) } label: {
-                HStack(spacing: 5) {
-                    Text("Open CodeCaps")
-                    Text("⌘1").font(.system(size: 10)).foregroundStyle(.tertiary)
+        ZStack {
+            HStack(spacing: 8) {
+                Button { openSettings() } label: {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 13, weight: .medium))
+                        .frame(width: 24, height: 24)
                 }
+                .buttonStyle(.plain)
+                .help("Settings")
+                .accessibilityLabel("Settings")
+
+                Spacer(minLength: 4)
+
+                Button { openConsole(.allPlatforms) } label: {
+                    HStack(spacing: 5) {
+                        Text("Open CodeCaps")
+                        Text("⌘1").font(.system(size: 10)).foregroundStyle(.tertiary)
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .help("Open CodeCaps")
+                .accessibilityLabel("Open CodeCaps")
             }
-            .buttonStyle(.borderedProminent)
-            .help("Open CodeCaps")
-            .accessibilityLabel("Open CodeCaps")
+
+            if model.burnRateAlertsEnabled {
+                VStack(spacing: 1) {
+                    Text("Runaway Usage Alerts Enabled")
+                        .font(.system(size: 9, weight: .medium))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                    if let detail = runawayAnomalyFooterDetail {
+                        Text(detail)
+                            .font(.system(size: 8))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+                    }
+                }
+                .frame(maxWidth: 205)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(runawayFooterAccessibilityLabel)
+                .allowsHitTesting(false)
+            }
         }
         .padding(.horizontal, Metrics.glanceGutter)
         .frame(height: Metrics.glanceFooterHeight)
+    }
+
+    private var runawayAnomalyFooterDetail: String? {
+        guard let anomaly = model.activeRunawayAnomalies.first else { return nil }
+        let provider = model.sections.first { $0.providerKey == anomaly.providerKey }?.providerLabel
+            ?? anomaly.providerKey
+        let comparison = anomaly.kind == .vsPeak ? "recent peak" : "usual pace"
+        return "\(provider) · \(anomaly.multiplier.formatted(.number.precision(.fractionLength(1))))× \(comparison)"
+    }
+
+    private var runawayFooterAccessibilityLabel: String {
+        let summaries = model.activeRunawayAnomalies.map(\.summary)
+        guard !summaries.isEmpty else { return "Runaway Usage Alerts Enabled" }
+        return "Runaway Usage Alerts Enabled, active anomaly: " + summaries.joined(separator: sentenceGap)
     }
 }
 

@@ -2,15 +2,13 @@ import Foundation
 
 /// Where a pulled quota window came from.
 ///
-/// The quota endpoint carries no host, producer or device field — a live
-/// response has `source` and `sourceApp` and nothing else — so those are the
-/// best machine identifier available, and inventing a richer one would mean
-/// inventing the data behind it.  This is the single place to teach if the
-/// payload ever grows a machine field.
+/// New payloads carry an explicit producer instance and a separate machine
+/// label.  Older responses remain readable, but a generic app name alone
+/// cannot prove a window was produced by this Mac.
 public enum FleetOrigin {
     /// The origin a window names, or `fleet` when it names none.
     public static func identity(of window: QuotaWindow) -> String {
-        for candidate in [window.source, window.sourceApp] {
+        for candidate in [window.producerInstanceId, window.machine, window.source, window.sourceApp] {
             let value = (candidate ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             if !value.isEmpty { return value }
         }
@@ -20,12 +18,14 @@ public enum FleetOrigin {
     /// Whether a pulled window is this Mac's own push coming back.  Such a
     /// window belongs under This Mac and must never be duplicated under Fleet.
     public static func isOwnPush(_ window: QuotaWindow, host: String = QuotaPublisher.producerInstanceId) -> Bool {
+        if let instance = window.producerInstanceId?.trimmingCharacters(in: .whitespacesAndNewlines), !instance.isEmpty {
+            return instance == host
+        }
+        // A legacy producer label such as codecaps or agent-bar is shared by
+        // every installation.  Only an actual host match can identify its owner.
         let identity = identity(of: window).lowercased()
-        let mine = [QuotaPublisher.producerId.lowercased()]
-            + QuotaPublisher.legacyProducerAliases.map { $0.lowercased() }
-            + [host.lowercased(),
-               host.lowercased().replacingOccurrences(of: ".local", with: "")]
-        return mine.contains(identity)
+        let mine = host.lowercased()
+        return identity == mine || identity == mine.replacingOccurrences(of: ".local", with: "")
     }
 
     /// "antigravity-usage" reads as "Antigravity Usage" in a group header.
@@ -60,7 +60,18 @@ public enum FleetOrigin {
                 grouped[identity(of: window), default: []].append(window)
             }
         }
-        let groups = grouped.keys.sorted().map { (id: $0, title: title(for: $0), windows: grouped[$0] ?? []) }
+        let groups = grouped.keys.sorted().map { key in
+            let readings = grouped[key] ?? []
+            let machine = readings.compactMap { $0.machine?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .first { !$0.isEmpty }
+            let name: String
+            if let machine { name = machine }
+            else if readings.contains(where: { $0.producerInstanceId != nil }) { name = "Mac (\(key))" }
+            else if ([QuotaPublisher.producerId] + QuotaPublisher.legacyProducerAliases).contains(key.lowercased()) {
+                name = "Unidentified Mac"
+            } else { name = title(for: key) }
+            return (id: key, title: name, windows: readings)
+        }
         return (own, groups)
     }
 }

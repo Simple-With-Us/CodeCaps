@@ -59,25 +59,28 @@ public enum QuotaPublisherError: Error, Equatable, Sendable, LocalizedError {
 }
 
 public actor QuotaPublisher {
-    /// The producer this app pushes under.  A window pulled back from the fleet
-    /// carrying this producer is this Mac's own reading making a round trip, so
-    /// the UI shows it under This Mac rather than duplicating it under Fleet.
-    ///
-    /// Renamed from `agent-bar` to `codecaps` on 2026-09-20.  The old name
-    /// remains a recognised alias in `FleetOrigin.isOwnPush` so windows
-    /// recorded by older builds (or echoed by a fleet that has not yet
-    /// caught up) still land under This Mac.
+    /// The app-level producer namespace.  Ownership of a pulled reading is
+    /// determined by producerInstanceId, never by this shared app name alone.
     public static let producerId = "codecaps"
 
-    /// Producer names this app recognises as its own for the purpose of
-    /// filing a pulled window under This Mac.  The first entry is the live
-    /// `producerId`; the rest are legacy aliases from before the rename.
+    /// Pre-rename producer labels remain readable as unidentified machines.
     public static let legacyProducerAliases: [String] = ["agent-bar"]
 
     /// The instance this Mac pushes under, so a pulled window can be recognised
     /// as its own even when a payload carries the instance rather than the
     /// producer.
-    public static var producerInstanceId: String { Host.current().localizedName ?? "Mac" }
+    public static let producerInstanceId = persistentInstanceId(defaults: .standard)
+    public static var machineName: String { Host.current().localizedName ?? "Mac" }
+
+    /// An installation identity survives a computer rename and distinguishes
+    /// machines with the same display name.  Tests use an isolated defaults suite.
+    static func persistentInstanceId(defaults: UserDefaults) -> String {
+        let key = "codecaps.producerInstanceId"
+        if let stored = defaults.string(forKey: key), UUID(uuidString: stored) != nil { return stored }
+        let value = UUID().uuidString.lowercased()
+        defaults.set(value, forKey: key)
+        return value
+    }
 
     private let timeout: TimeInterval
     private let session: URLSession
@@ -115,7 +118,7 @@ public actor QuotaPublisher {
 
         switch format {
         case .usageMonitorV2:
-            bodyData = try buildUsageMonitorV2Payload(windows: windows, occurredAtIso: occurredAtIso)
+            bodyData = try buildUsageMonitorV2Payload(windows: windows, occurredAtIso: occurredAtIso, machineName: machineName)
         case .genericWebhook:
             bodyData = try buildGenericWebhookPayload(windows: windows, occurredAtIso: occurredAtIso, machineName: machineName)
         }
@@ -167,8 +170,8 @@ public actor QuotaPublisher {
         }
     }
 
-    public nonisolated func buildUsageMonitorV2Payload(windows: [QuotaWindow], occurredAtIso: String, machineName: String? = nil) throws -> Data {
-        let machine = machineName ?? Self.producerInstanceId
+    public nonisolated func buildUsageMonitorV2Payload(windows: [QuotaWindow], occurredAtIso: String, machineName: String? = nil, producerInstanceId: String = QuotaPublisher.producerInstanceId) throws -> Data {
+        let machine = machineName ?? Self.machineName
         let events: [[String: Any]] = windows.compactMap { window in
             guard let remaining = window.boundedRemainingPercent ?? window.remainingPercent else { return nil }
             let seriesKey = window.resetAt ?? "\(occurredAtIso.prefix(13)):00"
@@ -185,7 +188,10 @@ public actor QuotaPublisher {
                 return window.window ?? window.label.lowercased().replacingOccurrences(of: " ", with: "-")
             }()
             let readingTime = window.occurredAt.isEmpty ? occurredAtIso : window.occurredAt
-            let eventId = "subq:\(window.canonicalProviderKey):\(bucketId):\(seriesKey):\(readingTime)"
+            // Include the instance in a length-prefixed key: two Macs can observe
+            // the same bucket at the same instant, while retries stay idempotent.
+            let eventId = "subq:" + [producerInstanceId, window.canonicalProviderKey, bucketId, seriesKey, readingTime]
+                .map { "\($0.utf8.count):\($0)" }.joined()
             let clampedRemaining = round(remaining * 100.0) / 100.0
             let usedPercent = round(max(0, min(100, 100.0 - clampedRemaining)) * 100.0) / 100.0
 
@@ -194,7 +200,8 @@ public actor QuotaPublisher {
                 "isExhausted": window.isExhausted || clampedRemaining <= 0,
                 "remainingUnknown": false,
                 "scale": "percent_0_100",
-                "source": Self.producerId
+                "source": Self.producerId,
+                "machine": machine
             ]
             if let resetAt = window.resetAt { meta["resetAt"] = resetAt }
             if let w = window.window { meta["quotaWindow"] = w }
@@ -222,21 +229,23 @@ public actor QuotaPublisher {
         let root: [String: Any] = [
             "schemaVersion": 2,
             "producerId": Self.producerId,
-            "producerInstanceId": machine,
+            "producerInstanceId": producerInstanceId,
             "events": events
         ]
         return try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
     }
 
-    public nonisolated func buildGenericWebhookPayload(windows: [QuotaWindow], occurredAtIso: String, machineName: String?) throws -> Data {
-        let machine = machineName ?? Self.producerInstanceId
+    public nonisolated func buildGenericWebhookPayload(windows: [QuotaWindow], occurredAtIso: String, machineName: String?, producerInstanceId: String = QuotaPublisher.producerInstanceId) throws -> Data {
+        let machine = machineName ?? Self.machineName
         let windowPayloads: [[String: Any]] = windows.map { w in
             var dict: [String: Any] = [
                 "id": w.id,
                 "provider": w.provider,
                 "label": w.label,
                 "status": w.status.rawValue,
-                "isExhausted": w.isExhausted
+                "isExhausted": w.isExhausted,
+                "producerInstanceId": producerInstanceId,
+                "machine": machine
             ]
             if let rem = w.remainingPercent { dict["remainingPercent"] = rem }
             if let reset = w.resetAt { dict["resetAt"] = reset }
@@ -251,6 +260,7 @@ public actor QuotaPublisher {
             "version": 1,
             "generatedAt": occurredAtIso,
             "machine": machine,
+            "producerInstanceId": producerInstanceId,
             "count": windows.count,
             "windows": windowPayloads
         ]

@@ -165,14 +165,29 @@ final class MonitorModel: ObservableObject {
     /// because "5x my average" is the wrong number for someone who writes long
     /// agents on purpose and the right one for someone who does not.
     @Published var anomalyBaselineMultiplier: Double {
-        didSet { defaults.set(anomalyBaselineMultiplier, forKey: "anomalyBaselineMultiplier") }
+        didSet {
+            defaults.set(anomalyBaselineMultiplier, forKey: "anomalyBaselineMultiplier")
+            refreshRunawayUsageState(recordSamples: false)
+        }
     }
     @Published var anomalyPeakMultiplier: Double {
-        didSet { defaults.set(anomalyPeakMultiplier, forKey: "anomalyPeakMultiplier") }
+        didSet {
+            defaults.set(anomalyPeakMultiplier, forKey: "anomalyPeakMultiplier")
+            refreshRunawayUsageState(recordSamples: false)
+        }
     }
     @Published var burnRateAlertsEnabled: Bool {
-        didSet { defaults.set(burnRateAlertsEnabled, forKey: "burnRateAlertsEnabled") }
+        didSet {
+            defaults.set(burnRateAlertsEnabled, forKey: "burnRateAlertsEnabled")
+            if burnRateAlertsEnabled {
+                Task { await alarmManager.requestNotificationPermission() }
+                refreshRunawayUsageState(recordSamples: false)
+            } else {
+                activeRunawayAnomalies = []
+            }
+        }
     }
+    @Published private(set) var activeRunawayAnomalies: [AnomalyDetector.Anomaly] = []
     @Published var menuBarQuotaSelection: String {
         didSet { defaults.set(menuBarQuotaSelection, forKey: "menuBarQuotaSelection") }
     }
@@ -294,6 +309,12 @@ final class MonitorModel: ObservableObject {
     public let alarmManager: ResetAlarmManager
 
     private let defaults: UserDefaults
+    private let burnRateHistoryURL: URL
+    private var lastRunawayAlertAt: [String: Double] = [:]
+    private var hasCurrentLocalRead = false
+    var localResultForTesting: LocalQuotaResult?
+    var runawayNotificationForTesting: ((BurnRateNotification) -> Void)?
+    var skipsSnapshotIOForTesting = false
     private var localWindows: [QuotaWindow] = []
     private var serverWindows: [QuotaWindow] = []
     @Published private(set) var fleetWindowGroups: [FleetWindowGroup] = []
@@ -309,8 +330,10 @@ final class MonitorModel: ObservableObject {
     /// was waiting for, so the Re-Authorize button clears without a refresh.
     private var tokenChanges: AnyCancellable?
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, burnRateHistoryURL: URL? = nil) {
         self.defaults = defaults
+        self.burnRateHistoryURL = burnRateHistoryURL ?? BurnRateMonitor.historyURL
+        self.lastRunawayAlertAt = defaults.dictionary(forKey: "runawayAlertLastSent") as? [String: Double] ?? [:]
         displayMode = DisplayMode(rawValue: defaults.string(forKey: "displayMode") ?? "") ?? .both
         menuBarStyle = MenuBarStyle(rawValue: defaults.string(forKey: "menuBarStyle") ?? "") ?? .symbolAndPercent
         menuBarMarkStyle = MenuBarMarkStyle(rawValue: defaults.string(forKey: "menuBarMarkStyle") ?? "")
@@ -624,6 +647,10 @@ final class MonitorModel: ObservableObject {
         }
     }
 
+    func injectRunawayAnomaliesForTests(_ anomalies: [AnomalyDetector.Anomaly]) {
+        activeRunawayAnomalies = anomalies
+    }
+
     var menuBarDetail: String {
         guard let target = menuBarTargetSnapshot else { return "No current quota report" }
         let title = displayRow(for: target.window)?.title
@@ -884,6 +911,11 @@ final class MonitorModel: ObservableObject {
         guard value != localEnabled else { return }
         localEnabled = value
         defaults.set(value, forKey: "localEnabled")
+        if !value {
+            hasCurrentLocalRead = false
+            localWindows = []
+            activeRunawayAnomalies = []
+        }
         refresh()
     }
 
@@ -1035,6 +1067,8 @@ final class MonitorModel: ObservableObject {
         defaults.set(server, forKey: "serverEnabled")
         defaults.set(value, forKey: "endpoint")
         localWindows = []
+        hasCurrentLocalRead = false
+        activeRunawayAnomalies = []
         serverWindows = []
         response = QuotaResponse(generatedAt: "")
         issues = [:]
@@ -1156,7 +1190,8 @@ final class MonitorModel: ObservableObject {
         let useServer = serverEnabled
         let currentEndpoint = endpoint
         request = Task { [weak self] in
-            async let localRead: LocalQuotaResult? = useLocal ? Self.readLocalSources() : nil
+            let resultForTesting = self?.localResultForTesting
+            async let localRead = Self.readLocalResult(useLocal: useLocal, testingResult: resultForTesting)
             var newServer: QuotaResponse?
             var failure: String?
             // The pull's own read doubles as the availability check, so the
@@ -1191,17 +1226,17 @@ final class MonitorModel: ObservableObject {
                 self.issues = local.issues
                 self.consentNeeded = local.consentNeeded
                 self.localWindows = AntigravityQuotaGroups.normalize(local.windows)
+                self.hasCurrentLocalRead = true
                 // One sample per window per refresh.  This is what the runaway
                 // detector compares against, so it has to be recorded whether
                 // or not the alert is on — turning the alert on after a week of
                 // running should not mean a week of nothing to compare to.
-                if !local.windows.isEmpty {
-                    BurnRateMonitor.record(AntigravityQuotaGroups.normalize(local.windows), now: self.now)
-                }
             } else {
                 self.issues = [:]
                 self.consentNeeded = []
                 self.localWindows = []
+                self.hasCurrentLocalRead = false
+                self.activeRunawayAnomalies = []
             }
 
             // Publish local snapshot to BotFleet on disk
@@ -1209,7 +1244,9 @@ final class MonitorModel: ObservableObject {
                 // `issues` is still the local read's own map here — the server
                 // failure below is merged in afterwards and must never reach a
                 // file that promises local-only readings.
-                if useLocal {
+                if self.skipsSnapshotIOForTesting {
+                    self.handoffError = nil
+                } else if useLocal {
                     try LocalQuotaSnapshot.write(windows: self.localWindows, issues: self.issues, customMarks: exportedCustomMarks(), now: self.now)
                     #if canImport(WidgetKit)
                     WidgetCenter.shared.reloadAllTimelines()
@@ -1260,10 +1297,72 @@ final class MonitorModel: ObservableObject {
             self.originByProvider = origins
             if newServer != nil { self.lastPullTime = self.now }
             self.response = QuotaResponse(generatedAt: ISO8601DateFormatter().string(from: self.now), windows: merged)
+            self.refreshRunawayUsageState(recordSamples: local != nil)
             self.alarmManager.evaluate(observations: self.resetAlarmObservationsForCurrentReadings(), now: self.now)
             self.isRefreshing = false
             self.request = nil
         }
+    }
+
+    private func refreshRunawayUsageState(recordSamples: Bool) {
+        guard localEnabled, hasCurrentLocalRead else {
+            activeRunawayAnomalies = []
+            return
+        }
+        if recordSamples {
+            BurnRateMonitor.record(localWindows, now: now, historyURL: burnRateHistoryURL)
+        }
+        guard burnRateAlertsEnabled else {
+            activeRunawayAnomalies = []
+            return
+        }
+
+        let masked = maskedWindowIds
+        let currentKeys = Set(localWindows.compactMap { window -> String? in
+            let snapshot = QuotaWindowSnapshot(window: window, now: now)
+            guard snapshot.isFresh, snapshot.remainingPercent != nil,
+                  !window.isSupplementaryVideoQuota, !masked.contains(window.id),
+                  issues[window.canonicalProviderKey] == nil,
+                  !disabledSources.contains(window.source ?? "") else { return nil }
+            return Self.runawayKey(window.canonicalProviderKey, window.id)
+        })
+        guard !currentKeys.isEmpty else {
+            activeRunawayAnomalies = []
+            return
+        }
+        let anomalies = BurnRateMonitor.evaluate(baseline: anomalyBaselineMultiplier,
+                                                  peak: anomalyPeakMultiplier,
+                                                  now: now,
+                                                  historyURL: burnRateHistoryURL)
+            .filter { currentKeys.contains(Self.runawayKey($0.providerKey, $0.windowId)) }
+        activeRunawayAnomalies = anomalies
+        guard !anomalies.isEmpty else { return }
+
+        var groups: [String: [AnomalyDetector.Anomaly]] = [:]
+        var order: [String] = []
+        for anomaly in anomalies {
+            let key = Self.runawayKey(anomaly.providerKey, anomaly.windowId)
+            if groups[key] == nil { order.append(key) }
+            groups[key, default: []].append(anomaly)
+        }
+        for key in order {
+            guard let group = groups[key] else { continue }
+            let lastSent = lastRunawayAlertAt[key] ?? -.infinity
+            guard now.timeIntervalSince1970 - lastSent >= BurnRateMonitor.alertCooldown else { continue }
+            let notification = BurnRateNotification(anomalies: group, sound: alarmManager.alarmSound)
+            if let runawayNotificationForTesting {
+                runawayNotificationForTesting(notification)
+            } else {
+                alarmManager.deliverRunawayUsageAlert(notification)
+            }
+            lastRunawayAlertAt[key] = now.timeIntervalSince1970
+        }
+        lastRunawayAlertAt = lastRunawayAlertAt.filter { now.timeIntervalSince1970 - $0.value <= 30 * 86_400 }
+        defaults.set(lastRunawayAlertAt, forKey: "runawayAlertLastSent")
+    }
+
+    private static func runawayKey(_ providerKey: String, _ windowId: String) -> String {
+        "\(providerKey)\u{1f}\(windowId)"
     }
 
     private nonisolated static func readLocalSources() async -> LocalQuotaResult {
@@ -1289,6 +1388,13 @@ final class MonitorModel: ObservableObject {
         // DashboardService), and used to be drawn as an empty second bar.
         return LocalQuotaResult(windows: windows, issues: issues, consentNeeded: consentNeeded)
             .droppingSupersededPlaceholders()
+    }
+
+    private nonisolated static func readLocalResult(useLocal: Bool,
+                                                    testingResult: LocalQuotaResult?) async -> LocalQuotaResult? {
+        guard useLocal else { return nil }
+        if let testingResult { return testingResult }
+        return await readLocalSources()
     }
 }
 

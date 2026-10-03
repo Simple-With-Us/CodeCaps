@@ -19,12 +19,20 @@ import QuotaCore
 final class GlanceRenderTests: XCTestCase {
     private func render(_ name: String, view: GlanceViewMode, alarmsAll: Bool, fleet: Bool = true,
                         expanded: Set<String> = [], signedOut: Set<String> = [],
+                        runawayAlert: Bool = false,
                         dark: Bool, into directory: URL) throws {
         let (model, defaults, suite) = GlanceFixtures.makeModel(
             view: view, alarmsAll: alarmsAll, fleet: fleet,
             extraWindows: expanded.contains("anthropic") ? [GlanceFixtures.claudeSonnetWindow] : [],
             signedOut: signedOut)
         defer { defaults.removePersistentDomain(forName: suite) }
+        if runawayAlert {
+            model.burnRateAlertsEnabled = true
+            model.injectRunawayAnomaliesForTests([
+                AnomalyDetector.Anomaly(providerKey: "anthropic", windowId: "claude-5h", kind: .vsPeak,
+                                        multiplier: 6.4, summary: "Claude 5-hour usage is 6.4× its recent peak.")
+            ])
+        }
         // The popover budgets its height for collapsed rows; an open row's
         // extra lines scroll.  The render adds them so the PNG shows them.
         let expandedLines = model.displaySections.filter { expanded.contains($0.id) }
@@ -49,6 +57,8 @@ final class GlanceRenderTests: XCTestCase {
         for dark in [false, true] {
             try render("glance-frommac-all-on", view: .fromMac, alarmsAll: true, dark: dark, into: directory)
             try render("glance-frommac-all-off", view: .fromMac, alarmsAll: false, dark: dark, into: directory)
+            try render("glance-frommac-runaway-alert", view: .fromMac, alarmsAll: true,
+                       runawayAlert: true, dark: dark, into: directory)
             try render("glance-frommac-minimax-expanded", view: .fromMac, alarmsAll: true,
                        expanded: ["minimax", "anthropic"], dark: dark, into: directory)
             try render("glance-frommac-claude-signed-out", view: .fromMac, alarmsAll: false,

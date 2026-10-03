@@ -399,6 +399,36 @@ public final class ResetAlarmManager: ObservableObject {
         }
     }
 
+    /// Delivers an opt-in runaway-usage alert through the same notification
+    /// authorization path and selected sound as reset alerts.  Runaway alerts
+    /// have their own identifier and do not consult reset-alarm selection.
+    func deliverRunawayUsageAlert(_ payload: BurnRateNotification) {
+        guard Self.canUseUserNotifications else { return }
+        let content = UNMutableNotificationContent()
+        content.title = payload.title
+        content.body = payload.body
+        content.sound = notificationSound(for: payload.sound)
+        let request = UNNotificationRequest(identifier: payload.identifier,
+                                            content: content,
+                                            trigger: nil)
+        Task { [weak self] in
+            let center = UNUserNotificationCenter.current()
+            let settings = await center.notificationSettings()
+            if settings.authorizationStatus == .denied {
+                self?.notificationsDenied = true
+                return
+            }
+            if settings.authorizationStatus == .notDetermined {
+                guard await self?.requestNotificationPermission() == true else { return }
+            }
+            do {
+                try await center.add(request)
+            } catch {
+                self?.notificationsDenied = true
+            }
+        }
+    }
+
     /// Sends an immediate test notification to verify notification delivery and sound.
     ///
     /// Now reports what happened.  The previous version requested authorization
