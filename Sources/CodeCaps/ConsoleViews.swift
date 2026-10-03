@@ -274,12 +274,16 @@ struct ConsoleView: View {
             .help("Refresh Quotas")
             .accessibilityLabel("Refresh Quotas")
 
-            Toggle(isOn: $model.keepConsoleInFront) {
-                Image(systemName: "pin").frame(width: 18, height: 18)
-            }
-            .toggleStyle(.button)
-            .help("Keep In Front")
-            .accessibilityLabel("Keep In Front")
+            // The owner asked (2026-10-02) for the pin control gone in favour
+            // of the app docking itself while this window is open, which is
+            // what HogHunter does and what `AppActivationManager` implements
+            // now.  A floating "keep in front" is a worse answer to the same
+            // need, and it was the one control here that explained nothing.
+            Text(CodeCapsVersion.display)
+                .font(.system(size: 10))
+                .foregroundStyle(Theme.ink.opacity(0.35))
+                .help("CodeCaps Version")
+                .accessibilityLabel(CodeCapsVersion.display)
         }
         .padding(.horizontal, Metrics.pagePadding)
         .frame(height: Metrics.toolbarHeight)
@@ -461,31 +465,23 @@ struct ConsoleSidebar: View {
 
     private var footer: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Toggle(isOn: Binding(
-                get: { model.localEnabled },
-                set: { model.setLocalEnabled($0) })) {
-                Text("Read From This Mac")
-            }
-            .toggleStyle(.switch)
-            .controlSize(.mini)
-            .font(.system(size: 11))
-            .help("""
-                Reads the quota files your AI CLIs already wrote on this Mac — \
-                no API keys, and no separate Usage Monitor app.  Turning it off \
-                hides every From Mac row; it does not stop this Mac sharing its \
-                quota, which is under Sources & Fleet.
-                """)
-            .accessibilityLabel("Read quota from this Mac")
-            .accessibilityValue(model.localEnabled ? "On" : "Off")
+            // This used to be a second copy of the control, and it was the
+            // confusing one: grey, status-like, and sitting in a footer where
+            // nothing else in the app is a switch.  The real control is the
+            // first thing on Settings -> Sources & Fleet, under THIS MAC.
+            // One control, one place.
+            Text("Reading from this Mac")
+                .font(.system(size: 11))
+                .foregroundStyle(model.localEnabled ? Theme.ink.opacity(0.7) : .secondary)
+                .accessibilityLabel("Reading from this Mac")
+                .accessibilityValue(model.localEnabled ? "On" : "Off")
+                .help("Turn this off in Settings, under Sources & Fleet.")
             if let handoffError = model.handoffError {
                 Text(handoffError)
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.warning)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Text(CodeCapsVersion.display)
-                .font(.system(size: 11))
-                .foregroundStyle(.tertiary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)

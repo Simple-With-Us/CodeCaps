@@ -11,7 +11,7 @@ import SwiftUI
 /// pairs clears 4.5:1 for its percentage text on its own background, because
 /// that number is the one the owner reads at a glance.
 enum AccentChoice: String, CaseIterable, Identifiable {
-    case teal, blue, violet, orange, green, magenta
+    case teal, blue, royalBlue, violet, orange, green, magenta
 
     var id: String { rawValue }
 
@@ -19,6 +19,7 @@ enum AccentChoice: String, CaseIterable, Identifiable {
         switch self {
         case .teal: return "Teal"
         case .blue: return "Blue"
+        case .royalBlue: return "Cobalt"
         case .violet: return "Violet"
         case .orange: return "Orange"
         case .green: return "Green"
@@ -31,6 +32,9 @@ enum AccentChoice: String, CaseIterable, Identifiable {
         switch self {
         case .teal: return 0x087370
         case .blue: return 0x1F5FBF
+        // The owner's own blue, taken from the app icon: it is the one that
+        // has to sit next to the teal without reading as the same colour.
+        case .royalBlue: return 0x0B4FA8
         case .violet: return 0x5B3FBF
         case .orange: return 0xA85C05
         case .green: return 0x2E6B2E
@@ -42,6 +46,7 @@ enum AccentChoice: String, CaseIterable, Identifiable {
         switch self {
         case .teal: return 0x4FD1C5
         case .blue: return 0x74AEF7
+        case .royalBlue: return 0x6FA8F5
         case .violet: return 0xB49BF5
         case .orange: return 0xF0B45A
         case .green: return 0x7FD07F

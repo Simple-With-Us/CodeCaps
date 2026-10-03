@@ -234,7 +234,7 @@ struct SettingsSourcesFleetPage: View {
 
     private var thisMacSection: some View {
         Section {
-            Toggle("Read Agent Quotas on This Mac",
+            Toggle("Read Quotas From This Mac",
                    isOn: Binding(get: { model.localEnabled }, set: { model.setLocalEnabled($0) }))
             ForEach(ReaderStatus.all, id: \.providerKey) { reader in
                 readerRow(reader)

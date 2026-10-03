@@ -64,9 +64,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             // so Dark has to be handed to it directly.
             self?.popover.appearance = resolved
         }.store(in: &subscriptions)
-        model.$keepConsoleInFront.removeDuplicates().sink { [weak self] pinned in
-            self?.consoleWindow?.level = pinned ? .floating : .normal
-        }.store(in: &subscriptions)
+        // The owner asked (2026-10-02) for the console to dock and come to
+        // the front like HogHunter's does, rather than carry a "Keep In
+        // Front" pin.  Floating level was the old answer: it kept the window
+        // above others but left the app an accessory with no Dock icon, so
+        // the owner could not switch to CodeCaps at all.  Dock + activate is
+        // what they actually wanted..store(in: &subscriptions)
         consoleState.$page.removeDuplicates().sink { [weak self] page in
             self?.consoleWindow?.title = page.isSettings ? "CodeCaps Settings" : "CodeCaps"
         }.store(in: &subscriptions)
@@ -243,8 +246,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             consoleWindow = window
         }
         consoleWindow?.title = consoleState.page.isSettings ? "CodeCaps Settings" : "CodeCaps"
-        consoleWindow?.level = model.keepConsoleInFront ? .floating : .normal
         consoleWindow?.makeKeyAndOrderFront(nil)
+        // Re-opening from the menu bar should raise the window that is already
+        // open, not a second copy of it, and it has to come forward even if it
+        // is behind whatever the owner was using.
+        consoleWindow?.makeKey()
+        NSApp.activate(ignoringOtherApps: true)
+        applyActivationPolicy()
         NSApp.activate(ignoringOtherApps: true)
     }
 
@@ -265,6 +273,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
     @objc private func refresh() { model.refresh() }
     @objc private func quit() { NSApp.terminate(nil) }
+    /// `.accessory` while nothing but the status item is up, `.regular` as
+    /// soon as the console is on screen — which is what puts a Dock icon in
+    /// and takes it out again.  HogHunter's `AppActivationManager` does the
+    /// same thing; the difference here is that a menu bar app has one window
+    /// rather than a window registry.
+    private func applyActivationPolicy() {
+        let hasWindow = consoleWindow?.isVisible ?? false
+        NSApp.setActivationPolicy(hasWindow ? .regular : .accessory)
+    }
+
+    /// Reopening a window that is already open brings it forward instead of
+    /// building a second one.
     @objc private func toggleKeepInFront() { model.keepConsoleInFront.toggle() }
 
     private func configureMenu() {

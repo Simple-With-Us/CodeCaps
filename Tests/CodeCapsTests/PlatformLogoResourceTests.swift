@@ -51,14 +51,16 @@ final class PlatformLogoResourceTests: XCTestCase {
                                     "the SwiftPM resource bundle could not be resolved at all")
         let marks = ["claude", "openai", "gemini", "gemini-color", "gemini-mono",
                      "cursor", "grok", "grok-bot", "minimax"]
-        var found = 0
+        // Every named mark must be present in some form.  Deliberately not an
+        // exact count: the owner replacing the fabricated MiniMax `{M}` with
+        // the real PNG mark added a file, and an equality assertion is a test
+        // that fails every time an asset is corrected.
         for name in marks {
-            for ext in ["svg", "png"] where bundle.url(forResource: name, withExtension: ext) != nil {
-                found += 1
+            let present = ["svg", "png"].contains { ext in
+                bundle.url(forResource: name, withExtension: ext) != nil
             }
+            XCTAssertTrue(present, "no artwork for '\(name)' in the resource bundle")
         }
-        XCTAssertEqual(found, marks.count,
-                       "expected every mark file in the bundle; some are missing, so the rows that need them draw an SF Symbol")
     }
 
     /// A mark that resolves but will not rasterise is the same failure wearing
