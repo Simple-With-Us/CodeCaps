@@ -230,24 +230,8 @@ struct ConsoleView: View {
                 // start of "Antigravity · Gemini · Third-Party" legible.
                 .layoutPriority(1)
                 .truncationMode(.tail)
-            Spacer(minLength: 8)
+                .frame(minWidth: 200, alignment: .leading)
             if !state.page.isSettings {
-                // The compact/detailed toggle only affects the All Platforms
-                // grid (column widths and the per-card row count).  On every
-                // other page it was a dead control that pushed the search
-                // field and the page title into truncation.  Hide it
-                // everywhere the value does not have a visible effect.
-                if state.page == .allPlatforms {
-                    Picker("Layout", selection: $model.viewLayout) {
-                        ForEach(QuotaViewLayout.allCases) { Text($0.title).tag($0) }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(width: 168)
-                    .help("Quota Layout")
-                    .accessibilityLabel("Quota Layout")
-                }
-
                 HStack(spacing: 5) {
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 11))
@@ -262,10 +246,26 @@ struct ConsoleView: View {
                 .padding(.vertical, 5)
                 .background(Theme.surface, in: RoundedRectangle(cornerRadius: 6))
                 .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Theme.hairline))
-                .frame(width: 180)
+                .frame(minWidth: 120, idealWidth: 180, maxWidth: 180)
                 .help("Find a Platform")
                 .accessibilityLabel("Find a Platform")
+
+                // Layout only changes the All Platforms grid.  Keep its
+                // control compact and adjacent to search instead of spending
+                // 168pt on a segmented picker in the toolbar.
+                if state.page == .allPlatforms {
+                    Menu {
+                        Picker("Quota Layout", selection: $model.viewLayout) {
+                            ForEach(QuotaViewLayout.allCases) { Text($0.title).tag($0) }
+                        }
+                    } label: {
+                        Image(systemName: "slider.horizontal.3")
+                    }
+                    .help("View Options")
+                    .accessibilityLabel("View Options")
+                }
             }
+            Spacer(minLength: 8)
 
             Button { model.refresh() } label: {
                 Image(systemName: "arrow.clockwise").frame(width: 18, height: 18)
