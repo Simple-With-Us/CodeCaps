@@ -35,4 +35,10 @@ final class ConsoleNavigationTests: XCTestCase {
         XCTAssertTrue(ConsolePage.settingsAppearance.isSettings)
         XCTAssertTrue(ConsolePage.settingsAbout.isSettings)
     }
+
+    func testQuotaViewLayoutCases() {
+        XCTAssertEqual(QuotaViewLayout.allCases.count, 2)
+        XCTAssertEqual(QuotaViewLayout.compact.title, "Compact")
+        XCTAssertEqual(QuotaViewLayout.detailed.title, "Detailed")
+    }
 }

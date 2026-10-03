@@ -224,30 +224,14 @@ struct ConsoleView: View {
             Text(pageTitle)
                 .font(.system(size: 20, weight: .semibold, design: .rounded))
                 .lineLimit(1)
-                // Without layout priority the title loses its space to the
-                // fixed-width controls on the right and gets truncated in the
-                // middle by default.  Tail truncation plus priority keeps the
-                // start of "Antigravity · Gemini · Third-Party" legible.
+                // F-06: 200pt minimum title width with priority keeps
+                // platform headings like "Antigravity · Gemini · Third-Party" legible.
+                .frame(minWidth: 200, alignment: .leading)
                 .layoutPriority(1)
                 .truncationMode(.tail)
-            Spacer(minLength: 8)
-            if !state.page.isSettings {
-                // The compact/detailed toggle only affects the All Platforms
-                // grid (column widths and the per-card row count).  On every
-                // other page it was a dead control that pushed the search
-                // field and the page title into truncation.  Hide it
-                // everywhere the value does not have a visible effect.
-                if state.page == .allPlatforms {
-                    Picker("Layout", selection: $model.viewLayout) {
-                        ForEach(QuotaViewLayout.allCases) { Text($0.title).tag($0) }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(width: 168)
-                    .help("Quota Layout")
-                    .accessibilityLabel("Quota Layout")
-                }
 
+            if !state.page.isSettings {
+                // F-06: Position search field immediately adjacent to the page title.
                 HStack(spacing: 5) {
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 11))
@@ -265,6 +249,24 @@ struct ConsoleView: View {
                 .frame(width: 180)
                 .help("Find a Platform")
                 .accessibilityLabel("Find a Platform")
+            }
+
+            Spacer(minLength: 8)
+
+            // F-06: Compact / Detailed segmented control replaced with View Options menu.
+            if state.page == .allPlatforms {
+                Menu {
+                    Picker("Layout", selection: $model.viewLayout) {
+                        ForEach(QuotaViewLayout.allCases) { Text($0.title).tag($0) }
+                    }
+                } label: {
+                    Image(systemName: "gearshape")
+                        .frame(width: 18, height: 18)
+                }
+                .menuStyle(.borderlessButton)
+                .frame(width: 24, height: 24)
+                .help("View Options")
+                .accessibilityLabel("View Options")
             }
 
             Button { model.refresh() } label: {

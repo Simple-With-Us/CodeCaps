@@ -80,9 +80,9 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
     public var statusColor: Color {
         if isMasked { return .secondary }
         guard let remainingPercent else { return .secondary }
-        if remainingPercent <= 0 { return Color(red: 0.90, green: 0.25, blue: 0.25) }
-        if remainingPercent < 20 { return Color(red: 0.95, green: 0.65, blue: 0.15) }
-        return Color(red: 0.10, green: 0.70, blue: 0.45)
+        if remainingPercent <= 0 { return CompanionTheme.danger }
+        if remainingPercent < 20 { return CompanionTheme.warning }
+        return CompanionTheme.accent
     }
 
     public func countdown(now: Date = Date()) -> String {
@@ -162,9 +162,9 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
 
     public var statusColor: Color {
         guard let remainingPercent else { return .secondary }
-        if remainingPercent <= 0 { return Color(red: 0.90, green: 0.25, blue: 0.25) }
-        if remainingPercent < 20 { return Color(red: 0.95, green: 0.65, blue: 0.15) }
-        return Color(red: 0.10, green: 0.70, blue: 0.45)
+        if remainingPercent <= 0 { return CompanionTheme.danger }
+        if remainingPercent < 20 { return CompanionTheme.warning }
+        return CompanionTheme.accent
     }
 
     public var elapsedFraction: Double? {
