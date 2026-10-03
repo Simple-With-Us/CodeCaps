@@ -210,7 +210,7 @@ struct GlancePopover: View {
     /// list, full width, with the time of its latest reading on the right.
     private func groupHeader(_ group: FleetGroup) -> some View {
         HStack(spacing: 8) {
-            Text(glanceFleetGroupHeading(group.title))
+            Text(glanceFleetGroupHeading(glanceFleetSourceLabel(group.title)))
                 .font(.system(size: 10, weight: .bold))
                 .tracking(0.8)
                 .foregroundStyle(Theme.groupBandLabel)
@@ -297,7 +297,24 @@ func glanceHeaderParts(view: GlanceViewMode, reporting: Int, total: Int, sources
 func glanceFleetGroupHeading(_ title: String) -> String {
     let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
     if name.isEmpty || name.lowercased() == "fleet" { return "UNNAMED SOURCE" }
+    // A source that names a host keeps the host's own casing.  `API.MINIMAX.IO`
+    // reads as shouting and implies a formality the URL does not have; the
+    // band is already visually distinct, so it does not need the capitals to
+    // separate itself from the rows below.
+    if name.contains(".") || name.contains(":") { return name }
     return name.uppercased()
+}
+
+/// A source's own name, in words a stranger can act on.  The reader labels
+/// are internal, and `gbu` in particular named a command rather than a thing:
+/// it is the local Grok Bot CLI on this Mac, not a remote machine reporting in.
+func glanceFleetSourceLabel(_ source: String) -> String {
+    switch source.lowercased() {
+    case "gbu": return "Grok Bot CLI (gbu)"
+    case "antigravity quota summary": return "Antigravity Summary (This Mac)"
+    case "cursor dashboardservice": return "Cursor Dashboard (This Mac)"
+    default: return source
+    }
 }
 
 // MARK: - Header controls
@@ -778,28 +795,38 @@ struct GlanceMeter: View {
         HStack(spacing: Metrics.glanceMeterGap) {
             Text(glanceMeterCaption(snapshot))
                 .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.primary)
+                // Ink, not `.primary` and not the status colour.  AG's #112
+                // set this to `.primary`, which is very close; the owner asked
+                // for the caption and the percentage to be black (white in
+                // dark) specifically, so this is `Theme.ink` — which also
+                // means it follows the high-contrast pure black/white.
+                .foregroundStyle(Theme.ink)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
                 .frame(width: Metrics.glanceMeterCaptionWidth, alignment: .trailing)
             // Red for the share used, green for the share left, and a black
-            // marker for how far through the period we are.  The percentage
-            // beside it keeps its own status colour.
+            // marker for how far through the period we are.  This is the one
+            // place the status colour appears.
             QuotaUsageBar(metrics: metrics, height: Metrics.glanceMeterBarHeight,
                           dimmed: quotaBarIsDimmed(for: snapshot, sourceFailed: false),
                           markerHeight: Metrics.glanceMeterMarkerHeight)
                 .frame(width: Metrics.glanceMeterBarWidth, height: Metrics.glanceMeterBarHeight)
+            // AG's #112 grouped the percentage and the countdown and
+            // italicised the countdown; that structure is kept.  The colour
+            // is the owner's ruling: the percentage is the number the row
+            // exists to convey, and a number that changes colour with its own
+            // value has to be re-read every time.  Accent belongs on the bar.
             HStack(spacing: 3) {
                 Text(percent.map { "\(Int($0.rounded()))%" } ?? "—")
                     .font(.system(size: 11, weight: .medium).monospacedDigit())
-                    .foregroundStyle(tint)
+                    .foregroundStyle(Theme.ink)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
                     .fixedSize(horizontal: true, vertical: false)
                 if !countdown.isEmpty {
                     Text(countdown)
                         .font(.system(size: 10, weight: .regular).italic())
-                        .foregroundStyle(Color.secondary.opacity(0.85))
+                        .foregroundStyle(Theme.ink.opacity(0.62))
                         .lineLimit(1)
                         .fixedSize(horizontal: true, vertical: false)
                         .help(glanceResetHelp(snapshot.resetAt, now: now) ?? "")
@@ -1206,8 +1233,14 @@ struct GlanceRow: View {
             if canExpand {
                 Image(systemName: "chevron.down")
                     .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(.tertiary)
-                    .frame(width: Metrics.glanceChevronWidth)
+                    // Darker than `.tertiary`, which at 9pt on a light surface
+                    // is barely distinguishable from the row behind it.
+                    .foregroundStyle(Theme.ink.opacity(0.55))
+                    // Centred on the row's own axis, so the chevron sits the
+                    // same distance from the right edge as the row is from its
+                    // own top and bottom.  A frame with only a width pinned it
+                    // to the leading edge of its slot and left it riding high.
+                    .frame(width: Metrics.glanceChevronWidth, height: Metrics.glanceLocalRowHeight)
                     .rotationEffect(.degrees(isExpanded ? 180 : 0))
                     .accessibilityHidden(true)
             } else {

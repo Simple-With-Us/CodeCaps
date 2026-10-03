@@ -186,11 +186,28 @@ final class GlanceToggleTests: XCTestCase {
 
     // MARK: - From Fleet headings
 
-    func testFleetHeadingsAreTheSourceInCapitals() {
-        XCTAssertEqual(glanceFleetGroupHeading("chatgpt.com"), "CHATGPT.COM")
-        XCTAssertEqual(glanceFleetGroupHeading(FleetOrigin.title(for: "chatgpt.com")), "CHATGPT.COM")
+    /// Owner 2026-10-01: "don't capitalize the first letter of fleet URL unless
+    /// doing so for all parts of the url".  A host keeps its own casing —
+    /// `api.minimax.io`, not `API.MINIMAX.IO` — because a shouted hostname
+    /// implies a formality the URL does not have, and the band is already
+    /// visually distinct from the rows under it.  A name that is not a host is
+    /// still shouted, so a machine name reads as a band.
+    func testAHostKeepsItsOwnCasingAndANameIsStillShouted() {
+        XCTAssertEqual(glanceFleetGroupHeading("chatgpt.com"), "chatgpt.com")
+        XCTAssertEqual(glanceFleetGroupHeading(FleetOrigin.title(for: "chatgpt.com")), "chatgpt.com")
+        XCTAssertEqual(glanceFleetGroupHeading("api.minimax.io"), "api.minimax.io")
         XCTAssertEqual(glanceFleetGroupHeading("Mac mini"), "MAC MINI")
         XCTAssertFalse(glanceFleetGroupHeading("build-box").contains("FLEET"))
+    }
+
+    /// The reader labels named a command, not a thing, and two of them are
+    /// local readers on this Mac rather than remote machines reporting in.
+    func testReaderSourceLabelsSayWhatTheyActuallyAre() {
+        XCTAssertEqual(glanceFleetSourceLabel("gbu"), "Grok Bot CLI (gbu)")
+        XCTAssertEqual(glanceFleetSourceLabel("Antigravity quota summary"),
+                       "Antigravity Summary (This Mac)")
+        XCTAssertEqual(glanceFleetSourceLabel("chatgpt.com"), "chatgpt.com",
+                       "an unfamiliar source passes through unchanged")
     }
 
     func testASourceThatNamesNothingGetsAPlainHeading() {
@@ -208,7 +225,7 @@ final class GlanceToggleTests: XCTestCase {
         let appOnly = QuotaWindow(id: "y", provider: "openai", sourceApp: "chatgpt.com", label: "5h window",
                                 occurredAt: "2026-09-30T12:00:00Z")
         XCTAssertEqual(glanceFleetGroupHeading(FleetOrigin.title(for: FleetOrigin.identity(of: appOnly))),
-                       "CHATGPT.COM")
+                       "chatgpt.com")
     }
 
     func testTextOnTheHeadingBandIsReadableInBothAppearances() {
