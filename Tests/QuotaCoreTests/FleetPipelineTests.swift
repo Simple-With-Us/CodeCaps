@@ -33,18 +33,18 @@ final class FleetPipelineTests: XCTestCase {
         try JSONDecoder().decode(QuotaResponse.self, from: Data(legacyBody.utf8))
     }
 
-    func testLegacyAgentBarPushIsRecognisedAsOwn() throws {
+    func testLegacyAgentBarWithoutMachineStaysUnattributed() throws {
         let response = try decodedLegacy()
         let split = FleetOrigin.split(response.windows, host: "Studio")
-        XCTAssertEqual(split.ownPush.count, 1)
-        XCTAssertTrue(split.groups.isEmpty)
+        XCTAssertTrue(split.ownPush.isEmpty)
+        XCTAssertEqual(split.groups.first?.title, "Unidentified Mac")
     }
 
     func testSplittingBeforeSectioningKeepsTheSecondProducer() throws {
         let response = try decoded()
         let split = FleetOrigin.split(response.windows, host: "Studio")
-        XCTAssertEqual(split.ownPush.count, 3)
-        XCTAssertEqual(split.groups.map(\.title), ["Antigravity Usage"])
+        XCTAssertTrue(split.ownPush.isEmpty)
+        XCTAssertEqual(split.groups.map(\.title), ["Antigravity Usage", "Unidentified Mac"])
         XCTAssertEqual(split.groups.first?.windows.count, 2)
 
         // The group is sectioned on its own, so its readings become that

@@ -38,7 +38,7 @@ final class ConsoleNavigationTests: XCTestCase {
 
     func testQuotaViewLayoutCases() {
         XCTAssertEqual(QuotaViewLayout.allCases.count, 2)
-        XCTAssertEqual(QuotaViewLayout.compact.title, "Compact")
+        XCTAssertEqual(QuotaViewLayout.summary.title, "Compact")
         XCTAssertEqual(QuotaViewLayout.detailed.title, "Detailed")
     }
 }

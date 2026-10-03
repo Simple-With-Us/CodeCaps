@@ -90,12 +90,12 @@ final class QuotaPublisherTests: XCTestCase {
     func testBuildUsageMonitorV2Payload() throws {
         let publisher = QuotaPublisher()
         let windows = makeSampleWindows()
-        let data = try publisher.buildUsageMonitorV2Payload(windows: windows, occurredAtIso: "2026-09-14T19:00:00Z", machineName: "Test-Mac")
+        let data = try publisher.buildUsageMonitorV2Payload(windows: windows, occurredAtIso: "2026-09-14T19:00:00Z", machineName: "Test-Mac", producerInstanceId: "test-instance")
         
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         XCTAssertEqual(json["schemaVersion"] as? Int, 2)
         XCTAssertEqual(json["producerId"] as? String, "codecaps")
-        XCTAssertEqual(json["producerInstanceId"] as? String, "Test-Mac")
+        XCTAssertEqual(json["producerInstanceId"] as? String, "test-instance")
 
         let events = try XCTUnwrap(json["events"] as? [[String: Any]])
         XCTAssertEqual(events.count, 2)
@@ -110,11 +110,33 @@ final class QuotaPublisherTests: XCTestCase {
         XCTAssertEqual(first["tier"] as? String, "Claude Max")
 
         let meta = try XCTUnwrap(first["metadata"] as? [String: Any])
+        XCTAssertEqual(meta["machine"] as? String, "Test-Mac")
         XCTAssertEqual(meta["bucketId"] as? String, "5h")
         XCTAssertEqual(meta["quotaWindow"] as? String, "5h")
         XCTAssertEqual(meta["resetAt"] as? String, "2026-09-14T22:00:00Z")
         XCTAssertEqual(meta["source"] as? String, "codecaps")
         XCTAssertEqual(meta["usedPercent"] as? Double, 15.0)
+    }
+
+    func testInstancePersistsAndScopesIdempotency() throws {
+        let suite = "codecaps-machine-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let id = QuotaPublisher.persistentInstanceId(defaults: defaults)
+        XCTAssertNotNil(UUID(uuidString: id))
+        XCTAssertEqual(id, QuotaPublisher.persistentInstanceId(defaults: defaults))
+        let publisher = QuotaPublisher()
+        func payload(_ instance: String, name: String = "Same Name") throws -> [String: Any] {
+            let data = try publisher.buildUsageMonitorV2Payload(windows: makeSampleWindows(), occurredAtIso: "2026-10-03T20:00:00Z", machineName: name, producerInstanceId: instance)
+            return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        }
+        func events(_ p: [String: Any]) throws -> [String] {
+            try XCTUnwrap(p["events"] as? [[String: Any]]).compactMap { $0["eventId"] as? String }
+        }
+        let first = try events(payload("one"))
+        XCTAssertEqual(first, try events(payload("one")))
+        XCTAssertEqual(first, try events(payload("one", name: "Renamed")))
+        XCTAssertNotEqual(first, try events(payload("two")))
     }
 
     func testBuildGenericWebhookPayload() throws {

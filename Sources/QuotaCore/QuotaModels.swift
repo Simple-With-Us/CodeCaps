@@ -42,6 +42,9 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
     public var providerLabel: String?
     public var via: String?
     public var sourceApp: String?
+    /// Durable producer identity, separate from the human-readable machine name.
+    public var producerInstanceId: String?
+    public var machine: String?
     public var modelId: String?
     public var modelType: String?
     public var label: String
@@ -79,7 +82,7 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
         case id, provider, providerKey, providerLabel, via, sourceApp, modelId, modelType, label
         case remainingPercent, absoluteRemaining, absoluteLimit, quotaUnit, planName
         case remainingUnknown, isExhausted, resetAt, window, status, skip, skipReason
-        case occurredAt, source
+        case occurredAt, source, producerInstanceId, machine
     }
 
     public init(
@@ -107,7 +110,9 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
         occurredAt: String,
         source: String? = nil,
         periodStart: String? = nil,
-        accountKey: String? = nil
+        accountKey: String? = nil,
+        producerInstanceId: String? = nil,
+        machine: String? = nil
     ) {
         self.id = id
         self.provider = provider
@@ -115,6 +120,8 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
         self.providerLabel = providerLabel
         self.via = via
         self.sourceApp = sourceApp
+        self.producerInstanceId = producerInstanceId
+        self.machine = machine
         self.modelId = modelId
         self.modelType = modelType
         self.label = label
@@ -144,6 +151,8 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
         providerLabel = try container.decodeIfPresent(String.self, forKey: .providerLabel)
         via = try container.decodeIfPresent(String.self, forKey: .via)
         sourceApp = try container.decodeIfPresent(String.self, forKey: .sourceApp)
+        producerInstanceId = try container.decodeIfPresent(String.self, forKey: .producerInstanceId)
+        machine = try container.decodeIfPresent(String.self, forKey: .machine)
         modelId = try container.decodeIfPresent(String.self, forKey: .modelId)
         modelType = try container.decodeIfPresent(String.self, forKey: .modelType)
         label = try container.decodeIfPresent(String.self, forKey: .label) ?? provider
