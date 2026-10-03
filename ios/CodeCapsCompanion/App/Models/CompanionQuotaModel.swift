@@ -94,6 +94,25 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
         if minutes >= 60 { return "\(minutes / 60)h \(minutes % 60)m" }
         return "\(minutes)m"
     }
+
+    public func elapsedFraction(now: Date = Date()) -> Double? {
+        guard let resetAt else { return nil }
+        let token = cadence.isEmpty ? label : cadence
+        let words = "\(token) \(label)".lowercased()
+        let durationSeconds: TimeInterval? = {
+            if words.contains("5h") || words.contains("5-hour") || words.contains("five_hour") { return 5 * 3600 }
+            if words.contains("4h") || words.contains("4-hour") || words.contains("four_hour") { return 4 * 3600 }
+            if words.contains("7d") || words.contains("7-day") || words.contains("weekly") || words.contains("1w") { return 7 * 86400 }
+            if words.contains("1d") || words.contains("daily") { return 86400 }
+            if words.contains("billing") || words.contains("cycle") || words.contains("monthly") { return 30 * 86400 }
+            return nil
+        }()
+        guard let duration = durationSeconds, duration > 0 else { return nil }
+        let start = resetAt.addingTimeInterval(-duration)
+        let elapsed = now.timeIntervalSince(start)
+        guard elapsed >= 0 else { return 0.0 }
+        return min(1.0, max(0.0, elapsed / duration))
+    }
 }
 
 /// An overarching platform section displayed in the CodeCaps iOS companion app.
@@ -148,6 +167,10 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
         return Color(red: 0.10, green: 0.70, blue: 0.45)
     }
 
+    public var elapsedFraction: Double? {
+        windows.compactMap { $0.elapsedFraction() }.first
+    }
+
     public var providerLogoName: String? {
         let key = providerKey.lowercased()
         let lowId = id.lowercased()
@@ -164,18 +187,7 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
     }
 
     public var fallbackSymbolName: String {
-        let key = providerKey.lowercased()
-        let lowId = id.lowercased()
-        if lowId.contains("third-party") { return "sparkles" }
-        if lowId.contains("gemini") { return "sparkles" }
-        if key.contains("cursor") { return "chevron.left.forwardslash.chevron.right" }
-        if key.contains("grok-bot") { return "sparkles.tv" }
-        if key.contains("grok") { return "sparkle" }
-        if key.contains("minimax") { return "waveform" }
-        if key.contains("openai") || key.contains("codex") { return "apple.terminal" }
-        if key.contains("anthropic") || key.contains("claude") { return "brain" }
-        if key.contains("antigravity") || key.contains("gemini") { return "sparkles" }
-        return "cpu"
+        "questionmark.square.dashed"
     }
 
     public func countdown(now: Date = Date()) -> String {
@@ -228,6 +240,49 @@ public final class CompanionNotificationDelegate: NSObject, UNUserNotificationCe
 @MainActor
 public final class CompanionQuotaModel: ObservableObject {
     public static let appGroupId = "group.com.simplewithus.codecaps"
+
+    public static let customMarksDirectory: URL = {
+        let fm = FileManager.default
+        let base = fm.containerURL(forSecurityApplicationGroupIdentifier: appGroupId)
+            ?? fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSTemporaryDirectory())
+        let dir = base.appendingPathComponent("CodeCaps/CustomMarks", isDirectory: true)
+        if !fm.fileExists(atPath: dir.path) {
+            try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        return dir
+    }()
+
+    public static func customMarkURL(for providerKey: String, isDarkMode: Bool = false) -> URL? {
+        let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let fm = FileManager.default
+        var candidateDirs: [URL] = [customMarksDirectory]
+        if let appGroup = fm.containerURL(forSecurityApplicationGroupIdentifier: appGroupId) {
+            let appGroupMarks = appGroup.appendingPathComponent("CustomMarks", isDirectory: true)
+            if !candidateDirs.contains(appGroupMarks) {
+                candidateDirs.insert(appGroupMarks, at: 0)
+            }
+        }
+        for dir in candidateDirs {
+            if isDarkMode {
+                for ext in ["png", "svg", "jpg", "jpeg"] {
+                    let darkUrl = dir.appendingPathComponent("\(key)-dark.\(ext)")
+                    if fm.fileExists(atPath: darkUrl.path) { return darkUrl }
+                }
+            }
+            for ext in ["png", "svg", "jpg", "jpeg"] {
+                let url = dir.appendingPathComponent("\(key).\(ext)")
+                if fm.fileExists(atPath: url.path) { return url }
+            }
+        }
+        return nil
+    }
+
+    public static func customMarkMode(for providerKey: String) -> String {
+        let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let defaults = UserDefaults(suiteName: appGroupId) ?? UserDefaults.standard
+        return defaults.string(forKey: "customMarkMode_\(key)") ?? "color"
+    }
 
     private var sharedDefaults: UserDefaults {
         UserDefaults(suiteName: Self.appGroupId) ?? UserDefaults.standard
@@ -520,6 +575,14 @@ public final class CompanionQuotaModel: ObservableObject {
 
     private struct WireEnvelope: Decodable {
         let windows: [WireRawWindow]?
+        let customMarks: [String: WireCustomMark]?
+    }
+
+    private struct WireCustomMark: Decodable {
+        let data: String
+        let darkData: String?
+        let mode: String
+        let ext: String
     }
 
     private struct WireRawWindow: Decodable {
@@ -546,6 +609,20 @@ public final class CompanionQuotaModel: ObservableObject {
         guard let envelope = try? JSONDecoder().decode(WireEnvelope.self, from: data),
               let rawWindows = envelope.windows, !rawWindows.isEmpty else { return }
         hasDataSource = true
+
+        if let customMarks = envelope.customMarks, !customMarks.isEmpty {
+            let dir = Self.customMarksDirectory
+            let defaults = sharedDefaults
+            for (key, mark) in customMarks {
+                if let raw = Data(base64Encoded: mark.data) {
+                    try? raw.write(to: dir.appendingPathComponent("\(key).\(mark.ext)"), options: .atomic)
+                }
+                if let darkStr = mark.darkData, let rawDark = Data(base64Encoded: darkStr) {
+                    try? rawDark.write(to: dir.appendingPathComponent("\(key)-dark.\(mark.ext)"), options: .atomic)
+                }
+                defaults.set(mark.mode, forKey: "customMarkMode_\(key)")
+            }
+        }
 
         var antigravityWindows: [WireRawWindow] = []
         var nonAntigravityWindows: [WireRawWindow] = []
@@ -634,7 +711,7 @@ public final class CompanionQuotaModel: ObservableObject {
         var seenCadenceKeys: Set<String> = []
 
         for w in rawWindows {
-            let cadence = Self.formatCadence(w.label.isEmpty ? (w.window ?? "") : w.label)
+            let cadence = Self.formatCadence(w.label, window: w.window)
             let parsedReset = CompanionDateFormatter.date(from: w.resetAt)
             let pct = w.remainingPercent
             let exhausted = (pct ?? 100) <= 0 || (w.isExhausted ?? false)
@@ -915,22 +992,28 @@ public final class CompanionQuotaModel: ObservableObject {
         return (fallbackKey.isEmpty ? "other" : fallbackKey, raw.provider, fallbackKey)
     }
 
-    public static func formatCadence(_ label: String) -> String {
-        let low = label.lowercased()
-        if low.contains("5h") || low.contains("5-hour") || low.contains("five_hour") {
+    public static func formatCadence(_ label: String, window: String? = nil) -> String {
+        let combined = "\(window ?? "") \(label)".lowercased()
+        if combined.contains("5h") || combined.contains("5-hour") || combined.contains("five_hour") {
             return "5-hour window"
         }
-        if low.contains("7d") || low.contains("seven_day") {
+        if combined.contains("4h") || combined.contains("4-hour") || combined.contains("four_hour") {
+            return "4-hour window"
+        }
+        if combined.contains("7d") || combined.contains("seven_day") {
             return "7-day window"
         }
-        if low.contains("1w") || low.contains("weekly") {
+        if combined.contains("1w") || combined.contains("weekly") {
             return "Weekly window"
         }
-        if low.contains("1d") || low.contains("daily") {
+        if combined.contains("1d") || combined.contains("daily") {
             return "Daily window"
         }
-        if low.contains("billing") || low.contains("cycle") {
+        if combined.contains("billing") || combined.contains("cycle") {
             return "Billing cycle"
+        }
+        if let window, !window.isEmpty {
+            return window
         }
         return label
     }

@@ -43,6 +43,25 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
     public func countdown(now: Date = Date()) -> String {
         WidgetPresentation.formatCountdown(resetAt: resetAt, now: now)
     }
+
+    public func elapsedFraction(now: Date = Date()) -> Double? {
+        guard let resetAt else { return nil }
+        let token = cadence.isEmpty ? label : cadence
+        let words = "\(token) \(label)".lowercased()
+        let durationSeconds: TimeInterval? = {
+            if words.contains("5h") || words.contains("5-hour") || words.contains("five_hour") { return 5 * 3600 }
+            if words.contains("4h") || words.contains("4-hour") || words.contains("four_hour") { return 4 * 3600 }
+            if words.contains("7d") || words.contains("7-day") || words.contains("weekly") || words.contains("1w") { return 7 * 86400 }
+            if words.contains("1d") || words.contains("daily") { return 86400 }
+            if words.contains("billing") || words.contains("cycle") || words.contains("monthly") { return 30 * 86400 }
+            return nil
+        }()
+        guard let duration = durationSeconds, duration > 0 else { return nil }
+        let start = resetAt.addingTimeInterval(-duration)
+        let elapsed = now.timeIntervalSince(start)
+        guard elapsed >= 0 else { return 0.0 }
+        return min(1.0, max(0.0, elapsed / duration))
+    }
 }
 
 /// Overarching platform section represented in a widget.
@@ -100,6 +119,10 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
         if isMasked { return 0.0 }
         guard let pct = remainingPercent else { return 0.0 }
         return max(0.0, min(1.0, pct / 100.0))
+    }
+
+    public var elapsedFraction: Double? {
+        windows.compactMap { $0.elapsedFraction() }.first
     }
 }
 
@@ -245,7 +268,7 @@ public enum WidgetPresentation {
             var seenCadenceKeys: Set<String> = []
 
             for w in group.windows {
-                let cadence = formatCadence(w.label.isEmpty ? (w.window ?? "") : w.label)
+                let cadence = formatCadence(w.label, window: w.window)
                 let parsedReset = parseDate(from: w.resetAt)
                 let pct = w.remainingPercent
                 let exhausted = (pct ?? 100) <= 0 || (w.isExhausted ?? false)
@@ -434,22 +457,28 @@ public enum WidgetPresentation {
         return (fallbackKey.isEmpty ? "other" : fallbackKey, raw.provider, fallbackKey)
     }
 
-    public static func formatCadence(_ label: String) -> String {
-        let low = label.lowercased()
-        if low.contains("5h") || low.contains("5-hour") || low.contains("five_hour") {
+    public static func formatCadence(_ label: String, window: String? = nil) -> String {
+        let combined = "\(window ?? "") \(label)".lowercased()
+        if combined.contains("5h") || combined.contains("5-hour") || combined.contains("five_hour") {
             return "5-hour window"
         }
-        if low.contains("7d") || low.contains("seven_day") {
+        if combined.contains("4h") || combined.contains("4-hour") || combined.contains("four_hour") {
+            return "4-hour window"
+        }
+        if combined.contains("7d") || combined.contains("seven_day") {
             return "7-day window"
         }
-        if low.contains("1w") || low.contains("weekly") {
+        if combined.contains("1w") || combined.contains("weekly") {
             return "Weekly cap"
         }
-        if low.contains("daily") || low.contains("day") || low.contains("24h") {
+        if combined.contains("daily") || combined.contains("day") || combined.contains("24h") || combined.contains("1d") {
             return "Daily window"
         }
-        if low.contains("month") || low.contains("30d") {
+        if combined.contains("month") || combined.contains("30d") || combined.contains("billing") || combined.contains("cycle") {
             return "Monthly cap"
+        }
+        if let window, !window.isEmpty {
+            return window
         }
         return label.isEmpty ? "Quota window" : label
     }

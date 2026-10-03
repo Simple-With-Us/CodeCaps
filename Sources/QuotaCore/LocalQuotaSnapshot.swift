@@ -1,5 +1,7 @@
 import Foundation
 
+public typealias CustomMarkPayload = LocalQuotaSnapshot.CustomMarkPayload
+
 /// A credential-free handoff for BotFleet on the same Mac.  Only local quota
 /// readings are exported; server accounts and authentication never enter it.
 public enum LocalQuotaSnapshot {
@@ -12,6 +14,20 @@ public enum LocalQuotaSnapshot {
     /// never reaches the file.
     static let redactedIssue = "Quota source is unavailable."
 
+    public struct CustomMarkPayload: Codable, Sendable {
+        public let data: String
+        public let darkData: String?
+        public let mode: String
+        public let ext: String
+
+        public init(data: String, darkData: String? = nil, mode: String, ext: String) {
+            self.data = data
+            self.darkData = darkData
+            self.mode = mode
+            self.ext = ext
+        }
+    }
+
     /// `producer` and `issues` are additive and optional on decode, so a file
     /// written by an older build still parses and `version` stays at 1.  The
     /// consumer enforces exact equality on the version, so a bump is a hard
@@ -23,6 +39,7 @@ public enum LocalQuotaSnapshot {
         public let generatedAt: String
         public let windows: [QuotaWindow]
         public let issues: [String: String]?
+        public let customMarks: [String: CustomMarkPayload]?
 
         public init(
             format: String,
@@ -30,7 +47,8 @@ public enum LocalQuotaSnapshot {
             producer: String? = nil,
             generatedAt: String,
             windows: [QuotaWindow],
-            issues: [String: String]? = nil
+            issues: [String: String]? = nil,
+            customMarks: [String: CustomMarkPayload]? = nil
         ) {
             self.format = format
             self.version = version
@@ -38,6 +56,7 @@ public enum LocalQuotaSnapshot {
             self.generatedAt = generatedAt
             self.windows = windows
             self.issues = issues
+            self.customMarks = customMarks
         }
     }
 
@@ -55,6 +74,7 @@ public enum LocalQuotaSnapshot {
     public static func write(
         windows: [QuotaWindow],
         issues: [String: String] = [:],
+        customMarks: [String: CustomMarkPayload]? = nil,
         now: Date = Date(),
         to url: URL = destination()
     ) throws {
@@ -65,15 +85,29 @@ public enum LocalQuotaSnapshot {
         let payload = Payload(format: "usage-monitor-local-quotas", version: 1, producer: producerName,
                               generatedAt: ISO8601DateFormatter().string(from: now),
                               windows: windows.map { $0.normalizedForExport() },
-                              issues: published.isEmpty ? nil : published)
+                              issues: published.isEmpty ? nil : published,
+                              customMarks: customMarks)
         let data = try JSONEncoder().encode(payload)
-        guard data.count <= 1_048_576 else { throw CocoaError(.fileWriteOutOfSpace) }
+        guard data.count <= 10_485_760 else { throw CocoaError(.fileWriteOutOfSpace) }
         try writePrivately(data, to: url, in: directory, using: manager)
 
         if let groupDest = appGroupDestination(), groupDest != url {
             let groupDir = groupDest.deletingLastPathComponent()
             try? manager.createDirectory(at: groupDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             try? writePrivately(data, to: groupDest, in: groupDir, using: manager)
+
+            if let customMarks, !customMarks.isEmpty {
+                let marksDir = groupDir.appendingPathComponent("CustomMarks", isDirectory: true)
+                try? manager.createDirectory(at: marksDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+                for (key, mark) in customMarks {
+                    if let rawData = Data(base64Encoded: mark.data) {
+                        try? writePrivately(rawData, to: marksDir.appendingPathComponent("\(key).\(mark.ext)"), in: marksDir, using: manager)
+                    }
+                    if let darkDataStr = mark.darkData, let rawDark = Data(base64Encoded: darkDataStr) {
+                        try? writePrivately(rawDark, to: marksDir.appendingPathComponent("\(key)-dark.\(mark.ext)"), in: marksDir, using: manager)
+                    }
+                }
+            }
         }
     }
 

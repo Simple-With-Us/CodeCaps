@@ -762,9 +762,12 @@ final class MonitorModel: ObservableObject {
         // platform key, so a style the owner set for "Antigravity" before the
         // pools were listed separately still applies to both pools instead of
         // silently reverting them to the default.
-        if let style = markStyles[key] { return style }
         let platform = key.split(separator: ":", maxSplits: 1).first.map(String.init) ?? key
-        return markStyles[platform] ?? .template
+        if let style = markStyles[key] ?? markStyles[platform] { return style }
+        if PlatformLogoImage.hasCustomMark(providerKey: key) || PlatformLogoImage.hasCustomMark(providerKey: platform) {
+            return .custom
+        }
+        return .template
     }
 
     /// The mark style for the glance popover.  `standard` (colour) by
@@ -772,9 +775,12 @@ final class MonitorModel: ObservableObject {
     /// so the brand colours read better than a monochrome silhouette.
     func glanceMarkStyle(for providerKey: String) -> MarkStyle {
         let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if let style = markStyles[key] { return style }
         let platform = key.split(separator: ":", maxSplits: 1).first.map(String.init) ?? key
-        return markStyles[platform] ?? .standard
+        if let style = markStyles[key] ?? markStyles[platform] { return style }
+        if PlatformLogoImage.hasCustomMark(providerKey: key) || PlatformLogoImage.hasCustomMark(providerKey: platform) {
+            return .custom
+        }
+        return .standard
     }
 
     func setMarkStyle(_ style: MarkStyle, for providerKey: String) {
@@ -848,6 +854,31 @@ final class MonitorModel: ObservableObject {
             if markStyles[key] == .custom { markStyles[key] = .template }
         }
         objectWillChange.send()
+    }
+
+    /// Serializes all currently installed custom marks so they can be exported to
+    /// local/shared snapshots and automatically synced to the iOS Companion app.
+    func exportedCustomMarks() -> [String: CustomMarkPayload] {
+        var result: [String: CustomMarkPayload] = [:]
+        let dir = PlatformLogoImage.customMarksDirectory
+        guard let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else {
+            return result
+        }
+        for file in files {
+            let name = file.deletingPathExtension().lastPathComponent
+            let ext = file.pathExtension.lowercased()
+            guard !name.hasSuffix("-dark"), ["png", "svg", "jpg", "jpeg"].contains(ext) else { continue }
+            guard let data = try? Data(contentsOf: file) else { continue }
+            let base64 = data.base64EncodedString()
+            let mode = customMarkMode(for: name).rawValue
+            var darkBase64: String? = nil
+            if let darkUrl = PlatformLogoImage.customDarkMarkURL(providerKey: name),
+               let darkData = try? Data(contentsOf: darkUrl) {
+                darkBase64 = darkData.base64EncodedString()
+            }
+            result[name] = CustomMarkPayload(data: base64, darkData: darkBase64, mode: mode, ext: ext)
+        }
+        return result
     }
 
     /// Live binding for the local-readers toggle.  Writing the default and
@@ -1183,7 +1214,7 @@ final class MonitorModel: ObservableObject {
                 // failure below is merged in afterwards and must never reach a
                 // file that promises local-only readings.
                 if useLocal {
-                    try LocalQuotaSnapshot.write(windows: self.localWindows, issues: self.issues, now: self.now)
+                    try LocalQuotaSnapshot.write(windows: self.localWindows, issues: self.issues, customMarks: exportedCustomMarks(), now: self.now)
                     #if canImport(WidgetKit)
                     WidgetCenter.shared.reloadAllTimelines()
                     #endif

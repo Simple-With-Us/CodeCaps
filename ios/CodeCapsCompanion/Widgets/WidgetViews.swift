@@ -60,10 +60,14 @@ struct ProviderMarkView: View {
     }
 
     var body: some View {
-        let assetName = assetName(for: providerKey)
-        #if canImport(UIKit)
-        if let image = UIImage(named: assetName) {
-            Image(uiImage: image)
+        if let custom = customMarkImage() {
+            custom
+                .resizable()
+                .scaledToFit()
+                .frame(width: size, height: size)
+                .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
+        } else if let asset = assetName(for: providerKey), let image = bundledImage(named: asset) {
+            image
                 .resizable()
                 .scaledToFit()
                 .frame(width: size, height: size)
@@ -71,45 +75,62 @@ struct ProviderMarkView: View {
         } else {
             fallbackBadge
         }
-        #elseif canImport(AppKit)
-        if let image = NSImage(named: NSImage.Name(assetName)) {
-            Image(nsImage: image)
-                .resizable()
-                .scaledToFit()
-                .frame(width: size, height: size)
-                .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
-        } else {
-            fallbackBadge
-        }
-        #else
-        fallbackBadge
-        #endif
     }
 
     private var fallbackBadge: some View {
         ZStack {
             RoundedRectangle(cornerRadius: size * 0.22, style: .continuous)
-                .fill(WidgetPresentation.providerColor(providerKey: providerKey).opacity(0.2))
-            Text(initial(for: providerKey))
-                .font(.system(size: size * 0.55, weight: .bold, design: .rounded))
-                .foregroundColor(WidgetPresentation.providerColor(providerKey: providerKey))
+                .fill(Color.secondary.opacity(0.15))
+            Image(systemName: "questionmark.square.dashed")
+                .font(.system(size: size * 0.55, weight: .medium))
+                .foregroundColor(.secondary)
         }
         .frame(width: size, height: size)
     }
 
-    private func initial(for key: String) -> String {
-        let low = key.lowercased()
-        if low.contains("claude") || low.contains("anthropic") { return "C" }
-        if low.contains("openai") || low.contains("codex") { return "O" }
-        if low.contains("cursor") { return "Cu" }
-        if low.contains("minimax") { return "M" }
-        if low.contains("antigravity") { return "A" }
-        if low.contains("grok") { return "G" }
-        if low.contains("gemini") { return "Ge" }
-        return String(key.prefix(1)).uppercased()
+    private func customMarkImage() -> Image? {
+        let fm = FileManager.default
+        guard let groupURL = fm.containerURL(forSecurityApplicationGroupIdentifier: "group.com.simplewithus.codecaps") else {
+            return nil
+        }
+        let cleanKey = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let candidates = [
+            groupURL.appendingPathComponent("CustomMarks", isDirectory: true),
+            groupURL.appendingPathComponent("CodeCaps/CustomMarks", isDirectory: true)
+        ]
+        for dir in candidates {
+            for ext in ["png", "svg", "jpg", "jpeg"] {
+                let fileURL = dir.appendingPathComponent("\(cleanKey).\(ext)")
+                if fm.fileExists(atPath: fileURL.path) {
+                    #if canImport(UIKit)
+                    if let uiImg = UIImage(contentsOfFile: fileURL.path) {
+                        return Image(uiImage: uiImg)
+                    }
+                    #elseif canImport(AppKit)
+                    if let nsImg = NSImage(contentsOf: fileURL) {
+                        return Image(nsImage: nsImg)
+                    }
+                    #endif
+                }
+            }
+        }
+        return nil
     }
 
-    private func assetName(for key: String) -> String {
+    private func bundledImage(named name: String) -> Image? {
+        #if canImport(UIKit)
+        if let img = UIImage(named: name) {
+            return Image(uiImage: img)
+        }
+        #elseif canImport(AppKit)
+        if let img = NSImage(named: NSImage.Name(name)) {
+            return Image(nsImage: img)
+        }
+        #endif
+        return nil
+    }
+
+    private func assetName(for key: String) -> String? {
         let low = key.lowercased()
         let pool = (itemId ?? "").lowercased()
         if low.contains("antigravity") && pool.contains("gemini") { return "provider-gemini" }
@@ -122,7 +143,7 @@ struct ProviderMarkView: View {
         if low.contains("gemini") { return "provider-gemini" }
         if low.contains("grok-bot") { return "provider-grok-bot" }
         if low.contains("grok") || low.contains("xai") { return "provider-grok" }
-        return "provider-antigravity"
+        return nil
     }
 }
 
@@ -130,18 +151,46 @@ struct ProviderMarkView: View {
 
 struct MiniProgressBar: View {
     let fraction: Double
-    let color: Color
+    var color: Color = Color(red: 0.10, green: 0.70, blue: 0.45)
+    var elapsedFraction: Double? = nil
     var height: CGFloat = 4
 
     var body: some View {
         GeometryReader { proxy in
+            let totalW = proxy.size.width
+            let safeFrac = min(1.0, max(0.0, fraction))
+            let remW = CGFloat(safeFrac) * totalW
+            let usedW = totalW - remW
+
             ZStack(alignment: .leading) {
                 Capsule()
                     .fill(Color.primary.opacity(0.12))
                     .frame(height: height)
-                Capsule()
-                    .fill(color)
-                    .frame(width: max(3, proxy.size.width * CGFloat(fraction)), height: height)
+
+                if totalW > 0 {
+                    HStack(spacing: 0) {
+                        if usedW > 0 {
+                            Rectangle()
+                                .fill(Color(red: 0.86, green: 0.22, blue: 0.22))
+                                .frame(width: usedW)
+                        }
+                        if remW > 0 {
+                            Rectangle()
+                                .fill(color)
+                                .frame(width: remW)
+                        }
+                    }
+                    .clipShape(Capsule())
+                    .frame(height: height)
+                }
+
+                if let elapsed = elapsedFraction, elapsed >= 0, elapsed <= 1.0, totalW > 0 {
+                    let markerX = CGFloat(elapsed) * totalW
+                    Rectangle()
+                        .fill(Color.primary.opacity(0.85))
+                        .frame(width: 1.5, height: height + 2)
+                        .position(x: markerX, y: proxy.size.height / 2)
+                }
             }
         }
         .frame(height: height)
@@ -228,6 +277,7 @@ struct OverviewSmallView: View {
                             MiniProgressBar(
                                 fraction: platform.progressFraction,
                                 color: platform.statusColor,
+                                elapsedFraction: platform.elapsedFraction,
                                 height: 3.5
                             )
                         }
@@ -307,6 +357,7 @@ struct OverviewMediumView: View {
                         MiniProgressBar(
                             fraction: platform.progressFraction,
                             color: platform.statusColor,
+                            elapsedFraction: platform.elapsedFraction,
                             height: 4
                         )
                         HStack {
@@ -385,6 +436,7 @@ struct OverviewLargeView: View {
                                 MiniProgressBar(
                                     fraction: platform.progressFraction,
                                     color: platform.statusColor,
+                                    elapsedFraction: platform.elapsedFraction,
                                     height: 4
                                 )
 
@@ -568,6 +620,7 @@ struct ProviderFocusView: View {
                                 MiniProgressBar(
                                     fraction: max(0.0, min(1.0, (win.remainingPercent ?? 0.0) / 100.0)),
                                     color: win.statusColor,
+                                    elapsedFraction: win.elapsedFraction(),
                                     height: 3.5
                                 )
                             }
@@ -612,7 +665,7 @@ struct AccessoryView: View {
                         Text(platform.displayPercent)
                             .font(.system(size: 12, weight: .bold, design: .rounded))
                     }
-                    MiniProgressBar(fraction: platform.progressFraction, color: .primary, height: 4)
+                    MiniProgressBar(fraction: platform.progressFraction, color: .primary, elapsedFraction: platform.elapsedFraction, height: 4)
                     HStack {
                         Text(platform.subtitle)
                             .font(.system(size: 9))
