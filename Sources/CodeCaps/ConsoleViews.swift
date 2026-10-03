@@ -352,6 +352,24 @@ private struct ConsoleSidebarSplitter: View {
 struct ConsoleSidebar: View {
     @ObservedObject var model: MonitorModel
     @ObservedObject var state: ConsoleState
+    @FocusState private var focusedPage: ConsolePage?
+
+    private var allPages: [ConsolePage] {
+        var pages: [ConsolePage] = [.allPlatforms]
+        pages.append(contentsOf: model.displaySections.map { .platform($0.id) })
+        pages.append(contentsOf: ConsolePage.settingsPages)
+        return pages
+    }
+
+    private func moveSelection(by delta: Int) {
+        let pages = allPages
+        guard !pages.isEmpty else { return }
+        let currentIndex = pages.firstIndex(of: state.page) ?? 0
+        let nextIndex = max(0, min(pages.count - 1, currentIndex + delta))
+        let target = pages[nextIndex]
+        state.page = target
+        focusedPage = target
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -385,6 +403,20 @@ struct ConsoleSidebar: View {
             }
             .listStyle(.sidebar)
             .scrollContentBackground(.hidden)
+            .focusable()
+            .onMoveCommand { direction in
+                switch direction {
+                case .up: moveSelection(by: -1)
+                case .down: moveSelection(by: 1)
+                default: break
+                }
+            }
+            .onAppear {
+                focusedPage = state.page
+            }
+            .onChange(of: state.page) { _, newPage in
+                focusedPage = newPage
+            }
 
             Divider()
             footer
@@ -395,7 +427,11 @@ struct ConsoleSidebar: View {
     /// One selectable sidebar row, highlighted with the app's own accent.
     private func sidebarRow<Content: View>(page: ConsolePage, @ViewBuilder content: () -> Content) -> some View {
         let selected = state.page == page
-        return Button { state.page = page } label: {
+        let isFocused = focusedPage == page
+        return Button {
+            state.page = page
+            focusedPage = page
+        } label: {
             content()
                 .foregroundStyle(Theme.ink)
                 .padding(.horizontal, 6)
@@ -404,10 +440,11 @@ struct ConsoleSidebar: View {
                 .background(selected ? Theme.selection : Color.clear,
                             in: RoundedRectangle(cornerRadius: 6))
                 .overlay(RoundedRectangle(cornerRadius: 6)
-                    .strokeBorder(selected ? Theme.accent.opacity(0.35) : .clear))
+                    .strokeBorder(selected ? Theme.accent.opacity(isFocused ? 0.65 : 0.35) : .clear))
                 .contentShape(RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.plain)
+        .focused($focusedPage, equals: page)
         .listRowInsets(EdgeInsets(top: 1, leading: 6, bottom: 1, trailing: 6))
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
     }
