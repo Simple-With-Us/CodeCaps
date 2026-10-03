@@ -278,9 +278,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// and takes it out again.  HogHunter's `AppActivationManager` does the
     /// same thing; the difference here is that a menu bar app has one window
     /// rather than a window registry.
+    ///
+    /// The display mode wins over the window.  A menu-bar-only app must never
+    /// grow a Dock icon, even with Settings open, or the setting the owner
+    /// chose quietly stops meaning anything.
     private func applyActivationPolicy() {
+        let docked = model.displayMode != .menuBar
         let hasWindow = consoleWindow?.isVisible ?? false
-        NSApp.setActivationPolicy(hasWindow ? .regular : .accessory)
+        NSApp.setActivationPolicy(docked && hasWindow ? .regular : .accessory)
+    }
+
+    /// Closing the console is what takes the Dock icon away.  Without this the
+    /// app stayed `.regular` with no window showing, which is a Dock icon the
+    /// owner cannot account for — clicking it brought up nothing.
+    ///
+    /// Always `.accessory`, in every display mode: the console is no longer
+    /// showing, and an owner who chose Dock mode still has their icon back the
+    /// moment `applyActivationPolicy` runs on the next open.
+    func windowWillClose(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow, window === consoleWindow else { return }
+        NSApp.setActivationPolicy(.accessory)
     }
 
     /// Reopening a window that is already open brings it forward instead of
