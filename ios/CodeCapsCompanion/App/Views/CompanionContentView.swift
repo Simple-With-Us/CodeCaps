@@ -252,18 +252,11 @@ public struct CompanionContentView: View {
             }
 
             // Overarching Progress Bar
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule()
-                        .fill(trackColor)
-                    if let pct = item.remainingPercent {
-                        Capsule()
-                            .fill(item.statusColor)
-                            .frame(width: geo.size.width * CGFloat(min(max(pct, 0), 100)) / 100)
-                    }
-                }
-            }
-            .frame(height: 6)
+            CompanionUsageBar(
+                remainingPercent: item.remainingPercent,
+                elapsedFraction: item.elapsedFraction,
+                height: 6
+            )
 
             // Multiple time periods / windows when expanded
             if isExpanded {
@@ -313,16 +306,12 @@ public struct CompanionContentView: View {
             }
             Spacer(minLength: 8)
 
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(trackColor)
-                    if let pct = win.remainingPercent {
-                        Capsule().fill(win.statusColor)
-                            .frame(width: geo.size.width * CGFloat(min(max(pct, 0), 100)) / 100)
-                    }
-                }
-            }
-            .frame(width: 48, height: 4)
+            CompanionUsageBar(
+                remainingPercent: win.remainingPercent,
+                elapsedFraction: win.elapsedFraction(),
+                height: 4
+            )
+            .frame(width: 52)
 
             Text(win.displayPercent)
                 .font(.system(size: 13, weight: .bold, design: .rounded).monospacedDigit())
@@ -585,15 +574,118 @@ public struct CompanionContentView: View {
     }
 }
 
+// MARK: - Companion Usage Bar
+
+public struct CompanionUsageBar: View {
+    public let remainingPercent: Double?
+    public let elapsedFraction: Double?
+    public var height: CGFloat
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var barUsedColor: Color {
+        Color(red: 0.86, green: 0.22, blue: 0.22)
+    }
+
+    private var barRemainingColor: Color {
+        Color(red: 0.10, green: 0.70, blue: 0.45)
+    }
+
+    private var trackColor: Color {
+        #if os(iOS)
+        return Color(uiColor: .tertiarySystemFill)
+        #else
+        return Color.secondary.opacity(0.15)
+        #endif
+    }
+
+    private var pacingMarkerColor: Color {
+        colorScheme == .dark ? Color.white : Color.black
+    }
+
+    private var pacingMarkerHaloColor: Color {
+        colorScheme == .dark ? Color.black.opacity(0.7) : Color.white.opacity(0.75)
+    }
+
+    public init(remainingPercent: Double?, elapsedFraction: Double? = nil, height: CGFloat = 6) {
+        self.remainingPercent = remainingPercent
+        self.elapsedFraction = elapsedFraction
+        self.height = height
+    }
+
+    public var body: some View {
+        GeometryReader { geo in
+            let totalWidth = geo.size.width
+            let safeRemaining = remainingPercent.map { min(100.0, max(0.0, $0)) }
+            let remainingWidth = safeRemaining.map { CGFloat($0 / 100.0) * totalWidth }
+            let usedWidth = remainingWidth.map { totalWidth - $0 }
+
+            ZStack(alignment: .leading) {
+                // Background Track
+                Capsule()
+                    .fill(trackColor)
+                    .frame(height: height)
+
+                // Two-tone segments: Used (Red) on left, Remaining (Green/Teal) on right
+                if let usedW = usedWidth, let remW = remainingWidth, totalWidth > 0 {
+                    HStack(spacing: 0) {
+                        if usedW > 0 {
+                            Rectangle()
+                                .fill(barUsedColor)
+                                .frame(width: usedW)
+                        }
+                        if remW > 0 {
+                            Rectangle()
+                                .fill(barRemainingColor)
+                                .frame(width: remW)
+                        }
+                    }
+                    .clipShape(Capsule())
+                    .frame(height: height)
+                }
+
+                // Pacing marker line (elapsed time fraction)
+                if let frac = elapsedFraction, frac >= 0, frac <= 1.0, totalWidth > 0 {
+                    let markerX = CGFloat(frac) * totalWidth
+                    let markerHeight = height + 4
+
+                    // Halo
+                    Rectangle()
+                        .fill(pacingMarkerHaloColor)
+                        .frame(width: 4, height: markerHeight + 2)
+                        .position(x: markerX, y: geo.size.height / 2)
+
+                    // Line
+                    Rectangle()
+                        .fill(pacingMarkerColor)
+                        .frame(width: 2, height: markerHeight)
+                        .position(x: markerX, y: geo.size.height / 2)
+                }
+            }
+        }
+        .frame(height: height)
+    }
+}
+
 // MARK: - Provider Logo
 
 public struct CompanionProviderLogo: View {
     public let item: CompanionQuotaItem
     public var size: CGFloat = 36
 
+    @Environment(\.colorScheme) private var colorScheme
+
     public init(item: CompanionQuotaItem, size: CGFloat = 36) {
         self.item = item
         self.size = size
+    }
+
+    private var customMarkURL: URL? {
+        CompanionQuotaModel.customMarkURL(for: item.providerKey, isDarkMode: colorScheme == .dark)
+    }
+
+    private var customMarkMode: String {
+        CompanionQuotaModel.customMarkMode(for: item.providerKey)
     }
 
     /// One-colour marks render as templates so they follow Light and Dark.
@@ -615,7 +707,22 @@ public struct CompanionProviderLogo: View {
                 .fill(Color.secondary.opacity(0.1))
             #endif
 
-            if let logoName = item.providerLogoName, logoExists(logoName) {
+            if let customImage = loadCustomImage() {
+                if customMarkMode == "template" {
+                    customImage
+                        .renderingMode(.template)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .foregroundStyle(.primary)
+                        .frame(width: size * 0.62, height: size * 0.62)
+                } else {
+                    customImage
+                        .renderingMode(.original)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: size * 0.62, height: size * 0.62)
+                }
+            } else if let logoName = item.providerLogoName, logoExists(logoName) {
                 if isMonochrome {
                     Image(logoName)
                         .renderingMode(.template)
@@ -637,6 +744,20 @@ public struct CompanionProviderLogo: View {
             }
         }
         .frame(width: size, height: size)
+    }
+
+    private func loadCustomImage() -> Image? {
+        guard let url = customMarkURL else { return nil }
+        #if canImport(UIKit)
+        if let uiImg = UIImage(contentsOfFile: url.path) {
+            return Image(uiImage: uiImg)
+        }
+        #elseif canImport(AppKit)
+        if let nsImg = NSImage(contentsOf: url) {
+            return Image(nsImage: nsImg)
+        }
+        #endif
+        return nil
     }
 
     private func logoExists(_ name: String) -> Bool {

@@ -22,6 +22,20 @@ final class LocalQuotaSnapshotTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
     }
 
+    func testPublishesAndPreservesCustomMarksInSnapshot() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("quota-windows.json")
+        let mark = CustomMarkPayload(data: "AQIDBA==", darkData: "BQYHCA==", mode: "color", ext: "png")
+        try LocalQuotaSnapshot.write(windows: [], issues: [:], customMarks: ["minimax": mark], to: url)
+
+        let payload = try JSONDecoder().decode(LocalQuotaSnapshot.Payload.self, from: Data(contentsOf: url))
+        XCTAssertEqual(payload.customMarks?["minimax"]?.data, "AQIDBA==")
+        XCTAssertEqual(payload.customMarks?["minimax"]?.darkData, "BQYHCA==")
+        XCTAssertEqual(payload.customMarks?["minimax"]?.mode, "color")
+        XCTAssertEqual(payload.customMarks?["minimax"]?.ext, "png")
+    }
+
     // MARK: - Q4: the reason a provider is missing
 
     func testPublishesProviderIssuesAndOmitsTheKeyWhenThereAreNone() throws {

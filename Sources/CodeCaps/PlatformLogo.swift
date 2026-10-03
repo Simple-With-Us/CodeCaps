@@ -350,13 +350,26 @@ public enum PlatformLogoImage {
         }
     }
 
+    /// Whether a user-supplied custom mark exists on disk for this provider or platform.
+    public static func hasCustomMark(providerKey: String) -> Bool {
+        let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let plat = platformKey(of: key)
+        return customPrimaryMarkURL(providerKey: key) != nil
+            || customDarkMarkURL(providerKey: key) != nil
+            || customPrimaryMarkURL(providerKey: plat) != nil
+            || customDarkMarkURL(providerKey: plat) != nil
+    }
+
     /// The on-disk path for a provider's primary custom mark, or `nil` if none
     /// has been chosen yet.
     public static func customPrimaryMarkURL(providerKey: String) -> URL? {
         let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        for ext in ["svg", "png", "pdf"] {
-            let url = customMarksDirectory.appendingPathComponent("\(key).\(ext)")
-            if FileManager.default.fileExists(atPath: url.path) { return url }
+        let candidates = key.contains(":") ? [key, platformKey(of: key)] : [key]
+        for candidate in candidates {
+            for ext in ["png", "svg", "jpg", "jpeg", "pdf"] {
+                let url = customMarksDirectory.appendingPathComponent("\(candidate).\(ext)")
+                if FileManager.default.fileExists(atPath: url.path) { return url }
+            }
         }
         return nil
     }
@@ -365,9 +378,12 @@ public enum PlatformLogoImage {
     /// has been imported yet.
     public static func customDarkMarkURL(providerKey: String) -> URL? {
         let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        for ext in ["svg", "png", "pdf"] {
-            let darkUrl = customMarksDirectory.appendingPathComponent("\(key)-dark.\(ext)")
-            if FileManager.default.fileExists(atPath: darkUrl.path) { return darkUrl }
+        let candidates = key.contains(":") ? [key, platformKey(of: key)] : [key]
+        for candidate in candidates {
+            for ext in ["png", "svg", "jpg", "jpeg", "pdf"] {
+                let darkUrl = customMarksDirectory.appendingPathComponent("\(candidate)-dark.\(ext)")
+                if FileManager.default.fileExists(atPath: darkUrl.path) { return darkUrl }
+            }
         }
         return nil
     }
