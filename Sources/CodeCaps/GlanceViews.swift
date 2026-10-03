@@ -178,7 +178,7 @@ struct GlancePopover: View {
                          markStyle: model.glanceMarkStyle(for: row.id),
                          showsAlarmToggle: !model.alarmsAll,
                          isAlarmEnabled: model.isProviderAlarmSelected(row.id),
-                         allowsExpansion: glanceRowAllowsExpansion(row, origin: origin),
+                         allowsExpansion: origin == .fleet && glanceRowAllowsExpansion(row, origin: origin),
                          isExpanded: expandedIds.contains(key),
                          onTap: { toggleExpanded(key) },
                          onToggleAlarm: { model.toggleAlarm(for: row.id) })
@@ -778,7 +778,7 @@ struct GlanceMeter: View {
         HStack(spacing: Metrics.glanceMeterGap) {
             Text(glanceMeterCaption(snapshot))
                 .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.primary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
                 .frame(width: Metrics.glanceMeterCaptionWidth, alignment: .trailing)
@@ -789,24 +789,23 @@ struct GlanceMeter: View {
                           dimmed: quotaBarIsDimmed(for: snapshot, sourceFailed: false),
                           markerHeight: Metrics.glanceMeterMarkerHeight)
                 .frame(width: Metrics.glanceMeterBarWidth, height: Metrics.glanceMeterBarHeight)
-            Text(percent.map { "\(Int($0.rounded()))%" } ?? "—")
-                .font(.system(size: 11, weight: .medium).monospacedDigit())
-                .foregroundStyle(tint)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-                .fixedSize(horizontal: true, vertical: false)
-                .frame(width: Metrics.glanceMeterPercentWidth, alignment: .leading)
-            // The same type as the caption on the left, so the row reads as
-            // one line of labels rather than a label and a footnote.  At most
-            // two units on the line; the full value and the reset's own time
-            // are one hover away.
-            Text(countdown)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
-                .frame(width: Metrics.glanceMeterCountdownWidth, alignment: .leading)
-                .help(glanceResetHelp(snapshot.resetAt, now: now) ?? "")
+            HStack(spacing: 3) {
+                Text(percent.map { "\(Int($0.rounded()))%" } ?? "—")
+                    .font(.system(size: 11, weight: .medium).monospacedDigit())
+                    .foregroundStyle(tint)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .fixedSize(horizontal: true, vertical: false)
+                if !countdown.isEmpty {
+                    Text(countdown)
+                        .font(.system(size: 10, weight: .regular).italic())
+                        .foregroundStyle(Color.secondary.opacity(0.85))
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .help(glanceResetHelp(snapshot.resetAt, now: now) ?? "")
+                }
+            }
+            .frame(width: Metrics.glanceMeterPercentWidth + Metrics.glanceMeterGap + Metrics.glanceMeterCountdownWidth, alignment: .leading)
         }
         .frame(width: Metrics.glanceMeterWidth, alignment: .leading)
         .accessibilityElement(children: .ignore)

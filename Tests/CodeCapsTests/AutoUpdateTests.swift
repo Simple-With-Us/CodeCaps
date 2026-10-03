@@ -6,7 +6,7 @@ import XCTest
 /// at launch — the wrong thing for a development build to show.
 final class AutoUpdateAvailabilityTests: XCTestCase {
     private let appURL = URL(fileURLWithPath: "/Users/someone/Applications/CodeCaps.app")
-    private let feed = "https://github.com/jaywedgeworth22/CodeCaps/releases/latest/download/appcast.xml"
+    private let feed = "https://github.com/Simple-With-Us/CodeCaps/releases/latest/download/appcast.xml"
     // 32 zero bytes, base64: the right shape for an EdDSA public key.
     private let key = Data(count: 32).base64EncodedString()
 

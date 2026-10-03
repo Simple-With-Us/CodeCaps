@@ -1,4 +1,4 @@
-// Copied verbatim from jaywedgeworth22/BotFleet scripts/infisical-fetch.mjs on
+// Copied verbatim from Simple-With-Us/BotFleet scripts/infisical-fetch.mjs on
 // 2026-09-29, with .github/actions/infisical-secrets, so the Mac release
 // workflow reads its signing certificate the way BotFleet's release.yml does.
 // Keep the two copies in step until the fleet has a shared action.

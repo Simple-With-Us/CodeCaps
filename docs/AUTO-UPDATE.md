@@ -7,7 +7,7 @@ Owner ruling, Tue, Sep 29, 2026: every fleet Mac app updates itself seamlessly, 
 1. A PR merges to `main` and changes the app (`Sources/`, `Package.*`, `VERSION`, the icon, or the build scripts).
 2. `.github/workflows/mac-release.yml` builds a universal Release bundle, signs it with the Developer ID Application certificate (hardened runtime, secure timestamp, nested code signed inside-out), notarizes and staples the app and the DMG, and writes an appcast whose one item is the new ZIP, signed with the app's EdDSA key.
 3. The workflow publishes a GitHub release tagged `v<VERSION>-build.<N>`, marked latest, carrying `CodeCaps.zip`, `CodeCaps.dmg`, their `.sha256` files, and `appcast.xml`, then confirms the live feed names build N.
-4. Every installed copy checks `https://github.com/jaywedgeworth22/CodeCaps/releases/latest/download/appcast.xml` once an hour, downloads the new ZIP in the background, verifies its EdDSA signature before unpacking it, and checks that it is signed by the same Developer ID team.
+4. Every installed copy checks `https://github.com/Simple-With-Us/CodeCaps/releases/latest/download/appcast.xml` once an hour, downloads the new ZIP in the background, verifies its EdDSA signature before unpacking it, and checks that it is signed by the same Developer ID team.
 5. As soon as CodeCaps is not the frontmost app (for a menu-bar app, nearly always), `AppUpdater` installs the update and relaunches.  The relaunch stays in the background: the Console window is not reopened and focus is not taken.  If the owner is using CodeCaps at that moment, the install waits until they switch away.
 
 Settings ▸ About shows "Automatic updates: On" and a **Check For Updates…** button.  The same command is in the app menu and the menu-bar item's right-click menu.
@@ -31,7 +31,7 @@ Settings ▸ About shows "Automatic updates: On" and a **Check For Updates…** 
 
 | Key | Value | Why |
 |---|---|---|
-| `SUFeedURL` | `https://github.com/jaywedgeworth22/CodeCaps/releases/latest/download/appcast.xml` | Always the newest release's appcast. |
+| `SUFeedURL` | `https://github.com/Simple-With-Us/CodeCaps/releases/latest/download/appcast.xml` | Always the newest release's appcast. |
 | `SUPublicEDKey` | `Ou2J0syHZawPSY3JLTLVyhbOylmtyr0QnZPbq7acETQ=` | Verifies each archive.  Public, committed in the build script. |
 | `SUEnableAutomaticChecks` | true | No "check automatically?" prompt. |
 | `SUAutomaticallyUpdate` | true | Download and install without asking. |
@@ -125,11 +125,11 @@ Afterwards quit the scratch process by its exact executable path, delete `$E2E`,
 
 Sparkle never downgrades, so a rollback is a fix forward:
 
-1. **Stop the spread (seconds).**  `gh release edit <last-good-tag> --latest -R jaywedgeworth22/CodeCaps`.  The feed now names the good build, so copies that have not updated yet stay where they are.  Copies already on the bad build are not moved back by this.
+1. **Stop the spread (seconds).**  `gh release edit <last-good-tag> --latest -R Simple-With-Us/CodeCaps`.  The feed now names the good build, so copies that have not updated yet stay where they are.  Copies already on the bad build are not moved back by this.
 2. **Fix forward (one merge).**  Revert the bad PR on `main`.  CI publishes build N+1 containing the old code with a higher build number, and every copy, including the ones on the bad build, updates to it within the hour.
 3. **If the bad build cannot update itself** (for example it crashes before `AppUpdater.start()` runs), those copies need a manual install of the fixed DMG from the Releases page.  `AppUpdater.shared.start()` is the first thing `applicationDidFinishLaunching` does for exactly this reason.
 
-To pause releases entirely, disable the workflow (`gh workflow disable mac-release.yml -R jaywedgeworth22/CodeCaps`).
+To pause releases entirely, disable the workflow (`gh workflow disable mac-release.yml -R Simple-With-Us/CodeCaps`).
 
 ## Copy This To Another Swift Mac App
 
@@ -145,5 +145,5 @@ To pause releases entirely, disable the workflow (`gh workflow disable mac-relea
 ## Known Limits
 
 - Copies installed before this change (CodeCaps 1.1.0 and earlier) have no Sparkle, so they need one manual install of a release built after it.
-- The Homebrew cask (`jaywedgeworth22/tap/codecaps`) still pins the `v1.1.0` DMG and keeps working.  Pointing it at the per-build releases and adding `auto_updates true` is a follow-up in the tap repository.
+- The Homebrew cask (`Simple-With-Us/tap/codecaps`) still pins the `v1.1.0` DMG and keeps working.  Pointing it at the per-build releases and adding `auto_updates true` is a follow-up in the tap repository.
 - Pure documentation or iOS changes do not publish a Mac release, because the workflow's `paths:` filter skips them; the next app change carries them along.
