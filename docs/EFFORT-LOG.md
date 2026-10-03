@@ -5,6 +5,27 @@ PR (when shipped), follow-ups (when parked).
 
 ---
 
+## 2026-10-03 — Prompt-free background Claude lookup [GROK-BUILD, in progress]
+
+Lane: `grok-build/prompt-free-claude-lookup` at
+`/Users/jay/apps/codecaps-grok-build-keychain`.  Board `da7fce2c`.  GitHub #13.
+PR #126.
+
+- The refresh loop no longer starts `/usr/bin/security`.  It also does not
+  ask Keychain for the secret.  The Sep 30 log showed that a data
+  `SecItemCopyMatching` still raises a panel when the interaction flags are
+  set, so that call stays out of the background path.
+- Allow Access is the only `security` run.  Its payload stays in memory for
+  this process only.  Each launch needs Allow Access again.  The secret is
+  not copied into a CodeCaps Keychain item.  Nothing logs the payload.
+- An expired remembered payload, a missing item, or a Claude usage 401 or
+  403 drops those bytes and asks for Allow Access again.  A stale token is
+  not fetched forever.
+- `ClaudeConsentTests` covers the silent path and the expiry drop.  #12's
+  idle sentence was already on main.
+
+---
+
 ## 2026-10-03 — Runtime Alerts and Machine Provenance [CODEX, in review]
 
 Lane: `codex/alerts-provenance-20261003`.  Boards `20dc3a22`, `d4673e2f`, `5af89c7c`.
@@ -15,7 +36,6 @@ Lane: `codex/alerts-provenance-20261003`.  Boards `20dc3a22`, `d4673e2f`, `5af89
 - Validation: 28 focused tests and enabled-anomaly Glance render passed before main sync.  Hosted checks cover the integrated branch.
 
 ---
-
 
 ## 2026-10-03 — App design audit F-02 iOS Theme tokens & F-06 Console toolbar density [AG, completed]
 
@@ -43,7 +63,6 @@ Lane: `codex/remove-stale-controls-20261003`.  Boards `11b25418`, `979b2c38`.  P
 - Reconciliation correction: `20dc3a22` reopened after tracing the runtime path.
   #109 records history and exposes thresholds but never invokes anomaly evaluation.
   Actual evaluation and notifications remain active work, not complete.
-
 ---
 
 ## 2026-10-03 — Console sidebar arrow navigation, window min size bump, iOS settings detents, and board completion [AG, completed]

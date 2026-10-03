@@ -164,7 +164,18 @@ public struct LocalQuotaReader: Sendable {
         request.httpMethod = "GET"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
-        let payload = try await requestJSON(request)
+        let payload: [String: Any]
+        do {
+            payload = try await requestJSON(request)
+        } catch LocalReaderError.reauth {
+            // The server rejected the token.  Drop the remembered bytes so
+            // the next refresh asks for Allow Access instead of sending them
+            // again.
+            ClaudeCredentialSource.resetRememberedCredential()
+            let state = ClaudeLoginState.needsPermission
+            return ProviderRead(provider: provider, windows: [], issue: state.issue,
+                                needsConsent: state.needsConsent)
+        }
         let windows = parseClaude(payload, planType: firstString(oauth, ["subscriptionType", "subscription_type"]), observedAt: now())
         guard !windows.isEmpty else {
             return ProviderRead(provider: provider, windows: [unknownWindow(provider: provider, label: "Claude quota", observedAt: now())], issue: "Claude returned no readable quota windows.")
