@@ -5,6 +5,24 @@ PR (when shipped), follow-ups (when parked).
 
 ---
 
+## 2026-10-03 — Remove Obsolete Pin Control and MiniMax Asset [CODEX, in review]
+
+Lane: `codex/remove-stale-controls-20261003`.  Boards `11b25418`, `979b2c38`.
+
+- Removed the inert Keep In Front menu action and unused stored model property.
+  Toolbar pin removal and single-meter alignment had already shipped.
+- Retained the newer #117 activation policy: menu-bar-only stays accessory;
+  Dock-capable modes show the icon with an open window and remove it on close.
+- Removed unused fabricated `minimax.svg`; the real `minimax.png` remains the
+  rendering source.  Corrected both resource and root README rendering/provenance.
+- Verification: focused PlatformLogoResourceTests 4/4 and DocsScreenshotTests
+  render 1/1 passed from a fresh build.  No installed app changed.
+- Reconciliation correction: `20dc3a22` reopened after tracing the runtime path.
+  #109 records history and exposes thresholds but never invokes anomaly evaluation.
+  Actual evaluation and notifications remain active work, not complete.
+
+---
+
 ## 2026-10-03 — Console sidebar arrow navigation, window min size bump, iOS settings detents, and board completion [AG, completed]
 
 Lane: `ag/arrow-nav-and-board-parity`.
@@ -15,6 +33,7 @@ Lane: `ag/arrow-nav-and-board-parity`.
 - Unit tests: added `ConsoleNavigationTests.swift` covering `Metrics.consoleMin`, page serialization round-trip, and settings page filtering; all 581 tests green in `swift test`.
 - AGENTS.md coordination protocol: documented inter-agent coordination stanzas, `#agent-sync` header formats, and per-bot routing policies per fleet instruction.
 - Board & issue reconciliation: conducted full board review against shipping codebase.  Verified and reconciled completed work: closed issue #44 (iOS preview sound shipped in #65) and issue #57 (public site screenshots redrawn by Claude on Sep 30); resolved 17 open board items confirmed landed in previous PRs (#40, #43, #53, #65, #67, #74, #75, #103, #109, #110, #111, #112, #113, #115, #117, #118).
+- CODEX correction (Oct 3): #57 screenshots existed on main but were not published on gh-pages; live HTTP verification still found AgentBar imagery.  Publishing fix is #123.  #109 also lacks runtime anomaly evaluation, so board 20dc3a22 remains active.  These corrections preserve the implementation history while qualifying the broad closeout.
 
 ---
 
@@ -28,8 +47,8 @@ Coordination packet: https://fleetlink.online/codecaps-board-20261003.
 - Baseline `87544c2` has no open PRs and successful Swift CI, secret scan,
   and Mac Release checks.  The initial board has 24 open/in-progress rows;
   GitHub has 11 open issues.  Each stale item is checked against current code.
-- Confirmed completed and reconciled on the board: runaway alerts
-  `20dc3a22` (#109), contrast `966fdffc` and row alignment `01b6d75a`
+- Initially reconciled, then corrected below: runaway alerts `20dc3a22`
+  were not complete.  Confirmed completed on the board: contrast `966fdffc` and row alignment `01b6d75a`
   (#111), custom marks `6a375482` (#103/#115), visual assets `eafb250b`
   (#113/#115/#117/#118), and reset sound options `2b922851` (#43).
   Cross-device push remains separately tracked in issue #42.

@@ -1,8 +1,10 @@
-# Provider marks
+# Provider Marks
 
-Every mark here is drawn as a **template image**: `PlatformLogoImage.load` sets `isTemplate = true` and the SwiftUI call site renders it with `.renderingMode(.template)`, so only the silhouette is used and the colour comes from the label — black in Light, white in Dark, on every surface including the menu bar status item.  A mark therefore only has to be a correct *shape*; its own fill colour is discarded.
+`PlatformLogoImage` maps provider keys to the bundled files in this directory.  Standard style preserves an asset's colors, except marks identified as monochrome, which adapt to the current appearance.  Light/Dark style renders a template.  Custom style uses the owner's imported mark and falls back to the bundled standard mark when no custom mark is available.  Providers without bundled artwork use the neutral SF Symbol fallback.
 
-`claude.svg`, `openai.svg`, `grok.svg`, `grok-bot.svg` and `minimax.svg` are faithful copies of the provider assets already shipped by BotFleet under `/Users/jay/Code/BotFleet/ios/App/Assets.xcassets/ProviderMark*.imageset/`.  They are bundled for local display only and remain subject to their source project licenses.  Antigravity uses the Gemini mark, and Grok CLI uses the Grok mark; no new artwork was created for them.
+MiniMax uses `minimax.png`; there is no MiniMax SVG in the active resource map.  MiniMax is treated as a monochrome mark in every style, so it adapts to Light and Dark appearances.
+
+`claude.svg`, `openai.svg`, `grok.svg`, and `grok-bot.svg` are bundled for local display.  Antigravity uses the Gemini mark, and Grok CLI uses the Grok mark.
 
 `grok-bot.svg` is the Grok X-mark with a small filled dot in the upper-right corner, so the bot variant reads as related but distinguishable from `grok.svg` in a row.
 
