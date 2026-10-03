@@ -30,7 +30,13 @@ public enum FleetOrigin {
 
     /// "antigravity-usage" reads as "Antigravity Usage" in a group header.
     public static func title(for identity: String) -> String {
-        identity
+        // A host is a host.  `chatgpt.com` title-cased to `ChATGPT.com`, which
+        // is not a hostname, and `api.minimax.io` to `Api.minimax.io`.  The
+        // owner asked (2026-10-01) that a URL not be capitalised at all unless
+        // every part of it is, so hosts pass through untouched and only a
+        // machine name gets its words capitalised.
+        if identity.contains(".") && !identity.contains(" ") { return identity }
+        return identity
             .replacingOccurrences(of: "_", with: " ")
             .replacingOccurrences(of: "-", with: " ")
             .split(separator: " ")

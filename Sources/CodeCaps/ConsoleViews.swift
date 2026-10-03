@@ -531,7 +531,6 @@ struct AllPlatformsPage: View {
                 HStack {
                     Text("This Mac").font(.system(size: 13, weight: .semibold))
                     Spacer()
-                    Text("Percent remaining").font(.system(size: 11)).foregroundStyle(.secondary)
                 }
                 LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
                     ForEach(localSections) { row in

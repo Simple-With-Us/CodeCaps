@@ -62,13 +62,20 @@ enum AccentChoice: String, CaseIterable, Identifiable {
 /// token.  A dynamic `NSColor` resolves per appearance, so the SPM target needs
 /// no asset catalog and nothing has to be re-rendered when the theme changes.
 enum Theme {
+    /// Pure black on light, pure white on dark, when high contrast is on.
+    private static var highContrastInk: Color {
+        highContrast ? dyn(NSColor.black, NSColor.white) : dyn(hex(0x1F2B3A), hex(0xE8ECF1))
+    }
     /// The owner's high-contrast choice, read on every resolve so a change
     /// takes effect without relaunching.
     static var highContrast: Bool {
         UserDefaults.standard.bool(forKey: "highContrast")
     }
 
-    static let ink = dyn(hex(0x1F2B3A), hex(0xE8ECF1))
+    /// High contrast drops the soft navy-grey for pure black/white, so text is
+    /// as far from the surface as it can be and not merely darker than the
+    /// default.  The owner had high contrast on and said there was not enough.
+    static var ink: Color { highContrastInk }
     /// The accent the owner picked.  A computed property rather than a `let`
     /// because it is a preference, and the dynamic `NSColor` it returns still
     /// resolves per appearance, so both the accent and the theme stay live.
@@ -79,7 +86,7 @@ enum Theme {
     static let background: Color = highContrastBackground
     static let surface: Color = highContrastSurface
     static let hairline: Color = highContrast
-        ? dyn(NSColor.black.withAlphaComponent(0.45), NSColor.white.withAlphaComponent(0.55))
+        ? dyn(NSColor.black.withAlphaComponent(0.72), NSColor.white.withAlphaComponent(0.85))
         : dyn(NSColor.black.withAlphaComponent(0.06), NSColor.white.withAlphaComponent(0.10))
     /// The elapsed-time marker on a quota bar.  Black on the light surface and
     /// white on the dark one, so it reads against both the red and green segments.
@@ -98,7 +105,7 @@ enum Theme {
     /// Unfilled portion of any progress bar.  A black 6% track disappears on a
     /// dark surface, so this is a token rather than a literal at each call site.
     static let track: Color = highContrast
-        ? dyn(NSColor.black.withAlphaComponent(0.35), NSColor.white.withAlphaComponent(0.40))
+        ? dyn(NSColor.black.withAlphaComponent(0.55), NSColor.white.withAlphaComponent(0.62))
         : dyn(NSColor.black.withAlphaComponent(0.08), NSColor.white.withAlphaComponent(0.14))
 
     /// Fill behind a selected or highlighted row.
@@ -107,13 +114,13 @@ enum Theme {
 
     /// The outline of a small header control: the From Mac / From Fleet switch.
     static let controlBorder: Color = highContrast
-        ? dyn(NSColor.black.withAlphaComponent(0.75), NSColor.white.withAlphaComponent(0.80))
+        ? dyn(NSColor.black.withAlphaComponent(0.92), NSColor.white.withAlphaComponent(0.95))
         : dyn(NSColor.black.withAlphaComponent(0.16), NSColor.white.withAlphaComponent(0.22))
 
     /// A control that is present but off, such as an unchecked row bell:
     /// visible enough to find, quiet enough not to read as a setting.
     static let faint: Color = highContrast
-        ? dyn(NSColor.black.withAlphaComponent(0.72), NSColor.white.withAlphaComponent(0.78))
+        ? dyn(NSColor.black.withAlphaComponent(0.88), NSColor.white.withAlphaComponent(0.92))
         : dyn(NSColor.black.withAlphaComponent(0.26), NSColor.white.withAlphaComponent(0.30))
 
     /// The band behind a source's heading in From Fleet: darker than the list
@@ -922,7 +929,7 @@ struct QuotaRow: View {
     }
 
     private func pacingBar(_ pacing: WindowPacing) -> some View {
-        let paceLabel = pacing.isUnderCapPace ? "Under cap pace" : "Over cap pace"
+        let paceLabel = pacing.isUnderCapPace ? "Under Pace" : "Over Pace"
         return VStack(alignment: .leading, spacing: 5) {
             // The same red-used, green-remaining bar Glance draws, with the
             // marker at how far through the period we are.  The frame leaves
