@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CodeCaps Setup — Local Data, Push, Pull, and Widgets</title>
+<meta name="description" content="Choose how CodeCaps reads and shares quota data: local-only, upload-only, download-only, or a combination.  Configure Mac, iOS, and widgets.">
+<link rel="icon" href="icon-192.png"><style>
+:root{color-scheme:light;--ink:#20312d;--teal:#087370;--line:#dbe5e1}*{box-sizing:border-box}body{margin:0;background:#fafcfb;color:var(--ink);font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{max-width:900px;margin:auto;padding:40px 24px 80px}a{color:var(--teal)}h1{font-size:clamp(30px,5vw,44px);line-height:1.15}h2{margin-top:42px;line-height:1.3}h3{margin-top:26px}nav{display:flex;gap:20px;flex-wrap:wrap}p,li{max-width:76ch}.intro{font-size:19px;color:#4e655d}.flow,.note{padding:20px;background:#eaf4ef;border-radius:12px}.flow{text-align:center;font-weight:600}.scroll{overflow:auto}table{border-collapse:collapse;width:100%;min-width:560px}th,td{text-align:left;padding:13px;border-bottom:1px solid var(--line)}th{background:#edf3f0}code{font-size:.88em;overflow-wrap:anywhere}footer{border-top:1px solid var(--line);margin-top:44px;padding-top:18px;color:#52655d}summary{cursor:pointer;font-weight:600}details{padding:12px 0;border-bottom:1px solid var(--line)}:focus-visible{outline:3px solid #087370;outline-offset:4px}
+</style></head><body><main>
+<nav aria-label="Site"><a href="./">← CodeCaps</a><a href="#choose">Choose a Setup</a><a href="#mac">Mac Instructions</a><a href="#ios">iOS and Widgets</a><a href="#troubleshooting">Troubleshooting</a></nav>
+<h1>Your Quotas. Your Data Flow.</h1>
+<p class="intro">CodeCaps can read quota information on your Mac, send those readings to a server you choose, and display readings fetched from a server.&nbsp; These are separate choices.</p>
+<p>No collector server is required for local Mac monitoring.&nbsp; CodeCaps does not create a shared server or a public feed for you.</p>
+<div class="flow" aria-label="Data flow">Signed-In Sources on Your Mac → CodeCaps<br>Optional Upload → Your Server → Optional Download → CodeCaps on Mac or iPhone</div>
+<h2 id="choose">Choose a Setup</h2>
+<div class="scroll"><table><thead><tr><th>Setup</th><th>Read This Mac</th><th>Push</th><th>Pull</th><th>Result</th></tr></thead><tbody>
+<tr><td>Local Only</td><td>On</td><td>Off</td><td>Off</td><td>View this Mac’s supported AI plan quotas.</td></tr>
+<tr><td>Share This Mac</td><td>On</td><td>On</td><td>Off</td><td>View locally and upload local readings for other devices.</td></tr>
+<tr><td>View a Server</td><td>Off</td><td>Off</td><td>On</td><td>Display readings collected elsewhere.</td></tr>
+<tr><td>Local and Remote</td><td>On</td><td>Off</td><td>On</td><td>Combine this Mac with server readings without uploading this Mac.</td></tr>
+<tr><td>Share and View</td><td>On</td><td>On</td><td>On</td><td>Upload local readings and display the server’s readings.</td></tr>
+<tr><td>Pause Collection</td><td>Off</td><td>Off</td><td>Off</td><td>No new local collection, collector uploads, or collector downloads.</td></tr>
+</tbody></table></div>
+<p>Push uploads the local readings; it does not forward downloaded readings back to the server.&nbsp; Turning off local collection leaves nothing new to upload.</p>
+<p class="note">“Local only” means no collector sync.&nbsp; Some local readers contact their provider to retrieve current quotas using an existing signed-in session, and app update checks are separate.&nbsp; Turning off push and pull is not an app-wide network firewall.</p>
+<h2 id="mac">Set Up CodeCaps on Mac</h2>
+<h3>1. Choose Local Sources</h3>
+<p>Open CodeCaps Settings → Sources.&nbsp; Turn <strong>Read Quotas From This Mac</strong> on to use supported local sign-ins.&nbsp; Sign in through the provider’s own app or CLI first; CodeCaps does not need you to paste a provider API key.</p>
+<p>If a source asks for access, use its explicit authorization action in CodeCaps.&nbsp; An unavailable or signed-out source is not evidence of zero remaining quota.</p>
+<h3>2. Optionally Upload Readings</h3>
+<ol><li>Obtain an ingest endpoint and ingest token from your server administrator.</li><li>Enable <strong>Push Quotas to a Server</strong>.</li><li>Enter the <strong>Ingest Endpoint</strong> and <strong>Ingest Token</strong>, and select the matching <strong>Payload Format</strong>.</li><li>Choose <strong>Save &amp; Push Now</strong> and confirm a successful result and updated push time.</li></ol>
+<p>A compatible Usage Monitor ingest URL commonly ends in <code>/api/ingest/usage</code>.&nbsp; Generic webhook mode requires a receiver that understands the CodeCaps JSON payload; an arbitrary website URL will not work.</p>
+<h3>3. Optionally Download Readings</h3>
+<ol><li>Obtain a quota read endpoint and a read token from your server administrator.</li><li>Enable <strong>Show Other Machines’ Quotas</strong>.</li><li>Enter the <strong>Quota Endpoint</strong> and <strong>Read Token</strong>.</li><li>Choose <strong>Save &amp; Fetch Now</strong> and confirm a successful fetch.</li></ol>
+<p>A compatible Usage Monitor read URL commonly ends in <code>/api/quota-windows</code>.&nbsp; A read URL is different from an ingest URL.&nbsp; Uploading data does not automatically enable downloading it.</p>
+<h3>Change Your Mind at Any Time</h3>
+<p>Turn each switch off independently to stop that activity.&nbsp; Use <strong>Forget Ingest Token</strong> or <strong>Forget Read Token</strong> when you also want the saved credential removed.&nbsp; Disabling sync does not erase readings already stored on your server; manage retention there.</p>
+<h2 id="ios">iPhone, iPad, and Native Widgets</h2>
+<p>An iPhone cannot read the signed-in CLI sessions on your Mac.&nbsp; To display those readings on iOS, keep a Mac or another collector publishing to a compatible server, then enter the server’s quota read URL under <strong>Mac Sync Endpoint</strong> and its read credential as the <strong>Sync Bearer Token</strong> in the companion’s Settings.</p>
+<p>Leave the companion endpoint empty if you do not want it fetching data.&nbsp; Previously cached readings may still be visible; their timestamps determine whether they are current.</p>
+<p>Native widgets display cached quota snapshots shared by their containing app.&nbsp; Open CodeCaps and verify a successful refresh before adding a widget from the system widget gallery.&nbsp; Widgets do not log in to providers or set up a server for you.</p>
+<p>On Mac, use the native CodeCaps widget supplied with the Mac app.&nbsp; On iOS, add CodeCaps from the Home Screen widget gallery.&nbsp; The operating system schedules widget refreshes, so the widget may update later than the app.</p>
+<p class="note">Widget repair is currently in progress for both platforms.&nbsp; Some builds can show an empty widget or omit the native Mac extension.&nbsp; An empty widget does not mean your quota is exhausted; check the app and the troubleshooting steps below.</p>
+<h2>What Is Shared?</h2>
+<p>Quota payloads contain supported provider and window identifiers, quota percentages, reset and observation timestamps, and optional machine labels or identifiers.&nbsp; They are not conversation transcripts.&nbsp; Provider login credentials are not included in quota uploads.</p>
+<p>Connection tokens are credentials for your server.&nbsp; Keep them out of public pages, screenshots, browser-side embed code, and shared links.&nbsp; Use HTTPS and separate read and ingest credentials where your server supports them.</p>
+<p>“Push quotas” means an HTTP data upload.&nbsp; Reset alerts, notification sounds, and cross-device push notifications are separate features; enabling uploads does not automatically deliver alerts to another device.</p>
+<h2 id="troubleshooting">Troubleshooting</h2>
+<details><summary>The Mac App Has No Readings</summary><p>Check that local reading is enabled and the source is signed in, or enable pull with a valid quota endpoint.&nbsp; Follow any source-specific authorization message.&nbsp; Do not enter the ingest URL as the read URL.</p></details>
+<details><summary>Push Works but My Phone Has No Data</summary><p>Verify that the server’s read endpoint actually returns those uploaded readings.&nbsp; Configure that read endpoint and its read token on the phone, and refresh the companion.&nbsp; The Mac’s push switch does not configure the phone.</p></details>
+<details><summary>The Widget Is Empty or Old</summary><p>First confirm current data in the containing app.&nbsp; Confirm your installed Mac build includes native widgets, and allow the system time to refresh.&nbsp; If the app has current readings but its widget remains empty, report the platform, app build, widget size, and last successful refresh time without sharing tokens.</p></details>
+<details><summary>I Want No Sharing</summary><p>On Mac, turn off both Push Quotas to a Server and Show Other Machines’ Quotas.&nbsp; Keep Read Quotas From This Mac on for local monitoring, or turn it off to pause collection too.&nbsp; On iOS, clear the endpoint to stop fetching.</p></details>
+<footer>CodeCaps Setup Guide · Updated October 3, 2026<br><a href="https://github.com/Simple-With-Us/CodeCaps/issues">Report a Problem</a></footer>
+</main></body></html>
