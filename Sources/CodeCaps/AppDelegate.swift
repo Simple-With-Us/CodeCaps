@@ -29,6 +29,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     let model = MonitorModel()
     let consoleState = ConsoleState()
     private var statusItem: NSStatusItem?
+
+    /// CodeCaps' own mark, from the owner's cropped black-on-transparent
+    /// artwork.  It is a template image so macOS tints it to the menu bar's
+    /// own colour, which is what makes one asset correct in light and dark.
+    private static let appMarkImage: NSImage? = {
+        guard let url = ResourceBundle.resolved?.url(forResource: "CodeCapsMenuBarIcon", withExtension: "png"),
+              let image = NSImage(contentsOf: url) else { return nil }
+        image.isTemplate = true
+        image.size = NSSize(width: 18, height: 18)
+        return image
+    }()
     private let popover = NSPopover()
     private var consoleWindow: NSWindow?
     private var statusMenu: NSMenu?
@@ -135,11 +146,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                 iconImage = PlatformLogoImage.menuBarImage(providerKey: markKey, style: markStyle, isDarkMode: isDark)
             }
             if iconImage == nil {
-                let symbolName = target != nil
-                    ? PlatformLogoImage.fallbackSymbolName(for: providerKey)
-                    : "gauge.with.dots.needle.50percent"
-                iconImage = NSImage(systemSymbolName: symbolName, accessibilityDescription: "CodeCaps")
-                iconImage?.isTemplate = (markStyle == .template)
+                // With no single provider pinned to the menu bar, the item
+                // wears CodeCaps' own mark rather than a generic gauge symbol.
+                // `template` is what lets one asset read correctly on both a
+                // light and a dark menu bar — the owner's cropped artwork is
+                // black-on-transparent for exactly that reason, and macOS
+                // recolours a template image to match the bar.
+                iconImage = Self.appMarkImage ?? {
+                    let symbolName = target != nil
+                        ? PlatformLogoImage.fallbackSymbolName(for: providerKey)
+                        : "gauge.with.dots.needle.50percent"
+                    let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: "CodeCaps")
+                    image?.isTemplate = (markStyle == .template)
+                    return image
+                }()
             }
             button.image = iconImage
             button.imagePosition = style == .symbolOnly ? .imageOnly : .imageLeading
