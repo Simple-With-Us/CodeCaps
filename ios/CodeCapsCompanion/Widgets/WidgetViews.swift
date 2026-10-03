@@ -148,38 +148,70 @@ struct MiniProgressBar: View {
     }
 }
 
+// MARK: - Honest Empty State View
+
+struct WidgetEmptyStateView: View {
+    let title: String
+    let subtitle: String
+
+    init(title: String = "No Quotas Synced", subtitle: String = "Open CodeCaps to connect AI subscription plans.") {
+        self.title = title
+        self.subtitle = subtitle
+    }
+
+    var body: some View {
+        VStack(spacing: 6) {
+            Image(systemName: "gauge.with.dots.needle.bottom.0percent")
+                .font(.system(size: 20))
+                .foregroundColor(WidgetColors.teal)
+            Text(title)
+                .font(.system(size: 12, weight: .bold, design: .rounded))
+                .foregroundColor(.primary)
+            Text(subtitle)
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
 // MARK: - Overview Small View
 
 struct OverviewSmallView: View {
     let entry: CodeCapsWidgetEntry
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            // Header
-            HStack(spacing: 5) {
-                Circle()
-                    .fill(WidgetColors.teal)
-                    .frame(width: 7, height: 7)
-                Text("CodeCaps")
-                    .font(.system(size: 11, weight: .bold, design: .rounded))
-                    .foregroundColor(.secondary)
-                Spacer()
-                if let first = entry.platforms.first, !first.countdown().isEmpty {
-                    Text(first.countdown())
-                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+        if entry.platforms.isEmpty {
+            WidgetEmptyStateView(
+                title: "No Quotas Synced",
+                subtitle: "Open CodeCaps to sync"
+            )
+            .padding(8)
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                // Header
+                HStack(spacing: 5) {
+                    Circle()
+                        .fill(WidgetColors.teal)
+                        .frame(width: 7, height: 7)
+                    Text("CodeCaps")
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
                         .foregroundColor(.secondary)
+                    Spacer()
+                    if let first = entry.platforms.first, !first.countdown().isEmpty {
+                        Text(first.countdown())
+                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .foregroundColor(.secondary)
+                    }
                 }
-            }
 
-            Spacer(minLength: 0)
+                Spacer(minLength: 0)
 
-            // Top 2 Platforms
-            let displayed = Array(entry.platforms.prefix(2))
-            if displayed.isEmpty {
-                Text("No AI subscriptions active")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-            } else {
+                // Top 2 Platforms
+                let displayed = Array(entry.platforms.prefix(2))
                 VStack(spacing: 8) {
                     ForEach(displayed) { platform in
                         VStack(alignment: .leading, spacing: 3) {
@@ -201,24 +233,24 @@ struct OverviewSmallView: View {
                         }
                     }
                 }
-            }
 
-            Spacer(minLength: 0)
+                Spacer(minLength: 0)
 
-            // Footer
-            HStack {
-                Text(entry.isPlaceholder ? "Preview" : "\(entry.platforms.count) Plans")
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundColor(.secondary)
-                Spacer()
-                if let updated = entry.lastUpdated {
-                    Text(updated, style: .time)
-                        .font(.system(size: 9))
+                // Footer
+                HStack {
+                    Text("\(entry.platforms.count) Plans")
+                        .font(.system(size: 9, weight: .medium))
                         .foregroundColor(.secondary)
+                    Spacer()
+                    if let updated = entry.lastUpdated {
+                        Text(updated, style: .time)
+                            .font(.system(size: 9))
+                            .foregroundColor(.secondary)
+                    }
                 }
             }
+            .padding(12)
         }
-        .padding(12)
     }
 }
 
@@ -228,31 +260,34 @@ struct OverviewMediumView: View {
     let entry: CodeCapsWidgetEntry
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            // Header
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(WidgetColors.teal)
-                    .frame(width: 8, height: 8)
-                Text("CodeCaps")
-                    .font(.system(size: 13, weight: .bold, design: .rounded))
-                Text("·" + widgetSentenceGap + "AI Plan Quotas")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(.secondary)
-                Spacer()
-                if let updated = entry.lastUpdated {
-                    Text(updated, style: .time)
-                        .font(.system(size: 11, weight: .regular))
+        if entry.platforms.isEmpty {
+            WidgetEmptyStateView(
+                title: "No AI Subscription Quotas Synced",
+                subtitle: "Open CodeCaps to connect AI subscription plans."
+            )
+            .padding(14)
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                // Header
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(WidgetColors.teal)
+                        .frame(width: 8, height: 8)
+                    Text("CodeCaps")
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                    Text("·" + widgetSentenceGap + "AI Plan Quotas")
+                        .font(.system(size: 12, weight: .medium))
                         .foregroundColor(.secondary)
-                } else if entry.isPlaceholder {
-                    Text("Sample Data")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(.secondary)
+                    Spacer()
+                    if let updated = entry.lastUpdated {
+                        Text(updated, style: .time)
+                            .font(.system(size: 11, weight: .regular))
+                            .foregroundColor(.secondary)
+                    }
                 }
-            }
 
-            Divider()
-                .opacity(0.5)
+                Divider()
+                    .opacity(0.5)
 
             // 4 Items in 2x2 grid or list
             let displayed = Array(entry.platforms.prefix(4))
@@ -290,9 +325,10 @@ struct OverviewMediumView: View {
                 }
             }
 
-            Spacer(minLength: 0)
+                Spacer(minLength: 0)
+            }
+            .padding(14)
         }
-        .padding(14)
     }
 }
 
@@ -302,85 +338,93 @@ struct OverviewLargeView: View {
     let entry: CodeCapsWidgetEntry
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            // Header
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(WidgetColors.teal)
-                    .frame(width: 9, height: 9)
-                Text("CodeCaps")
-                    .font(.system(size: 15, weight: .bold, design: .rounded))
-                Spacer()
-                Text("\(entry.platforms.count) Active Plans")
-                    .font(.system(size: 12, weight: .medium))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(WidgetColors.secondaryBackground)
-                    .clipShape(Capsule())
-            }
+        if entry.platforms.isEmpty {
+            WidgetEmptyStateView(
+                title: "No AI Subscription Quotas Synced",
+                subtitle: "Open CodeCaps on your Mac or iOS to connect and monitor your plans."
+            )
+            .padding(14)
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                // Header
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(WidgetColors.teal)
+                        .frame(width: 9, height: 9)
+                    Text("CodeCaps")
+                        .font(.system(size: 15, weight: .bold, design: .rounded))
+                    Spacer()
+                    Text("\(entry.platforms.count) Active Plans")
+                        .font(.system(size: 12, weight: .medium))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(WidgetColors.secondaryBackground)
+                        .clipShape(Capsule())
+                }
 
-            Divider()
-                .opacity(0.5)
+                Divider()
+                    .opacity(0.5)
 
-            // Up to 6 platforms with allowance windows
-            let displayed = Array(entry.platforms.prefix(6))
-            VStack(spacing: 8) {
-                ForEach(displayed) { platform in
-                    HStack(spacing: 10) {
-                        ProviderMarkView(providerKey: platform.providerKey, itemId: platform.id, size: 24)
+                // Up to 6 platforms with allowance windows
+                let displayed = Array(entry.platforms.prefix(6))
+                VStack(spacing: 8) {
+                    ForEach(displayed) { platform in
+                        HStack(spacing: 10) {
+                            ProviderMarkView(providerKey: platform.providerKey, itemId: platform.id, size: 24)
 
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack {
-                                Text(platform.title)
-                                    .font(.system(size: 13, weight: .semibold))
-                                Spacer()
-                                Text(platform.displayPercent)
-                                    .font(.system(size: 13, weight: .bold, design: .rounded))
-                                    .foregroundColor(platform.statusColor)
-                            }
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack {
+                                    Text(platform.title)
+                                        .font(.system(size: 13, weight: .semibold))
+                                    Spacer()
+                                    Text(platform.displayPercent)
+                                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                                        .foregroundColor(platform.statusColor)
+                                }
 
-                            MiniProgressBar(
-                                fraction: platform.progressFraction,
-                                color: platform.statusColor,
-                                height: 4
-                            )
+                                MiniProgressBar(
+                                    fraction: platform.progressFraction,
+                                    color: platform.statusColor,
+                                    height: 4
+                                )
 
-                            HStack {
-                                Text(platform.subtitle)
-                                    .font(.system(size: 10))
-                                    .foregroundColor(.secondary)
-                                    .lineLimit(1)
-                                Spacer()
-                                if !platform.countdown().isEmpty {
-                                    Text("resets in " + platform.countdown())
-                                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                                HStack {
+                                    Text(platform.subtitle)
+                                        .font(.system(size: 10))
                                         .foregroundColor(.secondary)
+                                        .lineLimit(1)
+                                    Spacer()
+                                    if !platform.countdown().isEmpty {
+                                        Text("resets in " + platform.countdown())
+                                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                                            .foregroundColor(.secondary)
+                                    }
                                 }
                             }
                         }
+                        .padding(6)
+                        .background(WidgetColors.secondaryBackground.opacity(0.5))
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     }
-                    .padding(6)
-                    .background(WidgetColors.secondaryBackground.opacity(0.5))
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
-            }
 
-            Spacer(minLength: 0)
+                Spacer(minLength: 0)
 
-            // Footer
-            HStack {
-                if let updated = entry.lastUpdated {
-                    Text("Updated " + DateFormatter.localizedString(from: updated, dateStyle: .none, timeStyle: .short))
-                        .font(.system(size: 10))
+                // Footer
+                HStack {
+                    if let updated = entry.lastUpdated {
+                        Text("Updated " + DateFormatter.localizedString(from: updated, dateStyle: .none, timeStyle: .short))
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    Text("CodeCaps AI Monitor")
+                        .font(.system(size: 10, weight: .medium))
                         .foregroundColor(.secondary)
                 }
-                Spacer()
-                Text("CodeCaps AI Monitor")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(.secondary)
             }
+            .padding(14)
         }
-        .padding(14)
     }
 }
 
@@ -391,13 +435,19 @@ struct ProviderFocusView: View {
     @Environment(\.widgetFamily) var family
 
     var body: some View {
-        let platform = entry.primaryPlatform ?? entry.platforms.first ?? WidgetPresentation.placeholders[0]
-
-        switch family {
-        case .systemMedium:
-            mediumFocusView(for: platform)
-        default:
-            smallFocusView(for: platform)
+        if let platform = entry.primaryPlatform ?? entry.platforms.first {
+            switch family {
+            case .systemMedium:
+                mediumFocusView(for: platform)
+            default:
+                smallFocusView(for: platform)
+            }
+        } else {
+            WidgetEmptyStateView(
+                title: "No Quota Synced",
+                subtitle: "Open CodeCaps to connect plans"
+            )
+            .padding(10)
         }
     }
 
@@ -539,50 +589,71 @@ struct AccessoryView: View {
     @Environment(\.widgetFamily) var family
 
     var body: some View {
-        let platform = entry.primaryPlatform ?? entry.platforms.first ?? WidgetPresentation.placeholders[0]
-
-        switch family {
-        case .accessoryCircular:
-            ZStack {
-                AccessoryWidgetBackground()
-                Gauge(value: platform.progressFraction, in: 0...1) {
-                    Text(platform.title.prefix(2).uppercased())
-                } currentValueLabel: {
-                    Text(platform.displayPercent.replacingOccurrences(of: "%", with: ""))
-                        .font(.system(size: 14, weight: .bold, design: .rounded))
-                }
-                .gaugeStyle(.accessoryCircularCapacity)
-            }
-
-        case .accessoryRectangular:
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 4) {
-                    Text(platform.title)
-                        .font(.system(size: 12, weight: .bold))
-                    Spacer()
-                    Text(platform.displayPercent)
-                        .font(.system(size: 12, weight: .bold, design: .rounded))
-                }
-                MiniProgressBar(fraction: platform.progressFraction, color: .primary, height: 4)
-                HStack {
-                    Text(platform.subtitle)
-                        .font(.system(size: 9))
-                    Spacer()
-                    if !platform.countdown().isEmpty {
-                        Text(platform.countdown())
-                            .font(.system(size: 9, design: .monospaced))
+        if let platform = entry.primaryPlatform ?? entry.platforms.first {
+            switch family {
+            case .accessoryCircular:
+                ZStack {
+                    AccessoryWidgetBackground()
+                    Gauge(value: platform.progressFraction, in: 0...1) {
+                        Text(platform.title.prefix(2).uppercased())
+                    } currentValueLabel: {
+                        Text(platform.displayPercent.replacingOccurrences(of: "%", with: ""))
+                            .font(.system(size: 14, weight: .bold, design: .rounded))
                     }
+                    .gaugeStyle(.accessoryCircularCapacity)
                 }
-                .foregroundColor(.secondary)
+
+            case .accessoryRectangular:
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 4) {
+                        Text(platform.title)
+                            .font(.system(size: 12, weight: .bold))
+                        Spacer()
+                        Text(platform.displayPercent)
+                            .font(.system(size: 12, weight: .bold, design: .rounded))
+                    }
+                    MiniProgressBar(fraction: platform.progressFraction, color: .primary, height: 4)
+                    HStack {
+                        Text(platform.subtitle)
+                            .font(.system(size: 9))
+                        Spacer()
+                        if !platform.countdown().isEmpty {
+                            Text(platform.countdown())
+                                .font(.system(size: 9, design: .monospaced))
+                        }
+                    }
+                    .foregroundColor(.secondary)
+                }
+
+            case .accessoryInline:
+                let pct = platform.displayPercent
+                let cd = platform.countdown()
+                Text("\(platform.title): \(pct)\(cd.isEmpty ? "" : " · " + cd)")
+
+            default:
+                Text("CodeCaps")
             }
-
-        case .accessoryInline:
-            let pct = platform.displayPercent
-            let cd = platform.countdown()
-            Text("\(platform.title): \(pct)\(cd.isEmpty ? "" : " · " + cd)")
-
-        default:
-            Text("CodeCaps")
+        } else {
+            switch family {
+            case .accessoryCircular:
+                ZStack {
+                    AccessoryWidgetBackground()
+                    Image(systemName: "gauge.with.dots.needle.bottom.0percent")
+                        .font(.system(size: 14))
+                }
+            case .accessoryRectangular:
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("CodeCaps")
+                        .font(.system(size: 12, weight: .bold))
+                    Text("No quotas synced")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                }
+            case .accessoryInline:
+                Text("CodeCaps: Open to connect")
+            default:
+                Text("CodeCaps")
+            }
         }
     }
 }

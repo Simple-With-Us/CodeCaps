@@ -77,19 +77,21 @@ public enum WidgetSnapshotStore {
             }
         }
 
-        // 4. macOS Host Application Support (Usage Monitor path)
-        let hostPath = ("~/Library/Application Support/Usage Monitor/quota-windows.json" as NSString).expandingTildeInPath
-        if let data = try? Data(contentsOf: URL(fileURLWithPath: hostPath)) {
-            let parsed = WidgetPresentation.parseSnapshot(data: data, platformOrder: order, now: now)
-            if !parsed.isEmpty {
-                let attrs = try? FileManager.default.attributesOfItem(atPath: hostPath)
-                let modDate = attrs?[.modificationDate] as? Date
-                return (parsed, modDate, false)
+        // 4. macOS Host Application Support (CodeCaps or Usage Monitor path)
+        for subpath in ["CodeCaps/quota-windows.json", "Usage Monitor/quota-windows.json"] {
+            let hostPath = ("~/Library/Application Support/\(subpath)" as NSString).expandingTildeInPath
+            if let data = try? Data(contentsOf: URL(fileURLWithPath: hostPath)) {
+                let parsed = WidgetPresentation.parseSnapshot(data: data, platformOrder: order, now: now)
+                if !parsed.isEmpty {
+                    let attrs = try? FileManager.default.attributesOfItem(atPath: hostPath)
+                    let modDate = attrs?[.modificationDate] as? Date
+                    return (parsed, modDate, false)
+                }
             }
         }
 
-        // 5. Fallback placeholder data so widget gallery and unconfigured installs look great
-        return (WidgetPresentation.placeholders, nil, true)
+        // 5. Unconfigured / no data synced state (honest empty state, no fake numbers)
+        return ([], nil, true)
     }
 }
 

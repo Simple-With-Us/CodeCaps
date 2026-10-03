@@ -26,9 +26,9 @@ final class PlatformLogoTests: XCTestCase {
     }
 
     func testFallbackSymbolsAreDefined() {
-        XCTAssertEqual(PlatformLogoImage.fallbackSymbolName(for: "grok-bot"), "bolt.badge.a")
-        XCTAssertEqual(PlatformLogoImage.fallbackSymbolName(for: "grok"), "bolt")
-        XCTAssertEqual(PlatformLogoImage.fallbackSymbolName(for: "unknown"), "gauge.with.dots.needle.50percent")
+        XCTAssertEqual(PlatformLogoImage.fallbackSymbolName(for: "grok-bot"), "questionmark.square.dashed")
+        XCTAssertEqual(PlatformLogoImage.fallbackSymbolName(for: "grok"), "questionmark.square.dashed")
+        XCTAssertEqual(PlatformLogoImage.fallbackSymbolName(for: "unknown"), "questionmark.square.dashed")
     }
 
     // MARK: - Resource bundle resolution

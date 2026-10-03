@@ -67,6 +67,10 @@ public enum ResourceBundle {
     }
 
     public static let resolved: Bundle? = {
+        if let mainBundleURL = Bundle.main.url(forResource: name, withExtension: "bundle"),
+           let bundle = Bundle(url: mainBundleURL) {
+            return bundle
+        }
         if let found = resolve(in: searchRoots) { return found }
         guard mayUseGeneratedAccessor(appBundleURL: Bundle.main.bundleURL) else { return nil }
         return Bundle.module
@@ -443,7 +447,7 @@ public enum PlatformLogoImage {
 
     public static func menuBarImage(providerKey: String, size: CGFloat = 16, style: MarkStyle = .template, isDarkMode: Bool? = nil) -> NSImage? {
         let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let isDark = isDarkMode ?? (NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua)
+        let isDark = isDarkMode ?? (NSApp?.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua)
         let cacheKey = "\(key)|\(style.rawValue)|\(isDark ? "dark" : "light")" as NSString
         if let cached = menuBarCache.object(forKey: cacheKey) { return cached }
         guard let original = load(providerKey: key, style: style, isDarkMode: isDark) else {
@@ -466,18 +470,9 @@ public enum PlatformLogoImage {
         return img
     }
 
+    /// Obvious, uniform fallback symbol when artwork cannot be resolved.
+    /// Fleet-wide rule: never use lookalike SF symbols to disguise missing marks.
     public static func fallbackSymbolName(for providerKey: String) -> String {
-        let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        switch key {
-        case "anthropic", "claude": return "sparkles"
-        case "openai", "codex": return "cpu"
-        case "google-antigravity", "antigravity", "gemini",
-             "google-antigravity:gemini", "google-antigravity:third-party": return "sparkle"
-        case "xai", "grok", "grok-cli": return "bolt"
-        case "grok-bot": return "bolt.badge.a"
-        case "minimax": return "m.square"
-        case "cursor": return "cursorarrow.rays"
-        default: return "gauge.with.dots.needle.50percent"
-        }
+        "questionmark.square.dashed"
     }
 }

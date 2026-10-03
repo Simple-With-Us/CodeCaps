@@ -148,12 +148,12 @@ for other local consumers (for example, BotFleet's Usage Monitor).  `format` is 
 **Homebrew**
 
 ```bash
-brew install --cask jaywedgeworth22/tap/codecaps
+brew install --cask Simple-With-Us/tap/codecaps
 ```
 
 **Download**
 
-Grab the signed and notarized `CodeCaps.dmg` from the [latest release](https://github.com/jaywedgeworth22/codecaps/releases/latest).
+Grab the signed and notarized `CodeCaps.dmg` from the [latest release](https://github.com/Simple-With-Us/codecaps/releases/latest).
 
 **Updates**
 
@@ -164,7 +164,7 @@ CodeCaps updates itself.  Every change merged to `main` becomes a signed, notari
 Requirements: macOS 14+, Apple silicon or Intel, Xcode Command Line Tools with a Swift 5.9+ toolchain.
 
 ```bash
-git clone https://github.com/jaywedgeworth22/codecaps.git
+git clone https://github.com/Simple-With-Us/codecaps.git
 cd codecaps
 script/build_and_run.sh            # build, install to ~/Applications, and relaunch
 ```

@@ -11,7 +11,7 @@ description: >-
   workflow command for that exact value, which is what scrubs it from the
   rendered log from that point on.
 
-  Copied from jaywedgeworth22/BotFleet on 2026-09-29 for CodeCaps'
+  Copied from Simple-With-Us/BotFleet on 2026-09-29 for CodeCaps'
   mac-release.yml; keep the two copies in step.
 
   NOTE: Usage-Monitor carries a parallel, not-yet-deduplicated copy of this

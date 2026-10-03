@@ -17,6 +17,7 @@ APP_CONTENTS="$APP_BUNDLE/Contents"
 APP_MACOS="$APP_CONTENTS/MacOS"
 APP_RESOURCES="$APP_CONTENTS/Resources"
 APP_FRAMEWORKS="$APP_CONTENTS/Frameworks"
+APP_PLUGINS="$APP_CONTENTS/PlugIns"
 APP_EXECUTABLE="$APP_MACOS/$PRODUCT_NAME"
 INFO_PLIST="$APP_CONTENTS/Info.plist"
 ICON_MASTER="$ROOT_DIR/assets/icon-1024.png"
@@ -37,7 +38,7 @@ NOTARY_PROFILE="${CODECAPS_NOTARY_PROFILE:-${AGENTBAR_NOTARY_PROFILE:-agentbar-n
 # public key is not a secret; its private half is the SPARKLE_ED_PRIVATE_KEY
 # repository secret, backed up in the owner's login Keychain (account
 # "codecaps") and in the secrets handoff folder.
-SPARKLE_FEED_URL_DEFAULT="https://github.com/jaywedgeworth22/CodeCaps/releases/latest/download/appcast.xml"
+SPARKLE_FEED_URL_DEFAULT="https://github.com/Simple-With-Us/CodeCaps/releases/latest/download/appcast.xml"
 SPARKLE_PUBLIC_ED_KEY="${CODECAPS_SPARKLE_PUBLIC_KEY:-Ou2J0syHZawPSY3JLTLVyhbOylmtyr0QnZPbq7acETQ=}"
 SPARKLE_CHECK_INTERVAL="${CODECAPS_SPARKLE_CHECK_INTERVAL:-3600}"
 
@@ -208,6 +209,31 @@ embed_frameworks() {
   fi
   if ! /usr/bin/otool -l "$APP_EXECUTABLE" | /usr/bin/grep -q '@executable_path/../Frameworks'; then
     /usr/bin/install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP_EXECUTABLE"
+  fi
+}
+
+embed_plugins() {
+  local xcode_proj="$ROOT_DIR/ios/CodeCapsCompanion/CodeCapsCompanion.xcodeproj"
+  if [[ ! -d "$xcode_proj" ]]; then
+    echo "note: Xcode companion project not found at $xcode_proj; skipping widget extension."
+    return 0
+  fi
+  local widget_symroot="$ROOT_DIR/ios/CodeCapsCompanion/build"
+  echo "building macOS widget extension (CodeCapsWidgetsMac)..."
+  if xcodebuild -project "$xcode_proj" -target CodeCapsWidgetsMac -configuration Release \
+      CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
+      SYMROOT="$widget_symroot" build >/dev/null 2>&1; then
+    local appex_src="$widget_symroot/Release/CodeCapsWidgets.appex"
+    if [[ -d "$appex_src" ]]; then
+      mkdir -p "$APP_PLUGINS"
+      rm -rf "$APP_PLUGINS/CodeCapsWidgets.appex"
+      cp -R "$appex_src" "$APP_PLUGINS/"
+      echo "embedded $(basename "$appex_src")"
+    else
+      echo "warning: CodeCapsWidgets.appex was not found in $widget_symroot/Release." >&2
+    fi
+  else
+    echo "warning: building CodeCapsWidgetsMac failed; continuing without embedded widgets." >&2
   fi
 }
 
@@ -437,6 +463,7 @@ build_and_stage() {
   cp "$build_binary" "$APP_EXECUTABLE"
   chmod +x "$APP_EXECUTABLE"
   embed_frameworks "$build_bin_dir"
+  embed_plugins
   if [[ "$UNIVERSAL" == "1" ]]; then
     local archs
     archs="$(/usr/bin/lipo -archs "$APP_EXECUTABLE" 2>/dev/null || true)"
