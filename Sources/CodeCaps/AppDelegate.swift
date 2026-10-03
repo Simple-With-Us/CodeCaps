@@ -320,8 +320,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         NSApp.setActivationPolicy(.accessory)
     }
 
-    /// Reopening a window that is already open brings it forward instead of
-    /// building a second one.
     private func configureMenu() {
         let menu = NSMenu()
         let appItem = NSMenuItem()
