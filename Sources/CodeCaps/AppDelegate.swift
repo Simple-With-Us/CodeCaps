@@ -116,8 +116,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         consoleState.$page.removeDuplicates().sink { [weak self] page in
             self?.consoleWindow?.title = page.isSettings ? "CodeCaps Settings" : "CodeCaps"
         }.store(in: &subscriptions)
+        model.$glanceView.removeDuplicates().sink { [weak self] _ in
+            DispatchQueue.main.async {
+                guard let self, self.popover.isShown, let button = self.statusItem?.button else { return }
+                let screen = button.window?.screen ?? NSScreen.main
+                let newHeight = QuotaGlanceMetrics.popoverHeight(for: self.model, on: screen)
+                self.popover.contentSize = NSSize(width: Metrics.glanceWidth, height: newHeight)
+            }
+        }.store(in: &subscriptions)
         model.objectWillChange.sink { [weak self] _ in
-            DispatchQueue.main.async { self?.updateStatus() }
+            DispatchQueue.main.async {
+                self?.updateStatus()
+                if let self, self.popover.isShown, let button = self.statusItem?.button {
+                    let screen = button.window?.screen ?? NSScreen.main
+                    let newHeight = QuotaGlanceMetrics.popoverHeight(for: self.model, on: screen)
+                    if abs(self.popover.contentSize.height - newHeight) > 1 {
+                        self.popover.contentSize = NSSize(width: Metrics.glanceWidth, height: newHeight)
+                    }
+                }
+            }
         }.store(in: &subscriptions)
         if model.displayMode != .menuBar && !relaunchedForUpdate { showConsole(page: nil) }
         model.start()
