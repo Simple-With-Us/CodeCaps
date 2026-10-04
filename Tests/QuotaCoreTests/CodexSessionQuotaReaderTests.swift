@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import XCTest
 @testable import QuotaCore
@@ -118,6 +119,8 @@ final class CodexSessionQuotaReaderTests: XCTestCase {
         let file = try fixture.session("a.jsonl", account: "account-a", lines: [fixture.event(at: "2026-10-03T11:55:00Z", used: 20)])
         let reader = CodexSessionQuotaReader(homeDirectory: fixture.home, now: { self.clock })
         let original = await reader.read()
+        XCTAssertEqual(original.windows.count, 1)
+        XCTAssertEqual(original.windows.first?.remainingPercent, 80)
         try fixture.append(#"{"timestamp":"2026-10-03T11:59:00Z","type":"event_msg","payload":{"type":"other"}}"# + "\n", to: file)
         let unchanged = await reader.read()
         XCTAssertEqual(unchanged.windows, original.windows)
@@ -129,7 +132,14 @@ private struct Fixture {
     let day: URL
 
     init(now: Date) throws {
-        home = FileManager.default.temporaryDirectory.resolvingSymlinksInPath()
+        // Foundation may shorten /private/var back to the /var symlink on macOS.
+        // Use the POSIX canonical path because the reader rejects symlink ancestors.
+        let temporaryPath = FileManager.default.temporaryDirectory.path
+        guard let resolved = Darwin.realpath(temporaryPath, nil) else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        defer { free(resolved) }
+        home = URL(fileURLWithPath: String(cString: resolved), isDirectory: true)
             .appendingPathComponent("CodexQuota-\(UUID().uuidString)")
         day = home.appendingPathComponent(".codex/sessions/2026/10/03")
         try FileManager.default.createDirectory(at: day, withIntermediateDirectories: true)
