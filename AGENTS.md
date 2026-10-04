@@ -53,8 +53,10 @@ CodeCaps is a macOS menu-bar Swift app for **centralized monitoring and
 alerting of every AI subscription plan on your Mac** — usage, quotas, and
 caps across Claude, Codex, Cursor, Antigravity, Grok, MiniMax, and the
 other AI CLIs already signed in.  No provider API key is entered; CodeCaps
-reads the local files those CLIs already write.  The same readings can be
-pushed to an endpoint you run and pulled back into one Glance popover.
+uses existing local sign-ins to query supported provider quotas and local
+helpers.  Reading a credential file is not a passive quota-file refresh.  The
+same readings can be pushed to an endpoint you run and pulled back into the
+Docked Bar.
 
 The name "CodeCaps" is the brand; the app's scope is AI subscription
 monitoring more broadly, not just coding subscriptions.  Owner ruling,
@@ -67,10 +69,13 @@ where the monitoring + sync semantics are the headline.
 
 Two SPM targets in `Package.swift`:
 
-- `CodeCaps` (executable, 8 source files, AppKit + SwiftUI)
-- `QuotaCore` (library, 14 source files, Foundation + SQLite)
+- `CodeCaps` (executable, AppKit + SwiftUI)
+- `QuotaCore` (library, Foundation + SQLite)
 
-macOS 14+.  Single platform.  External integrations: BotFleet on-disk
+The native Mac host requires macOS 14+.  The iOS companion and native iOS/Mac
+widgets live under `ios/CodeCapsCompanion`; generate their Xcode project from
+`project.yml`.  See `docs/WIDGETS.md` for signing and shared storage.
+External integrations: BotFleet on-disk
 handoff at `~/Library/Application Support/Usage Monitor/quota-windows.json`,
 HTTP push (`QuotaPublisher`, v2 ingest envelope), HTTP pull (`QuotaClient`,
 `FleetPipeline`).
