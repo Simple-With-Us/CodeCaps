@@ -5,13 +5,13 @@ PR (when shipped), follow-ups (when parked).
 
 ---
 
-## 2026-10-03 — TestFlight Export Uses Apple Rsync [CODEX, in progress]
+## 2026-10-03 — TestFlight Export Uses Apple Rsync [CODEX, PR #140]
 
 Lane: `codex/ios-export-apple-rsync`.  Board `45d7cc9e21574510aff1fbc2ce95eb3b`.
 
 - The merged widget build's iOS archive succeeded, but both Xcode export modes failed with `exportArchive Copy failed`.  Xcode invoked `/usr/bin/rsync`; its child resolved Homebrew rsync 3.5.1, which rejected Apple's `--extended-attributes` option.
-- Re-exporting the same signed archive with system tools first on `PATH` produced a valid IPA.  The app and widget both carry `group.com.simplewithus.codecaps`; App Store Connect upload remains in progress.
-- Pin the vendored ship helper to Apple system tools first so future CodeCaps TestFlight exports use the compatible rsync while Node and XcodeGen remain available from Homebrew.
+- Re-exporting the same signed archive with system tools first on `PATH` produced a valid IPA.  The app and widget both carry `group.com.simplewithus.codecaps`; App Store Connect accepted build `202610040200` (`0.1.63`) and reports internal `IN_BETA_TESTING`.
+- PR #140 pins the vendored ship helper to Apple system tools first so future CodeCaps TestFlight exports use the compatible rsync while Node and XcodeGen remain available from Homebrew.
 
 ---
 
@@ -21,9 +21,9 @@ Lane: `codex/native-widgets-data-controls`.  Boards `508560f7`, `9a3d1a21`, `bc0
 
 - Confirmed running `/Applications/CodeCaps.app` build 110 embeds a Mac widget but both signatures lack group entitlements.  Release configuration strips groups on iOS too; active iOS App Store profiles already authorize the required group.
 - Repair uses macOS team-scoped `CC8UTF7ATG.codecaps` and iOS `group.com.simplewithus.codecaps`, with explicit signature validation.  Widget cache supports local, pull-only, combined, and paused configurations independently from the local-only BotFleet handoff.
-- Public guide shipped in PR #127 at https://codecaps.simplewithus.com/setup.html; Pages succeeded and live bytes match source.  Native build/install and device verification remain pending; do not claim widgets repaired until verified.
+- Public guide shipped in PR #127 and its widget instructions updated in PR #138 at https://codecaps.simplewithus.com/setup.html; live bytes match source.
 - Gemini CLI reader is connected with real OAuth quota reads while Kimi remains retired.  Menu presets preserve legacy selections; fresh installs use Smart Pair.
-- Final focused gate passed 65 tests, including save/push cancellation and single-publication refinements.  PR #135 package, Mac structural-release validation, and iOS simulator screenshot jobs passed before the #134 main sync; signed App Group runtime verification remains pending.
+- Final focused gate passed 65 tests, including save/push cancellation and single-publication refinements.  PR #135 merged; Mac build 116 was notarized, installed, and verified writing a 43-window shared cache with matching host/widget App Group signatures.  iOS simulator app screenshots show reorder and honest empty state; rendered WidgetKit UI remains unverified.
 
 ---
 
