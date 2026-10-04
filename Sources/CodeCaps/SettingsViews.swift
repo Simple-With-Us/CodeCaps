@@ -1302,11 +1302,8 @@ struct SettingsInfisicalPage: View {
 
             Section {
                 TextField("Pull Endpoint", text: $pullEndpoint)
-                    .disableAutocorrection(true)
                 TextField("Push Endpoint", text: $pushEndpoint)
-                    .disableAutocorrection(true)
                 TextField("Refresh Seconds", text: $refreshSeconds)
-                    .disableAutocorrection(true)
                 HStack {
                     Spacer()
                     if working { ProgressView().controlSize(.small) }

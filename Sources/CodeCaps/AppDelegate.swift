@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import QuotaCore
 import SwiftUI
 
 @main

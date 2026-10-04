@@ -12,7 +12,8 @@ final class InfisicalIdentityStoreTests: XCTestCase {
         savedCalls = InfisicalIdentityStore.calls
         InfisicalIdentityStore.calls = InfisicalIdentityStore.KeychainCalls(
             read: { [weak self] service, account in
-                self?.vault["\(service)/\(account)"]
+                guard let self else { return nil }
+                return self.vault["\(service)/\(account)"]
             },
             save: { [weak self] service, account, value in
                 self?.vault["\(service)/\(account)"] = value
