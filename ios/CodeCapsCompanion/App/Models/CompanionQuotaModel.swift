@@ -1136,6 +1136,9 @@ public final class CompanionQuotaModel: ObservableObject {
         if pKey.contains("minimax") || prov.contains("minimax") {
             return ("minimax", "MiniMax", "minimax")
         }
+        if pKey.contains("muse") || prov.contains("muse") {
+            return ("muse", "Muse", "muse")
+        }
         if pKey.contains("grok-bot") || prov.contains("grok-bot") || prov.contains("grok bot") || id.contains("grok-bot") {
             return ("grok-bot", "Grok Bot", "grok-bot")
         }
