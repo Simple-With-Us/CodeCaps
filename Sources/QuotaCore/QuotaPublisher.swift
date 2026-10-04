@@ -201,7 +201,8 @@ public actor QuotaPublisher {
                 "remainingUnknown": false,
                 "scale": "percent_0_100",
                 "source": Self.producerId,
-                "machine": machine
+                "machine": machine,
+                "producerInstanceId": producerInstanceId
             ]
             if let resetAt = window.resetAt { meta["resetAt"] = resetAt }
             if let w = window.window { meta["quotaWindow"] = w }
@@ -220,6 +221,8 @@ public actor QuotaPublisher {
                 "limit": 100,
                 "credits": clampedRemaining,
                 "occurredAt": readingTime,
+                "machine": machine,
+                "producerInstanceId": producerInstanceId,
                 "metadata": meta
             ]
             if let plan = window.planName { event["tier"] = plan }
@@ -230,6 +233,7 @@ public actor QuotaPublisher {
             "schemaVersion": 2,
             "producerId": Self.producerId,
             "producerInstanceId": producerInstanceId,
+            "machine": machine,
             "events": events
         ]
         return try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])

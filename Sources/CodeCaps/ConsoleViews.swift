@@ -225,6 +225,13 @@ final class ConsoleState: ObservableObject {
         }
     }
 
+    func selectWindow(_ windowId: String?) {
+        selectedWindowId = windowId
+        selectedTimestamp = nil
+        unavailableAlert = nil
+        pendingAlert = nil
+    }
+
     func clearHistoryFocus() {
         selectedWindowId = nil
         selectedTimestamp = nil

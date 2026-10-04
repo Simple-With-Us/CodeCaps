@@ -338,6 +338,26 @@ final class ResetAlarmTrackerTests: XCTestCase {
                                              weekResetAt: weekEnd, week: 60), now: next).isEmpty)
     }
 
+    func testMidWindowResetFiresWhenQuotaSurgesOrJumpsToFullBeforePeriodEnd() {
+        var tracker = ResetAlarmTracker()
+        let fiveEnd = t0 + 4 * hour
+        let weekEnd = t0 + 4 * day
+        _ = tracker.process(claude(at: t0, fiveResetAt: fiveEnd, five: 75, weekResetAt: weekEnd, week: 60), now: t0)
+
+        // 30 minutes in (reset still 3.5h away): surged from under 80% to >= 95%
+        let mid1 = t0 + 30 * 60
+        let events1 = tracker.process(claude(at: mid1, fiveResetAt: fiveEnd, five: 96, weekResetAt: weekEnd, week: 60), now: mid1)
+        XCTAssertEqual(events1.map(\.windowId), ["5h"])
+
+        // Drops to 15%, then jumps to 100% mid-window
+        let mid2 = t0 + 60 * 60
+        _ = tracker.process(claude(at: mid2, fiveResetAt: fiveEnd, five: 15, weekResetAt: weekEnd, week: 60), now: mid2)
+
+        let mid3 = t0 + 70 * 60
+        let events2 = tracker.process(claude(at: mid3, fiveResetAt: fiveEnd, five: 100, weekResetAt: weekEnd, week: 60), now: mid3)
+        XCTAssertEqual(events2.map(\.windowId), ["5h"])
+    }
+
     func testAStaleResetTimeRepeatedAfterADetectedResetIsNotASecondReset() {
         var tracker = ResetAlarmTracker()
         let fiveEnd = t0 + hour

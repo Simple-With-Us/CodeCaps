@@ -239,6 +239,27 @@ struct SettingsSourcesFleetPage: View {
 
     private var thisMacSection: some View {
         Section {
+            HStack(spacing: 8) {
+                Image(systemName: "laptopcomputer")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Theme.accent)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Machine Identity: \(QuotaPublisher.machineName)")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text("Host: \(ProcessInfo.processInfo.hostName)")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Text("Identified")
+                    .font(.system(size: 10, weight: .medium))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Theme.accent.opacity(0.12), in: Capsule())
+                    .foregroundStyle(Theme.accent)
+            }
+            .padding(.vertical, 2)
+
             Toggle("Read Quotas From This Mac",
                    isOn: Binding(get: { model.localEnabled }, set: { model.setLocalEnabled($0) }))
             ForEach(ReaderStatus.all, id: \.providerKey) { reader in

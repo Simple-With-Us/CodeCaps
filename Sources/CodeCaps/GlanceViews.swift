@@ -103,33 +103,6 @@ struct GlancePopover: View {
     @ViewBuilder
     private var fromMacContent: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if let activeAnomaly = model.activeRunawayAnomalies.first {
-                RunawayAnomalyGlanceCard(
-                    anomaly: activeAnomaly,
-                    model: model,
-                    onInspect: {
-                        openAlert(activeAnomaly.providerKey, activeAnomaly.windowId, activeAnomaly.observedAt)
-                    },
-                    onOpenAllAlerts: {
-                        openConsole(.runawayAlerts)
-                    }
-                )
-                .padding(.horizontal, Metrics.glanceGutter)
-                .padding(.bottom, 6)
-            } else if let recentAlert = model.runawayAlertHistory.first, recentAlert.timestamp.timeIntervalSinceNow > -86_400 {
-                RunawayRecentAlertGlanceCard(
-                    alert: recentAlert,
-                    onInspect: {
-                        openAlert(recentAlert.providerKey, recentAlert.windowId, recentAlert.timestamp)
-                    },
-                    onOpenAllAlerts: {
-                        openConsole(.runawayAlerts)
-                    }
-                )
-                .padding(.horizontal, Metrics.glanceGutter)
-                .padding(.bottom, 6)
-            }
-
             if localSections.isEmpty && !model.localEnabled {
                 GlanceEmptyState(
                     symbol: "laptopcomputer",
@@ -300,46 +273,65 @@ struct GlancePopover: View {
                 .accessibilityLabel("Open CodeCaps")
             }
 
-            if model.burnRateAlertsEnabled {
+            if !model.activeRunawayAnomalies.isEmpty {
                 Button {
                     if let anomaly = model.activeRunawayAnomalies.first {
                         openAlert(anomaly.providerKey, anomaly.windowId, anomaly.observedAt)
-                    } else if let recent = model.runawayAlertHistory.first {
-                        openAlert(recent.providerKey, recent.windowId, recent.timestamp)
                     } else {
                         openConsole(.runawayAlerts)
                     }
                 } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: model.activeRunawayAnomalies.isEmpty ? "bell.badge" : "flame.fill")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(model.activeRunawayAnomalies.isEmpty ? Theme.ink : Theme.warning)
-                        Text(runawayFooterText)
-                            .font(.system(size: 11, weight: .medium))
-                            .lineLimit(1)
+                    HStack(spacing: 6) {
+                        Image(systemName: "flame.fill")
+                            .font(.system(size: 13, weight: .heavy))
+                            .foregroundStyle(Theme.warning)
+                        MarqueeText(
+                            text: runawayCombinedMarqueeText,
+                            font: .system(size: 12, weight: .bold, design: .rounded),
+                            color: Theme.warning
+                        )
                     }
-                    .frame(maxWidth: 220)
+                    .frame(maxWidth: 240, maxHeight: 24)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Theme.warning.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
+                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Theme.warning.opacity(0.35), lineWidth: 1))
                 }
                 .buttonStyle(.plain)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(runawayFooterAccessibilityLabel)
-                .help("Open Runaway Usage Alerts")
+                .help("Active Runaway Anomaly: click to inspect")
             }
         }
         .padding(.horizontal, Metrics.glanceGutter)
         .frame(height: Metrics.glanceFooterHeight)
     }
 
-    private var runawayFooterText: String {
-        if let anomaly = model.activeRunawayAnomalies.first {
-            let provider = model.sections.first { $0.providerKey == anomaly.providerKey }?.providerLabel
-                ?? anomaly.providerKey
-            return "Runaway: \(provider) (\(anomaly.multiplier.formatted(.number.precision(.fractionLength(1))))×)"
+    private var runawayFooterItems: [String] {
+        model.activeRunawayAnomalies.map { anomaly in
+            let matchingDisplayRow = model.displaySections.first { row in
+                row.section.windows.contains { $0.window.id == anomaly.windowId }
+            }
+            let provider: String
+            if let matchingDisplayRow, matchingDisplayRow.isPool {
+                provider = matchingDisplayRow.title
+            } else {
+                provider = model.sections.first { $0.providerKey == anomaly.providerKey }?.providerLabel
+                    ?? anomaly.providerKey.capitalized
+            }
+            let matchingSnapshot = model.displaySections.flatMap { $0.section.windows }
+                .first { $0.window.id == anomaly.windowId }
+                ?? model.sections.flatMap(\.windows).first { $0.window.id == anomaly.windowId }
+            let windowLabel = matchingSnapshot.map { glanceMeterCaption($0) } ?? anomaly.windowId
+            let comp = anomaly.kind == .vsPeak ? "peak" : "avg"
+            return "\(provider) (\(windowLabel)): \(anomaly.multiplier.formatted(.number.precision(.fractionLength(1))))× vs \(comp)"
         }
-        if let recent = model.runawayAlertHistory.first, recent.timestamp.timeIntervalSinceNow > -86_400 {
-            return "Recent: \(recent.providerLabel) (\(recent.multiplier.formatted(.number.precision(.fractionLength(1))))×)"
-        }
-        return "Runaway Alerts Active"
+    }
+
+    private var runawayCombinedMarqueeText: String {
+        let items = runawayFooterItems
+        if items.isEmpty { return "" }
+        return "RUNAWAY: " + items.joined(separator: ", ")
     }
 
     private var runawayAnomalyFooterDetail: String? {
@@ -358,12 +350,71 @@ struct GlancePopover: View {
     private var runawayFooterAccessibilityLabel: String {
         let summaries = model.activeRunawayAnomalies.map(\.summary)
         if !summaries.isEmpty {
-            return "Runaway Usage Alerts Enabled, active anomaly: " + summaries.joined(separator: sentenceGap)
+            return "Runaway Usage Alerts: " + summaries.joined(separator: sentenceGap)
         }
-        if let recent = model.runawayAlertHistory.first, recent.timestamp.timeIntervalSinceNow > -86_400 {
-            return "Runaway Usage Alerts Enabled, recent alert: \(recent.summary)"
+        return "Runaway Usage Alerts"
+    }
+}
+
+struct MarqueeText: View {
+    let text: String
+    var font: Font = .system(size: 12, weight: .bold)
+    var color: Color = Theme.warning
+
+    @State private var textWidth: CGFloat = 0
+    @State private var containerWidth: CGFloat = 0
+    @State private var offset: CGFloat = 0
+
+    var body: some View {
+        GeometryReader { geo in
+            let available = geo.size.width
+            let needsScroll = textWidth > available && available > 0
+
+            ZStack(alignment: .leading) {
+                Text(text)
+                    .font(font)
+                    .foregroundStyle(color)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .background(
+                        GeometryReader { textGeo in
+                            Color.clear.preference(key: MarqueeTextWidthKey.self, value: textGeo.size.width)
+                        }
+                    )
+                    .offset(x: needsScroll ? offset : 0)
+            }
+            .frame(width: available, height: geo.size.height, alignment: needsScroll ? .leading : .center)
+            .clipped()
+            .onPreferenceChange(MarqueeTextWidthKey.self) { width in
+                textWidth = width
+                containerWidth = available
+                startScroll(needsScroll: width > available && available > 0, width: width, available: available)
+            }
+            .onChange(of: available) { _, newAvailable in
+                containerWidth = newAvailable
+                startScroll(needsScroll: textWidth > newAvailable && newAvailable > 0, width: textWidth, available: newAvailable)
+            }
         }
-        return "Runaway Usage Alerts Enabled"
+    }
+
+    private func startScroll(needsScroll: Bool, width: CGFloat, available: CGFloat) {
+        if needsScroll {
+            let distance = width - available + 20
+            let duration = max(3.0, Double(distance) / 25.0)
+            offset = 0
+            withAnimation(.linear(duration: duration).repeatForever(autoreverses: true).delay(0.8)) {
+                offset = -distance
+            }
+        } else {
+            offset = 0
+        }
+    }
+}
+
+private struct MarqueeTextWidthKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }
 
@@ -931,6 +982,9 @@ private func nearestToCap(_ pool: [QuotaWindowSnapshot]) -> QuotaWindowSnapshot?
 /// bucket, a plan meter with no end date — is `.long`: a subscription-wide
 /// allowance is the long side of the pair far more often than the short one.
 func glanceCadence(_ snapshot: QuotaWindowSnapshot, now: Date) -> GlanceCadence {
+    if snapshot.window.isSupplementaryVideoQuota {
+        return .short
+    }
     let token = (snapshot.window.window ?? "")
         .lowercased()
         .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1066,21 +1120,39 @@ struct GlanceMeter: View {
             // Red for the share used, green for the share left, and a black
             // marker for how far through the period we are.  This is the one
             // place the status colour appears.
-            QuotaUsageBar(metrics: metrics, height: Metrics.glanceMeterBarHeight,
-                          dimmed: quotaBarIsDimmed(for: snapshot, sourceFailed: false),
-                          markerHeight: Metrics.glanceMeterMarkerHeight)
-                .frame(width: Metrics.glanceMeterBarWidth, height: Metrics.glanceMeterBarHeight)
+            if snapshot.window.isSupplementaryVideoQuota,
+               let remaining = snapshot.window.absoluteRemaining,
+               let limit = snapshot.window.absoluteLimit, limit > 0, limit <= 20 {
+                DiscreteQuotaPips(remaining: Int(remaining.rounded()), total: Int(limit.rounded()), tint: tint)
+                    .frame(width: Metrics.glanceMeterBarWidth, height: Metrics.glanceMeterBarHeight)
+            } else {
+                QuotaUsageBar(metrics: metrics, height: Metrics.glanceMeterBarHeight,
+                              dimmed: quotaBarIsDimmed(for: snapshot, sourceFailed: false),
+                              markerHeight: Metrics.glanceMeterMarkerHeight)
+                    .frame(width: Metrics.glanceMeterBarWidth, height: Metrics.glanceMeterBarHeight)
+            }
             // AG's #112 grouped the percentage and the countdown and
             // italicised the countdown; that structure is kept.  The colour
             // is the owner's ruling: the percentage is the number the row
             // exists to convey, and a number that changes colour with its own
             // value has to be re-read every time.  Accent belongs on the bar.
-            Text(percent.map { "\(Int($0.rounded()))%" } ?? "—")
-                .font(.system(size: 11, weight: .medium).monospacedDigit())
-                .foregroundStyle(Theme.ink)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-                .frame(width: Metrics.glanceMeterPercentWidth, alignment: .trailing)
+            if snapshot.window.isSupplementaryVideoQuota,
+               let remaining = snapshot.window.absoluteRemaining,
+               let limit = snapshot.window.absoluteLimit, limit > 0 {
+                Text("\(Int(remaining.rounded()))/\(Int(limit.rounded()))")
+                    .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(Theme.ink)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .frame(width: Metrics.glanceMeterPercentWidth, alignment: .trailing)
+            } else {
+                Text(percent.map { "\(Int($0.rounded()))%" } ?? "—")
+                    .font(.system(size: 11, weight: .medium).monospacedDigit())
+                    .foregroundStyle(Theme.ink)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .frame(width: Metrics.glanceMeterPercentWidth, alignment: .trailing)
+            }
             if !countdown.isEmpty {
                 Text(countdown)
                     .font(.system(size: 10, weight: .medium).monospacedDigit())
