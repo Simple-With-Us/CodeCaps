@@ -244,7 +244,8 @@ public struct CompanionContentView: View {
                             Image(systemName: item.isAlarmEnabled ? "bell.fill" : "bell")
                                 .font(.system(size: 14))
                                 .foregroundStyle(item.isAlarmEnabled ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.tertiary))
-                                .frame(width: 28, height: 28)
+                                .frame(width: 44, height: 44)
+                                .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Reset alarm for \(item.title)")
@@ -329,7 +330,7 @@ public struct CompanionContentView: View {
             CompanionUsageBar(
                 remainingPercent: win.remainingPercent,
                 elapsedFraction: win.elapsedFraction(),
-                height: 6
+                height: 7
             )
             .frame(width: 52)
 
@@ -612,7 +613,7 @@ public struct CompanionMeterView: View {
     public var body: some View {
         HStack(spacing: 5) {
             Text(caption)
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: 11, weight: .bold))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .frame(width: 24, alignment: .trailing)
@@ -620,7 +621,7 @@ public struct CompanionMeterView: View {
             CompanionUsageBar(
                 remainingPercent: window.remainingPercent,
                 elapsedFraction: window.elapsedFraction(),
-                height: 6
+                height: 7
             )
             .frame(minWidth: 40, maxWidth: .infinity)
 
@@ -633,7 +634,7 @@ public struct CompanionMeterView: View {
             let cd = window.countdown()
             if !cd.isEmpty {
                 Text(cd)
-                    .font(.system(size: 10, weight: .regular).italic())
+                    .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .frame(width: 38, alignment: .center)
@@ -679,7 +680,7 @@ public struct CompanionUsageBar: View {
         colorScheme == .dark ? Color.black.opacity(0.7) : Color.white.opacity(0.75)
     }
 
-    public init(remainingPercent: Double?, elapsedFraction: Double? = nil, height: CGFloat = 6) {
+    public init(remainingPercent: Double?, elapsedFraction: Double? = nil, height: CGFloat = 7) {
         self.remainingPercent = remainingPercent
         self.elapsedFraction = elapsedFraction
         self.height = height
@@ -719,24 +720,24 @@ public struct CompanionUsageBar: View {
                 // Pacing marker line (elapsed time fraction)
                 if let frac = elapsedFraction, frac >= 0, frac <= 1.0, totalWidth > 0 {
                     let markerX = CGFloat(frac) * totalWidth
-                    let markerHeight: CGFloat = max(16, height + 8)
-                    let markerWidth: CGFloat = 2.5
+                    let markerHeight: CGFloat = 18
+                    let markerWidth: CGFloat = 3.0
 
                     // Halo
-                    Rectangle()
+                    Capsule()
                         .fill(pacingMarkerHaloColor)
-                        .frame(width: 4.5, height: markerHeight + 2)
+                        .frame(width: 5.5, height: markerHeight + 2)
                         .position(x: markerX, y: geo.size.height / 2)
 
                     // Line
-                    Rectangle()
+                    Capsule()
                         .fill(pacingMarkerColor)
                         .frame(width: markerWidth, height: markerHeight)
                         .position(x: markerX, y: geo.size.height / 2)
                 }
             }
         }
-        .frame(height: height)
+        .frame(height: max(height, 20))
     }
 }
 
