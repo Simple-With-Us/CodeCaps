@@ -560,10 +560,19 @@ Board 42ae688ab3b84d9aa65e445aab072a15.  Closes #37.
 - The signal is the size of the rise, not the level it lands at: a
   fixed-period window cannot regain quota inside its own period.  A rise of at
   least `ResetAlarmPolicy.vendorRestoreRise` (30 points) against a period end
-  that held still is a vendor handing quota back.  Requiring the end to hold
-  still is what keeps this off a rolling window, whose remaining climbs *and*
-  whose period end creeps forward as old usage ages out — a distinction that
-  already exists in the file for `testARollingResetThatCreepsForwardWhileTheMacSleepsIsNotAReset`.
+  that held still is a vendor handing quota back.
+- Kody's review on PR #153 caught that "held still" was initially tested with
+  the fixed 15-minute `resetDriftTolerance`, which does not exclude a rolling
+  window at the app's real 300-second refresh: a reader reporting "resets in N
+  seconds" recomputes it from the current time, so the end slides about five
+  minutes per poll, which sat comfortably inside fifteen.  The harm went past
+  a wrong notification — a detected reset overwrites `minimumRemaining`, the
+  only record of how close the window got, so the genuine near-cap alarm at
+  the next period end would have been silenced.  The bound now sits *below*
+  that slide: `max(periodHoldFloor, min(resetDriftTolerance, elapsed / 2))`,
+  where the floor covers sub-minute "now plus seconds left" recomputation.
+  Confirmed by restoring the old tolerance and watching the regression test
+  report the low-water mark rewritten from 15.0 to 50.0.
 - Two tests were written first and confirmed failing against the old rule, from
   the real observed numbers, then made to pass.  Also pinned: a small
   mid-window rise is still drift, a restore rings once and not once per

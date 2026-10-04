@@ -490,6 +490,58 @@ final class ResetAlarmTrackerTests: XCTestCase {
             now: later).isEmpty)
     }
 
+    /// Found in review on PR #153: a rolling window at the app's real 300s
+    /// refresh cadence slid its period end five minutes per poll, which sat
+    /// inside the old fixed 15-minute tolerance.  So a rolling window whose
+    /// usage aged out by 30 points or more satisfied both halves of the rule
+    /// and was announced as a vendor reset.
+    ///
+    /// The harm went further than a wrong notification: a detected reset
+    /// overwrites the low-water mark, which is the only record of how close the
+    /// window got, so the genuine near-cap alarm at the next period end would
+    /// have been silenced.
+    func testARollingWindowThatSlidesItsEndEveryRefreshIsNotAVendorRestore() {
+        var tracker = ResetAlarmTracker()
+        let end = t0 + 5 * day
+        // Two quiet polls, five minutes apart, each sliding the end five minutes
+        // forward — a reader reporting "resets in N seconds" recomputed from the
+        // current time.  Then one poll sees a 35-point rise as a burst of usage
+        // ages out.  35 clears the 30-point bar, so only the "end held still"
+        // half of the rule stands between this and a bogus vendor reset.
+        _ = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end, remaining: 15.0, observedAt: t0, provider: "grok-bot")],
+            now: t0)
+        let poll1 = t0 + 5 * 60
+        _ = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end + 5 * 60, remaining: 15.0, observedAt: poll1, provider: "grok-bot")],
+            now: poll1)
+        let poll2 = t0 + 10 * 60
+        let events = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end + 10 * 60, remaining: 50.0, observedAt: poll2, provider: "grok-bot")],
+            now: poll2)
+        XCTAssertTrue(events.isEmpty, "A period end that slides with the clock is rolling, not a restore.")
+
+        // And the low-water mark survives, so the near-cap alarm can still fire.
+        let key = ResetAlarmTracker.windowKey(scope: "local", providerId: "grok-bot", windowId: "weekly")
+        XCTAssertEqual(tracker.state.windows[key]?.minimumRemaining, 15.0)
+    }
+
+    /// The same rolling window, but where a real vendor restore lands: the end
+    /// stays on the same instant while the quota jumps.  This must still fire.
+    func testARealRestoreIsStillDetectedAtTheShortRefreshCadence() {
+        var tracker = ResetAlarmTracker()
+        let end = t0 + 5 * day
+        _ = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end, remaining: 15.0, observedAt: t0, provider: "grok-bot")],
+            now: t0)
+        let later = t0 + 5 * 60
+        let events = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end, remaining: 89.0, observedAt: later, provider: "grok-bot")],
+            now: later)
+        XCTAssertEqual(events.map(\.windowId), ["weekly"])
+        XCTAssertEqual(events.first?.isVendorReset, true)
+    }
+
     /// One restore rings once, not once per refresh.
     func testAVendorRestoreRingsOnlyOnce() {
         var tracker = ResetAlarmTracker()

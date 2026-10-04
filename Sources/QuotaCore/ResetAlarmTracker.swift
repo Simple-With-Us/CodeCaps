@@ -236,6 +236,10 @@ public enum ResetAlarmPolicy {
     /// cannot regain quota inside its own period, so the size of the rise is
     /// the evidence and 30 points is far beyond rounding or a stale reading.
     public static let vendorRestoreRise: Double = 30
+    /// Floor for "the period end held still".  Covers a reader that recomputes
+    /// "now plus the seconds left" and returns a slightly different instant
+    /// each time, which is noise rather than movement.
+    public static let periodHoldFloor: TimeInterval = 90
     /// Windows and fires not seen for this long are forgotten.
     public static let retention: TimeInterval = 45 * 86_400
     /// A window's period counts toward "largest" for this long after it was
@@ -445,17 +449,31 @@ public struct ResetAlarmTracker: Sendable {
             // is still running.  Three ways to see it, and none of them
             // requires the quota to land at 100%:
             //  - the quota is handed back, which shows as a large rise against
-            //    a period end that did not move at all.  A rolling window
-            //    cannot do this: as old usage ages out its remaining climbs
-            //    AND its period end creeps forward, so requiring the end to
-            //    hold still is what separates the two.
+            //    a period end that stayed on the same instant.
             //  - the quota jumps to full from anything less.
             //  - the quota was nearly spent and is now nearly untouched.
             if !isReset, !hasPassed, let reading, let last = window.lastRemaining {
                 let jumpedToFull = reading >= 99.5 && last < 99.5
                 let surgedMidWindow = last < 80.0 && reading >= 95.0
+                // A reader that reports "resets in N seconds" recomputes that
+                // from the current time, so its end slides forward by roughly
+                // the gap between readings — a rolling window looks like a
+                // moving one rather than a held one.  The bound therefore sits
+                // *below* that slide: half the elapsed time, capped at the
+                // ordinary drift tolerance, with a floor for sub-minute
+                // recomputation noise.  Reusing `resetDriftTolerance` on its
+                // own was not enough — at the 300s refresh a 5-minute slide
+                // sat comfortably inside 15 minutes, so a rolling window whose
+                // usage aged out would be announced as a vendor reset and,
+                // worse, would overwrite the low-water mark the near-cap alarm
+                // depends on.
+                let elapsed = max(0, readAt.timeIntervalSince(window.lastObservedAt ?? readAt))
+                let holdTolerance = max(
+                    ResetAlarmPolicy.periodHoldFloor,
+                    min(ResetAlarmPolicy.resetDriftTolerance, elapsed / 2)
+                )
                 let periodEndHeld = observation.resetAt.map {
-                    abs($0.timeIntervalSince(previousReset)) <= ResetAlarmPolicy.resetDriftTolerance
+                    abs($0.timeIntervalSince(previousReset)) <= holdTolerance
                 } ?? false
                 let quotaHandedBack = periodEndHeld
                     && reading >= last + ResetAlarmPolicy.vendorRestoreRise
