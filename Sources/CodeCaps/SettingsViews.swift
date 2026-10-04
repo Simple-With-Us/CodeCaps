@@ -268,8 +268,10 @@ struct SettingsSourcesFleetPage: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("CodeCaps reads each CLI's own saved credentials in place." + sentenceGap
                      + "It never asks you for a provider API key.")
-                Text("Provider checks use saved credentials and local helpers across eight AI plan families." + sentenceGap
-                     + "Codex session file checks read one local quota source and do not upload or download on their own.")
+                Text("Provider Checks: 7 HTTP paths and 3 local helpers across 8 AI plan families." + sentenceGap
+                     + "These are source capabilities, not a request count per check.")
+                Text("Codex Session File Checks: 1 local quota source." + sentenceGap
+                     + "File checks do not upload or download on their own.")
                 Text("A snapshot is written to ~/Library/Application Support/Usage Monitor/quota-windows.json for BotFleet.")
                 if let widgetSharingError = model.widgetSharingError {
                     Text(widgetSharingError).foregroundStyle(Theme.warning)
@@ -1089,6 +1091,15 @@ struct SettingsNotificationsPage: View {
 
     var body: some View {
         SettingsPage {
+            if let row = model.displaySections.first(where: {
+                $0.providerKey == model.runawayAlertHistory.first?.providerKey
+            }) ?? model.displaySections.first {
+                Section {
+                    UsageHistoryView(model: model, state: state, row: row)
+                } header: {
+                    Eyebrow("RECENT USAGE HISTORY")
+                }
+            }
             Section {
                 Toggle("Reset Alarms For All Providers", isOn: $model.alarmsAll)
                     .help("The same switch as the All bell at the top of the Docked Bar.")
@@ -1208,16 +1219,6 @@ struct SettingsNotificationsPage: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-            }
-
-            if let row = model.displaySections.first(where: {
-                $0.providerKey == model.runawayAlertHistory.first?.providerKey
-            }) ?? model.displaySections.first {
-                Section {
-                    UsageHistoryView(model: model, state: state, row: row)
-                } header: {
-                    Eyebrow("RECENT USAGE HISTORY")
-                }
             }
 
             Section {

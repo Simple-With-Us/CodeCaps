@@ -57,9 +57,14 @@ final class SourceRefreshTests: XCTestCase {
         var fileReads = 0
         var providerReads = 0
         var serverReads = 0
+        var handoffWrites = 0
+        var widgetWrites = 0
+        model.sessionAccountIDForTesting = { "account-a" }
         model.sessionFileReadForTesting = { fileReads += 1; return result }
         model.localReadForTesting = { providerReads += 1; return nil }
         model.serverFetchForTesting = { serverReads += 1; return QuotaResponse(generatedAt: "") }
+        model.handoffWriteForTesting = { _ in handoffWrites += 1 }
+        model.widgetWriteForTesting = { _ in widgetWrites += 1 }
 
         model.refreshSessionFiles()
         await model.sessionFileTaskForTesting?.value
@@ -72,7 +77,10 @@ final class SourceRefreshTests: XCTestCase {
         XCTAssertEqual(providerReads, 0)
         XCTAssertEqual(serverReads, 0)
         XCTAssertEqual(model.response, first)
+        XCTAssertEqual(firstSampleCount, 1)
         XCTAssertEqual(BurnRateMonitor.loadSamples(historyURL: savedHistory).count, firstSampleCount)
+        XCTAssertEqual(handoffWrites, 1)
+        XCTAssertEqual(widgetWrites, 1)
     }
 
     func testDisablingSessionChecksRejectsInFlightResult() async {
@@ -81,6 +89,7 @@ final class SourceRefreshTests: XCTestCase {
         let model = MonitorModel(defaults: settings, burnRateHistoryURL: historyURL())
         model.skipsSnapshotIOForTesting = true
         let gate = RefreshGate()
+        model.sessionAccountIDForTesting = { "account-a" }
         model.sessionFileReadForTesting = {
             await gate.pause()
             return LocalQuotaResult(windows: [self.codex(50, at: Date())])
@@ -92,6 +101,63 @@ final class SourceRefreshTests: XCTestCase {
         await gate.open()
         await pending?.value
         XCTAssertFalse(model.sessionFileChecksEnabled)
+        XCTAssertTrue(model.response.windows.isEmpty)
+    }
+
+    func testAccountSwitchRejectsInFlightSessionReading() async {
+        let settings = defaults()
+        settings.set(false, forKey: SourceRefreshPreference.providerEnabled)
+        let model = MonitorModel(defaults: settings, burnRateHistoryURL: historyURL())
+        model.skipsSnapshotIOForTesting = true
+        let gate = RefreshGate()
+        var currentAccount = "account-a"
+        model.sessionAccountIDForTesting = { currentAccount }
+        model.sessionFileReadForTesting = {
+            await gate.pause()
+            return LocalQuotaResult(windows: [self.codex(50, at: Date(), account: "account-a")])
+        }
+        model.refreshSessionFiles()
+        await gate.waitUntilEntered()
+        currentAccount = "account-b"
+        await gate.open()
+        await model.sessionFileTaskForTesting?.value
+        XCTAssertTrue(model.response.windows.isEmpty)
+    }
+
+    func testMasterLocalSwitchClearsFileOnlyDisplay() async {
+        let settings = defaults()
+        settings.set(false, forKey: SourceRefreshPreference.providerEnabled)
+        let model = MonitorModel(defaults: settings, burnRateHistoryURL: historyURL())
+        model.skipsSnapshotIOForTesting = true
+        model.sessionAccountIDForTesting = { "account-a" }
+        model.sessionFileReadForTesting = {
+            LocalQuotaResult(windows: [self.codex(60, at: Date())])
+        }
+        model.refreshSessionFiles()
+        await model.sessionFileTaskForTesting?.value
+        XCTAssertEqual(model.response.windows.count, 1)
+        model.setLocalEnabled(false)
+        XCTAssertTrue(model.response.windows.isEmpty)
+    }
+
+    func testDisablingFleetPullClearsDisplayWhenProviderChecksOff() async {
+        let settings = defaults()
+        settings.set(false, forKey: SourceRefreshPreference.providerEnabled)
+        settings.set(false, forKey: SourceRefreshPreference.sessionEnabled)
+        settings.set(true, forKey: "serverEnabled")
+        let model = MonitorModel(defaults: settings)
+        model.skipsSnapshotIOForTesting = true
+        model.serverFetchForTesting = {
+            let own = QuotaWindow(id: "own:anthropic:5h", provider: "Claude", providerKey: "anthropic",
+                                  label: "5h", remainingPercent: 50,
+                                  occurredAt: ISO8601DateFormatter().string(from: Date()), source: "CodeCaps",
+                                  producerInstanceId: QuotaPublisher.producerInstanceId)
+            return QuotaResponse(generatedAt: "test", windows: [own])
+        }
+        model.refresh()
+        await model.refreshTaskForTesting?.value
+        XCTAssertFalse(model.response.windows.isEmpty)
+        model.disableServerPull()
         XCTAssertTrue(model.response.windows.isEmpty)
     }
 

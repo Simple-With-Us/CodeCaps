@@ -53,6 +53,10 @@ public actor CodexSessionQuotaReader {
             : LocalQuotaResult(windows: windows)
     }
 
+    /// Recheck the bounded local auth identity after an asynchronous quota read.
+    /// A login switch during a read must not publish the previous account's quotas.
+    public func currentAccountID() -> String? { readAccountID() }
+
     private struct Cursor {
         let device: UInt64
         let inode: UInt64
