@@ -89,6 +89,7 @@ public struct ResetAlarmEvent: Equatable, Sendable {
     /// The reading that revealed the reset.
     public var remainingPercent: Double?
     public var reason: Reason
+    public var isVendorReset: Bool
 
     public init(
         scope: String,
@@ -99,7 +100,8 @@ public struct ResetAlarmEvent: Equatable, Sendable {
         periodSeconds: TimeInterval?,
         endedPeriodResetAt: Date?,
         remainingPercent: Double?,
-        reason: Reason
+        reason: Reason,
+        isVendorReset: Bool = false
     ) {
         self.scope = scope
         self.providerId = providerId
@@ -110,6 +112,7 @@ public struct ResetAlarmEvent: Equatable, Sendable {
         self.endedPeriodResetAt = endedPeriodResetAt
         self.remainingPercent = remainingPercent
         self.reason = reason
+        self.isVendorReset = isVendorReset
     }
 }
 
@@ -280,6 +283,7 @@ public struct ResetAlarmTracker: Sendable {
     private struct Transition {
         let observation: ResetAlarmObservation
         let previous: ResetAlarmTrackerState.Window
+        let isMidWindow: Bool
     }
 
     private mutating func processGroup(
@@ -316,12 +320,16 @@ public struct ResetAlarmTracker: Sendable {
             } else if let minimum = transition.previous.minimumRemaining,
                       minimum <= ResetAlarmPolicy.nearCapThreshold {
                 reason = .nearCap(minimumRemaining: minimum)
+            } else if transition.isMidWindow {
+                reason = .nearCap(minimumRemaining: transition.previous.minimumRemaining ?? (transition.previous.lastRemaining ?? 80.0))
             } else {
                 continue
             }
 
-            let fireKey = "\(observation.providerId)|\(observation.windowLabel)"
-            let ended = transition.previous.periodResetAt
+            let fireKey = transition.isMidWindow
+                ? "\(observation.providerId)|\(observation.windowLabel)|midwindow"
+                : "\(observation.providerId)|\(observation.windowLabel)"
+            let ended = transition.isMidWindow ? (observation.observedAt ?? now) : transition.previous.periodResetAt
             if alreadyFired(key: fireKey, periodResetAt: ended) { continue }
             state.recentFires.append(.init(key: fireKey, periodResetAt: ended, firedAt: now))
             events.append(ResetAlarmEvent(
@@ -333,7 +341,8 @@ public struct ResetAlarmTracker: Sendable {
                 periodSeconds: observation.periodSeconds ?? transition.previous.periodSeconds,
                 endedPeriodResetAt: ended,
                 remainingPercent: observation.remainingPercent,
-                reason: reason))
+                reason: reason,
+                isVendorReset: transition.isMidWindow))
         }
         // Largest first, so a combined notification leads with the new week.
         return events.sorted { lhs, rhs in
@@ -389,6 +398,7 @@ public struct ResetAlarmTracker: Sendable {
 
         let readAt = observedAt ?? now
         var isReset = false
+        var isMidWindow = false
         var nextResetAt = window.periodResetAt
 
         if let previousReset = window.periodResetAt {
@@ -422,6 +432,17 @@ public struct ResetAlarmTracker: Sendable {
                 isReset = true
                 nextResetAt = observation.resetAt.flatMap { $0 > readAt ? $0 : nil }
             }
+            // Mid-window reset: anytime a quota jumps up to 100% or from under 80% to over 95%
+            // during a timeframe that is not at the end of the window.
+            if !isReset, !hasPassed, let reading, let last = window.lastRemaining {
+                let jumpedToFull = reading >= 99.5 && last < 99.5
+                let surgedMidWindow = last < 80.0 && reading >= 95.0
+                if jumpedToFull || surgedMidWindow {
+                    isReset = true
+                    isMidWindow = true
+                    nextResetAt = observation.resetAt.flatMap { $0 > readAt ? $0 : nil } ?? window.periodResetAt
+                }
+            }
         } else if let reported = observation.resetAt, reported > readAt {
             // No period end known — a reset was just detected without the next
             // one being published.  Adopt the first reset time still ahead; a
@@ -443,7 +464,7 @@ public struct ResetAlarmTracker: Sendable {
         }
         if let observed = observedAt { window.lastObservedAt = observed }
         state.windows[key] = window
-        return isReset ? Transition(observation: observation, previous: previous) : nil
+        return isReset ? Transition(observation: observation, previous: previous, isMidWindow: isMidWindow) : nil
     }
 
     // MARK: Largest window

@@ -34,4 +34,13 @@ final class ResetAlarmMessageTests: XCTestCase {
         let content = ResetAlarmMessage.content(for: [event("1m", period: 30 * 86_400, reason: .newPeriod)])
         XCTAssertTrue(content.body.hasSuffix("A new month of quota is available."))
     }
+
+    func testAVendorResetAnnouncesMidCycleRestoration() {
+        let vendorEvent = ResetAlarmEvent(scope: "local", providerId: "anthropic", providerTitle: "Claude", windowId: "5h",
+                                          windowLabel: "5h", periodSeconds: 5 * 3_600, endedPeriodResetAt: nil,
+                                          remainingPercent: 100, reason: .nearCap(minimumRemaining: 15), isVendorReset: true)
+        let content = ResetAlarmMessage.content(for: [vendorEvent])
+        XCTAssertEqual(content.title, "Vendor Reset: Claude")
+        XCTAssertEqual(content.body, "The 5h window received a vendor reset." + sentenceGap + "Quota restored mid-cycle, ready to use again.")
+    }
 }

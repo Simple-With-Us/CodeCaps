@@ -17,6 +17,7 @@ private struct HistoryPoint: Identifiable {
     let observedAt: Date
     let remainingPercent: Double
     let reset: Bool
+    let isVendorReset: Bool
 }
 
 /// Only persisted local samples are plotted.  Every quota window is a separate
@@ -38,14 +39,17 @@ struct UsageHistoryView: View {
 
     private var now: Date { model.now }
     private var start: Date { now.addingTimeInterval(-span.interval) }
-    private var windowIds: Set<String> { Set(row.section.windows.map { $0.window.id }) }
+    private var primaryWindows: [QuotaWindowSnapshot] {
+        row.section.windows.filter { !$0.window.isSupplementaryVideoQuota }
+    }
+    private var windowIds: Set<String> { Set(primaryWindows.map { $0.window.id }) }
     private var focusedWindowId: String? {
         guard let id = state.selectedWindowId, windowIds.contains(id) else { return nil }
         return id
     }
     private var inspectedSnapshot: QuotaWindowSnapshot? {
         if let focusedWindowId {
-            return row.section.windows.first { $0.window.id == focusedWindowId }
+            return primaryWindows.first { $0.window.id == focusedWindowId }
         }
         return row.driving
     }
@@ -56,9 +60,9 @@ struct UsageHistoryView: View {
             && (focusedWindowId == nil || $0.windowId == focusedWindowId) }
     }
     private var points: [HistoryPoint] {
-        let labelCounts = Dictionary(grouping: row.section.windows, by: { $0.window.label })
+        let labelCounts = Dictionary(grouping: primaryWindows, by: { $0.window.label })
             .mapValues(\.count)
-        let labels = row.section.windows.enumerated().reduce(into: [String: String]()) { labels, item in
+        let labels = primaryWindows.enumerated().reduce(into: [String: String]()) { labels, item in
             let (index, snapshot) = item
             let label = snapshot.window.label
             labels[snapshot.window.id] = (labelCounts[label] ?? 0) > 1
@@ -73,16 +77,20 @@ struct UsageHistoryView: View {
                 let earlier = segmentIndex == 0 ? nil : segments[segmentIndex - 1].last
                 return sorted.enumerated().compactMap { index, sample -> HistoryPoint? in
                     guard let percent = sample.remainingPercent else { return nil }
+                    let prevSample = index > 0 ? sorted[index - 1] : earlier
                     let reset = index == 0 && (earlier.map { previous in
                         (previous.resetAt.map { $0 > previous.observedAt && $0 <= sample.observedAt } ?? false)
                             || (previous.periodStart != nil && sample.periodStart != nil && previous.periodStart != sample.periodStart)
                     } ?? false)
+                    let isVendorReset = (prevSample?.remainingPercent ?? 100) < 95.0 && percent >= 98.0
+                        && (sample.resetAt.map { sample.observedAt < $0.addingTimeInterval(-60) } ?? true)
                     return HistoryPoint(id: "\(windowId):\(segmentIndex):\(index)",
                                         series: "\(windowId):\(segmentIndex)",
                                         windowLabel: labels[windowId] ?? "Quota Window",
                                         observedAt: sample.observedAt,
                                         remainingPercent: percent,
-                                        reset: reset)
+                                        reset: reset,
+                                        isVendorReset: isVendorReset)
                 }
             }
         }
@@ -112,7 +120,7 @@ struct UsageHistoryView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
+            HStack(spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Usage History")
                         .font(.system(size: 16, weight: .semibold))
@@ -121,6 +129,27 @@ struct UsageHistoryView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
+                if primaryWindows.count > 1 {
+                    Picker("Window", selection: Binding(
+                        get: { focusedWindowId ?? "all" },
+                        set: { (val: String) in
+                            if val == "all" {
+                                state.clearHistoryFocus()
+                            } else {
+                                state.selectWindow(val)
+                            }
+                        }
+                    )) {
+                        Text("All Windows").tag("all")
+                        ForEach(primaryWindows, id: \.window.id) { snapshot in
+                            Text(snapshot.window.label).tag(snapshot.window.id)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .font(.system(size: 11))
+                    .frame(maxWidth: 160)
+                    .accessibilityLabel("Filter Window")
+                }
                 Picker("History Range", selection: $span) {
                     ForEach(HistorySpan.allCases) { span in Text(span.rawValue).tag(span) }
                 }
@@ -131,7 +160,7 @@ struct UsageHistoryView: View {
             }
             if let focusedWindowId {
                 HStack {
-                    Text("Window: \(row.section.windows.first { $0.window.id == focusedWindowId }?.window.label ?? focusedWindowId)")
+                    Text("Filtered to: \(primaryWindows.first { $0.window.id == focusedWindowId }?.window.label ?? focusedWindowId)")
                         .font(.system(size: 11, weight: .medium))
                     Spacer()
                     Button("Show All Windows") { state.clearHistoryFocus() }
@@ -163,14 +192,23 @@ struct UsageHistoryView: View {
                             .foregroundStyle(by: .value("Window", point.windowLabel))
                             .interpolationMethod(.linear)
                             .accessibilityLabel("\(point.windowLabel), \(Int(point.remainingPercent.rounded())) percent remaining at \(point.observedAt.formatted())")
-                        PointMark(x: .value("Time", point.observedAt),
-                                  y: .value("Remaining", point.remainingPercent))
-                            .symbol(point.reset ? .diamond : .circle)
-                            .symbolSize(point.reset ? 40 : 10)
-                            .foregroundStyle(by: .value("Window", point.windowLabel))
-                            .accessibilityLabel(point.reset
-                                ? "\(point.windowLabel) reset at \(point.observedAt.formatted())"
-                                : "\(point.windowLabel), \(Int(point.remainingPercent.rounded())) percent at \(point.observedAt.formatted())")
+                        if point.isVendorReset {
+                            PointMark(x: .value("Time", point.observedAt),
+                                      y: .value("Remaining", point.remainingPercent))
+                                .symbol(.square)
+                                .symbolSize(45)
+                                .foregroundStyle(Color.green)
+                                .accessibilityLabel("\(point.windowLabel) vendor reset to \(Int(point.remainingPercent.rounded())) percent at \(point.observedAt.formatted())")
+                        } else {
+                            PointMark(x: .value("Time", point.observedAt),
+                                      y: .value("Remaining", point.remainingPercent))
+                                .symbol(point.reset ? .diamond : .circle)
+                                .symbolSize(point.reset ? 40 : 10)
+                                .foregroundStyle(by: .value("Window", point.windowLabel))
+                                .accessibilityLabel(point.reset
+                                    ? "\(point.windowLabel) reset at \(point.observedAt.formatted())"
+                                    : "\(point.windowLabel), \(Int(point.remainingPercent.rounded())) percent at \(point.observedAt.formatted())")
+                        }
                     }
                     ForEach(alerts) { alert in
                         RuleMark(x: .value("Alert", alert.timestamp))
@@ -193,7 +231,7 @@ struct UsageHistoryView: View {
                     Text("One reading so far.  The trend will appear after another reading.")
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                 }
-                Text("Each line is one quota window.  Gaps separate unobserved time, account changes, and new quota periods.  Diamonds mark resets; orange lines mark runaway alerts.")
+                Text("Each line is one quota window.  Gaps separate unobserved time, account changes, and new quota periods.  Diamonds mark scheduled resets; green squares mark mid-cycle vendor resets; orange lines mark runaway alerts.")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
             }
             if let inspectedSnapshot, !inspectedSnapshot.isFresh {

@@ -1573,7 +1573,7 @@ final class MonitorModel: ObservableObject {
             // rendered under FLEET, grouped by its origin — the previous
             // "supplemental" filter dropped all of them on a Mac that reads
             // every provider locally, so a working pull showed nothing at all.
-            let split = FleetOrigin.split(self.serverWindows)
+            let split = FleetOrigin.split(self.serverWindows, localWindows: self.localWindows)
             let ownPush = split.ownPush
             self.fleetWindowGroups = split.groups.map {
                 FleetWindowGroup(id: $0.id, title: $0.title, windows: $0.windows)

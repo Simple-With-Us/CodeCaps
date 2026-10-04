@@ -21,6 +21,31 @@ public struct ResetAlarmNotification: Equatable, Sendable {
     public let windowLabels: [String]
     public let windowId: String?
     public let timestamp: Date
+    public let isVendorReset: Bool
+
+    public init(
+        id: String,
+        providerId: String,
+        title: String,
+        body: String,
+        remainingPercent: Int,
+        sound: ResetAlarmSound,
+        windowLabels: [String],
+        windowId: String?,
+        timestamp: Date,
+        isVendorReset: Bool = false
+    ) {
+        self.id = id
+        self.providerId = providerId
+        self.title = title
+        self.body = body
+        self.remainingPercent = remainingPercent
+        self.sound = sound
+        self.windowLabels = windowLabels
+        self.windowId = windowId
+        self.timestamp = timestamp
+        self.isVendorReset = isVendorReset
+    }
 }
 
 /// What happened when the owner pressed "Send Test Notification".
@@ -234,15 +259,7 @@ public final class ResetAlarmManager: ObservableObject {
         setProviderAlarm(!enabledProviderIds.contains(providerId), for: providerId)
     }
 
-    /// Plays the picked sound.  Used by the Settings "Preview" button so
-    /// the owner can hear a sound before saving; called both with an
-    /// armed payload (during a real reset alert) and with no payload at
-    /// all (during a preview), so this is parameterless and emits via
-    /// `NSSound(named:)`.  `.silent` and `.systemDefault` are special-cased
-    /// so a preview of `Default chime` does not double-fire alongside the
-    /// system chime the notification would deliver.
-    public func previewChosenSound() {
-        let sound = alarmSound
+    public func playAlarmSound(_ sound: ResetAlarmSound) {
         guard sound.isAudible else { return }
         if let onPlaySound {
             onPlaySound()
@@ -254,6 +271,12 @@ public final class ResetAlarmManager: ObservableObject {
         default:
             NSSound(named: sound.rawValue)?.play()
         }
+    }
+
+    /// Plays the picked sound.  Used by the Settings "Preview" button so
+    /// the owner can hear a sound before saving.
+    public func previewChosenSound() {
+        playAlarmSound(alarmSound)
     }
 
     private static var isRunningUnderTests: Bool {
@@ -330,6 +353,7 @@ public final class ResetAlarmManager: ObservableObject {
         return order.compactMap { providerId in
             guard let group = byProvider[providerId], !group.isEmpty else { return nil }
             let content = Self.notificationContent(for: group)
+            let isVendorReset = group.contains { $0.isVendorReset }
             let payload = ResetAlarmNotification(
                 id: UUID().uuidString,
                 providerId: providerId,
@@ -339,7 +363,8 @@ public final class ResetAlarmManager: ObservableObject {
                 sound: alarmSound,
                 windowLabels: content.windowLabels,
                 windowId: group.first?.windowId,
-                timestamp: now)
+                timestamp: now,
+                isVendorReset: isVendorReset)
             deliver(payload)
             return payload
         }
@@ -369,6 +394,9 @@ public final class ResetAlarmManager: ObservableObject {
     }
 
     private func deliver(_ payload: ResetAlarmNotification) {
+        if payload.isVendorReset {
+            playAlarmSound(payload.sound)
+        }
         // Deliver via custom test handler if installed
         if let onNotification {
             onNotification(payload)

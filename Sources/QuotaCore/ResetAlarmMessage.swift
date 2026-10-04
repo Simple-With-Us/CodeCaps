@@ -11,7 +11,10 @@ public enum ResetAlarmMessage {
     /// event in `events` belongs to the same provider; the largest window comes
     /// first.
     public static func content(for events: [ResetAlarmEvent]) -> (title: String, body: String, windowLabels: [String]) {
-        let title = "Quota Reset: \(events.first?.providerTitle ?? "Quota")"
+        let isVendorReset = events.contains { $0.isVendorReset }
+        let title = isVendorReset
+            ? "Vendor Reset: \(events.first?.providerTitle ?? "Quota")"
+            : "Quota Reset: \(events.first?.providerTitle ?? "Quota")"
         var labels: [String] = []
         for event in events where !labels.contains(event.windowLabel) {
             labels.append(event.windowLabel)
@@ -21,6 +24,11 @@ public enum ResetAlarmMessage {
         case 0, 1: joined = labels.first ?? "quota"
         case 2: joined = "\(labels[0]) and \(labels[1])"
         default: joined = labels.dropLast().joined(separator: ", ") + " and " + (labels.last ?? "")
+        }
+
+        if isVendorReset {
+            let reset = labels.count > 1 ? "The \(joined) windows received a vendor reset." : "The \(joined) window received a vendor reset."
+            return (title, reset + sentenceGap + "Quota restored mid-cycle, ready to use again.", labels)
         }
 
         if let largest = events.first(where: { $0.reason == .newPeriod }) {

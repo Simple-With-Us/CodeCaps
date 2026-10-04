@@ -807,17 +807,40 @@ struct PlatformCard: View {
         }
         if !videoWindows.isEmpty {
             Divider()
-            DisclosureGroup(isExpanded: $videoExpanded) {
-                VStack(alignment: .leading, spacing: 12) {
-                    ForEach(videoWindows, id: \.window.id) { snapshot in
-                        QuotaRow(snapshot: snapshot, now: now, sourceFailed: issue != nil, compact: true)
+            if let video = videoWindows.first, videoWindows.count == 1 {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(alignment: .center, spacing: 6) {
+                        Image(systemName: "video.fill")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Theme.accent)
+                        Text("Video Allowance")
+                            .font(.system(size: 11, weight: .semibold))
+                        Spacer()
+                        if let reset = video.resetAt {
+                            HStack(spacing: 3) {
+                                Image(systemName: "clock.arrow.circlepath").accessibilityHidden(true)
+                                Text("resets in " + resetCountdown(reset, now: now))
+                            }
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                        }
                     }
+                    QuotaRow(snapshot: video, now: now, sourceFailed: issue != nil, compact: true)
                 }
-                .padding(.top, 8)
-            } label: {
-                Label("Video · \(videoWindows.count) Windows", systemImage: "video")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                .padding(.top, 4)
+            } else {
+                DisclosureGroup(isExpanded: $videoExpanded) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(videoWindows, id: \.window.id) { snapshot in
+                            QuotaRow(snapshot: snapshot, now: now, sourceFailed: issue != nil, compact: true)
+                        }
+                    }
+                    .padding(.top, 8)
+                } label: {
+                    Label("Video Quota (\(videoWindows.count) Windows)", systemImage: "video")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         if let issue {
@@ -841,6 +864,31 @@ struct PlatformCard: View {
     }
 }
 
+/// Discrete indicator representing a countable number of items (e.g. 5 video generations),
+/// not a continuous percentage bar.
+struct DiscreteQuotaPips: View {
+    let remaining: Int
+    let total: Int
+    let tint: Color
+
+    var body: some View {
+        HStack(spacing: 5) {
+            ForEach(0..<max(1, min(total, 20)), id: \.self) { index in
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(index < remaining ? tint : Theme.ink.opacity(0.12))
+                    .frame(height: 7)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 3)
+                            .strokeBorder(Theme.ink.opacity(0.12), lineWidth: 0.5)
+                    )
+            }
+        }
+        .frame(height: 7)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(remaining) of \(total) left")
+    }
+}
+
 struct QuotaRow: View {
     let snapshot: QuotaWindowSnapshot
     let now: Date
@@ -853,14 +901,24 @@ struct QuotaRow: View {
     private var tint: Color {
         masked ? .secondary : quotaStatusColor(for: snapshot, sourceFailed: sourceFailed)
     }
+    private var isDiscreteCount: Bool {
+        snapshot.window.isSupplementaryVideoQuota
+            || (snapshot.window.absoluteLimit != nil && (snapshot.window.absoluteLimit ?? 0) <= 20 && snapshot.window.quotaUnit != nil)
+    }
     private var percentText: String {
         if masked { return AntigravityDisplay.maskedValue }
+        if isDiscreteCount,
+           let rem = snapshot.window.absoluteRemaining,
+           let lim = snapshot.window.absoluteLimit {
+            return "\(Int(rem.rounded()))/\(Int(lim.rounded()))"
+        }
         return snapshot.remainingPercent.map { "\(Int($0.rounded()))%" } ?? "—"
     }
     private var barMetrics: QuotaBarMetrics { QuotaBarMetrics(snapshot: snapshot, now: now) }
     private var barDimmed: Bool { quotaBarIsDimmed(for: snapshot, sourceFailed: sourceFailed) }
     private var stateText: String {
         if masked { return "not applicable" }
+        if isDiscreteCount { return "left" }
         if snapshot.remainingPercent == nil { return "unavailable" }
         return snapshot.isFresh && !sourceFailed ? "remaining" : "last reported"
     }
@@ -888,6 +946,10 @@ struct QuotaRow: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+            } else if isDiscreteCount,
+                      let rem = snapshot.window.absoluteRemaining,
+                      let lim = snapshot.window.absoluteLimit, lim > 0, lim <= 20 {
+                DiscreteQuotaPips(remaining: Int(rem.rounded()), total: Int(lim.rounded()), tint: tint)
             } else if let pacing = snapshot.pacing(now: now), !compact {
                 pacingBar(pacing)
             } else if barMetrics.hasReading {
@@ -895,7 +957,8 @@ struct QuotaRow: View {
                               accessibilityLabel: "Quota Usage")
             }
 
-            if let remaining = snapshot.window.absoluteRemaining,
+            if !isDiscreteCount,
+               let remaining = snapshot.window.absoluteRemaining,
                let limit = snapshot.window.absoluteLimit,
                remaining.isFinite, limit.isFinite, remaining >= 0, limit > 0,
                let unit = snapshot.window.quotaUnit {

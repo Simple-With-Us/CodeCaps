@@ -578,6 +578,7 @@ private func parseMiniMax(_ root: [String: Any], observedAt: Date) -> [QuotaWind
     let payload = record(root["data"])
     let rows = (root["model_remains"] ?? root["modelRemains"] ?? payload["model_remains"] ?? payload["modelRemains"]) as? [[String: Any]] ?? []
     let planName = firstString(root, ["plan", "plan_type", "planType", "subscription", "subscription_type"])
+        ?? firstString(payload, ["plan", "plan_type", "planType", "subscription", "subscription_type", "plan_name", "planName"])
     let millisReset: (Double?) -> String? = { millis in
         guard let millis, millis.isFinite, millis >= 0, millis <= 31_536_000_000 else { return nil }
         let date = observedAt.addingTimeInterval(millis / 1000)
@@ -627,8 +628,32 @@ private func parseMiniMax(_ root: [String: Any], observedAt: Date) -> [QuotaWind
 
         let intervalRemaining = intervalPercent ?? intervalCounts.map { $0.remaining / $0.limit * 100 }
         let weeklyRemaining = weeklyPercent ?? weeklyCounts.map { $0.remaining / $0.limit * 100 }
-        let intervalLabel = intervalToken.map { "\(model) (\($0) window)" } ?? "\(model) (interval window)"
-        let weeklyLabel = weeklyToken.map { "\(model) (\($0) window)" } ?? "\(model) (weekly window)"
+
+        let isGeneral = model.lowercased() == "general" || model.lowercased() == "coding_plan"
+        let isVideo = model.lowercased().contains("video") || model.lowercased().contains("hailuo")
+        let intervalLabel: String
+        let weeklyLabel: String
+        if isGeneral {
+            intervalLabel = intervalToken == "5h" ? "5-hour window" : (intervalToken.map { "\($0) window" } ?? "5-hour window")
+            weeklyLabel = (weeklyToken == "1w" || weeklyToken == "weekly") ? "Weekly window" : (weeklyToken.map { "\($0) window" } ?? "Weekly window")
+        } else if isVideo {
+            intervalLabel = "Video"
+            weeklyLabel = "Video (Weekly window)"
+        } else {
+            intervalLabel = intervalToken.map { "\(model) (\($0) window)" } ?? "\(model) (interval window)"
+            weeklyLabel = weeklyToken.map { "\(model) (\($0) window)" } ?? "\(model) (weekly window)"
+        }
+
+        if isVideo {
+            // MiniMax coding plan has the 5h and 1w quotas.  Video is supplementary and discrete
+            // (e.g. 5/5 left per day).  The extraneous weekly video window (35/35) is omitted.
+            if intervalPercent != nil || intervalCounts != nil || intervalReset != nil {
+                let remaining = intervalCounts?.remaining ?? 5
+                let limit = intervalCounts?.limit ?? 5
+                result.append(window(provider: .minimax, id: "\(model):interval", label: intervalLabel, remaining: intervalRemaining ?? 100, resetAt: intervalReset, windowToken: intervalToken ?? "1d", modelId: model, absoluteRemaining: remaining, absoluteLimit: limit, quotaUnit: "videos", planName: planName, periodStart: intervalStart, observedAt: observedAt))
+            }
+            continue
+        }
 
         if intervalPercent != nil || intervalCounts != nil || intervalReset != nil {
             result.append(window(provider: .minimax, id: "\(model):interval", label: intervalLabel, remaining: intervalRemaining, resetAt: intervalReset, windowToken: intervalToken, modelId: model, absoluteRemaining: intervalCounts?.remaining, absoluteLimit: intervalCounts?.limit, quotaUnit: intervalCounts == nil ? nil : "requests", planName: planName, periodStart: intervalStart, observedAt: observedAt))
