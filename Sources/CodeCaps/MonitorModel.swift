@@ -188,6 +188,7 @@ final class MonitorModel: ObservableObject {
         }
     }
     @Published private(set) var activeRunawayAnomalies: [AnomalyDetector.Anomaly] = []
+    @Published public private(set) var runawayAlertHistory: [RunawayAlertRecord] = []
     @Published var menuBarQuotaSelection: String {
         didSet { defaults.set(menuBarQuotaSelection, forKey: "menuBarQuotaSelection") }
     }
@@ -245,6 +246,7 @@ final class MonitorModel: ObservableObject {
     @Published private(set) var consentNeeded: Set<String> = []
     @Published private(set) var serverError: String?
     @Published private(set) var handoffError: String?
+    @Published private(set) var widgetSharingError: String?
     @Published private(set) var now = Date()
 
     // Local & Remote Reading
@@ -313,6 +315,10 @@ final class MonitorModel: ObservableObject {
     private var lastRunawayAlertAt: [String: Double] = [:]
     private var hasCurrentLocalRead = false
     var localResultForTesting: LocalQuotaResult?
+    var localReadForTesting: (@MainActor () async -> LocalQuotaResult?)?
+    var serverFetchForTesting: (@MainActor () async throws -> QuotaResponse)?
+    var syncTokenReadForTesting: (@MainActor () async -> String?)?
+    var pushForTesting: (@MainActor ([QuotaWindow], URL, String?, QuotaSyncFormat) async throws -> QuotaPublishResult)?
     var runawayNotificationForTesting: ((BurnRateNotification) -> Void)?
     var skipsSnapshotIOForTesting = false
     private var localWindows: [QuotaWindow] = []
@@ -321,7 +327,10 @@ final class MonitorModel: ObservableObject {
     private var refreshTimer: Timer?
     private var clockTimer: Timer?
     private var request: Task<Void, Never>?
+    var refreshTaskForTesting: Task<Void, Never>? { request }
     private var revision = 0
+    private var pushRevision = 0
+    private var pushTask: Task<PushOutcome, Never>?
     private let publisher = QuotaPublisher()
     /// Re-publishes the alarm manager's changes, so a view that observes this
     /// model redraws when All or a provider's bell flips.
@@ -329,6 +338,12 @@ final class MonitorModel: ObservableObject {
     /// Re-checks the saved-token states when `TokenStore` gains a token nobody
     /// was waiting for, so the Re-Authorize button clears without a refresh.
     private var tokenChanges: AnyCancellable?
+
+    private enum PushOutcome {
+        case success(QuotaPublishResult)
+        case failure(String)
+        case cancelled
+    }
 
     init(defaults: UserDefaults = .standard, burnRateHistoryURL: URL? = nil) {
         self.defaults = defaults
@@ -345,7 +360,13 @@ final class MonitorModel: ObservableObject {
             ?? BurnRateMonitor.recommendedBaselineMultiplier
         anomalyPeakMultiplier = defaults.object(forKey: "anomalyPeakMultiplier") as? Double
             ?? BurnRateMonitor.recommendedPeakMultiplier
-        menuBarQuotaSelection = defaults.string(forKey: "menuBarQuotaSelection") ?? "auto_lowest_active"
+        menuBarQuotaSelection = defaults.string(forKey: "menuBarQuotaSelection") ?? "smart_pair"
+        if let alertData = defaults.data(forKey: "runawayAlertHistory"),
+           let history = try? JSONDecoder().decode([RunawayAlertRecord].self, from: alertData) {
+            runawayAlertHistory = history
+        } else {
+            runawayAlertHistory = []
+        }
         viewLayout = QuotaViewLayout(rawValue: defaults.string(forKey: "quotaViewLayout") ?? "") ?? .summary
         platformOrder = defaults.stringArray(forKey: "platformOrder") ?? []
         if let customData = defaults.data(forKey: "platformCustomInfo"),
@@ -460,9 +481,15 @@ final class MonitorModel: ObservableObject {
     /// All individual quotas available for pinning to the menu bar.
     var availableMenuBarQuotas: [(id: String, label: String)] {
         var result: [(id: String, label: String)] = [
+            (id: "most_urgent_5h", label: "Most Urgent 5h"),
+            (id: "most_urgent_weekly", label: "Most Urgent Weekly"),
+            (id: "smart_pair", label: "Smart Pair"),
             (id: "auto_lowest_active", label: "Lowest active quota"),
             (id: "auto_lowest", label: "Lowest quota"),
         ]
+        for row in displaySections {
+            result.append((id: "platform:\(row.id)", label: "Pin to \(row.title)"))
+        }
         for row in displaySections {
             let windows = row.section.windows.filter {
                 $0.isFresh && $0.remainingPercent != nil && !$0.window.isSupplementaryVideoQuota && !row.isMasked($0)
@@ -490,7 +517,18 @@ final class MonitorModel: ObservableObject {
 
     /// The window that should drive the menu bar display.
     var menuBarTargetSnapshot: QuotaWindowSnapshot? {
+        menuBarTargetSnapshots.first
+    }
+
+    /// The one or two readings represented by the current menu-bar preset.
+    var menuBarTargetSnapshots: [QuotaWindowSnapshot] {
         switch menuBarQuotaSelection {
+        case "most_urgent_5h":
+            return [pickMenuBarTarget(from: freshWindows.filter(isFiveHourMenuBarWindow))].compactMap { $0 }
+        case "most_urgent_weekly":
+            return [pickMenuBarTarget(from: freshWindows.filter(isWeeklyMenuBarWindow))].compactMap { $0 }
+        case "smart_pair":
+            return smartPairTargets
         case "auto_lowest_active":
             // Prefer the highest-ranked fresh window from a provider that has
             // any non-zero quota; this is what "auto" means once the owner has
@@ -498,17 +536,80 @@ final class MonitorModel: ObservableObject {
             // windows) is preserved by the fallback when no rank is set.
             let nonZero = freshWindows.filter { ($0.remainingPercent ?? 0) > 0 }
             let pool = nonZero.isEmpty ? freshWindows : nonZero
-            return pickMenuBarTarget(from: pool)
+            return [pickMenuBarTarget(from: pool)].compactMap { $0 }
         case "auto_lowest":
-            return pickMenuBarTarget(from: freshWindows)
+            return [pickMenuBarTarget(from: freshWindows)].compactMap { $0 }
         default:
+            if menuBarQuotaSelection.hasPrefix("platform:") {
+                let rowID = String(menuBarQuotaSelection.dropFirst("platform:".count))
+                guard let row = displaySections.first(where: { $0.id == rowID }) else { return [] }
+                let rowIDs = Set(row.section.windows.map { $0.window.id })
+                let targets = freshWindows.filter { rowIDs.contains($0.window.id) }
+                return [pickMenuBarTarget(from: targets)].compactMap { $0 }
+            }
             // An explicit pin is honoured regardless of rank — the owner asked
             // for this specific window and we do not second-guess.
             if let pinned = freshWindows.first(where: { $0.window.id == menuBarQuotaSelection }) {
-                return pinned
+                return [pinned]
             }
-            return pickMenuBarTarget(from: freshWindows)
+            return [pickMenuBarTarget(from: freshWindows)].compactMap { $0 }
         }
+    }
+
+    private var smartPairTargets: [QuotaWindowSnapshot] {
+        let currentIDs = Set(freshWindows.map { "\($0.window.canonicalProviderKey):\($0.window.id)" })
+        let rows: [(targets: [QuotaWindowSnapshot], urgency: Double)] = displaySections.compactMap { row in
+            let windows = row.section.windows.filter {
+                currentIDs.contains("\($0.window.canonicalProviderKey):\($0.window.id)")
+            }
+            guard !windows.isEmpty else { return nil }
+            let pairWindows = windows.filter { isShortMenuBarWindow($0) || isWeeklyMenuBarWindow($0) }
+            let scopedSection = QuotaPlatformSection(providerKey: row.section.providerKey,
+                                                     providerLabel: row.section.providerLabel,
+                                                     via: row.section.via,
+                                                     expected: row.section.expected,
+                                                     windows: pairWindows)
+            let scopedRow = DisplaySection(id: row.id,
+                                           providerKey: row.providerKey,
+                                           title: row.title,
+                                           platformTitle: row.platformTitle,
+                                           section: scopedSection,
+                                           poolKey: row.poolKey,
+                                           remainingPercent: windows.compactMap(\.remainingPercent).min(),
+                                           resetAt: windows.compactMap(\.resetAt).min(),
+                                           maskedWindowIds: row.maskedWindowIds)
+            let pair = glanceMeterPair(for: scopedRow, now: now)
+            let selected: [QuotaWindowSnapshot]
+            if let short = pair.short, let weekly = pair.long,
+               isShortMenuBarWindow(short), isWeeklyMenuBarWindow(weekly) {
+                selected = weekly.remainingPercent == 0 ? [weekly] : [short, weekly]
+            } else {
+                let remaining = windows.filter { $0.remainingPercent != nil }
+                guard let urgent = remaining.min(by: { ($0.remainingPercent ?? 100) < ($1.remainingPercent ?? 100) }) else {
+                    return nil
+                }
+                selected = [urgent]
+            }
+            return (selected, selected.compactMap(\.remainingPercent).min() ?? 100)
+        }
+        return rows.min(by: { $0.urgency < $1.urgency })?.targets ?? []
+    }
+
+    private func menuBarPeriodSeconds(_ snapshot: QuotaWindowSnapshot) -> TimeInterval? {
+        ResetAlarmCadence.periodSeconds(token: snapshot.window.window, label: snapshot.window.label)
+    }
+
+    private func isFiveHourMenuBarWindow(_ snapshot: QuotaWindowSnapshot) -> Bool {
+        menuBarPeriodSeconds(snapshot) == 5 * 3_600
+    }
+
+    private func isShortMenuBarWindow(_ snapshot: QuotaWindowSnapshot) -> Bool {
+        guard let seconds = menuBarPeriodSeconds(snapshot) else { return false }
+        return seconds < 86_400
+    }
+
+    private func isWeeklyMenuBarWindow(_ snapshot: QuotaWindowSnapshot) -> Bool {
+        menuBarPeriodSeconds(snapshot) == 7 * 86_400
     }
 
     /// Pick the menu-bar target from `pool` by lowest remaining percent.
@@ -534,8 +635,10 @@ final class MonitorModel: ObservableObject {
 
     var menuBarTitle: String {
         guard menuBarStyle != .symbolOnly else { return "" }
-        guard let target = menuBarTargetSnapshot, let pct = target.remainingPercent else { return "—" }
-        return "\(Int(pct.rounded()))%"
+        let values = menuBarTargetSnapshots.compactMap(\.remainingPercent)
+        guard !values.isEmpty else { return "—" }
+        let formatted = values.map { "\(Int($0.rounded()))%" }
+        return formatted.joined(separator: " / ")
     }
 
     // MARK: - Source ranking
@@ -744,6 +847,7 @@ final class MonitorModel: ObservableObject {
         revision += 1
         request?.cancel()
         request = nil
+        cancelPendingPush()
         isRefreshing = false
         refreshTimer?.invalidate()
         clockTimer?.invalidate()
@@ -909,12 +1013,14 @@ final class MonitorModel: ObservableObject {
     /// instead of waiting for a save.
     func setLocalEnabled(_ value: Bool) {
         guard value != localEnabled else { return }
+        invalidateRefresh()
         localEnabled = value
         defaults.set(value, forKey: "localEnabled")
         if !value {
             hasCurrentLocalRead = false
             localWindows = []
             activeRunawayAnomalies = []
+            if !skipsSnapshotIOForTesting { try? LocalQuotaSnapshot.remove() }
         }
         refresh()
     }
@@ -923,6 +1029,7 @@ final class MonitorModel: ObservableObject {
     /// always goes through `saveSyncSettings`, which validates the endpoint.
     func disableSync() {
         guard syncEnabled else { return }
+        cancelPendingPush()
         syncEnabled = false
         defaults.set(false, forKey: "syncEnabled")
     }
@@ -931,8 +1038,12 @@ final class MonitorModel: ObservableObject {
     /// always goes through `saveConnection`, which validates the endpoint.
     func disableServerPull() {
         guard serverEnabled else { return }
+        invalidateRefresh()
         serverEnabled = false
         defaults.set(false, forKey: "serverEnabled")
+        serverWindows = []
+        fleetWindowGroups = []
+        serverError = nil
         refresh()
     }
 
@@ -1046,6 +1157,7 @@ final class MonitorModel: ObservableObject {
         let value = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let url = URL(string: value), QuotaClient.isAllowedEndpoint(url) else { throw QuotaClientError.invalidEndpoint }
         let cleanToken = sanitizedToken(token)
+        invalidateRefresh()
         if !cleanToken.isEmpty {
             guard !cleanToken.contains("\n"), !cleanToken.contains("\r") else { throw QuotaClientError.invalidToken }
             try await TokenStore.save(cleanToken, server: value, service: TokenStore.readService)
@@ -1060,10 +1172,9 @@ final class MonitorModel: ObservableObject {
         let savedToken = !cleanToken.isEmpty ? cleanToken : server ? await TokenStore.read(server: value, service: TokenStore.readService) : nil
         if server && savedToken == nil { throw QuotaClientError.invalidToken }
         let saved = savedToken != nil || (value == endpoint && hasSavedToken)
-        revision += 1
-        request?.cancel()
-        request = nil
-        isRefreshing = false
+        // A timer refresh can start while the token read above is suspended.
+        // Invalidate it again before installing the new read modes.
+        invalidateRefresh()
         localEnabled = local
         serverEnabled = server
         endpoint = value
@@ -1099,6 +1210,7 @@ final class MonitorModel: ObservableObject {
         guard let url = URL(string: value), QuotaClient.isAllowedEndpoint(url) else {
             throw QuotaPublisherError.invalidEndpoint
         }
+        cancelPendingPush()
         let cleanToken = sanitizedToken(token)
         if !cleanToken.isEmpty {
             try await TokenStore.save(cleanToken, server: value, service: TokenStore.syncService)
@@ -1110,7 +1222,17 @@ final class MonitorModel: ObservableObject {
         // Settings → Infisical Sync.  Placed after the token save so a
         // Keychain failure cannot leave Infisical ahead of the local cache.
         try await InfisicalSettings.shared.writeThrough(value, for: InfisicalSettings.Keys.pushEndpoint)
-        let savedToken = !cleanToken.isEmpty ? cleanToken : enabled ? await TokenStore.read(server: value, service: TokenStore.syncService) : nil
+        let savedToken: String?
+        if !cleanToken.isEmpty {
+            savedToken = cleanToken
+        } else if enabled, let syncTokenReadForTesting {
+            savedToken = await syncTokenReadForTesting().map(sanitizedToken(_:))
+        } else if enabled {
+            savedToken = await TokenStore.read(server: value, service: TokenStore.syncService)
+                .map(sanitizedToken(_:))
+        } else {
+            savedToken = nil
+        }
         let saved = savedToken != nil || (value == syncEndpoint && hasSavedSyncToken)
 
         syncEnabled = enabled
@@ -1124,9 +1246,10 @@ final class MonitorModel: ObservableObject {
         defaults.set(format.rawValue, forKey: "syncFormat")
         defaults.set(saved, forKey: "hasSavedSyncToken")
 
-        if enabled && !localWindows.isEmpty {
-            await pushQuotasIfEnabled(windows: localWindows)
-        }
+        // A refresh may have entered the old push path while token persistence
+        // above suspended.  Invalidate again after the new settings are live.
+        cancelPendingPush()
+
     }
 
     func forgetSyncServer() async throws {
@@ -1161,60 +1284,151 @@ final class MonitorModel: ObservableObject {
     }
 
     func testAndPushSync(endpoint input: String = "", token inputToken: String = "", format inputFormat: QuotaSyncFormat? = nil) async -> (success: Bool, message: String) {
+        guard localEnabled, syncEnabled else {
+            return (false, "Enable Local Readers and push sharing before sending.")
+        }
         let endpointValue = input.trimmingCharacters(in: .whitespacesAndNewlines)
         let targetEndpoint = !endpointValue.isEmpty ? endpointValue : syncEndpoint
         guard let url = URL(string: targetEndpoint), QuotaClient.isAllowedEndpoint(url) else {
             return (false, "Invalid endpoint URL." + sentenceGap + "Use HTTPS, or HTTP for localhost only.")
         }
-        let windowsToPush = localWindows.isEmpty ? AntigravityQuotaGroups.normalize(await Self.readLocalSources().windows) : localWindows
+        guard targetEndpoint == syncEndpoint else {
+            return (false, "Save the Ingest Endpoint before sending.")
+        }
+        let generation = pushRevision
+        let targetFormat = inputFormat ?? syncFormat
+        let windowsToPush: [QuotaWindow]
+        if !localWindows.isEmpty {
+            windowsToPush = localWindows
+        } else if let localReadForTesting {
+            windowsToPush = AntigravityQuotaGroups.normalize((await localReadForTesting())?.windows ?? [])
+        } else if let localResultForTesting {
+            windowsToPush = AntigravityQuotaGroups.normalize(localResultForTesting.windows)
+        } else {
+            windowsToPush = AntigravityQuotaGroups.normalize(await Self.readLocalSources().windows)
+        }
+        guard isCurrentPushSettings(generation, endpoint: targetEndpoint, format: targetFormat) else {
+            return (false, "Push cancelled because sharing was disabled or its settings changed.")
+        }
         guard !windowsToPush.isEmpty else {
             return (false, "No local agent quotas available to push.")
         }
         let cleanToken = sanitizedToken(inputToken)
-        let resolvedToken = !cleanToken.isEmpty ? cleanToken : await TokenStore.read(server: targetEndpoint, service: TokenStore.syncService).map(sanitizedToken(_:))
+        let resolvedToken: String?
+        if !cleanToken.isEmpty {
+            resolvedToken = cleanToken
+        } else if let syncTokenReadForTesting {
+            resolvedToken = await syncTokenReadForTesting().map(sanitizedToken(_:))
+        } else {
+            resolvedToken = await TokenStore.read(server: targetEndpoint, service: TokenStore.syncService)
+                .map(sanitizedToken(_:))
+        }
+        guard isCurrentPushSettings(generation, endpoint: targetEndpoint, format: targetFormat) else {
+            return (false, "Push cancelled because sharing was disabled or its settings changed.")
+        }
         guard let token = resolvedToken, !token.isEmpty else {
             return (false, "Please provide a valid Ingest Token.")
         }
-        let targetFormat = inputFormat ?? syncFormat
-        do {
-            let result = try await publisher.publish(
-                windows: windowsToPush,
-                to: url,
-                token: token,
-                format: targetFormat
-            )
-            self.lastSyncTime = Date()
-            self.lastSyncStatus = result.message
-            self.lastSyncError = nil
+        switch await pushQuotasIfEnabled(windows: windowsToPush,
+                                         endpointOverride: targetEndpoint,
+                                         tokenOverride: token,
+                                         formatOverride: targetFormat) {
+        case let .success(result):
             return (true, result.message)
-        } catch {
-            let errorDesc = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            self.lastSyncStatus = "Error: \(errorDesc)"
-            self.lastSyncError = errorDesc
-            return (false, errorDesc)
+        case let .failure(message):
+            return (false, message)
+        case .cancelled:
+            return (false, "Push cancelled because sharing was disabled or its settings changed.")
         }
     }
 
-    private func pushQuotasIfEnabled(windows: [QuotaWindow]) async {
-        guard syncEnabled, let url = URL(string: syncEndpoint), QuotaClient.isAllowedEndpoint(url), !windows.isEmpty else { return }
-        isSyncing = true
-        defer { isSyncing = false }
-        let token = await TokenStore.read(server: syncEndpoint, service: TokenStore.syncService).map(sanitizedToken(_:))
-        // Served from the token cache after the first read of the launch.  A
-        // read that failed or timed out stays failed until the owner saves or
-        // re-authorizes the token, so say so where the button is.
-        syncTokenState = SavedTokenState.resolve(hasSavedFlag: hasSavedSyncToken,
-                                                 silentReadSucceeded: !(token ?? "").isEmpty)
-        do {
-            let result = try await publisher.publish(windows: windows, to: url, token: token, format: syncFormat)
-            self.lastSyncTime = Date()
-            self.lastSyncStatus = result.message
-            self.lastSyncError = nil
-        } catch {
-            let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            self.lastSyncStatus = "Error: \(message)"
-            self.lastSyncError = message
+    private func isCurrentPushSettings(_ generation: Int, endpoint: String, format: QuotaSyncFormat) -> Bool {
+        pushRevision == generation && localEnabled && syncEnabled
+            && syncEndpoint == endpoint && syncFormat == format
+    }
+
+    private func pushQuotasIfEnabled(windows: [QuotaWindow], endpointOverride: String? = nil,
+                                     tokenOverride: String? = nil,
+                                     formatOverride: QuotaSyncFormat? = nil) async -> PushOutcome {
+        let targetEndpoint = endpointOverride ?? syncEndpoint
+        let targetFormat = formatOverride ?? syncFormat
+        guard localEnabled, syncEnabled, targetEndpoint == syncEndpoint, targetFormat == syncFormat,
+              let url = URL(string: targetEndpoint), QuotaClient.isAllowedEndpoint(url), !windows.isEmpty else {
+            return .cancelled
         }
+        cancelPendingPush()
+        let generation = pushRevision
+        isSyncing = true
+        let task = Task<PushOutcome, Never> { [weak self] in
+            guard let self else { return .cancelled }
+            defer {
+                if self.pushRevision == generation {
+                    self.isSyncing = false
+                    self.pushTask = nil
+                }
+            }
+            let tokenValue: String?
+            if let tokenOverride {
+                tokenValue = tokenOverride
+            } else if let readForTesting = self.syncTokenReadForTesting {
+                tokenValue = await readForTesting()
+            } else {
+                tokenValue = await TokenStore.read(server: targetEndpoint, service: TokenStore.syncService)
+                    .map(sanitizedToken(_:))
+            }
+            guard !Task.isCancelled,
+                  self.isCurrentPushSettings(generation, endpoint: targetEndpoint, format: targetFormat) else {
+                return .cancelled
+            }
+            // Served from the token cache after the first read of the launch.  A
+            // read that failed or timed out stays failed until the owner saves or
+            // re-authorizes the token, so say so where the button is.
+            let token = tokenValue.map(sanitizedToken(_:))
+            self.syncTokenState = SavedTokenState.resolve(hasSavedFlag: self.hasSavedSyncToken,
+                                                          silentReadSucceeded: !(token ?? "").isEmpty)
+            do {
+                let result: QuotaPublishResult
+                if let pushForTesting = self.pushForTesting {
+                    result = try await pushForTesting(windows, url, token, targetFormat)
+                } else {
+                    result = try await self.publisher.publish(windows: windows, to: url, token: token, format: targetFormat)
+                }
+                guard !Task.isCancelled,
+                      self.isCurrentPushSettings(generation, endpoint: targetEndpoint, format: targetFormat) else {
+                    return .cancelled
+                }
+                self.lastSyncTime = Date()
+                self.lastSyncStatus = result.message
+                self.lastSyncError = nil
+                return .success(result)
+            } catch {
+                guard !Task.isCancelled,
+                      self.isCurrentPushSettings(generation, endpoint: targetEndpoint, format: targetFormat) else {
+                    return .cancelled
+                }
+                let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                self.lastSyncStatus = "Error: \(message)"
+                self.lastSyncError = message
+                return .failure(message)
+            }
+        }
+        pushTask = task
+        return await task.value
+    }
+
+    private func invalidateRefresh() {
+        revision += 1
+        request?.cancel()
+        request = nil
+        cancelPendingPush()
+        isRefreshing = false
+    }
+
+    private func cancelPendingPush() {
+        pushRevision += 1
+        pushTask?.cancel()
+        pushTask = nil
+        isSyncing = false
     }
 
     // MARK: - Refresh Loop
@@ -1228,7 +1442,13 @@ final class MonitorModel: ObservableObject {
         let currentEndpoint = endpoint
         request = Task { [weak self] in
             let resultForTesting = self?.localResultForTesting
-            async let localRead = Self.readLocalResult(useLocal: useLocal, testingResult: resultForTesting)
+            let localReadForTesting = self?.localReadForTesting
+            let serverFetchForTesting = self?.serverFetchForTesting
+            async let localRead: LocalQuotaResult? = {
+                guard useLocal else { return nil }
+                if let localReadForTesting { return await localReadForTesting() }
+                return await Self.readLocalResult(useLocal: useLocal, testingResult: resultForTesting)
+            }()
             var newServer: QuotaResponse?
             var failure: String?
             // The pull's own read doubles as the availability check, so the
@@ -1237,18 +1457,24 @@ final class MonitorModel: ObservableObject {
             // a failed read is not retried here (see `TokenCache`).
             var savedTokenReadable = false
             if useServer {
-                let token = await TokenStore.read(server: currentEndpoint, service: TokenStore.readService)
-                    .map(sanitizedToken(_:))
-                savedTokenReadable = !(token ?? "").isEmpty
-                do {
-                    guard let url = URL(string: currentEndpoint) else { throw QuotaClientError.invalidEndpoint }
-                    guard let token else { throw TokenStore.Failure.read }
-                    let client = try QuotaClient(endpoint: url, token: token)
-                    newServer = try await client.fetch()
-                } catch is CancellationError { return }
-                catch {
-                    failure = (error as? LocalizedError)?.errorDescription
-                        ?? ("Unable to reach the server." + sentenceGap + "Check the Quota Endpoint and the Read Token.")
+                if let serverFetchForTesting {
+                    do { newServer = try await serverFetchForTesting() }
+                    catch is CancellationError { return }
+                    catch { failure = error.localizedDescription }
+                } else {
+                    let token = await TokenStore.read(server: currentEndpoint, service: TokenStore.readService)
+                        .map(sanitizedToken(_:))
+                    savedTokenReadable = !(token ?? "").isEmpty
+                    do {
+                        guard let url = URL(string: currentEndpoint) else { throw QuotaClientError.invalidEndpoint }
+                        guard let token else { throw TokenStore.Failure.read }
+                        let client = try QuotaClient(endpoint: url, token: token)
+                        newServer = try await client.fetch()
+                    } catch is CancellationError { return }
+                    catch {
+                        failure = (error as? LocalizedError)?.errorDescription
+                            ?? ("Unable to reach the server." + sentenceGap + "Check the Quota Endpoint and the Read Token.")
+                    }
                 }
             }
             let local = await localRead
@@ -1285,9 +1511,6 @@ final class MonitorModel: ObservableObject {
                     self.handoffError = nil
                 } else if useLocal {
                     try LocalQuotaSnapshot.write(windows: self.localWindows, issues: self.issues, customMarks: exportedCustomMarks(), now: self.now)
-                    #if canImport(WidgetKit)
-                    WidgetCenter.shared.reloadAllTimelines()
-                    #endif
                 }
                 else { try LocalQuotaSnapshot.remove() }
                 self.handoffError = nil
@@ -1297,8 +1520,10 @@ final class MonitorModel: ObservableObject {
 
             // Push to remote server if enabled
             if self.syncEnabled && !self.localWindows.isEmpty {
-                await self.pushQuotasIfEnabled(windows: self.localWindows)
+                _ = await self.pushQuotasIfEnabled(windows: self.localWindows)
             }
+
+            guard !Task.isCancelled, self.revision == generation else { return }
 
             if let newServer {
                 // The raw windows, deliberately: running them through
@@ -1334,6 +1559,28 @@ final class MonitorModel: ObservableObject {
             self.originByProvider = origins
             if newServer != nil { self.lastPullTime = self.now }
             self.response = QuotaResponse(generatedAt: ISO8601DateFormatter().string(from: self.now), windows: merged)
+            if !self.skipsSnapshotIOForTesting {
+                do {
+                    let widgetCandidates = merged + split.groups.flatMap(\.windows)
+                    let visibleProviderKeys = Set(QuotaResponse(generatedAt: "", windows: widgetCandidates)
+                        .platformSections(now: self.now).map(\.providerKey))
+                    let widgetWindows = widgetCandidates.filter {
+                        visibleProviderKeys.contains($0.canonicalProviderKey)
+                            && !self.disabledSources.contains($0.source ?? "")
+                            && !$0.isSupplementaryVideoQuota
+                    }
+                    try LocalQuotaSnapshot.writeWidgetSnapshot(windows: widgetWindows,
+                                                              customMarks: self.exportedCustomMarks(), now: self.now)
+                    self.widgetSharingError = nil
+                    UserDefaults(suiteName: LocalQuotaSnapshot.appGroupId)?.set(self.platformOrder, forKey: "platformOrder")
+                    #if canImport(WidgetKit)
+                    WidgetCenter.shared.reloadAllTimelines()
+                    #endif
+                } catch {
+                    self.widgetSharingError = "Widgets cannot access the shared quota cache." + sentenceGap
+                        + "Install a build with native widget sharing enabled."
+                }
+            }
             self.refreshRunawayUsageState(recordSamples: local != nil)
             self.alarmManager.evaluate(observations: self.resetAlarmObservationsForCurrentReadings(), now: self.now)
             self.isRefreshing = false
@@ -1386,16 +1633,49 @@ final class MonitorModel: ObservableObject {
             guard let group = groups[key] else { continue }
             let lastSent = lastRunawayAlertAt[key] ?? -.infinity
             guard now.timeIntervalSince1970 - lastSent >= BurnRateMonitor.alertCooldown else { continue }
-            let notification = BurnRateNotification(anomalies: group, sound: alarmManager.alarmSound)
+            let provLabel = self.sections.first { $0.providerKey == group[0].providerKey }?.providerLabel
+                ?? group[0].providerKey.capitalized
+            let winLabel = self.sections.flatMap(\.windows)
+                .first { $0.window.id == group[0].windowId }?.window.label
+            let notification = BurnRateNotification(
+                anomalies: group,
+                sound: alarmManager.alarmSound,
+                providerLabel: provLabel,
+                windowLabel: winLabel
+            )
             if let runawayNotificationForTesting {
                 runawayNotificationForTesting(notification)
             } else {
                 alarmManager.deliverRunawayUsageAlert(notification)
             }
             lastRunawayAlertAt[key] = now.timeIntervalSince1970
+
+            let comp = group[0].kind == .vsPeak ? "recent peak" : "7-day average"
+            let mult = group[0].multiplier.formatted(.number.precision(.fractionLength(1)))
+            let record = RunawayAlertRecord(
+                timestamp: now,
+                providerKey: group[0].providerKey,
+                providerLabel: provLabel,
+                windowId: group[0].windowId,
+                windowLabel: winLabel ?? group[0].windowId,
+                multiplier: group[0].multiplier,
+                comparison: comp,
+                summary: "\(provLabel)\(winLabel.map { " (\($0))" } ?? "") is burning at \(mult)× your \(comp)."
+            )
+            appendRunawayAlert(record)
         }
         lastRunawayAlertAt = lastRunawayAlertAt.filter { now.timeIntervalSince1970 - $0.value <= 30 * 86_400 }
         defaults.set(lastRunawayAlertAt, forKey: "runawayAlertLastSent")
+    }
+
+    private func appendRunawayAlert(_ record: RunawayAlertRecord) {
+        var list = runawayAlertHistory
+        list.insert(record, at: 0)
+        if list.count > 50 { list = Array(list.prefix(50)) }
+        runawayAlertHistory = list
+        if let data = try? JSONEncoder().encode(list) {
+            defaults.set(data, forKey: "runawayAlertHistory")
+        }
     }
 
     private static func runawayKey(_ providerKey: String, _ windowId: String) -> String {
@@ -1406,11 +1686,12 @@ final class MonitorModel: ObservableObject {
         async let primary = LocalQuotaReader().read()
         async let cursor = CursorQuotaReader().read()
         async let grokBot = GrokBotQuotaReader().read()
+        async let gemini = GeminiQuotaReader().read()
         // EXTRA Grok Bot source beside Cursor DashboardService; `source: "gbu"`
         // so Settings can rank/disable it without replacing the Cursor reader.
         async let gbu = GbuQuotaReader().read()
         async let antigravity = AntigravitySummaryReader().read()
-        let results = await [primary, cursor, grokBot, gbu]
+        let results = await [primary, cursor, grokBot, gbu, gemini]
         let summary = await antigravity
         var windows = results.flatMap(\.windows)
         var issues = results.reduce(into: [String: String]()) { $0.merge($1.issues) { _, next in next } }

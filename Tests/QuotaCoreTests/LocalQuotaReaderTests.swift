@@ -166,6 +166,25 @@ final class LocalQuotaReaderTests: XCTestCase {
         XCTAssertEqual(result.windows.first { $0.providerKey == "xai" }?.remainingPercent, 40)
     }
 
+    func testClaudeUsageRejectionDropsTheRememberedGrantAndAsksAgain() async throws {
+        let home = try makeFixtureHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        try writeJSON(["mcpOAuth": [:]], to: home.appendingPathComponent(".claude/.credentials.json"))
+        let stale = Data(#"{"claudeAiOauth":{"accessToken":"fixture-claude","expiresAt":4102444800000}}"#.utf8)
+        ClaudeCredentialSource.remember(stale)
+        defer { ClaudeCredentialSource.resetRememberedCredential() }
+        let reader = LocalQuotaReader(homeDirectory: home, fetchJSON: { request in
+            XCTAssertEqual(request.url?.host, "api.anthropic.com")
+            return Self.httpResponse(#"{"error":"unauthorized"}"#, status: 401)
+        }, runAntigravity: { Data("{}".utf8) }, readClaudeCredential: {
+            .authorized(stale)
+        })
+        let result = await reader.read()
+        XCTAssertEqual(result.issues["anthropic"], ClaudeLoginState.needsPermission.issue)
+        XCTAssertEqual(result.consentNeeded, ["anthropic"])
+        XCTAssertNil(ClaudeCredentialSource.rememberedCredential())
+    }
+
     func testClaudeKeychainReaderTimeoutDoesNotHoldRefresh() async throws {
         let home = try makeFixtureHome()
         defer { try? FileManager.default.removeItem(at: home) }

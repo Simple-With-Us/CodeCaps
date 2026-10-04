@@ -65,12 +65,20 @@ final class QuotaCoreTests: XCTestCase {
     }
 
     func testUnusedPlatformsStayHiddenEvenWhenServerReportsThem() {
-        let hidden = ["kimi", "gemini-cli", "github-copilot", "windsurf"]
+        let hidden = ["kimi", "github-copilot", "windsurf"]
         let windows = hidden.map { key in
             QuotaWindow(id: key, provider: key, label: "Quota", remainingPercent: 30, occurredAt: "2023-11-14T22:13:20Z")
         }
         let response = QuotaResponse(generatedAt: "", windows: windows)
         XCTAssertTrue(Set(response.platformSections(now: now).map(\.providerKey)).isDisjoint(with: hidden))
+    }
+
+    func testGeminiCLIRemainsVisibleAsAProviderWhenQuotaIsReported() {
+        let gemini = QuotaWindow(id: "gemini", provider: "gemini-cli", providerLabel: "Gemini CLI", label: "Gemini Pro", remainingPercent: 42, occurredAt: "2023-11-14T22:13:20Z")
+        let sections = QuotaResponse(generatedAt: "", windows: [gemini]).platformSections(now: now)
+        let section = sections.first { $0.providerKey == "gemini-cli" }
+        XCTAssertEqual(section?.providerLabel, "Gemini CLI")
+        XCTAssertEqual(section?.windows.first?.remainingPercent, 42)
     }
 
     func testVideoClassificationDoesNotDemoteCodingOrOtherProviders() {
@@ -108,10 +116,11 @@ final class QuotaCoreTests: XCTestCase {
         let future = window(provider: "new-provider", occurred: "2023-11-14T22:05:00Z")
         let response = QuotaResponse(generatedAt: "2023-11-14T22:10:00Z", windows: [future])
         let sections = response.platformSections(now: now)
-        XCTAssertEqual(Array(sections.prefix(7)).map(\.providerKey), [
+        XCTAssertEqual(Array(sections.prefix(8)).map(\.providerKey), [
             "anthropic", "openai", "google-antigravity", "cursor", "xai", "grok-bot", "minimax",
+            "gemini-cli",
         ])
-        XCTAssertTrue(sections.prefix(7).allSatisfy(\.isMissing))
+        XCTAssertTrue(sections.prefix(8).allSatisfy(\.isMissing))
         XCTAssertEqual(sections.last?.providerKey, "new-provider")
     }
 
@@ -122,7 +131,7 @@ final class QuotaCoreTests: XCTestCase {
         let response = QuotaResponse(generatedAt: "2023-11-14T22:10:00Z", windows: [deepseekWindow])
         let sections = response.platformSections(now: now)
         XCTAssertFalse(sections.contains { $0.providerKey == "deepseek" })
-        XCTAssertEqual(sections.count, 7)
+        XCTAssertEqual(sections.count, 8)
     }
 
     func testFreshWindowsSortByLowRemainingAndUnknownLast() {

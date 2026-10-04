@@ -99,13 +99,12 @@ enum ClaudeItemPresence: Equatable, Sendable {
     case unknown
 }
 
-/// The only two Keychain operations the refresh loop may perform.
+/// The Keychain operations a caller may ask the probe to perform.
 ///
-/// Neither one reads Claude Code's secret from inside the CodeCaps process:
-/// the CLI read happens in the `security` child, and the lookup asks for
-/// attributes only.  There is deliberately no hook here for an in-process
-/// data read, because that is the call that raised the panel.  Tests inject
-/// their own closures so no test touches a real Keychain.
+/// The refresh loop uses `lookUpItem` only.  `readViaSecurityCLI` is reserved
+/// for Allow Access To Claude Code.  There is deliberately no hook for an
+/// in-process data read, because that is the call that raised the panel.
+/// Tests inject their own closures so no test touches a real Keychain.
 struct ClaudeKeychainProbe: Sendable {
     /// Runs `security` once, bounded by `deadline` seconds.  The second
     /// argument reports whether the caller has already given up, so a hung
@@ -211,16 +210,15 @@ public enum ClaudeCredentialSource {
     /// reached from Allow Access To Claude Code — never from the refresh loop,
     /// which must stay prompt-free.
     ///
-    /// It runs the same `security find-generic-password` child the refresh loop
-    /// runs, only without the refresh loop's 12 second kill.  The identity
-    /// matters: an Always Allow answers for the program that asked, and the
-    /// refresh loop reads as `security`, never in this process.  An in-process
-    /// read here would grant CodeCaps's team ID, which the loop never uses, and
-    /// the button would report success while the next refresh asked again.
+    /// It runs `security find-generic-password` once, and only from this button.
+    /// The refresh loop does not run it.  A background `security` child can
+    /// raise a panel when that tool is not on the item's access list, and an
+    /// in-process `SecItemCopyMatching` for the secret raises one even with
+    /// the interaction flags set.  The bytes from a successful button read
+    /// stay in memory for later silent refreshes.  They are never logged and
+    /// never handed to another type.
     ///
     /// Returns whether access was granted rather than the credential itself.
-    /// Nothing outside this type has any use for Claude Code's saved login, so
-    /// nothing outside this type is handed it.
     public static func readAllowingInteraction() async -> Bool {
         await readAllowingInteraction(probe: .live, deadline: interactiveDeadline)
     }
@@ -238,7 +236,12 @@ public enum ClaudeCredentialSource {
             DispatchQueue.global(qos: .userInitiated).async {
                 let outcome = probe.readViaSecurityCLI(deadline, { gate.isFinished })
                 log.notice("claude keychain interactive security CLI: \(outcome.logLabel, privacy: .public)")
-                if case .found = outcome { gate.finish(true) } else { gate.finish(false) }
+                if case .found(let data) = outcome {
+                    remember(data)
+                    gate.finish(true)
+                } else {
+                    gate.finish(false)
+                }
             }
             DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + outerWait) {
                 gate.finish(false)
@@ -246,54 +249,79 @@ public enum ClaudeCredentialSource {
         }
     }
 
-    /// The refresh loop's decision, with no Keychain data request of its own.
+    /// The refresh loop's decision.  It never starts `security` and never
+    /// asks Keychain for the secret.
     ///
-    /// Why there is no in-process data read here any more (verified from the
-    /// unified log, Sep 30 2026): the item's partition list is `apple-tool:`,
-    /// so the `security` child matches it and reads silently.  CodeCaps does
-    /// not: securityd logged `ACL partition mismatch: client
+    /// Why neither read is safe in the background (the data-read half verified
+    /// from the unified log, Sep 30 2026): the item's partition list is
+    /// `apple-tool:`.  securityd logged `ACL partition mismatch: client
     /// teamid:CC8UTF7ATG ACL ("apple-tool:")` and then `displaying keychain
-    /// prompt for <home>/Applications/CodeCaps.app` for a data `SecItemCopyMatching`
-    /// that carried both `LAContext.interactionNotAllowed` and
-    /// `kSecUseAuthenticationUIFail`.  So on current macOS those flags do not
-    /// suppress the file-keychain ACL/partition panel.  Always Allow adds the
-    /// team ID to the partition list, but Claude Code rewrites the item when
-    /// it refreshes its token and the grant is gone again, so it is no fix
-    /// either.  The attributes-only lookup below never asks for the secret
-    /// and never prompted, so it stays as the existence check.
+    /// prompt for <home>/Applications/CodeCaps.app` for a data
+    /// `SecItemCopyMatching` that carried both `LAContext.interactionNotAllowed`
+    /// and `kSecUseAuthenticationUIFail`.  Those flags do not suppress the
+    /// file-keychain panel.  The `security` child can raise the same panel
+    /// when it is not on the item's access list, so the refresh loop does not
+    /// start it either.  Allow Access is the only `security` run.  Its bytes
+    /// stay in memory for this process only, so each launch needs Allow
+    /// Access again.  They are not copied into a CodeCaps Keychain item.
+    /// An expired payload is dropped instead of being fetched again.
     ///
-    /// `isAbandoned` turns true once the caller's bounded wait has given up.
-    /// Nothing new starts after that — no retry, no lookup.
+    /// `attemptDeadline` and `attempts` remain so the bounded caller does not
+    /// change.  The background path does not spend that budget.
+    /// `isAbandoned` turns true once the caller's wait has given up, and
+    /// nothing new starts after that.
     static func resolveSilently(probe: ClaudeKeychainProbe,
                                 attemptDeadline: TimeInterval = cliAttemptDeadline,
                                 attempts: Int = cliAttempts,
                                 isAbandoned: @escaping @Sendable () -> Bool = { false }) -> ClaudeCredentialAccess {
-        var last = SecurityCLIOutcome.failed
-        retry: for attempt in 1...max(1, attempts) {
-            if isAbandoned() { return .temporarilyUnavailable }
-            last = probe.readViaSecurityCLI(attemptDeadline, isAbandoned)
-            log.notice("claude keychain security CLI attempt \(attempt, privacy: .public): \(last.logLabel, privacy: .public)")
-            switch last {
-            case .found(let data): return .authorized(data)
-            case .denied: return .unauthorized
-            case .notFound: break retry
-            case .timedOut, .failed: continue retry
-            }
-        }
-
-        if isAbandoned() { return .temporarilyUnavailable }
-        switch (last, probe.lookUpItem()) {
-        case (.notFound, .present):
-            // `security` saw no item a moment ago and the lookup sees one:
-            // Claude Code was most likely rewriting it.  Try again next time.
-            return .temporarilyUnavailable
-        case (.notFound, _), (_, .absent):
+        if isAbandoned() || attempts < 1 || attemptDeadline < 0 { return .temporarilyUnavailable }
+        switch probe.lookUpItem() {
+        case .absent:
+            resetRememberedCredential()
             return .missing
-        default:
-            // The item is there, or the lookup could not say, and the CLI
-            // did not finish.  That is load, not a signed-out Mac.
+        case .unknown:
             return .temporarilyUnavailable
+        case .present:
+            guard let data = rememberedCredential() else { return .unauthorized }
+            guard rememberedGrantStillUsable(data) else {
+                resetRememberedCredential()
+                return .unauthorized
+            }
+            return .authorized(data)
         }
+    }
+
+    /// A remembered payload is usable only while its access token is still
+    /// unexpired.  Anything else, including a rotated or unreadable record,
+    /// must not be sent again.
+    static func rememberedGrantStillUsable(_ data: Data, now: Date = Date()) -> Bool {
+        guard let root = ClaudeOAuthParser.parse(data) else { return false }
+        return ClaudeOAuthParser.validOAuth(in: root, now: now) != nil
+    }
+
+    private static let memoryLock = NSLock()
+    private static var remembered: Data?
+
+    /// Keeps a successful Allow Access payload for the refresh loop.  The
+    /// value is never logged.
+    static func remember(_ data: Data) {
+        memoryLock.lock()
+        remembered = data
+        memoryLock.unlock()
+    }
+
+    static func rememberedCredential() -> Data? {
+        memoryLock.lock()
+        defer { memoryLock.unlock() }
+        return remembered
+    }
+
+    /// Drops the in-memory payload.  Tests call this so one case cannot leak
+    /// into the next.  An absent item clears it too.
+    static func resetRememberedCredential() {
+        memoryLock.lock()
+        remembered = nil
+        memoryLock.unlock()
     }
 
     /// The existence check.  An attributes-only query reads the item's

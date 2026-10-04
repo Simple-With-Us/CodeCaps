@@ -102,12 +102,20 @@ jobs:
             echo "::notice title=Mac release not published::Missing: ${missing[*]}.  The bundle is still built and its signature verified.  See docs/AUTO-UPDATE.md, Secrets."
           fi
 
+      - name: Install XcodeGen
+        run: |
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          fi
+          xcodegen --version
+
       # Without the certificate there is nothing to publish, but the bundle
       # can still be proven: Sparkle.framework embedded, the rpath added, and
-      # the whole nesting passing codesign --verify --deep --strict (ad hoc).
+      # the whole nesting passing codesign --verify --deep --strict.  The
+      # ad-hoc signature does not prove App Group access.
       - name: Build and verify the bundle (not publishing)
         if: steps.gate.outputs.publish != 'true'
-        run: script/build_and_run.sh --build-only
+        run: CODECAPS_ALLOW_ADHOC_VALIDATION=1 script/build_and_run.sh --build-only
 
       - name: Import the Developer ID certificate into a throwaway keychain
         if: steps.gate.outputs.publish == 'true'

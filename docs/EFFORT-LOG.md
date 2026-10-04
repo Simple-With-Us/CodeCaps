@@ -5,7 +5,70 @@ PR (when shipped), follow-ups (when parked).
 
 ---
 
-## 2026-10-03 — Runtime Alerts and Machine Provenance [CODEX, in review]
+## 2026-10-03 — Native Widgets and Independent Data Setup [CODEX, in progress]
+
+Lane: `codex/native-widgets-data-controls`.  Boards `508560f7`, `9a3d1a21`, `bc0f76fd`, `29df655f`, `1b71afd1`.  Native widget and data-cache repair; public setup guide; iOS drag reorder; remaining menu-bar presets.
+
+- Confirmed running `/Applications/CodeCaps.app` build 110 embeds a Mac widget but both signatures lack group entitlements.  Release configuration strips groups on iOS too; active iOS App Store profiles already authorize the required group.
+- Repair uses macOS team-scoped `CC8UTF7ATG.codecaps` and iOS `group.com.simplewithus.codecaps`, with explicit signature validation.  Widget cache supports local, pull-only, combined, and paused configurations independently from the local-only BotFleet handoff.
+- Public guide shipped in PR #127 at https://codecaps.simplewithus.com/setup.html; Pages succeeded and live bytes match source.  Native build/install and device verification remain pending; do not claim widgets repaired until verified.
+- Gemini CLI reader is connected with real OAuth quota reads while Kimi remains retired.  Menu presets preserve legacy selections; fresh installs use Smart Pair.
+- Final focused gate passed 65 tests, including save/push cancellation and single-publication refinements.  PR #135 package, Mac structural-release validation, and iOS simulator screenshot jobs passed before the #134 main sync; signed App Group runtime verification remains pending.
+
+---
+
+## 2026-10-03 — Canonical brand icon, Glance meter alignment, iOS dual meters, and runaway alert history [AG, completed]
+
+Lane: `ag/companion-bars-and-icons`.
+
+- Canonical CodeCaps brand icon: restored the owner's authentic 3D gauge squircle mark from `/Users/jay/Code/Icons-Logos/CodeCaps/CodeCaps-Icon.icns` as `assets/AppIcon.icns`, updated `assets/icon-1024.png`, populated all 15 iOS and Mac asset catalog sizes in `ios/CodeCapsCompanion/Assets.xcassets/AppIcon.appiconset/`, and updated `script/build_and_run.sh` to use canonical `assets/AppIcon.icns` directly without double-plate resizing.
+- Glance meter alignment: decoupled percentage and reset countdown in `GlanceMeter` (`GlanceViews.swift`) into distinct columns with fixed widths (44pt percent trailing-aligned, 50pt countdown centered in an invisible column with fixed gap) so countdown alignment never shifts based on 100% vs 2-digit percentages.
+- iOS companion dual quota meters & MiniMax parity: updated `CompanionQuotaModel.swift` to exclude MiniMax supplementary video quota matching Mac Glance, added `shortWindow` / `longWindow` cadence resolution, replaced single overarching progress bar in `CompanionContentView.swift` (`quotaCard`) with two side-by-side meters (`CompanionMeterView`) visible without expanding, and increased `CompanionUsageBar` pacing marker height to 16pt (width 2.5pt) matching Mac Glance.
+- Runaway usage alerting visibility: updated `BurnRateNotification` in `BurnRateMonitor.swift` to explicitly name the provider and quota window in notification title and body; created `RunawayAlertRecord` history persisted in `MonitorModel.swift`; rendered recent runaway alert log in Settings under Runaway Agents; and updated Glance footer detail to surface recent alerts from the last 24 hours even after active burst subsides.
+- Verification: all 590 unit tests pass (0 failures, 4 skipped); iOS simulator builds clean via `xcodebuild`.
+
+---
+
+## 2026-10-03 — Claude file 401 stays sign-in-again [GROK-BUILD, in progress]
+
+Follow-up to PR #126.  A 401 from a token in `~/.claude/.credentials.json`
+still says "This account needs you to sign in again."  Allow Access is only
+for a token that came from the remembered Keychain grant.  Both paths drop
+the remembered bytes.
+
+---
+
+## 2026-10-03 — Fleet Antigravity row says when the weekly reading is missing [GROK-BUILD, in progress]
+
+Lane: `grok-build/fleet-weekly-gap`.  Board `47021e4c`.  Worktree `~/apps/codecaps-grok-build`.
+
+- A fleet Antigravity row whose payload has a 5h meter and no weekly meter used to leave the second column blank.  The long column now says "no weekly reading reported".  A masked weekly says the existing masked caption.  A weekly that is already on screen, a local row, and a one-meter provider leave the column alone.
+- Files: `Sources/CodeCaps/GlanceViews.swift`, `Tests/CodeCapsTests/GlanceRowTests.swift`.  Codex's runaway-alert footer in the same file is left as it landed in #128.
+
+---
+
+## 2026-10-03 — Prompt-free background Claude lookup [GROK-BUILD, in progress]
+
+Lane: `grok-build/prompt-free-claude-lookup` at
+`/Users/jay/apps/codecaps-grok-build-keychain`.  Board `da7fce2c`.  GitHub #13.
+PR #126.
+
+- The refresh loop no longer starts `/usr/bin/security`.  It also does not
+  ask Keychain for the secret.  The Sep 30 log showed that a data
+  `SecItemCopyMatching` still raises a panel when the interaction flags are
+  set, so that call stays out of the background path.
+- Allow Access is the only `security` run.  Its payload stays in memory for
+  this process only.  Each launch needs Allow Access again.  The secret is
+  not copied into a CodeCaps Keychain item.  Nothing logs the payload.
+- An expired remembered payload, a missing item, or a Claude usage 401 or
+  403 drops those bytes and asks for Allow Access again.  A stale token is
+  not fetched forever.
+- `ClaudeConsentTests` covers the silent path and the expiry drop.  #12's
+  idle sentence was already on main.
+
+---
+
+## 2026-10-03 — Runtime Alerts and Machine Provenance [CODEX, merged]
 
 Lane: `codex/alerts-provenance-20261003`.  Boards `20dc3a22`, `d4673e2f`, `5af89c7c`.
 
@@ -15,7 +78,6 @@ Lane: `codex/alerts-provenance-20261003`.  Boards `20dc3a22`, `d4673e2f`, `5af89
 - Validation: 28 focused tests and enabled-anomaly Glance render passed before main sync.  Hosted checks cover the integrated branch.
 
 ---
-
 
 ## 2026-10-03 — App design audit F-02 iOS Theme tokens & F-06 Console toolbar density [AG, completed]
 
@@ -43,7 +105,6 @@ Lane: `codex/remove-stale-controls-20261003`.  Boards `11b25418`, `979b2c38`.  P
 - Reconciliation correction: `20dc3a22` reopened after tracing the runtime path.
   #109 records history and exposes thresholds but never invokes anomaly evaluation.
   Actual evaluation and notifications remain active work, not complete.
-
 ---
 
 ## 2026-10-03 — Console sidebar arrow navigation, window min size bump, iOS settings detents, and board completion [AG, completed]

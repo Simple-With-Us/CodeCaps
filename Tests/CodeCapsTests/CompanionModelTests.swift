@@ -55,12 +55,14 @@ final class CompanionModelTests: XCTestCase {
 
     // MARK: - App Group & Hygiene
 
-    func testAppGroupIdParity() throws {
+    func testPlatformSpecificAppGroupIds() throws {
         let source = try readCompanionModelSource()
         XCTAssertTrue(
             source.contains(#"appGroupId = "group.com.simplewithus.codecaps""#),
-            "CompanionQuotaModel must use canonical App Group group.com.simplewithus.codecaps"
+            "iOS must use its registered App Group"
         )
+        XCTAssertTrue(source.contains(#"appGroupId = "CC8UTF7ATG.codecaps""#))
+        XCTAssertTrue(source.contains("#if os(macOS)"))
     }
 
     func testSentenceGapInOutcomeMessages() throws {
@@ -276,6 +278,8 @@ final class CompanionModelTests: XCTestCase {
             source.contains("CodeCaps/quota-windows.json"),
             "loadLocalFallback and saveLocalSnapshot must check the app's local sandbox storage"
         )
+        XCTAssertTrue(source.contains("CC8UTF7ATG.codecaps"))
+        XCTAssertTrue(source.contains("group.com.simplewithus.codecaps"))
     }
 
     func testPullToRefreshAndButtonResponsiveness() throws {
@@ -298,4 +302,3 @@ final class CompanionModelTests: XCTestCase {
         )
     }
 }
-

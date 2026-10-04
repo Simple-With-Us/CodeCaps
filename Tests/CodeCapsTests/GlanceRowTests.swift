@@ -824,4 +824,71 @@ final class GlanceMeterTests: XCTestCase {
         let windowNoDuration = makeWindow(id: "y", label: "Unknown", token: nil, resetIn: 3_600)
         XCTAssertNil(windowNoDuration.elapsedFraction(now: now))
     }
+
+    // MARK: Fleet weekly gap
+
+    func testFleetAntigravityNamesAMissingWeeklyReading() {
+        let row = antigravityRow([
+            makeWindow(id: "5h", label: "Gemini · 5-hour", token: "5h", remaining: 100,
+                       resetIn: 4 * 3_600, provider: "google-antigravity"),
+        ])
+        XCTAssertEqual(fleetWeeklyGap(for: row, origin: .fleet, now: now), "no weekly reading reported")
+        XCTAssertNil(fleetWeeklyGap(for: row, origin: .local, now: now),
+                     "a local row keeps the blank second column")
+    }
+
+    func testFleetAntigravityWithBothCadencesHasNoGap() {
+        let row = antigravityRow([
+            makeWindow(id: "5h", label: "Gemini · 5-hour", token: "5h", remaining: 100,
+                       resetIn: 4 * 3_600, provider: "google-antigravity"),
+            makeWindow(id: "weekly", label: "Gemini · Weekly", token: "weekly", remaining: 40,
+                       resetIn: 3 * 86_400, provider: "google-antigravity"),
+        ])
+        XCTAssertNil(fleetWeeklyGap(for: row, origin: .fleet, now: now))
+    }
+
+    func testFleetAntigravityWeeklyAloneHasNoGap() {
+        // The one weekly meter sits in the first column.  That is the reading,
+        // not a missing one.
+        let row = antigravityRow([
+            makeWindow(id: "weekly", label: "Gemini · Weekly", token: "weekly", remaining: 40,
+                       resetIn: 3 * 86_400, provider: "google-antigravity"),
+        ])
+        XCTAssertNil(fleetWeeklyGap(for: row, origin: .fleet, now: now))
+    }
+
+    func testFleetAntigravityNamesAMaskedWeekly() {
+        let row = antigravityRow([
+            makeWindow(id: "5h", label: "Gemini · 5-hour", token: "5h", remaining: 100,
+                       resetIn: 4 * 3_600, provider: "google-antigravity"),
+            makeWindow(id: "weekly", label: "Gemini · Weekly", token: "weekly", remaining: 0,
+                       resetIn: 3 * 86_400, provider: "google-antigravity"),
+        ], masked: ["weekly"])
+        XCTAssertEqual(fleetWeeklyGap(for: row, origin: .fleet, now: now), AntigravityDisplay.maskedCaption)
+    }
+
+    func testASingleMeterProviderDoesNotClaimAMissingWeekly() {
+        let row = makeRow([
+            makeWindow(id: "grokbot", label: "Grok Bot weekly", token: "weekly", remaining: 40),
+        ])
+        XCTAssertNil(fleetWeeklyGap(for: row, origin: .fleet, now: now))
+    }
+
+    private func antigravityRow(_ windows: [QuotaWindowSnapshot], masked: Set<String> = []) -> DisplaySection {
+        DisplaySection(
+            id: "google-antigravity:gemini",
+            providerKey: "google-antigravity",
+            title: "Antigravity · Gemini",
+            platformTitle: "Antigravity",
+            section: QuotaPlatformSection(
+                providerKey: "google-antigravity",
+                providerLabel: "Antigravity",
+                via: nil,
+                expected: true,
+                windows: windows),
+            poolKey: "gemini",
+            remainingPercent: windows.compactMap(\.remainingPercent).min(),
+            resetAt: nil,
+            maskedWindowIds: masked)
+    }
 }

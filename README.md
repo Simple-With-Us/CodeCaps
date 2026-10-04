@@ -2,7 +2,7 @@
 
 A macOS menu bar app for supported AI plan usage and quota windows.  It can share available readings across Macs through a collector you run.
 
-**[Download CodeCaps →](https://codecaps.simplewithus.com/)** · **[From Simple With Us](https://simplewithus.com/)**
+**[Download CodeCaps →](https://codecaps.simplewithus.com/)** · **[Setup & Data Guide](https://codecaps.simplewithus.com/setup.html)** · **[From Simple With Us](https://simplewithus.com/)**
 
 ## Why This Exists
 
@@ -29,7 +29,7 @@ CodeCaps has two surfaces.  Nothing renders in both.
 A platform can carry more than one quota window, so each surface has its own rule for which number leads:
 
 - A collapsed row (Glance, or a Console card) shows the **fresh window closest to its cap** — lowest remaining percent — with that window's own reset countdown.
-- The **menu bar** has its own picker (Menu Bar → Displayed Quota): *Lowest active quota* (default, lowest percent above 0%), *Lowest quota* (lowest percent outright, zero included), or one window pinned by name.
+- The **menu bar** has its own picker (Menu Bar → Displayed Quota): *Most Urgent 5h*, *Most Urgent Weekly*, *Smart Pair* (the default for new installs), or a platform pinned by name.  Smart Pair shows short and weekly percentages from the same platform row when both apply.  Existing legacy automatic choices and individual window pins remain available and keep their saved selection.
 - The Console's **Next Reset** tile is the soonest reset across every fresh window on every platform — not scoped to whichever is near its cap.
 
 Antigravity sells two independent model pools, shown as two rows, **Gemini** (the colour Gemini star) and **Third-Party** (the same star in one colour).  Collapsing them used to show "Antigravity 0%" the moment the Third-Party weekly cap was spent, while Gemini still had most of its allowance.  Whenever a pool's weekly window hits zero, its 5-hour percentage is withheld — shown as `n/a` rather than a number that can't mean anything until the week rolls over.

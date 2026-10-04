@@ -213,6 +213,11 @@ struct SettingsSourcesFleetPage: View {
 
     var body: some View {
         SettingsPage {
+            Section {
+                Link("Setup & Data Guide", destination: URL(string: "https://codecaps.simplewithus.com/setup.html")!)
+                Text("Choose local reading, uploads, and downloads independently.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             thisMacSection
             sourcesRankSection
             shareSection
@@ -246,6 +251,9 @@ struct SettingsSourcesFleetPage: View {
                 Text("CodeCaps reads each CLI's own saved credentials in place." + sentenceGap
                      + "It never asks you for a provider API key.")
                 Text("A snapshot is written to ~/Library/Application Support/Usage Monitor/quota-windows.json for BotFleet.")
+                if let widgetSharingError = model.widgetSharingError {
+                    Text(widgetSharingError).foregroundStyle(Theme.warning)
+                }
                 if let handoffError = model.handoffError {
                     Text(handoffError).foregroundStyle(Theme.warning)
                 }
@@ -724,6 +732,7 @@ struct ReaderStatus {
         ReaderStatus(providerKey: "anthropic", label: "Claude", source: "Claude Code credentials"),
         ReaderStatus(providerKey: "openai", label: "Codex", source: "Codex CLI credentials"),
         ReaderStatus(providerKey: "google-antigravity", label: "Antigravity", source: "Antigravity app or CLI"),
+        ReaderStatus(providerKey: "gemini-cli", label: "Gemini CLI", source: "Gemini CLI OAuth sign-in"),
         ReaderStatus(providerKey: "cursor", label: "Cursor", source: "Cursor app session"),
         ReaderStatus(providerKey: "xai", label: "Grok", source: "Grok CLI credentials"),
         ReaderStatus(providerKey: "grok-bot", label: "Grok Bot", source: "Cursor app session"),
@@ -1135,6 +1144,29 @@ struct SettingsNotificationsPage: View {
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
+
+                        if !model.runawayAlertHistory.isEmpty {
+                            Divider().padding(.vertical, 4)
+                            Text("Recent Runaway Alerts")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(.primary)
+                            ForEach(model.runawayAlertHistory.prefix(5)) { alert in
+                                HStack(alignment: .top) {
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text("\(alert.providerLabel) · \(alert.windowLabel)")
+                                            .font(.system(size: 11, weight: .medium))
+                                        Text(alert.summary)
+                                            .font(.system(size: 10))
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    Text(alert.timestamp.formatted(date: .omitted, time: .shortened))
+                                        .font(.system(size: 10).monospacedDigit())
+                                        .foregroundStyle(.secondary)
+                                }
+                                .padding(.vertical, 1)
+                            }
+                        }
                     }
                     .padding(.top, 2)
                 }

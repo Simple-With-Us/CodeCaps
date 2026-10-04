@@ -1,5 +1,6 @@
 import XCTest
 import Foundation
+import QuotaCore
 
 /// Verifies CodeCaps WidgetKit data models, presentation logic, wire payload decoding,
 /// platform ordering, and project/entitlement hygiene.
@@ -25,7 +26,11 @@ final class WidgetTests: XCTestCase {
     }
 
     private static var widgetMacEntitlementsURL: URL {
-        repoRoot.appendingPathComponent("ios/CodeCapsCompanion/Widgets/CodeCapsWidgetsMac.entitlements")
+        repoRoot.appendingPathComponent("ios/CodeCapsCompanion/Generated/CodeCapsWidgetsMac.entitlements")
+    }
+
+    private static var companionMacEntitlementsURL: URL {
+        repoRoot.appendingPathComponent("ios/CodeCapsCompanion/Generated/CodeCapsCompanionMac.entitlements")
     }
 
     private func readSource(at url: URL) throws -> String {
@@ -54,13 +59,16 @@ final class WidgetTests: XCTestCase {
 
         let macEntitlements = try readSource(at: Self.widgetMacEntitlementsURL)
         XCTAssertTrue(
-            macEntitlements.contains("group.com.simplewithus.codecaps"),
-            "macOS widget entitlements must declare group.com.simplewithus.codecaps"
+            macEntitlements.contains("CC8UTF7ATG.codecaps"),
+            "macOS widget entitlements must declare the team-authorized Mac app group"
         )
         XCTAssertTrue(
             macEntitlements.contains("com.apple.security.app-sandbox"),
             "macOS widget entitlements must declare app-sandbox"
         )
+        let macAppEntitlements = try readSource(at: Self.companionMacEntitlementsURL)
+        XCTAssertTrue(macAppEntitlements.contains("CC8UTF7ATG.codecaps"))
+        XCTAssertTrue(macAppEntitlements.contains("com.apple.security.network.client"))
     }
 
     func testProjectYmlDeclaresWidgetTargets() throws {
@@ -81,6 +89,23 @@ final class WidgetTests: XCTestCase {
             yml.contains("target: CodeCapsWidgetsMac"),
             "CodeCapsCompanionMac must embed CodeCapsWidgetsMac"
         )
+    }
+
+    func testExhaustedWeeklyAntigravityRetainsMaskedShortWindow() throws {
+        let observedAt = "2026-09-13T10:00:00Z"
+        let now = ISO8601DateFormatter().date(from: "2026-09-13T10:05:00Z")!
+        let windows = AntigravityQuotaGroups.normalize([
+            QuotaWindow(id: "gemini-short", provider: "Antigravity", via: "antigravity",
+                        modelId: "gemini-pro", label: "Gemini Pro", remainingPercent: 82,
+                        window: "5h", occurredAt: observedAt),
+            QuotaWindow(id: "gemini-week", provider: "Antigravity", via: "antigravity",
+                        modelId: "gemini-pro", label: "Gemini Pro weekly", remainingPercent: 0,
+                        window: "weekly", occurredAt: observedAt),
+        ])
+        XCTAssertTrue(windows.contains { $0.window == "5h" },
+                      "The exhausted-weekly pool still needs its short window for a masked n/a row.")
+        XCTAssertEqual(AntigravityQuotaGroups.maskedWindowIds(in: windows, now: now),
+                       ["antigravity:gemini:5h"])
     }
 
     // MARK: - Presentation Logic Tests (Simulated with mirrored pure logic)

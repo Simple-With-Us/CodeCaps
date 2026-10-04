@@ -85,19 +85,61 @@ enum BurnRateMonitor {
     }
 }
 
+public struct RunawayAlertRecord: Codable, Identifiable, Equatable, Sendable {
+    public let id: String
+    public let timestamp: Date
+    public let providerKey: String
+    public let providerLabel: String
+    public let windowId: String
+    public let windowLabel: String
+    public let multiplier: Double
+    public let comparison: String
+    public let summary: String
+
+    public init(id: String = UUID().uuidString,
+                timestamp: Date = Date(),
+                providerKey: String,
+                providerLabel: String,
+                windowId: String,
+                windowLabel: String,
+                multiplier: Double,
+                comparison: String,
+                summary: String) {
+        self.id = id
+        self.timestamp = timestamp
+        self.providerKey = providerKey
+        self.providerLabel = providerLabel
+        self.windowId = windowId
+        self.windowLabel = windowLabel
+        self.multiplier = multiplier
+        self.comparison = comparison
+        self.summary = summary
+    }
+}
+
 struct BurnRateNotification: Equatable, Sendable {
     let identifier: String
     let title: String
     let body: String
     let anomalies: [AnomalyDetector.Anomaly]
     let sound: ResetAlarmSound
+    let providerLabel: String?
+    let windowLabel: String?
 
-    init(anomalies: [AnomalyDetector.Anomaly], sound: ResetAlarmSound) {
+    init(anomalies: [AnomalyDetector.Anomaly], sound: ResetAlarmSound, providerLabel: String? = nil, windowLabel: String? = nil) {
         self.anomalies = anomalies
         self.sound = sound
+        self.providerLabel = providerLabel
+        self.windowLabel = windowLabel
         let first = anomalies[0]
         identifier = "codecaps.runaway.\(first.providerKey).\(first.windowId)"
-        title = "Runaway Usage Detected"
-        body = anomalies.map(\.summary).joined(separator: sentenceGap)
+        let prov = providerLabel ?? first.providerKey.capitalized
+        title = "Runaway Usage: \(prov)"
+        let win = windowLabel.map { " (\($0))" } ?? ""
+        body = anomalies.map { anomaly in
+            let comp = anomaly.kind == .vsPeak ? "recent peak" : "7-day average"
+            let mult = anomaly.multiplier.formatted(.number.precision(.fractionLength(1)))
+            return "\(prov)\(win) is burning at \(mult)× your \(comp)."
+        }.joined(separator: sentenceGap)
     }
 }
