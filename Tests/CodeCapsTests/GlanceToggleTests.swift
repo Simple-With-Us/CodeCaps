@@ -396,14 +396,12 @@ final class GlanceToggleTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(Metrics.glanceHeaderTitleGap, 20)
         XCTAssertGreaterThan(Metrics.glanceHeaderTitleGap, Metrics.glanceHeaderItemGap,
                              "the title is a group of its own, not another neighbour")
-        // And the width really is spent.  With no count or time, the header is
-        // the gutters, the title, that gap, the switch, the spring at its
-        // minimum, the bell, one gap and the 16pt refresh button.
+        // And the width really is spent.  With no count or time, the header carries
+        // the gutters, title, switch, bell, enlarged refresh button, and settings button.
         let toggle = NSHostingView(rootView: GlanceViewToggle(selection: .constant(.fromMac))).fittingSize.width
         let bell = NSHostingView(rootView: GlanceAlarmAllToggle(isOn: .constant(true))).fittingSize.width
         let expected = Metrics.glanceGutter * 2 + width("CodeCaps", size: 13, weight: .semibold)
-            + Metrics.glanceHeaderTitleGap + toggle + Metrics.glanceHeaderClusterGap
-            + bell + Metrics.glanceHeaderItemGap + 16
+            + 8 + toggle + 12 + bell + 12 + 22 + 6 + 22
         XCTAssertEqual(headerIdealWidth(parts: []), expected, accuracy: 3)
     }
 

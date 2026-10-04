@@ -64,9 +64,11 @@ struct GlancePopover: View {
     private var header: some View {
         GlanceHeaderBar(view: $model.glanceView,
                         alarmsAll: $model.alarmsAll,
-                        parts: headerParts,
+                        count: headerParts.first,
+                        time: headerParts.count > 1 ? headerParts[1] : nil,
                         isRefreshing: model.isRefreshing,
-                        refresh: { model.refresh() })
+                        refresh: { model.refresh() },
+                        openSettings: openSettings)
     }
 
     /// "6 of 7" and "4:27 PM", live: the count and the time of the last read.
@@ -249,30 +251,7 @@ struct GlancePopover: View {
     // MARK: - Footer
 
     private var footer: some View {
-        ZStack {
-            HStack(spacing: 8) {
-                Button { openSettings() } label: {
-                    Image(systemName: "gearshape")
-                        .font(.system(size: 13, weight: .medium))
-                        .frame(width: 24, height: 24)
-                }
-                .buttonStyle(.plain)
-                .help("Settings")
-                .accessibilityLabel("Settings")
-
-                Spacer(minLength: 4)
-
-                Button { openConsole(model.displaySections.first.map { .platform($0.id) } ?? .settingsSourcesFleet) } label: {
-                    HStack(spacing: 5) {
-                        Text("Open CodeCaps")
-                        Text("⌘1").font(.system(size: 10)).foregroundStyle(.tertiary)
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .help("Open CodeCaps")
-                .accessibilityLabel("Open CodeCaps")
-            }
-
+        HStack(spacing: 8) {
             if !model.activeRunawayAnomalies.isEmpty {
                 Button {
                     if let anomaly = model.activeRunawayAnomalies.first {
@@ -281,19 +260,29 @@ struct GlancePopover: View {
                         openConsole(.runawayAlerts)
                     }
                 } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "flame.fill")
-                            .font(.system(size: 14, weight: .heavy))
-                            .foregroundStyle(Theme.warning)
-                        MarqueeText(
-                            text: runawayCombinedMarqueeText,
-                            font: .system(size: 15, weight: .heavy, design: .rounded),
-                            color: Theme.warning
-                        )
+                    Image(systemName: "flame.fill")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(Theme.warning)
+                        .frame(width: 24, height: 28)
+                }
+                .buttonStyle(.plain)
+                .help("Active Runaway Anomaly: click to inspect")
+                .accessibilityLabel("Active Runaway Anomaly")
+
+                Button {
+                    if let anomaly = model.activeRunawayAnomalies.first {
+                        openAlert(anomaly.providerKey, anomaly.windowId, anomaly.observedAt)
+                    } else {
+                        openConsole(.runawayAlerts)
                     }
-                    .frame(maxWidth: 290, maxHeight: 28)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
+                } label: {
+                    MarqueeText(
+                        text: runawayCombinedMarqueeText,
+                        font: .system(size: 13, weight: .bold, design: .rounded),
+                        color: Theme.warning
+                    )
+                    .padding(.horizontal, 10)
+                    .frame(maxWidth: .infinity, maxHeight: 28)
                     .background(Theme.warning.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
                     .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Theme.warning.opacity(0.35), lineWidth: 1))
                 }
@@ -301,10 +290,33 @@ struct GlancePopover: View {
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(runawayFooterAccessibilityLabel)
                 .help("Active Runaway Anomaly: click to inspect")
+
+                Spacer(minLength: 12)
+            } else {
+                Spacer()
             }
+
+            openCodeCapsButton
         }
         .padding(.horizontal, Metrics.glanceGutter)
         .frame(height: Metrics.glanceFooterHeight)
+    }
+
+    private var openCodeCapsButton: some View {
+        Button {
+            openConsole(model.displaySections.first.map { .platform($0.id) } ?? .settingsSourcesFleet)
+        } label: {
+            HStack(spacing: 5) {
+                Text("Open CodeCaps")
+                Text("⌘1").font(.system(size: 10)).foregroundStyle(.tertiary)
+            }
+            .font(.system(size: 12, weight: .medium))
+            .padding(.horizontal, 10)
+            .frame(height: 28)
+        }
+        .buttonStyle(.borderedProminent)
+        .help("Open CodeCaps")
+        .accessibilityLabel("Open CodeCaps")
     }
 
     private var runawayFooterItems: [String] {
@@ -319,9 +331,6 @@ struct GlancePopover: View {
                 provider = model.sections.first { $0.providerKey == anomaly.providerKey }?.providerLabel
                     ?? anomaly.providerKey.capitalized
             }
-            // The marquee names the provider and the anomaly, not the window's
-            // cadence tag:  the row it sits under already shows that, and a
-            // compact "MiniMax: 2.0× vs peak" stays readable while scrolling.
             let comp = anomaly.kind == .vsPeak ? "peak" : "avg"
             var parts = ["\(provider): \(anomaly.multiplier.formatted(.number.precision(.fractionLength(1))))× vs \(comp)"]
             if let rate = anomaly.ratePercentPerHour {
@@ -361,17 +370,19 @@ struct GlancePopover: View {
 
 struct MarqueeText: View {
     let text: String
-    var font: Font = .system(size: 12, weight: .bold)
+    var font: Font = .system(size: 13, weight: .bold, design: .rounded)
     var color: Color = Theme.warning
+    var speed: Double = 30.0
+    var gap: CGFloat = 40.0
 
     @State private var textWidth: CGFloat = 0
-    @State private var containerWidth: CGFloat = 0
     @State private var offset: CGFloat = 0
+    @State private var isAnimating: Bool = false
 
     var body: some View {
         GeometryReader { geo in
             let available = geo.size.width
-            let needsScroll = textWidth > available && available > 0
+            let needsScroll = textWidth > (available - 6) && textWidth > 0 && available > 0
 
             ZStack(alignment: .leading) {
                 Text(text)
@@ -379,37 +390,56 @@ struct MarqueeText: View {
                     .foregroundStyle(color)
                     .lineLimit(1)
                     .fixedSize()
+                    .offset(x: needsScroll ? offset : 0)
+
+                if needsScroll {
+                    Text(text)
+                        .font(font)
+                        .foregroundStyle(color)
+                        .lineLimit(1)
+                        .fixedSize()
+                        .offset(x: offset + textWidth + gap)
+                }
+            }
+            .background(
+                Text(text)
+                    .font(font)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .hidden()
                     .background(
                         GeometryReader { textGeo in
                             Color.clear.preference(key: MarqueeTextWidthKey.self, value: textGeo.size.width)
                         }
                     )
-                    .offset(x: needsScroll ? offset : 0)
-            }
-            .frame(width: available, height: geo.size.height, alignment: needsScroll ? .leading : .center)
+            )
+            .frame(width: available, height: geo.size.height, alignment: .leading)
             .clipped()
-            .onPreferenceChange(MarqueeTextWidthKey.self) { width in
-                textWidth = width
-                containerWidth = available
-                startScroll(needsScroll: width > available && available > 0, width: width, available: available)
+            .onPreferenceChange(MarqueeTextWidthKey.self) { measured in
+                guard measured > 0, measured != textWidth else { return }
+                textWidth = measured
+                restartAnimation(needsScroll: measured > (available - 6), width: measured)
             }
             .onChange(of: available) { _, newAvailable in
-                containerWidth = newAvailable
-                startScroll(needsScroll: textWidth > newAvailable && newAvailable > 0, width: textWidth, available: newAvailable)
+                restartAnimation(needsScroll: textWidth > (newAvailable - 6), width: textWidth)
             }
         }
     }
 
-    private func startScroll(needsScroll: Bool, width: CGFloat, available: CGFloat) {
-        if needsScroll {
-            let distance = width - available + 20
-            let duration = max(3.0, Double(distance) / 25.0)
-            offset = 0
-            withAnimation(.linear(duration: duration).repeatForever(autoreverses: true).delay(0.8)) {
-                offset = -distance
+    private func restartAnimation(needsScroll: Bool, width: CGFloat) {
+        offset = 0
+        isAnimating = false
+        guard needsScroll && width > 0 else { return }
+
+        let cycleDistance = width + gap
+        let duration = Double(cycleDistance) / speed
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            guard !isAnimating else { return }
+            isAnimating = true
+            withAnimation(.linear(duration: duration).repeatForever(autoreverses: false)) {
+                offset = -cycleDistance
             }
-        } else {
-            offset = 0
         }
     }
 }
@@ -611,10 +641,42 @@ func glanceFleetSourceLabel(_ source: String) -> String {
 struct GlanceHeaderBar: View {
     @Binding var view: GlanceViewMode
     @Binding var alarmsAll: Bool
-    /// The count and the time ("6 of 7", "4:27 PM"); either may be missing.
-    let parts: [String]
+    var count: String? = nil
+    var time: String? = nil
     let isRefreshing: Bool
     var refresh: () -> Void
+    var openSettings: () -> Void = {}
+
+    init(view: Binding<GlanceViewMode>,
+         alarmsAll: Binding<Bool>,
+         count: String? = nil,
+         time: String? = nil,
+         isRefreshing: Bool,
+         refresh: @escaping () -> Void,
+         openSettings: @escaping () -> Void = {}) {
+        self._view = view
+        self._alarmsAll = alarmsAll
+        self.count = count
+        self.time = time
+        self.isRefreshing = isRefreshing
+        self.refresh = refresh
+        self.openSettings = openSettings
+    }
+
+    init(view: Binding<GlanceViewMode>,
+         alarmsAll: Binding<Bool>,
+         parts: [String],
+         isRefreshing: Bool,
+         refresh: @escaping () -> Void,
+         openSettings: @escaping () -> Void = {}) {
+        self._view = view
+        self._alarmsAll = alarmsAll
+        self.count = parts.first
+        self.time = parts.count > 1 ? parts[1] : nil
+        self.isRefreshing = isRefreshing
+        self.refresh = refresh
+        self.openSettings = openSettings
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -622,44 +684,44 @@ struct GlanceHeaderBar: View {
                 .font(.system(size: 13, weight: .semibold))
                 .lineLimit(1)
                 .fixedSize()
-            Spacer().frame(width: Metrics.glanceHeaderTitleGap)
+
+            Spacer(minLength: 8)
+
+            if let count, !count.isEmpty {
+                Text(count)
+                    .font(.system(size: 11, weight: .medium).monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .fixedSize()
+                Spacer(minLength: 8)
+            }
+
             GlanceViewToggle(selection: $view)
-            Spacer(minLength: Metrics.glanceHeaderClusterGap)
-            HStack(spacing: Metrics.glanceHeaderItemGap) {
-                GlanceAlarmAllToggle(isOn: $alarmsAll)
-                if !parts.isEmpty { status }
+
+            Spacer(minLength: 12)
+
+            GlanceAlarmAllToggle(isOn: $alarmsAll)
+
+            Spacer(minLength: 12)
+
+            if let time, !time.isEmpty {
+                Text(time)
+                    .font(.system(size: 11, weight: .medium).monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .fixedSize()
+                Spacer(minLength: 8)
+            }
+
+            HStack(spacing: 6) {
                 refreshButton
+                settingsButton
             }
         }
         .padding(.horizontal, Metrics.glanceGutter)
         .frame(height: Metrics.glanceHeaderHeight)
     }
 
-    /// The count and the time, each after a dot.  The dots are for the eye;
-    /// VoiceOver would say "bullet", so it gets the phrases with commas.
-    private var status: some View {
-        HStack(spacing: Metrics.glanceHeaderItemGap) {
-            ForEach(Array(parts.enumerated()), id: \.offset) { _, part in
-                Circle()
-                    .fill(Theme.faint)
-                    .frame(width: Metrics.glanceHeaderDotSize, height: Metrics.glanceHeaderDotSize)
-                Text(part)
-                    .font(.system(size: 11).monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .fixedSize()
-            }
-        }
-        .frame(height: Metrics.glanceHeaderControlHeight)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(parts.joined(separator: ", "))
-    }
-
-    /// Auto-refresh fires every 5 min (see MonitorModel.refreshTimer) and a
-    /// 30-second clock ticks every time `now` updates, so the manual button
-    /// used to live in the footer for redundancy.  It sits top-right next to
-    /// the time — icon-only, with the spinner replacing it while a refresh is
-    /// in flight.
     private var refreshButton: some View {
         Button(action: refresh) {
             Group {
@@ -667,10 +729,10 @@ struct GlanceHeaderBar: View {
                     ProgressView().controlSize(.small).frame(width: 14, height: 14)
                 } else {
                     Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 11, weight: .medium))
+                        .font(.system(size: 13, weight: .medium))
                 }
             }
-            .frame(width: 16, height: Metrics.glanceHeaderControlHeight)
+            .frame(width: 22, height: Metrics.glanceHeaderControlHeight)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -678,6 +740,19 @@ struct GlanceHeaderBar: View {
         .disabled(isRefreshing)
         .help("Refresh Quotas")
         .accessibilityLabel("Refresh Quotas")
+    }
+
+    private var settingsButton: some View {
+        Button(action: openSettings) {
+            Image(systemName: "gearshape")
+                .font(.system(size: 13, weight: .medium))
+                .frame(width: 22, height: Metrics.glanceHeaderControlHeight)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .help("Settings")
+        .accessibilityLabel("Settings")
     }
 }
 
@@ -754,9 +829,9 @@ struct GlanceAlarmAllToggle: View {
     private var label: some View {
         HStack(spacing: 4) {
             Image(systemName: isOn ? "bell.fill" : "bell")
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: 13, weight: .semibold))
             Text("All")
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: 13, weight: .semibold))
         }
         .foregroundStyle(tint)
         .frame(height: Metrics.glanceHeaderControlHeight)
@@ -1123,39 +1198,21 @@ struct GlanceMeter: View {
             // Red for the share used, green for the share left, and a black
             // marker for how far through the period we are.  This is the one
             // place the status colour appears.
-            if snapshot.window.isSupplementaryVideoQuota,
-               let remaining = snapshot.window.absoluteRemaining,
-               let limit = snapshot.window.absoluteLimit, limit > 0, limit <= 20 {
-                DiscreteQuotaPips(remaining: Int(remaining.rounded()), total: Int(limit.rounded()), tint: tint)
-                    .frame(width: Metrics.glanceMeterBarWidth, height: Metrics.glanceMeterBarHeight)
-            } else {
-                QuotaUsageBar(metrics: metrics, height: Metrics.glanceMeterBarHeight,
-                              dimmed: quotaBarIsDimmed(for: snapshot, sourceFailed: false),
-                              markerHeight: Metrics.glanceMeterMarkerHeight)
-                    .frame(width: Metrics.glanceMeterBarWidth, height: Metrics.glanceMeterBarHeight)
-            }
+            QuotaUsageBar(metrics: metrics, height: Metrics.glanceMeterBarHeight,
+                          dimmed: quotaBarIsDimmed(for: snapshot, sourceFailed: false),
+                          markerHeight: Metrics.glanceMeterMarkerHeight)
+                .frame(width: Metrics.glanceMeterBarWidth, height: Metrics.glanceMeterBarHeight)
             // AG's #112 grouped the percentage and the countdown and
             // italicised the countdown; that structure is kept.  The colour
             // is the owner's ruling: the percentage is the number the row
             // exists to convey, and a number that changes colour with its own
             // value has to be re-read every time.  Accent belongs on the bar.
-            if snapshot.window.isSupplementaryVideoQuota,
-               let remaining = snapshot.window.absoluteRemaining,
-               let limit = snapshot.window.absoluteLimit, limit > 0 {
-                Text("\(Int(remaining.rounded()))/\(Int(limit.rounded()))")
-                    .font(.system(size: 11, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(Theme.ink)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                    .frame(width: Metrics.glanceMeterPercentWidth, alignment: .trailing)
-            } else {
-                Text(percent.map { "\(Int($0.rounded()))%" } ?? "—")
-                    .font(.system(size: 11, weight: .medium).monospacedDigit())
-                    .foregroundStyle(Theme.ink)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                    .frame(width: Metrics.glanceMeterPercentWidth, alignment: .trailing)
-            }
+            Text(percent.map { "\(Int($0.rounded()))%" } ?? "—")
+                .font(.system(size: 11, weight: .medium).monospacedDigit())
+                .foregroundStyle(Theme.ink)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .frame(width: Metrics.glanceMeterPercentWidth, alignment: .trailing)
             if !countdown.isEmpty {
                 Text(countdown)
                     .font(.system(size: 10, weight: .medium).monospacedDigit())
@@ -1295,7 +1352,9 @@ func glanceExpandedLines(for row: DisplaySection, now: Date) -> [GlanceMeterLine
     for snapshot in shownWindows { holders[key(snapshot), default: []].append(snapshot) }
     var rest: [QuotaWindowSnapshot] = []
     // An empty duplicate is no more an extra line than it is a second meter.
-    let drawable = glanceDrawableWindows(row.section.windows.filter { !row.isMasked($0) })
+    let drawable = glanceDrawableWindows(row.section.windows.filter {
+        !$0.window.isSupplementaryVideoQuota && !row.isMasked($0)
+    })
     for snapshot in drawable where !shown.contains(snapshot.window.id) {
         if let known = holders[key(snapshot)],
            !known.contains(where: { source($0) == source(snapshot) }),

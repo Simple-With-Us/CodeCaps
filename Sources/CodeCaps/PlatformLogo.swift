@@ -66,23 +66,15 @@ public enum ResourceBundle {
         appBundleURL.pathExtension.lowercased() != "app"
     }
 
-    public static func resolveBundle() -> Bundle? {
+    public static let resolved: Bundle? = {
         if let mainBundleURL = Bundle.main.url(forResource: name, withExtension: "bundle"),
            let bundle = Bundle(url: mainBundleURL) {
             return bundle
         }
-        if let resURL = Bundle.main.resourceURL {
-            let direct = resURL.appendingPathComponent("\(name).bundle", isDirectory: true)
-            if FileManager.default.fileExists(atPath: direct.path), let bundle = Bundle(url: direct) {
-                return bundle
-            }
-        }
         if let found = resolve(in: searchRoots) { return found }
         guard mayUseGeneratedAccessor(appBundleURL: Bundle.main.bundleURL) else { return nil }
         return Bundle.module
-    }
-
-    public static let resolved: Bundle? = resolveBundle()
+    }()
 }
 
 /// How a provider's brand mark should be drawn.
@@ -249,42 +241,27 @@ public enum PlatformLogoImage {
     /// Return the bundled asset for `providerKey`, or `nil` if no artwork ships.
     /// The standard cache preserves brand colors; the template cache marks the
     /// image as a template so it adapts to Light/Dark and menu bar selection.
-    private static func currentBundle() -> Bundle? {
-        ResourceBundle.resolved ?? ResourceBundle.resolveBundle()
-    }
-
     private static func bundledImage(providerKey: String, style: MarkStyle = .template) -> NSImage? {
         let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() as NSString
         let cache = (style == .standard) ? standardCache : templateCache
         if let cached = cache.object(forKey: key) { return cached }
-        guard let bundle = currentBundle(),
-              let resource = resourceNames[key as String] ?? resourceNames[platformKey(of: key as String)] else {
-            return nil
-        }
-        let candidates: [URL?] = [
-            bundle.url(forResource: resource.name, withExtension: resource.ext),
-            bundle.url(forResource: resource.name, withExtension: resource.ext, subdirectory: "ProviderMarks"),
-            bundle.resourceURL?.appendingPathComponent("\(resource.name).\(resource.ext)"),
-            bundle.bundleURL.appendingPathComponent("Contents/Resources/\(resource.name).\(resource.ext)"),
-            bundle.bundleURL.appendingPathComponent("\(resource.name).\(resource.ext)")
-        ]
-        var targetURL: URL?
-        for candidate in candidates.compactMap({ $0 }) {
-            if FileManager.default.fileExists(atPath: candidate.path) {
-                targetURL = candidate
-                break
-            }
-        }
-        guard let url = targetURL,
-              let image = NSImage(contentsOf: url) ?? NSImage(contentsOfFile: url.path) else {
+        guard let bundle = ResourceBundle.resolved,
+              let resource = resourceNames[key as String] ?? resourceNames[platformKey(of: key as String)],
+              let url = bundle.url(forResource: resource.name, withExtension: resource.ext)
+                  ?? bundle.url(
+                      forResource: resource.name,
+                      withExtension: resource.ext,
+                      subdirectory: "ProviderMarks"
+                  ),
+              let image = NSImage(contentsOf: url) else {
             return nil
         }
         // Keep the brand color cached separately from the template copy.
-        let colorCopy = NSImage(contentsOf: url) ?? NSImage(contentsOfFile: url.path)
+        let colorCopy = NSImage(contentsOf: url)
         // A monochrome mark adapts to Light and Dark mode across all styles.
         colorCopy?.isTemplate = isMonochromeMark(key as String)
         standardCache.setObject(colorCopy ?? image, forKey: key)
-        let templateCopy = NSImage(contentsOf: url) ?? NSImage(contentsOfFile: url.path)
+        let templateCopy = NSImage(contentsOf: url)
         templateCopy?.isTemplate = true
         templateCache.setObject(templateCopy ?? image, forKey: key)
         return cache.object(forKey: key)

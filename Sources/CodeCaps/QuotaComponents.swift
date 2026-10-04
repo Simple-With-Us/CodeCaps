@@ -250,8 +250,8 @@ enum Metrics {
     /// The per-provider reset-alarm bell at the very left, shown while All is off.
     static let glanceAlarmBellWidth: CGFloat = 16
     static let glanceLogoWidth: CGFloat = 16
-    /// Fits "Antigravity", "Claude Code", "Gemini", the longest platform names without truncation.
-    static let glanceRowTitleWidth: CGFloat = 105
+    /// Fits "Claude Code" (79.5pt at 13pt medium), the longest platform name.
+    static let glanceRowTitleWidth: CGFloat = 80
     /// Fits "Plan" and "24h" at 11pt medium; "Quota" fits at its 0.8 scale.
     static let glanceMeterCaptionWidth: CGFloat = 26
     /// The gap between the parts inside one meter: caption, bar, percentage
@@ -267,14 +267,17 @@ enum Metrics {
     /// the column is the gap before the countdown, so the two never touch.
     static let glanceMeterPercentWidth: CGFloat = 44
     /// A countdown carries at most its two largest units ("17d 4h", "2h 42m"),
-    /// narrowed by ~30% from 50 to 35pt so platform names have plenty of room.
-    static let glanceMeterCountdownWidth: CGFloat = 35
+    /// so the widest realistic value is "31d 23h" or "29d 59m", measured at
+    /// 49pt by `testTheLongestCountdownsFitTheirColumn`.  The full value lives
+    /// in the countdown's tooltip.
+    static let glanceMeterCountdownWidth: CGFloat = 50
     static let glanceChevronWidth: CGFloat = 10
     /// The fixed gap between the row's columns, used by every spacer so one
     /// change re-tunes the whole row.
     static let glanceColumnGap: CGFloat = 8
-    /// The gap between the two meters.
-    static let glanceMeterGroupGap: CGFloat = 26
+    /// The gap between the two meters: from the end of the first countdown to
+    /// the second meter's caption.
+    static let glanceMeterGroupGap: CGFloat = 28
     /// The gap right after the logo, which is tighter than the rest.
     static let glanceLogoGap: CGFloat = 6
 
