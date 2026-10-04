@@ -573,6 +573,24 @@ Board 42ae688ab3b84d9aa65e445aab072a15.  Closes #37.
   where the floor covers sub-minute "now plus seconds left" recomputation.
   Confirmed by restoring the old tolerance and watching the regression test
   report the low-water mark rewritten from 15.0 to 50.0.
+- Kody's second review found the replacement was still wrong twice over, both
+  correct.  The 90s floor sat *above* the slide at short gaps, and short gaps
+  are ordinary here: the manual Refresh buttons and the 30s `clockTimer` both
+  produce them.  Separately, `observedAt` is optional at the only production
+  construction site, so an unstamped provider collapsed `elapsed` to zero and
+  would be pinned at the floor forever.  Worst of all the bound was a function
+  of the poll gap, so the same restore could fire at a slow cadence and be
+  dropped at a fast one — a property of the owner's refresh habit, not of
+  anything the provider said.
+- Replaced it with the decoupled form Kody proposed: "held still" is a flat
+  `resetDriftTolerance`, and a separate conjunct asks whether the end advanced
+  in step with the clock (`endMoved * 2 >= elapsed`).  A held end is therefore
+  classified identically at any cadence, and the floor is gone entirely.
+  Three tests cover the holes: a 30-second sliding window stays quiet and keeps
+  its low-water mark, a real restore is detected at 30s/300s/1h gaps, and an
+  unstamped provider still detects a genuine restore.  Reinstating the previous
+  version makes the 30-second test fail with the low-water mark rewritten from
+  15.0 to 50.0.
 - Two tests were written first and confirmed failing against the old rule, from
   the real observed numbers, then made to pass.  Also pinned: a small
   mid-window rise is still drift, a restore rings once and not once per

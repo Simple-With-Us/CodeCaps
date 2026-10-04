@@ -526,17 +526,66 @@ final class ResetAlarmTrackerTests: XCTestCase {
         XCTAssertEqual(tracker.state.windows[key]?.minimumRemaining, 15.0)
     }
 
-    /// The same rolling window, but where a real vendor restore lands: the end
-    /// stays on the same instant while the quota jumps.  This must still fire.
-    func testARealRestoreIsStillDetectedAtTheShortRefreshCadence() {
+    /// A real vendor restore is still detected at every refresh cadence.
+    /// Found in review on PR #153: bounding the tolerance by the poll gap meant
+    /// a held end was judged more strictly the more often the owner refreshed,
+    /// so the same restore could fire at a slow cadence and be dropped at a
+    /// fast one.  "Held still" is now a flat bound, which makes an end that did
+    /// not move classify identically whether the gap was 30 seconds or an hour.
+    ///
+    /// The slide test that backs it up is deliberately a ratio — that is the
+    /// only way to recognise a sliding end at all, and it necessarily compares
+    /// against elapsed time.  What is guaranteed here is the guarantee that
+    /// matters: a genuine restore is never dropped because of refresh timing.
+    func testARealRestoreIsDetectedAtEveryRefreshCadence() {
+        for gap in [30.0, 300.0, 3_600.0] {
+            var tracker = ResetAlarmTracker()
+            let end = t0 + 5 * day
+            _ = tracker.process(
+                [reading("weekly", period: 7 * day, resetAt: end, remaining: 15.0, observedAt: t0, provider: "grok-bot")],
+                now: t0)
+            let later = t0 + gap
+            let events = tracker.process(
+                [reading("weekly", period: 7 * day, resetAt: end, remaining: 89.0, observedAt: later, provider: "grok-bot")],
+                now: later)
+            XCTAssertEqual(events.map(\.windowId), ["weekly"], "Gap of \(Int(gap))s must still detect a restore.")
+            XCTAssertEqual(events.first?.isVendorReset, true, "Gap of \(Int(gap))s.")
+        }
+    }
+
+    /// A rolling window at the 30-second clock-timer cadence, where the slide
+    /// and the absolute floor are the same size.  Also found in review: a floor
+    /// pinned the bound above the slide at short gaps, and the manual Refresh
+    /// buttons plus the 30s `clockTimer` make those gaps ordinary.
+    func testARollingWindowAtTheThirtySecondCadenceIsNotAVendorRestore() {
         var tracker = ResetAlarmTracker()
         let end = t0 + 5 * day
         _ = tracker.process(
             [reading("weekly", period: 7 * day, resetAt: end, remaining: 15.0, observedAt: t0, provider: "grok-bot")],
             now: t0)
-        let later = t0 + 5 * 60
+        let later = t0 + 30
         let events = tracker.process(
-            [reading("weekly", period: 7 * day, resetAt: end, remaining: 89.0, observedAt: later, provider: "grok-bot")],
+            [reading("weekly", period: 7 * day, resetAt: end + 30, remaining: 50.0, observedAt: later, provider: "grok-bot")],
+            now: later)
+        XCTAssertTrue(events.isEmpty, "A 30-second slide is still a slide.")
+
+        let key = ResetAlarmTracker.windowKey(scope: "local", providerId: "grok-bot", windowId: "weekly")
+        XCTAssertEqual(tracker.state.windows[key]?.minimumRemaining, 15.0)
+    }
+
+    /// `observedAt` is optional at the only production construction site, so an
+    /// unstamped provider arrives with no elapsed time to judge by.  With no
+    /// time gap there is no way to show the end slid, so a held end plus a
+    /// large rise is still a restore rather than a permanent silent miss.
+    func testAnUnstampedProviderStillDetectsARealRestore() {
+        var tracker = ResetAlarmTracker()
+        let end = t0 + 5 * day
+        _ = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end, remaining: 15.0, observedAt: nil, provider: "grok-bot")],
+            now: t0)
+        let later = t0 + 300
+        let events = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end, remaining: 89.0, observedAt: nil, provider: "grok-bot")],
             now: later)
         XCTAssertEqual(events.map(\.windowId), ["weekly"])
         XCTAssertEqual(events.first?.isVendorReset, true)
