@@ -1135,6 +1135,29 @@ struct SettingsNotificationsPage: View {
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
+
+                        if !model.runawayAlertHistory.isEmpty {
+                            Divider().padding(.vertical, 4)
+                            Text("Recent Runaway Alerts")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(.primary)
+                            ForEach(model.runawayAlertHistory.prefix(5)) { alert in
+                                HStack(alignment: .top) {
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text("\(alert.providerLabel) · \(alert.windowLabel)")
+                                            .font(.system(size: 11, weight: .medium))
+                                        Text(alert.summary)
+                                            .font(.system(size: 10))
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    Text(alert.timestamp.formatted(date: .omitted, time: .shortened))
+                                        .font(.system(size: 10).monospacedDigit())
+                                        .foregroundStyle(.secondary)
+                                }
+                                .padding(.vertical, 1)
+                            }
+                        }
                     }
                     .padding(.top, 2)
                 }

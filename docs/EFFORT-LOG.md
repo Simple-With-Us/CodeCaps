@@ -5,6 +5,18 @@ PR (when shipped), follow-ups (when parked).
 
 ---
 
+## 2026-10-03 — Canonical brand icon, Glance meter alignment, iOS dual meters, and runaway alert history [AG, completed]
+
+Lane: `ag/companion-bars-and-icons`.
+
+- Canonical CodeCaps brand icon: restored the owner's authentic 3D gauge squircle mark from `/Users/jay/Code/Icons-Logos/CodeCaps/CodeCaps-Icon.icns` as `assets/AppIcon.icns`, updated `assets/icon-1024.png`, populated all 15 iOS and Mac asset catalog sizes in `ios/CodeCapsCompanion/Assets.xcassets/AppIcon.appiconset/`, and updated `script/build_and_run.sh` to use canonical `assets/AppIcon.icns` directly without double-plate resizing.
+- Glance meter alignment: decoupled percentage and reset countdown in `GlanceMeter` (`GlanceViews.swift`) into distinct columns with fixed widths (44pt percent trailing-aligned, 50pt countdown centered in an invisible column with fixed gap) so countdown alignment never shifts based on 100% vs 2-digit percentages.
+- iOS companion dual quota meters & MiniMax parity: updated `CompanionQuotaModel.swift` to exclude MiniMax supplementary video quota matching Mac Glance, added `shortWindow` / `longWindow` cadence resolution, replaced single overarching progress bar in `CompanionContentView.swift` (`quotaCard`) with two side-by-side meters (`CompanionMeterView`) visible without expanding, and increased `CompanionUsageBar` pacing marker height to 16pt (width 2.5pt) matching Mac Glance.
+- Runaway usage alerting visibility: updated `BurnRateNotification` in `BurnRateMonitor.swift` to explicitly name the provider and quota window in notification title and body; created `RunawayAlertRecord` history persisted in `MonitorModel.swift`; rendered recent runaway alert log in Settings under Runaway Agents; and updated Glance footer detail to surface recent alerts from the last 24 hours even after active burst subsides.
+- Verification: all 590 unit tests pass (0 failures, 4 skipped); iOS simulator builds clean via `xcodebuild`.
+
+---
+
 ## 2026-10-03 — Claude file 401 stays sign-in-again [GROK-BUILD, in progress]
 
 Follow-up to PR #126.  A 401 from a token in `~/.claude/.credentials.json`
