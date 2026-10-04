@@ -286,55 +286,57 @@ struct RunawayAlertsPage: View {
 
                 Spacer()
 
-                VStack(alignment: .trailing, spacing: 4) {
-                    Text(alert.timestamp.formatted(date: .abbreviated, time: .shortened))
-                        .font(.system(size: 11).monospacedDigit())
-                        .foregroundStyle(.secondary)
-
-                    Button("Inspect Chart") {
-                        state.select(providerKey: alert.providerKey,
-                                     windowId: alert.windowId,
-                                     at: alert.timestamp,
-                                     in: model.displaySections)
-                    }
-                    .font(.system(size: 11))
-                    .controlSize(.mini)
-                }
+                Text(alert.timestamp.formatted(date: .abbreviated, time: .shortened))
+                    .font(.system(size: 11).monospacedDigit())
+                    .foregroundStyle(.secondary)
             }
 
-            if let rate = alert.ratePercentPerHour,
-               let comparisonRate = alert.comparisonRatePercentPerHour {
-                HStack(spacing: 16) {
-                    HStack(spacing: 4) {
-                        Text("Burn Rate:")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.secondary)
-                        Text("\(rate.formatted(.number.precision(.fractionLength(1)))) %/hr")
-                            .font(.system(size: 10, weight: .medium).monospacedDigit())
-                    }
-
-                    HStack(spacing: 4) {
-                        Text("Comparison (\(alert.comparison)):")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.secondary)
-                        Text("\(comparisonRate.formatted(.number.precision(.fractionLength(1)))) %/hr")
-                            .font(.system(size: 10, weight: .medium).monospacedDigit())
-                    }
-
-                    if let coverage = alert.historyCoverageHours {
+            HStack(alignment: .center, spacing: 12) {
+                if let rate = alert.ratePercentPerHour,
+                   let comparisonRate = alert.comparisonRatePercentPerHour {
+                    HStack(spacing: 16) {
                         HStack(spacing: 4) {
-                            Text("Coverage:")
-                                .font(.system(size: 10))
+                            Text("Burn Rate:")
+                                .font(.system(size: 11))
                                 .foregroundStyle(.secondary)
-                            Text("\(coverage.formatted(.number.precision(.fractionLength(1)))) hrs")
-                                .font(.system(size: 10, weight: .medium).monospacedDigit())
+                            Text("\(rate.formatted(.number.precision(.fractionLength(1)))) %/hr")
+                                .font(.system(size: 11, weight: .medium).monospacedDigit())
+                        }
+
+                        HStack(spacing: 4) {
+                            Text("Comparison (\(alert.comparison)):")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                            Text("\(comparisonRate.formatted(.number.precision(.fractionLength(1)))) %/hr")
+                                .font(.system(size: 11, weight: .medium).monospacedDigit())
+                        }
+
+                        if let coverage = alert.historyCoverageHours {
+                            HStack(spacing: 4) {
+                                Text("Coverage:")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.secondary)
+                                Text("\(coverage.formatted(.number.precision(.fractionLength(1)))) hrs")
+                                    .font(.system(size: 11, weight: .medium).monospacedDigit())
+                            }
                         }
                     }
-
-                    Spacer()
                 }
-                .padding(.top, 2)
+
+                Spacer(minLength: 8)
+
+                Button("Inspect Chart") {
+                    state.select(providerKey: alert.providerKey,
+                                 windowId: alert.windowId,
+                                 at: alert.timestamp,
+                                 in: model.displaySections)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
+                .font(.system(size: 12, weight: .semibold))
+                .accessibilityLabel("Inspect Chart for \(alert.providerLabel)")
             }
+            .padding(.top, 4)
         }
         .padding(12)
         .background(Theme.surface, in: RoundedRectangle(cornerRadius: 8))

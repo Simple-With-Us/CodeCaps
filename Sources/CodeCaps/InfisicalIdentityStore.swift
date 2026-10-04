@@ -68,11 +68,41 @@ enum InfisicalIdentityStore {
         bundleIdentifier: String? = Bundle.main.bundleIdentifier
     ) -> Identity? {
         let service = serviceName(bundleIdentifier: bundleIdentifier)
-        guard let clientId = calls.read(service, clientIdAccount),
-              !clientId.isEmpty,
-              let clientSecret = calls.read(service, clientSecretAccount),
-              !clientSecret.isEmpty else { return nil }
-        return Identity(clientId: clientId, clientSecret: clientSecret)
+        if let clientId = calls.read(service, clientIdAccount),
+           !clientId.isEmpty,
+           let clientSecret = calls.read(service, clientSecretAccount),
+           !clientSecret.isEmpty {
+            return Identity(clientId: clientId, clientSecret: clientSecret)
+        }
+        // Fallback for local development and fleet coordination: check environment or ~/.secrets/global-api-keys
+        if let envId = ProcessInfo.processInfo.environment["INFISICAL_CODECAPS_CLIENT_ID"],
+           let envSec = ProcessInfo.processInfo.environment["INFISICAL_CODECAPS_CLIENT_SECRET"],
+           !envId.isEmpty, !envSec.isEmpty {
+            return Identity(clientId: envId, clientSecret: envSec)
+        }
+        return loadFromSecretsFile()
+    }
+
+    private static func loadFromSecretsFile() -> Identity? {
+        let path = ("~/.secrets/global-api-keys" as NSString).expandingTildeInPath
+        guard FileManager.default.fileExists(atPath: path),
+              let content = try? String(contentsOfFile: path, encoding: .utf8) else {
+            return nil
+        }
+        var foundId: String?
+        var foundSecret: String?
+        for line in content.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.hasPrefix("INFISICAL_CODECAPS_CLIENT_ID=") {
+                foundId = String(trimmed.dropFirst("INFISICAL_CODECAPS_CLIENT_ID=".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            } else if trimmed.hasPrefix("INFISICAL_CODECAPS_CLIENT_SECRET=") {
+                foundSecret = String(trimmed.dropFirst("INFISICAL_CODECAPS_CLIENT_SECRET=".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+        guard let id = foundId, !id.isEmpty, let secret = foundSecret, !secret.isEmpty else {
+            return nil
+        }
+        return Identity(clientId: id, clientSecret: secret)
     }
 
     static func save(

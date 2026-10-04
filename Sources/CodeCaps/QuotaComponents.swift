@@ -250,8 +250,8 @@ enum Metrics {
     /// The per-provider reset-alarm bell at the very left, shown while All is off.
     static let glanceAlarmBellWidth: CGFloat = 16
     static let glanceLogoWidth: CGFloat = 16
-    /// Fits "Claude Code" (79.5pt at 13pt medium), the longest platform name.
-    static let glanceRowTitleWidth: CGFloat = 80
+    /// Fits "Antigravity", "Claude Code", "Gemini", the longest platform names without truncation.
+    static let glanceRowTitleWidth: CGFloat = 105
     /// Fits "Plan" and "24h" at 11pt medium; "Quota" fits at its 0.8 scale.
     static let glanceMeterCaptionWidth: CGFloat = 26
     /// The gap between the parts inside one meter: caption, bar, percentage
@@ -267,23 +267,14 @@ enum Metrics {
     /// the column is the gap before the countdown, so the two never touch.
     static let glanceMeterPercentWidth: CGFloat = 44
     /// A countdown carries at most its two largest units ("17d 4h", "2h 42m"),
-    /// so the widest realistic value is "31d 23h" or "29d 59m", measured at
-    /// 49pt by `testTheLongestCountdownsFitTheirColumn`.  The full value lives
-    /// in the countdown's tooltip.
-    static let glanceMeterCountdownWidth: CGFloat = 50
+    /// narrowed by ~30% from 50 to 35pt so platform names have plenty of room.
+    static let glanceMeterCountdownWidth: CGFloat = 35
     static let glanceChevronWidth: CGFloat = 10
     /// The fixed gap between the row's columns, used by every spacer so one
     /// change re-tunes the whole row.
     static let glanceColumnGap: CGFloat = 8
-    /// The gap between the two meters: from the end of the first countdown to
-    /// the second meter's caption.  It was doubled to 48pt on 2026-09-30 and
-    /// the owner then read the row as too sparse, so it came back down to 28pt
-    /// (owner delta, 2026-09-30 evening).  Still three and a half times the
-    /// 8pt column gap, so the two windows still read as two columns — the
-    /// countdown is left-aligned in its frame, which put a further ~18pt of
-    /// visual slack on the end of every 54pt column, and that is most of what
-    /// 48pt was actually buying.
-    static let glanceMeterGroupGap: CGFloat = 28
+    /// The gap between the two meters.
+    static let glanceMeterGroupGap: CGFloat = 26
     /// The gap right after the logo, which is tighter than the rest.
     static let glanceLogoGap: CGFloat = 6
 
@@ -357,6 +348,42 @@ func quotaStatusColor(for snapshot: QuotaWindowSnapshot, sourceFailed: Bool) -> 
 /// last-reported bar never looks as live as a fresh one.
 func quotaBarIsDimmed(for snapshot: QuotaWindowSnapshot, sourceFailed: Bool) -> Bool {
     !snapshot.isFresh || sourceFailed
+}
+
+/// Dynamic pacing tint behind the percentage pill.
+/// Returns a background color (with appropriate opacity) when `isEnabled` is true:
+/// - Greener when under cap pace (surplus quota relative to elapsed period).
+/// - Redder when over cap pace (burning quota faster than elapsed period).
+func pacingPillBackgroundColor(
+    remainingPercent: Double?,
+    elapsedFraction: Double?,
+    isEnabled: Bool
+) -> Color {
+    guard isEnabled, let remaining = remainingPercent else { return Color.clear }
+
+    if let elapsed = elapsedFraction, elapsed > 0, elapsed < 1.0 {
+        let expectedRemaining = (1.0 - elapsed) * 100.0
+        let delta = remaining - expectedRemaining
+        if delta >= 15.0 {
+            let intensity = min(1.0, (delta - 15.0) / 40.0)
+            return Color.green.opacity(0.18 + 0.12 * intensity)
+        } else if delta >= 0.0 {
+            return Color.green.opacity(0.12)
+        } else if delta <= -20.0 {
+            let intensity = min(1.0, (-delta - 20.0) / 40.0)
+            return Color.red.opacity(0.20 + 0.15 * intensity)
+        } else {
+            return Color.orange.opacity(0.18)
+        }
+    } else {
+        if remaining >= 50.0 {
+            return Color.green.opacity(0.12)
+        } else if remaining >= 20.0 {
+            return Color.orange.opacity(0.16)
+        } else {
+            return Color.red.opacity(0.22)
+        }
+    }
 }
 
 /// The one quota bar every surface draws: a full-width track that starts with a
@@ -696,7 +723,7 @@ struct PlatformCard: View {
         section.windows.filter { !$0.window.isSupplementaryVideoQuota }
     }
     private var videoWindows: [QuotaWindowSnapshot] {
-        section.windows.filter { $0.window.isSupplementaryVideoQuota }
+        section.windows.filter { $0.window.isSupplementaryVideoQuota && !$0.window.isExtraneousWeeklyVideoQuota }
     }
     private var displayedWindows: [QuotaWindowSnapshot] {
         expanded ? primaryWindows : Array(primaryWindows.prefix(4))

@@ -283,15 +283,15 @@ struct GlancePopover: View {
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "flame.fill")
-                            .font(.system(size: 13, weight: .heavy))
+                            .font(.system(size: 14, weight: .heavy))
                             .foregroundStyle(Theme.warning)
                         MarqueeText(
                             text: runawayCombinedMarqueeText,
-                            font: .system(size: 12, weight: .bold, design: .rounded),
+                            font: .system(size: 15, weight: .heavy, design: .rounded),
                             color: Theme.warning
                         )
                     }
-                    .frame(maxWidth: 240, maxHeight: 24)
+                    .frame(maxWidth: 290, maxHeight: 28)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
                     .background(Theme.warning.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
@@ -323,8 +323,13 @@ struct GlancePopover: View {
                 .first { $0.window.id == anomaly.windowId }
                 ?? model.sections.flatMap(\.windows).first { $0.window.id == anomaly.windowId }
             let windowLabel = matchingSnapshot.map { glanceMeterCaption($0) } ?? anomaly.windowId
+            let normalized = runawayNormalizedTitle(provider: provider, window: windowLabel)
             let comp = anomaly.kind == .vsPeak ? "peak" : "avg"
-            return "\(provider) (\(windowLabel)): \(anomaly.multiplier.formatted(.number.precision(.fractionLength(1))))× vs \(comp)"
+            var parts = ["\(normalized): \(anomaly.multiplier.formatted(.number.precision(.fractionLength(1))))× vs \(comp)"]
+            if let rate = anomaly.ratePercentPerHour {
+                parts.append("\(rate.formatted(.number.precision(.fractionLength(1)))) %/hr")
+            }
+            return parts.joined(separator: " · ")
         }
     }
 

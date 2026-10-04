@@ -82,6 +82,39 @@ struct SettingsMenuBarPage: View {
                     .accessibilityLabel("Menu Bar Preview")
                 }
             }
+
+            Section {
+                Toggle("Floating On-Screen PiP Widget", isOn: $model.isPipEnabled)
+                    .help("Keep selected quotas in a compact floating HUD widget on top of all windows.")
+                    .accessibilityLabel("Floating On-Screen PiP Widget")
+
+                if model.isPipEnabled {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Pinned Quotas (Default: Lowest 2 Remaining)")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                        ForEach(model.displaySections) { row in
+                            Toggle(row.title, isOn: Binding(
+                                get: { model.pipPinnedRowIds.contains(row.id) },
+                                set: { checked in
+                                    if checked {
+                                        model.pipPinnedRowIds.insert(row.id)
+                                    } else {
+                                        model.pipPinnedRowIds.remove(row.id)
+                                    }
+                                }
+                            ))
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+            } header: {
+                Eyebrow("PICTURE IN PICTURE (PIP)")
+            } footer: {
+                Text("A tiny on-screen HUD stays on top of all windows so you are aware of critical quotas in real time.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 }
@@ -818,8 +851,13 @@ struct SettingsAppearancePage: View {
                 Toggle("High Contrast", isOn: $model.highContrast)
                     .help("Stronger surfaces, borders and greys, for a display where the soft defaults fall together.")
                     .accessibilityLabel("High Contrast")
+
+                Toggle("Dynamic Pacing Highlights", isOn: $model.pacingColorHighlights)
+                    .help("Tints percentage pills greener when under cap pace and redder when burning quota faster than time elapsed.")
+                    .accessibilityLabel("Dynamic Pacing Highlights")
             } footer: {
-                Text("System is the default." + sentenceGap + "Light and Dark ignore your Mac's setting.")
+                Text("System is the default." + sentenceGap + "Light and Dark ignore your Mac's setting." + sentenceGap
+                     + "Dynamic Pacing Highlights variably tints percentage pills greener when under cap pace and redder when burning quota faster than elapsed time.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
@@ -1397,7 +1435,13 @@ struct SettingsInfisicalPage: View {
     }
 
     private var statusLine: String {
-        hasIdentity ? "On" : "Off"
+        if hasIdentity {
+            if let last = settings.lastLoadedAt {
+                return "Active (Synced \(last.formatted(date: .omitted, time: .shortened)))"
+            }
+            return "Active"
+        }
+        return "Not configured"
     }
 
     private var settingsEnvironment: String {
