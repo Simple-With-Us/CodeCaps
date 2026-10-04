@@ -180,8 +180,8 @@ final class LocalQuotaReaderTests: XCTestCase {
             .authorized(stale)
         })
         let result = await reader.read()
-        XCTAssertEqual(result.issues["anthropic"], ClaudeLoginState.needsPermission.issue)
-        XCTAssertEqual(result.consentNeeded, ["anthropic"])
+        XCTAssertEqual(result.issues["anthropic"], ClaudeLoginState.signedOut.issue)
+        XCTAssertEqual(result.consentNeeded, [])
         XCTAssertNil(ClaudeCredentialSource.rememberedCredential())
     }
 

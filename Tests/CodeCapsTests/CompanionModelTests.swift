@@ -301,4 +301,50 @@ final class CompanionModelTests: XCTestCase {
             "CompanionContentView must kick off background refresh on appear"
         )
     }
+
+    // MARK: - MiniMax Normalization and Pacing Marker Prominence
+
+    func testMiniMaxCadenceNormalization() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains(#"combined.contains("coding plan") || combined.contains("interval")"#),
+            "formatCadence must classify MiniMax coding plan and interval as 5-hour window"
+        )
+        XCTAssertTrue(
+            source.contains(#"text.contains("coding plan") || text.contains("coding_plan") || text.contains("interval")"#),
+            "caption and isShortCadence must classify MiniMax coding plan as 5h short cadence"
+        )
+    }
+
+    func testMiniMaxConsolidationToTwoWindows() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains(#"let isMiniMax = providerKey.lowercased().contains("minimax")"#),
+            "MiniMax must be identified during platform section building"
+        )
+        XCTAssertTrue(
+            source.contains("let effectiveQualifier = isMiniMax ? \"\" : modelQualifier"),
+            "MiniMax must not split cadences by modelQualifier, collapsing into two primary windows"
+        )
+    }
+
+    func testCompanionUsageBarPacingMarkerProminence() throws {
+        let source = try readCompanionContentViewSource()
+        XCTAssertTrue(
+            source.contains("let markerHeight: CGFloat = 18"),
+            "CompanionUsageBar must use an 18pt marker height to match Mac prominence"
+        )
+        XCTAssertTrue(
+            source.contains("let markerWidth: CGFloat = 3.0"),
+            "CompanionUsageBar must use a 3.0pt marker width for clear mobile legibility"
+        )
+        XCTAssertTrue(
+            source.contains("frame(height: max(height, 20))"),
+            "CompanionUsageBar container must allocate 20pt frame so markers are never clipped"
+        )
+        XCTAssertTrue(
+            source.contains(".frame(width: 44, height: 44)"),
+            "Reset alarm bell button must meet the 44x44 minimum touch target standard"
+        )
+    }
 }

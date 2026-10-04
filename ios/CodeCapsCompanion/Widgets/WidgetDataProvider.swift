@@ -8,17 +8,33 @@ public struct CodeCapsWidgetEntry: TimelineEntry {
     public let platforms: [WidgetPlatformItem]
     public let lastUpdated: Date?
     public let isPlaceholder: Bool
+    /// The widget's own edit-sheet settings, carried on the entry because
+    /// WidgetKit hands the content closure an entry and nothing else.  Nil for
+    /// gallery placeholders, which then render the defaults.
+    public let configuration: SelectQuotaIntent?
 
     public init(
         date: Date,
         platforms: [WidgetPlatformItem],
         lastUpdated: Date? = nil,
-        isPlaceholder: Bool = false
+        isPlaceholder: Bool = false,
+        configuration: SelectQuotaIntent? = nil
     ) {
         self.date = date
         self.platforms = platforms
         self.lastUpdated = lastUpdated
         self.isPlaceholder = isPlaceholder
+        self.configuration = configuration
+    }
+
+    /// Plans per row, from the edit sheet.  Defaults to one.
+    public var rowLayout: WidgetRowLayout {
+        configuration?.rowLayout ?? .onePlanPerRow
+    }
+
+    /// Which window stands in for a plan that reports two, from the edit sheet.
+    public var windowPick: WidgetWindowPick {
+        configuration?.windowPick ?? .mostUrgent
     }
 
     /// Primary platform to display in single-provider focus widgets.
@@ -160,7 +176,10 @@ public enum WidgetSnapshotStore {
               let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupId) else {
             return cached
         }
-        let token = defaults.string(forKey: "companionSyncToken") ?? ""
+        let tokenStore = CompanionReadTokenStore(accessGroup: appGroupId)
+        let tokenState = tokenStore.readForWidget(shared: defaults)
+        if case .unavailable = tokenState { return cached }
+        let token = tokenState.token ?? ""
         do {
             let data = try await WidgetSnapshotFetcher.fetch(
                 endpoint: endpoint,
@@ -171,7 +190,7 @@ public enum WidgetSnapshotStore {
                 return cached
             }
             guard defaults.string(forKey: "companionSyncEndpoint") == endpoint,
-                  (defaults.string(forKey: "companionSyncToken") ?? "") == token else {
+                  tokenStore.readForWidget(shared: defaults) == tokenState else {
                 return readSnapshot(now: now)
             }
             let file = container.appendingPathComponent("quota-windows.json")
@@ -186,56 +205,28 @@ public enum WidgetSnapshotStore {
     #endif
 }
 
-/// Timeline provider for CodeCaps widgets.
-public struct CodeCapsTimelineProvider: TimelineProvider {
-    public typealias Entry = CodeCapsWidgetEntry
+/// Timeline construction shared by the configurable widget providers.
+///
+/// The provider itself lives with the intent, because an `AppIntentConfiguration`
+/// needs an `AppIntentTimelineProvider`; only the refresh policy is common, so
+/// that is all that lives here.
+enum WidgetTimelineBuilder {
 
-    public init() {}
-
-    public func placeholder(in context: Context) -> CodeCapsWidgetEntry {
-        CodeCapsWidgetEntry(
-            date: Date(),
-            platforms: WidgetPresentation.placeholders,
-            lastUpdated: nil,
-            isPlaceholder: true
-        )
-    }
-
-    public func getSnapshot(in context: Context, completion: @escaping (CodeCapsWidgetEntry) -> Void) {
-        if context.isPreview {
-            completion(placeholder(in: context))
-            return
-        }
-        let (platforms, lastUpdated, isPlaceholder) = WidgetSnapshotStore.readSnapshot()
-        completion(CodeCapsWidgetEntry(
-            date: Date(),
-            platforms: platforms,
-            lastUpdated: lastUpdated,
-            isPlaceholder: isPlaceholder
-        ))
-    }
-
-    public func getTimeline(in context: Context, completion: @escaping (Timeline<CodeCapsWidgetEntry>) -> Void) {
-        let now = Date()
-        #if os(iOS)
-        Task {
-            let snapshot = await WidgetSnapshotStore.refreshFromConfiguredEndpoint(now: now)
-            completion(makeTimeline(snapshot, now: now))
-        }
-        #else
-        completion(makeTimeline(WidgetSnapshotStore.readSnapshot(now: now), now: now))
-        #endif
-    }
-
-    private func makeTimeline(
+    /// `showing` narrows the entry to a configured plan; the refresh schedule
+    /// still comes from the full snapshot, because a plan that is not on screen
+    /// can still be the one that needs a timely reload.
+    static func makeTimeline(
         _ snapshot: (platforms: [WidgetPlatformItem], lastUpdated: Date?, isPlaceholder: Bool),
-        now: Date
+        now: Date,
+        showing: [WidgetPlatformItem]? = nil,
+        configuration: SelectQuotaIntent? = nil
     ) -> Timeline<CodeCapsWidgetEntry> {
         let entry = CodeCapsWidgetEntry(
             date: now,
-            platforms: snapshot.platforms,
+            platforms: showing ?? snapshot.platforms,
             lastUpdated: snapshot.lastUpdated,
-            isPlaceholder: snapshot.isPlaceholder
+            isPlaceholder: snapshot.isPlaceholder,
+            configuration: configuration
         )
         var nextRefresh = Calendar.current.date(byAdding: .minute, value: 15, to: now)
             ?? now.addingTimeInterval(900)

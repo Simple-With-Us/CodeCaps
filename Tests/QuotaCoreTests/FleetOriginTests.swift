@@ -77,6 +77,18 @@ final class FleetOriginTests: XCTestCase {
         XCTAssertEqual(FleetOrigin.split(roundTrip.windows, host: "another-id").groups.first?.title, "My Mac")
     }
 
+    func testLocalWindowsTimestampMatchingProvesOwnPush() {
+        let local = window(id: "local-mac:anthropic:5h", source: "codecaps", sourceApp: "local-mac")
+        var echoed = window(id: "local-mac:anthropic:5h", source: "codecaps", sourceApp: "codecaps")
+        echoed.producerInstanceId = nil
+        echoed.machine = nil
+
+        let split = FleetOrigin.split([echoed], host: "unknown-host", localWindows: [local])
+        XCTAssertEqual(split.ownPush.count, 1)
+        XCTAssertEqual(split.ownPush.first?.id, "local-mac:anthropic:5h")
+        XCTAssertTrue(split.groups.isEmpty)
+    }
+
     private func window(id: String = "w", source: String?, sourceApp: String?) -> QuotaWindow {
         QuotaWindow(id: id, provider: "anthropic", providerKey: "anthropic", sourceApp: sourceApp,
                     label: "5h window", remainingPercent: 50,

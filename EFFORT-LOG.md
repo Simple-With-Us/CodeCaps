@@ -1,5 +1,35 @@
 # CodeCaps — Effort Log
 
+## 2026-10-03 — Audit 9 Residual Reconciliation [CODEX, in progress]
+
+Lane: `codex/audit-residuals`.  Board `1ac04ba99f13478da0564f802d3af3e8`; GitHub #19.
+
+- Reconciled every A9 item against `origin/main` at `0f4bbc8` in `docs/audits/2026-10-03-audit-9-reconciliation.md`.  Existing source and tests supersede several stale findings; structured Glance issue state and the Grok Heavy attribution question remain separate work.
+- Aligning export and display status when a provider marks a nonzero reading exhausted; adding direct dangerous-copy marker cases; passing a Trash path to AppleScript as an argument; documenting the current two-header ingest contract without changing it.
+- Verification: focused hosted CI pending.  Local `bash -n` and `git diff --check` are planned; no local build on the loaded host.
+
+---
+
+## 2026-10-03 — MiniMax 5h/7d normalization, pacing marker prominence, and touch targets [AG, completed]
+
+Lane: `ag/ios-minimax-and-meter-prominence`.  PR #145 (merged as `d0a9db0`).
+
+- MiniMax cadence normalization: normalized "Coding plan (all models)" and interval tokens directly into the 5-hour quota (`5h`) and weekly into `7d`, consolidating MiniMax into two primary windows side by side without duplicate model metrics.
+- Prominent pacing markers on iOS: updated `CompanionUsageBar` to an 18pt capsule marker with a 3.0pt width and 20pt allocated frame height, matching Mac prominence and eliminating clipping.
+- Touch target polish: enlarged the reset alarm bell button to 44x44 points with `.contentShape(Rectangle())` for Apple HIG compliance.
+- Verified with 17 passing `CompanionModelTests` and clean local Xcode build for `CodeCapsCompanion` iOS Simulator target; merged to `main`.
+
+---
+
+## 2026-10-03 — Companion Shared-Keychain Read Token [CODEX, in progress]
+
+Lane: `codex/companion-shared-keychain`.  Board `7175aba0`; GitHub issue #129.
+
+- Migrate the companion read token from standard and App Group preferences into an App Group Keychain item shared by the app and iOS widget.  Keep legacy values until a successful Keychain write, provide explicit removal, and test migration/failure paths without real credentials.
+- iOS App Store profiles already authorize `group.com.simplewithus.codecaps` for both targets.  XcodeGen will include the shared store in app and widget targets; no hand-edited entitlements or project file.
+
+---
+
 ## 2026-10-03 — Canonical brand icon, Glance meter alignment, iOS dual meters, and runaway alert history [AG, completed]
 
 Lane: `ag/companion-bars-and-icons`.

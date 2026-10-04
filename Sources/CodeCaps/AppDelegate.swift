@@ -116,8 +116,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         consoleState.$page.removeDuplicates().sink { [weak self] page in
             self?.consoleWindow?.title = page.isSettings ? "CodeCaps Settings" : "CodeCaps"
         }.store(in: &subscriptions)
+        model.$glanceView.removeDuplicates().sink { [weak self] _ in
+            DispatchQueue.main.async {
+                guard let self, self.popover.isShown, let button = self.statusItem?.button else { return }
+                let screen = button.window?.screen ?? NSScreen.main
+                let newHeight = QuotaGlanceMetrics.popoverHeight(for: self.model, on: screen)
+                self.popover.contentSize = NSSize(width: Metrics.glanceWidth, height: newHeight)
+            }
+        }.store(in: &subscriptions)
         model.objectWillChange.sink { [weak self] _ in
-            DispatchQueue.main.async { self?.updateStatus() }
+            DispatchQueue.main.async {
+                self?.updateStatus()
+                if let self, self.popover.isShown, let button = self.statusItem?.button {
+                    let screen = button.window?.screen ?? NSScreen.main
+                    let newHeight = QuotaGlanceMetrics.popoverHeight(for: self.model, on: screen)
+                    if abs(self.popover.contentSize.height - newHeight) > 1 {
+                        self.popover.contentSize = NSSize(width: Metrics.glanceWidth, height: newHeight)
+                    }
+                }
+            }
         }.store(in: &subscriptions)
         if model.displayMode != .menuBar && !relaunchedForUpdate { showConsole(page: nil) }
         model.start()
@@ -425,24 +442,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// rather than a window registry.
     ///
     /// The display mode wins over the window.  A menu-bar-only app must never
-    /// grow a Dock icon, even with Settings open, or the setting the owner
-    /// chose quietly stops meaning anything.
+    /// While Settings or Console is open, the Dock icon is visible so the
+    /// window can be switched to normally.  When closed in Menu Bar mode,
+    /// the app reverts to .accessory so no stray Dock icon remains.
     private func applyActivationPolicy() {
         let docked = model.displayMode != .menuBar
         let hasWindow = consoleWindow?.isVisible ?? false
-        NSApp.setActivationPolicy(docked && hasWindow ? .regular : .accessory)
+        NSApp.setActivationPolicy((docked || hasWindow) ? .regular : .accessory)
     }
 
-    /// Closing the console is what takes the Dock icon away.  Without this the
-    /// app stayed `.regular` with no window showing, which is a Dock icon the
-    /// owner cannot account for — clicking it brought up nothing.
-    ///
-    /// Always `.accessory`, in every display mode: the console is no longer
-    /// showing, and an owner who chose Dock mode still has their icon back the
-    /// moment `applyActivationPolicy` runs on the next open.
+    /// Closing the console is what takes the Dock icon away in menu bar mode.
+    /// In Dock mode, the icon is kept.
     func windowWillClose(_ notification: Notification) {
         guard let window = notification.object as? NSWindow, window === consoleWindow else { return }
-        NSApp.setActivationPolicy(.accessory)
+        let docked = model.displayMode != .menuBar
+        NSApp.setActivationPolicy(docked ? .regular : .accessory)
     }
 
     private func configureMenu() {

@@ -332,12 +332,10 @@ final class GlanceToggleTests: XCTestCase {
 
     func testTheTwoMeterGroupsHaveClearlyMoreSpaceBetweenThemThanTheColumns() {
         XCTAssertGreaterThanOrEqual(Metrics.glanceMeterGroupGap, 2 * Metrics.glanceColumnGap)
-        // Owner delta 2026-09-30, twice: the gap was doubled to 48pt because the
-        // row read cramped, then the 624pt popover that bought read too wide and
-        // it came back to 28pt.  What separates the two windows is the gap plus
-        // the countdown column's trailing slack, so 28pt is the floor that still
-        // reads as two columns rather than one run-on.
-        XCTAssertGreaterThanOrEqual(Metrics.glanceMeterGroupGap, 28)
+        // Shrunk by ~30% from 28pt to 20pt per user request to buy width for platform
+        // titles so Antigravity never truncates, while remaining clearly wider than
+        // the 8pt column gap.
+        XCTAssertGreaterThanOrEqual(Metrics.glanceMeterGroupGap, 20)
     }
 
     func testTheBarsAreThickerAndTheElapsedMarkerTaller() {
@@ -396,14 +394,12 @@ final class GlanceToggleTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(Metrics.glanceHeaderTitleGap, 20)
         XCTAssertGreaterThan(Metrics.glanceHeaderTitleGap, Metrics.glanceHeaderItemGap,
                              "the title is a group of its own, not another neighbour")
-        // And the width really is spent.  With no count or time, the header is
-        // the gutters, the title, that gap, the switch, the spring at its
-        // minimum, the bell, one gap and the 16pt refresh button.
+        // And the width really is spent.  With no count or time, the header carries
+        // the gutters, title, switch, bell, enlarged refresh button, and settings button.
         let toggle = NSHostingView(rootView: GlanceViewToggle(selection: .constant(.fromMac))).fittingSize.width
         let bell = NSHostingView(rootView: GlanceAlarmAllToggle(isOn: .constant(true))).fittingSize.width
         let expected = Metrics.glanceGutter * 2 + width("CodeCaps", size: 13, weight: .semibold)
-            + Metrics.glanceHeaderTitleGap + toggle + Metrics.glanceHeaderClusterGap
-            + bell + Metrics.glanceHeaderItemGap + 16
+            + 8 + toggle + 12 + bell + 12 + 22 + 6 + 22
         XCTAssertEqual(headerIdealWidth(parts: []), expected, accuracy: 3)
     }
 

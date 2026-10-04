@@ -11,6 +11,7 @@ final class ConsoleNavigationTests: XCTestCase {
     func testConsolePageSerialization() {
         let pages: [ConsolePage] = [
             .platform("anthropic"),
+            .runawayAlerts,
             .settingsMenuBar,
             .settingsPlatforms,
             .settingsLogoStyle,
@@ -29,6 +30,9 @@ final class ConsoleNavigationTests: XCTestCase {
 
     func testConsolePageIsSettings() {
         XCTAssertFalse(ConsolePage.platform("anthropic").isSettings)
+        XCTAssertFalse(ConsolePage.runawayAlerts.isSettings)
+        XCTAssertEqual(ConsolePage.runawayAlerts.settingsTitle, "Runaway Alerts")
+        XCTAssertEqual(ConsolePage.runawayAlerts.symbol, "flame.fill")
         XCTAssertTrue(ConsolePage.settingsMenuBar.isSettings)
         XCTAssertTrue(ConsolePage.settingsAppearance.isSettings)
         XCTAssertTrue(ConsolePage.settingsAbout.isSettings)

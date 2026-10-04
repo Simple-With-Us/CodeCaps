@@ -82,6 +82,39 @@ struct SettingsMenuBarPage: View {
                     .accessibilityLabel("Menu Bar Preview")
                 }
             }
+
+            Section {
+                Toggle("Floating On-Screen PiP Widget", isOn: $model.isPipEnabled)
+                    .help("Keep selected quotas in a compact floating HUD widget on top of all windows.")
+                    .accessibilityLabel("Floating On-Screen PiP Widget")
+
+                if model.isPipEnabled {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Pinned Quotas (Default: Lowest 2 Remaining)")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                        ForEach(model.displaySections) { row in
+                            Toggle(row.title, isOn: Binding(
+                                get: { model.pipPinnedRowIds.contains(row.id) },
+                                set: { checked in
+                                    if checked {
+                                        model.pipPinnedRowIds.insert(row.id)
+                                    } else {
+                                        model.pipPinnedRowIds.remove(row.id)
+                                    }
+                                }
+                            ))
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+            } header: {
+                Eyebrow("PICTURE IN PICTURE (PIP)")
+            } footer: {
+                Text("A tiny on-screen HUD stays on top of all windows so you are aware of critical quotas in real time.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 }
@@ -239,6 +272,27 @@ struct SettingsSourcesFleetPage: View {
 
     private var thisMacSection: some View {
         Section {
+            HStack(spacing: 8) {
+                Image(systemName: "laptopcomputer")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Theme.accent)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Machine Identity: \(QuotaPublisher.machineName)")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text("Host: \(ProcessInfo.processInfo.hostName)")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Text("Identified")
+                    .font(.system(size: 10, weight: .medium))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Theme.accent.opacity(0.12), in: Capsule())
+                    .foregroundStyle(Theme.accent)
+            }
+            .padding(.vertical, 2)
+
             Toggle("Read Quotas From This Mac",
                    isOn: Binding(get: { model.localEnabled }, set: { model.setLocalEnabled($0) }))
             Toggle("Provider Checks", isOn: Binding(
@@ -754,7 +808,6 @@ struct ReaderStatus {
         ReaderStatus(providerKey: "anthropic", label: "Claude", source: "Claude Code credentials"),
         ReaderStatus(providerKey: "openai", label: "Codex", source: "Codex CLI credentials"),
         ReaderStatus(providerKey: "google-antigravity", label: "Antigravity", source: "Antigravity app or CLI"),
-        ReaderStatus(providerKey: "gemini-cli", label: "Gemini CLI", source: "Gemini CLI OAuth sign-in"),
         ReaderStatus(providerKey: "cursor", label: "Cursor", source: "Cursor app session"),
         ReaderStatus(providerKey: "xai", label: "Grok", source: "Grok CLI credentials"),
         ReaderStatus(providerKey: "grok-bot", label: "Grok Bot", source: "Cursor app session"),
@@ -820,8 +873,13 @@ struct SettingsAppearancePage: View {
                 Toggle("High Contrast", isOn: $model.highContrast)
                     .help("Stronger surfaces, borders and greys, for a display where the soft defaults fall together.")
                     .accessibilityLabel("High Contrast")
+
+                Toggle("Dynamic Pacing Highlights", isOn: $model.pacingColorHighlights)
+                    .help("Tints percentage pills greener when under cap pace and redder when burning quota faster than time elapsed.")
+                    .accessibilityLabel("Dynamic Pacing Highlights")
             } footer: {
-                Text("System is the default." + sentenceGap + "Light and Dark ignore your Mac's setting.")
+                Text("System is the default." + sentenceGap + "Light and Dark ignore your Mac's setting." + sentenceGap
+                     + "Dynamic Pacing Highlights variably tints percentage pills greener when under cap pace and redder when burning quota faster than elapsed time.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
@@ -835,13 +893,9 @@ struct SettingsLogoStylePage: View {
     @ObservedObject var model: MonitorModel
 
     private var orderedKeys: [String] {
-        // The same identifiers every other surface uses: `displaySections` ids
-        // are pool-qualified, so Antigravity lists as two rows carrying the
-        // two marks it actually draws.  Keying this list on the bare
-        // `providerKey` made the page resolve the platform-level mark instead
-        // — a monochrome Gemini silhouette next to a colour Gemini star in the
-        // sidebar — which is why the two never agreed and why changing the
-        // style appeared to fix the list without fixing anything.
+        if model.displaySections.isEmpty {
+            return ["claude", "cursor", "codex", "gemini", "antigravity", "grok", "grok-bot", "minimax"]
+        }
         let live = Set(model.displaySections.map(\.id))
         let stored = model.platformOrder.filter(live.contains)
         let unsorted = live.filter { !stored.contains($0) }.sorted()
@@ -855,7 +909,20 @@ struct SettingsLogoStylePage: View {
     }
 
     private func label(for rowId: String) -> String {
-        model.displaySections.first { $0.id == rowId }?.title ?? rowId
+        if let match = model.displaySections.first(where: { $0.id == rowId }) {
+            return match.title
+        }
+        switch rowId {
+        case "claude", "anthropic": return "Claude Code"
+        case "cursor": return "Cursor"
+        case "codex", "openai": return "Codex"
+        case "gemini": return "Gemini"
+        case "antigravity", "google-antigravity": return "Antigravity"
+        case "grok", "xai": return "Grok"
+        case "grok-bot": return "Grok Bot"
+        case "minimax": return "MiniMax"
+        default: return rowId.capitalized
+        }
     }
 
     var body: some View {
@@ -1206,6 +1273,12 @@ struct SettingsNotificationsPage: View {
                                 .accessibilityLabel("Open \(alert.providerLabel), \(alert.windowLabel) usage history at \(alert.timestamp.formatted())")
                                 .padding(.vertical, 1)
                             }
+                            Button("View All in Runaway Alerts Console…") {
+                                state.page = .runawayAlerts
+                            }
+                            .font(.system(size: 11))
+                            .controlSize(.small)
+                            .padding(.top, 4)
                         }
                     }
                     .padding(.top, 2)
@@ -1402,7 +1475,13 @@ struct SettingsInfisicalPage: View {
     }
 
     private var statusLine: String {
-        hasIdentity ? "On" : "Off"
+        if hasIdentity {
+            if let last = settings.lastLoadedAt {
+                return "Active (Synced \(last.formatted(date: .omitted, time: .shortened)))"
+            }
+            return "Active"
+        }
+        return "Not configured"
     }
 
     private var settingsEnvironment: String {

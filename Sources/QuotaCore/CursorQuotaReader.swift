@@ -123,18 +123,26 @@ private func cursorWindow(id: String, label: String, values: [String: Any], rese
     let usedCents = finiteNumber(values["used"])
     let percentageUsed = finiteNumber(values["totalPercentUsed"])
     let remainingPercent: Double?
-    if let limitCents, limitCents > 0, let remainingCents {
+    if let percentageUsed {
+        remainingPercent = clampCursorPercent(100 - percentageUsed)
+    } else if let limitCents, limitCents > 0, let remainingCents {
         remainingPercent = clampCursorPercent(remainingCents / limitCents * 100)
     } else if let limitCents, limitCents > 0, let usedCents {
         remainingPercent = clampCursorPercent((limitCents - usedCents) / limitCents * 100)
-    } else if let percentageUsed {
-        remainingPercent = clampCursorPercent(100 - percentageUsed)
     } else {
         remainingPercent = nil
     }
-    let limitUSD = limitCents.flatMap { $0 > 0 ? $0 / 100 : nil }
-    let remainingUSD = remainingCents.flatMap { limitUSD == nil ? nil : max(0, $0 / 100) }
-        ?? limitCents.flatMap { limit in usedCents.map { max(0, (limit - $0) / 100) } }
+    let limitUSD: Double? = limitCents.flatMap { $0 > 0 ? $0 / 100 : nil }
+    let remainingUSD: Double?
+    if let remainingPercent, let limitUSD {
+        remainingUSD = max(0, round(limitUSD * (remainingPercent / 100.0) * 100.0) / 100.0)
+    } else if let remainingCents, limitUSD != nil {
+        remainingUSD = max(0, remainingCents / 100.0)
+    } else if let limitCents, let usedCents {
+        remainingUSD = max(0, (limitCents - usedCents) / 100.0)
+    } else {
+        remainingUSD = nil
+    }
     let bounded = remainingPercent
     return QuotaWindow(
         id: "local-mac:cursor:\(id)", provider: "Cursor", providerKey: "cursor", providerLabel: "Cursor",

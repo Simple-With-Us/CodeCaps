@@ -201,7 +201,8 @@ public actor QuotaPublisher {
                 "remainingUnknown": false,
                 "scale": "percent_0_100",
                 "source": Self.producerId,
-                "machine": machine
+                "machine": machine,
+                "producerInstanceId": producerInstanceId
             ]
             if let resetAt = window.resetAt { meta["resetAt"] = resetAt }
             if let w = window.window { meta["quotaWindow"] = w }
@@ -222,6 +223,14 @@ public actor QuotaPublisher {
                 "occurredAt": readingTime,
                 "metadata": meta
             ]
+            // Provenance lives in `metadata` only.  The v2 event schema is
+            // strict and `additionalProperties: false`: putting `machine` or
+            // `producerInstanceId` on the event itself is rejected as
+            // "(root): Unrecognized key", and `machine` on the batch root is
+            // rejected the same way.  Either one fails the whole POST with
+            // HTTP 400 "Invalid usage telemetry v2 batch" before a single
+            // event is looked at, which is why the push showed the same error
+            // no matter which window it carried.
             if let plan = window.planName { event["tier"] = plan }
             return event
         }

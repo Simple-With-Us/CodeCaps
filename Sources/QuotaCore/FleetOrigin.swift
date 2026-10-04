@@ -17,15 +17,50 @@ public enum FleetOrigin {
 
     /// Whether a pulled window is this Mac's own push coming back.  Such a
     /// window belongs under This Mac and must never be duplicated under Fleet.
-    public static func isOwnPush(_ window: QuotaWindow, host: String = QuotaPublisher.producerInstanceId) -> Bool {
+    public static func isOwnPush(
+        _ window: QuotaWindow,
+        host: String = QuotaPublisher.producerInstanceId,
+        localWindows: [QuotaWindow] = []
+    ) -> Bool {
         if let instance = window.producerInstanceId?.trimmingCharacters(in: .whitespacesAndNewlines), !instance.isEmpty {
             return instance == host
         }
-        // A legacy producer label such as codecaps or agent-bar is shared by
-        // every installation.  Only an actual host match can identify its owner.
+        if let machine = window.machine?.trimmingCharacters(in: .whitespacesAndNewlines), !machine.isEmpty {
+            let localMachine = QuotaPublisher.machineName.lowercased()
+            let hostName = ProcessInfo.processInfo.hostName.lowercased()
+            let m = machine.lowercased()
+            if m == localMachine || m == hostName || m == hostName.replacingOccurrences(of: ".local", with: "") {
+                return true
+            }
+        }
+        if !window.occurredAt.isEmpty, !localWindows.isEmpty {
+            let occurred = window.occurredAt
+            let matchesLocal = localWindows.contains { local in
+                local.canonicalProviderKey == window.canonicalProviderKey
+                    && local.occurredAt == occurred
+                    && (local.window == window.window || local.id == window.id)
+            }
+            if matchesLocal { return true }
+        }
         let identity = identity(of: window).lowercased()
         let mine = host.lowercased()
-        return identity == mine || identity == mine.replacingOccurrences(of: ".local", with: "")
+        let localMachine = QuotaPublisher.machineName.lowercased()
+        let hostName = ProcessInfo.processInfo.hostName.lowercased()
+        if identity == mine || identity == mine.replacingOccurrences(of: ".local", with: "")
+            || identity == localMachine || identity == hostName || identity == hostName.replacingOccurrences(of: ".local", with: "") {
+            return true
+        }
+        // When a window comes from the app itself (e.g. source: "codecaps" or "agent-bar") without an explicit remote instance,
+        // and matches any of this Mac's observed local provider keys, it is this Mac's own push coming back.
+        let isCodeCapsSource = ([QuotaPublisher.producerId] + QuotaPublisher.legacyProducerAliases).contains(identity)
+            || ([QuotaPublisher.producerId] + QuotaPublisher.legacyProducerAliases).contains((window.source ?? "").lowercased())
+            || ([QuotaPublisher.producerId] + QuotaPublisher.legacyProducerAliases).contains((window.sourceApp ?? "").lowercased())
+        if isCodeCapsSource && window.producerInstanceId == nil && window.machine == nil {
+            if localWindows.contains(where: { $0.canonicalProviderKey == window.canonicalProviderKey }) {
+                return true
+            }
+        }
+        return false
     }
 
     /// "antigravity-usage" reads as "Antigravity Usage" in a group header.
@@ -49,12 +84,13 @@ public enum FleetOrigin {
     /// order.
     public static func split(
         _ windows: [QuotaWindow],
-        host: String = QuotaPublisher.producerInstanceId
+        host: String = QuotaPublisher.producerInstanceId,
+        localWindows: [QuotaWindow] = []
     ) -> (ownPush: [QuotaWindow], groups: [(id: String, title: String, windows: [QuotaWindow])]) {
         var own: [QuotaWindow] = []
         var grouped: [String: [QuotaWindow]] = [:]
         for window in windows {
-            if isOwnPush(window, host: host) {
+            if isOwnPush(window, host: host, localWindows: localWindows) {
                 own.append(window)
             } else {
                 grouped[identity(of: window), default: []].append(window)

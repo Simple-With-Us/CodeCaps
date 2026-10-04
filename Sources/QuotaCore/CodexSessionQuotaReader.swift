@@ -22,7 +22,8 @@ public actor CodexSessionQuotaReader {
 
     public init(homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
                 now: @escaping @Sendable () -> Date = { Date() }) {
-        self.homeDirectory = homeDirectory.standardizedFileURL
+        let path = Self.canonicalPath(homeDirectory.path)
+        self.homeDirectory = URL(fileURLWithPath: path, isDirectory: true)
         self.now = now
     }
 
@@ -108,8 +109,8 @@ public actor CodexSessionQuotaReader {
     private enum FileKind: Equatable { case regular, directory }
 
     private func secureStat(_ url: URL, required: FileKind) -> stat? {
-        let base = homeDirectory.standardizedFileURL.path
-        let path = url.standardizedFileURL.path
+        let base = homeDirectory.path
+        let path = url.path
         guard path.hasPrefix(base + "/") else { return nil }
         var current = "/"
         var info = stat()
@@ -329,5 +330,13 @@ public actor CodexSessionQuotaReader {
         let fractional = ISO8601DateFormatter()
         fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return fractional.date(from: text) ?? ISO8601DateFormatter().date(from: text)
+    }
+
+    private static func canonicalPath(_ path: String) -> String {
+        if let resolved = Darwin.realpath(path, nil) {
+            defer { free(resolved) }
+            return String(cString: resolved)
+        }
+        return path
     }
 }

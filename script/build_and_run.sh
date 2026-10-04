@@ -237,7 +237,8 @@ embed_plugins() {
   fi
   local widget_symroot="$ROOT_DIR/ios/CodeCapsCompanion/build"
   echo "building macOS widget extension (CodeCapsWidgetsMac)..."
-  if xcodebuild -project "$xcode_proj" -target CodeCapsWidgetsMac -configuration Release -jobs "${CODECAPS_BUILD_JOBS:-2}" \
+  if xcodebuild -project "$xcode_proj" -scheme CodeCapsCompanionMac -configuration Release -jobs "${CODECAPS_BUILD_JOBS:-2}" \
+      -derivedDataPath "$widget_symroot/DerivedData" \
       CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
       SYMROOT="$widget_symroot" build; then
     local appex_src="$widget_symroot/Release/CodeCapsWidgets.appex"
@@ -643,7 +644,11 @@ trash_path() {
     echo "would trash $path"
     return 0
   fi
-  if /usr/bin/osascript -e "tell application \"Finder\" to delete POSIX file \"$path\"" >/dev/null 2>&1; then
+  if /usr/bin/osascript - "$path" >/dev/null 2>&1 <<'APPLESCRIPT'; then
+on run argv
+  tell application "Finder" to delete (POSIX file (item 1 of argv))
+end run
+APPLESCRIPT
     echo "trashed $path"
   else
     echo "could not Trash (left in place): $path" >&2

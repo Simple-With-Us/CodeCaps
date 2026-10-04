@@ -250,8 +250,9 @@ enum Metrics {
     /// The per-provider reset-alarm bell at the very left, shown while All is off.
     static let glanceAlarmBellWidth: CGFloat = 16
     static let glanceLogoWidth: CGFloat = 16
-    /// Fits "Claude Code" (79.5pt at 13pt medium), the longest platform name.
-    static let glanceRowTitleWidth: CGFloat = 80
+    /// Fits the longest platform name with ample room to spare: "Antigravity"
+    /// and "Claude Code" fit cleanly without truncation.
+    static let glanceRowTitleWidth: CGFloat = 90
     /// Fits "Plan" and "24h" at 11pt medium; "Quota" fits at its 0.8 scale.
     static let glanceMeterCaptionWidth: CGFloat = 26
     /// The gap between the parts inside one meter: caption, bar, percentage
@@ -276,14 +277,9 @@ enum Metrics {
     /// change re-tunes the whole row.
     static let glanceColumnGap: CGFloat = 8
     /// The gap between the two meters: from the end of the first countdown to
-    /// the second meter's caption.  It was doubled to 48pt on 2026-09-30 and
-    /// the owner then read the row as too sparse, so it came back down to 28pt
-    /// (owner delta, 2026-09-30 evening).  Still three and a half times the
-    /// 8pt column gap, so the two windows still read as two columns — the
-    /// countdown is left-aligned in its frame, which put a further ~18pt of
-    /// visual slack on the end of every 54pt column, and that is most of what
-    /// 48pt was actually buying.
-    static let glanceMeterGroupGap: CGFloat = 28
+    /// the second meter's caption.  Shrunk by ~30% from 28pt to 20pt per user preference,
+    /// while remaining well above twice the column gap (16pt).
+    static let glanceMeterGroupGap: CGFloat = 20
     /// The gap right after the logo, which is tighter than the rest.
     static let glanceLogoGap: CGFloat = 6
 
@@ -357,6 +353,42 @@ func quotaStatusColor(for snapshot: QuotaWindowSnapshot, sourceFailed: Bool) -> 
 /// last-reported bar never looks as live as a fresh one.
 func quotaBarIsDimmed(for snapshot: QuotaWindowSnapshot, sourceFailed: Bool) -> Bool {
     !snapshot.isFresh || sourceFailed
+}
+
+/// Dynamic pacing tint behind the percentage pill.
+/// Returns a background color (with appropriate opacity) when `isEnabled` is true:
+/// - Greener when under cap pace (surplus quota relative to elapsed period).
+/// - Redder when over cap pace (burning quota faster than elapsed period).
+func pacingPillBackgroundColor(
+    remainingPercent: Double?,
+    elapsedFraction: Double?,
+    isEnabled: Bool
+) -> Color {
+    guard isEnabled, let remaining = remainingPercent else { return Color.clear }
+
+    if let elapsed = elapsedFraction, elapsed > 0, elapsed < 1.0 {
+        let expectedRemaining = (1.0 - elapsed) * 100.0
+        let delta = remaining - expectedRemaining
+        if delta >= 15.0 {
+            let intensity = min(1.0, (delta - 15.0) / 40.0)
+            return Color.green.opacity(0.18 + 0.12 * intensity)
+        } else if delta >= 0.0 {
+            return Color.green.opacity(0.12)
+        } else if delta <= -20.0 {
+            let intensity = min(1.0, (-delta - 20.0) / 40.0)
+            return Color.red.opacity(0.20 + 0.15 * intensity)
+        } else {
+            return Color.orange.opacity(0.18)
+        }
+    } else {
+        if remaining >= 50.0 {
+            return Color.green.opacity(0.12)
+        } else if remaining >= 20.0 {
+            return Color.orange.opacity(0.16)
+        } else {
+            return Color.red.opacity(0.22)
+        }
+    }
 }
 
 /// The one quota bar every surface draws: a full-width track that starts with a
@@ -622,10 +654,15 @@ enum QuotaGlanceMetrics {
 
     @MainActor
     static func popoverHeight(for model: MonitorModel, on screen: NSScreen? = nil) -> CGFloat {
+        let actualRows = model.displaySections.count
+        let rows = actualRows > 0 ? actualRows : expectedLocalRows(for: model)
+        let showsSetupCard = !model.syncEnabled && !model.serverEnabled
+        let consentHeight: CGFloat = !model.consentNeeded.isEmpty ? 52 : 0
         let local = localListHeight(
-            rows: expectedLocalRows(for: model),
-            showsSetupCard: !model.syncEnabled && !model.serverEnabled,
-            isEmpty: !(model.localEnabled || !model.displaySections.isEmpty))
+            rows: rows,
+            showsSetupCard: showsSetupCard,
+            isEmpty: !(model.localEnabled || !model.displaySections.isEmpty)
+        ) + consentHeight
         let fleet = fleetListHeight(rowsPerGroup: model.fleetGroups.map { $0.rows.count })
         let total = popoverHeight(forListHeight: max(local, fleet))
         return min(Metrics.glanceMaxHeight(on: screen), max(Metrics.glanceMinHeight, total))
@@ -691,7 +728,7 @@ struct PlatformCard: View {
         section.windows.filter { !$0.window.isSupplementaryVideoQuota }
     }
     private var videoWindows: [QuotaWindowSnapshot] {
-        section.windows.filter { $0.window.isSupplementaryVideoQuota }
+        section.windows.filter { $0.window.isSupplementaryVideoQuota && !$0.window.isExtraneousWeeklyVideoQuota }
     }
     private var displayedWindows: [QuotaWindowSnapshot] {
         expanded ? primaryWindows : Array(primaryWindows.prefix(4))
@@ -802,17 +839,40 @@ struct PlatformCard: View {
         }
         if !videoWindows.isEmpty {
             Divider()
-            DisclosureGroup(isExpanded: $videoExpanded) {
-                VStack(alignment: .leading, spacing: 12) {
-                    ForEach(videoWindows, id: \.window.id) { snapshot in
-                        QuotaRow(snapshot: snapshot, now: now, sourceFailed: issue != nil, compact: true)
+            if let video = videoWindows.first, videoWindows.count == 1 {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(alignment: .center, spacing: 6) {
+                        Image(systemName: "video.fill")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Theme.accent)
+                        Text("Video Allowance")
+                            .font(.system(size: 11, weight: .semibold))
+                        Spacer()
+                        if let reset = video.resetAt {
+                            HStack(spacing: 3) {
+                                Image(systemName: "clock.arrow.circlepath").accessibilityHidden(true)
+                                Text("resets in " + resetCountdown(reset, now: now))
+                            }
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                        }
                     }
+                    QuotaRow(snapshot: video, now: now, sourceFailed: issue != nil, compact: true)
                 }
-                .padding(.top, 8)
-            } label: {
-                Label("Video · \(videoWindows.count) Windows", systemImage: "video")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                .padding(.top, 4)
+            } else {
+                DisclosureGroup(isExpanded: $videoExpanded) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(videoWindows, id: \.window.id) { snapshot in
+                            QuotaRow(snapshot: snapshot, now: now, sourceFailed: issue != nil, compact: true)
+                        }
+                    }
+                    .padding(.top, 8)
+                } label: {
+                    Label("Video Quota (\(videoWindows.count) Windows)", systemImage: "video")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         if let issue {
@@ -836,6 +896,31 @@ struct PlatformCard: View {
     }
 }
 
+/// Discrete indicator representing a countable number of items (e.g. 5 video generations),
+/// not a continuous percentage bar.
+struct DiscreteQuotaPips: View {
+    let remaining: Int
+    let total: Int
+    let tint: Color
+
+    var body: some View {
+        HStack(spacing: 5) {
+            ForEach(0..<max(1, min(total, 20)), id: \.self) { index in
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(index < remaining ? tint : Theme.ink.opacity(0.12))
+                    .frame(height: 7)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 3)
+                            .strokeBorder(Theme.ink.opacity(0.12), lineWidth: 0.5)
+                    )
+            }
+        }
+        .frame(height: 7)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(remaining) of \(total) left")
+    }
+}
+
 struct QuotaRow: View {
     let snapshot: QuotaWindowSnapshot
     let now: Date
@@ -848,14 +933,24 @@ struct QuotaRow: View {
     private var tint: Color {
         masked ? .secondary : quotaStatusColor(for: snapshot, sourceFailed: sourceFailed)
     }
+    private var isDiscreteCount: Bool {
+        snapshot.window.isSupplementaryVideoQuota
+            || (snapshot.window.absoluteLimit != nil && (snapshot.window.absoluteLimit ?? 0) <= 20 && snapshot.window.quotaUnit != nil)
+    }
     private var percentText: String {
         if masked { return AntigravityDisplay.maskedValue }
+        if isDiscreteCount,
+           let rem = snapshot.window.absoluteRemaining,
+           let lim = snapshot.window.absoluteLimit {
+            return "\(Int(rem.rounded()))/\(Int(lim.rounded()))"
+        }
         return snapshot.remainingPercent.map { "\(Int($0.rounded()))%" } ?? "—"
     }
     private var barMetrics: QuotaBarMetrics { QuotaBarMetrics(snapshot: snapshot, now: now) }
     private var barDimmed: Bool { quotaBarIsDimmed(for: snapshot, sourceFailed: sourceFailed) }
     private var stateText: String {
         if masked { return "not applicable" }
+        if isDiscreteCount { return "left" }
         if snapshot.remainingPercent == nil { return "unavailable" }
         return snapshot.isFresh && !sourceFailed ? "remaining" : "last reported"
     }
@@ -883,6 +978,10 @@ struct QuotaRow: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+            } else if isDiscreteCount,
+                      let rem = snapshot.window.absoluteRemaining,
+                      let lim = snapshot.window.absoluteLimit, lim > 0, lim <= 20 {
+                DiscreteQuotaPips(remaining: Int(rem.rounded()), total: Int(lim.rounded()), tint: tint)
             } else if let pacing = snapshot.pacing(now: now), !compact {
                 pacingBar(pacing)
             } else if barMetrics.hasReading {
@@ -890,7 +989,8 @@ struct QuotaRow: View {
                               accessibilityLabel: "Quota Usage")
             }
 
-            if let remaining = snapshot.window.absoluteRemaining,
+            if !isDiscreteCount,
+               let remaining = snapshot.window.absoluteRemaining,
                let limit = snapshot.window.absoluteLimit,
                remaining.isFinite, limit.isFinite, remaining >= 0, limit > 0,
                let unit = snapshot.window.quotaUnit {

@@ -188,6 +188,18 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
         return identity.contains("video") || identity.contains("hailuo")
     }
 
+    /// Extraneous weekly video quotas (e.g. 35/35) are omitted because the daily/interval allowance (5/5)
+    /// is the true operative limit and weekly doesn't accumulate if not used daily.
+    public var isExtraneousWeeklyVideoQuota: Bool {
+        guard isSupplementaryVideoQuota else { return false }
+        let token = (window ?? "").lowercased()
+        let lbl = label.lowercased()
+        let wid = id.lowercased()
+        return token == "1w" || token == "weekly" || token == "7d"
+            || lbl.contains("weekly") || wid.contains("weekly")
+            || absoluteLimit == 35
+    }
+
     /// A bounded value suitable for display.  NaN and infinities are unknown.
     public var boundedRemainingPercent: Double? {
         guard !remainingUnknown, let value = remainingPercent, value.isFinite else { return nil }
@@ -214,7 +226,9 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
         copy.remainingPercent = bounded
         copy.remainingUnknown = bounded == nil
         copy.isExhausted = isExhausted || bounded == 0
-        if status == .unknown, bounded != nil {
+        if copy.isExhausted {
+            copy.status = .exhausted
+        } else if status == .unknown, bounded != nil {
             copy.status = QuotaWindowStatus.derived(remainingPercent: bounded)
         }
         copy.skip = skip || copy.isExhausted
@@ -313,10 +327,12 @@ public struct QuotaWindowSnapshot: Equatable, Sendable {
     public var isUnknown: Bool { remainingPercent == nil }
 
     public init(window: QuotaWindow, now: Date = Date()) {
-        self.window = window
-        self.observedAt = window.occurredDate
-        self.resetAt = window.resetDate
-        self.remainingPercent = window.boundedRemainingPercent
+        let normalized = window.normalizedForExport()
+        self.window = normalized
+        self.observedAt = normalized.occurredDate
+        self.resetAt = normalized.resetDate
+        self.remainingPercent = normalized.boundedRemainingPercent
+        self.status = normalized.status
 
         let observedIsFresh: Bool
         if let observedAt {
@@ -332,16 +348,6 @@ public struct QuotaWindowSnapshot: Equatable, Sendable {
             freshness = .fresh
         } else {
             freshness = .stale
-        }
-
-        if remainingPercent == nil {
-            status = .unknown
-        } else if window.isExhausted || remainingPercent == 0 {
-            status = .exhausted
-        } else if remainingPercent ?? 0 < 20 {
-            status = .nearCap
-        } else {
-            status = .available
         }
     }
 }
@@ -492,7 +498,7 @@ private enum QuotaProviders {
 
     // deepseek is retired as a quota provider (no local reader ever existed for it);
     // hidden also drops any server-pulled window that still canonicalizes to it.
-    static let hidden: Set<String> = ["kimi", "github-copilot", "windsurf", "deepseek"]
+    static let hidden: Set<String> = ["kimi", "github-copilot", "windsurf", "deepseek", "gemini-cli"]
 
     static let expected: [Expected] = [
         Expected(key: "anthropic", label: "Claude", via: nil),
@@ -502,7 +508,6 @@ private enum QuotaProviders {
         Expected(key: "xai", label: "Grok", via: nil),
         Expected(key: "grok-bot", label: "Grok Bot", via: "cursor"),
         Expected(key: "minimax", label: "MiniMax", via: nil),
-        Expected(key: "gemini-cli", label: "Gemini CLI", via: nil),
     ]
 
     static func canonicalKey(provider: String, providerKey: String?, via: String?) -> String {
@@ -514,13 +519,13 @@ private enum QuotaProviders {
         let aliases: [String: String] = [
             "anthropic": "anthropic", "claude": "anthropic", "claude-code": "anthropic", "claude.ai": "anthropic",
             "openai": "openai", "openai-codex": "openai", "codex": "openai",
-            "google": "google-antigravity", "google-antigravity": "google-antigravity", "antigravity": "google-antigravity", "antigravity-cli": "google-antigravity",
+            "google": "google-antigravity", "google-antigravity": "google-antigravity", "antigravity": "google-antigravity", "antigravity-cli": "google-antigravity", "gemini": "google-antigravity",
             "cursor": "cursor",
             "xai": "xai", "grok": "xai", "grok-build": "xai",
             "grok-bot": "grok-bot", "grok bot": "grok-bot", "grokbot": "grok-bot",
             "minimax": "minimax", "minimax-code": "minimax",
             "kimi": "kimi", "moonshot": "kimi", "moonshot-ai": "kimi",
-            "gemini": "gemini-cli", "gemini-cli": "gemini-cli",
+            "gemini-cli": "gemini-cli",
             "copilot": "github-copilot", "github-copilot": "github-copilot", "github_copilot": "github-copilot",
             "windsurf": "windsurf", "codeium": "windsurf",
         ]

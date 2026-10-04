@@ -147,20 +147,13 @@ final class GlanceExpandedLineTests: XCTestCase {
         ])
     }
 
-    func testMiniMaxExpandsToOneVideoLineAndNeverRepeatsTheGeneralWindows() {
+    func testMiniMaxNeverExpandsVideoLinesInGlance() {
         let pair = glanceMeterPair(for: miniMax, now: now)
         XCTAssertEqual(pair.short?.window.id, "general:interval")
         XCTAssertEqual(pair.long?.window.id, "general:weekly")
 
         let lines = glanceExpandedLines(for: miniMax, now: now)
-        XCTAssertEqual(lines.count, 1)
-        XCTAssertEqual(lines.first?.label, "Video")
-        XCTAssertEqual(lines.first?.short?.window.id, "video:interval", "the shorter cadence takes the first column")
-        XCTAssertEqual(lines.first?.long?.window.id, "video:weekly")
-        let shownIds = lines.flatMap { [$0.short, $0.long].compactMap { $0?.window.id } }
-        XCTAssertFalse(shownIds.contains { $0.hasPrefix("general") }, "the row already shows the general windows")
-        XCTAssertEqual(lines.first.map { [$0.short, $0.long].compactMap { $0 }.map(glanceMeterCaption) },
-                       ["1d", "7d"])
+        XCTAssertTrue(lines.isEmpty, "video allowances are quarantined from Glance and only appear in platform settings")
     }
 
     func testARowWithOnlyItsTwoMetersHasNothingToExpand() {
@@ -278,15 +271,21 @@ final class GlanceExpandedLineTests: XCTestCase {
         let one = row([
             window("m:a", label: "general (4h window)", token: "4h", remaining: 10, resetIn: 3_600, model: "general"),
             window("m:b", label: "general (1w window)", token: "1w", remaining: 10, resetIn: 86_400, model: "general"),
-            window("m:c", label: "video (1d window)", token: "1d", remaining: 100, resetIn: 3_600, model: "video"),
-            window("m:d", label: "video (1d window)", token: "1d", remaining: 90, resetIn: 7_200, model: "video"),
+            window("m:c", label: "fast (1d window)", token: "1d", remaining: 100, resetIn: 3_600, model: "fast"),
+            window("m:d", label: "fast (1d window)", token: "1d", remaining: 90, resetIn: 7_200, model: "fast"),
         ])
         XCTAssertEqual(glanceExpandedLines(for: one, now: now).flatMap { [$0.short, $0.long].compactMap { $0 } }.count,
                        2, "windows that share a source are windows, not copies")
     }
 
     func testAnExpandedLineIsSpokenWithItsCaptionsAndResets() throws {
-        let lines = glanceExpandedLines(for: miniMax, now: now)
+        let multiModel = row([
+            window("m:a", label: "general (4h window)", token: "4h", remaining: 92, resetIn: 3 * 3_600, model: "general"),
+            window("m:b", label: "general (1w window)", token: "1w", remaining: 81, resetIn: 6 * 86_400, model: "general"),
+            window("m:c", label: "extra (1d window)", token: "1d", remaining: 100, resetIn: 20 * 3_600, model: "extra"),
+            window("m:d", label: "extra (1w window)", token: "1w", remaining: 97, resetIn: 5 * 86_400, model: "extra"),
+        ])
+        let lines = glanceExpandedLines(for: multiModel, now: now)
         let line = try XCTUnwrap(lines.first)
         let speech = glanceMetersSpeech([line.short, line.long], now: now)
         XCTAssertTrue(speech.hasPrefix("1d 100 percent remaining"), speech)

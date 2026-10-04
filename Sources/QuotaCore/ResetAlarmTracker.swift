@@ -89,6 +89,7 @@ public struct ResetAlarmEvent: Equatable, Sendable {
     /// The reading that revealed the reset.
     public var remainingPercent: Double?
     public var reason: Reason
+    public var isVendorReset: Bool
 
     public init(
         scope: String,
@@ -99,7 +100,8 @@ public struct ResetAlarmEvent: Equatable, Sendable {
         periodSeconds: TimeInterval?,
         endedPeriodResetAt: Date?,
         remainingPercent: Double?,
-        reason: Reason
+        reason: Reason,
+        isVendorReset: Bool = false
     ) {
         self.scope = scope
         self.providerId = providerId
@@ -110,6 +112,7 @@ public struct ResetAlarmEvent: Equatable, Sendable {
         self.endedPeriodResetAt = endedPeriodResetAt
         self.remainingPercent = remainingPercent
         self.reason = reason
+        self.isVendorReset = isVendorReset
     }
 }
 
@@ -224,6 +227,15 @@ public enum ResetAlarmPolicy {
     public static let maximumFutureSkew: TimeInterval = 5 * 60
     /// "Remaining rose" means by more than this, so rounding is not a reset.
     public static let riseEpsilon: Double = 1
+    /// A mid-cycle rise of at least this many points, with the period end left
+    /// where it was, is the provider handing quota back.
+    ///
+    /// The level the quota lands at says nothing: on 2026-10-04 Cursor's
+    /// included plan came back at 89% and Grok Bot's week at 92%, and a rule
+    /// that only fired at 95% or above missed both.  A fixed-period window
+    /// cannot regain quota inside its own period, so the size of the rise is
+    /// the evidence and 30 points is far beyond rounding or a stale reading.
+    public static let vendorRestoreRise: Double = 30
     /// Windows and fires not seen for this long are forgotten.
     public static let retention: TimeInterval = 45 * 86_400
     /// A window's period counts toward "largest" for this long after it was
@@ -280,6 +292,7 @@ public struct ResetAlarmTracker: Sendable {
     private struct Transition {
         let observation: ResetAlarmObservation
         let previous: ResetAlarmTrackerState.Window
+        let isMidWindow: Bool
     }
 
     private mutating func processGroup(
@@ -316,12 +329,16 @@ public struct ResetAlarmTracker: Sendable {
             } else if let minimum = transition.previous.minimumRemaining,
                       minimum <= ResetAlarmPolicy.nearCapThreshold {
                 reason = .nearCap(minimumRemaining: minimum)
+            } else if transition.isMidWindow {
+                reason = .nearCap(minimumRemaining: transition.previous.minimumRemaining ?? (transition.previous.lastRemaining ?? 80.0))
             } else {
                 continue
             }
 
-            let fireKey = "\(observation.providerId)|\(observation.windowLabel)"
-            let ended = transition.previous.periodResetAt
+            let fireKey = transition.isMidWindow
+                ? "\(observation.providerId)|\(observation.windowLabel)|midwindow"
+                : "\(observation.providerId)|\(observation.windowLabel)"
+            let ended = transition.isMidWindow ? (observation.observedAt ?? now) : transition.previous.periodResetAt
             if alreadyFired(key: fireKey, periodResetAt: ended) { continue }
             state.recentFires.append(.init(key: fireKey, periodResetAt: ended, firedAt: now))
             events.append(ResetAlarmEvent(
@@ -333,7 +350,8 @@ public struct ResetAlarmTracker: Sendable {
                 periodSeconds: observation.periodSeconds ?? transition.previous.periodSeconds,
                 endedPeriodResetAt: ended,
                 remainingPercent: observation.remainingPercent,
-                reason: reason))
+                reason: reason,
+                isVendorReset: transition.isMidWindow))
         }
         // Largest first, so a combined notification leads with the new week.
         return events.sorted { lhs, rhs in
@@ -389,6 +407,7 @@ public struct ResetAlarmTracker: Sendable {
 
         let readAt = observedAt ?? now
         var isReset = false
+        var isMidWindow = false
         var nextResetAt = window.periodResetAt
 
         if let previousReset = window.periodResetAt {
@@ -422,6 +441,74 @@ public struct ResetAlarmTracker: Sendable {
                 isReset = true
                 nextResetAt = observation.resetAt.flatMap { $0 > readAt ? $0 : nil }
             }
+            // Mid-window reset: a quota that jumps back up while the period
+            // is still running.  Three ways to see it, and none of them
+            // requires the quota to land at 100%:
+            //  - the quota is handed back, which shows as a large rise against
+            //    a period end that did not move.
+            //  - the quota jumps to full from anything less.
+            //  - the quota was nearly spent and is now nearly untouched.
+            if !isReset, !hasPassed, let reading, let last = window.lastRemaining {
+                let jumpedToFull = reading >= 99.5 && last < 99.5
+                let surgedMidWindow = last < 80.0 && reading >= 95.0
+                // "Held still" and "slid with the clock" are two separate
+                // questions, and asking them as two separate questions keeps
+                // the verdict independent of how often this Mac happens to
+                // refresh.
+                //
+                // A reader that reports "resets in N seconds" recomputes it
+                // from the current time, so a rolling window's end advances in
+                // step with the clock — by roughly the gap since the last
+                // reading, at a 5-minute cadence or a 30-second one alike.
+                // A vendor restore leaves the end on the same instant.  The
+                // test is therefore a ratio, not an absolute bound: scaling
+                // the bound by the poll gap instead would make the same
+                // restore fire at a slow cadence and vanish at a fast one,
+                // which is a property of when the owner happened to press
+                // refresh rather than anything the provider said.
+                let endMoved = observation.resetAt.map { abs($0.timeIntervalSince(previousReset)) }
+                // A reading that omits its period end says nothing about it.
+                // Unknown must not be read as "held still".
+                let periodEndHeld = endMoved.map {
+                    $0 <= ResetAlarmPolicy.resetDriftTolerance
+                } ?? false
+                // A reader that reports "resets in N seconds" recomputes it
+                // from the current time, so a rolling window's end advances in
+                // step with the clock — by roughly the gap since the last
+                // reading, at a 5-minute cadence or a 30-second one alike.
+                // A vendor restore leaves the end on the same instant.  The
+                // test is a ratio rather than an absolute bound: scaling a
+                // bound by the poll gap would make the same restore fire at a
+                // slow cadence and vanish at a fast one, which is a property
+                // of when the owner pressed refresh rather than of anything
+                // the provider said.
+                let slidWithTheClock: Bool
+                if observedAt != nil, let lastObserved = window.lastObservedAt {
+                    let gap = max(0, readAt.timeIntervalSince(lastObserved))
+                    slidWithTheClock = gap > 0 && (endMoved ?? 0) * 2 >= gap
+                } else {
+                    // No trustworthy gap.  Either the reading carries no stamp,
+                    // the previous one did not, or this stamp was rejected as
+                    // too far in the future to be a real clock — and then
+                    // `readAt` falls back to `now`, so the gap can collapse to
+                    // zero and report "definitely did not slide" when the truth
+                    // is "cannot tell".  In every one of those cases any
+                    // movement at all disqualifies the reading.  The iOS
+                    // companion sends `observedAt: nil` on every observation,
+                    // which makes the unstamped case its ordinary path rather
+                    // than an edge case: without it a rolling reader there
+                    // could slide up to the whole drift tolerance per poll and
+                    // still read as held still.
+                    slidWithTheClock = (endMoved ?? 0) > 0
+                }
+                let quotaHandedBack = periodEndHeld && !slidWithTheClock
+                    && reading >= last + ResetAlarmPolicy.vendorRestoreRise
+                if jumpedToFull || surgedMidWindow || quotaHandedBack {
+                    isReset = true
+                    isMidWindow = true
+                    nextResetAt = observation.resetAt.flatMap { $0 > readAt ? $0 : nil } ?? window.periodResetAt
+                }
+            }
         } else if let reported = observation.resetAt, reported > readAt {
             // No period end known — a reset was just detected without the next
             // one being published.  Adopt the first reset time still ahead; a
@@ -441,9 +528,14 @@ public struct ResetAlarmTracker: Sendable {
                 window.lastRemaining = reading
             }
         }
-        if let observed = observedAt { window.lastObservedAt = observed }
+        // Assigned unconditionally, so it always means "the stamp carried by the
+        // previous reading" and is nil when that reading was unstamped.  Only
+        // ever writing it on a stamped reading would leave a stale anchor
+        // behind for as long as the provider went without one, which would
+        // measure the gap below in spans longer than a single interval.
+        window.lastObservedAt = observedAt
         state.windows[key] = window
-        return isReset ? Transition(observation: observation, previous: previous) : nil
+        return isReset ? Transition(observation: observation, previous: previous, isMidWindow: isMidWindow) : nil
     }
 
     // MARK: Largest window

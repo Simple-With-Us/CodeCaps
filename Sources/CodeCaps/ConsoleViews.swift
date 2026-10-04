@@ -6,6 +6,7 @@ import SwiftUI
 /// Glance, the app menu and the status menu.
 enum ConsolePage: Hashable {
     case platform(String)
+    case runawayAlerts
     case settingsMenuBar
     case settingsPlatforms
     case settingsLogoStyle
@@ -17,7 +18,7 @@ enum ConsolePage: Hashable {
 
     var isSettings: Bool {
         switch self {
-        case .platform: return false
+        case .platform, .runawayAlerts: return false
         default: return true
         }
     }
@@ -25,6 +26,7 @@ enum ConsolePage: Hashable {
     var storageKey: String {
         switch self {
         case .platform(let providerKey): return "platform:" + providerKey
+        case .runawayAlerts: return "runawayAlerts"
         case .settingsMenuBar: return "settingsMenuBar"
         case .settingsPlatforms: return "settingsPlatforms"
         case .settingsLogoStyle: return "settingsLogoStyle"
@@ -38,6 +40,7 @@ enum ConsolePage: Hashable {
 
     static func fromStorageKey(_ value: String) -> ConsolePage? {
         switch value {
+        case "runawayAlerts": return .runawayAlerts
         case "settingsMenuBar": return .settingsMenuBar
         case "settingsPlatforms": return .settingsPlatforms
         case "settingsLogoStyle": return .settingsLogoStyle
@@ -55,6 +58,7 @@ enum ConsolePage: Hashable {
     /// Sidebar and toolbar label.  A platform page is titled by the model.
     var settingsTitle: String {
         switch self {
+        case .runawayAlerts: return "Runaway Alerts"
         case .settingsMenuBar: return "Menu Bar"
         case .settingsPlatforms: return "Platforms"
         case .settingsLogoStyle: return "Logo Style"
@@ -69,6 +73,7 @@ enum ConsolePage: Hashable {
 
     var symbol: String {
         switch self {
+        case .runawayAlerts: return "flame.fill"
         case .settingsMenuBar: return "menubar.rectangle"
         case .settingsPlatforms: return "square.grid.2x2"
         case .settingsLogoStyle: return "photo.on.rectangle.angled"
@@ -209,15 +214,23 @@ final class ConsoleState: ObservableObject {
     }
 
     private func matchingRow(for target: AlertNavigation, in sections: [DisplaySection]) -> DisplaySection? {
-        sections.first { section in
-            section.id == target.providerKey
-                && (target.windowId == nil || section.section.windows.contains { $0.window.id == target.windowId })
-        } ?? sections.first { section in
-            section.providerKey == target.providerKey
+        let canonicalTarget = quotaProviderKey(target.providerKey, providerKey: target.providerKey)
+        return sections.first { section in
+            let sectionCanonical = quotaProviderKey(section.providerKey, providerKey: section.providerKey)
+            let providerMatches = section.id == target.providerKey
+                || section.providerKey == target.providerKey
+                || sectionCanonical == canonicalTarget
+            return providerMatches
                 && (target.windowId == nil || section.section.windows.contains { $0.window.id == target.windowId })
         }
     }
 
+    func selectWindow(_ windowId: String?) {
+        selectedWindowId = windowId
+        selectedTimestamp = nil
+        unavailableAlert = nil
+        pendingAlert = nil
+    }
     func clearHistoryFocus() {
         selectedWindowId = nil
         selectedTimestamp = nil
@@ -305,6 +318,9 @@ struct ConsoleView: View {
             }
             ScrollView {
                 switch state.page {
+                case .runawayAlerts:
+                    RunawayAlertsPage(model: model, state: state)
+                        .padding(Metrics.pagePadding)
                 case .platform(let key):
                     PlatformDetailPage(model: model, state: state, providerKey: key)
                         .padding(Metrics.pagePadding)
@@ -440,6 +456,7 @@ struct ConsoleSidebar: View {
 
     private var allPages: [ConsolePage] {
         var pages: [ConsolePage] = []
+        pages.append(.runawayAlerts)
         pages.append(contentsOf: model.displaySections.map { .platform($0.id) })
         pages.append(contentsOf: ConsolePage.settingsPages)
         return pages
@@ -465,6 +482,29 @@ struct ConsoleSidebar: View {
             // Drawing the highlight here settles both.
             List {
                 Section {
+                    sidebarRow(page: .runawayAlerts) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "flame.fill")
+                                .font(.system(size: 13))
+                                .foregroundStyle(model.activeRunawayAnomalies.isEmpty ? Theme.ink : Theme.warning)
+                                .frame(width: 18)
+                            Text("Runaway Alerts")
+                                .font(.system(size: 13, weight: .medium))
+                            Spacer(minLength: 4)
+                            if !model.activeRunawayAnomalies.isEmpty {
+                                Text("\(model.activeRunawayAnomalies.count)")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Theme.warning, in: Capsule())
+                            } else if !model.runawayAlertHistory.isEmpty {
+                                Text("\(model.runawayAlertHistory.count)")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
                     ForEach(model.displaySections) { row in
                         sidebarRow(page: .platform(row.id)) { quotaRow(row) }
                     }

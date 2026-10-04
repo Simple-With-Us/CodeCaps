@@ -298,6 +298,25 @@ final class MonitorModel: ObservableObject {
         didSet { defaults.set(glanceView.rawValue, forKey: "glanceView") }
     }
 
+    // PiP Floating HUD Widget
+    @Published var isPipEnabled: Bool {
+        didSet {
+            defaults.set(isPipEnabled, forKey: "isPipEnabled")
+            PipWidgetController.shared.update(model: self)
+        }
+    }
+    @Published var pipPinnedRowIds: Set<String> {
+        didSet {
+            defaults.set(Array(pipPinnedRowIds), forKey: "pipPinnedRowIds")
+            PipWidgetController.shared.update(model: self)
+        }
+    }
+
+    // Dynamic Pacing Highlights
+    @Published var pacingColorHighlights: Bool {
+        didSet { defaults.set(pacingColorHighlights, forKey: "pacingColorHighlights") }
+    }
+
     /// Where each provider's windows came from on the last refresh.
     @Published private(set) var originByProvider: [String: QuotaOrigin] = [:]
 
@@ -450,6 +469,9 @@ final class MonitorModel: ObservableObject {
 
         appearance = AppAppearance(rawValue: defaults.string(forKey: "appearance") ?? "") ?? .system
         glanceView = GlanceViewMode(rawValue: defaults.string(forKey: "glanceView") ?? "") ?? .fromMac
+        isPipEnabled = defaults.bool(forKey: "isPipEnabled")
+        pipPinnedRowIds = Set(defaults.stringArray(forKey: "pipPinnedRowIds") ?? [])
+        pacingColorHighlights = defaults.object(forKey: "pacingColorHighlights") as? Bool ?? true
         alarmChanges = alarmManager.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
         }
@@ -1692,7 +1714,7 @@ final class MonitorModel: ObservableObject {
             // rendered under FLEET, grouped by its origin — the previous
             // "supplemental" filter dropped all of them on a Mac that reads
             // every provider locally, so a working pull showed nothing at all.
-            let split = FleetOrigin.split(self.serverWindows)
+            let split = FleetOrigin.split(self.serverWindows, localWindows: self.localWindows)
             let ownPush = split.ownPush
             self.fleetWindowGroups = split.groups.map {
                 FleetWindowGroup(id: $0.id, title: $0.title, windows: $0.windows)
@@ -1766,8 +1788,8 @@ final class MonitorModel: ObservableObject {
         for (key, message) in file?.issues ?? [:] where issues[key] == nil {
             issues[key] = message
         }
-        for key in Set(windows.filter { $0.boundedRemainingPercent != nil }.map(\.canonicalProviderKey)) {
-            issues[key] = nil
+        if !fileWindows.filter({ $0.boundedRemainingPercent != nil }).isEmpty {
+            issues["openai"] = nil
         }
         if currentCodexAccountID == nil {
             issues["openai"] = "Codex is not signed in locally."
@@ -1921,10 +1943,35 @@ final class MonitorModel: ObservableObject {
             guard let group = groups[key] else { continue }
             let lastSent = lastRunawayAlertAt[key] ?? -.infinity
             guard now.timeIntervalSince1970 - lastSent >= BurnRateMonitor.alertCooldown else { continue }
-            let provLabel = self.sections.first { $0.providerKey == group[0].providerKey }?.providerLabel
-                ?? group[0].providerKey.capitalized
-            let winLabel = self.sections.flatMap(\.windows)
-                .first { $0.window.id == group[0].windowId }?.window.label
+            let matchingDisplayRow = self.displaySections.first { row in
+                row.section.windows.contains { $0.window.id == group[0].windowId }
+            }
+            let matchingSnapshot = self.displaySections.flatMap { $0.section.windows }
+                .first { $0.window.id == group[0].windowId }
+                ?? self.sections.flatMap(\.windows).first { $0.window.id == group[0].windowId }
+
+            let provLabel: String
+            if let matchingDisplayRow, matchingDisplayRow.isPool {
+                provLabel = matchingDisplayRow.title
+            } else {
+                provLabel = self.sections.first { $0.providerKey == group[0].providerKey }?.providerLabel
+                    ?? group[0].providerKey.capitalized
+            }
+
+            let winLabel: String?
+            if let matchingSnapshot {
+                let rawLabel = matchingSnapshot.window.label.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !rawLabel.isEmpty {
+                    winLabel = rawLabel
+                } else {
+                    let caption = glanceMeterCaption(matchingSnapshot)
+                    winLabel = caption != "Quota" ? "\(caption) window" : "Quota window"
+                }
+            } else {
+                winLabel = self.sections.flatMap(\.windows)
+                    .first { $0.window.id == group[0].windowId }?.window.label
+            }
+
             let notification = BurnRateNotification(
                 anomalies: group,
                 sound: alarmManager.alarmSound,
@@ -1969,6 +2016,11 @@ final class MonitorModel: ObservableObject {
         }
     }
 
+    func clearRunawayAlertHistory() {
+        runawayAlertHistory = []
+        defaults.removeObject(forKey: "runawayAlertHistory")
+    }
+
     private static func runawayKey(_ providerKey: String, _ windowId: String) -> String {
         "\(providerKey)\u{1f}\(windowId)"
     }
@@ -1977,12 +2029,11 @@ final class MonitorModel: ObservableObject {
         async let primary = LocalQuotaReader().read()
         async let cursor = CursorQuotaReader().read()
         async let grokBot = GrokBotQuotaReader().read()
-        async let gemini = GeminiQuotaReader().read()
         // EXTRA Grok Bot source beside Cursor DashboardService; `source: "gbu"`
         // so Settings can rank/disable it without replacing the Cursor reader.
         async let gbu = GbuQuotaReader().read()
         async let antigravity = AntigravitySummaryReader().read()
-        let results = await [primary, cursor, grokBot, gbu, gemini]
+        let results = await [primary, cursor, grokBot, gbu]
         let summary = await antigravity
         var windows = results.flatMap(\.windows)
         var issues = results.reduce(into: [String: String]()) { $0.merge($1.issues) { _, next in next } }

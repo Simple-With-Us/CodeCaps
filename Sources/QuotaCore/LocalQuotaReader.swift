@@ -173,9 +173,32 @@ public struct LocalQuotaReader: Sendable {
         } catch LocalReaderError.reauth {
             ClaudeCredentialSource.resetRememberedCredential()
             if tokenFromKeychain {
-                let state = ClaudeLoginState.needsPermission
-                return ProviderRead(provider: provider, windows: [], issue: state.issue,
-                                    needsConsent: state.needsConsent)
+                var renewed = false
+                if renewable {
+                    renewed = await renewalThrottle.perform(now: now(), action: renewClaudeLogin)
+                }
+                if renewed {
+                    let refreshedFile = (try? readJSONObject(relativePath: ".claude/.credentials.json")) ?? [:]
+                    let refreshedAccess = await ClaudeCredentialSource.boundedAccess(timeout: claudeKeychainTimeout) { await readClaudeCredential() }
+                    let refreshedKeychain = credentialRoot(refreshedAccess)
+                    if let refreshedOAuth = ClaudeOAuthParser.validOAuth(in: refreshedFile, now: now())
+                        ?? ClaudeOAuthParser.validOAuth(in: refreshedKeychain, now: now()),
+                       let refreshedToken = firstString(refreshedOAuth, ["accessToken", "access_token"]) {
+                        var retryRequest = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/usage")!)
+                        retryRequest.httpMethod = "GET"
+                        retryRequest.setValue("Bearer \(refreshedToken)", forHTTPHeaderField: "Authorization")
+                        retryRequest.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
+                        if let retryPayload = try? await requestJSON(retryRequest) {
+                            let retryWindows = parseClaude(retryPayload, planType: firstString(refreshedOAuth, ["subscriptionType", "subscription_type"]), observedAt: now())
+                            if !retryWindows.isEmpty {
+                                return ProviderRead(provider: provider, windows: retryWindows, issue: nil)
+                            }
+                        }
+                    }
+                }
+                let issue = renewable ? ClaudeLoginState.idle.issue : ClaudeLoginState.signedOut.issue
+                return ProviderRead(provider: provider, windows: [], issue: issue,
+                                    needsConsent: false)
             }
             throw LocalReaderError.reauth
         }
@@ -558,6 +581,7 @@ private func parseMiniMax(_ root: [String: Any], observedAt: Date) -> [QuotaWind
     let payload = record(root["data"])
     let rows = (root["model_remains"] ?? root["modelRemains"] ?? payload["model_remains"] ?? payload["modelRemains"]) as? [[String: Any]] ?? []
     let planName = firstString(root, ["plan", "plan_type", "planType", "subscription", "subscription_type"])
+        ?? firstString(payload, ["plan", "plan_type", "planType", "subscription", "subscription_type", "plan_name", "planName"])
     let millisReset: (Double?) -> String? = { millis in
         guard let millis, millis.isFinite, millis >= 0, millis <= 31_536_000_000 else { return nil }
         let date = observedAt.addingTimeInterval(millis / 1000)
@@ -607,8 +631,32 @@ private func parseMiniMax(_ root: [String: Any], observedAt: Date) -> [QuotaWind
 
         let intervalRemaining = intervalPercent ?? intervalCounts.map { $0.remaining / $0.limit * 100 }
         let weeklyRemaining = weeklyPercent ?? weeklyCounts.map { $0.remaining / $0.limit * 100 }
-        let intervalLabel = intervalToken.map { "\(model) (\($0) window)" } ?? "\(model) (interval window)"
-        let weeklyLabel = weeklyToken.map { "\(model) (\($0) window)" } ?? "\(model) (weekly window)"
+
+        let isGeneral = model.lowercased() == "general" || model.lowercased() == "coding_plan"
+        let isVideo = model.lowercased().contains("video") || model.lowercased().contains("hailuo")
+        let intervalLabel: String
+        let weeklyLabel: String
+        if isGeneral {
+            intervalLabel = intervalToken == "5h" ? "5-hour window" : (intervalToken.map { "\($0) window" } ?? "5-hour window")
+            weeklyLabel = (weeklyToken == "1w" || weeklyToken == "weekly") ? "Weekly window" : (weeklyToken.map { "\($0) window" } ?? "Weekly window")
+        } else if isVideo {
+            intervalLabel = "Video"
+            weeklyLabel = "Video (Weekly window)"
+        } else {
+            intervalLabel = intervalToken.map { "\(model) (\($0) window)" } ?? "\(model) (interval window)"
+            weeklyLabel = weeklyToken.map { "\(model) (\($0) window)" } ?? "\(model) (weekly window)"
+        }
+
+        if isVideo {
+            // MiniMax coding plan has the 5h and 1w quotas.  Video is supplementary and discrete
+            // (e.g. 5/5 left per day).  The extraneous weekly video window (35/35) is omitted.
+            if intervalPercent != nil || intervalCounts != nil || intervalReset != nil {
+                let remaining = intervalCounts?.remaining ?? 5
+                let limit = intervalCounts?.limit ?? 5
+                result.append(window(provider: .minimax, id: "\(model):interval", label: intervalLabel, remaining: intervalRemaining ?? 100, resetAt: intervalReset, windowToken: intervalToken ?? "1d", modelId: model, absoluteRemaining: remaining, absoluteLimit: limit, quotaUnit: "videos", planName: planName, periodStart: intervalStart, observedAt: observedAt))
+            }
+            continue
+        }
 
         if intervalPercent != nil || intervalCounts != nil || intervalReset != nil {
             result.append(window(provider: .minimax, id: "\(model):interval", label: intervalLabel, remaining: intervalRemaining, resetAt: intervalReset, windowToken: intervalToken, modelId: model, absoluteRemaining: intervalCounts?.remaining, absoluteLimit: intervalCounts?.limit, quotaUnit: intervalCounts == nil ? nil : "requests", planName: planName, periodStart: intervalStart, observedAt: observedAt))
