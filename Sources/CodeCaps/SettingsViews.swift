@@ -54,7 +54,7 @@ struct SettingsMenuBarPage: View {
                 Eyebrow("MENU BAR")
             } footer: {
                 Text("Match Provider follows each platform's Logo Style." + sentenceGap
-                     + "Light/Dark and Colour override it for the menu bar only, leaving the popover and sidebar on whatever you set on Logo Style.")
+                     + "Light/Dark and Colour override it for the menu bar only, leaving the Docked Bar and sidebar on whatever you set on Logo Style.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
@@ -106,7 +106,7 @@ struct SettingsPlatformsPage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Drag to reorder." + sentenceGap
-                 + "This order is used in the quota list and in Glance.")
+                 + "This order is used in the quota list and in the Docked Bar.")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -371,7 +371,7 @@ struct SettingsSourcesFleetPage: View {
                 Eyebrow("SOURCES PER PLATFORM")
             } footer: {
                 Text("CodeCaps pulls each provider's quota from whichever sources can answer." + sentenceGap
-                     + "Turn a source off to drop its windows everywhere — the menu bar, Glance, and Console all skip it." + sentenceGap
+                     + "Turn a source off to drop its windows everywhere — the menu bar, Docked Bar, and Console all skip it." + sentenceGap
                      + "Reorder to tell CodeCaps which source wins when two disagree; the top of the list is preferred, the bottom is the fallback.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
@@ -1065,12 +1065,13 @@ struct SettingsAboutPage: View {
 
 struct SettingsNotificationsPage: View {
     @ObservedObject var model: MonitorModel
+    @ObservedObject var state: ConsoleState
 
     var body: some View {
         SettingsPage {
             Section {
                 Toggle("Reset Alarms For All Providers", isOn: $model.alarmsAll)
-                    .help("The same switch as the All bell at the top of Glance.")
+                    .help("The same switch as the All bell at the top of the Docked Bar.")
                     .accessibilityLabel("Reset Alarms For All Providers")
                 Picker("Alert Sound", selection: $model.alarmSound) {
                     ForEach(ResetAlarmSound.defaultPickerOrder, id: \.self) { sound in
@@ -1098,7 +1099,7 @@ struct SettingsNotificationsPage: View {
             } footer: {
                 Text("A provider's longest window, such as its weekly or monthly limit, alerts every time it resets, so you know a new week or month began." + sentenceGap
                      + "A shorter window, such as a 5-hour limit, alerts only if it reached its cap or came within 20% of it before resetting." + sentenceGap
-                     + "Turn All off to choose providers one by one with the bell at the left of each row in Glance.")
+                     + "Turn All off to choose providers one by one with the bell at the left of each row in the Docked Bar.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1112,7 +1113,7 @@ struct SettingsNotificationsPage: View {
                 if model.burnRateAlertsEnabled {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
-                            Text("Versus Your 7-Day Average")
+                            Text("Versus Your Recent Average")
                             Slider(value: $model.anomalyBaselineMultiplier,
                                    in: BurnRateMonitor.baselineRange,
                                    step: 0.5)
@@ -1120,11 +1121,11 @@ struct SettingsNotificationsPage: View {
                                 .font(.system(size: 11).monospacedDigit())
                                 .frame(width: 38, alignment: .trailing)
                         }
-                        .help("Alerts when the current hour is spending this many times faster than your average hour of the past week. Recommended 5×.")
-                        .accessibilityLabel("Alert threshold versus your 7-day average")
+                        .help("Alerts when the current hour is spending this many times faster than your measured average, using up to seven days of available readings. Recommended 5×.")
+                        .accessibilityLabel("Alert threshold versus your recent average")
 
                         HStack {
-                            Text("Versus Your Worst Hour")
+                            Text("Versus Your Measured Peak")
                             Slider(value: $model.anomalyPeakMultiplier,
                                    in: BurnRateMonitor.peakRange,
                                    step: 0.1)
@@ -1132,15 +1133,12 @@ struct SettingsNotificationsPage: View {
                                 .font(.system(size: 11).monospacedDigit())
                                 .frame(width: 38, alignment: .trailing)
                         }
-                        .help("Alerts when the current hour is spending this many times faster than the fastest hour you had last week. Recommended 2×.")
-                        .accessibilityLabel("Alert threshold versus your worst hour")
+                        .help("Alerts when the current hour is spending this many times faster than your fastest measured interval. Recommended 2×.")
+                        .accessibilityLabel("Alert threshold versus your measured peak")
 
                         let history = BurnRateMonitor.historySummary()
-                        Text(history.days < 1
-                             ? "Still Learning." + sentenceGap
-                               + String(format: "%.0f hours of history so far. ", history.days * 24)
-                               + "The worst-hour check starts working once there is a few hours to compare against; the 7-day check needs about a week."
-                             : String(format: "Learning for %.1f days.", history.days))
+                        Text("\(history.sampleCount) saved local readings in the past 7 days." + sentenceGap
+                             + "Each quota window needs at least one hour of valid measured intervals before its comparison can alert.")
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -1151,19 +1149,30 @@ struct SettingsNotificationsPage: View {
                                 .font(.system(size: 11, weight: .semibold))
                                 .foregroundStyle(.primary)
                             ForEach(model.runawayAlertHistory.prefix(5)) { alert in
-                                HStack(alignment: .top) {
-                                    VStack(alignment: .leading, spacing: 1) {
-                                        Text("\(alert.providerLabel) · \(alert.windowLabel)")
-                                            .font(.system(size: 11, weight: .medium))
-                                        Text(alert.summary)
-                                            .font(.system(size: 10))
+                                Button {
+                                    state.select(providerKey: alert.providerKey,
+                                                 windowId: alert.windowId,
+                                                 at: alert.timestamp,
+                                                 in: model.displaySections,
+                                                 readCompleted: model.lastChecked != nil)
+                                } label: {
+                                    HStack(alignment: .top) {
+                                        VStack(alignment: .leading, spacing: 1) {
+                                            Text("\(alert.providerLabel) · \(alert.windowLabel)")
+                                                .font(.system(size: 11, weight: .medium))
+                                            Text(alert.summary)
+                                                .font(.system(size: 10))
+                                                .foregroundStyle(.secondary)
+                                        }
+                                        Spacer()
+                                        Text(alert.timestamp.formatted(date: .omitted, time: .shortened))
+                                            .font(.system(size: 10).monospacedDigit())
                                             .foregroundStyle(.secondary)
                                     }
-                                    Spacer()
-                                    Text(alert.timestamp.formatted(date: .omitted, time: .shortened))
-                                        .font(.system(size: 10).monospacedDigit())
-                                        .foregroundStyle(.secondary)
                                 }
+                                .buttonStyle(.plain)
+                                .help("Open \(alert.providerLabel) usage history")
+                                .accessibilityLabel("Open \(alert.providerLabel), \(alert.windowLabel) usage history at \(alert.timestamp.formatted())")
                                 .padding(.vertical, 1)
                             }
                         }
@@ -1171,11 +1180,11 @@ struct SettingsNotificationsPage: View {
                     .padding(.top, 2)
                 }
             } header: {
-                Eyebrow("RUNAWAY AGENTS")
+                Eyebrow("RUNAWAY USAGE")
             } footer: {
-                Text("5× the average is the recommended starting point." + sentenceGap
-                     + "At 3× a long agent run looks exactly like a runaway, and an alert that cries wolf on a normal afternoon gets muted within a week." + sentenceGap
-                     + "The worst-hour check fires far more readily and is the one that catches a stuck loop, so it is the first to lower if you want to hear from it.")
+                Text("5× the measured average is the recommended starting point." + sentenceGap
+                     + "The comparison uses only valid readings from the same quota period and account." + sentenceGap
+                     + "The measured-peak check catches unusually fast depletion relative to your own past activity.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1245,5 +1254,248 @@ struct CommitButton: View {
         }
         .help(title)
         .accessibilityLabel(title)
+    }
+}
+
+// MARK: - Infisical Sync
+
+/// The admin surface for Infisical as the source of truth (see INFISICAL.md).
+///
+/// CodeCaps is a single-user local app, so the owner IS the admin and the gate
+/// is a no-op by design — this page is only reachable on his own Mac.  The
+/// client identity is his own universal-auth machine identity, stored in his
+/// Keychain like the read and ingest tokens already are; it is never embedded
+/// in the app and never leaves the machine.  The iOS companion cannot hold a
+/// client secret, so it stays out of Infisical entirely and keeps reading
+/// through its existing quota API — the Mac app owns the Infisical read.
+struct SettingsInfisicalPage: View {
+    @ObservedObject var model: MonitorModel
+
+    @State private var clientId = ""
+    @State private var clientSecret = ""
+    @State private var hasIdentity = false
+    @State private var pullEndpoint = ""
+    @State private var pushEndpoint = ""
+    @State private var refreshSeconds = ""
+    @State private var working = false
+    @State private var message: String?
+    @State private var succeeded = false
+    @State private var keyMessage: String?
+    @State private var keySucceeded = false
+
+    private var settings: InfisicalSettings { InfisicalSettings.shared }
+
+    var body: some View {
+        SettingsPage {
+            Section {
+                TextField("Client ID", text: $clientId,
+                          prompt: Text(hasIdentity ? "Saved in Keychain" : "Client ID"))
+                SecureField("Client Secret", text: $clientSecret,
+                            prompt: Text(hasIdentity ? "Saved in Keychain" : "Client Secret"))
+                HStack {
+                    if hasIdentity {
+                        Button("Forget Identity", role: .destructive, action: forgetIdentity)
+                            .disabled(working)
+                    }
+                    Spacer()
+                    if working { ProgressView().controlSize(.small) }
+                    CommitButton(title: "Save Identity", prominent: !clientId.isEmpty, action: saveIdentity)
+                        .disabled(working || clientId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                  || clientSecret.isEmpty)
+                }
+                if let message {
+                    Text(message)
+                        .font(.system(size: 11))
+                        .foregroundStyle(succeeded ? Theme.accent : Theme.danger)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } header: {
+                Eyebrow("CLIENT IDENTITY")
+            } footer: {
+                Text("Your own Infisical machine identity, kept in your Keychain." + sentenceGap
+                     + "Nothing here is embedded in the app or sent anywhere but Infisical.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Section {
+                LabeledContent("Status") { Text(statusLine).font(.system(size: 11)).foregroundStyle(.secondary) }
+                LabeledContent("Environment") { Text(settingsEnvironment).font(.system(size: 11)) }
+                if let loaded = settings.lastLoadedAt {
+                    LabeledContent("Last Synced") {
+                        Text(loaded.formatted(date: .omitted, time: .shortened)).font(.system(size: 11))
+                    }
+                }
+                if let error = settings.lastError {
+                    Text(error)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.danger)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                HStack {
+                    Spacer()
+                    Button("Reload Now", action: reloadNow).disabled(working || !hasIdentity)
+                }
+            } header: {
+                Eyebrow("SYNC STATUS")
+            }
+
+            Section {
+                TextField("Pull Endpoint", text: $pullEndpoint)
+                TextField("Push Endpoint", text: $pushEndpoint)
+                TextField("Refresh Seconds", text: $refreshSeconds)
+                HStack {
+                    Spacer()
+                    if working { ProgressView().controlSize(.small) }
+                    CommitButton(title: "Save Keys", prominent: keysDirty, action: saveKeys)
+                        .disabled(working || !hasIdentity)
+                }
+                if let keyMessage = keyMessage {
+                    Text(keyMessage)
+                        .font(.system(size: 11))
+                        .foregroundStyle(keySucceeded ? Theme.accent : Theme.danger)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } header: {
+                Eyebrow("MANAGED KEYS")
+            } footer: {
+                Text("Saving writes to Infisical first; a failed write fails the save." + sentenceGap
+                     + "The pull and push pages write their endpoints through the same path.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .onAppear(perform: refreshFromStore)
+    }
+
+    private var statusLine: String {
+        hasIdentity ? "On" : "Off"
+    }
+
+    private var settingsEnvironment: String {
+        InfisicalSettings.defaultEnvironment()
+    }
+
+    private var keysDirty: Bool {
+        pullEndpoint != (settings.value(for: InfisicalSettings.Keys.pullEndpoint) ?? "")
+            || pushEndpoint != (settings.value(for: InfisicalSettings.Keys.pushEndpoint) ?? "")
+            || refreshSeconds != (settings.value(for: InfisicalSettings.Keys.refreshSeconds) ?? "")
+    }
+
+    private func refreshFromStore() {
+        hasIdentity = InfisicalIdentityStore.load() != nil
+        pullEndpoint = settings.value(for: InfisicalSettings.Keys.pullEndpoint) ?? ""
+        pushEndpoint = settings.value(for: InfisicalSettings.Keys.pushEndpoint) ?? ""
+        refreshSeconds = settings.value(for: InfisicalSettings.Keys.refreshSeconds) ?? ""
+    }
+
+    private func saveIdentity() {
+        working = true
+        message = nil
+        let identity = InfisicalIdentityStore.Identity(
+            clientId: clientId.trimmingCharacters(in: .whitespacesAndNewlines),
+            clientSecret: clientSecret)
+        Task {
+            defer { working = false }
+            do {
+                try InfisicalIdentityStore.save(identity)
+                settings.configure(InfisicalSettings.Configuration(
+                    environment: InfisicalSettings.defaultEnvironment(),
+                    clientId: identity.clientId,
+                    clientSecret: identity.clientSecret))
+                // Validate the identity immediately: a bad secret fails here,
+                // while the owner is looking at the message, not at 3 AM.
+                try await settings.load()
+                await MainActor.run {
+                    model.adoptInfisicalEndpointsIfUnset()
+                    clientSecret = ""
+                    refreshFromStore()
+                    succeeded = true
+                    message = "Identity saved and verified against Infisical."
+                    NotificationCenter.default.post(name: .infisicalIdentityChanged, object: nil)
+                }
+            } catch {
+                await MainActor.run {
+                    succeeded = false
+                    message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func forgetIdentity() {
+        working = true
+        Task {
+            defer { working = false }
+            do {
+                try InfisicalIdentityStore.delete()
+                settings.clearConfiguration()
+                await MainActor.run {
+                    clientId = ""
+                    clientSecret = ""
+                    refreshFromStore()
+                    succeeded = true
+                    message = "Identity removed.  Settings stay local until you add one again."
+                    NotificationCenter.default.post(name: .infisicalIdentityChanged, object: nil)
+                }
+            } catch {
+                await MainActor.run {
+                    succeeded = false
+                    message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func reloadNow() {
+        working = true
+        Task {
+            await settings.refresh()
+            await MainActor.run {
+                model.adoptInfisicalEndpointsIfUnset()
+                working = false
+                refreshFromStore()
+            }
+        }
+    }
+
+    private func saveKeys() {
+        working = true
+        keyMessage = nil
+        Task {
+            defer { working = false }
+            do {
+                // Write-through, one key at a time: each `set` lands in
+                // Infisical before the cache moves, and any failure aborts
+                // the save with the earlier keys already committed.
+                // Unchanged keys are skipped — no redundant writes.
+                let updates = [
+                    (InfisicalSettings.Keys.pullEndpoint, pullEndpoint),
+                    (InfisicalSettings.Keys.pushEndpoint, pushEndpoint),
+                    (InfisicalSettings.Keys.refreshSeconds, refreshSeconds),
+                ]
+                var wroteAny = false
+                for (key, field) in updates {
+                    let value = field.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard value != (settings.value(for: key) ?? "") else { continue }
+                    try await settings.set(value, for: key)
+                    wroteAny = true
+                }
+                await MainActor.run {
+                    model.adoptInfisicalEndpointsIfUnset()
+                    refreshFromStore()
+                    keySucceeded = true
+                    keyMessage = wroteAny ? "Keys saved to Infisical." : "No changes to save."
+                }
+            } catch {
+                await MainActor.run {
+                    refreshFromStore()
+                    keySucceeded = false
+                    keyMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                }
+            }
+        }
     }
 }

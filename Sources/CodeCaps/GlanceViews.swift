@@ -13,6 +13,7 @@ import SwiftUI
 struct GlancePopover: View {
     @ObservedObject var model: MonitorModel
     var openConsole: (ConsolePage) -> Void
+    var openAlert: (String, String?, Date?) -> Void
     /// Settings has its own entry point rather than a fixed page, so the gear
     /// and `⌘,` land in the same place: the Settings page last used.
     var openSettings: () -> Void
@@ -28,10 +29,12 @@ struct GlancePopover: View {
     init(model: MonitorModel,
          openConsole: @escaping (ConsolePage) -> Void,
          openSettings: @escaping () -> Void,
+         openAlert: @escaping (String, String?, Date?) -> Void = { _, _, _ in },
          initiallyExpanded: Set<String> = []) {
         self.model = model
         self.openConsole = openConsole
         self.openSettings = openSettings
+        self.openAlert = openAlert
         _expandedIds = State(initialValue: initiallyExpanded)
     }
 
@@ -253,7 +256,7 @@ struct GlancePopover: View {
 
                 Spacer(minLength: 4)
 
-                Button { openConsole(.allPlatforms) } label: {
+                Button { openConsole(model.displaySections.first.map { .platform($0.id) } ?? .settingsSourcesFleet) } label: {
                     HStack(spacing: 5) {
                         Text("Open CodeCaps")
                         Text("⌘1").font(.system(size: 10)).foregroundStyle(.tertiary)
@@ -265,7 +268,16 @@ struct GlancePopover: View {
             }
 
             if model.burnRateAlertsEnabled {
-                VStack(spacing: 1) {
+                Button {
+                    if let anomaly = model.activeRunawayAnomalies.first {
+                        openAlert(anomaly.providerKey, anomaly.windowId, anomaly.observedAt)
+                    } else if let recent = model.runawayAlertHistory.first {
+                        openAlert(recent.providerKey, recent.windowId, recent.timestamp)
+                    } else {
+                        openConsole(.settingsNotifications)
+                    }
+                } label: {
+                    VStack(spacing: 1) {
                     Text("Runaway Usage Alerts Enabled")
                         .font(.system(size: 9, weight: .medium))
                         .lineLimit(1)
@@ -277,11 +289,13 @@ struct GlancePopover: View {
                             .lineLimit(1)
                             .minimumScaleFactor(0.75)
                     }
-                }
+                    }
                 .frame(maxWidth: 205)
+                }
+                .buttonStyle(.plain)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(runawayFooterAccessibilityLabel)
-                .allowsHitTesting(false)
+                .help("Open Runaway Usage History")
             }
         }
         .padding(.horizontal, Metrics.glanceGutter)
@@ -292,7 +306,7 @@ struct GlancePopover: View {
         if let anomaly = model.activeRunawayAnomalies.first {
             let provider = model.sections.first { $0.providerKey == anomaly.providerKey }?.providerLabel
                 ?? anomaly.providerKey
-            let comparison = anomaly.kind == .vsPeak ? "recent peak" : "usual pace"
+            let comparison = anomaly.kind == .vsPeak ? "measured peak" : "measured average"
             return "\(provider) · \(anomaly.multiplier.formatted(.number.precision(.fractionLength(1))))× \(comparison)"
         }
         if let recent = model.runawayAlertHistory.first, recent.timestamp.timeIntervalSinceNow > -86_400 {

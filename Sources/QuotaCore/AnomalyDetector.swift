@@ -5,19 +5,14 @@ import Foundation
 /// Two thresholds, both user-tunable, both default to a value that fires only
 /// when the rate is well outside the owner's own recent pattern:
 ///
-/// 1. **`baselineMultiplier`** — current hour's rate of change vs the rolling
-///    7-day average rate of change.  Default 5×.  Catches "I'm using this much
-///    harder than usual, day over day".  Suggested range 3-10×.
+/// 1. **`baselineMultiplier`** — current hour's rate of change vs measured
+///    recent history.  Default 5×.
 ///
-/// 2. **`peakMultiplier`** — current hour's rate of change vs the owner's
-///    highest hourly rate over the prior week.  Default 2×.  Catches
-///    "I'm using this faster than my own worst hour last week".  Suggested
-///    range 1-3×; under 1× only catches runaway or stuck-loop cases.
+/// 2. **`peakMultiplier`** — current hour's rate of change vs the highest
+///    measured rate in available history.  Default 2×.
 ///
 /// Rate is computed as `percentPerHour` from consecutive samples in the
-/// history file.  A window that resets is treated as a discontinuity —
-/// the rate at the reset boundary is reported as the prior rate up to
-/// the reset, not the jump from 0% back up to a fresh window.
+/// history file.  Reset, account, and data gaps are discontinuities.
 ///
 /// The detector is pure: a `Sample` array in, an `[Anomaly]` array out.
 /// Persistence and the IO plumbing live elsewhere.
@@ -28,20 +23,27 @@ public struct AnomalyDetector: Sendable {
         public let observedAt: Date
         /// 0…100.  nil is treated as "not measurable" and skipped.
         public let remainingPercent: Double?
+        public let accountKey: String?
+        public let resetAt: Date?
+        public let periodStart: Date?
 
-        public init(providerKey: String, windowId: String, observedAt: Date, remainingPercent: Double?) {
+        public init(providerKey: String, windowId: String, observedAt: Date, remainingPercent: Double?,
+                    accountKey: String? = nil, resetAt: Date? = nil, periodStart: Date? = nil) {
             self.providerKey = providerKey
             self.windowId = windowId
             self.observedAt = observedAt
             self.remainingPercent = remainingPercent
+            self.accountKey = accountKey
+            self.resetAt = resetAt
+            self.periodStart = periodStart
         }
     }
 
     public struct Anomaly: Equatable, Sendable, Codable {
         public enum Kind: String, Codable, Sendable, Equatable {
-            /// Current rate is N× the rolling 7-day average.
+            /// Current rate is N× the measured historical average.
             case vsBaseline
-            /// Current rate is N× the prior-week peak hourly rate.
+            /// Current rate is N× the measured historical peak rate.
             case vsPeak
         }
         public let providerKey: String
@@ -50,15 +52,27 @@ public struct AnomalyDetector: Sendable {
         /// The actual multiplier observed, e.g. 6.4 means current is 6.4× the
         /// comparison baseline.  Always > 1.
         public let multiplier: Double
-        /// "vs baseline (5h): 6.4× your week-long average."
+        /// Example: "Spending fast vs 5h: 6.4× your average over available history."
         public let summary: String
+        /// Percentage points of allowance depleted per hour.
+        public let ratePercentPerHour: Double?
+        public let comparisonRatePercentPerHour: Double?
+        public let observedAt: Date?
+        /// Span between the earliest and latest valid comparison samples.
+        public let historyCoverageHours: Double?
 
-        public init(providerKey: String, windowId: String, kind: Kind, multiplier: Double, summary: String) {
+        public init(providerKey: String, windowId: String, kind: Kind, multiplier: Double, summary: String,
+                    ratePercentPerHour: Double? = nil, comparisonRatePercentPerHour: Double? = nil,
+                    observedAt: Date? = nil, historyCoverageHours: Double? = nil) {
             self.providerKey = providerKey
             self.windowId = windowId
             self.kind = kind
             self.multiplier = multiplier
             self.summary = summary
+            self.ratePercentPerHour = ratePercentPerHour
+            self.comparisonRatePercentPerHour = comparisonRatePercentPerHour
+            self.observedAt = observedAt
+            self.historyCoverageHours = historyCoverageHours
         }
     }
 
@@ -75,48 +89,137 @@ public struct AnomalyDetector: Sendable {
     /// (provider, window, kind) — the same window can fire both `vsBaseline`
     /// and `vsPeak` if both thresholds are crossed.
     public func evaluate(samples: [Sample], now: Date = Date()) -> [Anomaly] {
-        // Group by (provider, window).  Each group is a chronologically-sorted
-        // time series for one quota bucket.
-        let groups = Dictionary(grouping: samples) { "\($0.providerKey)|\($0.windowId)" }
+        guard baselineMultiplier.isFinite, baselineMultiplier > 1,
+              peakMultiplier.isFinite, peakMultiplier > 1 else { return [] }
+        let groups = Dictionary(grouping: Self.historySegments(samples: samples, now: now,
+                                                               maxGap: 3600)) {
+            PairKey(provider: $0[0].providerKey, window: $0[0].windowId)
+        }
         var out: [Anomaly] = []
-        for (_, group) in groups {
-            let sorted = group.sorted { $0.observedAt < $1.observedAt }
-            guard let currentRate = Self.currentHourRatePercent(samples: sorted, now: now),
+        for (key, segments) in groups {
+            guard let latest = segments.max(by: { $0.last!.observedAt < $1.last!.observedAt }),
+                  let observedAt = latest.last?.observedAt,
+                  now.timeIntervalSince(observedAt) <= 15 * 60,
+                  let currentRate = Self.currentHourRatePercent(samples: latest, now: now),
                   currentRate > 0 else { continue }
-            let baselineRate = Self.baselineRatePercent(samples: sorted, now: now)
-            let peakRate = Self.peakHourRatePercent(samples: sorted, now: now)
-            let windowLabel = Self.windowLabel(windowId: sorted[0].windowId)
-            if let baseline = baselineRate {
-                // A flat baseline (baseline == 0) means the user has not
-                // been depleting this window over the prior week — any
-                // depletion now is therefore infinitely more than baseline,
-                // so the anomaly always fires.  We report the ratio as
-                // `currentRate / max(baseline, epsilon)` so the math stays
-                // bounded and the summary still reads sanely.
-                let baselineForRatio = max(baseline, 0.01)
-                let ratio = currentRate / baselineForRatio
-                if ratio >= baselineMultiplier {
+            let historical = segments.filter { $0[0].accountKey == latest[0].accountKey }.flatMap { segment in
+                Self.historicalPairs(segment, now: now)
+            }
+            // Disjoint five-minute islands are not an hour of observation.
+            // Sum measured pair durations rather than the wall-clock span.
+            let coverage = historical.reduce(0) { $0 + $1.hours }
+            guard historical.count >= 3, coverage >= 1 else { continue }
+            let depletion = historical.reduce(0) { $0 + $1.rate * $1.hours }
+            let baselineRate = depletion / coverage
+            let peakRate = historical.map(\.rate).filter { $0 > 0 }.max()
+            let windowLabel = Self.windowLabel(windowId: key.window)
+            if baselineRate > 0 {
+                let ratio = currentRate / baselineRate
+                if ratio.isFinite, ratio >= baselineMultiplier {
                     out.append(Anomaly(
-                        providerKey: sorted[0].providerKey,
-                        windowId: sorted[0].windowId,
+                        providerKey: key.provider,
+                        windowId: key.window,
                         kind: .vsBaseline,
                         multiplier: ratio,
-                        summary: Self.summary(kind: .vsBaseline, ratio: ratio, threshold: baselineMultiplier, window: windowLabel, comparison: "your week-long average")))
+                        summary: Self.summary(kind: .vsBaseline, ratio: ratio, window: windowLabel, comparison: "your average over available history"),
+                        ratePercentPerHour: currentRate, comparisonRatePercentPerHour: baselineRate,
+                        observedAt: observedAt, historyCoverageHours: coverage))
                 }
             }
-            if let peak = peakRate, peak > 0 {
+            if let peak = peakRate {
                 let ratio = currentRate / peak
-                if ratio >= peakMultiplier {
+                if ratio.isFinite, ratio >= peakMultiplier {
                     out.append(Anomaly(
-                        providerKey: sorted[0].providerKey,
-                        windowId: sorted[0].windowId,
+                        providerKey: key.provider,
+                        windowId: key.window,
                         kind: .vsPeak,
                         multiplier: ratio,
-                        summary: Self.summary(kind: .vsPeak, ratio: ratio, threshold: peakMultiplier, window: windowLabel, comparison: "your highest hour last week")))
+                        summary: Self.summary(kind: .vsPeak, ratio: ratio, window: windowLabel, comparison: "your measured peak"),
+                        ratePercentPerHour: currentRate, comparisonRatePercentPerHour: peak,
+                        observedAt: observedAt, historyCoverageHours: coverage))
                 }
             }
         }
         return out
+    }
+
+    private struct PairKey: Hashable {
+        let provider: String
+        let window: String
+    }
+
+    private struct SampleKey: Hashable {
+        let pair: PairKey
+        let time: Date
+
+        init(pair: PairKey, time: Date) {
+            self.pair = pair
+            // JSONEncoder's ISO-8601 strategy stores whole seconds.  Match
+            // that precision so a persisted refresh deduplicates on reload.
+            self.time = Date(timeIntervalSince1970: floor(time.timeIntervalSince1970))
+        }
+    }
+
+    /// Valid, chronological series for graphing and rate calculations.  A
+    /// reset, account change, allowance recovery, or long gap starts a new
+    /// segment.  A sliding reset estimate may move on every refresh, so only
+    /// crossing the previously advertised reset time creates a reset split.
+    /// No synthetic points are inserted.
+    public static func historySegments(samples: [Sample], now: Date = Date(),
+                                       maxGap: TimeInterval = 30 * 60) -> [[Sample]] {
+        guard maxGap.isFinite, maxGap > 0 else { return [] }
+        var unique: [SampleKey: Sample] = [:]
+        for sample in samples {
+            guard sample.observedAt.timeIntervalSinceReferenceDate.isFinite,
+                  sample.observedAt <= now,
+                  let percent = sample.remainingPercent,
+                  percent.isFinite, (0...100).contains(percent),
+                  !sample.providerKey.isEmpty, !sample.windowId.isEmpty else { continue }
+            let key = SampleKey(pair: PairKey(provider: sample.providerKey, window: sample.windowId),
+                                time: sample.observedAt)
+            unique[key] = sample
+        }
+        let grouped = Dictionary(grouping: unique.values) {
+            PairKey(provider: $0.providerKey, window: $0.windowId)
+        }
+        var segments: [[Sample]] = []
+        for group in grouped.values {
+            let sorted = group.sorted { $0.observedAt < $1.observedAt }
+            var current: [Sample] = []
+            for sample in sorted {
+                if let previous = current.last,
+                   sample.observedAt.timeIntervalSince(previous.observedAt) > maxGap
+                    || sample.remainingPercent! > previous.remainingPercent!
+                    || sample.accountKey != previous.accountKey
+                    || (previous.resetAt.map { $0 > previous.observedAt && $0 <= sample.observedAt } ?? false)
+                    || sample.periodStart != previous.periodStart {
+                    segments.append(current)
+                    current = []
+                }
+                current.append(sample)
+            }
+            if !current.isEmpty { segments.append(current) }
+        }
+        return segments.sorted { $0[0].observedAt < $1[0].observedAt }
+    }
+
+    private struct HistoricalPair {
+        let rate: Double
+        let hours: Double
+    }
+
+    private static func historicalPairs(_ samples: [Sample], now: Date) -> [HistoricalPair] {
+        let start = now.addingTimeInterval(-7 * 24 * 3600)
+        let end = now.addingTimeInterval(-3600)
+        guard samples.count >= 2 else { return [] }
+        return (1..<samples.count).compactMap { index in
+            let a = samples[index - 1], b = samples[index]
+            let hours = b.observedAt.timeIntervalSince(a.observedAt) / 3600
+            guard a.observedAt >= start, b.observedAt < end,
+                  hours > 0, hours <= 1 else { return nil }
+            return HistoricalPair(rate: max(0, (a.remainingPercent! - b.remainingPercent!) / hours),
+                                  hours: hours)
+        }
     }
 
     /// Append-only JSONL store for sample history.  Lives in the same directory
@@ -140,14 +243,27 @@ public struct AnomalyDetector: Sendable {
             encoder.dateEncodingStrategy = .iso8601
             encoder.outputFormatting = [.withoutEscapingSlashes]
             let fm = FileManager.default
+            let existing = try load()
+            var seen = Set(existing.map {
+                SampleKey(pair: PairKey(provider: $0.providerKey, window: $0.windowId), time: $0.observedAt)
+            })
+            let fresh = samples.filter { sample in
+                guard sample.observedAt.timeIntervalSinceReferenceDate.isFinite,
+                      let percent = sample.remainingPercent,
+                      percent.isFinite, (0...100).contains(percent) else { return false }
+                return seen.insert(SampleKey(pair: PairKey(provider: sample.providerKey,
+                                                           window: sample.windowId),
+                                             time: sample.observedAt)).inserted
+            }
+            guard !fresh.isEmpty else { return }
             if !fm.fileExists(atPath: url.path) {
                 fm.createFile(atPath: url.path, contents: nil)
-                try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
             }
+            try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
             let handle = try FileHandle(forWritingTo: url)
             try autoreleasepool {
                 try handle.seekToEnd()
-                for sample in samples {
+                for sample in fresh {
                     var line = try encoder.encode(sample)
                     line.append(0x0A) // \n
                     try handle.write(contentsOf: line)
@@ -186,7 +302,13 @@ public struct AnomalyDetector: Sendable {
                     out.append(sample)
                 }
             }
-            return out
+            var unique: [SampleKey: Sample] = [:]
+            for sample in out {
+                unique[SampleKey(pair: PairKey(provider: sample.providerKey,
+                                               window: sample.windowId),
+                                 time: sample.observedAt)] = sample
+            }
+            return unique.values.sorted { $0.observedAt < $1.observedAt }
         }
     }
 
@@ -200,61 +322,9 @@ public struct AnomalyDetector: Sendable {
     static func currentHourRatePercent(samples: [Sample], now: Date) -> Double? {
         let cutoff = now.addingTimeInterval(-3600)
         let recent = samples.filter { $0.observedAt >= cutoff && $0.remainingPercent != nil }
-        guard recent.count >= 2 else { return nil }
+        guard recent.count >= 2,
+              recent.last!.observedAt.timeIntervalSince(recent.first!.observedAt) >= 300 else { return nil }
         return ratePerHour(samples: recent)
-    }
-
-    /// Average depletion rate over the rolling 7-day window, excluding
-    /// the most recent hour so the "current" and "baseline" windows do
-    /// not overlap.  Uses sliding consecutive-pair rates so flat or
-    /// sparse history still produces a number — a flat history yields
-    /// "0 %/h", not nil.
-    static func baselineRatePercent(samples: [Sample], now: Date) -> Double? {
-        let windowStart = now.addingTimeInterval(-7 * 24 * 3600)
-        let recentCutoff = now.addingTimeInterval(-3600)
-        let usable = samples.filter {
-            guard let pct = $0.remainingPercent else { return false }
-            return pct > 0 && $0.observedAt >= windowStart && $0.observedAt < recentCutoff
-        }
-        let rates = consecutivePairRates(samples: usable)
-        guard !rates.isEmpty else { return nil }
-        let total = rates.reduce(0, +)
-        return total / Double(rates.count)
-    }
-
-    /// Highest hourly rate observed in the prior week, excluding the
-    /// current hour.  Uses sliding consecutive-pair rates — no fixed
-    /// hour bucketing — so two samples one hour apart still produce
-    /// a valid rate.
-    static func peakHourRatePercent(samples: [Sample], now: Date) -> Double? {
-        let windowStart = now.addingTimeInterval(-7 * 24 * 3600)
-        let recentCutoff = now.addingTimeInterval(-3600)
-        let usable = samples.filter {
-            guard $0.remainingPercent != nil else { return false }
-            return $0.observedAt >= windowStart && $0.observedAt < recentCutoff
-        }
-        return consecutivePairRates(samples: usable).max()
-    }
-
-    /// Rate between every consecutive pair of samples, in percent-per-hour.
-    /// Returns an empty array when fewer than two samples are provided.
-    /// Positive numbers mean depletion, negative means recovery, zero
-    /// means flat.
-    static func consecutivePairRates(samples: [Sample]) -> [Double] {
-        guard samples.count >= 2 else { return [] }
-        let sorted = samples.sorted { $0.observedAt < $1.observedAt }
-        var rates: [Double] = []
-        rates.reserveCapacity(sorted.count - 1)
-        for i in 1..<sorted.count {
-            let a = sorted[i - 1]
-            let b = sorted[i]
-            guard let apct = a.remainingPercent, let bpct = b.remainingPercent else { continue }
-            let dtHours = b.observedAt.timeIntervalSince(a.observedAt) / 3600
-            guard dtHours > 0 else { continue }
-            // %/h = (a - b) / dtHours  (a − b positive when b is lower, i.e. depleting)
-            rates.append((apct - bpct) / dtHours)
-        }
-        return rates
     }
 
     /// Slope of `remainingPercent` vs `observedAt`, in percent-per-hour.
@@ -289,7 +359,7 @@ public struct AnomalyDetector: Sendable {
         return slope < 0 ? -slope : nil
     }
 
-    static func summary(kind: Anomaly.Kind, ratio: Double, threshold: Double, window: String, comparison: String) -> String {
+    static func summary(kind: Anomaly.Kind, ratio: Double, window: String, comparison: String) -> String {
         let prefix: String
         switch kind {
         case .vsBaseline: prefix = "Spending fast vs"

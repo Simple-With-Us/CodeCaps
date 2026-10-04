@@ -1,6 +1,8 @@
 import AppKit
 import Combine
+import QuotaCore
 import SwiftUI
+import UserNotifications
 
 @main
 enum CodeCapsMain {
@@ -21,6 +23,32 @@ enum CodeCapsMain {
         app.delegate = delegate
         app.run()
         withExtendedLifetime(delegate) {}
+    }
+}
+
+extension AppDelegate: UNUserNotificationCenterDelegate {
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                            willPresent notification: UNNotification,
+                                            withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner, .list, .sound])
+    }
+
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                            didReceive response: UNNotificationResponse,
+                                            withCompletionHandler completionHandler: @escaping () -> Void) {
+        guard response.actionIdentifier == UNNotificationDefaultActionIdentifier else {
+            completionHandler()
+            return
+        }
+        let destination = AlertNavigation(userInfo: response.notification.request.content.userInfo)
+        Task { @MainActor [weak self] in
+            if let destination {
+                self?.showAlert(providerKey: destination.providerKey,
+                                windowId: destination.windowId,
+                                at: destination.timestamp)
+            }
+            completionHandler()
+        }
     }
 }
 
@@ -49,13 +77,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         // Read before anything can open a window: the launch Sparkle performs
         // after installing an update stays in the background.
         let relaunchedForUpdate = UpdateRelaunchMarker().consume()
+        UNUserNotificationCenter.current().delegate = self
         AppUpdater.shared.start()
         configureMenu()
         popover.behavior = .transient
         let glance = NSHostingController(rootView:
             GlancePopover(model: model,
                           openConsole: { [weak self] page in self?.showConsole(page: page) },
-                          openSettings: { [weak self] in self?.showSettings() }))
+                          openSettings: { [weak self] in self?.showSettings() },
+                          openAlert: { [weak self] provider, window, time in
+                              self?.showAlert(providerKey: provider, windowId: window, at: time)
+                          }))
         // SwiftUI must not publish a preferred content size: NSPopover prefers
         // it over `contentSize`, which would let Glance resize itself while it
         // is open and defeat the height ceiling the scroll view depends on.
@@ -89,8 +121,78 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         }.store(in: &subscriptions)
         if model.displayMode != .menuBar && !relaunchedForUpdate { showConsole(page: nil) }
         model.start()
+        startInfisicalSync()
+        NotificationCenter.default.addObserver(
+            forName: .infisicalIdentityChanged, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.infisicalIdentityDidChange() }
+        }
         NSWorkspace.shared.notificationCenter.addObserver(
             self, selector: #selector(refresh), name: NSWorkspace.didWakeNotification, object: nil)
+    }
+
+    // MARK: - Infisical source of truth
+
+    private var infisicalRefreshTimer: Timer?
+
+    /// Loads the app-level settings from Infisical (see INFISICAL.md) when the
+    /// owner has provisioned an identity under Settings → Infisical Sync.
+    /// The load runs off the main thread and never blocks launch: until it
+    /// succeeds the app simply keeps its local values.
+    private func startInfisicalSync() {
+        Task.detached(priority: .utility) { [weak self] in
+            guard let identity = InfisicalIdentityStore.load() else { return }
+            let settings = InfisicalSettings.shared
+            settings.configure(InfisicalSettings.Configuration(
+                environment: InfisicalSettings.defaultEnvironment(),
+                clientId: identity.clientId,
+                clientSecret: identity.clientSecret))
+            await settings.refresh()
+            await MainActor.run { [weak self] in
+                self?.model.adoptInfisicalEndpointsIfUnset()
+                self?.scheduleInfisicalRefresh()
+            }
+        }
+    }
+
+    /// One-shot timer, rescheduled after every fire so a cadence change made
+    /// in Infisical itself takes effect on the next cycle.  A failed refresh
+    /// keeps serving the last-known-good cache — settings staleness is safer
+    /// than an outage.
+    private func scheduleInfisicalRefresh() {
+        infisicalRefreshTimer?.invalidate()
+        infisicalRefreshTimer = Timer.scheduledTimer(
+            withTimeInterval: InfisicalSettings.shared.refreshInterval,
+            repeats: false
+        ) { [weak self] _ in
+            Task {
+                await InfisicalSettings.shared.refresh()
+                await MainActor.run { [weak self] in
+                    self?.model.adoptInfisicalEndpointsIfUnset()
+                    self?.scheduleInfisicalRefresh()
+                }
+            }
+        }
+    }
+
+    /// (Re)starts the whole sync cycle — used at launch and whenever the
+    /// identity changes under Settings → Infisical Sync, so no relaunch is
+    /// needed.  A forgotten identity stops the timer and leaves settings local.
+    private func infisicalIdentityDidChange() {
+        infisicalRefreshTimer?.invalidate()
+        infisicalRefreshTimer = nil
+        startInfisicalSync()
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        guard InfisicalSettings.shared.isProvisioned else { return }
+        Task {
+            await InfisicalSettings.shared.refresh()
+            await MainActor.run { [weak self] in
+                self?.model.adoptInfisicalEndpointsIfUnset()
+                self?.scheduleInfisicalRefresh()
+            }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) { model.stop() }
@@ -240,7 +342,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// is what a reopen or a Dock-mode switch wants.
     func showConsole(page: ConsolePage?) {
         popover.performClose(nil)
-        if let page { consoleState.page = page }
+        if let page {
+            consoleState.clearHistoryFocus()
+            consoleState.page = page
+        }
+        consoleState.reconcile(available: model.displaySections,
+                               readCompleted: model.lastChecked != nil)
         if consoleWindow == nil {
             let window = NSWindow(contentRect: NSRect(origin: .zero, size: Metrics.consoleDefault),
                                   styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -277,7 +384,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     /// Kept so existing selectors and call sites keep working.
-    @objc func showMonitor() { showConsole(page: .allPlatforms) }
+    @objc func showMonitor() {
+        if case .platform(let key) = consoleState.page,
+           model.displaySections.contains(where: { $0.id == key }) {
+            consoleState.clearHistoryFocus()
+        } else if let first = model.displaySections.first {
+            consoleState.select(providerKey: first.id, windowId: nil, at: nil,
+                                in: model.displaySections)
+        } else {
+            consoleState.page = .settingsSourcesFleet
+        }
+        showConsole(page: nil)
+    }
+
+    func showAlert(providerKey: String, windowId: String?, at timestamp: Date?) {
+        consoleState.select(providerKey: providerKey, windowId: windowId,
+                            at: timestamp, in: model.displaySections,
+                            readCompleted: model.lastChecked != nil)
+        showConsole(page: nil)
+    }
 
     /// `⌘,` always lands on a Settings page, the last one used.
     @objc func showSettings() { showConsole(page: consoleState.lastSettingsPage) }
@@ -331,7 +456,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             appMenu.addItem(item)
         }
         add("Open CodeCaps", #selector(showMonitor), "1")
-        add("Glance", #selector(togglePopover), "2")
+        add("Docked Bar", #selector(togglePopover), "2")
         add("Settings…", #selector(showSettings), ",")
         add("Refresh Quotas", #selector(refresh), "r")
         appMenu.addItem(.separator())

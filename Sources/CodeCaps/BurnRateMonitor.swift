@@ -59,9 +59,16 @@ enum BurnRateMonitor {
                 providerKey: window.canonicalProviderKey,
                 windowId: window.id,
                 observedAt: window.occurredDate ?? now,
-                remainingPercent: percent)
+                remainingPercent: percent,
+                accountKey: window.accountKey,
+                resetAt: window.resetDate,
+                periodStart: window.periodStartDate)
         }
         try? history(at: historyURL).append(samples)
+    }
+
+    static func loadSamples(historyURL: URL? = nil) -> [AnomalyDetector.Sample] {
+        (try? history(at: historyURL).load()) ?? []
     }
 
     /// Evaluate the owner's current thresholds against everything on disk.
@@ -72,16 +79,15 @@ enum BurnRateMonitor {
             .evaluate(samples: samples, now: now)
     }
 
-    /// Whether there is enough history for either threshold to mean anything.
-    /// A rolling 7-day average needs most of a week; the peak check needs only
-    /// a few hours, because it compares against the worst hour seen so far.
+    /// A descriptive count only.  Detector readiness is per provider, window,
+    /// account, and quota period, so one old sample cannot make all sources ready.
     static func historySummary(now: Date = Date(),
-                               historyURL: URL? = nil) -> (days: Double, enoughForBaseline: Bool, enoughForPeak: Bool) {
-        guard let samples = try? history(at: historyURL).load(), let first = samples.map(\.observedAt).min() else {
-            return (0, false, false)
+                               historyURL: URL? = nil) -> (sampleCount: Int, days: Double) {
+        let samples = loadSamples(historyURL: historyURL).filter {
+            $0.observedAt >= now.addingTimeInterval(-7 * 86_400) && $0.observedAt <= now
         }
-        let days = max(0, now.timeIntervalSince(first) / 86_400)
-        return (days, days >= 1, days >= 1.0 / 24)
+        guard let first = samples.map(\.observedAt).min() else { return (0, 0) }
+        return (samples.count, max(0, now.timeIntervalSince(first) / 86_400))
     }
 }
 
@@ -95,6 +101,9 @@ public struct RunawayAlertRecord: Codable, Identifiable, Equatable, Sendable {
     public let multiplier: Double
     public let comparison: String
     public let summary: String
+    public let ratePercentPerHour: Double?
+    public let comparisonRatePercentPerHour: Double?
+    public let historyCoverageHours: Double?
 
     public init(id: String = UUID().uuidString,
                 timestamp: Date = Date(),
@@ -104,7 +113,10 @@ public struct RunawayAlertRecord: Codable, Identifiable, Equatable, Sendable {
                 windowLabel: String,
                 multiplier: Double,
                 comparison: String,
-                summary: String) {
+                summary: String,
+                ratePercentPerHour: Double? = nil,
+                comparisonRatePercentPerHour: Double? = nil,
+                historyCoverageHours: Double? = nil) {
         self.id = id
         self.timestamp = timestamp
         self.providerKey = providerKey
@@ -114,6 +126,9 @@ public struct RunawayAlertRecord: Codable, Identifiable, Equatable, Sendable {
         self.multiplier = multiplier
         self.comparison = comparison
         self.summary = summary
+        self.ratePercentPerHour = ratePercentPerHour
+        self.comparisonRatePercentPerHour = comparisonRatePercentPerHour
+        self.historyCoverageHours = historyCoverageHours
     }
 }
 
@@ -137,8 +152,11 @@ struct BurnRateNotification: Equatable, Sendable {
         title = "Runaway Usage: \(prov)"
         let win = windowLabel.map { " (\($0))" } ?? ""
         body = anomalies.map { anomaly in
-            let comp = anomaly.kind == .vsPeak ? "recent peak" : "7-day average"
+            let comp = anomaly.kind == .vsPeak ? "measured peak" : "available-history average"
             let mult = anomaly.multiplier.formatted(.number.precision(.fractionLength(1)))
+            if let rate = anomaly.ratePercentPerHour {
+                return "\(prov)\(win) is spending \(rate.formatted(.number.precision(.fractionLength(1)))) percentage points per hour, \(mult)× your \(comp)."
+            }
             return "\(prov)\(win) is burning at \(mult)× your \(comp)."
         }.joined(separator: sentenceGap)
     }

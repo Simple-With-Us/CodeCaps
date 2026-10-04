@@ -21,6 +21,22 @@ final class SettingsMigrationTests: XCTestCase {
         super.tearDown()
     }
 
+    func testInvalidSavedReadTokenDoesNotChangeRemoteSettings() async {
+        let model = MonitorModel(defaults: defaults)
+        model.readTokenReadForTesting = { nil }
+        var remoteWrites = 0
+        model.settingsWriteForTesting = { _, _ in remoteWrites += 1 }
+        do {
+            try await model.saveConnection(local: false, server: true,
+                                           endpoint: "https://quota.example.com/read", token: "")
+            XCTFail("An unreadable saved token must reject the save")
+        } catch {
+            XCTAssertEqual(remoteWrites, 0)
+            XCTAssertEqual(model.endpoint, "")
+            XCTAssertFalse(model.serverEnabled)
+        }
+    }
+
     func testFreshInstallPostsNowhere() {
         let model = MonitorModel(defaults: defaults)
         XCTAssertEqual(model.endpoint, "")
@@ -88,7 +104,7 @@ final class SettingsMigrationTests: XCTestCase {
 final class ConsolePageStorageTests: XCTestCase {
     func testEveryPageRoundTripsThroughItsStorageKey() {
         let pages: [ConsolePage] = [
-            .allPlatforms, .platform("anthropic"), .platform("google-antigravity:gemini"),
+            .platform("anthropic"), .platform("google-antigravity:gemini"),
             .platform("a:b"), .settingsMenuBar, .settingsPlatforms, .settingsSourcesFleet,
             .settingsAppearance, .settingsAbout,
         ]
@@ -99,12 +115,12 @@ final class ConsolePageStorageTests: XCTestCase {
 
     func testAnUnknownKeyIsRejectedRatherThanGuessed() {
         XCTAssertNil(ConsolePage.fromStorageKey(""))
+        XCTAssertNil(ConsolePage.fromStorageKey("allPlatforms"))
         XCTAssertNil(ConsolePage.fromStorageKey("settingsNothing"))
         XCTAssertEqual(ConsolePage.fromStorageKey("platform:"), .platform(""))
     }
 
     func testOnlySettingsPagesReportThemselvesAsSettings() {
-        XCTAssertFalse(ConsolePage.allPlatforms.isSettings)
         XCTAssertFalse(ConsolePage.platform("anthropic").isSettings)
         for page in ConsolePage.settingsPages { XCTAssertTrue(page.isSettings) }
     }

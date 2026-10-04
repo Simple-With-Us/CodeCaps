@@ -466,3 +466,11 @@ Board 42ae688ab3b84d9aa65e445aab072a15.  Closes #37.
 - Current pipeline has seven direct HTTP reader paths, three helper paths, and no passive CLI quota-file input.  Source-path counts are not request counts.
 - A private metadata-only comparison found matching current-account IDs in 18 of 20 recent Codex session files; the other two lacked usable identity.  Passive quota reads must require exact account identity, bounded regular files, complete allowlisted events, and original event timestamps.  Missing identity is excluded.
 - Provider checks retain the existing five-minute default.  Independent passive-file scheduling, counters, cancellation, and unchanged-input behavior require tests before shipping.
+
+## 2026-10-03 — Platform History and Alert Navigation [CODEX, in progress]
+
+- Board: `e574a7ee`; GitHub: #136.  Branch: `codex/platform-usage-history`.
+- Owner requested removal of All Platforms, prominent individual platform graphs, explanatory click-through alerts, and Docked Bar terminology.
+- UI expert reviewed the supplied notification screenshot and source at merged #134/#135.  Recommended quota percentage charts with 24-hour/7-day ranges, reset and missing-data breaks, and honest history availability.  This is a source-based design review, not a runtime visual audit.
+- Files reserved: ConsoleViews, UsageHistoryViews, GlanceViews, AppDelegate, ResetAlarmManager, SettingsViews, BurnRateMonitor, MonitorModel, AnomalyDetector, and associated tests.  Core history and app UI have separate writers.
+- App coordination moved to #codecaps (`C0C6NFR5QRJ`) through the existing websocket helper.  Widget release verification continues separately.  Provider/file refresh scheduling remains tracked by #137 / `4bcf84f1`.

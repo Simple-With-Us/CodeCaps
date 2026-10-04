@@ -19,6 +19,8 @@ public struct ResetAlarmNotification: Equatable, Sendable {
     public let sound: ResetAlarmSound
     /// The windows whose reset this notification announces, largest first.
     public let windowLabels: [String]
+    public let windowId: String?
+    public let timestamp: Date
 }
 
 /// What happened when the owner pressed "Send Test Notification".
@@ -335,7 +337,9 @@ public final class ResetAlarmManager: ObservableObject {
                 body: content.body,
                 remainingPercent: Int((group.first?.remainingPercent ?? 100).rounded()),
                 sound: alarmSound,
-                windowLabels: content.windowLabels)
+                windowLabels: content.windowLabels,
+                windowId: group.first?.windowId,
+                timestamp: now)
             deliver(payload)
             return payload
         }
@@ -375,6 +379,9 @@ public final class ResetAlarmManager: ObservableObject {
         content.title = payload.title
         content.body = payload.body
         content.sound = notificationSound(for: payload.sound)
+        content.userInfo = AlertNavigation(providerKey: payload.providerId,
+                                           windowId: payload.windowId,
+                                           timestamp: nil).userInfo
 
         let request = UNNotificationRequest(
             identifier: "codecaps.reset.\(payload.providerId).\(Date().timeIntervalSince1970)",
@@ -408,6 +415,11 @@ public final class ResetAlarmManager: ObservableObject {
         content.title = payload.title
         content.body = payload.body
         content.sound = notificationSound(for: payload.sound)
+        if let first = payload.anomalies.first {
+            content.userInfo = AlertNavigation(providerKey: first.providerKey,
+                                               windowId: first.windowId,
+                                               timestamp: first.observedAt).userInfo
+        }
         let request = UNNotificationRequest(identifier: payload.identifier,
                                             content: content,
                                             trigger: nil)
@@ -449,7 +461,9 @@ public final class ResetAlarmManager: ObservableObject {
                 body: body,
                 remainingPercent: 100,
                 sound: alarmSound,
-                windowLabels: []
+                windowLabels: [],
+                windowId: nil,
+                timestamp: Date()
             ))
             testNotificationOutcome = .sent
             return
