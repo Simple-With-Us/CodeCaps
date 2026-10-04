@@ -139,6 +139,44 @@ final class ConsoleSelectionTests: XCTestCase {
         XCTAssertNil(invalid?.timestamp)
     }
 
+    func testNormalizedDisplayWindowRetainsLocalHistoryProvenance() throws {
+        let model = MonitorModel(defaults: defaults())
+        let now = Date()
+        let local = QuotaWindow(id: "local-claude", provider: "Claude",
+                                label: "5-hour window", remainingPercent: 70,
+                                occurredAt: ISO8601DateFormatter().string(from: now),
+                                accountKey: "local-account")
+        model.injectLocalHistorySourceForTests([local])
+        let response = QuotaResponse(generatedAt: "", windows: [local])
+        let section = try XCTUnwrap(response.platformSections(now: now).first { $0.providerKey == "anthropic" })
+        let row = try XCTUnwrap(DisplaySection.rows(for: section, now: now).first)
+        XCTAssertNotEqual(row.section.windows.first?.window, local)
+        XCTAssertTrue(model.hasLocalHistorySource(for: row))
+        var otherAccount = local
+        otherAccount.accountKey = "other-account"
+        model.injectLocalHistorySourceForTests([otherAccount])
+        XCTAssertFalse(model.hasLocalHistorySource(for: row))
+    }
+
+    func testPooledAntigravityDisplayRetainsLocalHistoryProvenance() throws {
+        let model = MonitorModel(defaults: defaults())
+        let now = Date()
+        let local = QuotaWindow(id: "antigravity:gemini:5h", provider: "Antigravity",
+                                providerKey: "google-antigravity", label: "Gemini Models · 5-hour",
+                                remainingPercent: 70, window: "5h",
+                                occurredAt: ISO8601DateFormatter().string(from: now),
+                                accountKey: "local-account")
+        model.injectLocalHistorySourceForTests([local])
+        let response = QuotaResponse(generatedAt: "", windows: [local])
+        let section = try XCTUnwrap(response.platformSections(now: now).first { $0.providerKey == "google-antigravity" })
+        let row = try XCTUnwrap(DisplaySection.rows(for: section, now: now).first { $0.id == "google-antigravity:gemini" })
+        XCTAssertTrue(model.hasLocalHistorySource(for: row))
+        var remote = local
+        remote.producerInstanceId = "other-machine"
+        model.injectLocalHistorySourceForTests([remote])
+        XCTAssertFalse(model.hasLocalHistorySource(for: row))
+    }
+
     func testSameWindowIdFromAnotherProducerCannotShowLocalHistory() {
         let model = MonitorModel(defaults: defaults())
         let local = QuotaWindow(id: "shared-id", provider: "Claude", providerKey: "anthropic",
