@@ -31,12 +31,39 @@ final class DocsScreenshotTests: XCTestCase {
         return GlanceFixtures.png(of: popover, size: CGSize(width: Metrics.glanceWidth, height: height), dark: dark)
     }
 
-    private func console(page: ConsolePage, dark: Bool) -> Data? {
+    private func console(page: ConsolePage, dark: Bool, selectedAlert: Bool = false) -> Data? {
+        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let historyURL = temporary.appendingPathComponent("history.jsonl")
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        let now = GlanceFixtures.now
+        let samples: [AnomalyDetector.Sample] = (0...12).flatMap { step in
+            let at = now.addingTimeInterval(Double(step - 12) * 600)
+            return [
+                AnomalyDetector.Sample(providerKey: "anthropic", windowId: "claude-5h", observedAt: at,
+                                       remainingPercent: Double(85 - step * 4)),
+                AnomalyDetector.Sample(providerKey: "anthropic", windowId: "claude-7d", observedAt: at,
+                                       remainingPercent: Double(98 - step))
+            ]
+        }
+        try? AnomalyDetector.SampleHistory(url: historyURL).append(samples)
+        let alert = RunawayAlertRecord(timestamp: now.addingTimeInterval(-3_600), providerKey: "anthropic",
+                                       providerLabel: "Claude", windowId: "claude-5h",
+                                       windowLabel: "5-hour window", multiplier: 5.3,
+                                       comparison: "available-history average",
+                                       summary: "Claude (5-hour window) is spending quota at 5.3× its measured average.",
+                                       ratePercentPerHour: 24, comparisonRatePercentPerHour: 4.5,
+                                       historyCoverageHours: 6)
         let (model, defaults, suite) = GlanceFixtures.makeModel(view: .fromMac, alarmsAll: true, fleet: false,
-                                                                localReadersOn: true)
+                                                                localReadersOn: true,
+                                                                historyURL: historyURL,
+                                                                alertHistory: selectedAlert ? [alert] : [])
         defer { defaults.removePersistentDomain(forName: suite) }
         let state = ConsoleState(defaults: defaults)
         state.page = page
+        if selectedAlert {
+            state.select(providerKey: "anthropic", windowId: "claude-5h", at: alert.timestamp,
+                         in: model.displaySections)
+        }
         return GlanceFixtures.png(of: ConsoleView(model: model, state: state), size: consoleSize, dark: dark)
     }
 
@@ -51,8 +78,10 @@ final class DocsScreenshotTests: XCTestCase {
         try write(glance(view: .fromMac, dark: false), "glance-light.png", to: directory)
         try write(glance(view: .fromMac, dark: true), "glance-dark.png", to: directory)
         try write(glance(view: .fromFleet, dark: false), "glance-fleet.png", to: directory)
-        try write(console(page: .allPlatforms, dark: false), "console-light.png", to: directory)
-        try write(console(page: .allPlatforms, dark: true), "console-dark.png", to: directory)
+        try write(console(page: .platform("anthropic"), dark: false), "console-light.png", to: directory)
+        try write(console(page: .platform("anthropic"), dark: true), "console-dark.png", to: directory)
+        try write(console(page: .platform("anthropic"), dark: false, selectedAlert: true),
+                  "platform-alert-history.png", to: directory)
         try write(console(page: .platform("google-antigravity:gemini"), dark: false),
                   "platform-antigravity.png", to: directory)
         try write(console(page: .settingsSourcesFleet, dark: false), "settings-sources-fleet.png", to: directory)

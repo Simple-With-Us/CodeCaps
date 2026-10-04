@@ -54,7 +54,7 @@ struct SettingsMenuBarPage: View {
                 Eyebrow("MENU BAR")
             } footer: {
                 Text("Match Provider follows each platform's Logo Style." + sentenceGap
-                     + "Light/Dark and Colour override it for the menu bar only, leaving the popover and sidebar on whatever you set on Logo Style.")
+                     + "Light/Dark and Colour override it for the menu bar only, leaving the Docked Bar and sidebar on whatever you set on Logo Style.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
@@ -106,7 +106,7 @@ struct SettingsPlatformsPage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Drag to reorder." + sentenceGap
-                 + "This order is used in the quota list and in Glance.")
+                 + "This order is used in the quota list and in the Docked Bar.")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -371,7 +371,7 @@ struct SettingsSourcesFleetPage: View {
                 Eyebrow("SOURCES PER PLATFORM")
             } footer: {
                 Text("CodeCaps pulls each provider's quota from whichever sources can answer." + sentenceGap
-                     + "Turn a source off to drop its windows everywhere — the menu bar, Glance, and Console all skip it." + sentenceGap
+                     + "Turn a source off to drop its windows everywhere — the menu bar, Docked Bar, and Console all skip it." + sentenceGap
                      + "Reorder to tell CodeCaps which source wins when two disagree; the top of the list is preferred, the bottom is the fallback.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
@@ -1065,12 +1065,13 @@ struct SettingsAboutPage: View {
 
 struct SettingsNotificationsPage: View {
     @ObservedObject var model: MonitorModel
+    @ObservedObject var state: ConsoleState
 
     var body: some View {
         SettingsPage {
             Section {
                 Toggle("Reset Alarms For All Providers", isOn: $model.alarmsAll)
-                    .help("The same switch as the All bell at the top of Glance.")
+                    .help("The same switch as the All bell at the top of the Docked Bar.")
                     .accessibilityLabel("Reset Alarms For All Providers")
                 Picker("Alert Sound", selection: $model.alarmSound) {
                     ForEach(ResetAlarmSound.defaultPickerOrder, id: \.self) { sound in
@@ -1098,7 +1099,7 @@ struct SettingsNotificationsPage: View {
             } footer: {
                 Text("A provider's longest window, such as its weekly or monthly limit, alerts every time it resets, so you know a new week or month began." + sentenceGap
                      + "A shorter window, such as a 5-hour limit, alerts only if it reached its cap or came within 20% of it before resetting." + sentenceGap
-                     + "Turn All off to choose providers one by one with the bell at the left of each row in Glance.")
+                     + "Turn All off to choose providers one by one with the bell at the left of each row in the Docked Bar.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1112,7 +1113,7 @@ struct SettingsNotificationsPage: View {
                 if model.burnRateAlertsEnabled {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
-                            Text("Versus Your 7-Day Average")
+                            Text("Versus Your Recent Average")
                             Slider(value: $model.anomalyBaselineMultiplier,
                                    in: BurnRateMonitor.baselineRange,
                                    step: 0.5)
@@ -1120,11 +1121,11 @@ struct SettingsNotificationsPage: View {
                                 .font(.system(size: 11).monospacedDigit())
                                 .frame(width: 38, alignment: .trailing)
                         }
-                        .help("Alerts when the current hour is spending this many times faster than your average hour of the past week. Recommended 5×.")
-                        .accessibilityLabel("Alert threshold versus your 7-day average")
+                        .help("Alerts when the current hour is spending this many times faster than your measured average, using up to seven days of available readings. Recommended 5×.")
+                        .accessibilityLabel("Alert threshold versus your recent average")
 
                         HStack {
-                            Text("Versus Your Worst Hour")
+                            Text("Versus Your Measured Peak")
                             Slider(value: $model.anomalyPeakMultiplier,
                                    in: BurnRateMonitor.peakRange,
                                    step: 0.1)
@@ -1132,15 +1133,12 @@ struct SettingsNotificationsPage: View {
                                 .font(.system(size: 11).monospacedDigit())
                                 .frame(width: 38, alignment: .trailing)
                         }
-                        .help("Alerts when the current hour is spending this many times faster than the fastest hour you had last week. Recommended 2×.")
-                        .accessibilityLabel("Alert threshold versus your worst hour")
+                        .help("Alerts when the current hour is spending this many times faster than your fastest measured interval. Recommended 2×.")
+                        .accessibilityLabel("Alert threshold versus your measured peak")
 
                         let history = BurnRateMonitor.historySummary()
-                        Text(history.days < 1
-                             ? "Still Learning." + sentenceGap
-                               + String(format: "%.0f hours of history so far. ", history.days * 24)
-                               + "The worst-hour check starts working once there is a few hours to compare against; the 7-day check needs about a week."
-                             : String(format: "Learning for %.1f days.", history.days))
+                        Text("\(history.sampleCount) saved local readings in the past 7 days." + sentenceGap
+                             + "Each quota window needs at least one hour of valid measured intervals before its comparison can alert.")
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -1151,19 +1149,30 @@ struct SettingsNotificationsPage: View {
                                 .font(.system(size: 11, weight: .semibold))
                                 .foregroundStyle(.primary)
                             ForEach(model.runawayAlertHistory.prefix(5)) { alert in
-                                HStack(alignment: .top) {
-                                    VStack(alignment: .leading, spacing: 1) {
-                                        Text("\(alert.providerLabel) · \(alert.windowLabel)")
-                                            .font(.system(size: 11, weight: .medium))
-                                        Text(alert.summary)
-                                            .font(.system(size: 10))
+                                Button {
+                                    state.select(providerKey: alert.providerKey,
+                                                 windowId: alert.windowId,
+                                                 at: alert.timestamp,
+                                                 in: model.displaySections,
+                                                 readCompleted: model.lastChecked != nil)
+                                } label: {
+                                    HStack(alignment: .top) {
+                                        VStack(alignment: .leading, spacing: 1) {
+                                            Text("\(alert.providerLabel) · \(alert.windowLabel)")
+                                                .font(.system(size: 11, weight: .medium))
+                                            Text(alert.summary)
+                                                .font(.system(size: 10))
+                                                .foregroundStyle(.secondary)
+                                        }
+                                        Spacer()
+                                        Text(alert.timestamp.formatted(date: .omitted, time: .shortened))
+                                            .font(.system(size: 10).monospacedDigit())
                                             .foregroundStyle(.secondary)
                                     }
-                                    Spacer()
-                                    Text(alert.timestamp.formatted(date: .omitted, time: .shortened))
-                                        .font(.system(size: 10).monospacedDigit())
-                                        .foregroundStyle(.secondary)
                                 }
+                                .buttonStyle(.plain)
+                                .help("Open \(alert.providerLabel) usage history")
+                                .accessibilityLabel("Open \(alert.providerLabel), \(alert.windowLabel) usage history at \(alert.timestamp.formatted())")
                                 .padding(.vertical, 1)
                             }
                         }
@@ -1171,11 +1180,11 @@ struct SettingsNotificationsPage: View {
                     .padding(.top, 2)
                 }
             } header: {
-                Eyebrow("RUNAWAY AGENTS")
+                Eyebrow("RUNAWAY USAGE")
             } footer: {
-                Text("5× the average is the recommended starting point." + sentenceGap
-                     + "At 3× a long agent run looks exactly like a runaway, and an alert that cries wolf on a normal afternoon gets muted within a week." + sentenceGap
-                     + "The worst-hour check fires far more readily and is the one that catches a stuck loop, so it is the first to lower if you want to hear from it.")
+                Text("5× the measured average is the recommended starting point." + sentenceGap
+                     + "The comparison uses only valid readings from the same quota period and account." + sentenceGap
+                     + "The measured-peak check catches unusually fast depletion relative to your own past activity.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

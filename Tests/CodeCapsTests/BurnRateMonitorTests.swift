@@ -92,16 +92,15 @@ final class BurnRateMonitorTests: XCTestCase {
         let url = URL(fileURLWithPath: home + "/spike.jsonl")
         let history = AnomalyDetector.SampleHistory(url: url)
         let now = Date()
-        // Seven days draining at 0.5 points per hour, one sample every 5
-        // minutes, ending at 40% — then a single sample five minutes later
-        // at 25%.
+        // Seven days draining at 0.3 points per hour, one sample every 5
+        // minutes, ending near 40% — then a sharp fall to 25%.
         let count = 7 * 24 * 12
-        let startPercent = 40.0 + Double(count * 5 / 60) * 0.5
+        let startPercent = 90.0
         var samples: [AnomalyDetector.Sample] = []
         for i in 0..<count {
             let minutesAgo = Double(count - i) * 5
             samples.append(sample("w", at: now.addingTimeInterval(-minutesAgo * 60),
-                                  startPercent - (minutesAgo / 60) * 0.5))
+                                  startPercent - ((Double(count * 5) - minutesAgo) / 60) * 0.3))
         }
         samples.append(sample("w", at: now, 25))
         try history.append(samples)
@@ -110,7 +109,7 @@ final class BurnRateMonitorTests: XCTestCase {
         let anomalies = AnomalyDetector(baselineMultiplier: 5, peakMultiplier: 2)
             .evaluate(samples: loaded, now: now)
         XCTAssertFalse(anomalies.isEmpty,
-                       "a 15-point drop in 5 minutes against a 0.5/hour week must be reported")
+                       "a sharp drop in 5 minutes against a 0.3/hour week must be reported")
         for anomaly in anomalies {
             XCTAssertTrue([.vsBaseline, .vsPeak].contains(anomaly.kind),
                           "an unknown anomaly kind means the enum moved under this test")

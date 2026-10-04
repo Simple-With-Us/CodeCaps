@@ -142,14 +142,19 @@ enum GlanceFixtures {
         pickedAlarms: [String] = ["anthropic", "google-antigravity:gemini", "cursor"],
         localReadersOn: Bool = false,
         extraWindows: [QuotaWindow] = [],
-        signedOut: Set<String> = []
+        signedOut: Set<String> = [],
+        historyURL: URL? = nil,
+        alertHistory: [RunawayAlertRecord] = []
     ) -> (model: MonitorModel, defaults: UserDefaults, suite: String) {
         let suite = "com.jays.codecaps.render." + UUID().uuidString
         let defaults = UserDefaults(suiteName: suite)!
         // Nothing here calls `start()`, so no reader runs either way; this only
         // decides what the footer and the empty states say.
         defaults.set(localReadersOn, forKey: "localEnabled")
-        let model = MonitorModel(defaults: defaults)
+        if let data = try? JSONEncoder().encode(alertHistory) {
+            defaults.set(data, forKey: "runawayAlertHistory")
+        }
+        let model = MonitorModel(defaults: defaults, burnRateHistoryURL: historyURL)
         // A signed-out provider reports no windows and the issue its reader
         // gives, which is what the row turns into "not signed in".
         let windows = (localWindows + extraWindows).filter { !signedOut.contains($0.providerKey ?? $0.provider) }
@@ -157,6 +162,7 @@ enum GlanceFixtures {
         if signedOut.contains("anthropic") { issues["anthropic"] = ClaudeLoginState.signedOut.issue }
         model.injectForTests(sections: QuotaResponse(generatedAt: "", windows: windows).platformSections(now: now),
                              now: now, issues: issues)
+        if historyURL != nil { model.injectLocalHistorySourceForTests(windows) }
         model.injectFleetForTests(groups: fleet ? fleetGroups : [], checkedAt: now)
         model.glanceView = view
         model.alarmsAll = alarmsAll
