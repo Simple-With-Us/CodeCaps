@@ -21,6 +21,22 @@ final class SettingsMigrationTests: XCTestCase {
         super.tearDown()
     }
 
+    func testInvalidSavedReadTokenDoesNotChangeRemoteSettings() async {
+        let model = MonitorModel(defaults: defaults)
+        model.readTokenReadForTesting = { nil }
+        var remoteWrites = 0
+        model.settingsWriteForTesting = { _, _ in remoteWrites += 1 }
+        do {
+            try await model.saveConnection(local: false, server: true,
+                                           endpoint: "https://quota.example.com/read", token: "")
+            XCTFail("An unreadable saved token must reject the save")
+        } catch {
+            XCTAssertEqual(remoteWrites, 0)
+            XCTAssertEqual(model.endpoint, "")
+            XCTAssertFalse(model.serverEnabled)
+        }
+    }
+
     func testFreshInstallPostsNowhere() {
         let model = MonitorModel(defaults: defaults)
         XCTAssertEqual(model.endpoint, "")
