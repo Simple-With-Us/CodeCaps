@@ -337,6 +337,11 @@ final class ClaudeConsentTests: XCTestCase {
         XCTAssertTrue(ClaudeCredentialSource.rememberedGrantStillUsable(payload, now: Date(timeIntervalSince1970: 1_700_000_000)))
     }
 
+    func testExpiredRenewableRememberedGrantStaysUsable() {
+        let payload = Data(#"{"claudeAiOauth":{"accessToken":"old","refreshToken":"r","expiresAt":1000000000000}}"#.utf8)
+        XCTAssertTrue(ClaudeCredentialSource.rememberedGrantStillUsable(payload, now: Date(timeIntervalSince1970: 1_700_000_000)))
+    }
+
     func testRememberedGrantIsServedWithoutStartingSecurity() {
         let log = ProbeLog()
         let payload = Data(#"{"claudeAiOauth":{"accessToken":"fixture"}}"#.utf8)

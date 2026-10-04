@@ -291,12 +291,14 @@ public enum ClaudeCredentialSource {
         }
     }
 
-    /// A remembered payload is usable only while its access token is still
-    /// unexpired.  Anything else, including a rotated or unreadable record,
-    /// must not be sent again.
+    /// A remembered payload is usable while its access token is still
+    /// unexpired, or while it holds an expired access token that can be renewed
+    /// via its refresh token.  Anything else, including a rotated or unreadable
+    /// record, must not be sent again.
     static func rememberedGrantStillUsable(_ data: Data, now: Date = Date()) -> Bool {
         guard let root = ClaudeOAuthParser.parse(data) else { return false }
         return ClaudeOAuthParser.validOAuth(in: root, now: now) != nil
+            || ClaudeOAuthParser.isRenewable(in: root, now: now)
     }
 
     private static let memoryLock = NSLock()
