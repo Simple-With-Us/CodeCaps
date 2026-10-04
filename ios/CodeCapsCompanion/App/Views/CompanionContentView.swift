@@ -241,7 +241,8 @@ public struct CompanionContentView: View {
     }
 
     private func quotaCard(_ item: CompanionQuotaItem) -> some View {
-        let isExpanded = expandedIds.contains(item.id)
+        let isExpanded = expandedIds.contains(item.id) && item.isExpandable
+        let extraWindows = item.windows.filter { $0.id != item.shortWindow?.id && $0.id != item.longWindow?.id }
 
         return VStack(alignment: .leading, spacing: 12) {
             // Main clickable row
@@ -249,8 +250,18 @@ public struct CompanionContentView: View {
                 CompanionProviderLogo(item: item)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(item.title)
-                        .font(.system(size: 15, weight: .semibold))
+                    HStack(spacing: 6) {
+                        Text(item.title)
+                            .font(.system(size: 15, weight: .semibold))
+
+                        if item.hasSourceDiscrepancy {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(.orange)
+                                .accessibilityLabel("Warning: Secondary source differs by more than 3%")
+                        }
+                    }
+
                     if let sub = item.subtitle {
                         companionSubtitleView(sub)
                     }
@@ -279,12 +290,14 @@ public struct CompanionContentView: View {
                         .font(.system(size: 17, weight: .bold, design: .rounded).monospacedDigit())
                         .foregroundStyle(item.statusColor)
 
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.tertiary)
-                        .frame(width: 14, height: 14)
-                        .rotationEffect(.degrees(isExpanded ? 180 : 0))
-                        .accessibilityHidden(true)
+                    if item.isExpandable {
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.tertiary)
+                            .frame(width: 14, height: 14)
+                            .rotationEffect(.degrees(isExpanded ? 180 : 0))
+                            .accessibilityHidden(true)
+                    }
                 }
             }
 
@@ -302,24 +315,36 @@ public struct CompanionContentView: View {
                 }
             }
 
-            // Multiple time periods / windows when expanded
-            if isExpanded {
+            // Discrepancy warning banner if secondary source diverges by >3%
+            if item.hasSourceDiscrepancy {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.orange)
+                    Text(item.sourceDiscrepancies.first?.description ?? "Source discrepancy > 3%")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.orange)
+                        .lineLimit(1)
+                    Spacer()
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
+            }
+
+            // Multiple time periods / windows when expanded (only extra allowances not already displayed on the card)
+            if isExpanded && !extraWindows.isEmpty {
                 Divider()
                     .padding(.vertical, 2)
 
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("ALLOWANCE PERIODS")
+                    Text("ADDITIONAL ALLOWANCES")
                         .font(.system(size: 10, weight: .bold))
                         .tracking(0.6)
                         .foregroundStyle(.secondary)
 
-                    ForEach(item.windows) { win in
+                    ForEach(extraWindows) { win in
                         windowRow(win)
-                    }
-
-                    // Duplicate sources for the same data folded under the overarching section
-                    if !item.duplicateWindows.isEmpty {
-                        duplicateSourcesSection(item.duplicateWindows)
                     }
                 }
                 .transition(.opacity.combined(with: .move(edge: .top)))
@@ -329,7 +354,9 @@ public struct CompanionContentView: View {
         .background(cardBackground, in: RoundedRectangle(cornerRadius: 14))
         .contentShape(Rectangle())
         .onTapGesture {
-            toggleExpanded(item.id)
+            if item.isExpandable {
+                toggleExpanded(item.id)
+            }
         }
     }
 
@@ -363,54 +390,6 @@ public struct CompanionContentView: View {
                 .frame(width: 40, alignment: .trailing)
         }
         .padding(.vertical, 2)
-    }
-
-    // MARK: - Duplicate Sources Folded Section
-
-    private func duplicateSourcesSection(_ duplicates: [CompanionWindowItem]) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Divider()
-                .padding(.top, 4)
-
-            DisclosureGroup {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(duplicates) { dup in
-                        HStack(spacing: 8) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                HStack(spacing: 6) {
-                                    Text(dup.label)
-                                        .font(.system(size: 12, weight: .medium))
-                                    if let src = dup.source ?? dup.via {
-                                        Text("via \(src)")
-                                            .font(.system(size: 10, weight: .medium))
-                                            .foregroundStyle(.secondary)
-                                            .padding(.horizontal, 5)
-                                            .padding(.vertical, 1.5)
-                                            .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 4))
-                                    }
-                                }
-                                let cd = dup.countdown()
-                                if !cd.isEmpty {
-                                    Text("Resets in \(cd)")
-                                        .font(.system(size: 10))
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                            Spacer()
-                            Text(dup.displayPercent)
-                                .font(.system(size: 12, weight: .bold, design: .rounded).monospacedDigit())
-                                .foregroundStyle(dup.statusColor)
-                        }
-                        .padding(.vertical, 2)
-                    }
-                }
-                .padding(.top, 4)
-            } label: {
-                Label("Additional Sources (\(duplicates.count))", systemImage: "arrow.triangle.merge")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.secondary)
-            }
-        }
     }
 
     // MARK: - Settings View
@@ -479,6 +458,74 @@ public struct CompanionContentView: View {
                     }
                 }
                 .id("syncTokenSection")
+
+                Section("Data Sources & Mirrors") {
+                    let itemsWithDuplicates = model.items.filter { !$0.duplicateWindows.isEmpty }
+                    if itemsWithDuplicates.isEmpty {
+                        Text("No secondary or mirror sources detected." + sentenceGap
+                             + "All allowance windows are sourced directly from your primary sync feed.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(itemsWithDuplicates) { item in
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack(spacing: 8) {
+                                    CompanionProviderLogo(item: item, size: 20)
+                                    Text(item.title)
+                                        .font(.system(size: 14, weight: .semibold))
+                                    Spacer()
+                                    if item.hasSourceDiscrepancy {
+                                        Label("Discrepancy > 3%", systemImage: "exclamationmark.triangle.fill")
+                                            .font(.system(size: 11, weight: .medium))
+                                            .foregroundStyle(.orange)
+                                    }
+                                }
+
+                                ForEach(item.duplicateWindows) { dup in
+                                    HStack(spacing: 8) {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            HStack(spacing: 6) {
+                                                Text(dup.label)
+                                                    .font(.system(size: 12, weight: .medium))
+                                                if let src = dup.source ?? dup.via {
+                                                    Text("via \(src)")
+                                                        .font(.system(size: 10, weight: .medium))
+                                                        .foregroundStyle(.secondary)
+                                                        .padding(.horizontal, 5)
+                                                        .padding(.vertical, 1.5)
+                                                        .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 4))
+                                                }
+                                            }
+                                            let cd = dup.countdown()
+                                            if !cd.isEmpty {
+                                                Text("Resets in \(cd)")
+                                                    .font(.system(size: 10))
+                                                    .foregroundStyle(.secondary)
+                                            }
+                                        }
+                                        Spacer()
+                                        Text(dup.displayPercent)
+                                            .font(.system(size: 12, weight: .bold, design: .rounded).monospacedDigit())
+                                            .foregroundStyle(dup.statusColor)
+                                    }
+                                    .padding(.vertical, 2)
+                                }
+
+                                if item.hasSourceDiscrepancy {
+                                    ForEach(item.sourceDiscrepancies) { disc in
+                                        Text(disc.description)
+                                            .font(.caption2)
+                                            .foregroundStyle(.orange)
+                                    }
+                                }
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
+                } footer: {
+                    Text("CodeCaps monitors primary and mirror feeds for each platform." + sentenceGap
+                         + "Discrepancies greater than 3% between feeds trigger a warning flag on the platform card.")
+                }
 
                 Section("Alerts & Notifications") {
                     Toggle("Reset Alarms For All Providers", isOn: $model.alarmsAll)
