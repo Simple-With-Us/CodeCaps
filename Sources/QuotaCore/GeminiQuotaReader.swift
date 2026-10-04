@@ -1,8 +1,8 @@
 import Foundation
 
-/// Read-only quota probes for vendor CLI credentials that are already present on this Mac.
+/// Read-only quota probe for Gemini CLI credentials already present on this Mac.
 /// Credential and response contents never appear in `LocalQuotaResult` errors.
-public struct AdditionalQuotaReader: Sendable {
+public struct GeminiQuotaReader: Sendable {
     private let homeDirectory: URL
     private let now: @Sendable () -> Date
     private let fetchJSON: @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)
@@ -19,18 +19,8 @@ public struct AdditionalQuotaReader: Sendable {
     }
 
     public func read() async -> LocalQuotaResult {
-        await withTaskGroup(of: ProviderResult.self, returning: LocalQuotaResult.self) { group in
-            group.addTask { await readGemini() }
-            group.addTask { await readKimi() }
-            var windows: [QuotaWindow] = []
-            var issues: [String: String] = [:]
-            for await result in group {
-                windows.append(contentsOf: result.windows)
-                if let issue = result.issue { issues[result.key] = issue }
-            }
-            windows.sort { ($0.providerKey ?? $0.provider, $0.id) < ($1.providerKey ?? $1.provider, $1.id) }
-            return LocalQuotaResult(windows: windows, issues: issues)
-        }
+        let result = await readGemini()
+        return LocalQuotaResult(windows: result.windows, issues: result.issue.map { [result.key: $0] } ?? [:])
     }
 
     private func readGemini() async -> ProviderResult {
@@ -63,49 +53,6 @@ public struct AdditionalQuotaReader: Sendable {
             guard !windows.isEmpty else { return ProviderResult(key: key, windows: [unknown(key: key, provider: "gemini-cli", label: "Gemini CLI quota", observed: observed)], issue: "Gemini CLI returned no readable quota buckets.") }
             return ProviderResult(key: key, windows: windows)
         } catch { return ProviderResult(key: key, issue: errorMessage(error, provider: "Gemini CLI")) }
-    }
-
-    private func readKimi() async -> ProviderResult {
-        let key = "kimi"
-        do {
-            guard let root = try readJSONObject(relativePath: ".kimi-code/credentials/kimi-code.json") else {
-                return ProviderResult(key: key, issue: "Kimi Code is not signed in locally.")
-            }
-            guard let token = root["access_token"] as? String, validToken(token) else {
-                return ProviderResult(key: key, issue: "Kimi Code is not signed in locally.")
-            }
-            if let expiry = expiryDate(root), expiry <= now() {
-                return ProviderResult(key: key, issue: "Kimi Code needs you to sign in again.")
-            }
-            var request = URLRequest(url: URL(string: "https://api.kimi.com/coding/v1/usages")!)
-            request.httpMethod = "GET"
-            request.setValue("application/json", forHTTPHeaderField: "Accept")
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-            let payload = try await requestJSON(request)
-            let observed = now()
-            var windows: [QuotaWindow] = []
-            if let usage = payload["usage"] as? [String: Any] {
-                windows.append(kimiWindow(usage, id: "plan", label: "Plan quota", window: nil, observed: observed))
-            }
-            if let limits = payload["limits"] as? [[String: Any]] {
-                for (index, limit) in limits.enumerated() {
-                    guard let detail = limit["detail"] as? [String: Any], let window = limit["window"] as? [String: Any],
-                          let duration = number(window["duration"]), duration.isFinite, duration > 0, duration <= 31_536_000, let unit = window["timeUnit"] as? String else { continue }
-                    let token = "\(Int(duration))\(unit == "TIME_UNIT_MINUTE" ? "m" : " window")"
-                    windows.append(kimiWindow(detail, id: "limit-\(index + 1)", label: "Kimi Code (\(token))", window: token, observed: observed))
-                }
-            }
-            guard !windows.isEmpty else { return ProviderResult(key: key, windows: [unknown(key: key, provider: "kimi", label: "Kimi Code quota", observed: observed)], issue: "Kimi Code returned no readable quota windows.") }
-            return ProviderResult(key: key, windows: windows)
-        } catch { return ProviderResult(key: key, issue: errorMessage(error, provider: "Kimi Code")) }
-    }
-
-    private func kimiWindow(_ detail: [String: Any], id: String, label: String, window: String?, observed: Date) -> QuotaWindow {
-        let limit = number(detail["limit"]); let remaining = number(detail["remaining"])
-        let percent = limit.flatMap { limit in remaining.flatMap { limit > 0 ? $0 / limit * 100 : nil } }
-        let effectiveRemaining = remaining ?? limit.flatMap { used in number(detail["used"]).map { max(0, used - $0) } }
-        let effectivePercent = limit.flatMap { cap in cap > 0 ? effectiveRemaining.map { $0 / cap * 100 } : nil }
-        return QuotaWindow(id: "local-mac:kimi:\(id)", provider: "kimi", providerKey: "kimi", providerLabel: "Kimi Code", via: "kimi-code", sourceApp: "local-mac", label: label, remainingPercent: percent ?? effectivePercent, absoluteRemaining: effectiveRemaining, absoluteLimit: limit, quotaUnit: "requests", remainingUnknown: (percent ?? effectivePercent) == nil, resetAt: detail["resetTime"] as? String, window: window, occurredAt: iso8601(observed), source: "Kimi Code usage API")
     }
 
     private func fetchGeminiQuota(token: String) async throws -> [String: Any] {
@@ -164,10 +111,9 @@ private func number(_ value: Any?) -> Double? {
     return nil
 }
 private func validToken(_ token: String) -> Bool { !token.isEmpty && !token.contains("\r") && !token.contains("\n") }
-private func expiryDate(_ root: [String: Any]) -> Date? { guard let value = number(root["expires_at"] ?? root["expiresAt"]), value > 0, value.isFinite else { return nil }; return Date(timeIntervalSince1970: value / (value > 10_000_000_000 ? 1000 : 1)) }
 private func iso8601(_ date: Date) -> String { ISO8601DateFormatter().string(from: date) }
 private func unknown(key: String, provider: String, label: String, observed: Date) -> QuotaWindow { QuotaWindow(id: "unknown", provider: provider, providerKey: key, providerLabel: label, via: provider, sourceApp: "local-mac", label: label, remainingUnknown: true, occurredAt: iso8601(observed), source: "local quota reader") }
-private func errorMessage(_ error: Error, provider: String) -> String { if case AdditionalQuotaReader.ReaderError.http(401) = error { return "\(provider) needs you to sign in again." }; if case AdditionalQuotaReader.ReaderError.tooLarge = error { return "\(provider) returned an oversized response." }; return "\(provider) quota is unavailable." }
+private func errorMessage(_ error: Error, provider: String) -> String { if case GeminiQuotaReader.ReaderError.http(401) = error { return "\(provider) needs you to sign in again." }; if case GeminiQuotaReader.ReaderError.tooLarge = error { return "\(provider) returned an oversized response." }; return "\(provider) quota is unavailable." }
 
 private final class NoRedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) { completionHandler(nil) }

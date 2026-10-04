@@ -492,7 +492,7 @@ private enum QuotaProviders {
 
     // deepseek is retired as a quota provider (no local reader ever existed for it);
     // hidden also drops any server-pulled window that still canonicalizes to it.
-    static let hidden: Set<String> = ["kimi", "gemini-cli", "github-copilot", "windsurf", "deepseek"]
+    static let hidden: Set<String> = ["kimi", "github-copilot", "windsurf", "deepseek"]
 
     static let expected: [Expected] = [
         Expected(key: "anthropic", label: "Claude", via: nil),
@@ -502,6 +502,7 @@ private enum QuotaProviders {
         Expected(key: "xai", label: "Grok", via: nil),
         Expected(key: "grok-bot", label: "Grok Bot", via: "cursor"),
         Expected(key: "minimax", label: "MiniMax", via: nil),
+        Expected(key: "gemini-cli", label: "Gemini CLI", via: nil),
     ]
 
     static func canonicalKey(provider: String, providerKey: String?, via: String?) -> String {
@@ -740,4 +741,3 @@ public enum BillingRenewal {
         return formatter.string(from: date)
     }
 }
-
