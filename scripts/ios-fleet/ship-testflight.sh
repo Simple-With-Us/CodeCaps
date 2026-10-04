@@ -90,9 +90,11 @@
 
 set -euo pipefail
 
-# LaunchAgents inherit a tiny PATH (no Homebrew). Node is required for
-# ensure-tf-ready. Keep this before any `node` / `xcodegen` call.
-export PATH="/opt/homebrew/bin:/usr/local/bin:${PATH}"
+# LaunchAgents inherit a tiny PATH (no Homebrew).  Node is required for
+# ensure-tf-ready.  Keep Homebrew available, but prefer Apple's rsync: Xcode's
+# exportArchive passes --extended-attributes to its rsync child, which Homebrew
+# rsync 3.x rejects with "unknown option" and aborts the export.
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:${PATH}"
 
 FLEET_DIR="$(cd "$(dirname "$0")" && pwd)"
 APPS_JSON="${FLEET_DIR}/apps.json"
