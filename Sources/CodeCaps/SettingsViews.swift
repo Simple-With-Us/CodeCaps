@@ -241,6 +241,24 @@ struct SettingsSourcesFleetPage: View {
         Section {
             Toggle("Read Quotas From This Mac",
                    isOn: Binding(get: { model.localEnabled }, set: { model.setLocalEnabled($0) }))
+            Toggle("Provider Checks", isOn: Binding(
+                get: { model.providerChecksEnabled }, set: { model.setProviderChecksEnabled($0) }))
+                .disabled(!model.localEnabled)
+            Picker("Provider Check Interval", selection: $model.providerCheckCadence) {
+                ForEach(SourceRefreshCadence.allCases) { cadence in
+                    Text(cadence.title).tag(cadence)
+                }
+            }
+            .disabled(!model.localEnabled || !model.providerChecksEnabled)
+            Toggle("Codex Session File Checks", isOn: Binding(
+                get: { model.sessionFileChecksEnabled }, set: { model.setSessionFileChecksEnabled($0) }))
+                .disabled(!model.localEnabled)
+            Picker("Session File Check Interval", selection: $model.sessionFileCadence) {
+                ForEach(SourceRefreshCadence.allCases) { cadence in
+                    Text(cadence.title).tag(cadence)
+                }
+            }
+            .disabled(!model.localEnabled || !model.sessionFileChecksEnabled)
             ForEach(ReaderStatus.all, id: \.providerKey) { reader in
                 readerRow(reader)
             }
@@ -250,6 +268,8 @@ struct SettingsSourcesFleetPage: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("CodeCaps reads each CLI's own saved credentials in place." + sentenceGap
                      + "It never asks you for a provider API key.")
+                Text("Provider checks use saved credentials and local helpers across eight AI plan families." + sentenceGap
+                     + "Codex session file checks read one local quota source and do not upload or download on their own.")
                 Text("A snapshot is written to ~/Library/Application Support/Usage Monitor/quota-windows.json for BotFleet.")
                 if let widgetSharingError = model.widgetSharingError {
                     Text(widgetSharingError).foregroundStyle(Theme.warning)
@@ -1188,6 +1208,16 @@ struct SettingsNotificationsPage: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if let row = model.displaySections.first(where: {
+                $0.providerKey == model.runawayAlertHistory.first?.providerKey
+            }) ?? model.displaySections.first {
+                Section {
+                    UsageHistoryView(model: model, state: state, row: row)
+                } header: {
+                    Eyebrow("RECENT USAGE HISTORY")
+                }
             }
 
             Section {

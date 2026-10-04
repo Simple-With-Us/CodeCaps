@@ -209,7 +209,9 @@ public struct LocalQuotaReader: Sendable {
         request.setValue("codex-cli", forHTTPHeaderField: "User-Agent")
         if let accountID = firstString(tokens, ["account_id", "accountId"]) { request.setValue(accountID, forHTTPHeaderField: "chatgpt-account-id") }
         let payload = try await requestJSON(request)
-        let windows = parseCodex(payload, planType: firstString(root, ["plan_type", "planType", "plan"]), observedAt: now())
+        let accountID = firstString(tokens, ["account_id", "accountId"]).flatMap { $0.utf8.count <= 256 ? $0 : nil }
+        let windows = parseCodex(payload, planType: firstString(root, ["plan_type", "planType", "plan"]),
+                                 accountKey: accountID, observedAt: now())
         guard !windows.isEmpty else {
             return ProviderRead(provider: provider, windows: [unknownWindow(provider: provider, label: "Codex quota", observedAt: now())], issue: "Codex returned no readable quota windows.")
         }
@@ -440,6 +442,7 @@ private func window(
     quotaUnit: String? = nil,
     planName: String? = nil,
     periodStart: String? = nil,
+    accountKey: String? = nil,
     observedAt: Date
 ) -> QuotaWindow {
     let bounded = percentage(remaining)
@@ -451,7 +454,7 @@ private func window(
         quotaUnit: quotaUnit, planName: planName,
         resetAt: resetAt, window: windowToken,
         occurredAt: isoFormatter.string(from: observedAt), source: provider.label,
-        periodStart: periodStart
+        periodStart: periodStart, accountKey: accountKey
     ).normalizedForExport()
 }
 
@@ -489,7 +492,7 @@ private func claudeToken(_ value: String) -> String? {
     return count.map { "\($0)\(suffix)" }
 }
 
-private func parseCodex(_ root: [String: Any], planType: String?, observedAt: Date) -> [QuotaWindow] {
+private func parseCodex(_ root: [String: Any], planType: String?, accountKey: String?, observedAt: Date) -> [QuotaWindow] {
     let limits = record(root["rate_limit"] ?? root["rateLimit"] ?? root["rate_limits"] ?? root["rateLimits"] ?? root["limits"])
     var result: [QuotaWindow] = []
     func append(_ slot: String, _ value: [String: Any], modelId: String? = nil) {
@@ -500,7 +503,7 @@ private func parseCodex(_ root: [String: Any], planType: String?, observedAt: Da
         let reset = firstTimestamp(value, ["resets_at", "resetsAt", "reset_at", "resetAt"]) ?? firstNumber(value, ["reset_after_seconds", "resetAfterSeconds", "resets_in_seconds"]).flatMap { seconds in seconds >= 0 && seconds.isFinite && seconds <= 31_536_000 ? isoFormatter.string(from: observedAt.addingTimeInterval(seconds)) : nil }
         let remaining = direct.map(percentage) ?? used.map { 100 - min(100, max(0, $0)) }
         let suffix = modelId.map { " (\($0))" } ?? ""
-        result.append(window(provider: .codex, id: slot, label: token.map { "\($0) window\(suffix)" } ?? "\(slot.capitalized) window\(suffix)", remaining: remaining, resetAt: reset, windowToken: token, modelId: modelId, planName: planType, observedAt: observedAt))
+        result.append(window(provider: .codex, id: slot, label: token.map { "\($0) window\(suffix)" } ?? "\(slot.capitalized) window\(suffix)", remaining: remaining, resetAt: reset, windowToken: token, modelId: modelId, planName: planType, accountKey: accountKey, observedAt: observedAt))
     }
     for (slot, names) in [("primary", ["primary_window", "primaryWindow", "primary"]), ("secondary", ["secondary_window", "secondaryWindow", "secondary"])] {
         var raw: Any?
