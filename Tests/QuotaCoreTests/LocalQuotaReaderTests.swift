@@ -102,7 +102,12 @@ final class LocalQuotaReaderTests: XCTestCase {
         )
 
         let result = await reader.read()
-        XCTAssertEqual(result.issues["anthropic"], "This account needs you to sign in again.")
+        // A token the server rejects drops the remembered bytes and asks for
+        // the one-time Allow Access step (c6b6380), not a plain sign-in
+        // message — the issue must still never carry the token or the 401
+        // body back to the UI.
+        XCTAssertEqual(result.issues["anthropic"], ClaudeLoginState.needsPermission.issue)
+        XCTAssertEqual(result.consentNeeded, ["anthropic"])
         XCTAssertEqual(result.issues["openai"], "Codex is not signed in locally.")
         XCTAssertEqual(result.issues["xai"], "Grok is not signed in locally.")
         XCTAssertFalse(result.issues.values.joined(separator: " ").contains("super-secret"))
