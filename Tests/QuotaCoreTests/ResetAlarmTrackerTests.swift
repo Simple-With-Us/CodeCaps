@@ -399,6 +399,114 @@ final class ResetAlarmTrackerTests: XCTestCase {
                                              weekResetAt: weekEnd + hour, week: 50), now: woke).isEmpty)
     }
 
+    // MARK: - Vendor restores that do not land at 100%
+
+    /// On 2026-10-04 both Cursor and Grok Bot had their quota restored
+    /// mid-cycle and neither rang.  Reproduced here from the numbers in the
+    /// live tracker state: Cursor's included plan went 15.08% to 89.02% and
+    /// Grok Bot's weekly went 52.45% to 91.96%, in both cases with the period
+    /// end left exactly where it was.
+    ///
+    /// The old rule only fired when a restore landed at 95% or above, so a
+    /// vendor that gives back a partial allowance looked like ordinary drift.
+    /// A fixed-period window cannot regain quota inside its own period, so a
+    /// large rise is the signal and the level it lands at is not.
+    func testAVendorRestoreBelow95PercentIsDetected() {
+        var tracker = ResetAlarmTracker()
+        // Cursor: a 30-day billing cycle, thirteen days left when it was restored.
+        let cursorEnd = t0 + 13 * day
+        _ = tracker.process(
+            [reading("plan", period: 30 * day, resetAt: cursorEnd, remaining: 15.08, observedAt: t0, provider: "cursor")],
+            now: t0)
+
+        let cursorLater = t0 + 4 * hour
+        let cursorEvents = tracker.process(
+            [reading("plan", period: 30 * day, resetAt: cursorEnd, remaining: 89.02, observedAt: cursorLater, provider: "cursor")],
+            now: cursorLater)
+        XCTAssertEqual(cursorEvents.map(\.windowId), ["plan"])
+        XCTAssertEqual(cursorEvents.first?.isVendorReset, true, "A mid-cycle restore is a vendor reset.")
+    }
+
+    func testAPartialRestoreOfEverySizeIsDetected() {
+        // 56.45% to 91.96% is a 35-point rise that never reaches 95%.
+        var tracker = ResetAlarmTracker()
+        let weekEnd = t0 + 5 * day
+        _ = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: weekEnd, remaining: 56.45, observedAt: t0, provider: "grok-bot")],
+            now: t0)
+
+        let later = t0 + 3 * hour
+        let events = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: weekEnd, remaining: 91.96, observedAt: later, provider: "grok-bot")],
+            now: later)
+        XCTAssertEqual(events.map(\.windowId), ["weekly"])
+        XCTAssertEqual(events.first?.isVendorReset, true)
+    }
+
+    /// A rise is only new evidence when the period end holds still.  When the
+    /// end moves too, the earlier rule already calls it an early reset — a
+    /// provider resetting a limit early moves its reset time and the quota
+    /// climbs — so this rule adds nothing there and must not change it.
+    func testARiseWhosePeriodEndAlsoMovesIsStillAnEarlyReset() {
+        var tracker = ResetAlarmTracker()
+        let end = t0 + 5 * day
+        _ = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end, remaining: 56.45, observedAt: t0, provider: "grok-bot")],
+            now: t0)
+
+        let later = t0 + 3 * hour
+        let events = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end + 3 * hour, remaining: 91.96, observedAt: later, provider: "grok-bot")],
+            now: later)
+        XCTAssertEqual(events.map(\.windowId), ["weekly"], "A moved period end is an early reset.")
+    }
+
+    /// A large rise inside the drift tolerance is still the end holding still:
+    /// a provider recomputing "now plus the seconds left" jitters by seconds.
+    func testAHandedBackQuotaIsDetectedDespiteResetTimeJitter() {
+        var tracker = ResetAlarmTracker()
+        let end = t0 + 5 * day
+        _ = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end, remaining: 15.0, observedAt: t0, provider: "grok-bot")],
+            now: t0)
+        let later = t0 + hour
+        let events = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end + 60, remaining: 89.0, observedAt: later, provider: "grok-bot")],
+            now: later)
+        XCTAssertEqual(events.map(\.windowId), ["weekly"])
+        XCTAssertEqual(events.first?.isVendorReset, true)
+    }
+
+    /// Small drift is still drift, not a restore.
+    func testASmallMidWindowRiseIsNotAReset() {
+        var tracker = ResetAlarmTracker()
+        let end = t0 + 5 * day
+        _ = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end, remaining: 88.0, observedAt: t0, provider: "grok-bot")],
+            now: t0)
+        let later = t0 + 20 * 60
+        XCTAssertTrue(tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end, remaining: 91.0, observedAt: later, provider: "grok-bot")],
+            now: later).isEmpty)
+    }
+
+    /// One restore rings once, not once per refresh.
+    func testAVendorRestoreRingsOnlyOnce() {
+        var tracker = ResetAlarmTracker()
+        let end = t0 + 5 * day
+        _ = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end, remaining: 15.0, observedAt: t0, provider: "grok-bot")],
+            now: t0)
+        let first = t0 + hour
+        XCTAssertEqual(tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end, remaining: 89.0, observedAt: first, provider: "grok-bot")],
+            now: first).count, 1)
+        let second = t0 + 2 * hour
+        XCTAssertTrue(tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end, remaining: 87.0, observedAt: second, provider: "grok-bot")],
+            now: second).isEmpty)
+    }
+
     func testAnEarlyResetByTheProviderStillCounts() {
         // A provider that resets a limit early moves the reset a whole period.
         var tracker = ResetAlarmTracker()

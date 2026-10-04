@@ -227,6 +227,15 @@ public enum ResetAlarmPolicy {
     public static let maximumFutureSkew: TimeInterval = 5 * 60
     /// "Remaining rose" means by more than this, so rounding is not a reset.
     public static let riseEpsilon: Double = 1
+    /// A mid-cycle rise of at least this many points, with the period end left
+    /// where it was, is the provider handing quota back.
+    ///
+    /// The level the quota lands at says nothing: on 2026-10-04 Cursor's
+    /// included plan came back at 89% and Grok Bot's week at 92%, and a rule
+    /// that only fired at 95% or above missed both.  A fixed-period window
+    /// cannot regain quota inside its own period, so the size of the rise is
+    /// the evidence and 30 points is far beyond rounding or a stale reading.
+    public static let vendorRestoreRise: Double = 30
     /// Windows and fires not seen for this long are forgotten.
     public static let retention: TimeInterval = 45 * 86_400
     /// A window's period counts toward "largest" for this long after it was
@@ -432,12 +441,25 @@ public struct ResetAlarmTracker: Sendable {
                 isReset = true
                 nextResetAt = observation.resetAt.flatMap { $0 > readAt ? $0 : nil }
             }
-            // Mid-window reset: anytime a quota jumps up to 100% or from under 80% to over 95%
-            // during a timeframe that is not at the end of the window.
+            // Mid-window reset: a quota that jumps back up while the period
+            // is still running.  Three ways to see it, and none of them
+            // requires the quota to land at 100%:
+            //  - the quota is handed back, which shows as a large rise against
+            //    a period end that did not move at all.  A rolling window
+            //    cannot do this: as old usage ages out its remaining climbs
+            //    AND its period end creeps forward, so requiring the end to
+            //    hold still is what separates the two.
+            //  - the quota jumps to full from anything less.
+            //  - the quota was nearly spent and is now nearly untouched.
             if !isReset, !hasPassed, let reading, let last = window.lastRemaining {
                 let jumpedToFull = reading >= 99.5 && last < 99.5
                 let surgedMidWindow = last < 80.0 && reading >= 95.0
-                if jumpedToFull || surgedMidWindow {
+                let periodEndHeld = observation.resetAt.map {
+                    abs($0.timeIntervalSince(previousReset)) <= ResetAlarmPolicy.resetDriftTolerance
+                } ?? false
+                let quotaHandedBack = periodEndHeld
+                    && reading >= last + ResetAlarmPolicy.vendorRestoreRise
+                if jumpedToFull || surgedMidWindow || quotaHandedBack {
                     isReset = true
                     isMidWindow = true
                     nextResetAt = observation.resetAt.flatMap { $0 > readAt ? $0 : nil } ?? window.periodResetAt

@@ -540,3 +540,43 @@ Board 42ae688ab3b84d9aa65e445aab072a15.  Closes #37.
   `ImageRenderer` harness, not committed) rather than guessing at row counts,
   then `swift test` (671 tests, 0 failures) and `xcodebuild` of both
   `CodeCapsWidgets` and `CodeCapsWidgetsMac`.
+
+## 2026-10-04 — Vendor Restores Below 95% Are Now Detected [MINIMAX, in progress]
+
+- Board: `aa678b48`.  Branch: `mm/reset-detect-vendor-restore`.
+  Worktree: `/Users/jay/apps/codecaps-mm-widgets`.
+- Owner reported Cursor and Grok Bot were reset and that the system should
+  have noticed.  It did not.  Confirmed from the live tracker state persisted
+  in `com.jays.agent-bar.mac`: `local|cursor|local-mac:cursor:plan` moved
+  `minimumRemaining` 15.08 to `lastRemaining` 89.02 and
+  `local|grok-bot|local-mac:grok-bot:weekly` moved 52.45 to 91.96, both with
+  `periodResetAt` unchanged (813954746 and 812918119), and neither key appears
+  in `recentFires`.  Both period ends were days in the future, so the
+  end-of-period path could not apply either.
+- Root cause was a single rule in `ResetAlarmTracker.advance`: the mid-window
+  branch fired only when the quota jumped to 99.5% or above, or from under 80%
+  to over 95%.  Cursor came back at 89% and Grok Bot at 92%, so both fell
+  through the gap between those bars and were absorbed as ordinary drift.
+- The signal is the size of the rise, not the level it lands at: a
+  fixed-period window cannot regain quota inside its own period.  A rise of at
+  least `ResetAlarmPolicy.vendorRestoreRise` (30 points) against a period end
+  that held still is a vendor handing quota back.  Requiring the end to hold
+  still is what keeps this off a rolling window, whose remaining climbs *and*
+  whose period end creeps forward as old usage ages out — a distinction that
+  already exists in the file for `testARollingResetThatCreepsForwardWhileTheMacSleepsIsNotAReset`.
+- Two tests were written first and confirmed failing against the old rule, from
+  the real observed numbers, then made to pass.  Also pinned: a small
+  mid-window rise is still drift, a restore rings once and not once per
+  refresh, a restore is still detected when the reset time jitters inside the
+  drift tolerance, and a rise that moves the period end remains an early reset
+  under the pre-existing rule rather than being reclassified.
+- 41 `ResetAlarmTrackerTests` pass, full suite 677 with 0 failures.  The
+  notification wording already existed and needs no change: "Vendor Reset:
+  Cursor" with "Quota restored mid-cycle, ready to use again."
+- Known limit, stated rather than hidden: the tracker has already absorbed
+  89.02% and 91.96% as ordinary readings, so the reset that already slipped
+  through cannot be recovered by this change.  It catches the next one.
+- `Sources/CodeCaps/UsageHistoryViews.swift:85` carries the same too-strict
+  `>= 98.0` vendor-reset annotation for the Glance history chart, so that chart
+  will not mark these points either.  Left untouched: it is claimed by CODEX in
+  PR #142, and flagged to them on `#codecaps` instead.
