@@ -20,6 +20,8 @@ APP_FRAMEWORKS="$APP_CONTENTS/Frameworks"
 APP_PLUGINS="$APP_CONTENTS/PlugIns"
 APP_EXECUTABLE="$APP_MACOS/$PRODUCT_NAME"
 INFO_PLIST="$APP_CONTENTS/Info.plist"
+MAC_WIDGET_ENTITLEMENTS="$ROOT_DIR/ios/CodeCapsCompanion/Generated/CodeCapsWidgetsMac.entitlements"
+HOST_ENTITLEMENTS="$DIST_DIR/CodeCapsHost.entitlements"
 ICON_MASTER="$ROOT_DIR/assets/icon-1024.png"
 ICON_FALLBACK="$ROOT_DIR/assets/icon-512.png"
 ICON_MAKER="$ROOT_DIR/script/make_icon.swift"
@@ -102,9 +104,11 @@ usage: script/build_and_run.sh [mode]
 
   Signing: $CODECAPS_CODESIGN_IDENTITY or $AGENTBAR_CODESIGN_IDENTITY when set,
   otherwise the first "Developer ID Application:" identity in the codesigning
-  keychain, otherwise ad-hoc with a warning.  A stable identity is what lets
-  the saved Read Token and Ingest Token survive a rebuild — ad-hoc gives every
-  build a different code identity, so the Keychain stops trusting the new one.
+  keychain.  A Developer ID signature is required for the team-authorized Mac
+  widget app group; builds fail closed when no matching identity is available.
+  A stable identity also lets saved Read and Ingest tokens survive rebuilds.
+  CODECAPS_ALLOW_ADHOC_VALIDATION=1 is allowed only with --build-only; it
+  verifies bundle structure but reports App Group access as UNVERIFIED.
   --package also signs with the hardened runtime and a secure timestamp and
   prints the notarytool command; --release is the mode that actually notarizes.
 
@@ -214,26 +218,41 @@ embed_frameworks() {
 
 embed_plugins() {
   local xcode_proj="$ROOT_DIR/ios/CodeCapsCompanion/CodeCapsCompanion.xcodeproj"
+  if ! command -v xcodegen >/dev/null 2>&1; then
+    echo "error: xcodegen is required to generate the Mac widget app-group entitlements." >&2
+    exit 1
+  fi
+  if ! (cd "$ROOT_DIR/ios/CodeCapsCompanion" && xcodegen generate); then
+    echo "error: XcodeGen could not regenerate the companion project." >&2
+    exit 1
+  fi
   if [[ ! -d "$xcode_proj" ]]; then
-    echo "note: Xcode companion project not found at $xcode_proj; skipping widget extension."
-    return 0
+    echo "error: Xcode companion project not found at $xcode_proj." >&2
+    echo "error: refusing to stage CodeCaps without its widget extension." >&2
+    exit 1
+  fi
+  if [[ ! -f "$MAC_WIDGET_ENTITLEMENTS" ]]; then
+    echo "error: XcodeGen did not produce $MAC_WIDGET_ENTITLEMENTS." >&2
+    exit 1
   fi
   local widget_symroot="$ROOT_DIR/ios/CodeCapsCompanion/build"
   echo "building macOS widget extension (CodeCapsWidgetsMac)..."
-  if xcodebuild -project "$xcode_proj" -target CodeCapsWidgetsMac -configuration Release \
+  if xcodebuild -project "$xcode_proj" -target CodeCapsWidgetsMac -configuration Release -jobs "${CODECAPS_BUILD_JOBS:-2}" \
       CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
-      SYMROOT="$widget_symroot" build >/dev/null 2>&1; then
+      SYMROOT="$widget_symroot" build; then
     local appex_src="$widget_symroot/Release/CodeCapsWidgets.appex"
-    if [[ -d "$appex_src" ]]; then
-      mkdir -p "$APP_PLUGINS"
-      rm -rf "$APP_PLUGINS/CodeCapsWidgets.appex"
-      cp -R "$appex_src" "$APP_PLUGINS/"
-      echo "embedded $(basename "$appex_src")"
-    else
-      echo "warning: CodeCapsWidgets.appex was not found in $widget_symroot/Release." >&2
+    if [[ ! -d "$appex_src" ]]; then
+      echo "error: CodeCapsWidgets.appex was not found in $widget_symroot/Release." >&2
+      echo "error: refusing to stage a CodeCaps build without its widget extension." >&2
+      exit 1
     fi
+    mkdir -p "$APP_PLUGINS"
+    rm -rf "$APP_PLUGINS/CodeCapsWidgets.appex"
+    cp -R "$appex_src" "$APP_PLUGINS/"
+    echo "embedded $(basename "$appex_src")"
   else
-    echo "warning: building CodeCapsWidgetsMac failed; continuing without embedded widgets." >&2
+    echo "error: building CodeCapsWidgetsMac failed; see xcodebuild diagnostics above." >&2
+    exit 1
   fi
 }
 
@@ -266,16 +285,6 @@ codesign_bounded() {
   /usr/bin/perl -e 'alarm 30; exec @ARGV' /usr/bin/codesign "$@"
 }
 
-adhoc_warning() {
-  cat >&2 <<'WARN'
-warning: signing ad-hoc.  Every build then carries a different code identity, so
-         the saved Read Token and Ingest Token stop being readable and have to
-         be re-authorized (Sources & Fleet, Re-Authorize Saved Token) or pasted
-         again after every build.  Set AGENTBAR_CODESIGN_IDENTITY, or install a
-         Developer ID Application identity, to sign stably instead.
-WARN
-}
-
 # Nested code is signed before the bundle that contains it.  That is what
 # replaces --deep, which re-signs everything inside with the outer bundle's
 # options and which Apple has deprecated for exactly that reason.
@@ -305,10 +314,23 @@ sign_with_identity() {
   local identity="$1" target status
   while IFS= read -r target; do
     [[ -n "$target" ]] || continue
-    codesign_bounded --force ${SIGN_OPTIONS[@]+"${SIGN_OPTIONS[@]}"} --preserve-metadata=entitlements --sign "$identity" "$target" || return 1
+    if [[ "$target" == *.appex ]]; then
+      codesign_bounded --force ${SIGN_OPTIONS[@]+"${SIGN_OPTIONS[@]}"} \
+        --entitlements "$MAC_WIDGET_ENTITLEMENTS" --sign "$identity" "$target" || return 1
+    else
+      codesign_bounded --force ${SIGN_OPTIONS[@]+"${SIGN_OPTIONS[@]}"} --preserve-metadata=entitlements --sign "$identity" "$target" || return 1
+    fi
   done < <(framework_helper_paths)
   while IFS= read -r target; do
     [[ -n "$target" ]] || continue
+    if [[ "$target" == *.appex ]]; then
+      if ! codesign_bounded --force ${SIGN_OPTIONS[@]+"${SIGN_OPTIONS[@]}"} \
+        --entitlements "$MAC_WIDGET_ENTITLEMENTS" --sign "$identity" "$target"; then
+        echo "error: could not sign required widget extension: $target" >&2
+        return 1
+      fi
+      continue
+    fi
     codesign_bounded --force ${SIGN_OPTIONS[@]+"${SIGN_OPTIONS[@]}"} --sign "$identity" "$target" && continue
     status=$?
     # A SwiftPM resource bundle carries no Info.plist, so codesign calls it an
@@ -320,7 +342,51 @@ sign_with_identity() {
     [[ "$status" != "$WATCHDOG_STATUS" ]] || return 1
     echo "note: not separately signable, sealed as a resource instead: $target"
   done < <(nested_code_paths)
-  codesign_bounded --force ${SIGN_OPTIONS[@]+"${SIGN_OPTIONS[@]}"} --sign "$identity" "$APP_BUNDLE" || return 1
+  codesign_bounded --force ${SIGN_OPTIONS[@]+"${SIGN_OPTIONS[@]}"} \
+    --entitlements "$HOST_ENTITLEMENTS" --sign "$identity" "$APP_BUNDLE" || return 1
+}
+
+prepare_signing_entitlements() {
+  if [[ ! -f "$MAC_WIDGET_ENTITLEMENTS" ]]; then
+    echo "error: missing generated Mac widget entitlements: $MAC_WIDGET_ENTITLEMENTS" >&2
+    exit 1
+  fi
+  local group_id
+  group_id="$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.application-groups:0' "$MAC_WIDGET_ENTITLEMENTS" 2>/dev/null)" || {
+    echo "error: Mac widget entitlements do not declare an app group." >&2
+    exit 1
+  }
+  [[ "$group_id" == "CC8UTF7ATG.codecaps" ]] || {
+    echo "error: unexpected Mac widget app group '$group_id'." >&2
+    exit 1
+  }
+  cp "$MAC_WIDGET_ENTITLEMENTS" "$HOST_ENTITLEMENTS"
+  /usr/libexec/PlistBuddy -c 'Delete :com.apple.security.app-sandbox' "$HOST_ENTITLEMENTS"
+  if /usr/libexec/PlistBuddy -c 'Print :com.apple.security.app-sandbox' "$HOST_ENTITLEMENTS" >/dev/null 2>&1; then
+    echo "error: the standalone CodeCaps host must remain unsandboxed." >&2
+    exit 1
+  fi
+}
+
+verify_group_entitlement() {
+  local bundle="$1" label="$2" actual team
+  local entitlements_file
+  entitlements_file="$(mktemp "${TMPDIR:-/tmp}/codecaps-entitlements.XXXXXX")"
+  if ! /usr/bin/codesign -d --entitlements :- "$bundle" >"$entitlements_file" 2>/dev/null; then
+    rm -f "$entitlements_file"
+    actual=""
+  else
+    actual="$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.application-groups:0' "$entitlements_file" 2>/dev/null)" || actual=""
+    rm -f "$entitlements_file"
+  fi
+  team="$(/usr/bin/codesign -dv --verbose=4 "$bundle" 2>&1 \
+    | /usr/bin/sed -n 's/^TeamIdentifier=//p' | /usr/bin/head -n 1)"
+  local validation_only="${3:-false}"
+  if [[ "$actual" != "CC8UTF7ATG.codecaps" || ( "$validation_only" != "true" && "$team" != "CC8UTF7ATG" ) ]]; then
+    echo "error: $label signature lacks the expected team-authorized CodeCaps app group." >&2
+    echo "error: expected group CC8UTF7ATG.codecaps and TeamIdentifier CC8UTF7ATG; found group '${actual:-none}' and team '${team:-none}'." >&2
+    exit 1
+  fi
 }
 
 # The designated requirement is the proof.  Signed stably it names the
@@ -341,27 +407,36 @@ verify_app_signature() {
 
 sign_app_bundle() {
   local identity
+  prepare_signing_entitlements
   identity="$(resolve_codesign_identity)"
   if [[ -n "$identity" ]]; then
     if sign_with_identity "$identity"; then
       echo "signed with $identity"
       describe_signature
       verify_app_signature
+      verify_group_entitlement "$APP_PLUGINS/CodeCapsWidgets.appex" "CodeCaps widget extension"
+      verify_group_entitlement "$APP_BUNDLE" "CodeCaps host app"
       return 0
     fi
-    echo "warning: signing with '$identity' failed or timed out." >&2
+    echo "error: signing with '$identity' failed or timed out." >&2
+    exit 1
   else
-    echo "warning: no Developer ID Application identity is available for codesigning." >&2
+    if [[ "$MODE" == "--build-only" && "${CODECAPS_ALLOW_ADHOC_VALIDATION:-}" == "1" ]]; then
+      if sign_with_identity "-"; then
+        echo "signed ad-hoc for build-only structural validation"
+        describe_signature
+        verify_app_signature
+        verify_group_entitlement "$APP_PLUGINS/CodeCapsWidgets.appex" "CodeCaps widget extension" true
+        verify_group_entitlement "$APP_BUNDLE" "CodeCaps host app" true
+        echo "App Group runtime access: UNVERIFIED (ad-hoc signature has no Developer Team ID)."
+        return 0
+      fi
+      echo "error: ad-hoc structural validation signing failed." >&2
+      exit 1
+    fi
+    echo "error: no Developer ID Application identity is available; team-authorized widget app-group signing is required." >&2
+    exit 1
   fi
-  adhoc_warning
-  # The hardened-runtime and timestamp options belong to a real identity, so the
-  # fallback drops them and signs the bundle whole.  --deep is fine here —
-  # this is the ad-hoc path with no real identity to chain nested code under,
-  # and signing everything once with the bundle's own options is the only
-  # workable shape.
-  /usr/bin/codesign --force --deep --sign - "$APP_BUNDLE"
-  describe_signature
-  verify_app_signature
 }
 
 # The marketing version lives in one file so a release is a one-line edit, and
@@ -448,7 +523,7 @@ build_and_stage() {
   if [[ "$UNIVERSAL" == "1" ]]; then
     local arch
     for arch in "${UNIVERSAL_ARCHS[@]}"; do arch_flags+=(--arch "$arch"); done
-    if ! swift build --package-path "$PACKAGE_DIR" --configuration "$CONFIGURATION" --jobs 2 "${arch_flags[@]}"; then
+    if ! swift build --package-path "$PACKAGE_DIR" --configuration "$CONFIGURATION" --jobs "${CODECAPS_BUILD_JOBS:-2}" "${arch_flags[@]}"; then
       echo "warning: the universal build failed; falling back to this machine's architecture only." >&2
       echo "warning: the resulting artifact will not run on every supported Mac." >&2
       UNIVERSAL=0
@@ -456,7 +531,7 @@ build_and_stage() {
     fi
   fi
   if [[ "$UNIVERSAL" != "1" ]]; then
-    swift build --package-path "$PACKAGE_DIR" --configuration "$CONFIGURATION" --jobs 2
+    swift build --package-path "$PACKAGE_DIR" --configuration "$CONFIGURATION" --jobs "${CODECAPS_BUILD_JOBS:-2}"
   fi
   local build_bin_dir build_binary build_resources
   build_bin_dir="$(swift build --package-path "$PACKAGE_DIR" --configuration "$CONFIGURATION" ${arch_flags[@]+"${arch_flags[@]}"} --show-bin-path)"

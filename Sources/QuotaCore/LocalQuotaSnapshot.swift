@@ -60,7 +60,7 @@ public enum LocalQuotaSnapshot {
         }
     }
 
-    public static let appGroupId = "group.com.simplewithus.codecaps"
+    public static let appGroupId = "CC8UTF7ATG.codecaps"
 
     public static func destination(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL {
         home.appendingPathComponent("Library/Application Support/Usage Monitor/quota-windows.json")
@@ -91,22 +91,31 @@ public enum LocalQuotaSnapshot {
         guard data.count <= 10_485_760 else { throw CocoaError(.fileWriteOutOfSpace) }
         try writePrivately(data, to: url, in: directory, using: manager)
 
-        if let groupDest = appGroupDestination(), groupDest != url {
-            let groupDir = groupDest.deletingLastPathComponent()
-            try? manager.createDirectory(at: groupDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-            try? writePrivately(data, to: groupDest, in: groupDir, using: manager)
+    }
 
-            if let customMarks, !customMarks.isEmpty {
-                let marksDir = groupDir.appendingPathComponent("CustomMarks", isDirectory: true)
-                try? manager.createDirectory(at: marksDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-                for (key, mark) in customMarks {
-                    if let rawData = Data(base64Encoded: mark.data) {
-                        try? writePrivately(rawData, to: marksDir.appendingPathComponent("\(key).\(mark.ext)"), in: marksDir, using: manager)
-                    }
-                    if let darkDataStr = mark.darkData, let rawDark = Data(base64Encoded: darkDataStr) {
-                        try? writePrivately(rawDark, to: marksDir.appendingPathComponent("\(key)-dark.\(mark.ext)"), in: marksDir, using: manager)
-                    }
-                }
+    /// A separate widget cache can include pulled readings without changing the
+    /// local-only BotFleet handoff.  Failure is observable by the caller.
+    public static func writeWidgetSnapshot(
+        windows: [QuotaWindow],
+        customMarks: [String: CustomMarkPayload]? = nil,
+        now: Date = Date(),
+        to destination: URL? = appGroupDestination()
+    ) throws {
+        guard let destination else { throw CocoaError(.fileNoSuchFile) }
+        try write(windows: windows, customMarks: customMarks, now: now, to: destination)
+        guard let customMarks, !customMarks.isEmpty else { return }
+        let manager = FileManager.default
+        let marksDir = destination.deletingLastPathComponent().appendingPathComponent("CustomMarks", isDirectory: true)
+        try manager.createDirectory(at: marksDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        for (key, mark) in customMarks {
+            // File components are data, never paths outside the shared container.
+            guard !key.isEmpty, key.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }),
+                  ["png", "jpg", "jpeg", "svg", "webp"].contains(mark.ext.lowercased()) else { continue }
+            if let data = Data(base64Encoded: mark.data) {
+                try writePrivately(data, to: marksDir.appendingPathComponent("\(key).\(mark.ext)"), in: marksDir, using: manager)
+            }
+            if let dark = mark.darkData, let data = Data(base64Encoded: dark) {
+                try writePrivately(data, to: marksDir.appendingPathComponent("\(key)-dark.\(mark.ext)"), in: marksDir, using: manager)
             }
         }
     }

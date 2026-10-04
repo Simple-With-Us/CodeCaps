@@ -90,7 +90,7 @@ struct ProviderMarkView: View {
 
     private func customMarkImage() -> Image? {
         let fm = FileManager.default
-        guard let groupURL = fm.containerURL(forSecurityApplicationGroupIdentifier: "group.com.simplewithus.codecaps") else {
+        guard let groupURL = fm.containerURL(forSecurityApplicationGroupIdentifier: WidgetSnapshotStore.appGroupId) else {
             return nil
         }
         let cleanKey = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()

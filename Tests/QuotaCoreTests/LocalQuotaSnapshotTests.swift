@@ -3,6 +3,27 @@ import XCTest
 @testable import QuotaCore
 
 final class LocalQuotaSnapshotTests: XCTestCase {
+    func testWidgetCacheIsIndependentAndCanClearOldReadings() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let local = directory.appendingPathComponent("local.json")
+        let widget = directory.appendingPathComponent("shared/quota-windows.json")
+        let localWindow = QuotaWindow(id: "local", provider: "openai", label: "5h", remainingPercent: 40, occurredAt: "2026-10-03T23:00:00Z")
+        let pulled = QuotaWindow(id: "remote", provider: "anthropic", label: "weekly", remainingPercent: 70, occurredAt: "2026-10-03T23:00:00Z")
+        try LocalQuotaSnapshot.write(windows: [localWindow], to: local)
+        try LocalQuotaSnapshot.writeWidgetSnapshot(windows: [pulled], to: widget)
+        let decoder = JSONDecoder()
+        XCTAssertEqual(try decoder.decode(LocalQuotaSnapshot.Payload.self, from: Data(contentsOf: local)).windows.map(\.id), ["local"])
+        XCTAssertEqual(try decoder.decode(LocalQuotaSnapshot.Payload.self, from: Data(contentsOf: widget)).windows.map(\.id), ["remote"])
+        XCTAssertEqual((try FileManager.default.attributesOfItem(atPath: widget.path)[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+        try LocalQuotaSnapshot.writeWidgetSnapshot(windows: [], to: widget)
+        XCTAssertTrue(try decoder.decode(LocalQuotaSnapshot.Payload.self, from: Data(contentsOf: widget)).windows.isEmpty)
+    }
+
+    func testMissingWidgetContainerIsReported() {
+        XCTAssertThrowsError(try LocalQuotaSnapshot.writeWidgetSnapshot(windows: [], to: nil))
+    }
+
     func testWritesVersionedPrivateSnapshotAndRemovesWhenDisabled() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

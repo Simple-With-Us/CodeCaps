@@ -31,15 +31,80 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install XcodeGen and regenerate companion project
+        run: |
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          fi
+          cd ios/CodeCapsCompanion
+          xcodegen generate
       - name: List schemes (debug)
         run: |
           cd ios/CodeCapsCompanion
           xcodebuild -list -project CodeCapsCompanion.xcodeproj
-      - name: Build companion (iOS Simulator, no signing)
+      - name: Select an available iPhone simulator
         run: |
+          device_id="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; data=json.load(sys.stdin); devices=[d for group in data["devices"].values() for d in group if d.get("isAvailable") and d.get("deviceTypeIdentifier", "").startswith("com.apple.CoreSimulator.SimDeviceType.iPhone")]; print(devices[0]["udid"] if devices else "")')"
+          if [ -z "$device_id" ]; then
+            echo "::error::No available iPhone simulator is installed on this runner."
+            exit 1
+          fi
+          echo "SIMULATOR_ID=$device_id" >> "$GITHUB_ENV"
+      - name: Build and launch companion on iOS Simulator
+        run: |
+          derived_data="$RUNNER_TEMP/codecaps-companion-derived"
+          screenshot="$RUNNER_TEMP/codecaps-ios-reorder.png"
+          xcrun simctl boot "$SIMULATOR_ID" 2>/dev/null || true
+          xcrun simctl bootstatus "$SIMULATOR_ID" -b
           cd ios/CodeCapsCompanion
           xcodebuild -project CodeCapsCompanion.xcodeproj \
             -scheme "$SCHEME" \
-            -destination 'generic/platform=iOS Simulator' \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
+            -derivedDataPath "$derived_data" \
             CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="" \
             build
+          app="$derived_data/Build/Products/Debug-iphonesimulator/CodeCapsCompanion.app"
+          test -d "$app"
+          bundle_id=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Info.plist")
+          xcrun simctl install "$SIMULATOR_ID" "$app"
+          app_data="$(xcrun simctl get_app_container "$SIMULATOR_ID" "$bundle_id" data)"
+          mkdir -p "$app_data/Library/Application Support/CodeCaps"
+          python3 - "$app_data/Library/Application Support/CodeCaps/quota-windows.json" <<'PY'
+          import datetime, json, sys
+          observed = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+          windows = [
+              {"id": "claude-5h", "provider": "anthropic", "providerKey": "anthropic", "label": "5-hour window", "remainingPercent": 72.0, "isExhausted": False, "occurredAt": observed},
+              {"id": "codex-weekly", "provider": "openai", "providerKey": "codex", "label": "Weekly", "remainingPercent": 44.0, "isExhausted": False, "occurredAt": observed},
+              {"id": "cursor-fast", "provider": "cursor", "providerKey": "cursor", "label": "Fast Requests", "remainingPercent": 28.0, "isExhausted": False, "occurredAt": observed},
+          ]
+          with open(sys.argv[1], "w", encoding="utf-8") as snapshot:
+              json.dump({"windows": windows}, snapshot)
+          PY
+          xcrun simctl launch --terminate-running-process "$SIMULATOR_ID" "$bundle_id" -openSettings -reorderPlatforms
+          sleep 3
+          xcrun simctl io "$SIMULATOR_ID" screenshot "$screenshot"
+          test -s "$screenshot"
+          xcrun simctl terminate "$SIMULATOR_ID" "$bundle_id"
+          python3 - "$app_data/Library/Application Support/CodeCaps/quota-windows.json" <<'PYEMPTY'
+          import json, sys
+          with open(sys.argv[1], "w", encoding="utf-8") as snapshot:
+              json.dump({"windows": []}, snapshot)
+          PYEMPTY
+          xcrun simctl launch "$SIMULATOR_ID" "$bundle_id"
+          sleep 3
+          xcrun simctl io "$SIMULATOR_ID" screenshot "$RUNNER_TEMP/codecaps-ios-empty.png"
+      - name: Build Mac widget extension (no signing)
+        run: |
+          cd ios/CodeCapsCompanion
+          xcodebuild -project CodeCapsCompanion.xcodeproj \
+            -target CodeCapsWidgetsMac -configuration Release \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build
+      - name: Upload iOS platform-reordering screenshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: codecaps-ios-platform-reordering
+          path: |
+            ${{ runner.temp }}/codecaps-ios-reorder.png
+            ${{ runner.temp }}/codecaps-ios-empty.png
+          if-no-files-found: error

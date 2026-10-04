@@ -6,10 +6,14 @@ public struct CompanionContentView: View {
     @StateObject private var soundPlayer = AlarmSoundPlayer()
     @State private var showingSettings: Bool
     @State private var expandedIds: Set<String> = []
+    @State private var platformOrderEditMode: EditMode = .inactive
 
     public init(model: CompanionQuotaModel, showingSettings: Bool = ProcessInfo.processInfo.arguments.contains("-openSettings")) {
         self.model = model
         self._showingSettings = State(initialValue: showingSettings)
+        self._platformOrderEditMode = State(
+            initialValue: ProcessInfo.processInfo.arguments.contains("-reorderPlatforms") ? .active : .inactive
+        )
     }
 
     public var body: some View {
@@ -394,25 +398,6 @@ public struct CompanionContentView: View {
                             Text(item.title)
                                 .font(.system(size: 14, weight: .medium))
                             Spacer()
-                            Button {
-                                model.movePlatformUp(id: item.id)
-                            } label: {
-                                Image(systemName: "arrow.up")
-                                    .font(.system(size: 12, weight: .semibold))
-                                    .frame(width: 28, height: 28)
-                            }
-                            .buttonStyle(.borderless)
-                            .disabled(model.items.first?.id == item.id)
-
-                            Button {
-                                model.movePlatformDown(id: item.id)
-                            } label: {
-                                Image(systemName: "arrow.down")
-                                    .font(.system(size: 12, weight: .semibold))
-                                    .frame(width: 28, height: 28)
-                            }
-                            .buttonStyle(.borderless)
-                            .disabled(model.items.last?.id == item.id)
                         }
                     }
                     .onMove(perform: model.movePlatform)
@@ -425,10 +410,23 @@ public struct CompanionContentView: View {
                         .foregroundStyle(.secondary)
                     }
                 } header: {
-                    Text("Platform Order")
+                    HStack {
+                        Text("Platform Order")
+                        Spacer()
+                        #if os(iOS)
+                        Button(platformOrderEditMode == .active ? "Done" : "Edit") {
+                            withAnimation {
+                                platformOrderEditMode = platformOrderEditMode == .active ? .inactive : .active
+                            }
+                        }
+                        .accessibilityLabel(platformOrderEditMode == .active
+                                            ? "Done Reordering Platforms"
+                                            : "Reorder Platforms")
+                        #endif
+                    }
                 } footer: {
                     Text("Customize the order of platforms shown on the main screen." + sentenceGap
-                         + "Use the up/down arrows or drag to reorder.")
+                         + "Tap Edit, then drag to reorder.")
                 }
 
                 Section("Mac Sync Endpoint") {
@@ -507,6 +505,13 @@ public struct CompanionContentView: View {
                     }
                 }
 
+                Section("Help") {
+                    Link(
+                        "Setup & Data Guide",
+                        destination: URL(string: "https://codecaps.simplewithus.com/setup.html")!
+                    )
+                }
+
                 Section {
                     Button {
                         #if os(iOS)
@@ -554,6 +559,9 @@ public struct CompanionContentView: View {
                 }
                 .id("refreshSection")
             }
+            #if os(iOS)
+            .environment(\.editMode, $platformOrderEditMode)
+            #endif
             .navigationTitle("Companion Settings")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -845,4 +853,3 @@ public struct SettingsRefreshButtonStyle: ButtonStyle {
             .animation(.easeInOut(duration: 0.12), value: configuration.isPressed)
     }
 }
-

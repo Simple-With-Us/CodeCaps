@@ -5,6 +5,18 @@ PR (when shipped), follow-ups (when parked).
 
 ---
 
+## 2026-10-03 — Native Widgets and Independent Data Setup [CODEX, in progress]
+
+Lane: `codex/native-widgets-data-controls`.  Boards `508560f7`, `9a3d1a21`, `bc0f76fd`, `29df655f`, `1b71afd1`.  Native widget and data-cache repair; public setup guide; iOS drag reorder; remaining menu-bar presets.
+
+- Confirmed running `/Applications/CodeCaps.app` build 110 embeds a Mac widget but both signatures lack group entitlements.  Release configuration strips groups on iOS too; active iOS App Store profiles already authorize the required group.
+- Repair uses macOS team-scoped `CC8UTF7ATG.codecaps` and iOS `group.com.simplewithus.codecaps`, with explicit signature validation.  Widget cache supports local, pull-only, combined, and paused configurations independently from the local-only BotFleet handoff.
+- Public guide shipped in PR #127 at https://codecaps.simplewithus.com/setup.html; Pages succeeded and live bytes match source.  Native build/install and device verification remain pending; do not claim widgets repaired until verified.
+- Gemini CLI reader is connected with real OAuth quota reads while Kimi remains retired.  Menu presets preserve legacy selections; fresh installs use Smart Pair.
+- Final focused gate passed 65 tests, including save/push cancellation and single-publication refinements.  PR #135 package, Mac structural-release validation, and iOS simulator screenshot jobs passed before the #134 main sync; signed App Group runtime verification remains pending.
+
+---
+
 ## 2026-10-03 — Canonical brand icon, Glance meter alignment, iOS dual meters, and runaway alert history [AG, completed]
 
 Lane: `ag/companion-bars-and-icons`.
@@ -56,7 +68,7 @@ PR #126.
 
 ---
 
-## 2026-10-03 — Runtime Alerts and Machine Provenance [CODEX, in review]
+## 2026-10-03 — Runtime Alerts and Machine Provenance [CODEX, merged]
 
 Lane: `codex/alerts-provenance-20261003`.  Boards `20dc3a22`, `d4673e2f`, `5af89c7c`.
 
