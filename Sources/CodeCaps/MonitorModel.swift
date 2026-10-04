@@ -449,9 +449,12 @@ final class MonitorModel: ObservableObject {
     }
 
     func hasLocalHistorySource(for row: DisplaySection) -> Bool {
-        !row.section.windows.isEmpty && row.section.windows.allSatisfy { snapshot in
-            localWindows.contains(snapshot.window)
-        }
+        // Display sections canonicalize labels and percentages.  Compare both
+        // sides in that same form while retaining account and machine provenance.
+        let local = QuotaResponse(generatedAt: "", windows: localWindows).normalized().windows
+        let selected = QuotaResponse(generatedAt: "", windows: row.section.windows.map(\.window))
+            .normalized().windows
+        return !selected.isEmpty && selected.allSatisfy { local.contains($0) }
     }
 
     /// Windows whose percentage is real but meaningless: a five-hour Antigravity
