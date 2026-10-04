@@ -6,14 +6,18 @@ public struct CompanionContentView: View {
     @StateObject private var soundPlayer = AlarmSoundPlayer()
     @State private var showingSettings: Bool
     @State private var expandedIds: Set<String> = []
+    #if os(iOS)
     @State private var platformOrderEditMode: EditMode = .inactive
+    #endif
 
     public init(model: CompanionQuotaModel, showingSettings: Bool = ProcessInfo.processInfo.arguments.contains("-openSettings")) {
         self.model = model
         self._showingSettings = State(initialValue: showingSettings)
+        #if os(iOS)
         self._platformOrderEditMode = State(
             initialValue: ProcessInfo.processInfo.arguments.contains("-reorderPlatforms") ? .active : .inactive
         )
+        #endif
     }
 
     public var body: some View {
