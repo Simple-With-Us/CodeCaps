@@ -18,6 +18,11 @@ import XCTest
 /// `security` tool.  No credential value is ever asserted on.
 final class ClaudeConsentTests: XCTestCase {
 
+    override func setUp() {
+        super.setUp()
+        ClaudeCredentialSource.resetRememberedCredential()
+    }
+
     // MARK: - The pure mapping
 
     func testNoItemAndNoFileReadsAsSignedOut() {
@@ -248,11 +253,11 @@ final class ClaudeConsentTests: XCTestCase {
         XCTAssertEqual(result.issues["anthropic"], ClaudeLoginState.signedOut.issue)
     }
 
-    // MARK: - The silent read never makes a Keychain data request
+    // MARK: - The silent read never starts security and never reads the secret
 
-    /// Records every Keychain operation an injected probe was asked for.  The
-    /// probe has no hook for an in-process data read at all, so a log holding
-    /// only "cli" and "lookup" is proof that none was attempted.
+    /// Records every Keychain operation an injected probe was asked for.  A
+    /// background log of only "lookup" is proof the `security` child did not
+    /// start and no in-process data read was attempted.
     private final class ProbeLog: @unchecked Sendable {
         private let lock = NSLock()
         private var entries: [String] = []
@@ -286,83 +291,69 @@ final class ClaudeConsentTests: XCTestCase {
         }
     }
 
-    func testCLITimeoutWithAnExistingItemIsTransientAndNeverReadsData() {
+    func testBackgroundReadWithAnItemAndNoGrantAsksForConsentAndNeverStartsSecurity() {
         let log = ProbeLog()
         let access = ClaudeCredentialSource.resolveSilently(
             probe: makeProbe(log: log, cli: [.timedOut], presence: .present))
-        XCTAssertEqual(access, .temporarilyUnavailable)
-        XCTAssertEqual(log.calls, ["cli", "cli", "lookup"],
-                       "one retry, then the attributes-only lookup, and nothing else")
-        let state = ClaudeLoginState.resolve(hasUsableCredential: false, access: access, renewable: true)
-        XCTAssertEqual(state, .temporarilyUnavailable)
-        XCTAssertNotEqual(state, .signedOut)
-        XCTAssertFalse(state.needsConsent)
+        XCTAssertEqual(access, .unauthorized)
+        XCTAssertEqual(log.calls, ["lookup"])
+        XCTAssertEqual(ClaudeLoginState.resolve(hasUsableCredential: false, access: access), .needsPermission)
     }
 
-    func testCLIFailureWithAnExistingItemIsTransientAndNeverReadsData() {
-        let log = ProbeLog()
-        let access = ClaudeCredentialSource.resolveSilently(
-            probe: makeProbe(log: log, cli: [.failed], presence: .present))
-        XCTAssertEqual(access, .temporarilyUnavailable)
-        XCTAssertEqual(log.calls, ["cli", "cli", "lookup"])
-    }
-
-    func testCLIFailureWhenTheLookupCannotTellStaysTransient() {
+    func testBackgroundReadWhenTheLookupCannotTellStaysTransientAndNeverStartsSecurity() {
         let log = ProbeLog()
         let access = ClaudeCredentialSource.resolveSilently(
             probe: makeProbe(log: log, cli: [.timedOut], presence: .unknown))
         XCTAssertEqual(access, .temporarilyUnavailable)
+        XCTAssertEqual(log.calls, ["lookup"])
     }
 
-    func testCLIFailureWithNoItemIsMissing() {
+    func testBackgroundReadWithNoItemIsMissingAndDropsARememberedGrant() {
+        let payload = Data(#"{"claudeAiOauth":{"accessToken":"fixture"}}"#.utf8)
+        ClaudeCredentialSource.remember(payload)
         let log = ProbeLog()
         let access = ClaudeCredentialSource.resolveSilently(
-            probe: makeProbe(log: log, cli: [.timedOut], presence: .absent))
+            probe: makeProbe(log: log, cli: [.found(payload)], presence: .absent))
         XCTAssertEqual(access, .missing)
+        XCTAssertEqual(log.calls, ["lookup"])
+        XCTAssertNil(ClaudeCredentialSource.rememberedCredential())
     }
 
-    func testCLISuccessIsAuthorizedWithNoFurtherKeychainTraffic() {
+    func testExpiredRememberedGrantIsDroppedAndAsksForConsent() {
+        let expired = Data(#"{"claudeAiOauth":{"accessToken":"fixture","expiresAt":1}}"#.utf8)
+        ClaudeCredentialSource.remember(expired)
+        let log = ProbeLog()
+        let access = ClaudeCredentialSource.resolveSilently(
+            probe: makeProbe(log: log, cli: [.found(expired)], presence: .present),
+            isAbandoned: { false })
+        XCTAssertEqual(access, .unauthorized)
+        XCTAssertEqual(log.calls, ["lookup"])
+        XCTAssertNil(ClaudeCredentialSource.rememberedCredential())
+        XCTAssertFalse(ClaudeCredentialSource.rememberedGrantStillUsable(expired, now: Date(timeIntervalSince1970: 10)))
+    }
+
+    func testUnexpiredRememberedGrantStaysUsable() {
+        let payload = Data(#"{"claudeAiOauth":{"accessToken":"fixture","expiresAt":4102444800000}}"#.utf8)
+        XCTAssertTrue(ClaudeCredentialSource.rememberedGrantStillUsable(payload, now: Date(timeIntervalSince1970: 1_700_000_000)))
+    }
+
+    func testRememberedGrantIsServedWithoutStartingSecurity() {
         let log = ProbeLog()
         let payload = Data(#"{"claudeAiOauth":{"accessToken":"fixture"}}"#.utf8)
-        let access = ClaudeCredentialSource.resolveSilently(
-            probe: makeProbe(log: log, cli: [.found(payload)], presence: .present))
-        XCTAssertEqual(access, .authorized(payload))
-        XCTAssertEqual(log.calls, ["cli"])
-    }
-
-    func testRetryAfterATimeoutCanStillSucceed() {
-        let log = ProbeLog()
-        let payload = Data("{}".utf8)
-        let access = ClaudeCredentialSource.resolveSilently(
-            probe: makeProbe(log: log, cli: [.timedOut, .found(payload)], presence: .present))
-        XCTAssertEqual(access, .authorized(payload))
-        XCTAssertEqual(log.calls, ["cli", "cli"])
-    }
-
-    func testCLIExplicitDenialIsUnauthorizedAndNotRetried() {
-        let log = ProbeLog()
+        ClaudeCredentialSource.remember(payload)
         let access = ClaudeCredentialSource.resolveSilently(
             probe: makeProbe(log: log, cli: [.denied], presence: .present))
-        XCTAssertEqual(access, .unauthorized)
-        XCTAssertEqual(log.calls, ["cli"])
-        XCTAssertEqual(ClaudeLoginState.resolve(hasUsableCredential: false, access: access), .needsPermission)
+        XCTAssertEqual(access, .authorized(payload))
+        XCTAssertEqual(log.calls, ["lookup"])
     }
 
-    func testCLINotFoundWithNoItemIsMissingAndNotRetried() {
+    func testAbandonedBackgroundReadStartsNothing() {
         let log = ProbeLog()
         let access = ClaudeCredentialSource.resolveSilently(
-            probe: makeProbe(log: log, cli: [.notFound], presence: .absent))
-        XCTAssertEqual(access, .missing)
-        XCTAssertEqual(log.calls, ["cli", "lookup"])
-    }
-
-    /// Claude Code rewrites its item on token refresh.  A `security` miss
-    /// followed by a lookup hit is that race, not a signed-out Mac.
-    func testCLINotFoundWhileTheItemIsPresentIsTransient() {
-        let log = ProbeLog()
-        let access = ClaudeCredentialSource.resolveSilently(
-            probe: makeProbe(log: log, cli: [.notFound], presence: .present))
+            probe: makeProbe(log: log, cli: [.found(Data())], presence: .present),
+            isAbandoned: { true })
         XCTAssertEqual(access, .temporarilyUnavailable)
+        XCTAssertEqual(log.calls, [])
     }
 
     func testSecurityExitStatusesMapToOutcomes() {
@@ -470,16 +461,15 @@ final class ClaudeConsentTests: XCTestCase {
         XCTAssertFalse(ClaudeLoginState.resolve(hasUsableCredential: false, access: access).needsConsent)
     }
 
-    /// Once the outer wait has given up, the worker starts nothing new: the
-    /// hung CLI run is told to stop, and neither the retry nor the lookup runs.
-    func testOuterTimeoutIsTransientAndStartsNoFurtherWork() async {
+    /// A background read finishes from the attributes lookup.  A CLI closure
+    /// that would hang is never entered, so it cannot raise a panel.
+    func testBackgroundAccessNeverStartsTheSecurityCLI() async {
         let log = ProbeLog()
         let gate = DispatchSemaphore(value: 1)
         let probe = ClaudeKeychainProbe(
-            readViaSecurityCLI: { _, shouldStop in
+            readViaSecurityCLI: { _, _ in
                 log.record("cli")
-                let end = Date().addingTimeInterval(5)
-                while !shouldStop() && Date() < end { usleep(5_000) }
+                sleep(5)
                 return .timedOut
             },
             lookUpItem: {
@@ -488,15 +478,11 @@ final class ClaudeConsentTests: XCTestCase {
             })
         let started = Date()
         let access = await ClaudeCredentialSource.access(
-            probe: probe, gate: gate, queue: DispatchQueue(label: "claude-consent-test.timeout"),
-            timeout: 0.2, attemptDeadline: 5)
-        XCTAssertEqual(access, .temporarilyUnavailable)
-        XCTAssertLessThan(Date().timeIntervalSince(started), 3)
-        // The worker releases the gate when it is done; wait for that, then
-        // check what it did after the caller had already been answered.
-        XCTAssertEqual(gate.wait(timeout: .now() + 5), .success)
-        gate.signal()
-        XCTAssertEqual(log.calls, ["cli"])
+            probe: probe, gate: gate, queue: DispatchQueue(label: "claude-consent-test.background"),
+            timeout: 2, attemptDeadline: 5)
+        XCTAssertEqual(access, .unauthorized)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 2)
+        XCTAssertEqual(log.calls, ["lookup"])
     }
 
     // MARK: - The existence check asks for attributes only
@@ -514,16 +500,17 @@ final class ClaudeConsentTests: XCTestCase {
         XCTAssertNotNil(query[kSecUseAuthenticationContext as String])
     }
 
-    // MARK: - Allow Access runs the same `security` read the refresh loop does
+    // MARK: - Allow Access is the only security read
 
     func testAllowAccessReadsThroughTheSecurityCLIOnly() async {
         let log = ProbeLog()
         let deadlines = DeadlineLog()
+        let payload = Data(#"{"claudeAiOauth":{"accessToken":"fixture","expiresAt":4102444800000}}"#.utf8)
         let probe = ClaudeKeychainProbe(
             readViaSecurityCLI: { deadline, _ in
                 log.record("cli")
                 deadlines.record(deadline)
-                return .found(Data("{}".utf8))
+                return .found(payload)
             },
             lookUpItem: {
                 log.record("lookup")
@@ -532,10 +519,13 @@ final class ClaudeConsentTests: XCTestCase {
         let granted = await ClaudeCredentialSource.readAllowingInteraction(
             probe: probe, deadline: ClaudeCredentialSource.interactiveDeadline)
         XCTAssertTrue(granted)
-        XCTAssertEqual(log.calls, ["cli"], "no in-process read: a grant must apply to the identity the loop uses")
+        XCTAssertEqual(log.calls, ["cli"], "the button is the only security run, and it makes no in-process data read")
         XCTAssertEqual(deadlines.values, [ClaudeCredentialSource.interactiveDeadline])
         XCTAssertGreaterThan(ClaudeCredentialSource.interactiveDeadline, ClaudeCredentialSource.cliAttemptDeadline,
                              "the button must leave time to answer the panel")
+        let silent = ClaudeCredentialSource.resolveSilently(probe: probe)
+        XCTAssertEqual(silent, .authorized(payload))
+        XCTAssertEqual(log.calls, ["cli", "lookup"], "the next refresh serves the remembered bytes and does not start security again")
     }
 
     func testAllowAccessIsNotGrantedUnlessTheSecurityCLIReadIt() async {

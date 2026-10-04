@@ -13,10 +13,49 @@ Lane: `codex/native-widgets-data-controls`.  Boards `508560f7`, `9a3d1a21`, `bc0
 - Repair uses macOS team-scoped `CC8UTF7ATG.codecaps` and iOS `group.com.simplewithus.codecaps`, with explicit signature validation.  Widget cache supports local, pull-only, combined, and paused configurations independently from the local-only BotFleet handoff.
 - Public guide shipped in PR #127 at https://codecaps.simplewithus.com/setup.html; Pages succeeded and live bytes match source.  Native build/install and device verification remain pending; do not claim widgets repaired until verified.
 - Gemini CLI reader is connected with real OAuth quota reads while Kimi remains retired.  Menu presets preserve legacy selections; fresh installs use Smart Pair.
-- Initial combined focused gate passed 63 tests.  Final save/push cancellation and single-publication refinements require a fresh gate; native simulator and signed-artifact checks remain pending.
+- Final focused gate passed 65 tests, including save/push cancellation and single-publication refinements.  Native simulator and signed-artifact checks remain pending.
 
 ---
 
+
+## 2026-10-03 — Claude file 401 stays sign-in-again [GROK-BUILD, in progress]
+
+Follow-up to PR #126.  A 401 from a token in `~/.claude/.credentials.json`
+still says "This account needs you to sign in again."  Allow Access is only
+for a token that came from the remembered Keychain grant.  Both paths drop
+the remembered bytes.
+
+---
+
+## 2026-10-03 — Fleet Antigravity row says when the weekly reading is missing [GROK-BUILD, in progress]
+
+Lane: `grok-build/fleet-weekly-gap`.  Board `47021e4c`.  Worktree `~/apps/codecaps-grok-build`.
+
+- A fleet Antigravity row whose payload has a 5h meter and no weekly meter used to leave the second column blank.  The long column now says "no weekly reading reported".  A masked weekly says the existing masked caption.  A weekly that is already on screen, a local row, and a one-meter provider leave the column alone.
+- Files: `Sources/CodeCaps/GlanceViews.swift`, `Tests/CodeCapsTests/GlanceRowTests.swift`.  Codex's runaway-alert footer in the same file is left as it landed in #128.
+
+---
+
+## 2026-10-03 — Prompt-free background Claude lookup [GROK-BUILD, in progress]
+
+Lane: `grok-build/prompt-free-claude-lookup` at
+`/Users/jay/apps/codecaps-grok-build-keychain`.  Board `da7fce2c`.  GitHub #13.
+PR #126.
+
+- The refresh loop no longer starts `/usr/bin/security`.  It also does not
+  ask Keychain for the secret.  The Sep 30 log showed that a data
+  `SecItemCopyMatching` still raises a panel when the interaction flags are
+  set, so that call stays out of the background path.
+- Allow Access is the only `security` run.  Its payload stays in memory for
+  this process only.  Each launch needs Allow Access again.  The secret is
+  not copied into a CodeCaps Keychain item.  Nothing logs the payload.
+- An expired remembered payload, a missing item, or a Claude usage 401 or
+  403 drops those bytes and asks for Allow Access again.  A stale token is
+  not fetched forever.
+- `ClaudeConsentTests` covers the silent path and the expiry drop.  #12's
+  idle sentence was already on main.
+
+---
 
 ## 2026-10-03 — Runtime Alerts and Machine Provenance [CODEX, merged]
 
@@ -28,7 +67,6 @@ Lane: `codex/alerts-provenance-20261003`.  Boards `20dc3a22`, `d4673e2f`, `5af89
 - Validation: 28 focused tests and enabled-anomaly Glance render passed before main sync.  Hosted checks cover the integrated branch.
 
 ---
-
 
 ## 2026-10-03 — App design audit F-02 iOS Theme tokens & F-06 Console toolbar density [AG, completed]
 
@@ -56,7 +94,6 @@ Lane: `codex/remove-stale-controls-20261003`.  Boards `11b25418`, `979b2c38`.  P
 - Reconciliation correction: `20dc3a22` reopened after tracing the runtime path.
   #109 records history and exposes thresholds but never invokes anomaly evaluation.
   Actual evaluation and notifications remain active work, not complete.
-
 ---
 
 ## 2026-10-03 — Console sidebar arrow navigation, window min size bump, iOS settings detents, and board completion [AG, completed]
