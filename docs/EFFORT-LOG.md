@@ -1,13 +1,13 @@
 # CodeCaps — Effort Log
 
-## 2026-10-03 — MiniMax 5h/7d normalization, pacing marker prominence, and touch targets [AG, in progress]
+## 2026-10-03 — MiniMax 5h/7d normalization, pacing marker prominence, and touch targets [AG, completed]
 
-Lane: `ag/ios-minimax-and-meter-prominence`.
+Lane: `ag/ios-minimax-and-meter-prominence`.  PR #145 (merged as `d0a9db0`).
 
 - MiniMax cadence normalization: normalized "Coding plan (all models)" and interval tokens directly into the 5-hour quota (`5h`) and weekly into `7d`, consolidating MiniMax into two primary windows side by side without duplicate model metrics.
 - Prominent pacing markers on iOS: updated `CompanionUsageBar` to an 18pt capsule marker with a 3.0pt width and 20pt allocated frame height, matching Mac prominence and eliminating clipping.
 - Touch target polish: enlarged the reset alarm bell button to 44x44 points with `.contentShape(Rectangle())` for Apple HIG compliance.
-- Verified with 17 passing `CompanionModelTests` and clean local Xcode build for `CodeCapsCompanion` iOS Simulator target.
+- Verified with 17 passing `CompanionModelTests` and clean local Xcode build for `CodeCapsCompanion` iOS Simulator target; merged to `main`.
 
 ---
 

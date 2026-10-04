@@ -1,13 +1,23 @@
 # CodeCaps — Effort Log
 
-## 2026-10-03 — MiniMax 5h/7d normalization, pacing marker prominence, and touch targets [AG, in progress]
+## 2026-10-03 — Audit 9 Residual Reconciliation [CODEX, in progress]
 
-Lane: `ag/ios-minimax-and-meter-prominence`.
+Lane: `codex/audit-residuals`.  Board `1ac04ba99f13478da0564f802d3af3e8`; GitHub #19.
+
+- Reconciled every A9 item against `origin/main` at `0f4bbc8` in `docs/audits/2026-10-03-audit-9-reconciliation.md`.  Existing source and tests supersede several stale findings; structured Glance issue state and the Grok Heavy attribution question remain separate work.
+- Aligning export and display status when a provider marks a nonzero reading exhausted; adding direct dangerous-copy marker cases; passing a Trash path to AppleScript as an argument; documenting the current two-header ingest contract without changing it.
+- Verification: focused hosted CI pending.  Local `bash -n` and `git diff --check` are planned; no local build on the loaded host.
+
+---
+
+## 2026-10-03 — MiniMax 5h/7d normalization, pacing marker prominence, and touch targets [AG, completed]
+
+Lane: `ag/ios-minimax-and-meter-prominence`.  PR #145 (merged as `d0a9db0`).
 
 - MiniMax cadence normalization: normalized "Coding plan (all models)" and interval tokens directly into the 5-hour quota (`5h`) and weekly into `7d`, consolidating MiniMax into two primary windows side by side without duplicate model metrics.
 - Prominent pacing markers on iOS: updated `CompanionUsageBar` to an 18pt capsule marker with a 3.0pt width and 20pt allocated frame height, matching Mac prominence and eliminating clipping.
 - Touch target polish: enlarged the reset alarm bell button to 44x44 points with `.contentShape(Rectangle())` for Apple HIG compliance.
-- Verified with 17 passing `CompanionModelTests` and clean local Xcode build for `CodeCapsCompanion` iOS Simulator target.
+- Verified with 17 passing `CompanionModelTests` and clean local Xcode build for `CodeCapsCompanion` iOS Simulator target; merged to `main`.
 
 ---
 
