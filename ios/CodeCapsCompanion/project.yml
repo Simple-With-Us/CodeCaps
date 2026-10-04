@@ -42,6 +42,8 @@ targets:
         group: Shared
       - path: ../../Sources/QuotaCore/ResetAlarmCadence.swift
         group: Shared
+      - path: ../../Sources/QuotaCore/CompanionReadTokenStore.swift
+        group: Shared
     dependencies:
       - target: CodeCapsWidgets
         embed: true
@@ -78,6 +80,8 @@ targets:
       - path: Assets.xcassets
       - path: ../../Sources/QuotaCore/WidgetSnapshotFetcher.swift
         group: Shared
+      - path: ../../Sources/QuotaCore/CompanionReadTokenStore.swift
+        group: Shared
     settings:
       base:
         INFOPLIST_FILE: Widgets/Info.plist
@@ -113,6 +117,8 @@ targets:
       - path: ../../Sources/QuotaCore/ResetAlarmMessage.swift
         group: Shared
       - path: ../../Sources/QuotaCore/ResetAlarmCadence.swift
+        group: Shared
+      - path: ../../Sources/QuotaCore/CompanionReadTokenStore.swift
         group: Shared
     dependencies:
       - target: CodeCapsWidgetsMac

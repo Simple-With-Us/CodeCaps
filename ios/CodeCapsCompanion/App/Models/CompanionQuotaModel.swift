@@ -1,4 +1,5 @@
 import Foundation
+import Security
 import SwiftUI
 import UserNotifications
 #if canImport(WidgetKit)
@@ -96,15 +97,18 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
     }
 
     public func elapsedFraction(now: Date = Date()) -> Double? {
-        guard let resetAt else { return nil }
+        guard let resetAt else {
+            if let pct = remainingPercent, pct >= 100 { return 0.0 }
+            return nil
+        }
         let token = cadence.isEmpty ? label : cadence
         let words = "\(token) \(label)".lowercased()
         let durationSeconds: TimeInterval? = {
-            if words.contains("7d") || words.contains("7-day") || words.contains("weekly") || words.contains("1w") { return 7 * 86400 }
+            if words.contains("7d") || words.contains("7-day") || words.contains("weekly") || words.contains("1w") || words.contains("org") || words.contains("quota") { return 7 * 86400 }
             if words.contains("5h") || words.contains("5-hour") || words.contains("five_hour") || words.contains("coding plan") || words.contains("coding_plan") || words.contains("interval") { return 5 * 3600 }
             if words.contains("4h") || words.contains("4-hour") || words.contains("four_hour") { return 4 * 3600 }
-            if words.contains("1d") || words.contains("daily") { return 86400 }
-            if words.contains("billing") || words.contains("cycle") || words.contains("monthly") { return 30 * 86400 }
+            if words.contains("1d") || words.contains("daily") || words.contains("24h") { return 86400 }
+            if words.contains("billing") || words.contains("cycle") || words.contains("monthly") || words.contains("month") { return 30 * 86400 }
             return nil
         }()
         guard let duration = durationSeconds, duration > 0 else { return nil }
@@ -116,9 +120,9 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
 
     public var caption: String {
         let text = (cadence.isEmpty ? label : cadence).lowercased()
-        if text.contains("7d") || text.contains("weekly") || text.contains("1w") { return "7d" }
+        if text.contains("7d") || text.contains("weekly") || text.contains("1w") || text.contains("org") || text.contains("quota") { return "7d" }
         if text.contains("5h") || text.contains("5-hour") || text.contains("5 hour") || text.contains("coding plan") || text.contains("coding_plan") || text.contains("interval") { return "5h" }
-        if text.contains("4h") || text.contains("4-hour") || text.contains("4 hour") { return "4h" }
+        if text.contains("4h") || text.contains("4-hour") || text.contains("four_hour") { return "4h" }
         if text.contains("24h") || text.contains("daily") || text.contains("1d") { return "24h" }
         if text.contains("month") || text.contains("billing") || text.contains("cycle") || text.contains("30d") || text.contains("1m") { return "1m" }
         if text.contains("plan") || text.contains("included") { return "Plan" }
@@ -128,7 +132,7 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
 
     public var isShortCadence: Bool {
         let text = (cadence.isEmpty ? label : cadence).lowercased()
-        if text.contains("7d") || text.contains("1w") || text.contains("weekly") || text.contains("month") || text.contains("billing") || text.contains("cycle") || text.contains("30d") || text.contains("1m") { return false }
+        if text.contains("7d") || text.contains("1w") || text.contains("weekly") || text.contains("month") || text.contains("billing") || text.contains("cycle") || text.contains("30d") || text.contains("1m") || text.contains("org") || text.contains("quota") { return false }
         if text.contains("5h") || text.contains("4h") || text.contains("session") || text.contains("fast") || text.contains("coding plan") || text.contains("coding_plan") || text.contains("interval") { return true }
         if text.contains("plan") { return false }
         if let reset = resetAt {
@@ -339,6 +343,8 @@ public final class CompanionQuotaModel: ObservableObject {
     @Published public var notificationsDenied = false
     /// True when at least one real reading has been parsed.
     @Published public var hasDataSource = false
+    @Published public private(set) var tokenStorageError: String?
+    private let tokenStore: CompanionReadTokenStore
 
     /// Customizable platform display order.  Persisted to UserDefaults and App Group.
     @Published public var platformOrder: [String] {
@@ -358,10 +364,25 @@ public final class CompanionQuotaModel: ObservableObject {
     }
     @Published public var syncToken: String {
         didSet {
+            let status = tokenStore.save(syncToken, shared: sharedDefaults, standard: .standard)
+            guard status == errSecSuccess else {
+                syncToken = oldValue
+                tokenStorageError = "Could not save the sync token in Keychain (error \(status))."
+                    + sentenceGap + "The previous token remains in use."
+                return
+            }
+            tokenStorageError = nil
             syncConfigurationRevision &+= 1
-            UserDefaults.standard.set(syncToken, forKey: "companionSyncToken")
-            sharedDefaults.set(syncToken, forKey: "companionSyncToken")
+            #if canImport(WidgetKit)
+            WidgetCenter.shared.reloadAllTimelines()
+            #endif
         }
+    }
+
+    /// Clears the Keychain item and both legacy preferences through the same
+    /// persistence path as clearing the secure field.
+    public func removeSyncToken() {
+        syncToken = ""
     }
     private var syncConfigurationRevision = 0
     /// All: every provider's reset alarm is on, and rows show no bells.  Off:
@@ -407,10 +428,12 @@ public final class CompanionQuotaModel: ObservableObject {
 
     public init() {
         let defaults = UserDefaults(suiteName: Self.appGroupId) ?? UserDefaults.standard
+        let store = CompanionReadTokenStore(accessGroup: Self.appGroupId)
+        let tokenState = store.loadAndMigrate(shared: defaults, standard: .standard)
+        self.tokenStore = store
         self.syncEndpoint = defaults.string(forKey: "companionSyncEndpoint")
             ?? UserDefaults.standard.string(forKey: "companionSyncEndpoint") ?? ""
-        self.syncToken = defaults.string(forKey: "companionSyncToken")
-            ?? UserDefaults.standard.string(forKey: "companionSyncToken") ?? ""
+        self.syncToken = tokenState.token ?? ""
 
         // One-time migration of the two old mechanisms: a global "notify on
         // quota reset" switch, and one-shot bells armed per row.  The switch
@@ -449,6 +472,13 @@ public final class CompanionQuotaModel: ObservableObject {
 
         Task { await refreshNotificationAuthorization() }
         loadLocalFallback()
+        switch tokenState {
+        case .legacy(_, let status), .unavailable(let status):
+            tokenStorageError = "Keychain could not secure the saved token (error \(status))."
+                + sentenceGap + "It remains in preferences until you save it again."
+        case .token, .missing:
+            break
+        }
     }
 
     /// Asks for notification permission and reports whether it was granted.

@@ -226,7 +226,9 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
         copy.remainingPercent = bounded
         copy.remainingUnknown = bounded == nil
         copy.isExhausted = isExhausted || bounded == 0
-        if status == .unknown, bounded != nil {
+        if copy.isExhausted {
+            copy.status = .exhausted
+        } else if status == .unknown, bounded != nil {
             copy.status = QuotaWindowStatus.derived(remainingPercent: bounded)
         }
         copy.skip = skip || copy.isExhausted
@@ -325,10 +327,12 @@ public struct QuotaWindowSnapshot: Equatable, Sendable {
     public var isUnknown: Bool { remainingPercent == nil }
 
     public init(window: QuotaWindow, now: Date = Date()) {
-        self.window = window
-        self.observedAt = window.occurredDate
-        self.resetAt = window.resetDate
-        self.remainingPercent = window.boundedRemainingPercent
+        let normalized = window.normalizedForExport()
+        self.window = normalized
+        self.observedAt = normalized.occurredDate
+        self.resetAt = normalized.resetDate
+        self.remainingPercent = normalized.boundedRemainingPercent
+        self.status = normalized.status
 
         let observedIsFresh: Bool
         if let observedAt {
@@ -344,16 +348,6 @@ public struct QuotaWindowSnapshot: Equatable, Sendable {
             freshness = .fresh
         } else {
             freshness = .stale
-        }
-
-        if remainingPercent == nil {
-            status = .unknown
-        } else if window.isExhausted || remainingPercent == 0 {
-            status = .exhausted
-        } else if remainingPercent ?? 0 < 20 {
-            status = .nearCap
-        } else {
-            status = .available
         }
     }
 }

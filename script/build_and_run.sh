@@ -644,7 +644,11 @@ trash_path() {
     echo "would trash $path"
     return 0
   fi
-  if /usr/bin/osascript -e "tell application \"Finder\" to delete POSIX file \"$path\"" >/dev/null 2>&1; then
+  if /usr/bin/osascript - "$path" >/dev/null 2>&1 <<'APPLESCRIPT'; then
+on run argv
+  tell application "Finder" to delete (POSIX file (item 1 of argv))
+end run
+APPLESCRIPT
     echo "trashed $path"
   else
     echo "could not Trash (left in place): $path" >&2

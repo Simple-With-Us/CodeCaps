@@ -191,6 +191,7 @@ struct GlancePopover: View {
                          allowsExpansion: origin == .fleet && glanceRowAllowsExpansion(row, origin: origin),
                          isExpanded: expandedIds.contains(key),
                          hasAnomaly: hasAnomaly,
+                         pacingHighlights: model.pacingColorHighlights,
                          onTap: { toggleExpanded(key) },
                          onToggleAlarm: { model.toggleAlarm(for: row.id) })
     }
@@ -278,7 +279,7 @@ struct GlancePopover: View {
                 } label: {
                     MarqueeText(
                         text: runawayCombinedMarqueeText,
-                        font: .system(size: 13, weight: .bold, design: .rounded),
+                        font: .system(size: 15, weight: .heavy, design: .rounded),
                         color: Theme.warning
                     )
                     .padding(.horizontal, 10)
@@ -320,21 +321,15 @@ struct GlancePopover: View {
 
     private var runawayFooterItems: [String] {
         model.activeRunawayAnomalies.map { anomaly in
-            let matchingDisplayRow = model.displaySections.first { row in
-                row.section.windows.contains { $0.window.id == anomaly.windowId }
-            }
-            let provider: String
-            if let matchingDisplayRow, matchingDisplayRow.isPool {
-                provider = matchingDisplayRow.title
-            } else {
-                provider = model.sections.first { $0.providerKey == anomaly.providerKey }?.providerLabel
-                    ?? anomaly.providerKey.capitalized
-            }
             let matchingSnapshot = model.displaySections.flatMap { $0.section.windows }
                 .first { $0.window.id == anomaly.windowId }
                 ?? model.sections.flatMap(\.windows).first { $0.window.id == anomaly.windowId }
             let windowLabel = matchingSnapshot.map { glanceMeterCaption($0) }
-            let nameWithWindow = windowLabel.map { "\(provider) (\($0))" } ?? provider
+            let nameWithWindow = runawayNormalizedTitle(
+                providerKey: anomaly.providerKey,
+                windowId: anomaly.windowId,
+                windowLabel: windowLabel
+            )
             let comp = anomaly.kind == .vsPeak ? "peak" : "avg"
             var parts = ["\(nameWithWindow): \(anomaly.multiplier.formatted(.number.precision(.fractionLength(1))))× vs \(comp)"]
             if let rate = anomaly.ratePercentPerHour {
@@ -460,32 +455,61 @@ private struct MarqueeTextWidthKey: PreferenceKey {
 
 // MARK: - Runaway Anomaly Cards
 
+func runawayNormalizedTitle(providerKey: String, windowId: String, windowLabel: String?) -> String {
+    let lowKey = providerKey.lowercased()
+    let lowWin = (windowId + " " + (windowLabel ?? "")).lowercased()
+    let cadence: String
+    if lowWin.contains("5h") || lowWin.contains("5-hour") || lowWin.contains("interval") {
+        cadence = "5-hour"
+    } else if lowWin.contains("7d") || lowWin.contains("1w") || lowWin.contains("weekly") {
+        cadence = "weekly"
+    } else if let windowLabel, !windowLabel.isEmpty {
+        cadence = windowLabel
+    } else {
+        cadence = "window"
+    }
+
+    if lowKey.contains("antigravity") || lowKey.contains("google") {
+        if lowWin.contains("gemini") {
+            return "Gemini (\(cadence))"
+        } else {
+            return "Antigravity 3rd-Party (\(cadence))"
+        }
+    } else if lowKey.contains("gemini") {
+        return "Gemini (\(cadence))"
+    } else if lowKey.contains("minimax") {
+        return "MiniMax (\(cadence))"
+    } else if lowKey.contains("anthropic") || lowKey.contains("claude") {
+        return "Claude Code (\(cadence))"
+    } else if lowKey.contains("cursor") {
+        return "Cursor (\(cadence))"
+    } else if lowKey.contains("openai") || lowKey.contains("codex") {
+        return "Codex (\(cadence))"
+    } else if lowKey.contains("grok-bot") {
+        return "Grok Bot (\(cadence))"
+    } else if lowKey.contains("grok") || lowKey.contains("xai") {
+        return "Grok (\(cadence))"
+    } else {
+        return "\(providerKey.capitalized) (\(cadence))"
+    }
+}
+
 struct RunawayAnomalyGlanceCard: View {
     let anomaly: AnomalyDetector.Anomaly
     let model: MonitorModel
     var onInspect: () -> Void
     var onOpenAllAlerts: () -> Void
 
-    private var providerLabel: String {
-        let matchingDisplayRow = model.displaySections.first { row in
-            row.section.windows.contains { $0.window.id == anomaly.windowId }
-        }
-        if let matchingDisplayRow, matchingDisplayRow.isPool {
-            return matchingDisplayRow.title
-        }
-        return model.sections.first { $0.providerKey == anomaly.providerKey }?.providerLabel
-            ?? anomaly.providerKey.capitalized
-    }
-
-    private var windowLabel: String {
+    private var normalizedTitle: String {
         let matchingSnapshot = model.displaySections.flatMap { $0.section.windows }
             .first { $0.window.id == anomaly.windowId }
             ?? model.sections.flatMap(\.windows).first { $0.window.id == anomaly.windowId }
-        if let matchingSnapshot {
-            let raw = matchingSnapshot.window.label.trimmingCharacters(in: .whitespacesAndNewlines)
-            return raw.isEmpty ? glanceMeterCaption(matchingSnapshot) : raw
-        }
-        return anomaly.windowId
+        let windowLabel = matchingSnapshot.map { glanceMeterCaption($0) }
+        return runawayNormalizedTitle(
+            providerKey: anomaly.providerKey,
+            windowId: anomaly.windowId,
+            windowLabel: windowLabel
+        )
     }
 
     var body: some View {
@@ -499,35 +523,33 @@ struct RunawayAnomalyGlanceCard: View {
                     Text("Runaway:")
                         .font(.system(size: 11, weight: .bold))
                         .foregroundStyle(Theme.warning)
-                    Text("\(providerLabel) (\(windowLabel))")
+                    Text(normalizedTitle)
                         .font(.system(size: 11, weight: .semibold))
                         .lineLimit(1)
                 }
-                HStack(spacing: 4) {
+                HStack(spacing: 6) {
                     let comp = anomaly.kind == .vsPeak ? "peak" : "avg"
                     Text("\(anomaly.multiplier.formatted(.number.precision(.fractionLength(1))))× vs \(comp)")
                         .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(Theme.warning)
+                        .foregroundStyle(.secondary)
                     if let rate = anomaly.ratePercentPerHour {
-                        Text("• \(rate.formatted(.number.precision(.fractionLength(1)))) %/hr")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.secondary)
+                        Text("\(rate.formatted(.number.precision(.fractionLength(1)))) %/hr")
+                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                            .foregroundStyle(Theme.warning)
                     }
                 }
             }
 
             Spacer(minLength: 4)
 
-            Button("Inspect", action: onInspect)
-                .controlSize(.mini)
-                .font(.system(size: 10, weight: .medium))
-
-            Button(action: onOpenAllAlerts) {
-                Image(systemName: "list.bullet")
-                    .font(.system(size: 10))
+            Button(action: onInspect) {
+                Image(systemName: "info.circle.fill")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Theme.warning)
             }
             .buttonStyle(.plain)
-            .help("Open all runaway alerts in Console")
+            .help("Inspect runaway anomaly in Console")
+            .accessibilityLabel("Inspect runaway anomaly")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
@@ -541,6 +563,14 @@ struct RunawayRecentAlertGlanceCard: View {
     var onInspect: () -> Void
     var onOpenAllAlerts: () -> Void
 
+    private var normalizedTitle: String {
+        runawayNormalizedTitle(
+            providerKey: alert.providerKey,
+            windowId: alert.windowId,
+            windowLabel: alert.windowLabel
+        )
+    }
+
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "flame")
@@ -552,27 +582,30 @@ struct RunawayRecentAlertGlanceCard: View {
                     Text("Recent Alert:")
                         .font(.system(size: 11, weight: .bold))
                         .foregroundStyle(Theme.warning)
-                    Text("\(alert.providerLabel) (\(alert.windowLabel))")
+                    Text(normalizedTitle)
                         .font(.system(size: 11, weight: .semibold))
                         .lineLimit(1)
                 }
-                Text("\(alert.multiplier.formatted(.number.precision(.fractionLength(1))))× runaway · \(alert.timestamp.formatted(date: .omitted, time: .shortened))")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 6) {
+                    Text("\(alert.multiplier.formatted(.number.precision(.fractionLength(1))))× runaway")
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .foregroundStyle(Theme.warning)
+                    Text("· \(alert.timestamp.formatted(date: .omitted, time: .shortened))")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Spacer(minLength: 4)
 
-            Button("Inspect", action: onInspect)
-                .controlSize(.mini)
-                .font(.system(size: 10, weight: .medium))
-
-            Button(action: onOpenAllAlerts) {
-                Image(systemName: "list.bullet")
-                    .font(.system(size: 10))
+            Button(action: onInspect) {
+                Image(systemName: "info.circle.fill")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Theme.warning)
             }
             .buttonStyle(.plain)
-            .help("Open all runaway alerts in Console")
+            .help("Inspect runaway alert in Console")
+            .accessibilityLabel("Inspect runaway alert")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
@@ -1183,6 +1216,7 @@ private func glanceDurationTag(_ seconds: TimeInterval) -> String {
 struct GlanceMeter: View {
     let snapshot: QuotaWindowSnapshot
     let now: Date
+    var pacingHighlights: Bool = false
 
     private var percent: Double? { snapshot.remainingPercent }
     private var tint: Color { quotaStatusColor(for: snapshot, sourceFailed: false) }
@@ -1209,14 +1243,19 @@ struct GlanceMeter: View {
                           dimmed: quotaBarIsDimmed(for: snapshot, sourceFailed: false),
                           markerHeight: Metrics.glanceMeterMarkerHeight)
                 .frame(width: Metrics.glanceMeterBarWidth, height: Metrics.glanceMeterBarHeight)
-            // AG's #112 grouped the percentage and the countdown and
-            // italicised the countdown; that structure is kept.  The colour
-            // is the owner's ruling: the percentage is the number the row
-            // exists to convey, and a number that changes colour with its own
-            // value has to be re-read every time.  Accent belongs on the bar.
             Text(percent.map { "\(Int($0.rounded()))%" } ?? "—")
                 .font(.system(size: 11, weight: .medium).monospacedDigit())
                 .foregroundStyle(Theme.ink)
+                .padding(.horizontal, 3)
+                .padding(.vertical, 1)
+                .background(
+                    pacingPillBackgroundColor(
+                        remainingPercent: percent,
+                        elapsedFraction: snapshot.elapsedFraction(now: now),
+                        isEnabled: pacingHighlights
+                    ),
+                    in: RoundedRectangle(cornerRadius: 3)
+                )
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
                 .frame(width: Metrics.glanceMeterPercentWidth, alignment: .trailing)
@@ -1271,6 +1310,7 @@ struct GlanceMeterColumns: View {
     /// A nil gap leaves that column blank, which is what a one-meter provider
     /// (Grok Bot's weekly, in the first column) still wants.
     var longGap: String? = nil
+    var pacingHighlights: Bool = false
 
     var body: some View {
         columns
@@ -1303,7 +1343,7 @@ struct GlanceMeterColumns: View {
     @ViewBuilder
     private func column(_ snapshot: QuotaWindowSnapshot?, gap: String? = nil) -> some View {
         if let snapshot {
-            GlanceMeter(snapshot: snapshot, now: now)
+            GlanceMeter(snapshot: snapshot, now: now, pacingHighlights: pacingHighlights)
                 .frame(width: Metrics.glanceMeterWidth, alignment: .leading)
         } else if let gap, !gap.isEmpty {
             Text(gap)
@@ -1516,6 +1556,7 @@ struct GlanceRow: View {
     /// detail lines animate together.
     var isExpanded: Bool = false
     var hasAnomaly: Bool = false
+    var pacingHighlights: Bool = false
     /// Tap handler for the row's body — opening or closing the expansion.
     /// The bell is a sibling of the tappable body, so a tap on the bell never
     /// expands a row.
@@ -1640,7 +1681,8 @@ struct GlanceRow: View {
                 // weekly/monthly window are the two numbers an owner
                 // actually routes on, and hiding the second one behind a
                 // click made the compact row say half the truth.
-                GlanceMeterColumns(short: meters.short, long: meters.long, now: now, longGap: weeklyGap)
+                GlanceMeterColumns(short: meters.short, long: meters.long, now: now,
+                                   longGap: weeklyGap, pacingHighlights: pacingHighlights)
             } else {
                 // Where a single meter's bar would start (Cursor's, say),
                 // left-aligned, so a row without a reading still lines up
@@ -1733,7 +1775,8 @@ struct GlanceRow: View {
                         .truncationMode(.tail)
                         .frame(width: Metrics.glanceRowTitleWidth, alignment: .leading)
                     Spacer().frame(width: Metrics.glanceColumnGap)
-                    GlanceMeterColumns(short: line.short, long: line.long, now: now)
+                    GlanceMeterColumns(short: line.short, long: line.long, now: now,
+                                       pacingHighlights: pacingHighlights)
                     Spacer(minLength: 0)
                 }
                 .padding(.horizontal, Metrics.glanceGutter)

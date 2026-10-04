@@ -128,6 +128,15 @@ final class LocalQuotaSnapshotTests: XCTestCase {
         }
     }
 
+    func testLiteralBearerAndPrivateKeyMarkersAreRedacted() {
+        for reason in ["Authorization: Bearer=example-token",
+                       "-----BEGIN RSA PRIVATE KEY-----"] {
+            XCTAssertFalse(LocalQuotaSnapshot.isUserSafe(reason), "unsafe marker passed: \(reason)")
+            XCTAssertEqual(LocalQuotaSnapshot.safeIssues(["anthropic": reason])["anthropic"],
+                           LocalQuotaSnapshot.redactedIssue)
+        }
+    }
+
     func testKeepsTheUserSafeReasonsTheMenuActuallyShows() {
         let menuReasons = [
             "Claude Code quota login is unavailable.  Sign in to Claude Code to connect subscription quotas.",
@@ -194,11 +203,29 @@ final class LocalQuotaSnapshotTests: XCTestCase {
         XCTAssertTrue(kept.skip)
         XCTAssertEqual(kept.skipReason, "session rejected")
         XCTAssertEqual(kept.normalizedForExport(), kept)
+        XCTAssertEqual(QuotaWindowSnapshot(window: reported).status, kept.status)
 
         XCTAssertEqual(QuotaWindowStatus.derived(remainingPercent: nil), .unknown)
         XCTAssertEqual(QuotaWindowStatus.derived(remainingPercent: 0), .exhausted)
         XCTAssertEqual(QuotaWindowStatus.derived(remainingPercent: 19.9), .nearCap)
         XCTAssertEqual(QuotaWindowStatus.derived(remainingPercent: 20), .available)
+    }
+
+    func testExhaustedFlagHasTheSameStatusInExportAndDisplayAtNonzeroPercent() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("quota-windows.json")
+        let window = QuotaWindow(id: "flagged", provider: "openai", label: "5h",
+                                 remainingPercent: 15, isExhausted: true,
+                                 occurredAt: "2026-10-03T23:00:00Z")
+        let normalized = window.normalizedForExport()
+        XCTAssertEqual(normalized.status, .exhausted)
+        XCTAssertTrue(normalized.isExhausted)
+        XCTAssertTrue(normalized.skip)
+        XCTAssertEqual(QuotaWindowSnapshot(window: window).status, normalized.status)
+        try LocalQuotaSnapshot.write(windows: [window], to: url)
+        let payload = try JSONDecoder().decode(LocalQuotaSnapshot.Payload.self, from: Data(contentsOf: url))
+        XCTAssertEqual(payload.windows.first?.status, .exhausted)
     }
 
     // MARK: - Q11: the mode is final before the file is visible
