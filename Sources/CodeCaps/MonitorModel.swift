@@ -318,6 +318,8 @@ final class MonitorModel: ObservableObject {
     var localReadForTesting: (@MainActor () async -> LocalQuotaResult?)?
     var serverFetchForTesting: (@MainActor () async throws -> QuotaResponse)?
     var syncTokenReadForTesting: (@MainActor () async -> String?)?
+    var readTokenReadForTesting: (@MainActor () async -> String?)?
+    var settingsWriteForTesting: (@MainActor (String, String) async throws -> Void)?
     var pushForTesting: (@MainActor ([QuotaWindow], URL, String?, QuotaSyncFormat) async throws -> QuotaPublishResult)?
     var runawayNotificationForTesting: ((BurnRateNotification) -> Void)?
     var skipsSnapshotIOForTesting = false
@@ -440,6 +442,20 @@ final class MonitorModel: ObservableObject {
     /// Every surface that lists platforms reads this rather than `sections`.
     var displaySections: [DisplaySection] {
         sections.flatMap { DisplaySection.rows(for: $0, now: now) }
+    }
+
+    func historySamples() -> [AnomalyDetector.Sample] {
+        BurnRateMonitor.loadSamples(historyURL: burnRateHistoryURL)
+    }
+
+    func hasLocalHistorySource(for row: DisplaySection) -> Bool {
+        // Display sections canonicalize labels and percentages.  Compare both
+        // sides in that same form while retaining account and machine provenance.
+        let local = QuotaResponse(generatedAt: "", windows: localWindows).platformSections(now: now)
+            .flatMap { $0.windows.map(\.window) }
+        let selected = QuotaResponse(generatedAt: "", windows: row.section.windows.map(\.window))
+            .normalized().windows
+        return !selected.isEmpty && selected.allSatisfy { local.contains($0) }
     }
 
     /// Windows whose percentage is real but meaningless: a five-hour Antigravity
@@ -738,6 +754,10 @@ final class MonitorModel: ObservableObject {
         )
         self.now = now
         self.issues = issues
+    }
+
+    func injectLocalHistorySourceForTests(_ windows: [QuotaWindow]) {
+        localWindows = windows
     }
 
     /// The fleet half of the seam: pulled windows grouped by origin, plus the
@@ -1162,15 +1182,24 @@ final class MonitorModel: ObservableObject {
             guard !cleanToken.contains("\n"), !cleanToken.contains("\r") else { throw QuotaClientError.invalidToken }
             try await TokenStore.save(cleanToken, server: value, service: TokenStore.readService)
         }
-        // Infisical is the source of truth for the pull endpoint: the write
-        // lands there before any local state moves, and a failed write fails
-        // the save — the cache and Infisical never diverge silently.  See
-        // INFISICAL.md.  A no-op until the owner provisions an identity under
-        // Settings → Infisical Sync.  Placed after the token save so a
-        // Keychain failure cannot leave Infisical ahead of the local cache.
-        try await InfisicalSettings.shared.writeThrough(value, for: InfisicalSettings.Keys.pullEndpoint)
-        let savedToken = !cleanToken.isEmpty ? cleanToken : server ? await TokenStore.read(server: value, service: TokenStore.readService) : nil
-        if server && savedToken == nil { throw QuotaClientError.invalidToken }
+        let savedToken: String?
+        if !cleanToken.isEmpty {
+            savedToken = cleanToken
+        } else if server, let readTokenReadForTesting {
+            savedToken = await readTokenReadForTesting().map(sanitizedToken(_:))
+        } else if server {
+            savedToken = await TokenStore.read(server: value, service: TokenStore.readService)
+                .map(sanitizedToken(_:))
+        } else {
+            savedToken = nil
+        }
+        if server && (savedToken?.isEmpty ?? true) { throw QuotaClientError.invalidToken }
+        // Validate every local precondition before changing shared settings.
+        if let settingsWriteForTesting {
+            try await settingsWriteForTesting(value, InfisicalSettings.Keys.pullEndpoint)
+        } else {
+            try await InfisicalSettings.shared.writeThrough(value, for: InfisicalSettings.Keys.pullEndpoint)
+        }
         let saved = savedToken != nil || (value == endpoint && hasSavedToken)
         // A timer refresh can start while the token read above is suspended.
         // Invalidate it again before installing the new read modes.
@@ -1650,17 +1679,20 @@ final class MonitorModel: ObservableObject {
             }
             lastRunawayAlertAt[key] = now.timeIntervalSince1970
 
-            let comp = group[0].kind == .vsPeak ? "recent peak" : "7-day average"
+            let comp = group[0].kind == .vsPeak ? "measured peak" : "available-history average"
             let mult = group[0].multiplier.formatted(.number.precision(.fractionLength(1)))
             let record = RunawayAlertRecord(
-                timestamp: now,
+                timestamp: group[0].observedAt ?? now,
                 providerKey: group[0].providerKey,
                 providerLabel: provLabel,
                 windowId: group[0].windowId,
                 windowLabel: winLabel ?? group[0].windowId,
                 multiplier: group[0].multiplier,
                 comparison: comp,
-                summary: "\(provLabel)\(winLabel.map { " (\($0))" } ?? "") is burning at \(mult)× your \(comp)."
+                summary: "\(provLabel)\(winLabel.map { " (\($0))" } ?? "") is burning at \(mult)× your \(comp).",
+                ratePercentPerHour: group[0].ratePercentPerHour,
+                comparisonRatePercentPerHour: group[0].comparisonRatePercentPerHour,
+                historyCoverageHours: group[0].historyCoverageHours
             )
             appendRunawayAlert(record)
         }

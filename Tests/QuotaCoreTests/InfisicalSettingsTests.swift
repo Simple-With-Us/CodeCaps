@@ -38,9 +38,10 @@ private func loginPayload(token: String = "tok-123") -> Data {
     try! JSONSerialization.data(withJSONObject: ["accessToken": token])
 }
 
-private func secretsPayload(_ values: [String: String]) -> Data {
-    let secrets = values.map { ["secretKey": $0.key, "secretValue": $0.value] }
-    return try! JSONSerialization.data(withJSONObject: ["secrets": secrets])
+private func secretPayload(key: String, value: String) -> Data {
+    try! JSONSerialization.data(withJSONObject: [
+        "secret": ["secretKey": key, "secretValue": value],
+    ])
 }
 
 private func configuredSettings(
@@ -57,8 +58,10 @@ private func configuredSettings(
         if url.path.hasSuffix("/api/v1/auth/universal-auth/login"), method == "POST" {
             return (loginPayload(), 200)
         }
-        if url.path.hasSuffix("/api/v3/secrets/raw"), method == "GET" {
-            return (secretsPayload(values), 200)
+        if method == "GET", let key = url.pathComponents.last,
+           url.path.contains("/api/v3/secrets/raw/") {
+            guard let value = values[key] else { return (Data(), 404) }
+            return (secretPayload(key: key, value: value), 200)
         }
         throw MockInfisicalTransport.MockError.unexpected
     }
@@ -87,8 +90,21 @@ final class InfisicalSettingsTests: XCTestCase {
         XCTAssertEqual(settings.refreshInterval, 120)
         XCTAssertNotNil(settings.lastLoadedAt)
         XCTAssertNil(settings.lastError)
-        // One login plus one bulk list — and nothing else.
-        XCTAssertEqual(transport.methods, ["POST", "GET"])
+        // One login plus three named reads — and nothing else.
+        XCTAssertEqual(transport.methods, ["POST", "GET", "GET", "GET"])
+        let requested = transport.calls.filter { $0.method == "GET" }.compactMap { $0.url.pathComponents.last }
+        XCTAssertEqual(requested, [InfisicalSettings.Keys.pullEndpoint,
+                                   InfisicalSettings.Keys.pushEndpoint,
+                                   InfisicalSettings.Keys.refreshSeconds])
+        XCTAssertTrue(transport.calls.filter { $0.method == "GET" }.allSatisfy {
+            $0.url.path.contains("/api/v3/secrets/raw/") &&
+            URLComponents(url: $0.url, resolvingAgainstBaseURL: false)?.queryItems?.contains {
+                $0.name == "secretPath" && $0.value == "/"
+            } == true
+        })
+        XCTAssertNil(settings.value(for: "UNRELATED_SECRET"))
+        XCTAssertEqual(Set(settings.allValues().keys),
+                       Set([InfisicalSettings.Keys.pullEndpoint, InfisicalSettings.Keys.refreshSeconds]))
     }
 
     func testRuntimeReadsMakeZeroNetworkCallsAfterInit() async throws {
@@ -179,6 +195,51 @@ final class InfisicalSettingsTests: XCTestCase {
                        "https://quota.example.com/api/quota-windows",
                        "a failed refresh must keep serving the last-known-good cache")
         XCTAssertNotNil(settings.lastError)
+    }
+
+    func testLaterNamedReadFailureKeepsEntirePreviousCache() async throws {
+        let transport = MockInfisicalTransport()
+        let settings = configuredSettings(transport: transport, values: [
+            InfisicalSettings.Keys.pullEndpoint: "https://old.example.com/pull",
+            InfisicalSettings.Keys.pushEndpoint: "https://old.example.com/push",
+        ])
+        try await settings.load()
+        let loadedAt = settings.lastLoadedAt
+
+        transport.handler = { method, url, _, _ in
+            if method == "POST", url.path.hasSuffix("/api/v1/auth/universal-auth/login") {
+                return (loginPayload(), 200)
+            }
+            if method == "GET", url.path.hasSuffix("/PULL_ENDPOINT") {
+                return (secretPayload(key: InfisicalSettings.Keys.pullEndpoint,
+                                      value: "https://new.example.com/pull"), 200)
+            }
+            if method == "GET", url.path.hasSuffix("/PUSH_ENDPOINT") { return (Data(), 503) }
+            throw MockInfisicalTransport.MockError.unexpected
+        }
+
+        await settings.refresh()
+
+        XCTAssertEqual(settings.value(for: InfisicalSettings.Keys.pullEndpoint),
+                       "https://old.example.com/pull")
+        XCTAssertEqual(settings.value(for: InfisicalSettings.Keys.pushEndpoint),
+                       "https://old.example.com/push")
+        XCTAssertEqual(settings.lastLoadedAt, loadedAt)
+        XCTAssertNotNil(settings.lastError)
+    }
+
+    func testUnrelatedSecretIsNeverRequestedOrCached() async throws {
+        let transport = MockInfisicalTransport()
+        let settings = configuredSettings(transport: transport, values: [
+            "UNRELATED_SECRET": "must-stay-unread",
+            InfisicalSettings.Keys.pullEndpoint: "https://quota.example.com/pull",
+        ])
+
+        try await settings.load()
+
+        XCTAssertFalse(transport.calls.contains { $0.url.path.contains("UNRELATED_SECRET") })
+        XCTAssertNil(settings.value(for: "UNRELATED_SECRET"))
+        XCTAssertFalse(settings.allValues().keys.contains("UNRELATED_SECRET"))
     }
 
     func testFailedWriteThroughRejectsAndLeavesCacheUntouched() async throws {

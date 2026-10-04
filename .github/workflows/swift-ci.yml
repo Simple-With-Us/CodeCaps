@@ -10,6 +10,10 @@ on:
     branches: [main]
   pull_request:
 
+concurrency:
+  group: swift-ci-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
@@ -24,8 +28,17 @@ jobs:
       - uses: actions/checkout@v4
       - name: Swift build
         run: swift build
-      - name: Swift test
+      - name: Swift test and render native UI fixtures
+        env:
+          CODECAPS_DOCS_RENDER_DIR: ${{ runner.temp }}/codecaps-native-ui
         run: swift test
+      - name: Upload native UI screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codecaps-native-ui
+          path: ${{ runner.temp }}/codecaps-native-ui/*.png
+          if-no-files-found: warn
 
   companion:
     runs-on: macos-latest

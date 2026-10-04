@@ -6,7 +6,7 @@ Infisical is the sole source of truth for CodeCaps' app-level settings: secrets,
 
 - Infisical project: **CodeCaps** (`cd278860-c3bc-466f-9256-22385e64551b`), environments `dev` / `staging` / `prod`.
 - Release builds read `prod`; `.dev` builds read `dev` (`InfisicalSettings.defaultEnvironment`, mirroring how `TokenStore` scopes Keychain items per build).
-- REST surface used: universal-auth login → `GET /api/v3/secrets/raw` (bulk list) → `PATCH` / `POST /api/v3/secrets/raw/{name}` (write-through; the `/raw/` write path accepts a plaintext `secretValue`, validated against the live API — the non-raw path demands client-side E2EE fields).  Implemented with zero new dependencies in `Sources/QuotaCore/InfisicalSettings.swift` (`URLSession` only).
+- REST surface used: universal-auth login → three named `GET /api/v3/secrets/raw/{name}` requests → `PATCH` / `POST /api/v3/secrets/raw/{name}` for write-through.  The app never lists root secrets or fetches an unrelated secret value.  A missing managed key (404) remains unset, so its existing local/default behavior applies; any other read failure keeps the entire last-known-good cache.  Implemented with zero new dependencies in `Sources/QuotaCore/InfisicalSettings.swift` (`URLSession` only).
 
 ## Key Inventory
 
@@ -37,6 +37,7 @@ Non-sensitive defaults above are seeded in the `dev` environment only.  `prod` v
 1. **Load at startup.**  `AppDelegate.startInfisicalSync` runs on a background task at launch when an identity is provisioned: configure → `refresh()` → adopt endpoints.  A failure never blocks launch or the main thread; the app keeps its local values.
 2. **Never fetch per-request.**  All runtime reads go through `InfisicalSettings.value(for:)`, a synchronous memory-only read.  The only network calls are the startup load, the refresh timer, `applicationDidBecomeActive`, and explicit admin Save actions.
 3. **Background refresh.**  A one-shot timer rescheduled after every fire (so a cadence change in Infisical takes effect next cycle), plus a refresh on `applicationDidBecomeActive`.  A failed refresh is recorded on `lastError` (visible under Settings → Infisical Sync) and the last-known-good cache keeps serving — staleness is safer than an outage.
+   The three named reads complete before the cache changes; partial success never replaces it.  Infisical sync remains optional and separately provisioned.  Reading settings does not turn on quota push or pull.
 4. **Write-through on admin save.**  Saving the pull/push endpoint in Settings, or any managed key under Settings → Infisical Sync, writes to Infisical FIRST via `InfisicalSettings.set` and only then updates the local cache.  A failed Infisical write throws and the save is rejected with the error shown inline — the cache and Infisical never diverge silently.
 5. **Adoption, not clobbering.**  After a load/refresh, `MonitorModel.adoptInfisicalEndpointsIfUnset` fills in an endpoint only when the owner never set one locally (key absent).  A deliberately cleared field (stored as `""`) is never overridden.
 
@@ -46,7 +47,7 @@ CodeCaps is a single-user local app: the owner is the only user and therefore th
 
 ## Provisioning
 
-1. In Infisical, create a machine identity with read/write on the CodeCaps project (dev for `.dev` builds, prod for release) and copy its client ID and secret.
+1. In Infisical, create a machine identity scoped to the CodeCaps project, the intended environment (dev for `.dev` builds, prod for release), and the root secret path.  Grant read access at that scope; grant write access only if this identity will save settings from the app.  Use the narrowest permissions supported by the Infisical policy.  The client requests only the three managed keys by name, but that request pattern alone does not restrict what an overprivileged identity could access.  Copy its client ID and secret.
 2. Open Settings → Infisical Sync, paste both, press Save Identity.  The app verifies the identity against Infisical immediately and reports success or the exact failure.
 3. Set `PULL_ENDPOINT` / `PUSH_ENDPOINT` / `SETTINGS_REFRESH_SECONDS` under Managed Keys (or directly in Infisical); the app picks them up on the next refresh.
 

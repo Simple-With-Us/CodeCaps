@@ -479,3 +479,11 @@ quota shown two ways.  The expanded row labels now make origin legible
 without inspecting the underlying window.
 
 Board 42ae688ab3b84d9aa65e445aab072a15.  Closes #37.
+
+## 2026-10-03 — Platform History and Alert Navigation [CODEX, in progress]
+
+- Board: `e574a7ee`; GitHub: #136.  Branch: `codex/platform-usage-history`.
+- Owner requested removal of All Platforms, prominent individual platform graphs, explanatory click-through alerts, and Docked Bar terminology.
+- UI expert reviewed the supplied notification screenshot and source at merged #134/#135.  Recommended quota percentage charts with 24-hour/7-day ranges, reset and missing-data breaks, and honest history availability.  This is a source-based design review, not a runtime visual audit.
+- Files reserved: ConsoleViews, UsageHistoryViews, GlanceViews, AppDelegate, ResetAlarmManager, SettingsViews, BurnRateMonitor, MonitorModel, AnomalyDetector, and associated tests.  Core history and app UI have separate writers.
+- App coordination moved to #codecaps (`C0C6NFR5QRJ`) through the existing websocket helper.  Widget release verification continues separately.  Provider/file refresh scheduling remains tracked by #137 / `4bcf84f1`.

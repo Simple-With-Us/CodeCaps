@@ -45,6 +45,8 @@ public final class InfisicalSettings: @unchecked Sendable {
         public static let refreshSeconds = "SETTINGS_REFRESH_SECONDS"
     }
 
+    private static let managedKeys = [Keys.pullEndpoint, Keys.pushEndpoint, Keys.refreshSeconds]
+
     /// Fallback refresh cadence when the key is absent or unparseable.
     public static let defaultRefreshInterval: TimeInterval = 300
     /// Floor for an admin-set cadence, so a typo cannot turn the refresh
@@ -250,12 +252,12 @@ public final class InfisicalSettings: @unchecked Sendable {
 
     // MARK: - Load / refresh
 
-    /// Full fetch from Infisical, replacing the cache.  Throws on any failure
+    /// Fetch only the managed keys from Infisical, replacing the cache.  Throws on any failure
     /// and leaves the previous cache untouched.  Off the main thread by
     /// construction — every caller awaits it from a background task.
     public func load() async throws {
         let configuration = try configurationOrThrow()
-        let values = try await fetchAll(configuration: configuration)
+        let values = try await fetchManaged(configuration: configuration)
         lock.lock()
         defer { lock.unlock() }
         _cache = values
@@ -324,43 +326,44 @@ public final class InfisicalSettings: @unchecked Sendable {
         return token
     }
 
-    private func fetchAll(configuration: Configuration) async throws -> [String: String] {
+    private func fetchManaged(configuration: Configuration) async throws -> [String: String] {
         let token = try await accessToken(for: configuration)
-        guard var components = URLComponents(
-            url: configuration.siteURL.appendingPathComponent("api/v3/secrets/raw"),
-            resolvingAgainstBaseURL: false
-        ) else {
-            throw SettingsError.decoding("could not build the secrets list URL")
-        }
-        components.queryItems = [
-            URLQueryItem(name: "workspaceId", value: configuration.projectId),
-            URLQueryItem(name: "environment", value: configuration.environment),
-            URLQueryItem(name: "secretPath", value: "/"),
-            URLQueryItem(name: "viewSecretValue", value: "true"),
-            URLQueryItem(name: "expandSecretReferences", value: "false"),
-            URLQueryItem(name: "include_imports", value: "false"),
-        ]
-        guard let url = components.url else {
-            throw SettingsError.decoding("could not build the secrets list URL")
-        }
-        let (data, status) = try await sending {
-            try await self.transport.send(
-                method: "GET",
-                url: url,
-                headers: ["Authorization": "Bearer \(token)"],
-                body: nil
-            )
-        }
-        guard status == 200 else { throw SettingsError.fetchFailed(status: status) }
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let secrets = json["secrets"] as? [[String: Any]] else {
-            throw SettingsError.decoding("secrets list had no secrets array")
-        }
         var values: [String: String] = [:]
-        for secret in secrets {
-            guard let key = secret["secretKey"] as? String, !key.isEmpty,
-                  let value = secret["secretValue"] as? String, !value.isEmpty else { continue }
-            values[key] = value
+        for key in Self.managedKeys {
+            guard var components = URLComponents(
+                url: configuration.siteURL.appendingPathComponent("api/v3/secrets/raw").appendingPathComponent(key),
+                resolvingAgainstBaseURL: false
+            ) else {
+                throw SettingsError.decoding("could not build the named secret URL")
+            }
+            components.queryItems = [
+                URLQueryItem(name: "workspaceId", value: configuration.projectId),
+                URLQueryItem(name: "environment", value: configuration.environment),
+                URLQueryItem(name: "secretPath", value: "/"),
+                URLQueryItem(name: "type", value: "shared"),
+                URLQueryItem(name: "expandSecretReferences", value: "false"),
+                URLQueryItem(name: "include_imports", value: "false"),
+            ]
+            guard let url = components.url else {
+                throw SettingsError.decoding("could not build the named secret URL")
+            }
+            let (data, status) = try await sending {
+                try await self.transport.send(
+                    method: "GET",
+                    url: url,
+                    headers: ["Authorization": "Bearer \(token)"],
+                    body: nil
+                )
+            }
+            if status == 404 { continue }
+            guard status == 200 else { throw SettingsError.fetchFailed(status: status) }
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let secret = json["secret"] as? [String: Any],
+                  let returnedKey = secret["secretKey"] as? String, returnedKey == key,
+                  let value = secret["secretValue"] as? String else {
+                throw SettingsError.decoding("named secret response was invalid")
+            }
+            if !value.isEmpty { values[key] = value }
         }
         return values
     }
