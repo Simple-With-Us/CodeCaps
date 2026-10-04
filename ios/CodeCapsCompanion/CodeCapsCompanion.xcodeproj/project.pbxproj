@@ -11,6 +11,7 @@
 		056BC4016EE14B5CDADD58E1 /* alarm-glass.wav in Resources */ = {isa = PBXBuildFile; fileRef = 185B2FA090E97F0B48E3E9A8 /* alarm-glass.wav */; };
 		0BA20AB9771ACD744FE1DA95 /* CodeCapsWidgetsMac.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 1981252E1F614DC809CAB013 /* CodeCapsWidgetsMac.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		0BDDE676F287EA3372B9D24B /* CompanionQuotaModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1371DB889435F70346FB6AF /* CompanionQuotaModel.swift */; };
+		0FB40BD33AB5375F6C02ACFC /* WidgetConfigurationIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72DB68669C8EFB8E9045184C /* WidgetConfigurationIntent.swift */; };
 		135997B0E383FB2D00C87CB0 /* SentenceGap.swift in Sources */ = {isa = PBXBuildFile; fileRef = E124B68EB2FF725D59E2EC1F /* SentenceGap.swift */; };
 		137C79F45750F4FA04219AFE /* SentenceGap.swift in Sources */ = {isa = PBXBuildFile; fileRef = E124B68EB2FF725D59E2EC1F /* SentenceGap.swift */; };
 		15B3EE6BAA0DB41A14ED38A6 /* AlarmSoundPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 674BB9709E48A6D00D4EE92C /* AlarmSoundPlayer.swift */; };
@@ -31,6 +32,7 @@
 		4D9258D010AD16F059277D93 /* alarm-submarine.wav in Resources */ = {isa = PBXBuildFile; fileRef = 5F63EE805947E5707E2A0C3F /* alarm-submarine.wav */; };
 		6447965E07907E9AA3407123 /* alarm-sosumi.wav in Resources */ = {isa = PBXBuildFile; fileRef = 4FA72166D5E5A0F726B4DF18 /* alarm-sosumi.wav */; };
 		689104F1DF3DDC7C7F75D168 /* WidgetSnapshotFetcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DE3A7D9C36FF286A082F60E /* WidgetSnapshotFetcher.swift */; };
+		717D1C459A127B80594F8905 /* WidgetWindowRows.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7A7EF5A19DFD2299052F4DE /* WidgetWindowRows.swift */; };
 		7A59C4CE14A8C4532A6C9327 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = DF46F01EE0931315955EE9AF /* Assets.xcassets */; };
 		7DFD68E2400E127E11B80471 /* CodeCapsWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = FD27E95016C7BDDE19F6C6E2 /* CodeCapsWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		7F3D6663EA86FDE73EA17DCB /* alarm-sosumi.wav in Resources */ = {isa = PBXBuildFile; fileRef = 4FA72166D5E5A0F726B4DF18 /* alarm-sosumi.wav */; };
@@ -38,6 +40,7 @@
 		99A788DAEA41B4AB83A93501 /* CodeCapsCompanionApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34CE8BC7DF9DCF088BF1B805 /* CodeCapsCompanionApp.swift */; };
 		99E4B46415A2BCB252FAA6C0 /* ResetAlarmMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5ECFD3E9DC2728ACB5FB5488 /* ResetAlarmMessage.swift */; };
 		9D826DF8BA1D0C240F17EAFC /* ResetAlarmSound.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89A5807594DFD989CADCC6F2 /* ResetAlarmSound.swift */; };
+		A90E0EF383B2CDF27263BAF0 /* WidgetConfigurationIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72DB68669C8EFB8E9045184C /* WidgetConfigurationIntent.swift */; };
 		AB8C667473DF14CCF7B48F2A /* WidgetDataProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = F281E65EF7010842967CD100 /* WidgetDataProvider.swift */; };
 		AFBBFB2FD8EEA9DA9EF40042 /* alarm-bottle.wav in Resources */ = {isa = PBXBuildFile; fileRef = 302C44DD0C87899C354A914C /* alarm-bottle.wav */; };
 		BD4C31C68641BA2ED6BE8798 /* alarm-bottle.wav in Resources */ = {isa = PBXBuildFile; fileRef = 302C44DD0C87899C354A914C /* alarm-bottle.wav */; };
@@ -55,6 +58,7 @@
 		EA984A6E75520CAB2639A8B4 /* CodeCapsWidgetBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6316FA88D130531D99C73AEE /* CodeCapsWidgetBundle.swift */; };
 		F245CD4AA6FA8D9C23A5D373 /* CompanionTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C1CF45BE162CC9B8CD968DC /* CompanionTheme.swift */; };
 		F3C6891672DADC0AD9667E90 /* WidgetPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 716F800EA9DEDFC597BD08BB /* WidgetPresentation.swift */; };
+		F912D93277350586352FE398 /* WidgetWindowRows.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7A7EF5A19DFD2299052F4DE /* WidgetWindowRows.swift */; };
 		FC810FA7900F297E014083A5 /* AlarmSoundPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 674BB9709E48A6D00D4EE92C /* AlarmSoundPlayer.swift */; };
 		FE52A4A8D224D9DBB320ABCC /* alarm-glass.wav in Resources */ = {isa = PBXBuildFile; fileRef = 185B2FA090E97F0B48E3E9A8 /* alarm-glass.wav */; };
 /* End PBXBuildFile section */
@@ -118,19 +122,19 @@
 		5F63EE805947E5707E2A0C3F /* alarm-submarine.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "alarm-submarine.wav"; sourceTree = "<group>"; };
 		6316FA88D130531D99C73AEE /* CodeCapsWidgetBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeCapsWidgetBundle.swift; sourceTree = "<group>"; };
 		674BB9709E48A6D00D4EE92C /* AlarmSoundPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlarmSoundPlayer.swift; sourceTree = "<group>"; };
-		6992E7C7086CA631814CCD87 /* CodeCapsCompanionMac.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = CodeCapsCompanionMac.entitlements; sourceTree = "<group>"; };
 		6B76200EBE871E29BAC8A41B /* ResetAlarmCadence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ResetAlarmCadence.swift; path = ../../Sources/QuotaCore/ResetAlarmCadence.swift; sourceTree = "<group>"; };
 		716F800EA9DEDFC597BD08BB /* WidgetPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetPresentation.swift; sourceTree = "<group>"; };
+		72DB68669C8EFB8E9045184C /* WidgetConfigurationIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetConfigurationIntent.swift; sourceTree = "<group>"; };
 		84C4C2C5DC3AA20234129F15 /* CompanionContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionContentView.swift; sourceTree = "<group>"; };
 		881BAB30A7762A0170BE4FD8 /* alarm-frog.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "alarm-frog.wav"; sourceTree = "<group>"; };
 		89A5807594DFD989CADCC6F2 /* ResetAlarmSound.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResetAlarmSound.swift; sourceTree = "<group>"; };
 		9DE3A7D9C36FF286A082F60E /* WidgetSnapshotFetcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WidgetSnapshotFetcher.swift; path = ../../Sources/QuotaCore/WidgetSnapshotFetcher.swift; sourceTree = "<group>"; };
-		AC1ED96526BA3E7B9E43084F /* CodeCapsWidgetsMac.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = CodeCapsWidgetsMac.entitlements; sourceTree = "<group>"; };
 		B47E0485E1902045DBFE06B1 /* CodeCapsCompanion.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = CodeCapsCompanion.entitlements; sourceTree = "<group>"; };
 		C1371DB889435F70346FB6AF /* CompanionQuotaModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionQuotaModel.swift; sourceTree = "<group>"; };
 		C2EA171A442F77D9348C68D4 /* InfoMac.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = InfoMac.plist; sourceTree = "<group>"; };
 		C679EF2BE96C94E938E56DC1 /* CodeCapsCompanionMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CodeCapsCompanionMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		D5FD1EFF75431229A669FC5A /* ResetAlarmTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ResetAlarmTracker.swift; path = ../../Sources/QuotaCore/ResetAlarmTracker.swift; sourceTree = "<group>"; };
+		D7A7EF5A19DFD2299052F4DE /* WidgetWindowRows.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetWindowRows.swift; sourceTree = "<group>"; };
 		DF46F01EE0931315955EE9AF /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		E124B68EB2FF725D59E2EC1F /* SentenceGap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SentenceGap.swift; sourceTree = "<group>"; };
 		E53A47DB2534669DD3BEE62E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
@@ -174,7 +178,6 @@
 				4BE1EE20399A37860158A030 /* Views */,
 				B47E0485E1902045DBFE06B1 /* CodeCapsCompanion.entitlements */,
 				34CE8BC7DF9DCF088BF1B805 /* CodeCapsCompanionApp.swift */,
-				6992E7C7086CA631814CCD87 /* CodeCapsCompanionMac.entitlements */,
 				154D17A5A492536F43729222 /* Info.plist */,
 				C2EA171A442F77D9348C68D4 /* InfoMac.plist */,
 			);
@@ -216,12 +219,13 @@
 			children = (
 				6316FA88D130531D99C73AEE /* CodeCapsWidgetBundle.swift */,
 				5087F87CE3B2EDD3B9E1309C /* CodeCapsWidgets.entitlements */,
-				AC1ED96526BA3E7B9E43084F /* CodeCapsWidgetsMac.entitlements */,
 				E53A47DB2534669DD3BEE62E /* Info.plist */,
 				10FF587176549AAC4A616E3B /* InfoMac.plist */,
+				72DB68669C8EFB8E9045184C /* WidgetConfigurationIntent.swift */,
 				F281E65EF7010842967CD100 /* WidgetDataProvider.swift */,
 				716F800EA9DEDFC597BD08BB /* WidgetPresentation.swift */,
 				0A40D20353A8D6C1D9E9D349 /* WidgetViews.swift */,
+				D7A7EF5A19DFD2299052F4DE /* WidgetWindowRows.swift */,
 			);
 			path = Widgets;
 			sourceTree = "<group>";
@@ -450,10 +454,12 @@
 			buildActionMask = 2147483647;
 			files = (
 				170FA7844615930B5A1D4CBD /* CodeCapsWidgetBundle.swift in Sources */,
+				0FB40BD33AB5375F6C02ACFC /* WidgetConfigurationIntent.swift in Sources */,
 				AB8C667473DF14CCF7B48F2A /* WidgetDataProvider.swift in Sources */,
 				C7498C0ACDD5320564DE32B0 /* WidgetPresentation.swift in Sources */,
 				C1B3C6C3651687B8283C75CD /* WidgetSnapshotFetcher.swift in Sources */,
 				1C938ECE1998071D65A908EA /* WidgetViews.swift in Sources */,
+				717D1C459A127B80594F8905 /* WidgetWindowRows.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -462,10 +468,12 @@
 			buildActionMask = 2147483647;
 			files = (
 				EA984A6E75520CAB2639A8B4 /* CodeCapsWidgetBundle.swift in Sources */,
+				A90E0EF383B2CDF27263BAF0 /* WidgetConfigurationIntent.swift in Sources */,
 				D3C30EA2E4A6B59A22E086DB /* WidgetDataProvider.swift in Sources */,
 				F3C6891672DADC0AD9667E90 /* WidgetPresentation.swift in Sources */,
 				689104F1DF3DDC7C7F75D168 /* WidgetSnapshotFetcher.swift in Sources */,
 				2AA3DE1AA8DD20DD5AD6E403 /* WidgetViews.swift in Sources */,
+				F912D93277350586352FE398 /* WidgetWindowRows.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
