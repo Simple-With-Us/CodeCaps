@@ -164,17 +164,20 @@ public struct LocalQuotaReader: Sendable {
         request.httpMethod = "GET"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
+        // A file token the server rejects is "sign in again."  Only a token
+        // that came from the remembered Keychain grant asks for Allow Access.
+        let tokenFromKeychain = ClaudeOAuthParser.validOAuth(in: file, now: now()) == nil
         let payload: [String: Any]
         do {
             payload = try await requestJSON(request)
         } catch LocalReaderError.reauth {
-            // The server rejected the token.  Drop the remembered bytes so
-            // the next refresh asks for Allow Access instead of sending them
-            // again.
             ClaudeCredentialSource.resetRememberedCredential()
-            let state = ClaudeLoginState.needsPermission
-            return ProviderRead(provider: provider, windows: [], issue: state.issue,
-                                needsConsent: state.needsConsent)
+            if tokenFromKeychain {
+                let state = ClaudeLoginState.needsPermission
+                return ProviderRead(provider: provider, windows: [], issue: state.issue,
+                                    needsConsent: state.needsConsent)
+            }
+            throw LocalReaderError.reauth
         }
         let windows = parseClaude(payload, planType: firstString(oauth, ["subscriptionType", "subscription_type"]), observedAt: now())
         guard !windows.isEmpty else {

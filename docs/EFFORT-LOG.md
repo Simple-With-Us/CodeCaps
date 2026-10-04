@@ -5,6 +5,15 @@ PR (when shipped), follow-ups (when parked).
 
 ---
 
+## 2026-10-03 — Claude file 401 stays sign-in-again [GROK-BUILD, in progress]
+
+Follow-up to PR #126.  A 401 from a token in `~/.claude/.credentials.json`
+still says "This account needs you to sign in again."  Allow Access is only
+for a token that came from the remembered Keychain grant.  Both paths drop
+the remembered bytes.
+
+---
+
 ## 2026-10-03 — Fleet Antigravity row says when the weekly reading is missing [GROK-BUILD, in progress]
 
 Lane: `grok-build/fleet-weekly-gap`.  Board `47021e4c`.  Worktree `~/apps/codecaps-grok-build`.
