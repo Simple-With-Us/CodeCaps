@@ -5,6 +5,15 @@ PR (when shipped), follow-ups (when parked).
 
 ---
 
+## 2026-10-03 — Fleet Antigravity row says when the weekly reading is missing [GROK-BUILD, in progress]
+
+Lane: `grok-build/fleet-weekly-gap`.  Board `47021e4c`.  Worktree `~/apps/codecaps-grok-build`.
+
+- A fleet Antigravity row whose payload has a 5h meter and no weekly meter used to leave the second column blank.  The long column now says "no weekly reading reported".  A masked weekly says the existing masked caption.  A weekly that is already on screen, a local row, and a one-meter provider leave the column alone.
+- Files: `Sources/CodeCaps/GlanceViews.swift`, `Tests/CodeCapsTests/GlanceRowTests.swift`.  Codex's runaway-alert footer in the same file is left as it landed in #128.
+
+---
+
 ## 2026-10-03 — Prompt-free background Claude lookup [GROK-BUILD, in progress]
 
 Lane: `grok-build/prompt-free-claude-lookup` at
