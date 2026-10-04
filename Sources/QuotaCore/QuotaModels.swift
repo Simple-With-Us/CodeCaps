@@ -438,6 +438,15 @@ public extension QuotaResponse {
         let snapshots = reports.map { QuotaWindowSnapshot(window: $0, now: now) }
             .sorted { left, right in
                 if key == "google-antigravity" { return left.window.id < right.window.id }
+                // Cadence order: shorter periods (e.g. 5-hour) precede longer periods (e.g. weekly) across all platforms.
+                let lPeriod = ResetAlarmCadence.periodSeconds(token: left.window.window, label: left.window.label)
+                let rPeriod = ResetAlarmCadence.periodSeconds(token: right.window.window, label: right.window.label)
+                if let lp = lPeriod, let rp = rPeriod, lp != rp {
+                    return lp < rp
+                }
+                if lPeriod != nil && rPeriod == nil { return true }
+                if lPeriod == nil && rPeriod != nil { return false }
+
                 // Fresh low remaining values are actionable.  Stale and
                 // awaiting-refresh values stay after fresh values and do not
                 // compete with a real percentage.

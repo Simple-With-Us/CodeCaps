@@ -374,6 +374,16 @@ public enum WidgetPresentation {
                 }
             }
 
+            // Standardize cadence order: shorter periods (e.g. 5-hour) precede longer periods (e.g. weekly).
+            childWindows.sort { left, right in
+                let lPeriod = ResetAlarmCadence.periodSeconds(token: left.cadence, label: left.label) ?? 86400
+                let rPeriod = ResetAlarmCadence.periodSeconds(token: right.cadence, label: right.label) ?? 86400
+                if lPeriod != rPeriod {
+                    return lPeriod < rPeriod
+                }
+                return left.id < right.id
+            }
+
             let validPercents = childWindows.compactMap(\.remainingPercent)
             let controllingPct = validPercents.min()
             let isExhausted = (controllingPct ?? 100) <= 0

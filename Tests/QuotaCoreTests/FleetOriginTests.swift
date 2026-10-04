@@ -89,6 +89,23 @@ final class FleetOriginTests: XCTestCase {
         XCTAssertTrue(split.groups.isEmpty)
     }
 
+    func testLocalMacPrefixAndSourceAppIdentifiesOwnPush() {
+        let prefixed = window(id: "local-mac:anthropic:five_hour", source: "Claude Code", sourceApp: nil)
+        XCTAssertTrue(FleetOrigin.isOwnPush(prefixed, host: "unrelated-host"))
+
+        let appSourced = window(id: "some-window", source: "Claude Code", sourceApp: "local-mac")
+        XCTAssertTrue(FleetOrigin.isOwnPush(appSourced, host: "unrelated-host"))
+    }
+
+    func testMachineNormalizationRecognizesDottedHostAndLocalizedNames() {
+        var win = window(id: "remote-pull-1", source: "codecaps", sourceApp: "codecaps")
+        win.machine = "Mac.Jays.Services"
+        XCTAssertTrue(FleetOrigin.isOwnPush(win, host: "macjaysservices.local"))
+
+        win.machine = "macjaysservices"
+        XCTAssertTrue(FleetOrigin.isOwnPush(win, host: "Mac.Jays.Services"))
+    }
+
     private func window(id: String = "w", source: String?, sourceApp: String?) -> QuotaWindow {
         QuotaWindow(id: id, provider: "anthropic", providerKey: "anthropic", sourceApp: sourceApp,
                     label: "5h window", remainingPercent: 50,

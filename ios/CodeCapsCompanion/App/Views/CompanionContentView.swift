@@ -394,6 +394,10 @@ public struct CompanionContentView: View {
 
     // MARK: - Settings View
 
+    private var itemsWithDuplicates: [CompanionQuotaItem] {
+        model.items.filter { !$0.duplicateWindows.isEmpty }
+    }
+
     private var companionSettingsView: some View {
         NavigationStack {
             ScrollViewReader { proxy in
@@ -459,8 +463,7 @@ public struct CompanionContentView: View {
                 }
                 .id("syncTokenSection")
 
-                Section("Data Sources & Mirrors") {
-                    let itemsWithDuplicates = model.items.filter { !$0.duplicateWindows.isEmpty }
+                Section {
                     if itemsWithDuplicates.isEmpty {
                         Text("No secondary or mirror sources detected." + sentenceGap
                              + "All allowance windows are sourced directly from your primary sync feed.")
@@ -496,9 +499,8 @@ public struct CompanionContentView: View {
                                                         .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 4))
                                                 }
                                             }
-                                            let cd = dup.countdown()
-                                            if !cd.isEmpty {
-                                                Text("Resets in \(cd)")
+                                            if !dup.countdown().isEmpty {
+                                                Text("Resets in \(dup.countdown())")
                                                     .font(.system(size: 10))
                                                     .foregroundStyle(.secondary)
                                             }
@@ -522,6 +524,8 @@ public struct CompanionContentView: View {
                             .padding(.vertical, 4)
                         }
                     }
+                } header: {
+                    Text("Data Sources & Mirrors")
                 } footer: {
                     Text("CodeCaps monitors primary and mirror feeds for each platform." + sentenceGap
                          + "Discrepancies greater than 3% between feeds trigger a warning flag on the platform card.")
