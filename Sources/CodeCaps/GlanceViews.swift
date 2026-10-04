@@ -251,35 +251,42 @@ struct GlancePopover: View {
 
     // MARK: - Footer
 
+    private var hasRunawayNotice: Bool {
+        !model.activeRunawayAnomalies.isEmpty
+            || (model.runawayAlertHistory.first.map { $0.timestamp.timeIntervalSinceNow > -86_400 } ?? false)
+    }
+
+    private func openRunawayFooterAction() {
+        if let anomaly = model.activeRunawayAnomalies.first {
+            openAlert(anomaly.providerKey, anomaly.windowId, anomaly.observedAt)
+        } else if let recent = model.runawayAlertHistory.first {
+            openAlert(recent.providerKey, recent.windowId, recent.timestamp)
+        } else {
+            openConsole(.runawayAlerts)
+        }
+    }
+
     private var footer: some View {
         HStack(spacing: 8) {
-            if !model.activeRunawayAnomalies.isEmpty {
+            if hasRunawayNotice {
                 Button {
-                    if let anomaly = model.activeRunawayAnomalies.first {
-                        openAlert(anomaly.providerKey, anomaly.windowId, anomaly.observedAt)
-                    } else {
-                        openConsole(.runawayAlerts)
-                    }
+                    openRunawayFooterAction()
                 } label: {
-                    Image(systemName: "flame.fill")
+                    Image(systemName: model.activeRunawayAnomalies.isEmpty ? "clock.arrow.circlepath" : "flame.fill")
                         .font(.system(size: 14, weight: .bold))
                         .foregroundStyle(Theme.warning)
                         .frame(width: 24, height: 28)
                 }
                 .buttonStyle(.plain)
-                .help("Active Runaway Anomaly: click to inspect")
-                .accessibilityLabel("Active Runaway Anomaly")
+                .help("Runaway Usage Notice: click to inspect")
+                .accessibilityLabel("Runaway Usage Notice")
 
                 Button {
-                    if let anomaly = model.activeRunawayAnomalies.first {
-                        openAlert(anomaly.providerKey, anomaly.windowId, anomaly.observedAt)
-                    } else {
-                        openConsole(.runawayAlerts)
-                    }
+                    openRunawayFooterAction()
                 } label: {
                     MarqueeText(
                         text: runawayCombinedMarqueeText,
-                        font: .system(size: 15, weight: .heavy, design: .rounded),
+                        font: .system(size: 16, weight: .heavy, design: .rounded),
                         color: Theme.warning
                     )
                     .padding(.horizontal, 10)
@@ -290,7 +297,7 @@ struct GlancePopover: View {
                 .buttonStyle(.plain)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(runawayFooterAccessibilityLabel)
-                .help("Active Runaway Anomaly: click to inspect")
+                .help("Runaway Usage Notice: click to inspect")
                 .padding(.trailing, 4)
             } else {
                 Spacer()
@@ -320,29 +327,50 @@ struct GlancePopover: View {
     }
 
     private var runawayFooterItems: [String] {
-        model.activeRunawayAnomalies.map { anomaly in
+        if !model.activeRunawayAnomalies.isEmpty {
+            return model.activeRunawayAnomalies.map { anomaly in
+                let matchingSnapshot = model.displaySections.flatMap { $0.section.windows }
+                    .first { $0.window.id == anomaly.windowId }
+                    ?? model.sections.flatMap(\.windows).first { $0.window.id == anomaly.windowId }
+                let windowLabel = matchingSnapshot.map { glanceMeterCaption($0) }
+                let nameWithWindow = runawayNormalizedTitle(
+                    providerKey: anomaly.providerKey,
+                    windowId: anomaly.windowId,
+                    windowLabel: windowLabel
+                )
+                let comp = anomaly.kind == .vsPeak ? "peak" : "avg"
+                var parts = ["\(nameWithWindow): \(anomaly.multiplier.formatted(.number.precision(.fractionLength(1))))× vs \(comp)"]
+                if let rate = anomaly.ratePercentPerHour {
+                    parts.append("\(rate.formatted(.number.precision(.fractionLength(1)))) %/hr")
+                }
+                return parts.joined(separator: " · ")
+            }
+        }
+        if let recent = model.runawayAlertHistory.first, recent.timestamp.timeIntervalSinceNow > -86_400 {
             let matchingSnapshot = model.displaySections.flatMap { $0.section.windows }
-                .first { $0.window.id == anomaly.windowId }
-                ?? model.sections.flatMap(\.windows).first { $0.window.id == anomaly.windowId }
+                .first { $0.window.id == recent.windowId }
+                ?? model.sections.flatMap(\.windows).first { $0.window.id == recent.windowId }
             let windowLabel = matchingSnapshot.map { glanceMeterCaption($0) }
             let nameWithWindow = runawayNormalizedTitle(
-                providerKey: anomaly.providerKey,
-                windowId: anomaly.windowId,
+                providerKey: recent.providerKey,
+                windowId: recent.windowId,
                 windowLabel: windowLabel
             )
-            let comp = anomaly.kind == .vsPeak ? "peak" : "avg"
-            var parts = ["\(nameWithWindow): \(anomaly.multiplier.formatted(.number.precision(.fractionLength(1))))× vs \(comp)"]
-            if let rate = anomaly.ratePercentPerHour {
+            let comp = recent.comparison
+            var parts = ["\(nameWithWindow): \(recent.multiplier.formatted(.number.precision(.fractionLength(1))))× vs \(comp) (\(recent.timestamp.formatted(date: .omitted, time: .shortened)))"]
+            if let rate = recent.ratePercentPerHour {
                 parts.append("\(rate.formatted(.number.precision(.fractionLength(1)))) %/hr")
             }
-            return parts.joined(separator: " · ")
+            return [parts.joined(separator: " · ")]
         }
+        return []
     }
 
     private var runawayCombinedMarqueeText: String {
         let items = runawayFooterItems
         if items.isEmpty { return "" }
-        return "RUNAWAY: " + items.joined(separator: ", ")
+        let prefix = model.activeRunawayAnomalies.isEmpty ? "RECENT RUNAWAY: " : "RUNAWAY: "
+        return prefix + items.joined(separator: ", ")
     }
 
     private var runawayAnomalyFooterDetail: String? {
@@ -362,6 +390,9 @@ struct GlancePopover: View {
         let summaries = model.activeRunawayAnomalies.map(\.summary)
         if !summaries.isEmpty {
             return "Runaway Usage Alerts: " + summaries.joined(separator: sentenceGap)
+        }
+        if let recent = model.runawayAlertHistory.first, recent.timestamp.timeIntervalSinceNow > -86_400 {
+            return "Recent Runaway Alert: \(recent.providerLabel) \(recent.multiplier.formatted(.number.precision(.fractionLength(1))))×"
         }
         return "Runaway Usage Alerts"
     }
