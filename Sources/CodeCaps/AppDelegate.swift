@@ -441,24 +441,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// same thing; the difference here is that a menu bar app has one window
     /// rather than a window registry.
     ///
-    /// `.accessory` while nothing but the status item is up, `.regular` as
-    /// soon as the console is on screen — which is what puts a Dock icon in
-    /// and takes it out again.
-    ///
-    /// When Settings or the Console is open, the app dynamically becomes `.regular`
-    /// so the owner can switch to it from the Dock or ⌘-Tab.  When closed,
-    /// it reverts to `.accessory` if the owner chose Menu Bar mode.
+    /// The display mode wins over the window.  A menu-bar-only app must never
+    /// grow a Dock icon, even with Settings open, or the setting the owner
+    /// chose quietly stops meaning anything.
     private func applyActivationPolicy() {
+        let docked = model.displayMode != .menuBar
         let hasWindow = consoleWindow?.isVisible ?? false
-        let showDockIcon = (model.displayMode != .menuBar) || hasWindow
-        NSApp.setActivationPolicy(showDockIcon ? .regular : .accessory)
+        NSApp.setActivationPolicy(docked && hasWindow ? .regular : .accessory)
     }
 
-    /// Closing the console takes the Dock icon away if the owner chose Menu Bar mode.
+    /// Closing the console is what takes the Dock icon away.  Without this the
+    /// app stayed `.regular` with no window showing, which is a Dock icon the
+    /// owner cannot account for — clicking it brought up nothing.
+    ///
+    /// Always `.accessory`, in every display mode: the console is no longer
+    /// showing, and an owner who chose Dock mode still has their icon back the
+    /// moment `applyActivationPolicy` runs on the next open.
     func windowWillClose(_ notification: Notification) {
         guard let window = notification.object as? NSWindow, window === consoleWindow else { return }
-        let showDockIcon = model.displayMode != .menuBar
-        NSApp.setActivationPolicy(showDockIcon ? .regular : .accessory)
+        NSApp.setActivationPolicy(.accessory)
     }
 
     private func configureMenu() {
