@@ -149,8 +149,7 @@ public actor CodexSessionQuotaReader {
             Darwin.pread(fd, bytes.baseAddress, count, off_t(offset))
         }
         guard received >= 0 else { return nil }
-        data.count = received
-        return data
+        return Data(data.prefix(received))
     }
 
     private func scan(_ url: URL, accountID: String, at instant: Date, budget: inout Int) {
