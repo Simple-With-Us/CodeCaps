@@ -1630,7 +1630,7 @@ final class MonitorModel: ObservableObject {
             let comp = group[0].kind == .vsPeak ? "measured peak" : "available-history average"
             let mult = group[0].multiplier.formatted(.number.precision(.fractionLength(1)))
             let record = RunawayAlertRecord(
-                timestamp: now,
+                timestamp: group[0].observedAt ?? now,
                 providerKey: group[0].providerKey,
                 providerLabel: provLabel,
                 windowId: group[0].windowId,

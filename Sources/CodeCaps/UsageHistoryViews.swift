@@ -116,7 +116,7 @@ struct UsageHistoryView: View {
                 ContentUnavailableView {
                     Label("Local History Unavailable", systemImage: "chart.xyaxis.line")
                 } description: {
-                    Text("This quota came from a synced source." + sentenceGap
+                    Text("The selected source has no matching local history." + sentenceGap
                          + "CodeCaps records usage history only for readings made on this Mac.")
                 }
                 .frame(minHeight: 190)

@@ -381,7 +381,7 @@ public final class ResetAlarmManager: ObservableObject {
         content.sound = notificationSound(for: payload.sound)
         content.userInfo = AlertNavigation(providerKey: payload.providerId,
                                            windowId: payload.windowId,
-                                           timestamp: payload.timestamp).userInfo
+                                           timestamp: nil).userInfo
 
         let request = UNNotificationRequest(
             identifier: "codecaps.reset.\(payload.providerId).\(Date().timeIntervalSince1970)",
