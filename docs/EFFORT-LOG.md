@@ -458,3 +458,11 @@ quota shown two ways.  The expanded row labels now make origin legible
 without inspecting the underlying window.
 
 Board 42ae688ab3b84d9aa65e445aab072a15.  Closes #37.
+
+## 2026-10-03 — Independent Provider and File Refresh [CODEX, in progress]
+
+- Board `4bcf84f1`, GitHub #137; branch `codex/independent-source-refresh` in managed codecaps-refresh checkout.
+- Reserve new `CodexSessionQuotaReader` and tests first.  MonitorModel/Settings scheduling integration follows the graph/navigation writer's handback in #139.
+- Current pipeline has seven direct HTTP reader paths, three helper paths, and no passive CLI quota-file input.  Source-path counts are not request counts.
+- A private metadata-only comparison found matching current-account IDs in 18 of 20 recent Codex session files; the other two lacked usable identity.  Passive quota reads must require exact account identity, bounded regular files, complete allowlisted events, and original event timestamps.  Missing identity is excluded.
+- Provider checks retain the existing five-minute default.  Independent passive-file scheduling, counters, cancellation, and unchanged-input behavior require tests before shipping.
