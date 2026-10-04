@@ -670,6 +670,31 @@ final class ResetAlarmTrackerTests: XCTestCase {
         XCTAssertEqual(tracker.state.windows[key]?.minimumRemaining, 15.0)
     }
 
+    /// Fifth review on PR #153.  The gate tested the raw `observation.observedAt`
+    /// while the gap came from `readAt`, whose stamp is nulled when it sits
+    /// more than 300s in the future.  So a skew-rejected stamp passed the gate,
+    /// `readAt` fell back to `now`, and a gap of zero concluded "definitely did
+    /// not slide" when the truth is "cannot tell" — the same failure mode as a
+    /// missing stamp, reached through a different door.
+    func testAStampRejectedAsClockSkewIsNotAVendorRestore() {
+        var tracker = ResetAlarmTracker()
+        let end = t0 + 5 * day
+        _ = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end, remaining: 15.0, observedAt: t0, provider: "grok-bot")],
+            now: t0)
+        // 400s ahead is past the 300s skew guard, so the tracker discards it.
+        // Both readings are processed at the same `now`, which is the clock
+        // having stepped backwards between polls.
+        let skewed = t0 + 400
+        let events = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end + 100, remaining: 50.0, observedAt: skewed, provider: "grok-bot")],
+            now: t0)
+        XCTAssertTrue(events.isEmpty, "A rejected stamp leaves no gap, so a move cannot be cleared.")
+
+        let key = ResetAlarmTracker.windowKey(scope: "local", providerId: "grok-bot", windowId: "weekly")
+        XCTAssertEqual(tracker.state.windows[key]?.minimumRemaining, 15.0)
+    }
+
     /// One restore rings once, not once per refresh.
     func testAVendorRestoreRingsOnlyOnce() {
         var tracker = ResetAlarmTracker()

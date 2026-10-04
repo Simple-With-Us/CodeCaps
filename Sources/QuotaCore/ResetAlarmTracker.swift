@@ -483,17 +483,22 @@ public struct ResetAlarmTracker: Sendable {
                 // of when the owner pressed refresh rather than of anything
                 // the provider said.
                 let slidWithTheClock: Bool
-                if observation.observedAt != nil, let lastObserved = window.lastObservedAt {
+                if observedAt != nil, let lastObserved = window.lastObservedAt {
                     let gap = max(0, readAt.timeIntervalSince(lastObserved))
                     slidWithTheClock = gap > 0 && (endMoved ?? 0) * 2 >= gap
                 } else {
-                    // No trustworthy gap: either this reading is unstamped, or
-                    // the previous one was.  Then any movement at all
-                    // disqualifies the reading.  The iOS companion sends
-                    // `observedAt: nil` on every observation, which makes this
-                    // its ordinary path rather than an edge case: without it a
-                    // rolling reader there could slide up to the whole drift
-                    // tolerance per poll and still read as held still.
+                    // No trustworthy gap.  Either the reading carries no stamp,
+                    // the previous one did not, or this stamp was rejected as
+                    // too far in the future to be a real clock — and then
+                    // `readAt` falls back to `now`, so the gap can collapse to
+                    // zero and report "definitely did not slide" when the truth
+                    // is "cannot tell".  In every one of those cases any
+                    // movement at all disqualifies the reading.  The iOS
+                    // companion sends `observedAt: nil` on every observation,
+                    // which makes the unstamped case its ordinary path rather
+                    // than an edge case: without it a rolling reader there
+                    // could slide up to the whole drift tolerance per poll and
+                    // still read as held still.
                     slidWithTheClock = (endMoved ?? 0) > 0
                 }
                 let quotaHandedBack = periodEndHeld && !slidWithTheClock

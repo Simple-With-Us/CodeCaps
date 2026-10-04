@@ -614,7 +614,14 @@ Board 42ae688ab3b84d9aa65e445aab072a15.  Closes #37.
   carried by the previous reading" and is nil when that reading was unstamped,
   and to require the current reading to be stamped before trusting the gap.
   Reverting fails the new test and reports 15.0 to 50.0.
-- 684 tests across both bundles, 0 failures.
+- Kody's fifth review caught the same failure through a different door: the
+  gate tested the raw `observation.observedAt` while the gap came from
+  `readAt`, whose stamp is nulled past the 300-second skew guard.  A rejected
+  stamp therefore passed the gate, `readAt` fell back to `now`, and a gap of
+  zero concluded "definitely did not slide" when the truth is "cannot tell".
+  The gate now tests the filtered local `observedAt`, so a skew-rejected stamp
+  takes the conservative branch.  Reverting reports 15.0 to 50.0 again.
+- 685 tests across both bundles, 0 failures.
 - Two tests were written first and confirmed failing against the old rule, from
   the real observed numbers, then made to pass.  Also pinned: a small
   mid-window rise is still drift, a restore rings once and not once per
