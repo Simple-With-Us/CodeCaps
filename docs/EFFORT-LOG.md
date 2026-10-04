@@ -1,5 +1,17 @@
 # CodeCaps — Effort Log
 
+## 2026-10-04 — Glance header & footer marquee redesign, MiniMax video quarantine, and Runaway inspect button [AG, completed]
+
+Lane: `ag/glance-header-footer-redesign-and-video-quarantine`.  PR #151 (merged as `9b4f2d6`).  Board `bb2a8b26`, `e31de21f`.
+
+- Glance header overhaul: relocated Settings gear button to top-right toolbar next to reload; enlarged reload (frame 22, icon 13pt), settings (frame 22, icon 13pt), and bell w/"All" (13pt semibold); removed top-right separator dots; repositioned "X of Y" count to the left of the view toggle; and distributed components evenly across the 570pt popover width.
+- Glance footer banner redesign: replaced centered floating pill with full-width marquee banner; relocated flame icon to bottom-left where Settings was (`Theme.warning`, 24x28pt); matched 28pt height and 6pt corner radius with `Open CodeCaps` button with 12pt breathing room; implemented linear constant-speed (30 pt/s) leftward wrap-around ticker (`autoreverses: false`, 1.2s pause, 40pt cycle gap) with animation token guards against race conditions; included specific window captions (e.g. `Grok Bot (7d): 8.6× vs avg`).
+- MiniMax video quota quarantine: quarantined video allowance exclusively to platform settings card (`5/5 left` format); excluded video allowances from Glance meters, Glance expanded rows, and Usage History charts.
+- Runaway usage tab "Inspect Chart" button: enlarged and repositioned comfortably in bottom-right corner of `RunawayAlertRow` using `.bordered` styling and `.controlSize(.regular)`.
+- Verification: popover intrinsic width invariant holds; 671 unit tests passed with 0 failures; signed, notarized macOS release built and installed to `/Applications/CodeCaps.app` via `./script/build_and_run.sh`.
+
+---
+
 ## 2026-10-03 — MiniMax 5h/7d normalization, pacing marker prominence, and touch targets [AG, completed]
 
 Lane: `ag/ios-minimax-and-meter-prominence`.  PR #145 (merged as `d0a9db0`).
