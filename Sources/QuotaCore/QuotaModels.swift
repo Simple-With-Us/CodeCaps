@@ -492,7 +492,7 @@ private enum QuotaProviders {
 
     // deepseek is retired as a quota provider (no local reader ever existed for it);
     // hidden also drops any server-pulled window that still canonicalizes to it.
-    static let hidden: Set<String> = ["kimi", "github-copilot", "windsurf", "deepseek"]
+    static let hidden: Set<String> = ["kimi", "github-copilot", "windsurf", "deepseek", "gemini-cli"]
 
     static let expected: [Expected] = [
         Expected(key: "anthropic", label: "Claude", via: nil),
@@ -502,7 +502,6 @@ private enum QuotaProviders {
         Expected(key: "xai", label: "Grok", via: nil),
         Expected(key: "grok-bot", label: "Grok Bot", via: "cursor"),
         Expected(key: "minimax", label: "MiniMax", via: nil),
-        Expected(key: "gemini-cli", label: "Gemini CLI", via: nil),
     ]
 
     static func canonicalKey(provider: String, providerKey: String?, via: String?) -> String {
@@ -514,13 +513,13 @@ private enum QuotaProviders {
         let aliases: [String: String] = [
             "anthropic": "anthropic", "claude": "anthropic", "claude-code": "anthropic", "claude.ai": "anthropic",
             "openai": "openai", "openai-codex": "openai", "codex": "openai",
-            "google": "google-antigravity", "google-antigravity": "google-antigravity", "antigravity": "google-antigravity", "antigravity-cli": "google-antigravity",
+            "google": "google-antigravity", "google-antigravity": "google-antigravity", "antigravity": "google-antigravity", "antigravity-cli": "google-antigravity", "gemini": "google-antigravity",
             "cursor": "cursor",
             "xai": "xai", "grok": "xai", "grok-build": "xai",
             "grok-bot": "grok-bot", "grok bot": "grok-bot", "grokbot": "grok-bot",
             "minimax": "minimax", "minimax-code": "minimax",
             "kimi": "kimi", "moonshot": "kimi", "moonshot-ai": "kimi",
-            "gemini": "gemini-cli", "gemini-cli": "gemini-cli",
+            "gemini-cli": "gemini-cli",
             "copilot": "github-copilot", "github-copilot": "github-copilot", "github_copilot": "github-copilot",
             "windsurf": "windsurf", "codeium": "windsurf",
         ]

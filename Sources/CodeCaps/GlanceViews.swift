@@ -649,8 +649,14 @@ func glanceMeterPair(for row: DisplaySection, now: Date) -> GlanceMeterPair {
     func distinct(_ snapshot: QuotaWindowSnapshot) -> Bool {
         snapshot.window.id != short.window.id && !glanceIsCopy(snapshot, of: short)
     }
-    let long = nearestToCap(longest.filter(distinct))
-        ?? nearestToCap(candidates.filter(distinct))
+    // A placeholder window with neither a reading nor a reset date provides no information
+    // and should not displace an empty slot with a dummy solid bar.
+    func hasInformation(_ snapshot: QuotaWindowSnapshot) -> Bool {
+        snapshot.remainingPercent != nil || snapshot.resetAt != nil
+    }
+    let longCandidates = longest.filter(distinct).filter(hasInformation)
+    let fallbackCandidates = candidates.filter(distinct).filter(hasInformation)
+    let long = nearestToCap(longCandidates) ?? nearestToCap(fallbackCandidates)
     return GlanceMeterPair(short: short, long: long)
 }
 
@@ -914,8 +920,8 @@ struct GlanceMeter: View {
                 .frame(width: Metrics.glanceMeterPercentWidth, alignment: .trailing)
             if !countdown.isEmpty {
                 Text(countdown)
-                    .font(.system(size: 10, weight: .regular).italic())
-                    .foregroundStyle(Theme.ink.opacity(0.62))
+                    .font(.system(size: 10, weight: .medium).monospacedDigit())
+                    .foregroundStyle(Theme.ink.opacity(0.75))
                     .lineLimit(1)
                     .frame(width: Metrics.glanceMeterCountdownWidth, alignment: .center)
                     .help(glanceResetHelp(snapshot.resetAt, now: now) ?? "")

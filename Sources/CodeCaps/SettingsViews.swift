@@ -732,7 +732,6 @@ struct ReaderStatus {
         ReaderStatus(providerKey: "anthropic", label: "Claude", source: "Claude Code credentials"),
         ReaderStatus(providerKey: "openai", label: "Codex", source: "Codex CLI credentials"),
         ReaderStatus(providerKey: "google-antigravity", label: "Antigravity", source: "Antigravity app or CLI"),
-        ReaderStatus(providerKey: "gemini-cli", label: "Gemini CLI", source: "Gemini CLI OAuth sign-in"),
         ReaderStatus(providerKey: "cursor", label: "Cursor", source: "Cursor app session"),
         ReaderStatus(providerKey: "xai", label: "Grok", source: "Grok CLI credentials"),
         ReaderStatus(providerKey: "grok-bot", label: "Grok Bot", source: "Cursor app session"),

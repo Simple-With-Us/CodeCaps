@@ -21,11 +21,22 @@ public enum FleetOrigin {
         if let instance = window.producerInstanceId?.trimmingCharacters(in: .whitespacesAndNewlines), !instance.isEmpty {
             return instance == host
         }
+        if let machine = window.machine?.trimmingCharacters(in: .whitespacesAndNewlines), !machine.isEmpty {
+            let localMachine = QuotaPublisher.machineName.lowercased()
+            let hostName = ProcessInfo.processInfo.hostName.lowercased()
+            let m = machine.lowercased()
+            if m == localMachine || m == hostName || m == hostName.replacingOccurrences(of: ".local", with: "") {
+                return true
+            }
+        }
         // A legacy producer label such as codecaps or agent-bar is shared by
         // every installation.  Only an actual host match can identify its owner.
         let identity = identity(of: window).lowercased()
         let mine = host.lowercased()
+        let localMachine = QuotaPublisher.machineName.lowercased()
+        let hostName = ProcessInfo.processInfo.hostName.lowercased()
         return identity == mine || identity == mine.replacingOccurrences(of: ".local", with: "")
+            || identity == localMachine || identity == hostName || identity == hostName.replacingOccurrences(of: ".local", with: "")
     }
 
     /// "antigravity-usage" reads as "Antigravity Usage" in a group header.

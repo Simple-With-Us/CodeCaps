@@ -622,10 +622,15 @@ enum QuotaGlanceMetrics {
 
     @MainActor
     static func popoverHeight(for model: MonitorModel, on screen: NSScreen? = nil) -> CGFloat {
+        let actualRows = model.displaySections.count
+        let rows = actualRows > 0 ? actualRows : expectedLocalRows(for: model)
+        let showsSetupCard = !model.syncEnabled && !model.serverEnabled
+        let consentHeight: CGFloat = !model.consentNeeded.isEmpty ? 52 : 0
         let local = localListHeight(
-            rows: expectedLocalRows(for: model),
-            showsSetupCard: !model.syncEnabled && !model.serverEnabled,
-            isEmpty: !(model.localEnabled || !model.displaySections.isEmpty))
+            rows: rows,
+            showsSetupCard: showsSetupCard,
+            isEmpty: !(model.localEnabled || !model.displaySections.isEmpty)
+        ) + consentHeight
         let fleet = fleetListHeight(rowsPerGroup: model.fleetGroups.map { $0.rows.count })
         let total = popoverHeight(forListHeight: max(local, fleet))
         return min(Metrics.glanceMaxHeight(on: screen), max(Metrics.glanceMinHeight, total))
