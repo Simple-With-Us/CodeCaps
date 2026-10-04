@@ -767,8 +767,9 @@ public final class CompanionQuotaModel: ObservableObject {
     }
 
     /// Mirrors the backend manifest's provider group on the wire.  Optional
-    /// fields decode as absent — older envelopes keep working.
-    private struct WireProviderGroup: Decodable {
+    /// fields decode as absent — older envelopes keep working.  Encodable so
+    /// the parsed manifest can be persisted for the widget byte-for-byte.
+    private struct WireProviderGroup: Codable {
         let provider: String
         let providerKey: String?
         let providerLabel: String
@@ -778,7 +779,7 @@ public final class CompanionQuotaModel: ObservableObject {
         let terms: WireProviderTerms?
     }
 
-    private struct WireProviderTerms: Decodable {
+    private struct WireProviderTerms: Codable {
         let defaultWindowLabel: String?
     }
 
@@ -917,19 +918,11 @@ public final class CompanionQuotaModel: ObservableObject {
 
         // Persist the manifest into the App Group so the widget reads the same
         // labels/order/icon hints without redeclaring its own hardcoded table.
+        // Encoded with JSONEncoder (never hand-rolled dictionaries: a nil
+        // value in a [String: Any?] dictionary makes JSONSerialization throw,
+        // which would silently skip persisting the manifest altogether).
         if !manifest.isEmpty {
-            let payload = manifest.map { group -> [String: Any?] in
-                [
-                    "provider": group.provider,
-                    "providerKey": group.providerKey as Any?,
-                    "providerLabel": group.providerLabel,
-                    "via": group.via as Any?,
-                    "sortOrder": group.sortOrder as Any?,
-                    "iconHint": group.iconHint as Any?,
-                    "terms": group.terms.map { ["defaultWindowLabel": $0.defaultWindowLabel as Any?] } as Any?,
-                ]
-            }
-            if let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) {
+            if let data = try? JSONEncoder().encode(manifest) {
                 sharedDefaults.set(data, forKey: "providerGroups")
             }
         } else {
@@ -1222,39 +1215,28 @@ public final class CompanionQuotaModel: ObservableObject {
         for raw: WireRawWindow,
         manifest: [WireProviderGroup]? = nil
     ) -> (key: String, title: String, providerKey: String) {
+        let legacy = canonicalPlatformKeyLegacy(for: raw)
+        // Server-first: when the manifest lists this provider, its label
+        // wins.  Generic over the manifest's keys, so a provider added purely
+        // via the backend manifest gets its server label with no app change.
+        // (The manifest lookup is by the window's canonical key — never by
+        // substring — so unrelated windows can never collapse onto one entry.)
+        if let manifest,
+           let group = manifest.first(where: {
+               canonicalManifestKey(provider: $0.provider, via: $0.via) == legacy.key
+           }) {
+            let label = group.providerLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (legacy.key, label.isEmpty ? legacy.title : label, legacy.providerKey)
+        }
+        return legacy
+    }
+
+    /// The pre-manifest hardcoded mapping.  Kept as the offline fallback and
+    /// as the canonical-key computation the manifest lookup keys off.
+    private static func canonicalPlatformKeyLegacy(for raw: WireRawWindow) -> (key: String, title: String, providerKey: String) {
         let pKey = (raw.providerKey ?? raw.provider).lowercased()
         let prov = raw.provider.lowercased()
         let id = raw.id.lowercased()
-
-        // Server-first: if the manifest already lists a group that canonicalizes
-        // to the same key, prefer its server-supplied label over the hardcoded
-        // fallback.  Renames happen on the backend without an app release.
-        if let manifest {
-            if let group = manifest.first(where: { matches(group: $0, pKey: pKey, prov: prov, id: id, expectedKey: "anthropic") }) {
-                let label = group.providerLabel.trimmingCharacters(in: .whitespacesAndNewlines)
-                return ("anthropic", label.isEmpty ? "Claude Code" : label, "anthropic")
-            }
-            if let group = manifest.first(where: { matches(group: $0, pKey: pKey, prov: prov, id: id, expectedKey: "openai") }) {
-                let label = group.providerLabel.trimmingCharacters(in: .whitespacesAndNewlines)
-                return ("openai", label.isEmpty ? "Codex" : label, "openai")
-            }
-            if let group = manifest.first(where: { matches(group: $0, pKey: pKey, prov: prov, id: id, expectedKey: "minimax") }) {
-                let label = group.providerLabel.trimmingCharacters(in: .whitespacesAndNewlines)
-                return ("minimax", label.isEmpty ? "MiniMax" : label, "minimax")
-            }
-            if let group = manifest.first(where: { matches(group: $0, pKey: pKey, prov: prov, id: id, expectedKey: "grok-bot") }) {
-                let label = group.providerLabel.trimmingCharacters(in: .whitespacesAndNewlines)
-                return ("grok-bot", label.isEmpty ? "Grok Bot" : label, "grok-bot")
-            }
-            if let group = manifest.first(where: { matches(group: $0, pKey: pKey, prov: prov, id: id, expectedKey: "cursor") }) {
-                let label = group.providerLabel.trimmingCharacters(in: .whitespacesAndNewlines)
-                return ("cursor", label.isEmpty ? "Cursor" : label, "cursor")
-            }
-            if let group = manifest.first(where: { matches(group: $0, pKey: pKey, prov: prov, id: id, expectedKey: "xai") }) {
-                let label = group.providerLabel.trimmingCharacters(in: .whitespacesAndNewlines)
-                return ("xai", label.isEmpty ? "Grok" : label, "xai")
-            }
-        }
 
         if pKey.contains("anthropic") || prov.contains("anthropic") || prov.contains("claude") {
             return ("anthropic", "Claude Code", "anthropic")
@@ -1276,46 +1258,6 @@ public final class CompanionQuotaModel: ObservableObject {
         }
         let fallbackKey = (raw.providerKey ?? raw.provider).trimmingCharacters(in: .whitespacesAndNewlines)
         return (fallbackKey.isEmpty ? "other" : fallbackKey, raw.provider, fallbackKey)
-    }
-
-    /// True when the wire window matches the manifest entry for `expectedKey`.
-    /// Comparison is intentionally loose — the manifest stores canonical names
-    /// but the windows payload still aliases through providers the readers used
-    /// (e.g. `claude`, `claude-code`).  This mirrors `QuotaProviders.canonicalKey`
-    /// on the Mac side.
-    private static func matches(
-        group: WireProviderGroup,
-        pKey: String,
-        prov: String,
-        id: String,
-        expectedKey: String
-    ) -> Bool {
-        let groupProvider = group.provider.lowercased()
-        let groupVia = group.via?.lowercased() ?? ""
-        let manifestKey = canonicalManifestKey(provider: group.provider, via: group.via)
-        if manifestKey == expectedKey { return true }
-        switch expectedKey {
-        case "anthropic":
-            return pKey.contains("anthropic") || prov.contains("anthropic") || prov.contains("claude")
-                || groupProvider.contains("anthropic") || groupProvider.contains("claude")
-        case "openai":
-            return pKey.contains("openai") || prov.contains("openai") || prov.contains("codex")
-                || groupProvider.contains("openai") || groupProvider.contains("codex")
-        case "minimax":
-            return pKey.contains("minimax") || prov.contains("minimax")
-                || groupProvider.contains("minimax")
-        case "grok-bot":
-            return pKey.contains("grok-bot") || prov.contains("grok-bot") || prov.contains("grok bot") || id.contains("grok-bot")
-                || groupProvider.contains("grok-bot") || groupVia.contains("cursor")
-        case "cursor":
-            return pKey.contains("cursor") || prov.contains("cursor")
-                || groupProvider.contains("cursor")
-        case "xai":
-            return pKey.contains("grok") || prov.contains("grok") || pKey.contains("xai") || prov.contains("xai")
-                || groupProvider.contains("grok") || groupProvider.contains("xai")
-        default:
-            return false
-        }
     }
 
     /// Mirror of `QuotaProviders.canonicalKey` for the wire manifest.  Kept

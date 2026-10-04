@@ -271,26 +271,31 @@ public enum PlatformLogoImage {
 
     private static func bundledImage(providerKey: String, style: MarkStyle = .template, iconHint: String? = nil) -> NSImage? {
         let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() as NSString
-        let cache = (style == .standard) ? standardCache : templateCache
-        if let cached = cache.object(forKey: key) { return cached }
-        // Server-first: try the manifest-supplied hint name first; fall back
-        // to the built-in `resourceNames` map (Phase 1 behaviour).  The hint
-        // is treated as a bare asset name, extension picked from the existing
-        // map so the admin can keep typing "claude" / "gemini" / "grok-bot"
-        // without thinking about extensions.
+        // Cache dimension: a manifest hint change must not keep serving the
+        // previously cached mark for the same provider key.
         let hintName = iconHint?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let cacheKey = ((hintName?.isEmpty == false) ? "\(key)|\(hintName!)" : (key as String)) as NSString
+        let cache = (style == .standard) ? standardCache : templateCache
+        if let cached = cache.object(forKey: cacheKey) { return cached }
+        // Server-first: try the manifest-supplied hint name first; fall back
+        // to the built-in `resourceNames` map (pre-manifest behaviour) when
+        // the hint does not resolve to a file, so a bad hint can never blank
+        // a mark the bundled map would have found.
         let hintResource: (name: String, ext: String)? = hintName.flatMap { name in
             guard !name.isEmpty else { return nil }
             if let existing = resourceNames[name] { return existing }
-            // Try common extensions in the order the bundled map uses.
-            for ext in ["svg", "png", "pdf"] {
-                return (name, ext)
-            }
             return (name, "svg")
         }
-        guard let resource = hintResource ?? resourceNames[key as String] ?? resourceNames[platformKey(of: key as String)] else {
-            return nil
+        let mapResource = resourceNames[key as String] ?? resourceNames[platformKey(of: key as String)]
+        for resource in [hintResource, mapResource].compactMap({ $0 }) {
+            if let image = imageFromBundle(resource: resource, key: key, cacheKey: cacheKey, cache: cache, style: style) {
+                return image
+            }
         }
+        return nil
+    }
+
+    private static func imageFromBundle(resource: (name: String, ext: String), key: NSString, cacheKey: NSString, cache: NSCache<NSString, NSImage>, style: MarkStyle) -> NSImage? {
         let bundle = currentBundle()
         let candidates: [URL?] = [
             bundle?.url(forResource: resource.name, withExtension: resource.ext),
@@ -320,11 +325,11 @@ public enum PlatformLogoImage {
         let colorCopy = NSImage(contentsOf: url) ?? NSImage(contentsOfFile: url.path)
         // A monochrome mark adapts to Light and Dark mode across all styles.
         colorCopy?.isTemplate = isMonochromeMark(key as String)
-        standardCache.setObject(colorCopy ?? image, forKey: key)
+        standardCache.setObject(colorCopy ?? image, forKey: cacheKey)
         let templateCopy = NSImage(contentsOf: url) ?? NSImage(contentsOfFile: url.path)
         templateCopy?.isTemplate = true
-        templateCache.setObject(templateCopy ?? image, forKey: key)
-        return cache.object(forKey: key)
+        templateCache.setObject(templateCopy ?? image, forKey: cacheKey)
+        return cache.object(forKey: cacheKey)
     }
 
     /// Marks that are a single colour by design: they carry no brand colour to
