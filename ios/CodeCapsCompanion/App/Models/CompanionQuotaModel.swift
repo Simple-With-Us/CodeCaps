@@ -170,6 +170,57 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
         return windows.first(where: { $0.id != shortWindow?.id })
     }
 
+    /// A platform card is only expandable if it reports more than two allowance
+    /// windows, so single and dual window cards never repeat their face data.
+    public var isExpandable: Bool {
+        windows.count > 2
+    }
+
+    /// One discrepancy where an additional/duplicate source diverges from its matching primary window by more than 3%.
+    public struct SourceDiscrepancy: Identifiable, Equatable, Sendable {
+        public var id: String { "\(primaryWindow.id)-\(duplicateWindow.id)" }
+        public let primaryWindow: CompanionWindowItem
+        public let duplicateWindow: CompanionWindowItem
+        public let delta: Double
+        public let description: String
+
+        public init(primaryWindow: CompanionWindowItem, duplicateWindow: CompanionWindowItem, delta: Double, description: String) {
+            self.primaryWindow = primaryWindow
+            self.duplicateWindow = duplicateWindow
+            self.delta = delta
+            self.description = description
+        }
+    }
+
+    /// All source discrepancies greater than 3% between primary windows and mirror/duplicate sources.
+    public var sourceDiscrepancies: [SourceDiscrepancy] {
+        var results: [SourceDiscrepancy] = []
+        for dup in duplicateWindows {
+            guard let dPct = dup.remainingPercent else { continue }
+            let match = windows.first(where: { $0.cadence.lowercased() == dup.cadence.lowercased() })
+                ?? windows.first
+            guard let primary = match, let pPct = primary.remainingPercent else { continue }
+            let delta = abs(pPct - dPct)
+            if delta > 3.0 {
+                let diffText = String(format: "%.0f%%", delta)
+                let srcName = dup.source ?? dup.via ?? "mirror source"
+                let desc = "\(primary.label): \(Int(pPct.rounded()))% vs \(Int(dPct.rounded()))% via \(srcName) (Δ\(diffText))"
+                results.append(SourceDiscrepancy(
+                    primaryWindow: primary,
+                    duplicateWindow: dup,
+                    delta: delta,
+                    description: desc
+                ))
+            }
+        }
+        return results
+    }
+
+    /// Whether any duplicate source diverges from its matching primary window by more than 3%.
+    public var hasSourceDiscrepancy: Bool {
+        !sourceDiscrepancies.isEmpty
+    }
+
     public init(
         id: String,
         providerKey: String,

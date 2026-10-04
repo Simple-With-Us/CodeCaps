@@ -1788,8 +1788,8 @@ final class MonitorModel: ObservableObject {
         for (key, message) in file?.issues ?? [:] where issues[key] == nil {
             issues[key] = message
         }
-        if !fileWindows.filter({ $0.boundedRemainingPercent != nil }).isEmpty {
-            issues["openai"] = nil
+        for key in Set(windows.filter({ $0.boundedRemainingPercent != nil }).map(\.canonicalProviderKey)) {
+            issues[key] = nil
         }
         if currentCodexAccountID == nil {
             issues["openai"] = "Codex is not signed in locally."

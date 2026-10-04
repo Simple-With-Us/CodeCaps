@@ -206,17 +206,18 @@ public enum ClaudeCredentialSource {
         }
     }
 
-    /// One read that lets macOS show its own authorization panel.  Only ever
-    /// reached from Allow Access To Claude Code — never from the refresh loop,
-    /// which must stay prompt-free.
+    /// One read that lets macOS show its own authorization panel, reached from
+    /// Allow Access To Claude Code.
     ///
-    /// It runs `security find-generic-password` once, and only from this button.
-    /// The refresh loop does not run it.  A background `security` child can
-    /// raise a panel when that tool is not on the item's access list, and an
-    /// in-process `SecItemCopyMatching` for the secret raises one even with
-    /// the interaction flags set.  The bytes from a successful button read
-    /// stay in memory for later silent refreshes.  They are never logged and
-    /// never handed to another type.
+    /// It runs `security find-generic-password` once.  The refresh loop also
+    /// runs that command now (`resolveSilently`), but only as a last resort
+    /// for a launch that has no remembered grant; this button is the one that
+    /// exists to be pressed on a fresh install, and it is the only path that
+    /// is *trying* to put the tool on the item's access list.  An in-process
+    /// `SecItemCopyMatching` for the secret raises a panel even with the
+    /// interaction flags set, so that is never used.  The bytes stay in memory
+    /// for later silent refreshes.  They are never logged and never handed to
+    /// another type.
     ///
     /// Returns whether access was granted rather than the credential itself.
     public static func readAllowingInteraction() async -> Bool {
@@ -249,22 +250,35 @@ public enum ClaudeCredentialSource {
         }
     }
 
-    /// The refresh loop's decision.  It never starts `security` and never
-    /// asks Keychain for the secret.
+    /// The refresh loop's decision.  It never asks Keychain for the secret
+    /// from this process.
     ///
-    /// Why neither read is safe in the background (the data-read half verified
-    /// from the unified log, Sep 30 2026): the item's partition list is
-    /// `apple-tool:`.  securityd logged `ACL partition mismatch: client
-    /// teamid:CC8UTF7ATG ACL ("apple-tool:")` and then `displaying keychain
-    /// prompt for <home>/Applications/CodeCaps.app` for a data
-    /// `SecItemCopyMatching` that carried both `LAContext.interactionNotAllowed`
-    /// and `kSecUseAuthenticationUIFail`.  Those flags do not suppress the
-    /// file-keychain panel.  The `security` child can raise the same panel
-    /// when it is not on the item's access list, so the refresh loop does not
-    /// start it either.  Allow Access is the only `security` run.  Its bytes
-    /// stay in memory for this process only, so each launch needs Allow
-    /// Access again.  They are not copied into a CodeCaps Keychain item.
-    /// An expired payload is dropped instead of being fetched again.
+    /// Why that read is unsafe in the background (verified from the unified
+    /// log, Sep 30 2026): the item's partition list is `apple-tool:`.  securityd
+    /// logged `ACL partition mismatch: client teamid:CC8UTF7ATG ACL
+    /// ("apple-tool:")` and then `displaying keychain prompt for
+    /// <home>/Applications/CodeCaps.app` for a data `SecItemCopyMatching` that
+    /// carried both `LAContext.interactionNotAllowed` and
+    /// `kSecUseAuthenticationUIFail`.  Those flags do not suppress the
+    /// file-keychain panel, so this process never makes that call.
+    ///
+    /// The `security` child is a different story, and this changed on
+    /// 2026-10-04.  It used to be that the loop started it *only* from Allow
+    /// Access, because the bytes were kept in process memory only — so every
+    /// relaunch started from nothing and re-armed the "needs permission" row,
+    /// and the owner had to click Allow Access again every single time.  That
+    /// was the bug, not the safety rule.
+    ///
+    /// Once the owner answers Always Allow, `/usr/bin/security` is on the
+    /// item's access list and that read returns without a panel.  So the loop
+    /// now runs it itself whenever the item is present and nothing is
+    /// remembered: silent on every launch after the grant, and a real
+    /// `.unauthorized` — with the row asking — on a fresh install that has
+    /// never been granted, or after the ACL is revoked.  The panel is only
+    /// ever raised in the case where the owner genuinely has to answer.
+    ///
+    /// The bytes are still never written to a CodeCaps Keychain item, never
+    /// logged, and never handed to another type.
     ///
     /// `attemptDeadline` and `attempts` remain so the bounded caller does not
     /// change.  The background path does not spend that budget.
@@ -282,12 +296,37 @@ public enum ClaudeCredentialSource {
         case .unknown:
             return .temporarilyUnavailable
         case .present:
-            guard let data = rememberedCredential() else { return .unauthorized }
-            // The item was authorized and read from Keychain into memory.
-            // Even if the token inside is expired, macOS Keychain access was
-            // already granted. Return .authorized(data) so LocalQuotaReader and
-            // ClaudeLoginState report it as signedOut/idle, not needsPermission.
-            return .authorized(data)
+            if let data = rememberedCredential() {
+                // The item was authorized and read from Keychain into memory.
+                // Even if the token inside is expired, macOS Keychain access was
+                // already granted. Return .authorized(data) so LocalQuotaReader
+                // and ClaudeLoginState report it as signedOut/idle, not
+                // needsPermission.
+                return .authorized(data)
+            }
+            // Nothing in memory, but the item is here.  Before this was a bare
+            // `.unauthorized`, which re-armed the "needs permission" row on
+            // every single launch and made the owner re-click Allow Access
+            // forever — the grant was process-memory only, so it never
+            // survived a relaunch.
+            //
+            // Try the one read that can still succeed quietly.  Once the owner
+            // has answered Always Allow, `/usr/bin/security` is on the item's
+            // access list and this returns the bytes without a panel, so the
+            // app reads itself for the rest of the session with no further
+            // prompting.  The panel only reappears if the ACL is revoked, which
+            // is precisely when the owner should be asked again.
+            //
+            // A refusal here is not a failure: it is the first run on a fresh
+            // install that has never been granted, and the caller's
+            // `.unauthorized` is the correct answer for that case.
+            let outcome = probe.readViaSecurityCLI(attemptDeadline, { isAbandoned() })
+            log.notice("claude keychain silent security CLI: \(outcome.logLabel, privacy: .public)")
+            if case .found(let data) = outcome {
+                remember(data)
+                return .authorized(data)
+            }
+            return .unauthorized
         }
     }
 

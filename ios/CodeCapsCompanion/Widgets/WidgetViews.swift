@@ -155,6 +155,8 @@ struct MiniProgressBar: View {
     var elapsedFraction: Double? = nil
     var height: CGFloat = 4
 
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
         GeometryReader { proxy in
             let totalW = proxy.size.width
@@ -186,9 +188,19 @@ struct MiniProgressBar: View {
 
                 if let elapsed = elapsedFraction, elapsed >= 0, elapsed <= 1.0, totalW > 0 {
                     let markerX = CGFloat(elapsed) * totalW
-                    Rectangle()
-                        .fill(Color.primary.opacity(0.85))
-                        .frame(width: 1.5, height: height + 2)
+                    let markerHeight = max(height + 6, 11)
+                    let markerWidth: CGFloat = 2.5
+
+                    // High-contrast halo so the line is unmistakably visible over red and green segments
+                    Capsule()
+                        .fill(colorScheme == .dark ? Color.black.opacity(0.75) : Color.white.opacity(0.85))
+                        .frame(width: markerWidth + 2.0, height: markerHeight + 2.0)
+                        .position(x: markerX, y: proxy.size.height / 2)
+
+                    // Prominent pacing marker line crossing the bar
+                    Capsule()
+                        .fill(colorScheme == .dark ? Color.white : Color.black)
+                        .frame(width: markerWidth, height: markerHeight)
                         .position(x: markerX, y: proxy.size.height / 2)
                 }
             }
