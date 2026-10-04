@@ -804,6 +804,7 @@ case "$MODE" in
     ;;
   run)
     build_and_stage
+    kill_installed_app
     install_owned_app
     /usr/bin/open -n "$INSTALLED_APP"
     rm -rf "$APP_BUNDLE"

@@ -78,6 +78,8 @@ targets:
           - "CodeCapsWidgetsMac.Release.entitlements"
           - "CodeCapsWidgets.Release.entitlements"
       - path: Assets.xcassets
+      - path: ../../Sources/QuotaCore/ResetAlarmCadence.swift
+        group: Shared
       - path: ../../Sources/QuotaCore/WidgetSnapshotFetcher.swift
         group: Shared
       - path: ../../Sources/QuotaCore/CompanionReadTokenStore.swift
@@ -160,7 +162,11 @@ targets:
           - "CodeCapsWidgetsMac.entitlements"
           - "CodeCapsWidgetsMac.Release.entitlements"
       - path: Assets.xcassets
+      - path: ../../Sources/QuotaCore/ResetAlarmCadence.swift
+        group: Shared
       - path: ../../Sources/QuotaCore/WidgetSnapshotFetcher.swift
+        group: Shared
+      - path: ../../Sources/QuotaCore/CompanionReadTokenStore.swift
         group: Shared
     entitlements:
       path: Generated/CodeCapsWidgetsMac.entitlements
