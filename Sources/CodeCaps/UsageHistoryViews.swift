@@ -35,6 +35,12 @@ struct UsageHistoryView: View {
         guard let id = state.selectedWindowId, windowIds.contains(id) else { return nil }
         return id
     }
+    private var inspectedSnapshot: QuotaWindowSnapshot? {
+        if let focusedWindowId {
+            return row.section.windows.first { $0.window.id == focusedWindowId }
+        }
+        return row.driving
+    }
     private var relevantSamples: [AnomalyDetector.Sample] {
         guard model.hasLocalHistorySource(for: row) else { return [] }
         return samples.filter { $0.providerKey == row.providerKey && windowIds.contains($0.windowId)
@@ -170,8 +176,12 @@ struct UsageHistoryView: View {
                 Text("Each line is one quota window.  Gaps separate unobserved time, account changes, and new quota periods.  Diamonds mark resets; orange lines mark runaway alerts.")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
             }
-            if row.driving?.isFresh == false {
-                Text("Latest quota reading is stale.  The chart shows recorded history only.")
+            if let inspectedSnapshot, !inspectedSnapshot.isFresh {
+                Text(inspectedSnapshot.observedAt.map {
+                    "This window last reported \($0.formatted(date: .abbreviated, time: .shortened))." + sentenceGap
+                        + "The chart shows recorded history only."
+                } ?? "This window's last report time is unavailable." + sentenceGap
+                    + "The chart shows recorded history only.")
                     .font(.system(size: 11)).foregroundStyle(Theme.warning)
             }
             if let selected = state.selectedTimestamp {
