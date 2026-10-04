@@ -5,6 +5,16 @@ PR (when shipped), follow-ups (when parked).
 
 ---
 
+## 2026-10-03 — TestFlight Export Uses Apple Rsync [CODEX, in progress]
+
+Lane: `codex/ios-export-apple-rsync`.  Board `45d7cc9e21574510aff1fbc2ce95eb3b`.
+
+- The merged widget build's iOS archive succeeded, but both Xcode export modes failed with `exportArchive Copy failed`.  Xcode invoked `/usr/bin/rsync`; its child resolved Homebrew rsync 3.5.1, which rejected Apple's `--extended-attributes` option.
+- Re-exporting the same signed archive with system tools first on `PATH` produced a valid IPA.  The app and widget both carry `group.com.simplewithus.codecaps`; App Store Connect upload remains in progress.
+- Pin the vendored ship helper to Apple system tools first so future CodeCaps TestFlight exports use the compatible rsync while Node and XcodeGen remain available from Homebrew.
+
+---
+
 ## 2026-10-03 — Native Widgets and Independent Data Setup [CODEX, in progress]
 
 Lane: `codex/native-widgets-data-controls`.  Boards `508560f7`, `9a3d1a21`, `bc0f76fd`, `29df655f`, `1b71afd1`.  Native widget and data-cache repair; public setup guide; iOS drag reorder; remaining menu-bar presets.
