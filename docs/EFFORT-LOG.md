@@ -13,7 +13,7 @@ Lane: `codex/native-widgets-data-controls`.  Boards `508560f7`, `9a3d1a21`, `bc0
 - Repair uses macOS team-scoped `CC8UTF7ATG.codecaps` and iOS `group.com.simplewithus.codecaps`, with explicit signature validation.  Widget cache supports local, pull-only, combined, and paused configurations independently from the local-only BotFleet handoff.
 - Public guide shipped in PR #127 at https://codecaps.simplewithus.com/setup.html; Pages succeeded and live bytes match source.  Native build/install and device verification remain pending; do not claim widgets repaired until verified.
 - Gemini CLI reader is connected with real OAuth quota reads while Kimi remains retired.  Menu presets preserve legacy selections; fresh installs use Smart Pair.
-- Final focused gate passed 65 tests, including save/push cancellation and single-publication refinements.  Native simulator and signed-artifact checks remain pending.
+- Final focused gate passed 65 tests, including save/push cancellation and single-publication refinements.  PR #135 package, Mac structural-release validation, and iOS simulator screenshot jobs passed before the #134 main sync; signed App Group runtime verification remains pending.
 
 ---
 
