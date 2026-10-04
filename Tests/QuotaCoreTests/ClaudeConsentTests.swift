@@ -319,16 +319,15 @@ final class ClaudeConsentTests: XCTestCase {
         XCTAssertNil(ClaudeCredentialSource.rememberedCredential())
     }
 
-    func testExpiredRememberedGrantIsDroppedAndAsksForConsent() {
+    func testExpiredRememberedGrantRemainsAuthorizedWithoutAskingForConsent() {
         let expired = Data(#"{"claudeAiOauth":{"accessToken":"fixture","expiresAt":1}}"#.utf8)
         ClaudeCredentialSource.remember(expired)
         let log = ProbeLog()
         let access = ClaudeCredentialSource.resolveSilently(
             probe: makeProbe(log: log, cli: [.found(expired)], presence: .present),
             isAbandoned: { false })
-        XCTAssertEqual(access, .unauthorized)
+        XCTAssertEqual(access, .authorized(expired))
         XCTAssertEqual(log.calls, ["lookup"])
-        XCTAssertNil(ClaudeCredentialSource.rememberedCredential())
         XCTAssertFalse(ClaudeCredentialSource.rememberedGrantStillUsable(expired, now: Date(timeIntervalSince1970: 10)))
     }
 
@@ -625,6 +624,24 @@ final class ClaudeConsentTests: XCTestCase {
         XCTAssertTrue(result.windows.filter { $0.providerKey == "anthropic" }.isEmpty)
         XCTAssertEqual(reads.value, 1)
         XCTAssertEqual(renewals.value, 0)
+    }
+
+    func testReauthErrorFromAnthropicServerNeverAsksForKeychainConsent() async throws {
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let reader = LocalQuotaReader(
+            homeDirectory: home,
+            now: { now },
+            fetchJSON: { _ in Self.httpResponse(#"{"error":"unauthorized"}"#, status: 401) },
+            runAntigravity: { Data("{}".utf8) },
+            readClaudeCredential: {
+                .authorized(Data(#"{"claudeAiOauth":{"accessToken":"expired-server-side","expiresAt":4102444800000}}"#.utf8))
+            })
+        let result = await reader.read()
+        XCTAssertFalse(result.consentNeeded.contains("anthropic"), "Server 401 reauth must never trigger Keychain consent prompt")
+        XCTAssertEqual(result.issues["anthropic"], ClaudeLoginState.signedOut.issue)
+        XCTAssertNil(ClaudeCredentialSource.rememberedCredential())
     }
 
     // MARK: - Helpers

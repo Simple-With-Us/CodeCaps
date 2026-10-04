@@ -103,6 +103,33 @@ struct GlancePopover: View {
     @ViewBuilder
     private var fromMacContent: some View {
         VStack(alignment: .leading, spacing: 0) {
+            if let activeAnomaly = model.activeRunawayAnomalies.first {
+                RunawayAnomalyGlanceCard(
+                    anomaly: activeAnomaly,
+                    model: model,
+                    onInspect: {
+                        openAlert(activeAnomaly.providerKey, activeAnomaly.windowId, activeAnomaly.observedAt)
+                    },
+                    onOpenAllAlerts: {
+                        openConsole(.runawayAlerts)
+                    }
+                )
+                .padding(.horizontal, Metrics.glanceGutter)
+                .padding(.bottom, 6)
+            } else if let recentAlert = model.runawayAlertHistory.first, recentAlert.timestamp.timeIntervalSinceNow > -86_400 {
+                RunawayRecentAlertGlanceCard(
+                    alert: recentAlert,
+                    onInspect: {
+                        openAlert(recentAlert.providerKey, recentAlert.windowId, recentAlert.timestamp)
+                    },
+                    onOpenAllAlerts: {
+                        openConsole(.runawayAlerts)
+                    }
+                )
+                .padding(.horizontal, Metrics.glanceGutter)
+                .padding(.bottom, 6)
+            }
+
             if localSections.isEmpty && !model.localEnabled {
                 GlanceEmptyState(
                     symbol: "laptopcomputer",
@@ -174,6 +201,11 @@ struct GlancePopover: View {
     private func glanceRow(_ row: DisplaySection, issue: String?, origin: QuotaOrigin,
                            expansionKey: String? = nil) -> some View {
         let key = expansionKey ?? row.id
+        let rowCanonical = quotaProviderKey(row.providerKey, providerKey: row.providerKey)
+        let hasAnomaly = model.activeRunawayAnomalies.contains { anomaly in
+            if anomaly.providerKey == row.providerKey { return true }
+            return quotaProviderKey(anomaly.providerKey, providerKey: anomaly.providerKey) == rowCanonical
+        }
         return GlanceRow(row: row,
                          now: model.now,
                          issue: issue,
@@ -183,6 +215,7 @@ struct GlancePopover: View {
                          isAlarmEnabled: model.isProviderAlarmSelected(row.id),
                          allowsExpansion: origin == .fleet && glanceRowAllowsExpansion(row, origin: origin),
                          isExpanded: expandedIds.contains(key),
+                         hasAnomaly: hasAnomaly,
                          onTap: { toggleExpanded(key) },
                          onToggleAlarm: { model.toggleAlarm(for: row.id) })
     }
@@ -274,32 +307,39 @@ struct GlancePopover: View {
                     } else if let recent = model.runawayAlertHistory.first {
                         openAlert(recent.providerKey, recent.windowId, recent.timestamp)
                     } else {
-                        openConsole(.settingsNotifications)
+                        openConsole(.runawayAlerts)
                     }
                 } label: {
-                    VStack(spacing: 1) {
-                    Text("Runaway Usage Alerts Enabled")
-                        .font(.system(size: 9, weight: .medium))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.75)
-                    if let detail = runawayAnomalyFooterDetail {
-                        Text(detail)
-                            .font(.system(size: 8))
-                            .foregroundStyle(.secondary)
+                    HStack(spacing: 5) {
+                        Image(systemName: model.activeRunawayAnomalies.isEmpty ? "bell.badge" : "flame.fill")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(model.activeRunawayAnomalies.isEmpty ? Theme.ink : Theme.warning)
+                        Text(runawayFooterText)
+                            .font(.system(size: 11, weight: .medium))
                             .lineLimit(1)
-                            .minimumScaleFactor(0.75)
                     }
-                    }
-                .frame(maxWidth: 205)
+                    .frame(maxWidth: 220)
                 }
                 .buttonStyle(.plain)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(runawayFooterAccessibilityLabel)
-                .help("Open Runaway Usage History")
+                .help("Open Runaway Usage Alerts")
             }
         }
         .padding(.horizontal, Metrics.glanceGutter)
         .frame(height: Metrics.glanceFooterHeight)
+    }
+
+    private var runawayFooterText: String {
+        if let anomaly = model.activeRunawayAnomalies.first {
+            let provider = model.sections.first { $0.providerKey == anomaly.providerKey }?.providerLabel
+                ?? anomaly.providerKey
+            return "Runaway: \(provider) (\(anomaly.multiplier.formatted(.number.precision(.fractionLength(1))))×)"
+        }
+        if let recent = model.runawayAlertHistory.first, recent.timestamp.timeIntervalSinceNow > -86_400 {
+            return "Recent: \(recent.providerLabel) (\(recent.multiplier.formatted(.number.precision(.fractionLength(1))))×)"
+        }
+        return "Runaway Alerts Active"
     }
 
     private var runawayAnomalyFooterDetail: String? {
@@ -324,6 +364,129 @@ struct GlancePopover: View {
             return "Runaway Usage Alerts Enabled, recent alert: \(recent.summary)"
         }
         return "Runaway Usage Alerts Enabled"
+    }
+}
+
+// MARK: - Runaway Anomaly Cards
+
+struct RunawayAnomalyGlanceCard: View {
+    let anomaly: AnomalyDetector.Anomaly
+    let model: MonitorModel
+    var onInspect: () -> Void
+    var onOpenAllAlerts: () -> Void
+
+    private var providerLabel: String {
+        let matchingDisplayRow = model.displaySections.first { row in
+            row.section.windows.contains { $0.window.id == anomaly.windowId }
+        }
+        if let matchingDisplayRow, matchingDisplayRow.isPool {
+            return matchingDisplayRow.title
+        }
+        return model.sections.first { $0.providerKey == anomaly.providerKey }?.providerLabel
+            ?? anomaly.providerKey.capitalized
+    }
+
+    private var windowLabel: String {
+        let matchingSnapshot = model.displaySections.flatMap { $0.section.windows }
+            .first { $0.window.id == anomaly.windowId }
+            ?? model.sections.flatMap(\.windows).first { $0.window.id == anomaly.windowId }
+        if let matchingSnapshot {
+            let raw = matchingSnapshot.window.label.trimmingCharacters(in: .whitespacesAndNewlines)
+            return raw.isEmpty ? glanceMeterCaption(matchingSnapshot) : raw
+        }
+        return anomaly.windowId
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "flame.fill")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(Theme.warning)
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 4) {
+                    Text("Runaway:")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(Theme.warning)
+                    Text("\(providerLabel) (\(windowLabel))")
+                        .font(.system(size: 11, weight: .semibold))
+                        .lineLimit(1)
+                }
+                HStack(spacing: 4) {
+                    let comp = anomaly.kind == .vsPeak ? "peak" : "avg"
+                    Text("\(anomaly.multiplier.formatted(.number.precision(.fractionLength(1))))× vs \(comp)")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(Theme.warning)
+                    if let rate = anomaly.ratePercentPerHour {
+                        Text("• \(rate.formatted(.number.precision(.fractionLength(1)))) %/hr")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            Spacer(minLength: 4)
+
+            Button("Inspect", action: onInspect)
+                .controlSize(.mini)
+                .font(.system(size: 10, weight: .medium))
+
+            Button(action: onOpenAllAlerts) {
+                Image(systemName: "list.bullet")
+                    .font(.system(size: 10))
+            }
+            .buttonStyle(.plain)
+            .help("Open all runaway alerts in Console")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Theme.warning.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Theme.warning.opacity(0.35), lineWidth: 1))
+    }
+}
+
+struct RunawayRecentAlertGlanceCard: View {
+    let alert: RunawayAlertRecord
+    var onInspect: () -> Void
+    var onOpenAllAlerts: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "flame")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Theme.warning)
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 4) {
+                    Text("Recent Alert:")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(Theme.warning)
+                    Text("\(alert.providerLabel) (\(alert.windowLabel))")
+                        .font(.system(size: 11, weight: .semibold))
+                        .lineLimit(1)
+                }
+                Text("\(alert.multiplier.formatted(.number.precision(.fractionLength(1))))× runaway · \(alert.timestamp.formatted(date: .omitted, time: .shortened))")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 4)
+
+            Button("Inspect", action: onInspect)
+                .controlSize(.mini)
+                .font(.system(size: 10, weight: .medium))
+
+            Button(action: onOpenAllAlerts) {
+                Image(systemName: "list.bullet")
+                    .font(.system(size: 10))
+            }
+            .buttonStyle(.plain)
+            .help("Open all runaway alerts in Console")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Theme.warning.opacity(0.25), lineWidth: 1))
     }
 }
 
@@ -1211,6 +1374,7 @@ struct GlanceRow: View {
     /// popover's `expandedIds` set, threaded down here so the chevron and the
     /// detail lines animate together.
     var isExpanded: Bool = false
+    var hasAnomaly: Bool = false
     /// Tap handler for the row's body — opening or closing the expansion.
     /// The bell is a sibling of the tappable body, so a tap on the bell never
     /// expands a row.
@@ -1298,10 +1462,18 @@ struct GlanceRow: View {
                 // An Antigravity row names its pool, which does not fit beside
                 // the platform in the title column, so the pool takes the second
                 // line rather than being truncated away.
-                Text(row.poolTitle == nil ? row.title : row.platformTitle)
-                    .font(.system(size: 13, weight: .medium))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                HStack(spacing: 3) {
+                    Text(row.poolTitle == nil ? row.title : row.platformTitle)
+                        .font(.system(size: 13, weight: .medium))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    if hasAnomaly {
+                        Image(systemName: "flame.fill")
+                            .font(.system(size: 9))
+                            .foregroundStyle(Theme.warning)
+                            .help("Active runaway usage anomaly detected")
+                    }
+                }
                 if let subtitle = row.poolTitle {
                     Text(subtitle)
                         .font(.system(size: 10))
