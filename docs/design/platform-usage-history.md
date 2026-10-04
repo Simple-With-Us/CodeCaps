@@ -32,4 +32,4 @@ The attached menu-bar popover is the Docked Bar.  Floating Window describes a de
 
 ## Validation
 
-Navigation migration, alert identity routing, legacy history decoding, finite quota values, duplicate timestamps, reset/gap segmentation, and sparse or flat comparison history need behavioral tests.  Native Mac visual claims require appropriate review or captured evidence; iOS screenshots remain required for iOS UI changes.
+Navigation migration, alert identity routing, legacy history decoding, finite quota values, duplicate timestamps, reset/gap segmentation, and sparse or flat comparison history need behavioral tests.  Native Mac visual claims require code review and CI-based verification — a supplied or manually captured screenshot is not sufficient evidence.  iOS UI changes require CI-generated simulator screenshots.

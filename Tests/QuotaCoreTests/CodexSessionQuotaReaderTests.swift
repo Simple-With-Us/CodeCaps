@@ -64,6 +64,24 @@ final class CodexSessionQuotaReaderTests: XCTestCase {
         XCTAssertEqual(completed.windows.first?.occurredAt, "2026-10-03T11:50:00Z")
     }
 
+    func testEmptyFileObservedBeforeFirstLineBecomesVisibleWhenItGrows() async throws {
+        let fixture = try Fixture(now: clock)
+        defer { fixture.remove() }
+        try fixture.auth("account-a")
+        let url = fixture.day.appendingPathComponent("growing.jsonl")
+        FileManager.default.createFile(atPath: url.path, contents: nil)
+        let reader = CodexSessionQuotaReader(homeDirectory: fixture.home, now: { self.clock })
+        let empty = await reader.read()
+        XCTAssertTrue(empty.windows.isEmpty)
+        // The session_meta line lands after the first poll: the earlier
+        // not-yet-identifiable observation must not pin a rejection.
+        try fixture.replace(url, account: "account-a",
+                            lines: [fixture.event(at: "2026-10-03T11:55:00Z", used: 20)])
+        let grown = await reader.read()
+        XCTAssertEqual(grown.windows.first?.remainingPercent, 80)
+        XCTAssertEqual(grown.windows.first?.accountKey, "account-a")
+    }
+
     func testTruncationAndRotationRestartAtNewMetadata() async throws {
         let fixture = try Fixture(now: clock)
         defer { fixture.remove() }

@@ -326,6 +326,11 @@ final class MonitorModel: ObservableObject {
 
     private let defaults: UserDefaults
     private let burnRateHistoryURL: URL
+    /// Memoized historySamples(): the burn-rate file is parsed once per
+    /// on-disk change instead of once per view construction (UsageHistoryView
+    /// init runs on every SwiftUI body evaluation).  Keyed on the file's
+    /// modification date + size; appends and trims both change those.
+    private var historySamplesCache: (modification: Date?, size: Int, samples: [AnomalyDetector.Sample])?
     private var lastRunawayAlertAt: [String: Double] = [:]
     private var hasCurrentLocalRead = false
     var localResultForTesting: LocalQuotaResult?
@@ -478,7 +483,16 @@ final class MonitorModel: ObservableObject {
     }
 
     func historySamples() -> [AnomalyDetector.Sample] {
-        BurnRateMonitor.loadSamples(historyURL: burnRateHistoryURL)
+        let attrs = try? FileManager.default.attributesOfItem(atPath: burnRateHistoryURL.path)
+        let modification = attrs?[.modificationDate] as? Date
+        let size = (attrs?[.size] as? Int) ?? -1
+        if let cache = historySamplesCache,
+           cache.modification == modification, cache.size == size {
+            return cache.samples
+        }
+        let samples = BurnRateMonitor.loadSamples(historyURL: burnRateHistoryURL)
+        historySamplesCache = (modification, size, samples)
+        return samples
     }
 
     func hasLocalHistorySource(for row: DisplaySection) -> Bool {
@@ -1793,8 +1807,15 @@ final class MonitorModel: ObservableObject {
     /// stay on the provider/manual path, so a one-minute file poll is passive.
     private func rebuildLocalState(recordSamples: Bool) {
         let local = currentLocalResult()
-        now = Date()
-        lastChecked = now
+        if recordSamples {
+            // Only a real read advances the check clock.  Preference toggles
+            // rebuild state with no I/O; stamping lastChecked there made
+            // ConsoleState.reconcile treat the toggle as a completed read and
+            // abandon the saved-platform wait.  (`now` itself is still kept
+            // fresh by the 30-second clock timer.)
+            now = Date()
+            lastChecked = now
+        }
         issues = local?.issues ?? [:]
         consentNeeded = local?.consentNeeded ?? []
         localWindows = AntigravityQuotaGroups.normalize(local?.windows ?? [])

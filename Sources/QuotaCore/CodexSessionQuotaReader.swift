@@ -179,10 +179,23 @@ public actor CodexSessionQuotaReader {
             let count = min(Int(size), Self.maxPrefix, budget)
             guard let prefix = read(fd, from: 0, count: count) else { return }
             budget -= prefix.count
-            let matches = prefix.firstIndex(of: 10).flatMap { newline -> Bool? in
-                guard newline <= Self.maxLine else { return nil }
-                return metadataAccount(in: Data(prefix[..<newline])) == accountID
-            } ?? false
+            guard let newline = prefix.firstIndex(of: 10) else {
+                // Empty or still-flushing file: no complete first line to
+                // identify the session yet.  Don't cache a rejection — a
+                // session observed before its first line is written would
+                // otherwise stay invisible for the life of the inode.
+                return
+            }
+            guard newline <= Self.maxLine else {
+                // First line exceeds the readable bound: not a session_meta
+                // header.  The identity definitively does not match.
+                cursor = Cursor(device: UInt64(opened.st_dev), inode: UInt64(opened.st_ino), offset: 0,
+                                modificationNanoseconds: modification,
+                                matchesAccount: false)
+                cursors[url] = cursor
+                return
+            }
+            let matches = metadataAccount(in: Data(prefix[..<newline])) == accountID
             cursor = Cursor(device: UInt64(opened.st_dev), inode: UInt64(opened.st_ino), offset: 0,
                             modificationNanoseconds: modification,
                             matchesAccount: matches)
