@@ -290,8 +290,7 @@ struct GlancePopover: View {
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(runawayFooterAccessibilityLabel)
                 .help("Active Runaway Anomaly: click to inspect")
-
-                Spacer(minLength: 12)
+                .padding(.trailing, 4)
             } else {
                 Spacer()
             }
@@ -331,8 +330,13 @@ struct GlancePopover: View {
                 provider = model.sections.first { $0.providerKey == anomaly.providerKey }?.providerLabel
                     ?? anomaly.providerKey.capitalized
             }
+            let matchingSnapshot = model.displaySections.flatMap { $0.section.windows }
+                .first { $0.window.id == anomaly.windowId }
+                ?? model.sections.flatMap(\.windows).first { $0.window.id == anomaly.windowId }
+            let windowLabel = matchingSnapshot.map { glanceMeterCaption($0) }
+            let nameWithWindow = windowLabel.map { "\(provider) (\($0))" } ?? provider
             let comp = anomaly.kind == .vsPeak ? "peak" : "avg"
-            var parts = ["\(provider): \(anomaly.multiplier.formatted(.number.precision(.fractionLength(1))))× vs \(comp)"]
+            var parts = ["\(nameWithWindow): \(anomaly.multiplier.formatted(.number.precision(.fractionLength(1))))× vs \(comp)"]
             if let rate = anomaly.ratePercentPerHour {
                 parts.append("\(rate.formatted(.number.precision(.fractionLength(1)))) %/hr")
             }
@@ -378,6 +382,7 @@ struct MarqueeText: View {
     @State private var textWidth: CGFloat = 0
     @State private var offset: CGFloat = 0
     @State private var isAnimating: Bool = false
+    @State private var animationToken: UUID = UUID()
 
     var body: some View {
         GeometryReader { geo in
@@ -431,11 +436,13 @@ struct MarqueeText: View {
         isAnimating = false
         guard needsScroll && width > 0 else { return }
 
+        let token = UUID()
+        animationToken = token
         let cycleDistance = width + gap
         let duration = Double(cycleDistance) / speed
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-            guard !isAnimating else { return }
+            guard animationToken == token else { return }
             isAnimating = true
             withAnimation(.linear(duration: duration).repeatForever(autoreverses: false)) {
                 offset = -cycleDistance
