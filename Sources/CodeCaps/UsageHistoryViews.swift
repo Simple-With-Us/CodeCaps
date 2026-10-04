@@ -82,8 +82,12 @@ struct UsageHistoryView: View {
                         (previous.resetAt.map { $0 > previous.observedAt && $0 <= sample.observedAt } ?? false)
                             || (previous.periodStart != nil && sample.periodStart != nil && previous.periodStart != sample.periodStart)
                     } ?? false)
-                    let isVendorReset = (prevSample?.remainingPercent ?? 100) < 95.0 && percent >= 98.0
-                        && (sample.resetAt.map { sample.observedAt < $0.addingTimeInterval(-60) } ?? true)
+                    let lastPercent = prevSample?.remainingPercent ?? 100.0
+                    let midWindow = sample.resetAt.map { sample.observedAt < $0.addingTimeInterval(-60) } ?? true
+                    let jumpedToFull = percent >= 99.5 && lastPercent < 98.0
+                    let surgedMidWindow = lastPercent < 80.0 && percent >= 95.0
+                    let quotaHandedBack = percent >= lastPercent + 30.0
+                    let isVendorReset = midWindow && (jumpedToFull || surgedMidWindow || quotaHandedBack)
                     return HistoryPoint(id: "\(windowId):\(segmentIndex):\(index)",
                                         series: "\(windowId):\(segmentIndex)",
                                         windowLabel: labels[windowId] ?? "Quota Window",

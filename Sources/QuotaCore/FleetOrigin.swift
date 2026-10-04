@@ -15,6 +15,15 @@ public enum FleetOrigin {
         return "fleet"
     }
 
+    private static func normalizeMachineString(_ str: String) -> String {
+        str.lowercased()
+            .replacingOccurrences(of: ".local", with: "")
+            .replacingOccurrences(of: ".", with: "")
+            .replacingOccurrences(of: "-", with: "")
+            .replacingOccurrences(of: "_", with: "")
+            .replacingOccurrences(of: " ", with: "")
+    }
+
     /// Whether a pulled window is this Mac's own push coming back.  Such a
     /// window belongs under This Mac and must never be duplicated under Fleet.
     public static func isOwnPush(
@@ -23,13 +32,21 @@ public enum FleetOrigin {
         localWindows: [QuotaWindow] = []
     ) -> Bool {
         if let instance = window.producerInstanceId?.trimmingCharacters(in: .whitespacesAndNewlines), !instance.isEmpty {
-            return instance == host
+            return instance.lowercased() == host.lowercased()
+        }
+        if window.id.hasPrefix("local-mac:") {
+            return true
+        }
+        if let sourceApp = window.sourceApp?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+           sourceApp == "local-mac" {
+            return true
         }
         if let machine = window.machine?.trimmingCharacters(in: .whitespacesAndNewlines), !machine.isEmpty {
-            let localMachine = QuotaPublisher.machineName.lowercased()
-            let hostName = ProcessInfo.processInfo.hostName.lowercased()
-            let m = machine.lowercased()
-            if m == localMachine || m == hostName || m == hostName.replacingOccurrences(of: ".local", with: "") {
+            let normM = normalizeMachineString(machine)
+            let normLocal = normalizeMachineString(QuotaPublisher.machineName)
+            let normHost = normalizeMachineString(ProcessInfo.processInfo.hostName)
+            let normHostParam = normalizeMachineString(host)
+            if normM == normLocal || normM == normHost || normM == normHostParam || normM == "localmac" || normM == "mac" {
                 return true
             }
         }
@@ -43,18 +60,18 @@ public enum FleetOrigin {
             if matchesLocal { return true }
         }
         let identity = identity(of: window).lowercased()
-        let mine = host.lowercased()
-        let localMachine = QuotaPublisher.machineName.lowercased()
-        let hostName = ProcessInfo.processInfo.hostName.lowercased()
-        if identity == mine || identity == mine.replacingOccurrences(of: ".local", with: "")
-            || identity == localMachine || identity == hostName || identity == hostName.replacingOccurrences(of: ".local", with: "") {
+        let normId = normalizeMachineString(identity)
+        let normLocal = normalizeMachineString(QuotaPublisher.machineName)
+        let normHost = normalizeMachineString(ProcessInfo.processInfo.hostName)
+        let normHostParam = normalizeMachineString(host)
+        if normId == normHostParam || normId == normLocal || normId == normHost || normId == "localmac" {
             return true
         }
         // When a window comes from the app itself (e.g. source: "codecaps" or "agent-bar") without an explicit remote instance,
         // and matches any of this Mac's observed local provider keys, it is this Mac's own push coming back.
-        let isCodeCapsSource = ([QuotaPublisher.producerId] + QuotaPublisher.legacyProducerAliases).contains(identity)
-            || ([QuotaPublisher.producerId] + QuotaPublisher.legacyProducerAliases).contains((window.source ?? "").lowercased())
-            || ([QuotaPublisher.producerId] + QuotaPublisher.legacyProducerAliases).contains((window.sourceApp ?? "").lowercased())
+        let isCodeCapsSource = ([QuotaPublisher.producerId] + QuotaPublisher.legacyProducerAliases + ["local-mac"]).contains(identity)
+            || ([QuotaPublisher.producerId] + QuotaPublisher.legacyProducerAliases + ["local-mac"]).contains((window.source ?? "").lowercased())
+            || ([QuotaPublisher.producerId] + QuotaPublisher.legacyProducerAliases + ["local-mac"]).contains((window.sourceApp ?? "").lowercased())
         if isCodeCapsSource && window.producerInstanceId == nil && window.machine == nil {
             if localWindows.contains(where: { $0.canonicalProviderKey == window.canonicalProviderKey }) {
                 return true
