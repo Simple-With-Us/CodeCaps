@@ -591,6 +591,19 @@ Board 42ae688ab3b84d9aa65e445aab072a15.  Closes #37.
   unstamped provider still detects a genuine restore.  Reinstating the previous
   version makes the 30-second test fail with the low-water mark rewritten from
   15.0 to 50.0.
+- Kody's third review found two more, also correct, and both now fixed.  A
+  reading that omits its period end was defaulting `endMoved` to zero, which
+  read as "held still"; unknown is not held, so a nil `resetAt` no longer
+  qualifies.  And `window.lastObservedAt` is only written when a reading
+  carries a stamp, while the iOS companion sends `observedAt: nil` on every
+  observation — so on iOS `elapsed` was permanently zero, the slide test never
+  engaged, and a rolling reader could slide up to the full 15-minute tolerance
+  per poll and still look held.  An unstamped provider now treats any movement
+  in its period end as disqualifying, which leaves only a bit-identical end as
+  evidence of a real restore.  Verified by reverting each fix on its own: the
+  nil-reset case rewrites the low-water mark 15.0 to 89.0 and the unstamped
+  slide case 15.0 to 50.0.
+- 683 tests across both bundles, 0 failures.
 - Two tests were written first and confirmed failing against the old rule, from
   the real observed numbers, then made to pass.  Also pinned: a small
   mid-window rise is still drift, a restore rings once and not once per

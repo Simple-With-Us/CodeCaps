@@ -591,6 +591,49 @@ final class ResetAlarmTrackerTests: XCTestCase {
         XCTAssertEqual(events.first?.isVendorReset, true)
     }
 
+    /// Third review on PR #153.  `window.lastObservedAt` is only written when a
+    /// reading carries a stamp, and the iOS companion sends `observedAt: nil`
+    /// on every observation — so `elapsed` is permanently zero there and the
+    /// slide test never engaged.  An unstamped rolling reader could slide up to
+    /// the whole drift tolerance per poll and still read as held still.
+    func testAnUnstampedProviderThatSlidesItsEndIsNotAVendorRestore() {
+        var tracker = ResetAlarmTracker()
+        let end = t0 + 5 * day
+        _ = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end, remaining: 15.0, observedAt: nil, provider: "grok-bot")],
+            now: t0)
+        let later = t0 + 300
+        // A 300s slide — inside the 15-minute drift tolerance, so without the
+        // unstamped branch this reads as a held end.
+        let events = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end + 300, remaining: 50.0, observedAt: nil, provider: "grok-bot")],
+            now: later)
+        XCTAssertTrue(events.isEmpty, "With no stamp there is no gap, so any movement disqualifies a restore.")
+
+        let key = ResetAlarmTracker.windowKey(scope: "local", providerId: "grok-bot", windowId: "weekly")
+        XCTAssertEqual(tracker.state.windows[key]?.minimumRemaining, 15.0)
+    }
+
+    /// A reading that stops reporting its period end says nothing about where
+    /// the end is.  Defaulting the missing value to zero read as "held still",
+    /// which let a 30-point rise fire a vendor reset and overwrite the
+    /// low-water mark the near-cap alarm depends on.
+    func testAReadingThatOmitsItsResetTimeIsNotAVendorRestore() {
+        var tracker = ResetAlarmTracker()
+        let end = t0 + 5 * day
+        _ = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end, remaining: 15.0, observedAt: t0, provider: "grok-bot")],
+            now: t0)
+        let later = t0 + 5 * 60
+        let events = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: nil, remaining: 89.0, observedAt: later, provider: "grok-bot")],
+            now: later)
+        XCTAssertTrue(events.isEmpty, "Unknown period end is not a held period end.")
+
+        let key = ResetAlarmTracker.windowKey(scope: "local", providerId: "grok-bot", windowId: "weekly")
+        XCTAssertEqual(tracker.state.windows[key]?.minimumRemaining, 15.0)
+    }
+
     /// One restore rings once, not once per refresh.
     func testAVendorRestoreRingsOnlyOnce() {
         var tracker = ResetAlarmTracker()

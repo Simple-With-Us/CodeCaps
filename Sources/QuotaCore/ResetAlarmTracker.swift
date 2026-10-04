@@ -466,10 +466,36 @@ public struct ResetAlarmTracker: Sendable {
                 // restore fire at a slow cadence and vanish at a fast one,
                 // which is a property of when the owner happened to press
                 // refresh rather than anything the provider said.
-                let elapsed = max(0, readAt.timeIntervalSince(window.lastObservedAt ?? readAt))
                 let endMoved = observation.resetAt.map { abs($0.timeIntervalSince(previousReset)) }
-                let slidWithTheClock = elapsed > 0 && (endMoved ?? 0) * 2 >= elapsed
-                let periodEndHeld = (endMoved ?? 0) <= ResetAlarmPolicy.resetDriftTolerance
+                // A reading that omits its period end says nothing about it.
+                // Unknown must not be read as "held still".
+                let periodEndHeld = endMoved.map {
+                    $0 <= ResetAlarmPolicy.resetDriftTolerance
+                } ?? false
+                // A reader that reports "resets in N seconds" recomputes it
+                // from the current time, so a rolling window's end advances in
+                // step with the clock — by roughly the gap since the last
+                // reading, at a 5-minute cadence or a 30-second one alike.
+                // A vendor restore leaves the end on the same instant.  The
+                // test is a ratio rather than an absolute bound: scaling a
+                // bound by the poll gap would make the same restore fire at a
+                // slow cadence and vanish at a fast one, which is a property
+                // of when the owner pressed refresh rather than of anything
+                // the provider said.
+                let slidWithTheClock: Bool
+                if let lastObserved = window.lastObservedAt {
+                    let gap = max(0, readAt.timeIntervalSince(lastObserved))
+                    slidWithTheClock = gap > 0 && (endMoved ?? 0) * 2 >= gap
+                } else {
+                    // No stamp means no gap to measure a slide against, so any
+                    // movement at all disqualifies the reading.  The iOS
+                    // companion sends `observedAt: nil` on every observation,
+                    // which makes this its ordinary path rather than an edge
+                    // case: without it a rolling reader there could slide up to
+                    // the whole drift tolerance per poll and still read as
+                    // held still.
+                    slidWithTheClock = (endMoved ?? 0) > 0
+                }
                 let quotaHandedBack = periodEndHeld && !slidWithTheClock
                     && reading >= last + ResetAlarmPolicy.vendorRestoreRise
                 if jumpedToFull || surgedMidWindow || quotaHandedBack {
