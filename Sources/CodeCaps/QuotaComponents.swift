@@ -772,7 +772,8 @@ struct PlatformCard: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            PlatformLogo(providerKey: row.id, size: compact ? 22 : 28, style: markStyle)
+            PlatformLogo(providerKey: row.id, size: compact ? 22 : 28, style: markStyle,
+                         iconHint: row.poolKey == nil ? section.iconHint : nil)
                 .frame(width: compact ? 24 : 30, height: compact ? 24 : 30)
             VStack(alignment: .leading, spacing: 2) {
                 Text(section.providerLabel)
