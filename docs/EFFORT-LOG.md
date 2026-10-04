@@ -603,7 +603,18 @@ Board 42ae688ab3b84d9aa65e445aab072a15.  Closes #37.
   evidence of a real restore.  Verified by reverting each fix on its own: the
   nil-reset case rewrites the low-water mark 15.0 to 89.0 and the unstamped
   slide case 15.0 to 50.0.
-- 683 tests across both bundles, 0 failures.
+- Kody's fourth review found a mixed stamped/unstamped sequence, also correct.
+  `window.lastObservedAt` was only written on a stamped reading and never
+  cleared, so a provider that began sending `observedAt: nil` left a stale
+  anchor.  The gap then spanned every poll since the last stamp — 900s in the
+  test — while the end had only moved 300s across those polls, so `600 >= 900`
+  failed, `slidWithTheClock` came back false and `periodEndHeld` true, and a
+  35-point rise announced a vendor reset and destroyed the low-water mark.  The
+  fix is to assign `lastObservedAt` unconditionally so it means "the stamp
+  carried by the previous reading" and is nil when that reading was unstamped,
+  and to require the current reading to be stamped before trusting the gap.
+  Reverting fails the new test and reports 15.0 to 50.0.
+- 684 tests across both bundles, 0 failures.
 - Two tests were written first and confirmed failing against the old rule, from
   the real observed numbers, then made to pass.  Also pinned: a small
   mid-window rise is still drift, a restore rings once and not once per

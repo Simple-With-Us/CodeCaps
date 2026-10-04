@@ -483,17 +483,17 @@ public struct ResetAlarmTracker: Sendable {
                 // of when the owner pressed refresh rather than of anything
                 // the provider said.
                 let slidWithTheClock: Bool
-                if let lastObserved = window.lastObservedAt {
+                if observation.observedAt != nil, let lastObserved = window.lastObservedAt {
                     let gap = max(0, readAt.timeIntervalSince(lastObserved))
                     slidWithTheClock = gap > 0 && (endMoved ?? 0) * 2 >= gap
                 } else {
-                    // No stamp means no gap to measure a slide against, so any
-                    // movement at all disqualifies the reading.  The iOS
-                    // companion sends `observedAt: nil` on every observation,
-                    // which makes this its ordinary path rather than an edge
-                    // case: without it a rolling reader there could slide up to
-                    // the whole drift tolerance per poll and still read as
-                    // held still.
+                    // No trustworthy gap: either this reading is unstamped, or
+                    // the previous one was.  Then any movement at all
+                    // disqualifies the reading.  The iOS companion sends
+                    // `observedAt: nil` on every observation, which makes this
+                    // its ordinary path rather than an edge case: without it a
+                    // rolling reader there could slide up to the whole drift
+                    // tolerance per poll and still read as held still.
                     slidWithTheClock = (endMoved ?? 0) > 0
                 }
                 let quotaHandedBack = periodEndHeld && !slidWithTheClock
@@ -523,7 +523,12 @@ public struct ResetAlarmTracker: Sendable {
                 window.lastRemaining = reading
             }
         }
-        if let observed = observedAt { window.lastObservedAt = observed }
+        // Assigned unconditionally, so it always means "the stamp carried by the
+        // previous reading" and is nil when that reading was unstamped.  Only
+        // ever writing it on a stamped reading would leave a stale anchor
+        // behind for as long as the provider went without one, which would
+        // measure the gap below in spans longer than a single interval.
+        window.lastObservedAt = observedAt
         state.windows[key] = window
         return isReset ? Transition(observation: observation, previous: previous, isMidWindow: isMidWindow) : nil
     }

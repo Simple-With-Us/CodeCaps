@@ -618,6 +618,10 @@ final class ResetAlarmTrackerTests: XCTestCase {
     /// the end is.  Defaulting the missing value to zero read as "held still",
     /// which let a 30-point rise fire a vendor reset and overwrite the
     /// low-water mark the near-cap alarm depends on.
+    /// A reading that stops reporting its period end says nothing about where
+    /// the end is.  Defaulting the missing value to zero read as "held still",
+    /// which let a 30-point rise fire a vendor reset and overwrite the
+    /// low-water mark the near-cap alarm depends on.
     func testAReadingThatOmitsItsResetTimeIsNotAVendorRestore() {
         var tracker = ResetAlarmTracker()
         let end = t0 + 5 * day
@@ -629,6 +633,38 @@ final class ResetAlarmTrackerTests: XCTestCase {
             [reading("weekly", period: 7 * day, resetAt: nil, remaining: 89.0, observedAt: later, provider: "grok-bot")],
             now: later)
         XCTAssertTrue(events.isEmpty, "Unknown period end is not a held period end.")
+
+        let key = ResetAlarmTracker.windowKey(scope: "local", providerId: "grok-bot", windowId: "weekly")
+        XCTAssertEqual(tracker.state.windows[key]?.minimumRemaining, 15.0)
+    }
+
+    /// Fourth review on PR #153.  `lastObservedAt` was only written on a
+    /// stamped reading and never cleared, so a provider that started sending
+    /// `observedAt: nil` left a stale anchor behind.  The gap below then spanned
+    /// every poll since the last stamp — 900s here — while the end had only
+    /// moved 300s across those polls, so 600 >= 900 failed and a sliding end
+    /// was read as held still.  A 35-point rise then announced a vendor reset
+    /// and destroyed the low-water mark.
+    func testAProviderThatStopsStampingMidStreamIsNotAVendorRestore() {
+        var tracker = ResetAlarmTracker()
+        let end = t0 + 5 * day
+        // One stamped reading, then the stamps stop arriving.
+        _ = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end, remaining: 15.0, observedAt: t0, provider: "grok-bot")],
+            now: t0)
+        // The end creeps by only 100s a poll while 300s of real time passes.
+        for (offset, moved) in [(300.0, 100.0), (600.0, 200.0)] {
+            _ = tracker.process(
+                [reading("weekly", period: 7 * day, resetAt: end.addingTimeInterval(moved),
+                         remaining: 15.0, observedAt: nil, provider: "grok-bot")],
+                now: t0 + offset)
+        }
+        let later = t0 + 900
+        let events = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end + 300, remaining: 50.0,
+                     observedAt: nil, provider: "grok-bot")],
+            now: later)
+        XCTAssertTrue(events.isEmpty, "A stale stamp anchor must not excuse a sliding period end.")
 
         let key = ResetAlarmTracker.windowKey(scope: "local", providerId: "grok-bot", windowId: "weekly")
         XCTAssertEqual(tracker.state.windows[key]?.minimumRemaining, 15.0)
