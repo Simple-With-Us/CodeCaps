@@ -283,10 +283,10 @@ public enum ClaudeCredentialSource {
             return .temporarilyUnavailable
         case .present:
             guard let data = rememberedCredential() else { return .unauthorized }
-            guard rememberedGrantStillUsable(data) else {
-                resetRememberedCredential()
-                return .unauthorized
-            }
+            // The item was authorized and read from Keychain into memory.
+            // Even if the token inside is expired, macOS Keychain access was
+            // already granted. Return .authorized(data) so LocalQuotaReader and
+            // ClaudeLoginState report it as signedOut/idle, not needsPermission.
             return .authorized(data)
         }
     }

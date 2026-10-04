@@ -173,9 +173,32 @@ public struct LocalQuotaReader: Sendable {
         } catch LocalReaderError.reauth {
             ClaudeCredentialSource.resetRememberedCredential()
             if tokenFromKeychain {
-                let state = ClaudeLoginState.needsPermission
-                return ProviderRead(provider: provider, windows: [], issue: state.issue,
-                                    needsConsent: state.needsConsent)
+                var renewed = false
+                if renewable {
+                    renewed = await renewalThrottle.perform(now: now(), action: renewClaudeLogin)
+                }
+                if renewed {
+                    let refreshedFile = (try? readJSONObject(relativePath: ".claude/.credentials.json")) ?? [:]
+                    let refreshedAccess = await ClaudeCredentialSource.boundedAccess(timeout: claudeKeychainTimeout) { await readClaudeCredential() }
+                    let refreshedKeychain = credentialRoot(refreshedAccess)
+                    if let refreshedOAuth = ClaudeOAuthParser.validOAuth(in: refreshedFile, now: now())
+                        ?? ClaudeOAuthParser.validOAuth(in: refreshedKeychain, now: now()),
+                       let refreshedToken = firstString(refreshedOAuth, ["accessToken", "access_token"]) {
+                        var retryRequest = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/usage")!)
+                        retryRequest.httpMethod = "GET"
+                        retryRequest.setValue("Bearer \(refreshedToken)", forHTTPHeaderField: "Authorization")
+                        retryRequest.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
+                        if let retryPayload = try? await requestJSON(retryRequest) {
+                            let retryWindows = parseClaude(retryPayload, planType: firstString(refreshedOAuth, ["subscriptionType", "subscription_type"]), observedAt: now())
+                            if !retryWindows.isEmpty {
+                                return ProviderRead(provider: provider, windows: retryWindows, issue: nil)
+                            }
+                        }
+                    }
+                }
+                let issue = renewable ? ClaudeLoginState.idle.issue : ClaudeLoginState.signedOut.issue
+                return ProviderRead(provider: provider, windows: [], issue: issue,
+                                    needsConsent: false)
             }
             throw LocalReaderError.reauth
         }

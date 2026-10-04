@@ -1174,6 +1174,12 @@ struct SettingsNotificationsPage: View {
                                 .accessibilityLabel("Open \(alert.providerLabel), \(alert.windowLabel) usage history at \(alert.timestamp.formatted())")
                                 .padding(.vertical, 1)
                             }
+                            Button("View All in Runaway Alerts Console…") {
+                                state.page = .runawayAlerts
+                            }
+                            .font(.system(size: 11))
+                            .controlSize(.small)
+                            .padding(.top, 4)
                         }
                     }
                     .padding(.top, 2)

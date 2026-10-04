@@ -88,16 +88,26 @@ struct UsageHistoryView: View {
         }
     }
     private var alerts: [RunawayAlertRecord] {
-        model.runawayAlertHistory.filter { $0.providerKey == row.providerKey
-            && windowIds.contains($0.windowId)
-            && (focusedWindowId == nil || $0.windowId == focusedWindowId)
-            && $0.timestamp >= start && $0.timestamp <= now }
+        let rowCanonical = quotaProviderKey(row.providerKey, providerKey: row.providerKey)
+        return model.runawayAlertHistory.filter { alert in
+            let alertCanonical = quotaProviderKey(alert.providerKey, providerKey: alert.providerKey)
+            let matchesProvider = alert.providerKey == row.providerKey || alertCanonical == rowCanonical
+            return matchesProvider
+                && windowIds.contains(alert.windowId)
+                && (focusedWindowId == nil || alert.windowId == focusedWindowId)
+                && alert.timestamp >= start && alert.timestamp <= now
+        }
     }
     private var selectedAlert: RunawayAlertRecord? {
         guard let selected = state.selectedTimestamp else { return nil }
-        return model.runawayAlertHistory.first { $0.providerKey == row.providerKey
-            && (focusedWindowId == nil || $0.windowId == focusedWindowId)
-            && abs($0.timestamp.timeIntervalSince(selected)) < 2 }
+        let rowCanonical = quotaProviderKey(row.providerKey, providerKey: row.providerKey)
+        return model.runawayAlertHistory.first { alert in
+            let alertCanonical = quotaProviderKey(alert.providerKey, providerKey: alert.providerKey)
+            let matchesProvider = alert.providerKey == row.providerKey || alertCanonical == rowCanonical
+            return matchesProvider
+                && (focusedWindowId == nil || alert.windowId == focusedWindowId)
+                && abs(alert.timestamp.timeIntervalSince(selected)) < 2
+        }
     }
 
     var body: some View {

@@ -1662,10 +1662,35 @@ final class MonitorModel: ObservableObject {
             guard let group = groups[key] else { continue }
             let lastSent = lastRunawayAlertAt[key] ?? -.infinity
             guard now.timeIntervalSince1970 - lastSent >= BurnRateMonitor.alertCooldown else { continue }
-            let provLabel = self.sections.first { $0.providerKey == group[0].providerKey }?.providerLabel
-                ?? group[0].providerKey.capitalized
-            let winLabel = self.sections.flatMap(\.windows)
-                .first { $0.window.id == group[0].windowId }?.window.label
+            let matchingDisplayRow = self.displaySections.first { row in
+                row.section.windows.contains { $0.window.id == group[0].windowId }
+            }
+            let matchingSnapshot = self.displaySections.flatMap { $0.section.windows }
+                .first { $0.window.id == group[0].windowId }
+                ?? self.sections.flatMap(\.windows).first { $0.window.id == group[0].windowId }
+
+            let provLabel: String
+            if let matchingDisplayRow, matchingDisplayRow.isPool {
+                provLabel = matchingDisplayRow.title
+            } else {
+                provLabel = self.sections.first { $0.providerKey == group[0].providerKey }?.providerLabel
+                    ?? group[0].providerKey.capitalized
+            }
+
+            let winLabel: String?
+            if let matchingSnapshot {
+                let rawLabel = matchingSnapshot.window.label.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !rawLabel.isEmpty {
+                    winLabel = rawLabel
+                } else {
+                    let caption = glanceMeterCaption(matchingSnapshot)
+                    winLabel = caption != "Quota" ? "\(caption) window" : "Quota window"
+                }
+            } else {
+                winLabel = self.sections.flatMap(\.windows)
+                    .first { $0.window.id == group[0].windowId }?.window.label
+            }
+
             let notification = BurnRateNotification(
                 anomalies: group,
                 sound: alarmManager.alarmSound,
@@ -1708,6 +1733,11 @@ final class MonitorModel: ObservableObject {
         if let data = try? JSONEncoder().encode(list) {
             defaults.set(data, forKey: "runawayAlertHistory")
         }
+    }
+
+    func clearRunawayAlertHistory() {
+        runawayAlertHistory = []
+        defaults.removeObject(forKey: "runawayAlertHistory")
     }
 
     private static func runawayKey(_ providerKey: String, _ windowId: String) -> String {

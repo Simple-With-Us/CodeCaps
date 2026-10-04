@@ -149,7 +149,11 @@ struct BurnRateNotification: Equatable, Sendable {
         let first = anomalies[0]
         identifier = "codecaps.runaway.\(first.providerKey).\(first.windowId)"
         let prov = providerLabel ?? first.providerKey.capitalized
-        title = "Runaway Usage: \(prov)"
+        if let windowLabel, !windowLabel.isEmpty {
+            title = "Runaway Usage: \(prov) (\(windowLabel))"
+        } else {
+            title = "Runaway Usage: \(prov)"
+        }
         let win = windowLabel.map { " (\($0))" } ?? ""
         body = anomalies.map { anomaly in
             let comp = anomaly.kind == .vsPeak ? "measured peak" : "available-history average"

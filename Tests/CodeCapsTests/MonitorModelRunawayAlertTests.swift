@@ -40,6 +40,8 @@ final class MonitorModelRunawayAlertTests: XCTestCase {
         XCTAssertEqual(delivered.count, 1)
         XCTAssertEqual(delivered[0].sound, .submarine)
         XCTAssertEqual(delivered[0].anomalies, model.activeRunawayAnomalies)
+        XCTAssertTrue(delivered[0].title.contains("Runaway Usage:"), "title must declare runaway usage")
+        XCTAssertTrue(delivered[0].title.contains("("), "title must include window cadence")
         XCTAssertEqual(model.runawayAlertHistory.first?.timestamp,
                        delivered[0].anomalies.first?.observedAt,
                        "notification activation must find the exact saved alert observation")
