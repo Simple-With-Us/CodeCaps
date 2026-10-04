@@ -123,7 +123,7 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
         if text.contains("month") || text.contains("billing") || text.contains("cycle") || text.contains("30d") || text.contains("1m") { return "1m" }
         if text.contains("plan") || text.contains("included") { return "Plan" }
         if !cadence.isEmpty && cadence.count <= 4 { return cadence }
-        return "Quota"
+        return "7d"
     }
 
     public var isShortCadence: Bool {
@@ -845,20 +845,19 @@ public final class CompanionQuotaModel: ObservableObject {
         let futureResets = primaryWindows.compactMap(\.resetAt).filter { $0 > now }
         let nearestReset = futureResets.min() ?? primaryWindows.compactMap(\.resetAt).min()
 
-        // Subtitle describing cadence windows
+        // Subtitle describing cadence windows: lowercase, no "window", 2 spaces before (N sources)
         let subtitle: String
+        let sourceCount = Set(primaryWindows.compactMap(\.source) + duplicateWindows.compactMap(\.source)).count
+        let sourceSuffix = sourceCount > 1 ? "  (\(sourceCount) sources)" : ""
         if primaryWindows.count == 1, let single = primaryWindows.first {
-            if !duplicateWindows.isEmpty {
-                subtitle = "\(single.cadence) · \(duplicateWindows.count + 1) sources"
-            } else {
-                subtitle = single.cadence
-            }
+            let base = single.cadence.lowercased().replacingOccurrences(of: " window", with: "")
+            subtitle = "\(base)\(sourceSuffix)"
         } else if primaryWindows.count > 1 {
-            let cadences = primaryWindows.map(\.cadence)
+            let cadences = primaryWindows.map { $0.cadence.lowercased().replacingOccurrences(of: " window", with: "") }
             if cadences.count == 2 {
-                subtitle = "\(cadences[0]) & \(cadences[1])"
+                subtitle = "\(cadences[0]) & \(cadences[1])\(sourceSuffix)"
             } else {
-                subtitle = "\(primaryWindows.count) active windows"
+                subtitle = "\(primaryWindows.count) active allowances\(sourceSuffix)"
             }
         } else {
             subtitle = title
@@ -901,33 +900,25 @@ public final class CompanionQuotaModel: ObservableObject {
 
         let controllingPct: Double?
         let isExhausted: Bool
+        let sourceCount = Set(windows.compactMap(\.source)).count
+        let sourceSuffix = sourceCount > 1 ? "  (\(sourceCount) sources)" : ""
         let subtitle: String
 
         if weeklyExhausted && weeklyWin != nil {
             controllingPct = weeklyPct ?? 0
             isExhausted = true
-            subtitle = "\(defaultSubtitle) · Weekly limit exhausted"
+            subtitle = "weekly limit exhausted\(sourceSuffix)"
         } else {
             let validPercents = [fiveHourWin?.remainingPercent, weeklyWin?.remainingPercent].compactMap { $0 }
             if validPercents.isEmpty {
                 let allPcts = windows.compactMap { $0.remainingPercent }
                 controllingPct = allPcts.min()
                 isExhausted = (controllingPct ?? 100) <= 0
-                subtitle = defaultSubtitle
+                subtitle = "5-hour & weekly\(sourceSuffix)"
             } else {
                 controllingPct = validPercents.min()
                 isExhausted = (controllingPct ?? 100) <= 0
-                if let fPct = fiveHourWin?.remainingPercent, let wPct = weeklyWin?.remainingPercent {
-                    if fPct < wPct {
-                        subtitle = "\(defaultSubtitle) · 5h pool (Weekly \(Int(wPct.rounded()))%)"
-                    } else if wPct < fPct {
-                        subtitle = "\(defaultSubtitle) · Weekly pool (5h \(Int(fPct.rounded()))%)"
-                    } else {
-                        subtitle = "\(defaultSubtitle) · 5h & Weekly"
-                    }
-                } else {
-                    subtitle = "\(defaultSubtitle) · 5-hour & Weekly"
-                }
+                subtitle = "5-hour & weekly\(sourceSuffix)"
             }
         }
 
@@ -1079,29 +1070,26 @@ public final class CompanionQuotaModel: ObservableObject {
 
     public static func formatCadence(_ label: String, window: String? = nil) -> String {
         let combined = "\(window ?? "") \(label)".lowercased()
-        if combined.contains("7d") || combined.contains("seven_day") {
-            return "7-day window"
-        }
-        if combined.contains("1w") || combined.contains("weekly") {
-            return "Weekly window"
+        if combined.contains("7d") || combined.contains("seven_day") || combined.contains("1w") || combined.contains("weekly") {
+            return "weekly"
         }
         if combined.contains("5h") || combined.contains("5-hour") || combined.contains("five_hour")
             || combined.contains("coding_plan") || combined.contains("coding plan") || combined.contains("interval") {
-            return "5-hour window"
+            return "5-hour"
         }
         if combined.contains("4h") || combined.contains("4-hour") || combined.contains("four_hour") {
-            return "4-hour window"
+            return "4-hour"
         }
-        if combined.contains("1d") || combined.contains("daily") {
-            return "Daily window"
+        if combined.contains("1d") || combined.contains("daily") || combined.contains("24h") {
+            return "daily"
         }
-        if combined.contains("billing") || combined.contains("cycle") {
-            return "Billing cycle"
+        if combined.contains("billing") || combined.contains("cycle") || combined.contains("monthly") || combined.contains("1m") {
+            return "monthly"
         }
         if let window, !window.isEmpty {
-            return window
+            return window.lowercased().replacingOccurrences(of: " window", with: "")
         }
-        return label
+        return label.lowercased().replacingOccurrences(of: " window", with: "")
     }
 
     /// Feeds one snapshot's windows through the tracker, saves its state, and

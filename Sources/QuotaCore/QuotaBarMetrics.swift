@@ -163,7 +163,13 @@ public extension QuotaWindowSnapshot {
 
     /// How far through its period the window is, 0...1, or nil when unknown.
     func elapsedFraction(now: Date, calendar: Calendar = QuotaPeriod.billingCalendar) -> Double? {
-        periodSpan(calendar: calendar)?.elapsedFraction(at: now)
+        if let span = periodSpan(calendar: calendar) {
+            return span.elapsedFraction(at: now)
+        }
+        if let remaining = remainingPercent, remaining >= 100 {
+            return 0.0
+        }
+        return nil
     }
 }
 

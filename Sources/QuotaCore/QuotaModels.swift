@@ -188,6 +188,18 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
         return identity.contains("video") || identity.contains("hailuo")
     }
 
+    /// Extraneous weekly video quotas (e.g. 35/35) are omitted because the daily/interval allowance (5/5)
+    /// is the true operative limit and weekly doesn't accumulate if not used daily.
+    public var isExtraneousWeeklyVideoQuota: Bool {
+        guard isSupplementaryVideoQuota else { return false }
+        let token = (window ?? "").lowercased()
+        let lbl = label.lowercased()
+        let wid = id.lowercased()
+        return token == "1w" || token == "weekly" || token == "7d"
+            || lbl.contains("weekly") || wid.contains("weekly")
+            || absoluteLimit == 35
+    }
+
     /// A bounded value suitable for display.  NaN and infinities are unknown.
     public var boundedRemainingPercent: Double? {
         guard !remainingUnknown, let value = remainingPercent, value.isFinite else { return nil }

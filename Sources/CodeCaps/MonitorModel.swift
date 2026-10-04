@@ -284,6 +284,25 @@ final class MonitorModel: ObservableObject {
         didSet { defaults.set(glanceView.rawValue, forKey: "glanceView") }
     }
 
+    // PiP Floating HUD Widget
+    @Published var isPipEnabled: Bool {
+        didSet {
+            defaults.set(isPipEnabled, forKey: "isPipEnabled")
+            PipWidgetController.shared.update(model: self)
+        }
+    }
+    @Published var pipPinnedRowIds: Set<String> {
+        didSet {
+            defaults.set(Array(pipPinnedRowIds), forKey: "pipPinnedRowIds")
+            PipWidgetController.shared.update(model: self)
+        }
+    }
+
+    // Dynamic Pacing Highlights
+    @Published var pacingColorHighlights: Bool {
+        didSet { defaults.set(pacingColorHighlights, forKey: "pacingColorHighlights") }
+    }
+
     /// Where each provider's windows came from on the last refresh.
     @Published private(set) var originByProvider: [String: QuotaOrigin] = [:]
 
@@ -412,6 +431,9 @@ final class MonitorModel: ObservableObject {
 
         appearance = AppAppearance(rawValue: defaults.string(forKey: "appearance") ?? "") ?? .system
         glanceView = GlanceViewMode(rawValue: defaults.string(forKey: "glanceView") ?? "") ?? .fromMac
+        isPipEnabled = defaults.bool(forKey: "isPipEnabled")
+        pipPinnedRowIds = Set(defaults.stringArray(forKey: "pipPinnedRowIds") ?? [])
+        pacingColorHighlights = defaults.object(forKey: "pacingColorHighlights") as? Bool ?? true
         alarmChanges = alarmManager.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
         }

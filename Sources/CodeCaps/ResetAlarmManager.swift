@@ -394,7 +394,9 @@ public final class ResetAlarmManager: ObservableObject {
     }
 
     private func deliver(_ payload: ResetAlarmNotification) {
-        if payload.isVendorReset {
+        // Only deliver alerts if the master top bell is armed (All) or this specific quota's bell is on
+        guard isAlarmEnabled(for: payload.providerId) else { return }
+        if payload.isVendorReset && payload.sound.isAudible {
             playAlarmSound(payload.sound)
         }
         // Deliver via custom test handler if installed
