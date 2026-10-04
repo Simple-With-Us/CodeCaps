@@ -237,15 +237,47 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
     }
 }
 
+/// Additive per-provider terms the backend can carry on the manifest.
+/// Currently a single `defaultWindowLabel` ("5h", "weekly", ...) used as a
+/// fallback label when a provider has no windows yet.  Missing fields decode
+/// as absent — never a decode failure — so older payloads keep working.
+public struct QuotaProviderTerms: Codable, Equatable, Sendable {
+    public var defaultWindowLabel: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case defaultWindowLabel
+    }
+
+    public init(defaultWindowLabel: String? = nil) {
+        self.defaultWindowLabel = defaultWindowLabel
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        defaultWindowLabel = try container.decodeIfPresent(String.self, forKey: .defaultWindowLabel)
+    }
+}
+
 public struct QuotaProviderGroup: Codable, Equatable, Sendable {
     public var provider: String
     public var providerLabel: String
     public var via: String?
     public var expected: Bool
     public var windows: [QuotaWindow]
+    /// Server-side ordering for the native section list.  Absent on legacy
+    /// payloads and treated as zero (the older client-side expected list did
+    /// its own ordering).  Sections sort ascending by it.
+    public var sortOrder: Int?
+    /// Optional brand-mark asset hint from the manifest.  The native logo
+    /// resolver prefers this name when present, falling back to the built-in
+    /// `resourceNames` map and finally to a neutral SF Symbol.
+    public var iconHint: String?
+    /// Per-provider fallback terms (currently a `defaultWindowLabel`).
+    public var terms: QuotaProviderTerms?
 
     private enum CodingKeys: String, CodingKey {
         case provider, providerLabel, via, expected, windows
+        case sortOrder, iconHint, terms
     }
 
     public init(
@@ -253,13 +285,19 @@ public struct QuotaProviderGroup: Codable, Equatable, Sendable {
         providerLabel: String,
         via: String? = nil,
         expected: Bool = false,
-        windows: [QuotaWindow] = []
+        windows: [QuotaWindow] = [],
+        sortOrder: Int? = nil,
+        iconHint: String? = nil,
+        terms: QuotaProviderTerms? = nil
     ) {
         self.provider = provider
         self.providerLabel = providerLabel
         self.via = via
         self.expected = expected
         self.windows = windows
+        self.sortOrder = sortOrder
+        self.iconHint = iconHint
+        self.terms = terms
     }
 
     public init(from decoder: Decoder) throws {
@@ -269,6 +307,9 @@ public struct QuotaProviderGroup: Codable, Equatable, Sendable {
         via = try container.decodeIfPresent(String.self, forKey: .via)
         expected = try container.decodeIfPresent(Bool.self, forKey: .expected) ?? false
         windows = try container.decodeIfPresent([QuotaWindow].self, forKey: .windows) ?? []
+        sortOrder = try container.decodeIfPresent(Int.self, forKey: .sortOrder)
+        iconHint = try container.decodeIfPresent(String.self, forKey: .iconHint)
+        terms = try container.decodeIfPresent(QuotaProviderTerms.self, forKey: .terms)
     }
 }
 
@@ -358,6 +399,10 @@ public struct QuotaPlatformSection: Equatable, Sendable {
     public let via: String?
     public let expected: Bool
     public let windows: [QuotaWindowSnapshot]
+    /// Server-supplied brand-mark hint, when the backend manifest names one.
+    /// `PlatformLogo` prefers this when present and falls back to the built-in
+    /// resource map.  Nil for sections that never had a manifest entry.
+    public let iconHint: String?
 
     public var isMissing: Bool { expected && windows.isEmpty }
     public var hasFreshReport: Bool {
@@ -369,13 +414,15 @@ public struct QuotaPlatformSection: Equatable, Sendable {
         providerLabel: String,
         via: String? = nil,
         expected: Bool,
-        windows: [QuotaWindowSnapshot]
+        windows: [QuotaWindowSnapshot],
+        iconHint: String? = nil
     ) {
         self.providerKey = providerKey
         self.providerLabel = providerLabel
         self.via = via
         self.expected = expected
         self.windows = windows
+        self.iconHint = iconHint
     }
 }
 
@@ -394,6 +441,12 @@ public extension QuotaResponse {
 
     /// Returns the stable native dashboard order, followed by future provider
     /// keys supplied by the server.  Missing expected providers are explicit.
+    ///
+    /// Server-first: every provider the manifest lists drives both the section
+    /// order and its label.  The hardcoded `QuotaProviders.expected` list only
+    /// runs when the server returns an empty `providerGroups` array — i.e. the
+    /// offline fallback / pre-manifest backend path.  That branch is kept as a
+    /// safety net for first-launch installs before a sync has completed.
     func platformSections(now: Date = Date()) -> [QuotaPlatformSection] {
         let normalizedWindows = windows.map { $0.normalized() }
         var grouped = Dictionary<String, [QuotaWindow]>(minimumCapacity: normalizedWindows.count)
@@ -410,16 +463,53 @@ public extension QuotaResponse {
             }
         }
 
-        var sections: [QuotaPlatformSection] = []
-        for provider in QuotaProviders.expected {
-            sections.append(makeSection(key: provider.key, label: provider.label, via: provider.via, expected: true, grouped: grouped, now: now))
+        // Build the manifest view: key, label, via, expected, iconHint, and
+        // sort order, keyed by canonical key so future keys without a manifest
+        // entry do not collide with their canonicalized form.
+        var manifest: [(key: String, label: String, via: String?, expected: Bool, iconHint: String?, sortOrder: Int)] = []
+        if providerGroups.isEmpty {
+            // OFFLINE FALLBACK: server returned no provider groups.  Use the
+            // bundled list as the only source of order/labels.  An admin who
+            // adds a provider must ship it through the server manifest, not by
+            // editing this list.
+            for provider in QuotaProviders.expected {
+                manifest.append((provider.key, provider.label, provider.via, true, nil, 0))
+            }
+        } else {
+            // Server-first: the manifest is authoritative.  Iterate in the
+            // server-supplied order (it already arrives sorted by sortOrder)
+            // and only fall back to `QuotaProviders.label(for:)` when the group
+            // did not carry its own label.
+            for group in providerGroups {
+                let key = QuotaProviders.canonicalKey(provider: group.provider, providerKey: nil, via: group.via)
+                guard !QuotaProviders.hidden.contains(key) else { continue }
+                let trimmed = group.providerLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+                let label = trimmed.isEmpty ? QuotaProviders.label(for: key) : trimmed
+                manifest.append((key, label, group.via, group.expected, group.iconHint, group.sortOrder ?? 0))
+            }
+            manifest.sort { lhs, rhs in
+                if lhs.sortOrder != rhs.sortOrder { return lhs.sortOrder < rhs.sortOrder }
+                return lhs.label.localizedCaseInsensitiveCompare(rhs.label) == .orderedAscending
+            }
         }
 
-        let futureKeys = grouped.keys.filter { key in !QuotaProviders.hidden.contains(key) && !QuotaProviders.expected.contains(where: { $0.key == key }) }.sorted()
+        var sections: [QuotaPlatformSection] = []
+        for entry in manifest {
+            sections.append(makeSection(key: entry.key, label: entry.label, via: entry.via, expected: entry.expected, iconHint: entry.iconHint, grouped: grouped, now: now))
+        }
+
+        // Future keys: windows whose canonical key is in neither the manifest
+        // nor the hidden set.  These still need a section, with the server's
+        // group label winning over the hardcoded one.
+        let knownKeys = Set(manifest.map(\.key))
+        let futureKeys = grouped.keys.filter { key in
+            !QuotaProviders.hidden.contains(key) && !knownKeys.contains(key)
+        }.sorted()
         for key in futureKeys {
             let group = providerGroups.first { QuotaProviders.canonicalKey(provider: $0.provider, providerKey: nil, via: $0.via) == key }
             let groupLabel = group?.providerLabel.trimmingCharacters(in: .whitespacesAndNewlines)
-            sections.append(makeSection(key: key, label: groupLabel?.isEmpty == false ? groupLabel! : QuotaProviders.label(for: key), via: group?.via, expected: false, grouped: grouped, now: now))
+            let label = groupLabel?.isEmpty == false ? groupLabel! : QuotaProviders.label(for: key)
+            sections.append(makeSection(key: key, label: label, via: group?.via, expected: false, iconHint: group?.iconHint, grouped: grouped, now: now))
         }
         return sections
     }
@@ -429,6 +519,7 @@ public extension QuotaResponse {
         label: String,
         via: String?,
         expected: Bool,
+        iconHint: String? = nil,
         grouped: [String: [QuotaWindow]],
         now: Date
     ) -> QuotaPlatformSection {
@@ -461,7 +552,7 @@ public extension QuotaResponse {
                 }
                 return left.window.label.localizedCaseInsensitiveCompare(right.window.label) == .orderedAscending
             }
-        return QuotaPlatformSection(providerKey: key, providerLabel: label, via: via, expected: expected, windows: snapshots)
+        return QuotaPlatformSection(providerKey: key, providerLabel: label, via: via, expected: expected, windows: snapshots, iconHint: iconHint)
     }
 }
 

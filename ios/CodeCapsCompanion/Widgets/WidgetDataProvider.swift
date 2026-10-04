@@ -71,15 +71,43 @@ public enum WidgetSnapshotStore {
     private static func decodeSnapshot(
         _ data: Data,
         platformOrder: [String],
-        now: Date
+        now: Date,
+        manifest: [[String: Any]]? = nil
     ) -> [WidgetPlatformItem]? {
         guard let envelope = try? JSONDecoder().decode(SnapshotEnvelope.self, from: data),
               let windows = envelope.windows else {
             return nil
         }
         guard !windows.isEmpty else { return [] }
-        let platforms = WidgetPresentation.parseSnapshot(data: data, platformOrder: platformOrder, now: now)
+        let augmented: Data
+        if let manifest, !manifest.isEmpty {
+            augmented = injectManifest(into: data, manifest: manifest) ?? data
+        } else {
+            augmented = data
+        }
+        let platforms = WidgetPresentation.parseSnapshot(data: augmented, platformOrder: platformOrder, now: now)
         return platforms.isEmpty ? nil : platforms
+    }
+
+    /// The iOS companion writes the manifest it parsed from the wire envelope
+    /// into App Group shared defaults under "providerGroups" (JSON).  The
+    /// widget bundle cannot share the same envelope struct, so it reads the
+    /// manifest from defaults and stitches it back into the snapshot's JSON
+    /// before decoding.  When the manifest is missing, the wire's own
+    /// `providerGroups` field is what feeds `WidgetPresentation` — so older
+    /// snapshots keep working.
+    private static func injectManifest(into data: Data, manifest: [[String: Any]]) -> Data? {
+        guard var object = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] else { return nil }
+        object["providerGroups"] = manifest
+        return try? JSONSerialization.data(withJSONObject: object, options: [])
+    }
+
+    /// Read the manifest from shared defaults.  Returns the parsed array of
+    /// dictionaries, or nil if it isn't present / parseable.  Persisted by
+    /// `CompanionQuotaModel.parseSnapshot` after each successful sync.
+    private static func readPersistedManifest(defaults: UserDefaults) -> [[String: Any]]? {
+        guard let blob = defaults.data(forKey: "providerGroups") else { return nil }
+        return (try? JSONSerialization.jsonObject(with: blob, options: [])) as? [[String: Any]]
     }
 
     private static func observedAt(in data: Data) -> Date? {
@@ -105,12 +133,13 @@ public enum WidgetSnapshotStore {
     public static func readSnapshot(now: Date = Date()) -> (platforms: [WidgetPlatformItem], lastUpdated: Date?, isPlaceholder: Bool) {
         let defaults = UserDefaults(suiteName: appGroupId) ?? UserDefaults.standard
         let order = defaults.stringArray(forKey: "platformOrder") ?? []
+        let manifest = readPersistedManifest(defaults: defaults)
 
         // 1. App Group container
         if let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupId) {
             let file = container.appendingPathComponent("quota-windows.json")
             if let data = try? Data(contentsOf: file) {
-                if let parsed = decodeSnapshot(data, platformOrder: order, now: now) {
+                if let parsed = decodeSnapshot(data, platformOrder: order, now: now, manifest: manifest) {
                     let attrs = try? FileManager.default.attributesOfItem(atPath: file.path)
                     let modDate = observedAt(in: data) ?? (attrs?[.modificationDate] as? Date)
                     return (parsed, modDate, parsed.isEmpty)
@@ -122,7 +151,7 @@ public enum WidgetSnapshotStore {
         if let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
             let file = appSupport.appendingPathComponent("CodeCaps/quota-windows.json")
             if let data = try? Data(contentsOf: file) {
-                let parsed = decodeSnapshot(data, platformOrder: order, now: now) ?? []
+                let parsed = decodeSnapshot(data, platformOrder: order, now: now, manifest: manifest) ?? []
                 if !parsed.isEmpty {
                     let attrs = try? FileManager.default.attributesOfItem(atPath: file.path)
                     let modDate = attrs?[.modificationDate] as? Date
@@ -135,7 +164,7 @@ public enum WidgetSnapshotStore {
         if let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first {
             let file = caches.appendingPathComponent("quota-windows.json")
             if let data = try? Data(contentsOf: file) {
-                let parsed = decodeSnapshot(data, platformOrder: order, now: now) ?? []
+                let parsed = decodeSnapshot(data, platformOrder: order, now: now, manifest: manifest) ?? []
                 if !parsed.isEmpty {
                     let attrs = try? FileManager.default.attributesOfItem(atPath: file.path)
                     let modDate = attrs?[.modificationDate] as? Date
@@ -148,7 +177,7 @@ public enum WidgetSnapshotStore {
         for subpath in ["CodeCaps/quota-windows.json", "Usage Monitor/quota-windows.json"] {
             let hostPath = ("~/Library/Application Support/\(subpath)" as NSString).expandingTildeInPath
             if let data = try? Data(contentsOf: URL(fileURLWithPath: hostPath)) {
-                let parsed = decodeSnapshot(data, platformOrder: order, now: now) ?? []
+                let parsed = decodeSnapshot(data, platformOrder: order, now: now, manifest: manifest) ?? []
                 if !parsed.isEmpty {
                     let attrs = try? FileManager.default.attributesOfItem(atPath: hostPath)
                     let modDate = attrs?[.modificationDate] as? Date
@@ -180,13 +209,14 @@ public enum WidgetSnapshotStore {
         let tokenState = tokenStore.readForWidget(shared: defaults)
         if case .unavailable = tokenState { return cached }
         let token = tokenState.token ?? ""
+        let manifest = readPersistedManifest(defaults: defaults)
         do {
             let data = try await WidgetSnapshotFetcher.fetch(
                 endpoint: endpoint,
                 bearerToken: token,
                 configuration: configuration
             )
-            guard let platforms = decodeSnapshot(data, platformOrder: defaults.stringArray(forKey: "platformOrder") ?? [], now: now) else {
+            guard let platforms = decodeSnapshot(data, platformOrder: defaults.stringArray(forKey: "platformOrder") ?? [], now: now, manifest: manifest) else {
                 return cached
             }
             guard defaults.string(forKey: "companionSyncEndpoint") == endpoint,

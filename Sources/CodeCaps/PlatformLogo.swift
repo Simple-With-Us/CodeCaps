@@ -135,6 +135,10 @@ public enum CustomMarkMode: String, CaseIterable, Identifiable, Codable, Sendabl
 public struct PlatformLogo: View {
     @Environment(\.colorScheme) private var colorScheme
     public let providerKey: String
+    /// Server-supplied mark asset hint (from the manifest's `iconHint`).  When
+    /// non-nil, `PlatformLogoImage` looks it up first and only falls back to
+    /// the built-in `resourceNames` map when the hint does not resolve.
+    public let iconHint: String?
     public let size: CGFloat
     public let style: MarkStyle
     public let customMode: CustomMarkMode?
@@ -150,8 +154,10 @@ public struct PlatformLogo: View {
                 size: CGFloat = 22,
                 style: MarkStyle,
                 customMode: CustomMarkMode? = nil,
-                tint: Color? = nil) {
+                tint: Color? = nil,
+                iconHint: String? = nil) {
         self.providerKey = providerKey
+        self.iconHint = iconHint
         self.size = size
         self.style = style
         self.customMode = customMode
@@ -178,7 +184,7 @@ public struct PlatformLogo: View {
     public var body: some View {
         Group {
             let isDark = colorScheme == .dark
-            if let image = PlatformLogoImage.load(providerKey: providerKey, style: style, isDarkMode: isDark) {
+            if let image = PlatformLogoImage.load(providerKey: providerKey, iconHint: iconHint, style: style, isDarkMode: isDark) {
                 if rendersAsTemplate {
                     Image(nsImage: image)
                         .renderingMode(.template)
@@ -263,11 +269,26 @@ public enum PlatformLogoImage {
         return nil
     }
 
-    private static func bundledImage(providerKey: String, style: MarkStyle = .template) -> NSImage? {
+    private static func bundledImage(providerKey: String, style: MarkStyle = .template, iconHint: String? = nil) -> NSImage? {
         let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() as NSString
         let cache = (style == .standard) ? standardCache : templateCache
         if let cached = cache.object(forKey: key) { return cached }
-        guard let resource = resourceNames[key as String] ?? resourceNames[platformKey(of: key as String)] else {
+        // Server-first: try the manifest-supplied hint name first; fall back
+        // to the built-in `resourceNames` map (Phase 1 behaviour).  The hint
+        // is treated as a bare asset name, extension picked from the existing
+        // map so the admin can keep typing "claude" / "gemini" / "grok-bot"
+        // without thinking about extensions.
+        let hintName = iconHint?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let hintResource: (name: String, ext: String)? = hintName.flatMap { name in
+            guard !name.isEmpty else { return nil }
+            if let existing = resourceNames[name] { return existing }
+            // Try common extensions in the order the bundled map uses.
+            for ext in ["svg", "png", "pdf"] {
+                return (name, ext)
+            }
+            return (name, "svg")
+        }
+        guard let resource = hintResource ?? resourceNames[key as String] ?? resourceNames[platformKey(of: key as String)] else {
             return nil
         }
         let bundle = currentBundle()
@@ -373,19 +394,23 @@ public enum PlatformLogoImage {
     /// resolved relative to `customMarksDirectory`; an unreadable file falls
     /// back to the bundled asset so a stale selection does not blank the menu
     /// bar.
-    public static func load(providerKey: String, style: MarkStyle, isDarkMode: Bool = false) -> NSImage? {
+    ///
+    /// `iconHint` is the manifest-supplied asset name (Phase 2 backend).  When
+    /// present, `load` tries the hint first and falls back to the legacy
+    /// `resourceNames` map; when absent, behaviour is unchanged from Phase 1.
+    public static func load(providerKey: String, iconHint: String? = nil, style: MarkStyle, isDarkMode: Bool = false) -> NSImage? {
         let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         switch style {
         case .standard:
-            return bundledImage(providerKey: key, style: .standard)
+            return bundledImage(providerKey: key, style: .standard, iconHint: iconHint)
         case .template:
-            return bundledImage(providerKey: key, style: .template)
+            return bundledImage(providerKey: key, style: .template, iconHint: iconHint)
         case .custom:
             if let custom = loadCustom(providerKey: key, isDarkMode: isDarkMode)
                 ?? loadCustom(providerKey: platformKey(of: key), isDarkMode: isDarkMode) {
                 return custom
             }
-            return bundledImage(providerKey: key, style: .standard)
+            return bundledImage(providerKey: key, style: .standard, iconHint: iconHint)
         }
     }
 
