@@ -12,6 +12,15 @@ Lane: `ag/companion-bars-and-icons`.
 
 ---
 
+## 2026-10-03 — Fleet Antigravity row says when the weekly reading is missing [GROK-BUILD, in progress]
+
+Lane: `grok-build/fleet-weekly-gap`.  Board `47021e4c`.  Worktree `~/apps/codecaps-grok-build`.
+
+- A fleet Antigravity row whose payload has a 5h meter and no weekly meter used to leave the second column blank.  The long column now says "no weekly reading reported".  A masked weekly says the existing masked caption.  A weekly that is already on screen, a local row, and a one-meter provider leave the column alone.
+- Files: `Sources/CodeCaps/GlanceViews.swift`, `Tests/CodeCapsTests/GlanceRowTests.swift`.  Codex's runaway-alert footer in the same file is left as it landed in #128.
+
+---
+
 ## 2026-10-03 — Native Widgets and Independent Data Setup [CODEX, in progress]
 
 Lane: `/Users/jay/.codex/worktrees/codecaps-board/CodeCaps`, `codex/alerts-provenance-20261003`.  Boards `508560f7`, `9a3d1a21`, `bc0f76fd`, `29df655f`, `1b71afd1`.
