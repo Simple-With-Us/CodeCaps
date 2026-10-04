@@ -193,7 +193,10 @@ public actor CodexSessionQuotaReader {
         guard let data = read(fd, from: start, count: Int(size - start)) else { return }
         budget -= data.count
         var lineStart = 0
-        if start > 0 {
+        // A retained cursor starts at a complete-line boundary (or the start
+        // of a partial line).  Skip a fragment only when a bounded tail read
+        // actually jumped past that cursor.
+        if start > active.offset {
             guard let boundary = data.firstIndex(of: 10) else {
                 active.offset = size
                 cursors[url] = active

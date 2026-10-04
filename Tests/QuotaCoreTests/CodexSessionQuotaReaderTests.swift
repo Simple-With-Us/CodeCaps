@@ -21,7 +21,7 @@ final class CodexSessionQuotaReaderTests: XCTestCase {
         XCTAssertEqual(first.windows.first?.occurredAt, "2026-10-03T11:55:00Z")
         let repeatRead = await reader.read()
         XCTAssertEqual(repeatRead.windows, first.windows)
-        try fixture.append(fixture.event(at: "2026-10-03T11:58:00Z", used: 30), to: file)
+        try fixture.append(fixture.event(at: "2026-10-03T11:58:00Z", used: 30) + "\n", to: file)
         let updated = await reader.read()
         XCTAssertEqual(updated.windows.first?.remainingPercent, 70)
         XCTAssertEqual(updated.windows.first?.occurredAt, "2026-10-03T11:58:00Z")
