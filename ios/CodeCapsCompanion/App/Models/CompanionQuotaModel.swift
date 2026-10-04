@@ -113,6 +113,28 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
         guard elapsed >= 0 else { return 0.0 }
         return min(1.0, max(0.0, elapsed / duration))
     }
+
+    public var caption: String {
+        let text = (cadence.isEmpty ? label : cadence).lowercased()
+        if text.contains("5h") || text.contains("5-hour") || text.contains("5 hour") { return "5h" }
+        if text.contains("4h") || text.contains("4-hour") || text.contains("4 hour") { return "4h" }
+        if text.contains("7d") || text.contains("weekly") || text.contains("1w") { return "7d" }
+        if text.contains("24h") || text.contains("daily") || text.contains("1d") { return "24h" }
+        if text.contains("month") || text.contains("billing") || text.contains("cycle") || text.contains("30d") || text.contains("1m") { return "1m" }
+        if text.contains("plan") || text.contains("included") { return "Plan" }
+        if !cadence.isEmpty && cadence.count <= 4 { return cadence }
+        return "Quota"
+    }
+
+    public var isShortCadence: Bool {
+        let text = (cadence.isEmpty ? label : cadence).lowercased()
+        if text.contains("5h") || text.contains("4h") || text.contains("session") || text.contains("fast") { return true }
+        if text.contains("7d") || text.contains("1w") || text.contains("weekly") || text.contains("month") || text.contains("billing") || text.contains("cycle") || text.contains("30d") || text.contains("1m") || text.contains("plan") { return false }
+        if let reset = resetAt {
+            return reset.timeIntervalSinceNow < 86_400
+        }
+        return true
+    }
 }
 
 /// An overarching platform section displayed in the CodeCaps iOS companion app.
@@ -130,6 +152,18 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
     public var isAlarmEnabled: Bool
     public let windows: [CompanionWindowItem]
     public let duplicateWindows: [CompanionWindowItem]
+
+    public var shortWindow: CompanionWindowItem? {
+        windows.first(where: { $0.isShortCadence }) ?? windows.first
+    }
+
+    public var longWindow: CompanionWindowItem? {
+        let nonShort = windows.filter { !$0.isShortCadence }
+        if let match = nonShort.first(where: { $0.id != shortWindow?.id }) {
+            return match
+        }
+        return windows.first(where: { $0.id != shortWindow?.id })
+    }
 
     public init(
         id: String,
@@ -635,7 +669,12 @@ public final class CompanionQuotaModel: ObservableObject {
             if isAntigravity {
                 antigravityWindows.append(w)
             } else {
-                nonAntigravityWindows.append(w)
+                let id = [w.id, w.modelId, w.modelType, w.label].compactMap { $0 }.joined(separator: " ").lowercased()
+                let isMiniMaxVideo = (pKey.contains("minimax") || w.provider.lowercased().contains("minimax"))
+                    && (id.contains("video") || id.contains("hailuo"))
+                if !isMiniMaxVideo {
+                    nonAntigravityWindows.append(w)
+                }
             }
         }
 

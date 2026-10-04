@@ -387,6 +387,13 @@ bundle_identifier() {
 # the fleet rule and every other surface wants it — and the macOS shape is
 # derived here, at build time, into a throwaway file.
 stage_icon() {
+  if [[ -f "$ROOT_DIR/assets/AppIcon.icns" ]]; then
+    cp "$ROOT_DIR/assets/AppIcon.icns" "$APP_RESOURCES/AppIcon.icns"
+    ICON_FILE="AppIcon.icns"
+    echo "icon: using canonical assets/AppIcon.icns"
+    return 0
+  fi
+
   local master="$ICON_MASTER"
   [[ -f "$master" ]] || master="$ICON_FALLBACK"
   [[ -f "$master" ]] || { echo "warning: no icon master found, shipping without an icon" >&2; return 0; }

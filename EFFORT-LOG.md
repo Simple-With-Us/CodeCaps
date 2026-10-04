@@ -1,5 +1,27 @@
 # CodeCaps — Effort Log
 
+## 2026-10-03 — Canonical brand icon, Glance meter alignment, iOS dual meters, and runaway alert history [AG, completed]
+
+Lane: `ag/companion-bars-and-icons`.
+
+- Canonical CodeCaps brand icon: restored the owner's authentic 3D gauge squircle mark from `/Users/jay/Code/Icons-Logos/CodeCaps/CodeCaps-Icon.icns` as `assets/AppIcon.icns`, updated `assets/icon-1024.png`, populated all 15 iOS and Mac asset catalog sizes in `ios/CodeCapsCompanion/Assets.xcassets/AppIcon.appiconset/`, and updated `script/build_and_run.sh` to use canonical `assets/AppIcon.icns` directly without double-plate resizing.
+- Glance meter alignment: decoupled percentage and reset countdown in `GlanceMeter` (`GlanceViews.swift`) into distinct columns with fixed widths (44pt percent trailing-aligned, 50pt countdown centered in an invisible column with fixed gap) so countdown alignment never shifts based on 100% vs 2-digit percentages.
+- iOS companion dual quota meters & MiniMax parity: updated `CompanionQuotaModel.swift` to exclude MiniMax supplementary video quota matching Mac Glance, added `shortWindow` / `longWindow` cadence resolution, replaced single overarching progress bar in `CompanionContentView.swift` (`quotaCard`) with two side-by-side meters (`CompanionMeterView`) visible without expanding, and increased `CompanionUsageBar` pacing marker height to 16pt (width 2.5pt) matching Mac Glance.
+- Runaway usage alerting visibility: updated `BurnRateNotification` in `BurnRateMonitor.swift` to explicitly name the provider and quota window in notification title and body; created `RunawayAlertRecord` history persisted in `MonitorModel.swift`; rendered recent runaway alert log in Settings under Runaway Agents; and updated Glance footer detail to surface recent alerts from the last 24 hours even after active burst subsides.
+- Verification: all 590 unit tests pass (0 failures, 4 skipped); iOS simulator builds clean via `xcodebuild`.
+
+---
+
+## 2026-10-03 — Native Widgets and Independent Data Setup [CODEX, in progress]
+
+Lane: `/Users/jay/.codex/worktrees/codecaps-board/CodeCaps`, `codex/alerts-provenance-20261003`.  Boards `508560f7`, `9a3d1a21`, `bc0f76fd`, `29df655f`, `1b71afd1`.
+
+- Public setup guide shipped in PR #127: https://codecaps.simplewithus.com/setup.html.  Runtime alerts and client machine identity shipped in PR #128.
+- Native widget repair adds correct shared-group signing on Mac and iOS, independent real widget cache, optional iOS timeline pulls, and in-app setup links.  iOS drag reorder, menu presets, and Gemini CLI reader included in the active batch.
+- Verification is in progress.  Do not mark widgets shipped until signed package and actual data access are verified.  Usage-Monitor #1583 remains blocked by an upstream unpatched development dependency advisory; no audit bypass.
+
+---
+
 ## 2026-10-03 — App design audit F-02 iOS Theme tokens & F-06 Console toolbar density [AG, completed]
 
 Lane: `ag/design-audit-f02-f06`.
