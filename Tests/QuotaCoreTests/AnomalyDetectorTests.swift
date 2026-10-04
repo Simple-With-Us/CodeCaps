@@ -167,11 +167,16 @@ final class AnomalyDetectorTests: XCTestCase {
 
     func testMovingResetEstimateDoesNotSplitSlidingWindow() {
         let t = Date(timeIntervalSince1970: 1_700_000_000)
-        let samples = (0..<4).map { index in
-            AnomalyDetector.Sample(providerKey: "p", windowId: "w",
-                                   observedAt: t.addingTimeInterval(Double(index * 300)),
-                                   remainingPercent: 90 - Double(index * 5),
-                                   resetAt: t.addingTimeInterval(Double(7200 + index * 300)))
+        var samples: [AnomalyDetector.Sample] = []
+        for index in 0..<4 {
+            let elapsed = Double(index) * 300
+            let remaining = 90.0 - Double(index) * 5
+            let observedAt = t.addingTimeInterval(elapsed)
+            let resetAt = t.addingTimeInterval(7_200 + elapsed)
+            samples.append(AnomalyDetector.Sample(providerKey: "p", windowId: "w",
+                                                  observedAt: observedAt,
+                                                  remainingPercent: remaining,
+                                                  resetAt: resetAt))
         }
         let segments = AnomalyDetector.historySegments(samples: samples,
                                                         now: t.addingTimeInterval(900))

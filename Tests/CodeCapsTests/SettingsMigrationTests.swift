@@ -88,7 +88,7 @@ final class SettingsMigrationTests: XCTestCase {
 final class ConsolePageStorageTests: XCTestCase {
     func testEveryPageRoundTripsThroughItsStorageKey() {
         let pages: [ConsolePage] = [
-            .allPlatforms, .platform("anthropic"), .platform("google-antigravity:gemini"),
+            .platform("anthropic"), .platform("google-antigravity:gemini"),
             .platform("a:b"), .settingsMenuBar, .settingsPlatforms, .settingsSourcesFleet,
             .settingsAppearance, .settingsAbout,
         ]
@@ -99,12 +99,12 @@ final class ConsolePageStorageTests: XCTestCase {
 
     func testAnUnknownKeyIsRejectedRatherThanGuessed() {
         XCTAssertNil(ConsolePage.fromStorageKey(""))
+        XCTAssertNil(ConsolePage.fromStorageKey("allPlatforms"))
         XCTAssertNil(ConsolePage.fromStorageKey("settingsNothing"))
         XCTAssertEqual(ConsolePage.fromStorageKey("platform:"), .platform(""))
     }
 
     func testOnlySettingsPagesReportThemselvesAsSettings() {
-        XCTAssertFalse(ConsolePage.allPlatforms.isSettings)
         XCTAssertFalse(ConsolePage.platform("anthropic").isSettings)
         for page in ConsolePage.settingsPages { XCTAssertTrue(page.isSettings) }
     }

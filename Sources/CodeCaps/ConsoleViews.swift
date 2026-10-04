@@ -5,7 +5,6 @@ import SwiftUI
 /// One selection type for the sidebar, the detail pane and every deep link from
 /// Glance, the app menu and the status menu.
 enum ConsolePage: Hashable {
-    case allPlatforms
     case platform(String)
     case settingsMenuBar
     case settingsPlatforms
@@ -17,14 +16,13 @@ enum ConsolePage: Hashable {
 
     var isSettings: Bool {
         switch self {
-        case .allPlatforms, .platform: return false
+        case .platform: return false
         default: return true
         }
     }
 
     var storageKey: String {
         switch self {
-        case .allPlatforms: return "allPlatforms"
         case .platform(let providerKey): return "platform:" + providerKey
         case .settingsMenuBar: return "settingsMenuBar"
         case .settingsPlatforms: return "settingsPlatforms"
@@ -38,7 +36,6 @@ enum ConsolePage: Hashable {
 
     static func fromStorageKey(_ value: String) -> ConsolePage? {
         switch value {
-        case "allPlatforms": return .allPlatforms
         case "settingsMenuBar": return .settingsMenuBar
         case "settingsPlatforms": return .settingsPlatforms
         case "settingsLogoStyle": return .settingsLogoStyle
@@ -84,19 +81,58 @@ enum ConsolePage: Hashable {
     ]
 }
 
+struct AlertNavigation: Equatable {
+    let providerKey: String
+    let windowId: String?
+    let timestamp: Date?
+
+    var userInfo: [AnyHashable: Any] {
+        var values: [AnyHashable: Any] = ["providerKey": providerKey]
+        if let windowId { values["windowId"] = windowId }
+        if let timestamp { values["observedAt"] = timestamp.timeIntervalSince1970 }
+        return values
+    }
+
+    init(providerKey: String, windowId: String?, timestamp: Date?) {
+        self.providerKey = providerKey
+        self.windowId = windowId
+        self.timestamp = timestamp
+    }
+
+    init?(userInfo: [AnyHashable: Any]) {
+        guard let providerKey = userInfo["providerKey"] as? String, !providerKey.isEmpty else { return nil }
+        self.providerKey = providerKey
+        self.windowId = userInfo["windowId"] as? String
+        let epoch = userInfo["observedAt"] as? Double
+        self.timestamp = epoch.flatMap { $0.isFinite ? Date(timeIntervalSince1970: $0) : nil }
+    }
+}
+
 /// Selection state shared between AppKit (which owns the window and its title)
 /// and SwiftUI (which owns the sidebar and detail pane).
 @MainActor
 final class ConsoleState: ObservableObject {
-    @Published var page: ConsolePage = .allPlatforms {
+    @Published var page: ConsolePage = .settingsSourcesFleet {
         didSet {
             guard page != oldValue else { return }
+            if !isReconciling {
+                awaitingInitialSelection = false
+                pendingStoredKey = nil
+            }
+            if isReconciling && pendingStoredKey != nil && page == .settingsSourcesFleet { return }
             if page.isSettings {
                 defaults.set(page.storageKey, forKey: "consoleLastSettingsPage")
             }
             defaults.set(page.storageKey, forKey: "consoleLastPage")
         }
     }
+    @Published private(set) var selectedWindowId: String?
+    @Published private(set) var selectedTimestamp: Date?
+    @Published private(set) var unavailableAlert: AlertNavigation?
+    private var pendingAlert: AlertNavigation?
+    private var pendingStoredKey: String?
+    private var awaitingInitialSelection = true
+    private var isReconciling = false
 
     private let defaults: UserDefaults
 
@@ -104,7 +140,84 @@ final class ConsoleState: ObservableObject {
         self.defaults = defaults
         // A Settings page is a destination, never a place to resume.
         let stored = defaults.string(forKey: "consoleLastPage").flatMap(ConsolePage.fromStorageKey)
-        page = (stored?.isSettings == false ? stored : nil) ?? .allPlatforms
+        page = (stored?.isSettings == false ? stored : nil) ?? .settingsSourcesFleet
+        if case .platform(let key) = page { pendingStoredKey = key }
+    }
+
+    /// Resolve saved selections after the first read and whenever a source disappears.
+    func reconcile(available sections: [DisplaySection], readCompleted: Bool = false) {
+        if let pendingAlert {
+            if let row = matchingRow(for: pendingAlert, in: sections) {
+                self.pendingAlert = nil
+                select(providerKey: row.id, windowId: pendingAlert.windowId,
+                       at: pendingAlert.timestamp, in: sections)
+            } else if readCompleted {
+                self.pendingAlert = nil
+                unavailableAlert = pendingAlert
+            }
+            return
+        }
+        if awaitingInitialSelection, let key = pendingStoredKey,
+           let saved = sections.first(where: { $0.id == key }) {
+            isReconciling = true
+            page = .platform(saved.id)
+            isReconciling = false
+            pendingStoredKey = nil
+            awaitingInitialSelection = false
+            return
+        }
+        if awaitingInitialSelection && pendingStoredKey != nil && !readCompleted { return }
+        if case .platform(let key) = page, sections.contains(where: { $0.id == key }) {
+            pendingStoredKey = nil
+            awaitingInitialSelection = false
+            return
+        }
+        if page.isSettings && !awaitingInitialSelection { return }
+        if sections.isEmpty && !readCompleted { return }
+        isReconciling = true
+        page = sections.first.map { .platform($0.id) } ?? .settingsSourcesFleet
+        isReconciling = false
+        pendingStoredKey = nil
+        if !sections.isEmpty { awaitingInitialSelection = false }
+    }
+
+    func select(providerKey: String, windowId: String?, at timestamp: Date?,
+                in sections: [DisplaySection], readCompleted: Bool = true) {
+        let target = AlertNavigation(providerKey: providerKey, windowId: windowId, timestamp: timestamp)
+        let row = matchingRow(for: target, in: sections)
+        guard let row else {
+            if !readCompleted {
+                pendingAlert = target
+            } else {
+                unavailableAlert = target
+            }
+            awaitingInitialSelection = false
+            page = .settingsSourcesFleet
+            return
+        }
+        pendingAlert = nil
+        unavailableAlert = nil
+        selectedWindowId = windowId
+        selectedTimestamp = timestamp
+        awaitingInitialSelection = false
+        page = .platform(row.id)
+    }
+
+    private func matchingRow(for target: AlertNavigation, in sections: [DisplaySection]) -> DisplaySection? {
+        sections.first { section in
+            section.id == target.providerKey
+                && (target.windowId == nil || section.section.windows.contains { $0.window.id == target.windowId })
+        } ?? sections.first { section in
+            section.providerKey == target.providerKey
+                && (target.windowId == nil || section.section.windows.contains { $0.window.id == target.windowId })
+        }
+    }
+
+    func clearHistoryFocus() {
+        selectedWindowId = nil
+        selectedTimestamp = nil
+        unavailableAlert = nil
+        pendingAlert = nil
     }
 
     var lastSettingsPage: ConsolePage {
@@ -126,13 +239,11 @@ final class ConsoleState: ObservableObject {
 struct ConsoleView: View {
     @ObservedObject var model: MonitorModel
     @ObservedObject var state: ConsoleState
-    @State private var query = ""
     /// Owner-resizable column width, clamped to the design bounds, default
     /// loaded from `UserDefaults.standard` so a wider sidebar chosen on a
     /// big display stays wide; a fresh install lands on
     /// `Metrics.sidebarWidthDefault`.
     @State private var sidebarWidth: CGFloat
-    @FocusState private var searchFocused: Bool
 
     init(model: MonitorModel, state: ConsoleState) {
         self.model = model
@@ -157,17 +268,15 @@ struct ConsoleView: View {
         .foregroundStyle(Theme.ink)
         .tint(Theme.accent)
         .background(Theme.background)
-        .background {
-            // The keyboard equivalents the spec asks for.  Hidden buttons
-            // rather than menu items, because the search field belongs to this
-            // view and nothing in AppKit can reach its focus state.
-            VStack {
-                Button("") { searchFocused = true }
-                    .keyboardShortcut("f", modifiers: .command)
-                    .disabled(state.page.isSettings)
-            }
-            .opacity(0)
-            .accessibilityHidden(true)
+        .onAppear { state.reconcile(available: model.displaySections,
+                                   readCompleted: model.lastChecked != nil) }
+        .onChange(of: model.displaySections.map(\.id)) { _, _ in
+            state.reconcile(available: model.displaySections,
+                            readCompleted: model.lastChecked != nil)
+        }
+        .onChange(of: model.lastChecked) { _, _ in
+            state.reconcile(available: model.displaySections,
+                            readCompleted: model.lastChecked != nil)
         }
     }
 
@@ -182,11 +291,15 @@ struct ConsoleView: View {
                 Rectangle().fill(Theme.accent).frame(height: 2)
                     .accessibilityHidden(true)
             }
+            if let unavailable = state.unavailableAlert {
+                Text("Alert source unavailable: \(unavailable.providerKey)\(unavailable.windowId.map { " · \($0)" } ?? "").  Check Sources & Fleet for this provider.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.warning)
+                    .padding(.horizontal, Metrics.pagePadding)
+                    .padding(.vertical, 8)
+            }
             ScrollView {
                 switch state.page {
-                case .allPlatforms:
-                    AllPlatformsPage(model: model, state: state, query: query)
-                        .padding(Metrics.pagePadding)
                 case .platform(let key):
                     PlatformDetailPage(model: model, state: state, providerKey: key)
                         .padding(Metrics.pagePadding)
@@ -199,7 +312,7 @@ struct ConsoleView: View {
                 case .settingsSourcesFleet:
                     SettingsSourcesFleetPage(model: model)
                 case .settingsNotifications:
-                    SettingsNotificationsPage(model: model)
+                    SettingsNotificationsPage(model: model, state: state)
                 case .settingsAppearance:
                     SettingsAppearancePage(model: model)
                 case .settingsAbout:
@@ -212,7 +325,6 @@ struct ConsoleView: View {
 
     private var pageTitle: String {
         switch state.page {
-        case .allPlatforms: return "All Platforms"
         case .platform(let key):
             return model.displaySections.first { $0.id == key }?.title ?? key
         default: return state.page.settingsTitle
@@ -230,44 +342,7 @@ struct ConsoleView: View {
                 .layoutPriority(1)
                 .truncationMode(.tail)
 
-            if !state.page.isSettings {
-                // F-06: Position search field immediately adjacent to the page title.
-                HStack(spacing: 5) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .accessibilityHidden(true)
-                    TextField("Find a Platform", text: $query)
-                        .textFieldStyle(.plain)
-                        .focused($searchFocused)
-                        .onExitCommand { query = "" }
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
-                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 6))
-                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Theme.hairline))
-                .frame(width: 180)
-                .help("Find a Platform")
-                .accessibilityLabel("Find a Platform")
-            }
-
             Spacer(minLength: 8)
-
-            // F-06: Compact / Detailed segmented control replaced with View Options menu.
-            if state.page == .allPlatforms {
-                Menu {
-                    Picker("Layout", selection: $model.viewLayout) {
-                        ForEach(QuotaViewLayout.allCases) { Text($0.title).tag($0) }
-                    }
-                } label: {
-                    Image(systemName: "gearshape")
-                        .frame(width: 18, height: 18)
-                }
-                .menuStyle(.borderlessButton)
-                .frame(width: 24, height: 24)
-                .help("View Options")
-                .accessibilityLabel("View Options")
-            }
 
             Button { model.refresh() } label: {
                 Image(systemName: "arrow.clockwise").frame(width: 18, height: 18)
@@ -357,7 +432,7 @@ struct ConsoleSidebar: View {
     @FocusState private var focusedPage: ConsolePage?
 
     private var allPages: [ConsolePage] {
-        var pages: [ConsolePage] = [.allPlatforms]
+        var pages: [ConsolePage] = []
         pages.append(contentsOf: model.displaySections.map { .platform($0.id) })
         pages.append(contentsOf: ConsolePage.settingsPages)
         return pages
@@ -369,6 +444,7 @@ struct ConsoleSidebar: View {
         let currentIndex = pages.firstIndex(of: state.page) ?? 0
         let nextIndex = max(0, min(pages.count - 1, currentIndex + delta))
         let target = pages[nextIndex]
+        state.clearHistoryFocus()
         state.page = target
         focusedPage = target
     }
@@ -382,10 +458,6 @@ struct ConsoleSidebar: View {
             // Drawing the highlight here settles both.
             List {
                 Section {
-                    sidebarRow(page: .allPlatforms) {
-                        Label("All Platforms", systemImage: "square.grid.2x2")
-                            .font(.system(size: 13, weight: .medium))
-                    }
                     ForEach(model.displaySections) { row in
                         sidebarRow(page: .platform(row.id)) { quotaRow(row) }
                     }
@@ -431,6 +503,7 @@ struct ConsoleSidebar: View {
         let selected = state.page == page
         let isFocused = focusedPage == page
         return Button {
+            state.clearHistoryFocus()
             state.page = page
             focusedPage = page
         } label: {
@@ -527,200 +600,6 @@ struct ConsoleSidebar: View {
     }
 }
 
-// MARK: - All Platforms
-
-struct AllPlatformsPage: View {
-    @ObservedObject var model: MonitorModel
-    @ObservedObject var state: ConsoleState
-    let query: String
-
-    private var matching: [DisplaySection] {
-        model.displaySections.filter {
-            query.isEmpty || $0.title.localizedCaseInsensitiveContains(query)
-        }
-    }
-    private var localSections: [DisplaySection] {
-        matching.filter { model.originByProvider[$0.providerKey] != .fleet }
-    }
-    /// Fleet rows, filtered by the same search box, grouped by machine.
-    private var fleetGroups: [FleetGroup] {
-        model.fleetGroups.map { group in
-            FleetGroup(id: group.id,
-                       title: group.title,
-                       windowCount: group.windowCount,
-                       rows: group.rows.filter { query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) })
-        }
-        .filter { !$0.rows.isEmpty }
-    }
-    private var compact: Bool { model.viewLayout == .summary }
-    private var columns: [GridItem] { [GridItem(.adaptive(minimum: compact ? 240 : 290), alignment: .top)] }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            tiles
-            if let error = model.serverError { errorBanner(error) }
-
-            if !model.localEnabled && !model.serverEnabled {
-                emptyState
-            } else {
-                HStack {
-                    Text("This Mac").font(.system(size: 13, weight: .semibold))
-                    Spacer()
-                }
-                LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
-                    ForEach(localSections) { row in
-                        card(row, origin: .local)
-                    }
-                }
-                if model.serverEnabled { fleetGroup }
-            }
-
-            Text("Quota windows are independent." + sentenceGap
-                 + "Antigravity meters two model pools separately, so each pool has its own row.")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    private var tiles: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), alignment: .top)], spacing: 12) {
-            SummaryTile(label: "Reporting",
-                        value: model.lastChecked == nil ? "—" : "\(model.reportingCount) of \(model.sections.count)",
-                        symbol: "antenna.radiowaves.left.and.right",
-                        detail: "reporting")
-            SummaryTile(label: "Near Cap",
-                        value: model.lastChecked == nil ? "—" : "\(model.nearCapCount)",
-                        symbol: "gauge.with.dots.needle.100percent",
-                        detail: "at 20% or less")
-            SummaryTile(label: "Next Reset",
-                        // The whole countdown: the two-unit form is Glance's, and this tile
-                        // has no tooltip to carry the minutes.
-                        value: model.nextReset.map { glanceResetFullCountdown($0, now: model.now) } ?? "—",
-                        symbol: "clock",
-                        detail: nextResetDetail)
-            SummaryTile(label: "Fleet",
-                        value: model.serverEnabled ? "\(model.fleetWindowCount) windows" : "Off",
-                        symbol: "arrow.up.arrow.down.circle",
-                        detail: model.serverEnabled
-                            ? (model.lastPullTime.map { "pulled \($0.formatted(date: .omitted, time: .shortened))" } ?? "never pulled")
-                            : "set up fleet pull")
-        }
-    }
-
-    /// Which platform and window the next reset belongs to, so the tile says
-    /// what is about to reset rather than only when.
-    private var nextResetDetail: String {
-        guard let next = model.nextReset else { return "no reset reported" }
-        for row in model.displaySections {
-            for snapshot in row.section.windows where snapshot.resetAt == next && !row.isMasked(snapshot) {
-                // An Antigravity row names its pool, so the tile says which
-                // pool is about to reset rather than only "Antigravity".
-                return "\(row.title), \(windowCadenceName(snapshot.window))"
-            }
-        }
-        return next.formatted(date: .omitted, time: .shortened)
-    }
-
-    private func errorBanner(_ error: String) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(Theme.warning)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Fleet refresh failed." + sentenceGap + "Showing the last report.")
-                    .font(.system(size: 12, weight: .medium))
-                Text(error)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 8)
-            Button("Open Settings") { state.page = .settingsSourcesFleet }
-                .help("Open Settings")
-                .accessibilityLabel("Open Settings")
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.warning.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Theme.warning.opacity(0.35)))
-    }
-
-    private var emptyState: some View {
-        ContentUnavailableView {
-            Label("Connect a Quota Source", systemImage: "link")
-        } description: {
-            Text("CodeCaps reads quota from the agent CLIs already signed in on this Mac."
-                 + sentenceGap + "You can also pull quota from your other machines.")
-        } actions: {
-            HStack(spacing: 10) {
-                Button("Turn On Local Readers") {
-                    model.setLocalEnabled(true)
-                    state.page = .settingsSourcesFleet
-                }
-                .buttonStyle(.borderedProminent)
-                Button("Set Up Fleet Pull") { state.page = .settingsSourcesFleet }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var fleetGroup: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Rectangle().fill(Theme.fleet).frame(width: 2)
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Text(fleetTitle).font(.system(size: 13, weight: .semibold))
-                    Spacer()
-                    Text(model.lastPullTime.map { "Pulled \($0.formatted(date: .omitted, time: .shortened))" } ?? "Never pulled")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                }
-                if fleetGroups.isEmpty {
-                    Text("No other machines have reported yet.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(fleetGroups) { group in
-                        // A group header per machine: the pull carries an
-                        // origin per window and nothing finer.
-                        HStack {
-                            Text(group.title).font(.system(size: 12, weight: .semibold))
-                            Spacer()
-                            Text("\(group.windowCount) window\(group.windowCount == 1 ? "" : "s")")
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                        }
-                        LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
-                            ForEach(group.rows) { row in
-                                card(row, origin: .fleet)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        .fixedSize(horizontal: false, vertical: true)
-    }
-
-    private var fleetTitle: String { "Fleet" }
-
-    private func card(_ row: DisplaySection, origin: QuotaOrigin) -> some View {
-        PlatformCard(row: row,
-                     now: model.now,
-                     issue: origin == .fleet ? nil : model.issues[row.providerKey],
-                     compact: compact,
-                     wide: false,
-                     origin: origin,
-                     customInfo: model.platformCustomInfo[row.providerKey],
-                     markStyle: model.markStyle(for: row.id),
-                     isAlarmArmed: model.isAlarmEnabled(for: row.id),
-                     onToggleAlarm: model.alarmsAll ? nil : { model.toggleAlarm(for: row.id) },
-                     onOpenSettings: model.consentNeeded.contains(row.providerKey)
-                        ? { state.page = .settingsSourcesFleet } : nil)
-    }
-}
-
 // MARK: - Single platform
 
 struct PlatformDetailPage: View {
@@ -753,6 +632,7 @@ struct PlatformDetailPage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             if let row {
+                UsageHistoryView(model: model, state: state, row: row)
                 PlatformCard(row: row,
                              now: model.now,
                              issue: model.issues[row.providerKey],

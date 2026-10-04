@@ -442,6 +442,16 @@ final class MonitorModel: ObservableObject {
         sections.flatMap { DisplaySection.rows(for: $0, now: now) }
     }
 
+    func historySamples() -> [AnomalyDetector.Sample] {
+        BurnRateMonitor.loadSamples(historyURL: burnRateHistoryURL)
+    }
+
+    func hasLocalHistorySource(for row: DisplaySection) -> Bool {
+        !row.section.windows.isEmpty && row.section.windows.allSatisfy { snapshot in
+            localWindows.contains(snapshot.window)
+        }
+    }
+
     /// Windows whose percentage is real but meaningless: a five-hour Antigravity
     /// window under a pool whose weekly cap is already spent.  They are shown as
     /// "n/a" and never counted as near cap or picked as the lowest.
@@ -738,6 +748,10 @@ final class MonitorModel: ObservableObject {
         )
         self.now = now
         self.issues = issues
+    }
+
+    func injectLocalHistorySourceForTests(_ windows: [QuotaWindow]) {
+        localWindows = windows
     }
 
     /// The fleet half of the seam: pulled windows grouped by origin, plus the
@@ -1613,7 +1627,7 @@ final class MonitorModel: ObservableObject {
             }
             lastRunawayAlertAt[key] = now.timeIntervalSince1970
 
-            let comp = group[0].kind == .vsPeak ? "recent peak" : "7-day average"
+            let comp = group[0].kind == .vsPeak ? "measured peak" : "available-history average"
             let mult = group[0].multiplier.formatted(.number.precision(.fractionLength(1)))
             let record = RunawayAlertRecord(
                 timestamp: now,
@@ -1623,7 +1637,10 @@ final class MonitorModel: ObservableObject {
                 windowLabel: winLabel ?? group[0].windowId,
                 multiplier: group[0].multiplier,
                 comparison: comp,
-                summary: "\(provLabel)\(winLabel.map { " (\($0))" } ?? "") is burning at \(mult)× your \(comp)."
+                summary: "\(provLabel)\(winLabel.map { " (\($0))" } ?? "") is burning at \(mult)× your \(comp).",
+                ratePercentPerHour: group[0].ratePercentPerHour,
+                comparisonRatePercentPerHour: group[0].comparisonRatePercentPerHour,
+                historyCoverageHours: group[0].historyCoverageHours
             )
             appendRunawayAlert(record)
         }
