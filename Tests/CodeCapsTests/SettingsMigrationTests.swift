@@ -71,12 +71,17 @@ final class SettingsMigrationTests: XCTestCase {
         let model = MonitorModel(defaults: defaults)
         let ids = model.availableMenuBarQuotas.map(\.id)
         XCTAssertTrue(ids.contains("some-retired-window-id"))
-        XCTAssertEqual(ids.first, "auto_lowest_active")
+        XCTAssertEqual(ids.first, "most_urgent_5h")
+        XCTAssertEqual(model.menuBarQuotaSelection, "some-retired-window-id")
     }
 
-    func testTheDefaultSelectionAddsNoPlaceholder() {
+    func testFreshInstallDefaultsToSmartPairAndOffersPresets() {
         let model = MonitorModel(defaults: defaults)
-        XCTAssertEqual(model.availableMenuBarQuotas.map(\.id), ["auto_lowest_active", "auto_lowest"])
+        XCTAssertEqual(model.menuBarQuotaSelection, "smart_pair")
+        let ids = Set(model.availableMenuBarQuotas.map(\.id))
+        XCTAssertTrue(ids.isSuperset(of: ["most_urgent_5h", "most_urgent_weekly", "smart_pair",
+                                          "auto_lowest_active", "auto_lowest"]))
+        XCTAssertFalse(model.availableMenuBarQuotas.contains { $0.label == "Pinned quota unavailable" })
     }
 }
 

@@ -239,7 +239,11 @@ public final class CompanionNotificationDelegate: NSObject, UNUserNotificationCe
 /// 6. Supports customizable platform ordering matching the macOS preference.
 @MainActor
 public final class CompanionQuotaModel: ObservableObject {
+    #if os(macOS)
+    public static let appGroupId = "CC8UTF7ATG.codecaps"
+    #else
     public static let appGroupId = "group.com.simplewithus.codecaps"
+    #endif
 
     public static let customMarksDirectory: URL = {
         let fm = FileManager.default
@@ -312,16 +316,19 @@ public final class CompanionQuotaModel: ObservableObject {
 
     @Published public var syncEndpoint: String {
         didSet {
+            syncConfigurationRevision &+= 1
             UserDefaults.standard.set(syncEndpoint, forKey: "companionSyncEndpoint")
             sharedDefaults.set(syncEndpoint, forKey: "companionSyncEndpoint")
         }
     }
     @Published public var syncToken: String {
         didSet {
+            syncConfigurationRevision &+= 1
             UserDefaults.standard.set(syncToken, forKey: "companionSyncToken")
             sharedDefaults.set(syncToken, forKey: "companionSyncToken")
         }
     }
+    private var syncConfigurationRevision = 0
     /// All: every provider's reset alarm is on, and rows show no bells.  Off:
     /// only the providers in `alarmProviderIds` alarm.  The same model as the
     /// Mac app's All bell.
@@ -533,26 +540,42 @@ public final class CompanionQuotaModel: ObservableObject {
         defer { isRefreshing = false }
 
         var failure: String?
+        let requestedRevision = syncConfigurationRevision
+        let requestedEndpoint = syncEndpoint
+        let requestedToken = syncToken
 
         // Attempt endpoint fetch if configured
-        if let url = URL(string: syncEndpoint), !syncEndpoint.isEmpty {
+        if let url = URL(string: requestedEndpoint), !requestedEndpoint.isEmpty {
             do {
                 var req = URLRequest(url: url)
-                if !syncToken.isEmpty {
-                    req.setValue("Bearer \(syncToken)", forHTTPHeaderField: "Authorization")
+                if !requestedToken.isEmpty {
+                    req.setValue("Bearer \(requestedToken)", forHTTPHeaderField: "Authorization")
                 }
                 let (data, response) = try await URLSession.shared.data(for: req)
+                guard requestedRevision == syncConfigurationRevision,
+                      requestedEndpoint == syncEndpoint,
+                      requestedToken == syncToken else { return }
                 if let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) {
-                    parseSnapshot(data: data)
-                    saveLocalSnapshot(data: data)
-                    lastError = nil
-                    lastUpdated = Date()
-                    return
+                    if parseSnapshot(data: data) {
+                        let widgetSnapshotSaved = saveLocalSnapshot(data: data)
+                        lastError = widgetSnapshotSaved
+                            ? nil
+                            : "Quota readings loaded, but widget sharing is unavailable." + sentenceGap
+                                + "Install the latest CodeCaps build and reopen the app."
+                        lastUpdated = hasDataSource ? Date() : nil
+                        return
+                    }
+                    failure = "The sync endpoint returned an invalid quota snapshot." + sentenceGap
+                        + "Check the endpoint response and try again."
+                } else {
+                    let status = (response as? HTTPURLResponse)?.statusCode
+                    failure = "The sync endpoint answered \(status.map(String.init) ?? "unexpectedly")." + sentenceGap
+                        + "Check the endpoint and token in Companion Settings."
                 }
-                let status = (response as? HTTPURLResponse)?.statusCode
-                failure = "The sync endpoint answered \(status.map(String.init) ?? "unexpectedly")." + sentenceGap
-                    + "Check the endpoint and token in Companion Settings."
             } catch {
+                guard requestedRevision == syncConfigurationRevision,
+                      requestedEndpoint == syncEndpoint,
+                      requestedToken == syncToken else { return }
                 failure = "Could not reach the sync endpoint." + sentenceGap
                     + error.localizedDescription
             }
@@ -605,15 +628,27 @@ public final class CompanionQuotaModel: ObservableObject {
         let skipReason: String?
     }
 
-    private func parseSnapshot(data: Data) {
+    @discardableResult
+    private func parseSnapshot(data: Data) -> Bool {
         guard let envelope = try? JSONDecoder().decode(WireEnvelope.self, from: data),
-              let rawWindows = envelope.windows, !rawWindows.isEmpty else { return }
+              let rawWindows = envelope.windows else { return false }
+
+        guard !rawWindows.isEmpty else {
+            items = []
+            hasDataSource = false
+            lastUpdated = nil
+            evaluateResets(newItems: [])
+            return true
+        }
         hasDataSource = true
 
         if let customMarks = envelope.customMarks, !customMarks.isEmpty {
             let dir = Self.customMarksDirectory
             let defaults = sharedDefaults
             for (key, mark) in customMarks {
+                guard !key.isEmpty,
+                      key.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }),
+                      ["png", "jpg", "jpeg", "svg", "webp"].contains(mark.ext.lowercased()) else { continue }
                 if let raw = Data(base64Encoded: mark.data) {
                     try? raw.write(to: dir.appendingPathComponent("\(key).\(mark.ext)"), options: .atomic)
                 }
@@ -698,6 +733,7 @@ public final class CompanionQuotaModel: ObservableObject {
         let sortedItems = sortPlatforms(newItems)
         evaluateResets(newItems: sortedItems)
         self.items = sortedItems
+        return true
     }
 
     private func buildPlatformSection(
@@ -1097,13 +1133,14 @@ public final class CompanionQuotaModel: ObservableObject {
         if let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: Self.appGroupId) {
             let sharedFile = container.appendingPathComponent("quota-windows.json")
             if let data = try? Data(contentsOf: sharedFile) {
-                parseSnapshot(data: data)
-                if self.lastUpdated == nil,
-                   let attrs = try? FileManager.default.attributesOfItem(atPath: sharedFile.path),
-                   let modDate = attrs[.modificationDate] as? Date {
-                    self.lastUpdated = modDate
+                if parseSnapshot(data: data) {
+                    if self.lastUpdated == nil,
+                       let attrs = try? FileManager.default.attributesOfItem(atPath: sharedFile.path),
+                       let modDate = attrs[.modificationDate] as? Date {
+                        self.lastUpdated = modDate
+                    }
+                    return
                 }
-                if !items.isEmpty { return }
             }
         }
 
@@ -1112,13 +1149,14 @@ public final class CompanionQuotaModel: ObservableObject {
             let localFile = appSupport.appendingPathComponent("CodeCaps/quota-windows.json")
             if FileManager.default.fileExists(atPath: localFile.path),
                let data = try? Data(contentsOf: localFile) {
-                parseSnapshot(data: data)
-                if self.lastUpdated == nil,
-                   let attrs = try? FileManager.default.attributesOfItem(atPath: localFile.path),
-                   let modDate = attrs[.modificationDate] as? Date {
-                    self.lastUpdated = modDate
+                if parseSnapshot(data: data) {
+                    if self.lastUpdated == nil,
+                       let attrs = try? FileManager.default.attributesOfItem(atPath: localFile.path),
+                       let modDate = attrs[.modificationDate] as? Date {
+                        self.lastUpdated = modDate
+                    }
+                    return
                 }
-                if !items.isEmpty { return }
             }
         }
 
@@ -1127,13 +1165,14 @@ public final class CompanionQuotaModel: ObservableObject {
             let cacheFile = caches.appendingPathComponent("quota-windows.json")
             if FileManager.default.fileExists(atPath: cacheFile.path),
                let data = try? Data(contentsOf: cacheFile) {
-                parseSnapshot(data: data)
-                if self.lastUpdated == nil,
-                   let attrs = try? FileManager.default.attributesOfItem(atPath: cacheFile.path),
-                   let modDate = attrs[.modificationDate] as? Date {
-                    self.lastUpdated = modDate
+                if parseSnapshot(data: data) {
+                    if self.lastUpdated == nil,
+                       let attrs = try? FileManager.default.attributesOfItem(atPath: cacheFile.path),
+                       let modDate = attrs[.modificationDate] as? Date {
+                        self.lastUpdated = modDate
+                    }
+                    return
                 }
-                if !items.isEmpty { return }
             }
         }
 
@@ -1144,13 +1183,14 @@ public final class CompanionQuotaModel: ObservableObject {
             let hostPath = "\(hostHome)/Library/Application Support/Usage Monitor/quota-windows.json"
             if FileManager.default.fileExists(atPath: hostPath),
                let data = try? Data(contentsOf: URL(fileURLWithPath: hostPath)) {
-                parseSnapshot(data: data)
-                if self.lastUpdated == nil,
-                   let attrs = try? FileManager.default.attributesOfItem(atPath: hostPath),
-                   let modDate = attrs[.modificationDate] as? Date {
-                    self.lastUpdated = modDate
+                if parseSnapshot(data: data) {
+                    if self.lastUpdated == nil,
+                       let attrs = try? FileManager.default.attributesOfItem(atPath: hostPath),
+                       let modDate = attrs[.modificationDate] as? Date {
+                        self.lastUpdated = modDate
+                    }
+                    return
                 }
-                if !items.isEmpty { return }
             }
         }
         #endif
@@ -1159,13 +1199,14 @@ public final class CompanionQuotaModel: ObservableObject {
         let fallbackPath = ("~/Library/Application Support/Usage Monitor/quota-windows.json" as NSString).expandingTildeInPath
         if FileManager.default.fileExists(atPath: fallbackPath),
            let data = try? Data(contentsOf: URL(fileURLWithPath: fallbackPath)) {
-            parseSnapshot(data: data)
-            if self.lastUpdated == nil,
-               let attrs = try? FileManager.default.attributesOfItem(atPath: fallbackPath),
-               let modDate = attrs[.modificationDate] as? Date {
-                self.lastUpdated = modDate
+            if parseSnapshot(data: data) {
+                if self.lastUpdated == nil,
+                   let attrs = try? FileManager.default.attributesOfItem(atPath: fallbackPath),
+                   let modDate = attrs[.modificationDate] as? Date {
+                    self.lastUpdated = modDate
+                }
+                return
             }
-            if !items.isEmpty { return }
         }
 
         if items.isEmpty {
@@ -1175,25 +1216,50 @@ public final class CompanionQuotaModel: ObservableObject {
 
     /// Persists the latest fetched snapshot to local storage so future launches
     /// immediately have quota data even before a network request completes.
-    private func saveLocalSnapshot(data: Data) {
-        // 1. Shared App Group container if available
+    @discardableResult
+    private func saveLocalSnapshot(data: Data) -> Bool {
+        var sharedSnapshotSaved = false
+        // Widgets cannot read the app's private fallback directories.  Report
+        // a missing or unwritable group container instead of silently making
+        // the readings look shared when the signed app lacks this capability.
         if let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: Self.appGroupId) {
             let sharedFile = container.appendingPathComponent("quota-windows.json")
-            try? data.write(to: sharedFile, options: .atomic)
+            do {
+                try data.write(to: sharedFile, options: .atomic)
+                sharedSnapshotSaved = true
+            } catch {
+                NSLog("CodeCaps could not write widget snapshot to app group %@: %@", Self.appGroupId, error.localizedDescription)
+            }
+        } else {
+            NSLog("CodeCaps has no container for widget app group %@; widget readings will remain unavailable until signing is fixed.", Self.appGroupId)
         }
 
         // 2. Local sandbox Application Support directory
         if let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
             let dir = appSupport.appendingPathComponent("CodeCaps", isDirectory: true)
-            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             let localFile = dir.appendingPathComponent("quota-windows.json")
-            try? data.write(to: localFile, options: .atomic)
+            do {
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                try data.write(to: localFile, options: .atomic)
+            } catch {
+                NSLog("CodeCaps could not cache quota snapshot in Application Support: %@", error.localizedDescription)
+            }
         }
 
         // 3. Local sandbox Caches directory
         if let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first {
             let cacheFile = caches.appendingPathComponent("quota-windows.json")
-            try? data.write(to: cacheFile, options: .atomic)
+            do {
+                try data.write(to: cacheFile, options: .atomic)
+            } catch {
+                NSLog("CodeCaps could not cache quota snapshot in Caches: %@", error.localizedDescription)
+            }
         }
+        #if canImport(WidgetKit)
+        if sharedSnapshotSaved {
+            WidgetCenter.shared.reloadAllTimelines()
+        }
+        #endif
+        return sharedSnapshotSaved
     }
 }
