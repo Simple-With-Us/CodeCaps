@@ -399,6 +399,319 @@ final class ResetAlarmTrackerTests: XCTestCase {
                                              weekResetAt: weekEnd + hour, week: 50), now: woke).isEmpty)
     }
 
+    // MARK: - Vendor restores that do not land at 100%
+
+    /// On 2026-10-04 both Cursor and Grok Bot had their quota restored
+    /// mid-cycle and neither rang.  Reproduced here from the numbers in the
+    /// live tracker state: Cursor's included plan went 15.08% to 89.02% and
+    /// Grok Bot's weekly went 52.45% to 91.96%, in both cases with the period
+    /// end left exactly where it was.
+    ///
+    /// The old rule only fired when a restore landed at 95% or above, so a
+    /// vendor that gives back a partial allowance looked like ordinary drift.
+    /// A fixed-period window cannot regain quota inside its own period, so a
+    /// large rise is the signal and the level it lands at is not.
+    func testAVendorRestoreBelow95PercentIsDetected() {
+        var tracker = ResetAlarmTracker()
+        // Cursor: a 30-day billing cycle, thirteen days left when it was restored.
+        let cursorEnd = t0 + 13 * day
+        _ = tracker.process(
+            [reading("plan", period: 30 * day, resetAt: cursorEnd, remaining: 15.08, observedAt: t0, provider: "cursor")],
+            now: t0)
+
+        let cursorLater = t0 + 4 * hour
+        let cursorEvents = tracker.process(
+            [reading("plan", period: 30 * day, resetAt: cursorEnd, remaining: 89.02, observedAt: cursorLater, provider: "cursor")],
+            now: cursorLater)
+        XCTAssertEqual(cursorEvents.map(\.windowId), ["plan"])
+        XCTAssertEqual(cursorEvents.first?.isVendorReset, true, "A mid-cycle restore is a vendor reset.")
+    }
+
+    func testAPartialRestoreOfEverySizeIsDetected() {
+        // 56.45% to 91.96% is a 35-point rise that never reaches 95%.
+        var tracker = ResetAlarmTracker()
+        let weekEnd = t0 + 5 * day
+        _ = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: weekEnd, remaining: 56.45, observedAt: t0, provider: "grok-bot")],
+            now: t0)
+
+        let later = t0 + 3 * hour
+        let events = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: weekEnd, remaining: 91.96, observedAt: later, provider: "grok-bot")],
+            now: later)
+        XCTAssertEqual(events.map(\.windowId), ["weekly"])
+        XCTAssertEqual(events.first?.isVendorReset, true)
+    }
+
+    /// A rise is only new evidence when the period end holds still.  When the
+    /// end moves too, the earlier rule already calls it an early reset — a
+    /// provider resetting a limit early moves its reset time and the quota
+    /// climbs — so this rule adds nothing there and must not change it.
+    func testARiseWhosePeriodEndAlsoMovesIsStillAnEarlyReset() {
+        var tracker = ResetAlarmTracker()
+        let end = t0 + 5 * day
+        _ = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end, remaining: 56.45, observedAt: t0, provider: "grok-bot")],
+            now: t0)
+
+        let later = t0 + 3 * hour
+        let events = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end + 3 * hour, remaining: 91.96, observedAt: later, provider: "grok-bot")],
+            now: later)
+        XCTAssertEqual(events.map(\.windowId), ["weekly"], "A moved period end is an early reset.")
+    }
+
+    /// A large rise inside the drift tolerance is still the end holding still:
+    /// a provider recomputing "now plus the seconds left" jitters by seconds.
+    func testAHandedBackQuotaIsDetectedDespiteResetTimeJitter() {
+        var tracker = ResetAlarmTracker()
+        let end = t0 + 5 * day
+        _ = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end, remaining: 15.0, observedAt: t0, provider: "grok-bot")],
+            now: t0)
+        let later = t0 + hour
+        let events = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end + 60, remaining: 89.0, observedAt: later, provider: "grok-bot")],
+            now: later)
+        XCTAssertEqual(events.map(\.windowId), ["weekly"])
+        XCTAssertEqual(events.first?.isVendorReset, true)
+    }
+
+    /// Small drift is still drift, not a restore.
+    func testASmallMidWindowRiseIsNotAReset() {
+        var tracker = ResetAlarmTracker()
+        let end = t0 + 5 * day
+        _ = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end, remaining: 88.0, observedAt: t0, provider: "grok-bot")],
+            now: t0)
+        let later = t0 + 20 * 60
+        XCTAssertTrue(tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end, remaining: 91.0, observedAt: later, provider: "grok-bot")],
+            now: later).isEmpty)
+    }
+
+    /// Found in review on PR #153: a rolling window at the app's real 300s
+    /// refresh cadence slid its period end five minutes per poll, which sat
+    /// inside the old fixed 15-minute tolerance.  So a rolling window whose
+    /// usage aged out by 30 points or more satisfied both halves of the rule
+    /// and was announced as a vendor reset.
+    ///
+    /// The harm went further than a wrong notification: a detected reset
+    /// overwrites the low-water mark, which is the only record of how close the
+    /// window got, so the genuine near-cap alarm at the next period end would
+    /// have been silenced.
+    func testARollingWindowThatSlidesItsEndEveryRefreshIsNotAVendorRestore() {
+        var tracker = ResetAlarmTracker()
+        let end = t0 + 5 * day
+        // Two quiet polls, five minutes apart, each sliding the end five minutes
+        // forward — a reader reporting "resets in N seconds" recomputed from the
+        // current time.  Then one poll sees a 35-point rise as a burst of usage
+        // ages out.  35 clears the 30-point bar, so only the "end held still"
+        // half of the rule stands between this and a bogus vendor reset.
+        _ = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end, remaining: 15.0, observedAt: t0, provider: "grok-bot")],
+            now: t0)
+        let poll1 = t0 + 5 * 60
+        _ = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end + 5 * 60, remaining: 15.0, observedAt: poll1, provider: "grok-bot")],
+            now: poll1)
+        let poll2 = t0 + 10 * 60
+        let events = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end + 10 * 60, remaining: 50.0, observedAt: poll2, provider: "grok-bot")],
+            now: poll2)
+        XCTAssertTrue(events.isEmpty, "A period end that slides with the clock is rolling, not a restore.")
+
+        // And the low-water mark survives, so the near-cap alarm can still fire.
+        let key = ResetAlarmTracker.windowKey(scope: "local", providerId: "grok-bot", windowId: "weekly")
+        XCTAssertEqual(tracker.state.windows[key]?.minimumRemaining, 15.0)
+    }
+
+    /// A real vendor restore is still detected at every refresh cadence.
+    /// Found in review on PR #153: bounding the tolerance by the poll gap meant
+    /// a held end was judged more strictly the more often the owner refreshed,
+    /// so the same restore could fire at a slow cadence and be dropped at a
+    /// fast one.  "Held still" is now a flat bound, which makes an end that did
+    /// not move classify identically whether the gap was 30 seconds or an hour.
+    ///
+    /// The slide test that backs it up is deliberately a ratio — that is the
+    /// only way to recognise a sliding end at all, and it necessarily compares
+    /// against elapsed time.  What is guaranteed here is the guarantee that
+    /// matters: a genuine restore is never dropped because of refresh timing.
+    func testARealRestoreIsDetectedAtEveryRefreshCadence() {
+        for gap in [30.0, 300.0, 3_600.0] {
+            var tracker = ResetAlarmTracker()
+            let end = t0 + 5 * day
+            _ = tracker.process(
+                [reading("weekly", period: 7 * day, resetAt: end, remaining: 15.0, observedAt: t0, provider: "grok-bot")],
+                now: t0)
+            let later = t0 + gap
+            let events = tracker.process(
+                [reading("weekly", period: 7 * day, resetAt: end, remaining: 89.0, observedAt: later, provider: "grok-bot")],
+                now: later)
+            XCTAssertEqual(events.map(\.windowId), ["weekly"], "Gap of \(Int(gap))s must still detect a restore.")
+            XCTAssertEqual(events.first?.isVendorReset, true, "Gap of \(Int(gap))s.")
+        }
+    }
+
+    /// A rolling window at the 30-second clock-timer cadence, where the slide
+    /// and the absolute floor are the same size.  Also found in review: a floor
+    /// pinned the bound above the slide at short gaps, and the manual Refresh
+    /// buttons plus the 30s `clockTimer` make those gaps ordinary.
+    func testARollingWindowAtTheThirtySecondCadenceIsNotAVendorRestore() {
+        var tracker = ResetAlarmTracker()
+        let end = t0 + 5 * day
+        _ = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end, remaining: 15.0, observedAt: t0, provider: "grok-bot")],
+            now: t0)
+        let later = t0 + 30
+        let events = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end + 30, remaining: 50.0, observedAt: later, provider: "grok-bot")],
+            now: later)
+        XCTAssertTrue(events.isEmpty, "A 30-second slide is still a slide.")
+
+        let key = ResetAlarmTracker.windowKey(scope: "local", providerId: "grok-bot", windowId: "weekly")
+        XCTAssertEqual(tracker.state.windows[key]?.minimumRemaining, 15.0)
+    }
+
+    /// `observedAt` is optional at the only production construction site, so an
+    /// unstamped provider arrives with no elapsed time to judge by.  With no
+    /// time gap there is no way to show the end slid, so a held end plus a
+    /// large rise is still a restore rather than a permanent silent miss.
+    func testAnUnstampedProviderStillDetectsARealRestore() {
+        var tracker = ResetAlarmTracker()
+        let end = t0 + 5 * day
+        _ = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end, remaining: 15.0, observedAt: nil, provider: "grok-bot")],
+            now: t0)
+        let later = t0 + 300
+        let events = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end, remaining: 89.0, observedAt: nil, provider: "grok-bot")],
+            now: later)
+        XCTAssertEqual(events.map(\.windowId), ["weekly"])
+        XCTAssertEqual(events.first?.isVendorReset, true)
+    }
+
+    /// Third review on PR #153.  `window.lastObservedAt` is only written when a
+    /// reading carries a stamp, and the iOS companion sends `observedAt: nil`
+    /// on every observation — so `elapsed` is permanently zero there and the
+    /// slide test never engaged.  An unstamped rolling reader could slide up to
+    /// the whole drift tolerance per poll and still read as held still.
+    func testAnUnstampedProviderThatSlidesItsEndIsNotAVendorRestore() {
+        var tracker = ResetAlarmTracker()
+        let end = t0 + 5 * day
+        _ = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end, remaining: 15.0, observedAt: nil, provider: "grok-bot")],
+            now: t0)
+        let later = t0 + 300
+        // A 300s slide — inside the 15-minute drift tolerance, so without the
+        // unstamped branch this reads as a held end.
+        let events = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end + 300, remaining: 50.0, observedAt: nil, provider: "grok-bot")],
+            now: later)
+        XCTAssertTrue(events.isEmpty, "With no stamp there is no gap, so any movement disqualifies a restore.")
+
+        let key = ResetAlarmTracker.windowKey(scope: "local", providerId: "grok-bot", windowId: "weekly")
+        XCTAssertEqual(tracker.state.windows[key]?.minimumRemaining, 15.0)
+    }
+
+    /// A reading that stops reporting its period end says nothing about where
+    /// the end is.  Defaulting the missing value to zero read as "held still",
+    /// which let a 30-point rise fire a vendor reset and overwrite the
+    /// low-water mark the near-cap alarm depends on.
+    /// A reading that stops reporting its period end says nothing about where
+    /// the end is.  Defaulting the missing value to zero read as "held still",
+    /// which let a 30-point rise fire a vendor reset and overwrite the
+    /// low-water mark the near-cap alarm depends on.
+    func testAReadingThatOmitsItsResetTimeIsNotAVendorRestore() {
+        var tracker = ResetAlarmTracker()
+        let end = t0 + 5 * day
+        _ = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end, remaining: 15.0, observedAt: t0, provider: "grok-bot")],
+            now: t0)
+        let later = t0 + 5 * 60
+        let events = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: nil, remaining: 89.0, observedAt: later, provider: "grok-bot")],
+            now: later)
+        XCTAssertTrue(events.isEmpty, "Unknown period end is not a held period end.")
+
+        let key = ResetAlarmTracker.windowKey(scope: "local", providerId: "grok-bot", windowId: "weekly")
+        XCTAssertEqual(tracker.state.windows[key]?.minimumRemaining, 15.0)
+    }
+
+    /// Fourth review on PR #153.  `lastObservedAt` was only written on a
+    /// stamped reading and never cleared, so a provider that started sending
+    /// `observedAt: nil` left a stale anchor behind.  The gap below then spanned
+    /// every poll since the last stamp — 900s here — while the end had only
+    /// moved 300s across those polls, so 600 >= 900 failed and a sliding end
+    /// was read as held still.  A 35-point rise then announced a vendor reset
+    /// and destroyed the low-water mark.
+    func testAProviderThatStopsStampingMidStreamIsNotAVendorRestore() {
+        var tracker = ResetAlarmTracker()
+        let end = t0 + 5 * day
+        // One stamped reading, then the stamps stop arriving.
+        _ = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end, remaining: 15.0, observedAt: t0, provider: "grok-bot")],
+            now: t0)
+        // The end creeps by only 100s a poll while 300s of real time passes.
+        for (offset, moved) in [(300.0, 100.0), (600.0, 200.0)] {
+            _ = tracker.process(
+                [reading("weekly", period: 7 * day, resetAt: end.addingTimeInterval(moved),
+                         remaining: 15.0, observedAt: nil, provider: "grok-bot")],
+                now: t0 + offset)
+        }
+        let later = t0 + 900
+        let events = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end + 300, remaining: 50.0,
+                     observedAt: nil, provider: "grok-bot")],
+            now: later)
+        XCTAssertTrue(events.isEmpty, "A stale stamp anchor must not excuse a sliding period end.")
+
+        let key = ResetAlarmTracker.windowKey(scope: "local", providerId: "grok-bot", windowId: "weekly")
+        XCTAssertEqual(tracker.state.windows[key]?.minimumRemaining, 15.0)
+    }
+
+    /// Fifth review on PR #153.  The gate tested the raw `observation.observedAt`
+    /// while the gap came from `readAt`, whose stamp is nulled when it sits
+    /// more than 300s in the future.  So a skew-rejected stamp passed the gate,
+    /// `readAt` fell back to `now`, and a gap of zero concluded "definitely did
+    /// not slide" when the truth is "cannot tell" — the same failure mode as a
+    /// missing stamp, reached through a different door.
+    func testAStampRejectedAsClockSkewIsNotAVendorRestore() {
+        var tracker = ResetAlarmTracker()
+        let end = t0 + 5 * day
+        _ = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end, remaining: 15.0, observedAt: t0, provider: "grok-bot")],
+            now: t0)
+        // 400s ahead is past the 300s skew guard, so the tracker discards it.
+        // Both readings are processed at the same `now`, which is the clock
+        // having stepped backwards between polls.
+        let skewed = t0 + 400
+        let events = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end + 100, remaining: 50.0, observedAt: skewed, provider: "grok-bot")],
+            now: t0)
+        XCTAssertTrue(events.isEmpty, "A rejected stamp leaves no gap, so a move cannot be cleared.")
+
+        let key = ResetAlarmTracker.windowKey(scope: "local", providerId: "grok-bot", windowId: "weekly")
+        XCTAssertEqual(tracker.state.windows[key]?.minimumRemaining, 15.0)
+    }
+
+    /// One restore rings once, not once per refresh.
+    func testAVendorRestoreRingsOnlyOnce() {
+        var tracker = ResetAlarmTracker()
+        let end = t0 + 5 * day
+        _ = tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end, remaining: 15.0, observedAt: t0, provider: "grok-bot")],
+            now: t0)
+        let first = t0 + hour
+        XCTAssertEqual(tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end, remaining: 89.0, observedAt: first, provider: "grok-bot")],
+            now: first).count, 1)
+        let second = t0 + 2 * hour
+        XCTAssertTrue(tracker.process(
+            [reading("weekly", period: 7 * day, resetAt: end, remaining: 87.0, observedAt: second, provider: "grok-bot")],
+            now: second).isEmpty)
+    }
+
     func testAnEarlyResetByTheProviderStillCounts() {
         // A provider that resets a limit early moves the reset a whole period.
         var tracker = ResetAlarmTracker()

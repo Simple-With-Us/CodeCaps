@@ -540,3 +540,101 @@ Board 42ae688ab3b84d9aa65e445aab072a15.  Closes #37.
   `ImageRenderer` harness, not committed) rather than guessing at row counts,
   then `swift test` (671 tests, 0 failures) and `xcodebuild` of both
   `CodeCapsWidgets` and `CodeCapsWidgetsMac`.
+
+## 2026-10-04 — Vendor Restores Below 95% Are Now Detected [MINIMAX, in progress]
+
+- Board: `aa678b48`.  Branch: `mm/reset-detect-vendor-restore`.
+  Worktree: `/Users/jay/apps/codecaps-mm-widgets`.
+- Owner reported Cursor and Grok Bot were reset and that the system should
+  have noticed.  It did not.  Confirmed from the live tracker state persisted
+  in `com.jays.agent-bar.mac`: `local|cursor|local-mac:cursor:plan` moved
+  `minimumRemaining` 15.08 to `lastRemaining` 89.02 and
+  `local|grok-bot|local-mac:grok-bot:weekly` moved 52.45 to 91.96, both with
+  `periodResetAt` unchanged (813954746 and 812918119), and neither key appears
+  in `recentFires`.  Both period ends were days in the future, so the
+  end-of-period path could not apply either.
+- Root cause was a single rule in `ResetAlarmTracker.advance`: the mid-window
+  branch fired only when the quota jumped to 99.5% or above, or from under 80%
+  to over 95%.  Cursor came back at 89% and Grok Bot at 92%, so both fell
+  through the gap between those bars and were absorbed as ordinary drift.
+- The signal is the size of the rise, not the level it lands at: a
+  fixed-period window cannot regain quota inside its own period.  A rise of at
+  least `ResetAlarmPolicy.vendorRestoreRise` (30 points) against a period end
+  that held still is a vendor handing quota back.
+- Kody's review on PR #153 caught that "held still" was initially tested with
+  the fixed 15-minute `resetDriftTolerance`, which does not exclude a rolling
+  window at the app's real 300-second refresh: a reader reporting "resets in N
+  seconds" recomputes it from the current time, so the end slides about five
+  minutes per poll, which sat comfortably inside fifteen.  The harm went past
+  a wrong notification — a detected reset overwrites `minimumRemaining`, the
+  only record of how close the window got, so the genuine near-cap alarm at
+  the next period end would have been silenced.  The bound now sits *below*
+  that slide: `max(periodHoldFloor, min(resetDriftTolerance, elapsed / 2))`,
+  where the floor covers sub-minute "now plus seconds left" recomputation.
+  Confirmed by restoring the old tolerance and watching the regression test
+  report the low-water mark rewritten from 15.0 to 50.0.
+- Kody's second review found the replacement was still wrong twice over, both
+  correct.  The 90s floor sat *above* the slide at short gaps, and short gaps
+  are ordinary here: the manual Refresh buttons and the 30s `clockTimer` both
+  produce them.  Separately, `observedAt` is optional at the only production
+  construction site, so an unstamped provider collapsed `elapsed` to zero and
+  would be pinned at the floor forever.  Worst of all the bound was a function
+  of the poll gap, so the same restore could fire at a slow cadence and be
+  dropped at a fast one — a property of the owner's refresh habit, not of
+  anything the provider said.
+- Replaced it with the decoupled form Kody proposed: "held still" is a flat
+  `resetDriftTolerance`, and a separate conjunct asks whether the end advanced
+  in step with the clock (`endMoved * 2 >= elapsed`).  A held end is therefore
+  classified identically at any cadence, and the floor is gone entirely.
+  Three tests cover the holes: a 30-second sliding window stays quiet and keeps
+  its low-water mark, a real restore is detected at 30s/300s/1h gaps, and an
+  unstamped provider still detects a genuine restore.  Reinstating the previous
+  version makes the 30-second test fail with the low-water mark rewritten from
+  15.0 to 50.0.
+- Kody's third review found two more, also correct, and both now fixed.  A
+  reading that omits its period end was defaulting `endMoved` to zero, which
+  read as "held still"; unknown is not held, so a nil `resetAt` no longer
+  qualifies.  And `window.lastObservedAt` is only written when a reading
+  carries a stamp, while the iOS companion sends `observedAt: nil` on every
+  observation — so on iOS `elapsed` was permanently zero, the slide test never
+  engaged, and a rolling reader could slide up to the full 15-minute tolerance
+  per poll and still look held.  An unstamped provider now treats any movement
+  in its period end as disqualifying, which leaves only a bit-identical end as
+  evidence of a real restore.  Verified by reverting each fix on its own: the
+  nil-reset case rewrites the low-water mark 15.0 to 89.0 and the unstamped
+  slide case 15.0 to 50.0.
+- Kody's fourth review found a mixed stamped/unstamped sequence, also correct.
+  `window.lastObservedAt` was only written on a stamped reading and never
+  cleared, so a provider that began sending `observedAt: nil` left a stale
+  anchor.  The gap then spanned every poll since the last stamp — 900s in the
+  test — while the end had only moved 300s across those polls, so `600 >= 900`
+  failed, `slidWithTheClock` came back false and `periodEndHeld` true, and a
+  35-point rise announced a vendor reset and destroyed the low-water mark.  The
+  fix is to assign `lastObservedAt` unconditionally so it means "the stamp
+  carried by the previous reading" and is nil when that reading was unstamped,
+  and to require the current reading to be stamped before trusting the gap.
+  Reverting fails the new test and reports 15.0 to 50.0.
+- Kody's fifth review caught the same failure through a different door: the
+  gate tested the raw `observation.observedAt` while the gap came from
+  `readAt`, whose stamp is nulled past the 300-second skew guard.  A rejected
+  stamp therefore passed the gate, `readAt` fell back to `now`, and a gap of
+  zero concluded "definitely did not slide" when the truth is "cannot tell".
+  The gate now tests the filtered local `observedAt`, so a skew-rejected stamp
+  takes the conservative branch.  Reverting reports 15.0 to 50.0 again.
+- 685 tests across both bundles, 0 failures.
+- Two tests were written first and confirmed failing against the old rule, from
+  the real observed numbers, then made to pass.  Also pinned: a small
+  mid-window rise is still drift, a restore rings once and not once per
+  refresh, a restore is still detected when the reset time jitters inside the
+  drift tolerance, and a rise that moves the period end remains an early reset
+  under the pre-existing rule rather than being reclassified.
+- 41 `ResetAlarmTrackerTests` pass, full suite 677 with 0 failures.  The
+  notification wording already existed and needs no change: "Vendor Reset:
+  Cursor" with "Quota restored mid-cycle, ready to use again."
+- Known limit, stated rather than hidden: the tracker has already absorbed
+  89.02% and 91.96% as ordinary readings, so the reset that already slipped
+  through cannot be recovered by this change.  It catches the next one.
+- `Sources/CodeCaps/UsageHistoryViews.swift:85` carries the same too-strict
+  `>= 98.0` vendor-reset annotation for the Glance history chart, so that chart
+  will not mark these points either.  Left untouched: it is claimed by CODEX in
+  PR #142, and flagged to them on `#codecaps` instead.
