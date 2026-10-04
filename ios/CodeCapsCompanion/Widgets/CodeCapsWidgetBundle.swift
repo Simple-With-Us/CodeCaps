@@ -19,14 +19,18 @@ struct CodeCapsOverviewWidget: Widget {
     let kind: String = "CodeCapsOverviewWidget"
 
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: kind, provider: CodeCapsTimelineProvider()) { entry in
+        AppIntentConfiguration(
+            kind: kind,
+            intent: SelectQuotaIntent.self,
+            provider: CodeCapsIntentProvider()
+        ) { entry in
             OverviewWidgetEntryView(entry: entry)
                 .containerBackground(for: .widget) {
                     WidgetColors.background
                 }
         }
         .configurationDisplayName("AI Subscription Overview")
-        .description("Monitor quotas, remaining percentages, and reset countdowns across your active AI subscription plans.")
+        .description("Monitor quotas, remaining percentages, and reset countdowns across your AI subscription plans. Edit to pick a plan, choose one or two plans per row, and pick which window stands in.")
         .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
     }
 }
@@ -38,13 +42,13 @@ struct OverviewWidgetEntryView: View {
     var body: some View {
         switch family {
         case .systemSmall:
-            OverviewSmallView(entry: entry)
+            OverviewSmallView(entry: entry, pick: entry.windowPick)
         case .systemMedium:
-            OverviewMediumView(entry: entry)
+            OverviewMediumView(entry: entry, pick: entry.windowPick, columns: entry.rowLayout.columns)
         case .systemLarge:
-            OverviewLargeView(entry: entry)
+            OverviewLargeView(entry: entry, pick: entry.windowPick, columns: entry.rowLayout.columns)
         default:
-            OverviewSmallView(entry: entry)
+            OverviewSmallView(entry: entry, pick: entry.windowPick)
         }
     }
 }
@@ -55,14 +59,18 @@ struct CodeCapsProviderWidget: Widget {
     let kind: String = "CodeCapsProviderWidget"
 
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: kind, provider: CodeCapsTimelineProvider()) { entry in
+        AppIntentConfiguration(
+            kind: kind,
+            intent: SelectQuotaIntent.self,
+            provider: CodeCapsIntentProvider()
+        ) { entry in
             ProviderFocusView(entry: entry)
                 .containerBackground(for: .widget) {
                     WidgetColors.background
                 }
         }
         .configurationDisplayName("AI Plan Focus")
-        .description("Track the AI subscription plan nearest to its quota cap with a circular progress gauge.")
+        .description("Track one AI subscription plan with a circular gauge. Edit to choose the plan and which of its windows the gauge shows.")
         .supportedFamilies([.systemSmall, .systemMedium])
     }
 }
@@ -74,14 +82,18 @@ struct CodeCapsAccessoryWidget: Widget {
     let kind: String = "CodeCapsAccessoryWidget"
 
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: kind, provider: CodeCapsTimelineProvider()) { entry in
+        AppIntentConfiguration(
+            kind: kind,
+            intent: SelectQuotaIntent.self,
+            provider: CodeCapsIntentProvider()
+        ) { entry in
             AccessoryView(entry: entry)
                 .containerBackground(for: .widget) {
                     Color.clear
                 }
         }
         .configurationDisplayName("Lock Screen Quota")
-        .description("Glance at active AI subscription quotas directly from your Lock Screen or StandBy.")
+        .description("Glance at active AI subscription quotas directly from your Lock Screen or StandBy. Edit to choose the plan.")
         .supportedFamilies([.accessoryCircular, .accessoryRectangular, .accessoryInline])
     }
 }

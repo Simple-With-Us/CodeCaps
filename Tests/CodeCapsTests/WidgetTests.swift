@@ -179,6 +179,121 @@ final class WidgetTests: XCTestCase {
         XCTAssertEqual(windows[1].remainingPercent, 42.0)
     }
 
+    // MARK: - Cadence Token & Reset Caption
+
+    /// The caption under a bar has to name its window, and a two-window plan
+    /// standing in for one bar is the case the owner called out as unclear.
+    func testShortCadenceTokens() {
+        XCTAssertEqual(shortCadence(cadence: "5-hour window", label: "5-hour window"), "5h")
+        XCTAssertEqual(shortCadence(cadence: "5h", label: "5h"), "5h")
+        XCTAssertEqual(shortCadence(cadence: "7-day window", label: "7-day window"), "7d")
+        XCTAssertEqual(shortCadence(cadence: "Weekly cap", label: "Weekly cap"), "7d")
+        XCTAssertEqual(shortCadence(cadence: "1w", label: "1w"), "7d")
+        XCTAssertEqual(shortCadence(cadence: "Daily cap", label: "Daily cap"), "1d")
+        // Cursor's real reading: an "Included plan" on a billing cycle.  The Mac
+        // app already renders this as 1m, so the two surfaces must agree.
+        XCTAssertEqual(shortCadence(cadence: "billing-cycle", label: "Included plan"), "1m")
+        XCTAssertEqual(shortCadence(cadence: "Monthly cap", label: "Monthly cap"), "1m")
+    }
+
+    func testResetCaptionUsesTwoLargestUnits() {
+        let now = Date()
+        XCTAssertEqual(resetCaption(resetAt: now.addingTimeInterval(2 * 86400 + 3 * 3600), now: now), "Resets in 2d 3h")
+        XCTAssertEqual(resetCaption(resetAt: now.addingTimeInterval(7200), now: now), "Resets in 2h")
+        // An unknown or already-elapsed reset says nothing rather than reading
+        // as "due", which would be a claim the provider never made.
+        XCTAssertEqual(resetCaption(resetAt: nil, now: now), "")
+        XCTAssertEqual(resetCaption(resetAt: now.addingTimeInterval(-60), now: now), "")
+    }
+
+    /// The pick that decides which window a single bar represents.
+    func testControllingWindowPrefersLeastRemaining() {
+        let windows = [
+            window("5h", percent: 100, hoursToReset: 3),
+            window("7d", percent: 1, hoursToReset: 44)
+        ]
+        XCTAssertEqual(controllingWindow(windows, .mostUrgent)?.id, "7d")
+        XCTAssertEqual(controllingWindow(windows, .resetsSoonest)?.id, "5h")
+        XCTAssertEqual(controllingWindow(windows, .mostHeadroom)?.id, "5h")
+    }
+
+    /// A window CodeCaps cannot see is not the urgent one.
+    func testControllingWindowNeverPicksMasked() {
+        let windows = [
+            window("5h", percent: 0, hoursToReset: 2, masked: true),
+            window("7d", percent: 40, hoursToReset: 40)
+        ]
+        XCTAssertEqual(controllingWindow(windows, .mostUrgent)?.id, "7d")
+    }
+
+    // MARK: - Edit Mode Exists
+
+    /// Regression guard for the owner's report that there was no way to choose
+    /// which quota a widget shows.  A `StaticConfiguration` has no parameters,
+    /// so its edit sheet is empty by construction; all three widgets must be
+    /// `AppIntentConfiguration` or the dropdowns disappear again.
+    func testEveryWidgetIsConfigurable() throws {
+        let bundle = try readSource(at: Self.repoRoot.appendingPathComponent("ios/CodeCapsCompanion/Widgets/CodeCapsWidgetBundle.swift"))
+        XCTAssertFalse(bundle.contains("StaticConfiguration"),
+                       "A StaticConfiguration cannot be configured, which is why the edit sheet was empty.")
+        let configurations = bundle.components(separatedBy: "AppIntentConfiguration").count - 1
+        XCTAssertEqual(configurations, 3, "All three widgets need an AppIntentConfiguration.")
+        XCTAssertTrue(bundle.contains("intent: SelectQuotaIntent.self"))
+    }
+
+    func testConfigurationIntentOffersPlanRowsAndWindowChoice() throws {
+        let intent = try readSource(at: Self.repoRoot.appendingPathComponent("ios/CodeCapsCompanion/Widgets/WidgetConfigurationIntent.swift"))
+        XCTAssertTrue(intent.contains("WidgetConfigurationIntent"))
+        XCTAssertTrue(intent.contains("var plan: WidgetPlanEntity?"))
+        XCTAssertTrue(intent.contains("var rowLayout: WidgetRowLayout"))
+        XCTAssertTrue(intent.contains("var windowPick: WidgetWindowPick"))
+        // The options have to be filled from the live snapshot, not a hardcoded
+        // list, or the picker offers plans the widget cannot show.
+        XCTAssertTrue(intent.contains("WidgetSnapshotStore.readSnapshot()"))
+    }
+
+    // MARK: - Copy
+
+    /// "Active" overclaims: a tracked plan can be exhausted or unused and still
+    /// be tracked.  The owner asked for "tracked" everywhere.
+    func testNoActivePlansCopyRemains() throws {
+        for relative in ["Widgets/WidgetViews.swift", "Widgets/WidgetPresentation.swift"] {
+            let source = try readSource(at: Self.repoRoot.appendingPathComponent("ios/CodeCapsCompanion/\(relative)"))
+            XCTAssertFalse(source.contains("Active Plans"), "\(relative) still says Active Plans")
+            XCTAssertFalse(source.contains("active plans"), "\(relative) still says active plans")
+        }
+        let views = try readSource(at: Self.repoRoot.appendingPathComponent("ios/CodeCapsCompanion/Widgets/WidgetViews.swift"))
+        XCTAssertTrue(views.contains("Tracked Plans"))
+        // The small size lost its plan count and its header countdown; both were
+        // numbers on screen with nothing to say which plan they described.
+        let smallView = views.components(separatedBy: "struct OverviewSmallView").last?
+            .components(separatedBy: "// MARK: - Overview Medium View").first ?? ""
+        XCTAssertFalse(smallView.contains("Plans)"), "The small widget still renders a plan count")
+    }
+
+    /// "Monthly fast requests" was preview data that leaked into the gallery
+    /// and told the owner nothing.  It described no real reading.
+    func testBogusPlaceholderSubtitleIsGone() throws {
+        let presentation = try readSource(at: Self.widgetPresentationURL)
+        XCTAssertFalse(presentation.contains("Monthly fast requests"))
+        // The Antigravity pools read as their own names so they fit a row.
+        XCTAssertTrue(presentation.contains("title: \"3rd-Party\""))
+    }
+
+    func testWindowCaptionRowNamesTheWindow() throws {
+        let rows = try readSource(at: Self.repoRoot.appendingPathComponent("ios/CodeCapsCompanion/Widgets/WidgetWindowRows.swift"))
+        XCTAssertTrue(rows.contains("struct WindowCaptionRow"))
+        XCTAssertTrue(rows.contains("struct PlanBarRow"))
+        XCTAssertTrue(rows.contains("struct PlanGrid"))
+        // The mark replaces the app name in the corner; the asset itself belongs
+        // to the owning seat, so this only asserts the view looks for it and
+        // degrades to nothing rather than a reserved gap.
+        XCTAssertTrue(rows.contains("codecaps-mark"))
+        let presentation = try readSource(at: Self.widgetPresentationURL)
+        XCTAssertTrue(presentation.contains("static func shortCadence"))
+        XCTAssertTrue(presentation.contains("static func resetCaption"))
+    }
+
     // MARK: - Helpers mirroring WidgetPresentation logic for test isolation
 
     private func formatPercent(_ percent: Double?, isMasked: Bool) -> String {
@@ -203,5 +318,71 @@ final class WidgetTests: XCTestCase {
             return "\(hours)h\(mins > 0 ? " \(mins)m" : "")"
         }
         return "\(minutes)m"
+    }
+
+    private func shortCadence(cadence: String, label: String) -> String {
+        let combined = "\(cadence) \(label)".lowercased()
+        if combined.contains("5h") || combined.contains("5-hour") || combined.contains("5 hour") || combined.contains("five_hour") { return "5h" }
+        if combined.contains("4h") || combined.contains("4-hour") || combined.contains("4 hour") || combined.contains("four_hour") { return "4h" }
+        if combined.contains("7d") || combined.contains("7-day") || combined.contains("7 day") || combined.contains("weekly") || combined.contains("1w") { return "7d" }
+        if combined.contains("daily") || combined.contains("1d") || combined.contains("24h") || combined.contains("24-hour") { return "1d" }
+        if combined.contains("month") || combined.contains("billing") || combined.contains("cycle") || combined.contains("30d") { return "1m" }
+        if combined.contains("year") || combined.contains("annual") || combined.contains("365") { return "1y" }
+        let first = label.trimmingCharacters(in: .whitespacesAndNewlines)
+            .components(separatedBy: " ")
+            .first ?? ""
+        return first.isEmpty ? "Quota" : first
+    }
+
+    private func resetCaption(resetAt: Date?, now: Date) -> String {
+        guard let resetAt else { return "" }
+        let countdown = formatCountdown(resetAt: resetAt, now: now)
+        guard !countdown.isEmpty, countdown != "due" else { return "" }
+        return "Resets in " + countdown
+    }
+
+    private struct FixtureWindow {
+        let id: String
+        let percent: Double?
+        let hoursToReset: Double
+        let masked: Bool
+    }
+
+    private enum FixtureWindowPick {
+        case mostUrgent
+        case resetsSoonest
+        case mostHeadroom
+    }
+
+    private func window(
+        _ id: String,
+        percent: Double?,
+        hoursToReset: Double,
+        masked: Bool = false
+    ) -> FixtureWindow {
+        FixtureWindow(id: id, percent: percent, hoursToReset: hoursToReset, masked: masked)
+    }
+
+    private func controllingWindow(
+        _ windows: [FixtureWindow],
+        _ pick: FixtureWindowPick
+    ) -> FixtureWindow? {
+        let visible = windows.filter { !$0.masked }
+        let pool = visible.isEmpty ? windows : visible
+        switch pick {
+        case .mostHeadroom:
+            return pool.max {
+                ($0.percent ?? 100, $0.hoursToReset) < ($1.percent ?? 100, $1.hoursToReset)
+            }
+        case .resetsSoonest:
+            return pool.min { $0.hoursToReset < $1.hoursToReset }
+        case .mostUrgent:
+            return pool.min {
+                let lhs = $0.percent ?? 100
+                let rhs = $1.percent ?? 100
+                if lhs != rhs { return lhs < rhs }
+                return $0.hoursToReset < $1.hoursToReset
+            }
+        }
     }
 }

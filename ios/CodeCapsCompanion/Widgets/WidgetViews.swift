@@ -227,10 +227,44 @@ struct WidgetEmptyStateView: View {
     }
 }
 
+// MARK: - Widget Header
+
+/// The app mark at top-left, with an optional trailing note on the right.
+///
+/// This replaces a teal dot plus the word "CodeCaps".  On the small size that
+/// word could not fit next to a countdown and wrapped to "CodeCa", and the
+/// countdown it crowded out belonged to whichever plan happened to sort first,
+/// so a number on screen had nothing to say which plan it described.
+struct WidgetHeaderView: View {
+    var markSize: CGFloat = 14
+    var trailing: String?
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 6) {
+            CodeCapsMarkView(size: markSize)
+            Spacer(minLength: 0)
+            if let trailing, !trailing.isEmpty {
+                Text(trailing)
+                    .font(.system(size: markSize - 2, weight: .regular))
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+            }
+        }
+    }
+}
+
 // MARK: - Overview Small View
 
 struct OverviewSmallView: View {
     let entry: CodeCapsWidgetEntry
+    var pick: WidgetWindowPick = .mostUrgent
+
+    /// Three plans now that the app name, the plan count and the header
+    /// countdown gave their rows back.  The caption line is what made the
+    /// third row fit: it costs 9pt and says which window the number is.
+    private var displayed: [WidgetPlatformItem] {
+        Array(entry.platforms.prefix(3))
+    }
 
     var body: some View {
         if entry.platforms.isEmpty {
@@ -240,66 +274,28 @@ struct OverviewSmallView: View {
             )
             .padding(8)
         } else {
-            VStack(alignment: .leading, spacing: 6) {
-                // Header
-                HStack(spacing: 5) {
-                    Circle()
-                        .fill(WidgetColors.teal)
-                        .frame(width: 7, height: 7)
-                    Text("CodeCaps")
-                        .font(.system(size: 11, weight: .bold, design: .rounded))
-                        .foregroundColor(.secondary)
-                    Spacer()
-                    if let first = entry.platforms.first, !first.countdown().isEmpty {
-                        Text(first.countdown())
-                            .font(.system(size: 10, weight: .medium, design: .monospaced))
-                            .foregroundColor(.secondary)
-                    }
-                }
+            VStack(alignment: .leading, spacing: 7) {
+                WidgetHeaderView(markSize: 13)
 
                 Spacer(minLength: 0)
 
-                // Top 2 Platforms
-                let displayed = Array(entry.platforms.prefix(2))
-                VStack(spacing: 8) {
+                VStack(spacing: 6) {
                     ForEach(displayed) { platform in
-                        VStack(alignment: .leading, spacing: 3) {
-                            HStack(spacing: 5) {
-                                ProviderMarkView(providerKey: platform.providerKey, itemId: platform.id, size: 14)
-                                Text(platform.title)
-                                    .font(.system(size: 12, weight: .semibold))
-                                    .lineLimit(1)
-                                Spacer()
-                                Text(platform.displayPercent)
-                                    .font(.system(size: 12, weight: .bold, design: .rounded))
-                                    .foregroundColor(platform.statusColor)
-                            }
-                            MiniProgressBar(
-                                fraction: platform.progressFraction,
-                                color: platform.statusColor,
-                                elapsedFraction: platform.elapsedFraction,
-                                height: 3.5
-                            )
-                        }
+                        PlanBarRow(
+                            platform: platform,
+                            pick: pick,
+                            markSize: 13,
+                            titleFont: 11.5,
+                            captionFont: 8.5,
+                            percentFont: 11.5,
+                            barHeight: 3.5
+                        )
                     }
                 }
 
                 Spacer(minLength: 0)
-
-                // Footer
-                HStack {
-                    Text("\(entry.platforms.count) Plans")
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundColor(.secondary)
-                    Spacer()
-                    if let updated = entry.lastUpdated {
-                        Text(updated, style: .time)
-                            .font(.system(size: 9))
-                            .foregroundColor(.secondary)
-                    }
-                }
             }
-            .padding(12)
+            .padding(11)
         }
     }
 }
@@ -308,6 +304,17 @@ struct OverviewSmallView: View {
 
 struct OverviewMediumView: View {
     let entry: CodeCapsWidgetEntry
+    var pick: WidgetWindowPick = .mostUrgent
+    var columns: Int = 1
+
+    /// A row is now three lines tall (title, bar, caption), so one plan per row
+    /// gets fewer rows than two per row does.  Both counts stay inside the
+    /// medium widget's height with room to spare.
+    private var cap: Int { columns >= 2 ? 4 : 3 }
+
+    private var displayed: [WidgetPlatformItem] {
+        Array(entry.platforms.prefix(cap))
+    }
 
     var body: some View {
         if entry.platforms.isEmpty {
@@ -318,63 +325,27 @@ struct OverviewMediumView: View {
             .padding(14)
         } else {
             VStack(alignment: .leading, spacing: 8) {
-                // Header
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(WidgetColors.teal)
-                        .frame(width: 8, height: 8)
-                    Text("CodeCaps")
-                        .font(.system(size: 13, weight: .bold, design: .rounded))
-                    Text("·" + widgetSentenceGap + "AI Plan Quotas")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.secondary)
-                    Spacer()
-                    if let updated = entry.lastUpdated {
-                        Text(updated, style: .time)
-                            .font(.system(size: 11, weight: .regular))
-                            .foregroundColor(.secondary)
+                WidgetHeaderView(
+                    markSize: 15,
+                    trailing: entry.lastUpdated.map {
+                        DateFormatter.localizedString(from: $0, dateStyle: .none, timeStyle: .short)
                     }
-                }
+                )
 
-                Divider()
-                    .opacity(0.5)
+                Divider().opacity(0.5)
 
-            // 4 Items in 2x2 grid or list
-            let displayed = Array(entry.platforms.prefix(4))
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)], spacing: 10) {
-                ForEach(displayed) { platform in
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack(spacing: 5) {
-                            ProviderMarkView(providerKey: platform.providerKey, itemId: platform.id, size: 16)
-                            Text(platform.title)
-                                .font(.system(size: 12, weight: .semibold))
-                                .lineLimit(1)
-                            Spacer()
-                            Text(platform.displayPercent)
-                                .font(.system(size: 12, weight: .bold, design: .rounded))
-                                .foregroundColor(platform.statusColor)
-                        }
-                        MiniProgressBar(
-                            fraction: platform.progressFraction,
-                            color: platform.statusColor,
-                            elapsedFraction: platform.elapsedFraction,
-                            height: 4
-                        )
-                        HStack {
-                            Text(platform.subtitle)
-                                .font(.system(size: 9, weight: .regular))
-                                .foregroundColor(.secondary)
-                                .lineLimit(1)
-                            Spacer()
-                            if !platform.countdown().isEmpty {
-                                Text(platform.countdown())
-                                    .font(.system(size: 9, weight: .medium, design: .monospaced))
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                    }
-                }
-            }
+                PlanGrid(
+                    platforms: displayed,
+                    columns: columns,
+                    pick: pick,
+                    markSize: 15,
+                    titleFont: 12,
+                    captionFont: 9,
+                    percentFont: 12,
+                    barHeight: 4,
+                    spacing: 7,
+                    horizontalSpacing: 12
+                )
 
                 Spacer(minLength: 0)
             }
@@ -387,6 +358,25 @@ struct OverviewMediumView: View {
 
 struct OverviewLargeView: View {
     let entry: CodeCapsWidgetEntry
+    var pick: WidgetWindowPick = .mostUrgent
+    var columns: Int = 1
+
+    /// Seven rows one per row, twelve two per row.  The header dropped the app
+    /// name for the mark, which is what paid for the extra row.
+    private var cap: Int { columns >= 2 ? 12 : 7 }
+
+    private var displayed: [WidgetPlatformItem] {
+        Array(entry.platforms.prefix(cap))
+    }
+
+    /// "8 Tracked Plans" when every tracked plan fits, and "7 Of 8 Tracked" when
+    /// the size ran out of room.  Saying "8" above seven rows is the same class
+    /// of unexplained number the caption rows exist to remove.
+    private var countCaption: String {
+        let tracked = entry.platforms.count
+        guard tracked > displayed.count else { return "\(tracked) Tracked Plans" }
+        return "\(displayed.count) Of \(tracked) Tracked"
+    }
 
     var body: some View {
         if entry.platforms.isEmpty {
@@ -396,84 +386,28 @@ struct OverviewLargeView: View {
             )
             .padding(14)
         } else {
-            VStack(alignment: .leading, spacing: 8) {
-                // Header
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(WidgetColors.teal)
-                        .frame(width: 9, height: 9)
-                    Text("CodeCaps")
-                        .font(.system(size: 15, weight: .bold, design: .rounded))
-                    Spacer()
-                    Text("\(entry.platforms.count) Active Plans")
-                        .font(.system(size: 12, weight: .medium))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(WidgetColors.secondaryBackground)
-                        .clipShape(Capsule())
-                }
+            VStack(alignment: .leading, spacing: 7) {
+                WidgetHeaderView(
+                    markSize: 16,
+                    trailing: countCaption
+                )
 
-                Divider()
-                    .opacity(0.5)
+                Divider().opacity(0.5)
 
-                // Up to 6 platforms with allowance windows
-                let displayed = Array(entry.platforms.prefix(6))
-                VStack(spacing: 8) {
-                    ForEach(displayed) { platform in
-                        HStack(spacing: 10) {
-                            ProviderMarkView(providerKey: platform.providerKey, itemId: platform.id, size: 24)
-
-                            VStack(alignment: .leading, spacing: 2) {
-                                HStack {
-                                    Text(platform.title)
-                                        .font(.system(size: 13, weight: .semibold))
-                                    Spacer()
-                                    Text(platform.displayPercent)
-                                        .font(.system(size: 13, weight: .bold, design: .rounded))
-                                        .foregroundColor(platform.statusColor)
-                                }
-
-                                MiniProgressBar(
-                                    fraction: platform.progressFraction,
-                                    color: platform.statusColor,
-                                    elapsedFraction: platform.elapsedFraction,
-                                    height: 4
-                                )
-
-                                HStack {
-                                    Text(platform.subtitle)
-                                        .font(.system(size: 10))
-                                        .foregroundColor(.secondary)
-                                        .lineLimit(1)
-                                    Spacer()
-                                    if !platform.countdown().isEmpty {
-                                        Text("resets in " + platform.countdown())
-                                            .font(.system(size: 10, weight: .medium, design: .monospaced))
-                                            .foregroundColor(.secondary)
-                                    }
-                                }
-                            }
-                        }
-                        .padding(6)
-                        .background(WidgetColors.secondaryBackground.opacity(0.5))
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    }
-                }
+                PlanGrid(
+                    platforms: displayed,
+                    columns: columns,
+                    pick: pick,
+                    markSize: 16,
+                    titleFont: 12.5,
+                    captionFont: 9.5,
+                    percentFont: 12.5,
+                    barHeight: 4,
+                    spacing: 6,
+                    horizontalSpacing: 14
+                )
 
                 Spacer(minLength: 0)
-
-                // Footer
-                HStack {
-                    if let updated = entry.lastUpdated {
-                        Text("Updated " + DateFormatter.localizedString(from: updated, dateStyle: .none, timeStyle: .short))
-                            .font(.system(size: 10))
-                            .foregroundColor(.secondary)
-                    }
-                    Spacer()
-                    Text("CodeCaps AI Monitor")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(.secondary)
-                }
             }
             .padding(14)
         }
@@ -486,8 +420,49 @@ struct ProviderFocusView: View {
     let entry: CodeCapsWidgetEntry
     @Environment(\.widgetFamily) var family
 
+    /// The configured plan when one is set, otherwise the plan nearest its cap.
+    private var platform: WidgetPlatformItem? {
+        entry.platforms.first ?? entry.primaryPlatform
+    }
+
+    private var pick: WidgetWindowPick { entry.windowPick }
+
+    /// The window the gauge and caption describe, so the number on screen and
+    /// the caption under it always name the same window.
+    private var shownWindow: WidgetWindowItem? {
+        platform?.controllingWindow(pick)
+    }
+
+    private var shownPercent: Double? {
+        shownWindow?.remainingPercent ?? platform?.remainingPercent
+    }
+
+    private var shownMasked: Bool {
+        shownWindow?.isMasked ?? platform?.isMasked ?? false
+    }
+
+    private var fraction: Double {
+        guard let pct = shownPercent, !shownMasked else { return 0.0 }
+        return max(0.0, min(1.0, pct / 100.0))
+    }
+
+    private var statusColor: Color {
+        WidgetPresentation.statusColor(percent: shownPercent, isMasked: shownMasked)
+    }
+
+    private var captionToken: String {
+        if let window = shownWindow { return window.cadenceToken }
+        guard let platform else { return "" }
+        return WidgetPresentation.shortCadence(cadence: platform.subtitle, label: platform.title)
+    }
+
+    private var captionReset: String {
+        if let window = shownWindow { return window.resetCaption() }
+        return platform?.resetCaption() ?? ""
+    }
+
     var body: some View {
-        if let platform = entry.primaryPlatform ?? entry.platforms.first {
+        if let platform {
             switch family {
             case .systemMedium:
                 mediumFocusView(for: platform)
@@ -504,115 +479,97 @@ struct ProviderFocusView: View {
     }
 
     private func smallFocusView(for platform: WidgetPlatformItem) -> some View {
-        VStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 5) {
-                ProviderMarkView(providerKey: platform.providerKey, itemId: platform.id, size: 14)
+                CodeCapsMarkView(size: 12)
+                ProviderMarkView(providerKey: platform.providerKey, itemId: platform.id, size: 13)
                 Text(platform.title)
                     .font(.system(size: 12, weight: .semibold))
                     .lineLimit(1)
-                Spacer()
+                    .minimumScaleFactor(0.85)
+                Spacer(minLength: 0)
             }
 
             Spacer(minLength: 0)
 
-            // Circular Gauge
             ZStack {
                 Circle()
                     .stroke(Color.primary.opacity(0.12), lineWidth: 9)
                 Circle()
-                    .trim(from: 0, to: CGFloat(platform.progressFraction))
+                    .trim(from: 0, to: CGFloat(fraction))
                     .stroke(
-                        platform.statusColor,
+                        statusColor,
                         style: StrokeStyle(lineWidth: 9, lineCap: .round)
                     )
                     .rotationEffect(.degrees(-90))
 
                 VStack(spacing: 1) {
-                    Text(platform.displayPercent)
+                    Text(WidgetPresentation.displayPercent(percent: shownPercent, isMasked: shownMasked))
                         .font(.system(size: 18, weight: .bold, design: .rounded))
                         .foregroundColor(.primary)
-                    Text("remaining")
+                    Text("Remaining")
                         .font(.system(size: 8, weight: .medium))
                         .foregroundColor(.secondary)
                 }
             }
-            .frame(width: 72, height: 72)
+            .frame(width: 70, height: 70)
 
             Spacer(minLength: 0)
 
-            HStack {
-                if !platform.countdown().isEmpty {
-                    Text("Resets in " + platform.countdown())
-                        .font(.system(size: 9, weight: .medium, design: .monospaced))
-                        .foregroundColor(.secondary)
-                } else {
-                    Text(platform.subtitle)
-                        .font(.system(size: 9))
-                        .foregroundColor(.secondary)
-                }
-            }
+            WindowCaptionRow(token: captionToken, resetCaption: captionReset, font: 9)
         }
         .padding(12)
     }
 
     private func mediumFocusView(for platform: WidgetPlatformItem) -> some View {
-        HStack(spacing: 16) {
-            // Left: Gauge
-            VStack(spacing: 6) {
-                ZStack {
-                    Circle()
-                        .stroke(Color.primary.opacity(0.12), lineWidth: 10)
-                    Circle()
-                        .trim(from: 0, to: CGFloat(platform.progressFraction))
-                        .stroke(
-                            platform.statusColor,
-                            style: StrokeStyle(lineWidth: 10, lineCap: .round)
-                        )
-                        .rotationEffect(.degrees(-90))
+        VStack(alignment: .leading, spacing: 8) {
+            WidgetHeaderView(markSize: 15)
 
-                    VStack(spacing: 1) {
-                        ProviderMarkView(providerKey: platform.providerKey, itemId: platform.id, size: 20)
-                        Text(platform.displayPercent)
-                            .font(.system(size: 16, weight: .bold, design: .rounded))
+            HStack(alignment: .top, spacing: 14) {
+                // Left: Gauge
+                VStack(spacing: 6) {
+                    ZStack {
+                        Circle()
+                            .stroke(Color.primary.opacity(0.12), lineWidth: 10)
+                        Circle()
+                            .trim(from: 0, to: CGFloat(fraction))
+                            .stroke(
+                                statusColor,
+                                style: StrokeStyle(lineWidth: 10, lineCap: .round)
+                            )
+                            .rotationEffect(.degrees(-90))
+
+                        VStack(spacing: 1) {
+                            ProviderMarkView(providerKey: platform.providerKey, itemId: platform.id, size: 20)
+                            Text(WidgetPresentation.displayPercent(percent: shownPercent, isMasked: shownMasked))
+                                .font(.system(size: 16, weight: .bold, design: .rounded))
+                        }
                     }
+                    .frame(width: 80, height: 80)
+
+                    Text(platform.title)
+                        .font(.system(size: 12, weight: .bold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                 }
-                .frame(width: 80, height: 80)
+                .frame(width: 96)
 
-                Text(platform.title)
-                    .font(.system(size: 12, weight: .bold))
-                    .lineLimit(1)
-            }
-            .frame(width: 100)
-
-            // Right: Windows and details
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text(platform.subtitle)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(.secondary)
-                    Spacer()
-                    if !platform.countdown().isEmpty {
-                        Text("Reset " + platform.countdown())
-                            .font(.system(size: 10, weight: .medium, design: .monospaced))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(WidgetColors.secondaryBackground)
-                            .clipShape(Capsule())
-                    }
-                }
-
-                if platform.windows.isEmpty {
-                    Text("No individual window breakdown reported.")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                } else {
-                    VStack(spacing: 6) {
+                // Right: every window the plan reports, each with its own
+                // caption.  The old header repeated a single subtitle here,
+                // which for Cursor read "Monthly fast requests" — a phrase
+                // that came from preview data and described nothing the owner
+                // could act on.
+                VStack(alignment: .leading, spacing: 7) {
+                    if platform.windows.isEmpty {
+                        WindowCaptionRow(token: captionToken, resetCaption: captionReset, font: 9.5)
+                    } else {
                         ForEach(platform.windows) { win in
                             VStack(alignment: .leading, spacing: 2) {
-                                HStack {
+                                HStack(spacing: 5) {
                                     Text(win.label)
                                         .font(.system(size: 11, weight: .medium))
-                                    Spacer()
+                                        .lineLimit(1)
+                                    Spacer(minLength: 2)
                                     Text(win.displayPercent)
                                         .font(.system(size: 11, weight: .bold, design: .rounded))
                                         .foregroundColor(win.statusColor)
@@ -623,12 +580,17 @@ struct ProviderFocusView: View {
                                     elapsedFraction: win.elapsedFraction(),
                                     height: 3.5
                                 )
+                                WindowCaptionRow(
+                                    token: win.cadenceToken,
+                                    resetCaption: win.resetCaption(),
+                                    font: 9
+                                )
                             }
                         }
                     }
-                }
 
-                Spacer(minLength: 0)
+                    Spacer(minLength: 0)
+                }
             }
         }
         .padding(14)
@@ -641,8 +603,12 @@ struct AccessoryView: View {
     let entry: CodeCapsWidgetEntry
     @Environment(\.widgetFamily) var family
 
+    private var platform: WidgetPlatformItem? {
+        entry.platforms.first ?? entry.primaryPlatform
+    }
+
     var body: some View {
-        if let platform = entry.primaryPlatform ?? entry.platforms.first {
+        if let platform {
             switch family {
             case .accessoryCircular:
                 ZStack {
@@ -659,29 +625,27 @@ struct AccessoryView: View {
             case .accessoryRectangular:
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 4) {
+                        CodeCapsMarkView(size: 10)
                         Text(platform.title)
                             .font(.system(size: 12, weight: .bold))
-                        Spacer()
+                            .lineLimit(1)
+                        Spacer(minLength: 2)
                         Text(platform.displayPercent)
                             .font(.system(size: 12, weight: .bold, design: .rounded))
                     }
                     MiniProgressBar(fraction: platform.progressFraction, color: .primary, elapsedFraction: platform.elapsedFraction, height: 4)
-                    HStack {
-                        Text(platform.subtitle)
-                            .font(.system(size: 9))
-                        Spacer()
-                        if !platform.countdown().isEmpty {
-                            Text(platform.countdown())
-                                .font(.system(size: 9, design: .monospaced))
-                        }
-                    }
-                    .foregroundColor(.secondary)
+                    WindowCaptionRow(
+                        token: platform.controllingWindow(entry.windowPick)?.cadenceToken
+                            ?? WidgetPresentation.shortCadence(cadence: platform.subtitle, label: platform.title),
+                        resetCaption: platform.controllingWindow(entry.windowPick)?.resetCaption() ?? platform.resetCaption(),
+                        font: 9
+                    )
                 }
 
             case .accessoryInline:
                 let pct = platform.displayPercent
                 let cd = platform.countdown()
-                Text("\(platform.title): \(pct)\(cd.isEmpty ? "" : " · " + cd)")
+                Text("\(platform.title): \(pct)\(cd.isEmpty ? "" : " " + cd)")
 
             default:
                 Text("CodeCaps")

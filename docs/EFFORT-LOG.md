@@ -487,3 +487,44 @@ Board 42ae688ab3b84d9aa65e445aab072a15.  Closes #37.
 - UI expert reviewed the supplied notification screenshot and source at merged #134/#135.  Recommended quota percentage charts with 24-hour/7-day ranges, reset and missing-data breaks, and honest history availability.  This is a source-based design review, not a runtime visual audit.
 - Files reserved: ConsoleViews, UsageHistoryViews, GlanceViews, AppDelegate, ResetAlarmManager, SettingsViews, BurnRateMonitor, MonitorModel, AnomalyDetector, and associated tests.  Core history and app UI have separate writers.
 - App coordination moved to #codecaps (`C0C6NFR5QRJ`) through the existing websocket helper.  Widget release verification continues separately.  Provider/file refresh scheduling remains tracked by #137 / `4bcf84f1`.
+
+## 2026-10-04 — Widget Edit Mode, Caption Rows, And Mark Header [MINIMAX, in progress]
+
+- Board: `3ce4d5d1`.  Branch: `mm/widgets-layout-labels`.  Worktree: `/Users/jay/apps/codecaps-mm-widgets`.
+- Owner could not find any way to choose which quota a widget shows.  All three
+  widgets were `StaticConfiguration`, which has no parameters at all, so the
+  edit sheet was empty by construction rather than by bug.  All three are now
+  `AppIntentConfiguration` over a shared `SelectQuotaIntent` carrying a plan
+  picker, one-or-two-plans-per-row, and a window pick.  The plan options are
+  filled from the live shared snapshot so the picker cannot offer a plan the
+  widget is unable to render.
+- Answered the owner's question about how a single bar is chosen when a plan
+  reports two windows.  The rule is now explicit and selectable rather than an
+  incidental `min()`: closest to its cap (default, soonest reset breaking a
+  tie), resets soonest, or most remaining.  A masked window never wins, since
+  "cannot see this one" is not urgency.
+- Every quota bar on every size now carries a caption row naming its window:
+  cadence token on the left (`5h`, `7d`, `1d`, `1m`), `Resets in 12d 22m` on the
+  right, two largest units at most.  This is what removes "which window is
+  that?" — the old small-size header countdown described whichever plan sorted
+  first and said nothing about which.
+- The bullet plus the word "CodeCaps" is replaced by the `codecaps-mark` asset in
+  the top-left.  The word was wrapping to "CodeCa" on the small size.
+  `CodeCapsMarkView` resolves the asset by name and renders nothing when it is
+  absent, so the header never reserves a gap; the asset itself belongs to
+  `@AG` (board `bb2a8b26`) and was not touched here.
+- Small size: plan count, app name and header countdown removed, third plan
+  added with the reclaimed room.  Medium: `CodeCaps · AI Plan Quotas` header
+  removed, plans per row now an option.  Large: up to 7 rows one per row or 12
+  two per row.
+- Copy: "N Active Plans" is now "N Tracked Plans", or "7 Of 8 Tracked" when the
+  size runs out of rows, so the header count can never contradict the rows.
+  Antigravity pools read as "Gemini" and "3rd-Party".
+- "Monthly fast requests" was hardcoded placeholder data in
+  `WidgetPresentation.placeholders`, not a real reading.  Cursor's actual window
+  is "Included plan" on a billing cycle, which now renders as `1m` — the same
+  token the Mac app's `compactWindowName` already produces for it.
+- Verified by rasterising the real widget views at all three sizes (a throwaway
+  `ImageRenderer` harness, not committed) rather than guessing at row counts,
+  then `swift test` (671 tests, 0 failures) and `xcodebuild` of both
+  `CodeCapsWidgets` and `CodeCapsWidgetsMac`.

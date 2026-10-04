@@ -44,6 +44,16 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
         WidgetPresentation.formatCountdown(resetAt: resetAt, now: now)
     }
 
+    /// Compact cadence token for the caption under a bar: `5h`, `7d`, `1m`.
+    public var cadenceToken: String {
+        WidgetPresentation.shortCadence(cadence: cadence, label: label)
+    }
+
+    /// `Resets in 12d 22m`, or an empty string when the provider reports no reset.
+    public func resetCaption(now: Date = Date()) -> String {
+        WidgetPresentation.resetCaption(resetAt: resetAt, now: now)
+    }
+
     public func elapsedFraction(now: Date = Date()) -> Double? {
         guard let resetAt else { return nil }
         let token = cadence.isEmpty ? label : cadence
@@ -114,6 +124,10 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
         WidgetPresentation.formatCountdown(resetAt: resetAt, now: now)
     }
 
+    public func resetCaption(now: Date = Date()) -> String {
+        WidgetPresentation.resetCaption(resetAt: resetAt, now: now)
+    }
+
     /// Progress fraction in range 0.0...1.0 for gauges and progress bars.
     public var progressFraction: Double {
         if isMasked { return 0.0 }
@@ -123,6 +137,47 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
 
     public var elapsedFraction: Double? {
         windows.compactMap { $0.elapsedFraction() }.first
+    }
+
+    /// The single window that stands in for this plan when a row shows one bar.
+    ///
+    /// A plan often reports two windows (Claude Code has a 5-hour and a 7-day
+    /// cap), and a row is only wide enough for one bar.  The pick is explicit
+    /// rather than incidental so the same rule holds on every surface:
+    ///
+    /// - `.mostUrgent` — the window with the least left in it, because that is
+    ///   the one that will stop the owner working first.  Ties go to whichever
+    ///   resets sooner.  This is the default.
+    /// - `.resetsSoonest` — the window whose reset lands first, so the number
+    ///   moves soonest.
+    /// - `.longestRemaining` — the window with the most left, for a plan read
+    ///   as headroom.
+    ///
+    /// A masked window can never win `.mostUrgent`, since "we cannot see this
+    /// one" is not urgency.
+    public func controllingWindow(_ pick: WidgetWindowPick = .mostUrgent) -> WidgetWindowItem? {
+        guard !windows.isEmpty else { return nil }
+        let visible = windows.filter { !$0.isMasked }
+        let pool = visible.isEmpty ? windows : visible
+        switch pick {
+        case .mostHeadroom:
+            return pool.max {
+                ($0.remainingPercent ?? 100, $0.resetAt ?? .distantFuture)
+                    < ($1.remainingPercent ?? 100, $1.resetAt ?? .distantFuture)
+            }
+        case .resetsSoonest:
+            return pool.min {
+                ($0.resetAt ?? .distantFuture) < ($1.resetAt ?? .distantFuture)
+            }
+        case .mostUrgent:
+            return pool.min {
+                // Least remaining first; soonest reset breaks the tie.
+                let lhs = $0.remainingPercent ?? 100
+                let rhs = $1.remainingPercent ?? 100
+                if lhs != rhs { return lhs < rhs }
+                return ($0.resetAt ?? .distantFuture) < ($1.resetAt ?? .distantFuture)
+            }
+        }
     }
 }
 
@@ -189,6 +244,37 @@ public enum WidgetPresentation {
             return "\(hours)h\(mins > 0 ? " \(mins)m" : "")"
         }
         return "\(minutes)m"
+    }
+
+    /// `Resets in 12d 22m`.  Two largest units at most, so a caption never
+    /// grows long enough to crowd out the cadence token on the same line.
+    /// Empty when there is nothing honest to say — an unknown reset stays
+    /// blank rather than reading as "due".
+    public static func resetCaption(resetAt: Date?, now: Date = Date()) -> String {
+        guard let resetAt else { return "" }
+        let countdown = formatCountdown(resetAt: resetAt, now: now)
+        guard !countdown.isEmpty, countdown != "due" else { return "" }
+        return "Resets in " + countdown
+    }
+
+    /// Compact cadence token for the caption under a bar.  Numeric tokens only,
+    /// so a 5-hour window and a 7-day window read at the same weight and the
+    /// caption cannot wrap: `5h`, `7d`, `1d`, `1m`.
+    ///
+    /// A billing cycle is `1m`, which is what the Mac app's compact rows already
+    /// show for Cursor's "Included plan", so the two surfaces agree.
+    public static func shortCadence(cadence: String, label: String) -> String {
+        let combined = "\(cadence) \(label)".lowercased()
+        if combined.contains("5h") || combined.contains("5-hour") || combined.contains("5 hour") || combined.contains("five_hour") { return "5h" }
+        if combined.contains("4h") || combined.contains("4-hour") || combined.contains("4 hour") || combined.contains("four_hour") { return "4h" }
+        if combined.contains("7d") || combined.contains("7-day") || combined.contains("7 day") || combined.contains("weekly") || combined.contains("1w") { return "7d" }
+        if combined.contains("daily") || combined.contains("1d") || combined.contains("24h") || combined.contains("24-hour") { return "1d" }
+        if combined.contains("month") || combined.contains("billing") || combined.contains("cycle") || combined.contains("30d") { return "1m" }
+        if combined.contains("year") || combined.contains("annual") || combined.contains("365") { return "1y" }
+        let first = label.trimmingCharacters(in: .whitespacesAndNewlines)
+            .components(separatedBy: " ")
+            .first ?? ""
+        return first.isEmpty ? "Quota" : first
     }
 
     public static func parseDate(from string: String?) -> Date? {
@@ -322,7 +408,7 @@ public enum WidgetPresentation {
 
             if let item = consolidateAntigravityPool(
                 poolKey: "gemini",
-                title: "Antigravity · Gemini",
+                title: "Gemini",
                 windows: geminiWindows,
                 now: now
             ) {
@@ -331,7 +417,7 @@ public enum WidgetPresentation {
 
             if let item = consolidateAntigravityPool(
                 poolKey: "third-party",
-                title: "Antigravity · Third-Party",
+                title: "3rd-Party",
                 windows: thirdPartyWindows,
                 now: now
             ) {
@@ -492,7 +578,7 @@ public enum WidgetPresentation {
                 id: "anthropic",
                 providerKey: "anthropic",
                 title: "Claude Code",
-                subtitle: "5-hour & Weekly",
+                subtitle: "5h · 7d",
                 remainingPercent: 82.0,
                 resetAt: now.addingTimeInterval(3600 * 3 + 720),
                 isExhausted: false,
@@ -518,7 +604,7 @@ public enum WidgetPresentation {
                 id: "cursor",
                 providerKey: "cursor",
                 title: "Cursor",
-                subtitle: "Monthly fast requests",
+                subtitle: "Monthly",
                 remainingPercent: 45.0,
                 resetAt: now.addingTimeInterval(3600 * 24 * 12),
                 isExhausted: false,
@@ -537,7 +623,7 @@ public enum WidgetPresentation {
                 id: "minimax",
                 providerKey: "minimax",
                 title: "MiniMax",
-                subtitle: "Daily text & video quotas",
+                subtitle: "5h · 1d",
                 remainingPercent: 91.0,
                 resetAt: now.addingTimeInterval(3600 * 18),
                 isExhausted: false,
@@ -555,8 +641,8 @@ public enum WidgetPresentation {
             WidgetPlatformItem(
                 id: "antigravity-gemini",
                 providerKey: "google-antigravity",
-                title: "Antigravity",
-                subtitle: "Gemini Models",
+                title: "Gemini",
+                subtitle: "5h · 7d",
                 remainingPercent: 74.0,
                 resetAt: now.addingTimeInterval(3600 * 24 * 5),
                 isExhausted: false,
