@@ -102,7 +102,7 @@ final class LocalQuotaReaderTests: XCTestCase {
         )
 
         let result = await reader.read()
-        XCTAssertEqual(result.issues["anthropic"], ClaudeLoginState.needsPermission.issue)
+        XCTAssertEqual(result.issues["anthropic"], "This account needs you to sign in again.")
         XCTAssertEqual(result.issues["openai"], "Codex is not signed in locally.")
         XCTAssertEqual(result.issues["xai"], "Grok is not signed in locally.")
         XCTAssertFalse(result.issues.values.joined(separator: " ").contains("super-secret"))
