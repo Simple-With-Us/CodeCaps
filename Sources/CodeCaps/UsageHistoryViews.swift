@@ -28,6 +28,14 @@ struct UsageHistoryView: View {
     @State private var span: HistorySpan = .day
     @State private var samples: [AnomalyDetector.Sample] = []
 
+    init(model: MonitorModel, state: ConsoleState, row: DisplaySection) {
+        self.model = model
+        self.state = state
+        self.row = row
+        // Offscreen AppKit snapshots can draw before SwiftUI calls onAppear.
+        _samples = State(initialValue: model.historySamples())
+    }
+
     private var now: Date { model.now }
     private var start: Date { now.addingTimeInterval(-span.interval) }
     private var windowIds: Set<String> { Set(row.section.windows.map { $0.window.id }) }
@@ -107,6 +115,8 @@ struct UsageHistoryView: View {
                     ForEach(HistorySpan.allCases) { span in Text(span.rawValue).tag(span) }
                 }
                 .pickerStyle(.segmented)
+                .labelsHidden()
+                .accessibilityLabel("History Range")
                 .frame(width: 118)
             }
             if let focusedWindowId {

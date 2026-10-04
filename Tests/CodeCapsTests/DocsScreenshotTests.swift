@@ -31,7 +31,7 @@ final class DocsScreenshotTests: XCTestCase {
         return GlanceFixtures.png(of: popover, size: CGSize(width: Metrics.glanceWidth, height: height), dark: dark)
     }
 
-    private func console(page: ConsolePage, dark: Bool, selectedAlert: Bool = false) -> Data? {
+    private func console(page: ConsolePage, dark: Bool, selectedAlert: Bool = false) throws -> Data? {
         let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let historyURL = temporary.appendingPathComponent("history.jsonl")
         defer { try? FileManager.default.removeItem(at: temporary) }
@@ -40,12 +40,16 @@ final class DocsScreenshotTests: XCTestCase {
             let at = now.addingTimeInterval(Double(step - 12) * 600)
             return [
                 AnomalyDetector.Sample(providerKey: "anthropic", windowId: "claude-5h", observedAt: at,
-                                       remainingPercent: Double(85 - step * 4)),
+                                       remainingPercent: Double(85 - step * 6)),
                 AnomalyDetector.Sample(providerKey: "anthropic", windowId: "claude-7d", observedAt: at,
-                                       remainingPercent: Double(98 - step))
+                                       remainingPercent: 100 - Double(step) / 6),
+                AnomalyDetector.Sample(providerKey: "google-antigravity", windowId: "antigravity:gemini:5h",
+                                       observedAt: at, remainingPercent: Double(99 - step)),
+                AnomalyDetector.Sample(providerKey: "google-antigravity", windowId: "antigravity:gemini:weekly",
+                                       observedAt: at, remainingPercent: Double(76 - step))
             ]
         }
-        try? AnomalyDetector.SampleHistory(url: historyURL).append(samples)
+        try AnomalyDetector.SampleHistory(url: historyURL).append(samples)
         let alert = RunawayAlertRecord(timestamp: now.addingTimeInterval(-3_600), providerKey: "anthropic",
                                        providerLabel: "Claude", windowId: "claude-5h",
                                        windowLabel: "5-hour window", multiplier: 5.3,
@@ -58,6 +62,27 @@ final class DocsScreenshotTests: XCTestCase {
                                                                 historyURL: historyURL,
                                                                 alertHistory: selectedAlert ? [alert] : [])
         defer { defaults.removePersistentDomain(forName: suite) }
+        XCTAssertEqual(model.historySamples().count, samples.count,
+                       "the screenshot must use the saved local sample fixture")
+        if case .platform(let key) = page {
+            guard let row = model.displaySections.first(where: { $0.id == key }) else {
+                XCTFail("the screenshot platform must exist")
+                return nil
+            }
+            XCTAssertTrue(model.hasLocalHistorySource(for: row),
+                          "the screenshot platform must resolve to a local history source")
+            let windowIds = Set(row.section.windows.map { $0.window.id })
+            let plotted = model.historySamples().filter {
+                $0.providerKey == row.providerKey && windowIds.contains($0.windowId)
+            }
+            let readingsByWindow = Dictionary(grouping: plotted, by: \.windowId)
+            XCTAssertTrue(readingsByWindow.values.contains { $0.count >= 2 },
+                          "the screenshot platform needs two readings of the same window to draw a line")
+            if selectedAlert {
+                XCTAssertGreaterThanOrEqual(readingsByWindow[alert.windowId]?.count ?? 0, 2,
+                                            "the selected alert window needs its own visible history")
+            }
+        }
         let state = ConsoleState(defaults: defaults)
         state.page = page
         if selectedAlert {
@@ -78,12 +103,12 @@ final class DocsScreenshotTests: XCTestCase {
         try write(glance(view: .fromMac, dark: false), "glance-light.png", to: directory)
         try write(glance(view: .fromMac, dark: true), "glance-dark.png", to: directory)
         try write(glance(view: .fromFleet, dark: false), "glance-fleet.png", to: directory)
-        try write(console(page: .platform("anthropic"), dark: false), "console-light.png", to: directory)
-        try write(console(page: .platform("anthropic"), dark: true), "console-dark.png", to: directory)
-        try write(console(page: .platform("anthropic"), dark: false, selectedAlert: true),
+        try write(try console(page: .platform("anthropic"), dark: false), "console-light.png", to: directory)
+        try write(try console(page: .platform("anthropic"), dark: true), "console-dark.png", to: directory)
+        try write(try console(page: .platform("anthropic"), dark: false, selectedAlert: true),
                   "platform-alert-history.png", to: directory)
-        try write(console(page: .platform("google-antigravity:gemini"), dark: false),
+        try write(try console(page: .platform("google-antigravity:gemini"), dark: false),
                   "platform-antigravity.png", to: directory)
-        try write(console(page: .settingsSourcesFleet, dark: false), "settings-sources-fleet.png", to: directory)
+        try write(try console(page: .settingsSourcesFleet, dark: false), "settings-sources-fleet.png", to: directory)
     }
 }
