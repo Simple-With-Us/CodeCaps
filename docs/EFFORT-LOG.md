@@ -1,8 +1,18 @@
 # CodeCaps — Effort Log
 
-## 2026-10-04 — Glance header & footer marquee redesign, MiniMax video quarantine, and Runaway inspect button [AG, completed]
+## 2026-10-04 — Glance title breathing room, dynamic pacing highlights, PiP widget, and iOS companion polish [AG, in progress]
 
-Lane: `ag/glance-header-footer-redesign-and-video-quarantine`.  PR #151 (merged as `9b4f2d6`).  Board `bb2a8b26`, `e31de21f`.
+Lane: `ag/ui-glance-pacing-pip-ios-polish`.  Board `bb2a8b26`, `7175aba0`, `1ac04ba9`, `4be8a67a`, `4bcf84f1`.
+
+- Glance row metrics: adjusted `glanceRowTitleWidth` to 90pt (preventing Antigravity and Claude Code title truncation) and tightened `glanceMeterGroupGap` by ~30% from 28pt to 20pt, preserving the 570pt popover width invariant (`glanceRowIntrinsicWidth = 568 <= 570`).
+- Dynamic pacing color highlights: enabled `pacingColorHighlights` in `GlanceMeter`, dynamically tinting percentage pills greener when under-cap and redder when burning over-cap pace using `pacingPillBackgroundColor`.
+- Runaway anomaly typography & inspect info button: updated runaway cards to replace text "Inspect" with `Image(systemName: "info.circle.fill")`, removed redundant `list.bullet` button, rendered rate (`% / hr`) and multiplier in larger bold fonts, normalized Antigravity/MiniMax window titles, and formatted footer marquee with `.system(size: 15, weight: .heavy, design: .rounded)` font.
+- Floating PiP widget: resolved `CodeCapsMenuBarIcon` safely via `ResourceBundle.resolved` with fallback so PiP header never displays a blank asset.
+- Settings window & dock icon: updated `AppDelegate.applyActivationPolicy()` to display the Dock icon while Settings/Console is open and hide it on close in Menu Bar mode; added provider logo fallback in `SettingsLogoStylePage` so marks appear immediately before initial read completion.
+- iOS companion polish & Keychain migration: integrated `CompanionReadTokenStore` for App Group Keychain storage with preference migration and "Remove Token" button; darkened meter captions (`.primary`) and reset countdowns; enforced `7d` cadence across Claude and Antigravity; and added `.minimumScaleFactor(0.85)` for graceful card scaling.
+- Verification: 680+ tests passing across `QuotaCoreTests` and `CodeCapsTests` with 0 failures.
+
+---
 
 - Glance header overhaul: relocated Settings gear button to top-right toolbar next to reload; enlarged reload (frame 22, icon 13pt), settings (frame 22, icon 13pt), and bell w/"All" (13pt semibold); removed top-right separator dots; repositioned "X of Y" count to the left of the view toggle; and distributed components evenly across the 570pt popover width.
 - Glance footer banner redesign: replaced centered floating pill with full-width marquee banner; relocated flame icon to bottom-left where Settings was (`Theme.warning`, 24x28pt); matched 28pt height and 6pt corner radius with `Open CodeCaps` button with 12pt breathing room; implemented linear constant-speed (30 pt/s) leftward wrap-around ticker (`autoreverses: false`, 1.2s pause, 40pt cycle gap) with animation token guards against race conditions; included specific window captions (e.g. `Grok Bot (7d): 8.6× vs avg`).

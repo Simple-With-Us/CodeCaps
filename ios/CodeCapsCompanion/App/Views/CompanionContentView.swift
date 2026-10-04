@@ -467,7 +467,18 @@ public struct CompanionContentView: View {
                         .autocorrectionDisabled(true)
                     #endif
                     SecureField("Sync Bearer Token", text: $model.syncToken)
+                    Button("Remove Token", role: .destructive) {
+                        model.removeSyncToken()
+                    }
+                    .accessibilityIdentifier("removeSyncToken")
+                    .disabled(model.syncToken.isEmpty && model.tokenStorageError == nil)
+                    if let tokenStorageError = model.tokenStorageError {
+                        Text(tokenStorageError)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
                 }
+                .id("syncTokenSection")
 
                 Section("Alerts & Notifications") {
                     Toggle("Reset Alarms For All Providers", isOn: $model.alarmsAll)
@@ -645,7 +656,7 @@ public struct CompanionMeterView: View {
         HStack(spacing: 4) {
             Text(caption)
                 .font(.system(size: 11, weight: .bold))
-                .foregroundStyle(.primary.opacity(0.85))
+                .foregroundStyle(.primary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
                 .frame(width: 24, alignment: .trailing)
@@ -668,7 +679,7 @@ public struct CompanionMeterView: View {
             if !cd.isEmpty {
                 Text(cd)
                     .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.primary.opacity(0.75))
+                    .foregroundStyle(.primary.opacity(0.85))
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
                     .frame(width: 44, alignment: .center)
@@ -677,6 +688,7 @@ public struct CompanionMeterView: View {
                     .frame(width: 44, height: 1)
             }
         }
+        .minimumScaleFactor(0.85)
         .frame(maxWidth: .infinity)
     }
 }

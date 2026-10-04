@@ -871,13 +871,9 @@ struct SettingsLogoStylePage: View {
     @ObservedObject var model: MonitorModel
 
     private var orderedKeys: [String] {
-        // The same identifiers every other surface uses: `displaySections` ids
-        // are pool-qualified, so Antigravity lists as two rows carrying the
-        // two marks it actually draws.  Keying this list on the bare
-        // `providerKey` made the page resolve the platform-level mark instead
-        // — a monochrome Gemini silhouette next to a colour Gemini star in the
-        // sidebar — which is why the two never agreed and why changing the
-        // style appeared to fix the list without fixing anything.
+        if model.displaySections.isEmpty {
+            return ["claude", "cursor", "codex", "gemini", "antigravity", "grok", "grok-bot", "minimax"]
+        }
         let live = Set(model.displaySections.map(\.id))
         let stored = model.platformOrder.filter(live.contains)
         let unsorted = live.filter { !stored.contains($0) }.sorted()
@@ -891,7 +887,20 @@ struct SettingsLogoStylePage: View {
     }
 
     private func label(for rowId: String) -> String {
-        model.displaySections.first { $0.id == rowId }?.title ?? rowId
+        if let match = model.displaySections.first(where: { $0.id == rowId }) {
+            return match.title
+        }
+        switch rowId {
+        case "claude", "anthropic": return "Claude Code"
+        case "cursor": return "Cursor"
+        case "codex", "openai": return "Codex"
+        case "gemini": return "Gemini"
+        case "antigravity", "google-antigravity": return "Antigravity"
+        case "grok", "xai": return "Grok"
+        case "grok-bot": return "Grok Bot"
+        case "minimax": return "MiniMax"
+        default: return rowId.capitalized
+        }
     }
 
     var body: some View {

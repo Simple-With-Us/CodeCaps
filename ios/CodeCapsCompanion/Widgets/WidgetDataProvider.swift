@@ -176,7 +176,10 @@ public enum WidgetSnapshotStore {
               let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupId) else {
             return cached
         }
-        let token = defaults.string(forKey: "companionSyncToken") ?? ""
+        let tokenStore = CompanionReadTokenStore(accessGroup: appGroupId)
+        let tokenState = tokenStore.readForWidget(shared: defaults)
+        if case .unavailable = tokenState { return cached }
+        let token = tokenState.token ?? ""
         do {
             let data = try await WidgetSnapshotFetcher.fetch(
                 endpoint: endpoint,
@@ -187,7 +190,7 @@ public enum WidgetSnapshotStore {
                 return cached
             }
             guard defaults.string(forKey: "companionSyncEndpoint") == endpoint,
-                  (defaults.string(forKey: "companionSyncToken") ?? "") == token else {
+                  tokenStore.readForWidget(shared: defaults) == tokenState else {
                 return readSnapshot(now: now)
             }
             let file = container.appendingPathComponent("quota-windows.json")

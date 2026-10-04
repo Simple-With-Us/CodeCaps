@@ -91,12 +91,21 @@ struct PipWidgetView: View {
         VStack(alignment: .leading, spacing: 6) {
             // Header bar
             HStack(spacing: 6) {
-                Image("CodeCapsMenuBarIcon")
-                    .resizable()
-                    .renderingMode(.template)
-                    .aspectRatio(contentMode: .fit)
-                    .frame(width: 12, height: 12)
-                    .foregroundStyle(Theme.accent)
+                if let url = ResourceBundle.resolved?.url(forResource: "CodeCapsMenuBarIcon", withExtension: "png"),
+                   let nsImage = NSImage(contentsOf: url) {
+                    Image(nsImage: nsImage)
+                        .resizable()
+                        .renderingMode(.template)
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 12, height: 12)
+                        .foregroundStyle(Theme.accent)
+                } else {
+                    Image(systemName: "gauge.with.needle.fill")
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 12, height: 12)
+                        .foregroundStyle(Theme.accent)
+                }
                 Text("CodeCaps PiP")
                     .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(.secondary)
