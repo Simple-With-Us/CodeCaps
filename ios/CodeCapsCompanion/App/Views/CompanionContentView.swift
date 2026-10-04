@@ -117,7 +117,14 @@ public struct CompanionContentView: View {
     // MARK: - Header Card
 
     private var headerCard: some View {
-        HStack {
+        HStack(spacing: 12) {
+            Image("codecaps-mark")
+                .resizable()
+                .renderingMode(.template)
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 32, height: 32)
+                .foregroundStyle(.primary)
+
             VStack(alignment: .leading, spacing: 4) {
                 Text("FLEET STATUS")
                     .font(.caption2.weight(.bold))
@@ -127,8 +134,9 @@ public struct CompanionContentView: View {
             }
             Spacer()
             if let updated = model.lastUpdated {
-                Text("Updated \(updated.formatted(date: .omitted, time: .shortened))")
+                Text(updated.formatted(date: .omitted, time: .shortened))
                     .font(.caption)
+                    .italic()
                     .foregroundStyle(.secondary)
             }
         }
@@ -213,6 +221,25 @@ public struct CompanionContentView: View {
         }
     }
 
+    @ViewBuilder
+    private func companionSubtitleView(_ text: String) -> some View {
+        if let range = text.range(of: "  (") {
+            let prefix = String(text[..<range.lowerBound])
+            let suffix = String(text[range.lowerBound...])
+            (Text(prefix) + Text(suffix).italic())
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        } else {
+            Text(text)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+    }
+
     private func quotaCard(_ item: CompanionQuotaItem) -> some View {
         let isExpanded = expandedIds.contains(item.id)
 
@@ -225,11 +252,7 @@ public struct CompanionContentView: View {
                     Text(item.title)
                         .font(.system(size: 15, weight: .semibold))
                     if let sub = item.subtitle {
-                        Text(sub)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
+                        companionSubtitleView(sub)
                     }
                 }
                 Spacer()
@@ -585,6 +608,14 @@ public struct CompanionContentView: View {
             }
             .toolbar {
                 #if os(iOS)
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Image("codecaps-mark")
+                        .resizable()
+                        .renderingMode(.template)
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 22, height: 22)
+                        .foregroundStyle(.primary)
+                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { showingSettings = false }
                 }
@@ -611,11 +642,12 @@ public struct CompanionMeterView: View {
     }
 
     public var body: some View {
-        HStack(spacing: 5) {
+        HStack(spacing: 4) {
             Text(caption)
                 .font(.system(size: 11, weight: .bold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.primary.opacity(0.85))
                 .lineLimit(1)
+                .minimumScaleFactor(0.8)
                 .frame(width: 24, alignment: .trailing)
 
             CompanionUsageBar(
@@ -623,24 +655,26 @@ public struct CompanionMeterView: View {
                 elapsedFraction: window.elapsedFraction(),
                 height: 7
             )
-            .frame(minWidth: 40, maxWidth: .infinity)
+            .frame(minWidth: 35, maxWidth: .infinity)
 
             Text(window.displayPercent)
                 .font(.system(size: 12, weight: .bold, design: .rounded).monospacedDigit())
                 .foregroundStyle(window.statusColor)
                 .lineLimit(1)
-                .frame(width: 32, alignment: .trailing)
+                .minimumScaleFactor(0.8)
+                .frame(width: 36, alignment: .trailing)
 
             let cd = window.countdown()
             if !cd.isEmpty {
                 Text(cd)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.primary.opacity(0.75))
                     .lineLimit(1)
-                    .frame(width: 38, alignment: .center)
+                    .minimumScaleFactor(0.8)
+                    .frame(width: 44, alignment: .center)
             } else {
                 Color.clear
-                    .frame(width: 38, height: 1)
+                    .frame(width: 44, height: 1)
             }
         }
         .frame(maxWidth: .infinity)
