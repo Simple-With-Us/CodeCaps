@@ -100,9 +100,9 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
         let token = cadence.isEmpty ? label : cadence
         let words = "\(token) \(label)".lowercased()
         let durationSeconds: TimeInterval? = {
-            if words.contains("5h") || words.contains("5-hour") || words.contains("five_hour") { return 5 * 3600 }
-            if words.contains("4h") || words.contains("4-hour") || words.contains("four_hour") { return 4 * 3600 }
             if words.contains("7d") || words.contains("7-day") || words.contains("weekly") || words.contains("1w") { return 7 * 86400 }
+            if words.contains("5h") || words.contains("5-hour") || words.contains("five_hour") || words.contains("coding plan") || words.contains("coding_plan") || words.contains("interval") { return 5 * 3600 }
+            if words.contains("4h") || words.contains("4-hour") || words.contains("four_hour") { return 4 * 3600 }
             if words.contains("1d") || words.contains("daily") { return 86400 }
             if words.contains("billing") || words.contains("cycle") || words.contains("monthly") { return 30 * 86400 }
             return nil
@@ -116,9 +116,9 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
 
     public var caption: String {
         let text = (cadence.isEmpty ? label : cadence).lowercased()
-        if text.contains("5h") || text.contains("5-hour") || text.contains("5 hour") { return "5h" }
-        if text.contains("4h") || text.contains("4-hour") || text.contains("4 hour") { return "4h" }
         if text.contains("7d") || text.contains("weekly") || text.contains("1w") { return "7d" }
+        if text.contains("5h") || text.contains("5-hour") || text.contains("5 hour") || text.contains("coding plan") || text.contains("coding_plan") || text.contains("interval") { return "5h" }
+        if text.contains("4h") || text.contains("4-hour") || text.contains("4 hour") { return "4h" }
         if text.contains("24h") || text.contains("daily") || text.contains("1d") { return "24h" }
         if text.contains("month") || text.contains("billing") || text.contains("cycle") || text.contains("30d") || text.contains("1m") { return "1m" }
         if text.contains("plan") || text.contains("included") { return "Plan" }
@@ -128,8 +128,9 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
 
     public var isShortCadence: Bool {
         let text = (cadence.isEmpty ? label : cadence).lowercased()
-        if text.contains("5h") || text.contains("4h") || text.contains("session") || text.contains("fast") { return true }
-        if text.contains("7d") || text.contains("1w") || text.contains("weekly") || text.contains("month") || text.contains("billing") || text.contains("cycle") || text.contains("30d") || text.contains("1m") || text.contains("plan") { return false }
+        if text.contains("7d") || text.contains("1w") || text.contains("weekly") || text.contains("month") || text.contains("billing") || text.contains("cycle") || text.contains("30d") || text.contains("1m") { return false }
+        if text.contains("5h") || text.contains("4h") || text.contains("session") || text.contains("fast") || text.contains("coding plan") || text.contains("coding_plan") || text.contains("interval") { return true }
+        if text.contains("plan") { return false }
         if let reset = resetAt {
             return reset.timeIntervalSinceNow < 86_400
         }
@@ -794,16 +795,25 @@ public final class CompanionQuotaModel: ObservableObject {
             // Cadence key identifies the underlying allowance window / model tier.
             // E.g. "weekly", "5h", "general:5h", "video:1d".
             let modelQualifier = (w.modelId ?? "").lowercased()
+            let isMiniMax = providerKey.lowercased().contains("minimax") || id.lowercased().contains("minimax")
+            let effectiveQualifier = isMiniMax ? "" : modelQualifier
             let normalizedCadence = cadence.lowercased()
-            let cadenceKey = modelQualifier.isEmpty
+            let cadenceKey = effectiveQualifier.isEmpty
                 ? normalizedCadence
-                : "\(modelQualifier):\(normalizedCadence)"
+                : "\(effectiveQualifier):\(normalizedCadence)"
 
             let isDuplicate = seenCadenceKeys.contains(cadenceKey)
 
+            let windowLabel: String
+            if isMiniMax {
+                windowLabel = cadence == "5-hour window" ? "5-hour window" : (cadence == "Weekly window" ? "Weekly window" : (w.label.isEmpty ? cadence : w.label))
+            } else {
+                windowLabel = w.label.isEmpty ? cadence : w.label
+            }
+
             let windowItem = CompanionWindowItem(
                 id: w.id,
-                label: w.label.isEmpty ? cadence : w.label,
+                label: windowLabel,
                 cadence: cadence,
                 remainingPercent: pct,
                 resetAt: parsedReset,
@@ -1069,17 +1079,18 @@ public final class CompanionQuotaModel: ObservableObject {
 
     public static func formatCadence(_ label: String, window: String? = nil) -> String {
         let combined = "\(window ?? "") \(label)".lowercased()
-        if combined.contains("5h") || combined.contains("5-hour") || combined.contains("five_hour") {
-            return "5-hour window"
-        }
-        if combined.contains("4h") || combined.contains("4-hour") || combined.contains("four_hour") {
-            return "4-hour window"
-        }
         if combined.contains("7d") || combined.contains("seven_day") {
             return "7-day window"
         }
         if combined.contains("1w") || combined.contains("weekly") {
             return "Weekly window"
+        }
+        if combined.contains("5h") || combined.contains("5-hour") || combined.contains("five_hour")
+            || combined.contains("coding_plan") || combined.contains("coding plan") || combined.contains("interval") {
+            return "5-hour window"
+        }
+        if combined.contains("4h") || combined.contains("4-hour") || combined.contains("four_hour") {
+            return "4-hour window"
         }
         if combined.contains("1d") || combined.contains("daily") {
             return "Daily window"
