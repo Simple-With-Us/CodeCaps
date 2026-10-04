@@ -29,10 +29,12 @@
 		311AB846015F2FEDF0014C43 /* CompanionTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C1CF45BE162CC9B8CD968DC /* CompanionTheme.swift */; };
 		31CFC3813E00700F4A1D0E2F /* ResetAlarmCadence.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B76200EBE871E29BAC8A41B /* ResetAlarmCadence.swift */; };
 		346906A2DDABDF60AF9D4F62 /* alarm-submarine.wav in Resources */ = {isa = PBXBuildFile; fileRef = 5F63EE805947E5707E2A0C3F /* alarm-submarine.wav */; };
+		3C07D53C4EFEE8F91EEDDEC7 /* ResetAlarmCadence.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B76200EBE871E29BAC8A41B /* ResetAlarmCadence.swift */; };
 		4D9258D010AD16F059277D93 /* alarm-submarine.wav in Resources */ = {isa = PBXBuildFile; fileRef = 5F63EE805947E5707E2A0C3F /* alarm-submarine.wav */; };
 		4F76A47C0A1C84A3525F004C /* CompanionReadTokenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7E7C693CD5357E0391881F0 /* CompanionReadTokenStore.swift */; };
 		6447965E07907E9AA3407123 /* alarm-sosumi.wav in Resources */ = {isa = PBXBuildFile; fileRef = 4FA72166D5E5A0F726B4DF18 /* alarm-sosumi.wav */; };
 		689104F1DF3DDC7C7F75D168 /* WidgetSnapshotFetcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DE3A7D9C36FF286A082F60E /* WidgetSnapshotFetcher.swift */; };
+		6AF2CF64E8C9F39D87C4B24C /* CompanionReadTokenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7E7C693CD5357E0391881F0 /* CompanionReadTokenStore.swift */; };
 		717D1C459A127B80594F8905 /* WidgetWindowRows.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7A7EF5A19DFD2299052F4DE /* WidgetWindowRows.swift */; };
 		7A59C4CE14A8C4532A6C9327 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = DF46F01EE0931315955EE9AF /* Assets.xcassets */; };
 		7DFD68E2400E127E11B80471 /* CodeCapsWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = FD27E95016C7BDDE19F6C6E2 /* CodeCapsWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
@@ -44,6 +46,7 @@
 		A90E0EF383B2CDF27263BAF0 /* WidgetConfigurationIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72DB68669C8EFB8E9045184C /* WidgetConfigurationIntent.swift */; };
 		AB8C667473DF14CCF7B48F2A /* WidgetDataProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = F281E65EF7010842967CD100 /* WidgetDataProvider.swift */; };
 		AFBBFB2FD8EEA9DA9EF40042 /* alarm-bottle.wav in Resources */ = {isa = PBXBuildFile; fileRef = 302C44DD0C87899C354A914C /* alarm-bottle.wav */; };
+		BBE95186FD35EC37DBF13D51 /* ResetAlarmCadence.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B76200EBE871E29BAC8A41B /* ResetAlarmCadence.swift */; };
 		BD4C31C68641BA2ED6BE8798 /* alarm-bottle.wav in Resources */ = {isa = PBXBuildFile; fileRef = 302C44DD0C87899C354A914C /* alarm-bottle.wav */; };
 		BF0A24BA7D7B70B182950DA9 /* ResetAlarmTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5FD1EFF75431229A669FC5A /* ResetAlarmTracker.swift */; };
 		C1B3C6C3651687B8283C75CD /* WidgetSnapshotFetcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DE3A7D9C36FF286A082F60E /* WidgetSnapshotFetcher.swift */; };
@@ -461,6 +464,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				170FA7844615930B5A1D4CBD /* CodeCapsWidgetBundle.swift in Sources */,
+				6AF2CF64E8C9F39D87C4B24C /* CompanionReadTokenStore.swift in Sources */,
+				3C07D53C4EFEE8F91EEDDEC7 /* ResetAlarmCadence.swift in Sources */,
 				0FB40BD33AB5375F6C02ACFC /* WidgetConfigurationIntent.swift in Sources */,
 				AB8C667473DF14CCF7B48F2A /* WidgetDataProvider.swift in Sources */,
 				C7498C0ACDD5320564DE32B0 /* WidgetPresentation.swift in Sources */,
@@ -476,6 +481,7 @@
 			files = (
 				EA984A6E75520CAB2639A8B4 /* CodeCapsWidgetBundle.swift in Sources */,
 				E8DE0A145EA5D76CD51886E8 /* CompanionReadTokenStore.swift in Sources */,
+				BBE95186FD35EC37DBF13D51 /* ResetAlarmCadence.swift in Sources */,
 				A90E0EF383B2CDF27263BAF0 /* WidgetConfigurationIntent.swift in Sources */,
 				D3C30EA2E4A6B59A22E086DB /* WidgetDataProvider.swift in Sources */,
 				F3C6891672DADC0AD9667E90 /* WidgetPresentation.swift in Sources */,

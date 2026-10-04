@@ -77,6 +77,10 @@ public enum ResourceBundle {
                 return bundle
             }
         }
+        let appContentsRes = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/\(name).bundle", isDirectory: true)
+        if FileManager.default.fileExists(atPath: appContentsRes.path), let bundle = Bundle(url: appContentsRes) {
+            return bundle
+        }
         if let found = resolve(in: searchRoots) { return found }
         guard mayUseGeneratedAccessor(appBundleURL: Bundle.main.bundleURL) else { return nil }
         return Bundle.module
@@ -249,24 +253,36 @@ public enum PlatformLogoImage {
     /// Return the bundled asset for `providerKey`, or `nil` if no artwork ships.
     /// The standard cache preserves brand colors; the template cache marks the
     /// image as a template so it adapts to Light/Dark and menu bar selection.
+    private static var cachedBundle: Bundle? = nil
     private static func currentBundle() -> Bundle? {
-        ResourceBundle.resolved ?? ResourceBundle.resolveBundle()
+        if let cached = cachedBundle { return cached }
+        if let b = ResourceBundle.resolved ?? ResourceBundle.resolveBundle() {
+            cachedBundle = b
+            return b
+        }
+        return nil
     }
 
     private static func bundledImage(providerKey: String, style: MarkStyle = .template) -> NSImage? {
         let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() as NSString
         let cache = (style == .standard) ? standardCache : templateCache
         if let cached = cache.object(forKey: key) { return cached }
-        guard let bundle = currentBundle(),
-              let resource = resourceNames[key as String] ?? resourceNames[platformKey(of: key as String)] else {
+        guard let resource = resourceNames[key as String] ?? resourceNames[platformKey(of: key as String)] else {
             return nil
         }
+        let bundle = currentBundle()
         let candidates: [URL?] = [
-            bundle.url(forResource: resource.name, withExtension: resource.ext),
-            bundle.url(forResource: resource.name, withExtension: resource.ext, subdirectory: "ProviderMarks"),
-            bundle.resourceURL?.appendingPathComponent("\(resource.name).\(resource.ext)"),
-            bundle.bundleURL.appendingPathComponent("Contents/Resources/\(resource.name).\(resource.ext)"),
-            bundle.bundleURL.appendingPathComponent("\(resource.name).\(resource.ext)")
+            bundle?.url(forResource: resource.name, withExtension: resource.ext),
+            bundle?.url(forResource: resource.name, withExtension: resource.ext, subdirectory: "ProviderMarks"),
+            bundle?.resourceURL?.appendingPathComponent("\(resource.name).\(resource.ext)"),
+            bundle?.bundleURL.appendingPathComponent("Contents/Resources/\(resource.name).\(resource.ext)"),
+            bundle?.bundleURL.appendingPathComponent("\(resource.name).\(resource.ext)"),
+            Bundle.main.resourceURL?.appendingPathComponent("CodeCaps_CodeCaps.bundle/Contents/Resources/\(resource.name).\(resource.ext)"),
+            Bundle.main.resourceURL?.appendingPathComponent("CodeCaps_CodeCaps.bundle/\(resource.name).\(resource.ext)"),
+            Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/CodeCaps_CodeCaps.bundle/Contents/Resources/\(resource.name).\(resource.ext)"),
+            Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/CodeCaps_CodeCaps.bundle/\(resource.name).\(resource.ext)"),
+            Bundle.main.resourceURL?.appendingPathComponent("\(resource.name).\(resource.ext)"),
+            Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/\(resource.name).\(resource.ext)")
         ]
         var targetURL: URL?
         for candidate in candidates.compactMap({ $0 }) {
