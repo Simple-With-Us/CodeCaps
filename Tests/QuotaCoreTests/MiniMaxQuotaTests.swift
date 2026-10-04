@@ -91,6 +91,32 @@ final class MiniMaxQuotaTests: XCTestCase {
         )
     }
 
+    func testMiniMaxCadenceOrderStandardizedFiveHourFirst() {
+        let weekly = QuotaWindow(
+            id: "local-mac:minimax:general:weekly",
+            provider: "minimax",
+            providerKey: "minimax",
+            label: "Weekly window",
+            remainingPercent: 10,
+            occurredAt: "2026-10-04T12:00:00Z"
+        )
+        let fiveHour = QuotaWindow(
+            id: "local-mac:minimax:general:interval",
+            provider: "minimax",
+            providerKey: "minimax",
+            label: "5-hour window",
+            remainingPercent: 90,
+            occurredAt: "2026-10-04T12:00:00Z"
+        )
+        let response = QuotaResponse(generatedAt: "2026-10-04T12:00:00Z", windows: [weekly, fiveHour], skipModelTypes: [])
+        let sections = response.platformSections(now: Date())
+        let section = sections.first { $0.providerKey == "minimax" }
+        XCTAssertNotNil(section)
+        XCTAssertEqual(section?.windows.count, 2)
+        XCTAssertEqual(section?.windows[0].window.id, "local-mac:minimax:general:interval")
+        XCTAssertEqual(section?.windows[1].window.id, "local-mac:minimax:general:weekly")
+    }
+
     private func makeHome() throws -> URL {
         let home = FileManager.default.temporaryDirectory.appendingPathComponent("minimax-quota-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: home.appendingPathComponent(".mmx"), withIntermediateDirectories: true)
