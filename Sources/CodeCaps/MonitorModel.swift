@@ -188,6 +188,7 @@ final class MonitorModel: ObservableObject {
         }
     }
     @Published private(set) var activeRunawayAnomalies: [AnomalyDetector.Anomaly] = []
+    @Published public private(set) var runawayAlertHistory: [RunawayAlertRecord] = []
     @Published var menuBarQuotaSelection: String {
         didSet { defaults.set(menuBarQuotaSelection, forKey: "menuBarQuotaSelection") }
     }
@@ -360,6 +361,12 @@ final class MonitorModel: ObservableObject {
         anomalyPeakMultiplier = defaults.object(forKey: "anomalyPeakMultiplier") as? Double
             ?? BurnRateMonitor.recommendedPeakMultiplier
         menuBarQuotaSelection = defaults.string(forKey: "menuBarQuotaSelection") ?? "smart_pair"
+        if let alertData = defaults.data(forKey: "runawayAlertHistory"),
+           let history = try? JSONDecoder().decode([RunawayAlertRecord].self, from: alertData) {
+            runawayAlertHistory = history
+        } else {
+            runawayAlertHistory = []
+        }
         viewLayout = QuotaViewLayout(rawValue: defaults.string(forKey: "quotaViewLayout") ?? "") ?? .summary
         platformOrder = defaults.stringArray(forKey: "platformOrder") ?? []
         if let customData = defaults.data(forKey: "platformCustomInfo"),
@@ -1589,16 +1596,49 @@ final class MonitorModel: ObservableObject {
             guard let group = groups[key] else { continue }
             let lastSent = lastRunawayAlertAt[key] ?? -.infinity
             guard now.timeIntervalSince1970 - lastSent >= BurnRateMonitor.alertCooldown else { continue }
-            let notification = BurnRateNotification(anomalies: group, sound: alarmManager.alarmSound)
+            let provLabel = self.sections.first { $0.providerKey == group[0].providerKey }?.providerLabel
+                ?? group[0].providerKey.capitalized
+            let winLabel = self.sections.flatMap(\.windows)
+                .first { $0.window.id == group[0].windowId }?.window.label
+            let notification = BurnRateNotification(
+                anomalies: group,
+                sound: alarmManager.alarmSound,
+                providerLabel: provLabel,
+                windowLabel: winLabel
+            )
             if let runawayNotificationForTesting {
                 runawayNotificationForTesting(notification)
             } else {
                 alarmManager.deliverRunawayUsageAlert(notification)
             }
             lastRunawayAlertAt[key] = now.timeIntervalSince1970
+
+            let comp = group[0].kind == .vsPeak ? "recent peak" : "7-day average"
+            let mult = group[0].multiplier.formatted(.number.precision(.fractionLength(1)))
+            let record = RunawayAlertRecord(
+                timestamp: now,
+                providerKey: group[0].providerKey,
+                providerLabel: provLabel,
+                windowId: group[0].windowId,
+                windowLabel: winLabel ?? group[0].windowId,
+                multiplier: group[0].multiplier,
+                comparison: comp,
+                summary: "\(provLabel)\(winLabel.map { " (\($0))" } ?? "") is burning at \(mult)× your \(comp)."
+            )
+            appendRunawayAlert(record)
         }
         lastRunawayAlertAt = lastRunawayAlertAt.filter { now.timeIntervalSince1970 - $0.value <= 30 * 86_400 }
         defaults.set(lastRunawayAlertAt, forKey: "runawayAlertLastSent")
+    }
+
+    private func appendRunawayAlert(_ record: RunawayAlertRecord) {
+        var list = runawayAlertHistory
+        list.insert(record, at: 0)
+        if list.count > 50 { list = Array(list.prefix(50)) }
+        runawayAlertHistory = list
+        if let data = try? JSONEncoder().encode(list) {
+            defaults.set(data, forKey: "runawayAlertHistory")
+        }
     }
 
     private static func runawayKey(_ providerKey: String, _ windowId: String) -> String {

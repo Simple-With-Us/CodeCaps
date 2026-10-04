@@ -260,12 +260,19 @@ public struct CompanionContentView: View {
                 }
             }
 
-            // Overarching Progress Bar
-            CompanionUsageBar(
-                remainingPercent: item.remainingPercent,
-                elapsedFraction: item.elapsedFraction,
-                height: 6
-            )
+            // Quota Bars side by side
+            HStack(spacing: 12) {
+                if let short = item.shortWindow {
+                    CompanionMeterView(caption: short.caption, window: short)
+                }
+                if let long = item.longWindow, long.id != item.shortWindow?.id {
+                    CompanionMeterView(caption: long.caption, window: long)
+                } else if item.shortWindow == nil {
+                    if let first = item.windows.first {
+                        CompanionMeterView(caption: first.caption, window: first)
+                    }
+                }
+            }
 
             // Multiple time periods / windows when expanded
             if isExpanded {
@@ -318,7 +325,7 @@ public struct CompanionContentView: View {
             CompanionUsageBar(
                 remainingPercent: win.remainingPercent,
                 elapsedFraction: win.elapsedFraction(),
-                height: 4
+                height: 6
             )
             .frame(width: 52)
 
@@ -587,6 +594,54 @@ public struct CompanionContentView: View {
     }
 }
 
+// MARK: - Companion Meter View
+
+public struct CompanionMeterView: View {
+    public let caption: String
+    public let window: CompanionWindowItem
+
+    public init(caption: String, window: CompanionWindowItem) {
+        self.caption = caption
+        self.window = window
+    }
+
+    public var body: some View {
+        HStack(spacing: 5) {
+            Text(caption)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .frame(width: 24, alignment: .trailing)
+
+            CompanionUsageBar(
+                remainingPercent: window.remainingPercent,
+                elapsedFraction: window.elapsedFraction(),
+                height: 6
+            )
+            .frame(minWidth: 40, maxWidth: .infinity)
+
+            Text(window.displayPercent)
+                .font(.system(size: 12, weight: .bold, design: .rounded).monospacedDigit())
+                .foregroundStyle(window.statusColor)
+                .lineLimit(1)
+                .frame(width: 32, alignment: .trailing)
+
+            let cd = window.countdown()
+            if !cd.isEmpty {
+                Text(cd)
+                    .font(.system(size: 10, weight: .regular).italic())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .frame(width: 38, alignment: .center)
+            } else {
+                Color.clear
+                    .frame(width: 38, height: 1)
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
 // MARK: - Companion Usage Bar
 
 public struct CompanionUsageBar: View {
@@ -660,18 +715,19 @@ public struct CompanionUsageBar: View {
                 // Pacing marker line (elapsed time fraction)
                 if let frac = elapsedFraction, frac >= 0, frac <= 1.0, totalWidth > 0 {
                     let markerX = CGFloat(frac) * totalWidth
-                    let markerHeight = height + 4
+                    let markerHeight: CGFloat = max(16, height + 8)
+                    let markerWidth: CGFloat = 2.5
 
                     // Halo
                     Rectangle()
                         .fill(pacingMarkerHaloColor)
-                        .frame(width: 4, height: markerHeight + 2)
+                        .frame(width: 4.5, height: markerHeight + 2)
                         .position(x: markerX, y: geo.size.height / 2)
 
                     // Line
                     Rectangle()
                         .fill(pacingMarkerColor)
-                        .frame(width: 2, height: markerHeight)
+                        .frame(width: markerWidth, height: markerHeight)
                         .position(x: markerX, y: geo.size.height / 2)
                 }
             }

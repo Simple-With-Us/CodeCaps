@@ -289,17 +289,27 @@ struct GlancePopover: View {
     }
 
     private var runawayAnomalyFooterDetail: String? {
-        guard let anomaly = model.activeRunawayAnomalies.first else { return nil }
-        let provider = model.sections.first { $0.providerKey == anomaly.providerKey }?.providerLabel
-            ?? anomaly.providerKey
-        let comparison = anomaly.kind == .vsPeak ? "recent peak" : "usual pace"
-        return "\(provider) · \(anomaly.multiplier.formatted(.number.precision(.fractionLength(1))))× \(comparison)"
+        if let anomaly = model.activeRunawayAnomalies.first {
+            let provider = model.sections.first { $0.providerKey == anomaly.providerKey }?.providerLabel
+                ?? anomaly.providerKey
+            let comparison = anomaly.kind == .vsPeak ? "recent peak" : "usual pace"
+            return "\(provider) · \(anomaly.multiplier.formatted(.number.precision(.fractionLength(1))))× \(comparison)"
+        }
+        if let recent = model.runawayAlertHistory.first, recent.timestamp.timeIntervalSinceNow > -86_400 {
+            return "\(recent.providerLabel) · \(recent.multiplier.formatted(.number.precision(.fractionLength(1))))× runaway alert (\(recent.timestamp.formatted(date: .omitted, time: .shortened)))"
+        }
+        return nil
     }
 
     private var runawayFooterAccessibilityLabel: String {
         let summaries = model.activeRunawayAnomalies.map(\.summary)
-        guard !summaries.isEmpty else { return "Runaway Usage Alerts Enabled" }
-        return "Runaway Usage Alerts Enabled, active anomaly: " + summaries.joined(separator: sentenceGap)
+        if !summaries.isEmpty {
+            return "Runaway Usage Alerts Enabled, active anomaly: " + summaries.joined(separator: sentenceGap)
+        }
+        if let recent = model.runawayAlertHistory.first, recent.timestamp.timeIntervalSinceNow > -86_400 {
+            return "Runaway Usage Alerts Enabled, recent alert: \(recent.summary)"
+        }
+        return "Runaway Usage Alerts Enabled"
     }
 }
 
@@ -882,23 +892,23 @@ struct GlanceMeter: View {
             // is the owner's ruling: the percentage is the number the row
             // exists to convey, and a number that changes colour with its own
             // value has to be re-read every time.  Accent belongs on the bar.
-            HStack(spacing: 3) {
-                Text(percent.map { "\(Int($0.rounded()))%" } ?? "—")
-                    .font(.system(size: 11, weight: .medium).monospacedDigit())
-                    .foregroundStyle(Theme.ink)
+            Text(percent.map { "\(Int($0.rounded()))%" } ?? "—")
+                .font(.system(size: 11, weight: .medium).monospacedDigit())
+                .foregroundStyle(Theme.ink)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .frame(width: Metrics.glanceMeterPercentWidth, alignment: .trailing)
+            if !countdown.isEmpty {
+                Text(countdown)
+                    .font(.system(size: 10, weight: .regular).italic())
+                    .foregroundStyle(Theme.ink.opacity(0.62))
                     .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                    .fixedSize(horizontal: true, vertical: false)
-                if !countdown.isEmpty {
-                    Text(countdown)
-                        .font(.system(size: 10, weight: .regular).italic())
-                        .foregroundStyle(Theme.ink.opacity(0.62))
-                        .lineLimit(1)
-                        .fixedSize(horizontal: true, vertical: false)
-                        .help(glanceResetHelp(snapshot.resetAt, now: now) ?? "")
-                }
+                    .frame(width: Metrics.glanceMeterCountdownWidth, alignment: .center)
+                    .help(glanceResetHelp(snapshot.resetAt, now: now) ?? "")
+            } else {
+                Color.clear
+                    .frame(width: Metrics.glanceMeterCountdownWidth, height: 1)
             }
-            .frame(width: Metrics.glanceMeterPercentWidth + Metrics.glanceMeterGap + Metrics.glanceMeterCountdownWidth, alignment: .leading)
         }
         .frame(width: Metrics.glanceMeterWidth, alignment: .leading)
         .accessibilityElement(children: .ignore)
