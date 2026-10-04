@@ -250,7 +250,15 @@ enum Metrics {
     /// The per-provider reset-alarm bell at the very left, shown while All is off.
     static let glanceAlarmBellWidth: CGFloat = 16
     static let glanceLogoWidth: CGFloat = 16
-    /// Fits "Claude Code" (79.5pt at 13pt medium), the longest platform name.
+    /// Fits the longest platform name with room to spare:  "Claude Code" is
+    /// 80pt at 13pt medium, the widest of the real set ("Antigravity" 68,
+    /// "Grok Bot" 55, "MiniMax" 52, "Cursor" 42, "Codex" 40), which
+    /// `testCaptionsAndTitlesFitTheirColumns` measures rather than estimates.
+    ///
+    /// This was widened to 105pt, and the width had to be taken back out of the
+    /// countdown column to pay for it.  A 25pt title nobody needs is not worth
+    /// a reset time that reads "29d 5" — and the 570pt popover only fits one
+    /// of the two.
     static let glanceRowTitleWidth: CGFloat = 80
     /// Fits "Plan" and "24h" at 11pt medium; "Quota" fits at its 0.8 scale.
     static let glanceMeterCaptionWidth: CGFloat = 26
@@ -270,13 +278,20 @@ enum Metrics {
     /// so the widest realistic value is "31d 23h" or "29d 59m", measured at
     /// 49pt by `testTheLongestCountdownsFitTheirColumn`.  The full value lives
     /// in the countdown's tooltip.
+    ///
+    /// 35pt was tried to buy room for longer platform names and had to go:  at
+    /// that width every realistic countdown truncates ("29d 59m" needs 49pt),
+    /// and a truncated reset time is worse than a tight name.  The row fits the
+    /// 570pt popover with the full column, so the width is spent where it is
+    /// read rather than where it is merely wide.
     static let glanceMeterCountdownWidth: CGFloat = 50
     static let glanceChevronWidth: CGFloat = 10
     /// The fixed gap between the row's columns, used by every spacer so one
     /// change re-tunes the whole row.
     static let glanceColumnGap: CGFloat = 8
     /// The gap between the two meters: from the end of the first countdown to
-    /// the second meter's caption.
+    /// the second meter's caption.  Still three and a half times the 8pt column
+    /// gap, so the two windows read as two columns.
     static let glanceMeterGroupGap: CGFloat = 28
     /// The gap right after the logo, which is tighter than the rest.
     static let glanceLogoGap: CGFloat = 6
