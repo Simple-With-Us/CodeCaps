@@ -8,7 +8,7 @@ enum SourceRefreshCadence: Int, CaseIterable, Identifiable {
 
     var id: Int { rawValue }
     var seconds: TimeInterval { TimeInterval(rawValue * 60) }
-    var title: String { "Every \(rawValue) Minute\(rawValue == 1 ? "" : "s")" }
+    var title: String { "Every \(rawValue) minute\(rawValue == 1 ? "" : "s")" }
 }
 
 enum SourceRefreshPreference {
