@@ -118,6 +118,34 @@ final class QuotaPublisherTests: XCTestCase {
         XCTAssertEqual(meta["usedPercent"] as? Double, 15.0)
     }
 
+    /// The v2 schema is strict (`additionalProperties: false`), and one extra
+    /// key at the batch or event level fails the whole POST with HTTP 400
+    /// "Invalid usage telemetry v2 batch" before any event is inspected.  That
+    /// is how `machine` at the batch root, and `machine` plus
+    /// `producerInstanceId` on the event, silently broke every push while
+    /// looking like a server outage.
+    func testV2PayloadCarriesNoKeysTheSchemaRejects() throws {
+        let publisher = QuotaPublisher()
+        let data = try publisher.buildUsageMonitorV2Payload(
+            windows: makeSampleWindows(), occurredAtIso: "2026-09-14T19:00:00Z",
+            machineName: "Test-Mac", producerInstanceId: "test-instance")
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        let allowedRoot: Set<String> = ["schemaVersion", "producerId", "producerInstanceId", "events"]
+        for key in json.keys {
+            XCTAssertTrue(allowedRoot.contains(key), "batch root carries '\(key)', which the v2 schema rejects")
+        }
+        // Provenance still has to survive: it belongs in metadata, not beside it.
+        let events = try XCTUnwrap(json["events"] as? [[String: Any]])
+        for event in events {
+            XCTAssertNil(event["machine"], "event-level 'machine' is rejected as an unrecognized key")
+            XCTAssertNil(event["producerInstanceId"], "event-level 'producerInstanceId' is rejected as an unrecognized key")
+            let meta = try XCTUnwrap(event["metadata"] as? [String: Any])
+            XCTAssertEqual(meta["machine"] as? String, "Test-Mac")
+            XCTAssertEqual(meta["producerInstanceId"] as? String, "test-instance")
+        }
+    }
+
     func testInstancePersistsAndScopesIdempotency() throws {
         let suite = "codecaps-machine-" + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
