@@ -147,6 +147,8 @@ final class SourceRefreshTests: XCTestCase {
         settings.set(true, forKey: "serverEnabled")
         let model = MonitorModel(defaults: settings)
         model.skipsSnapshotIOForTesting = true
+        var accountReads = 0
+        model.sessionAccountIDForTesting = { accountReads += 1; return "account-a" }
         model.serverFetchForTesting = {
             let own = QuotaWindow(id: "own:anthropic:5h", provider: "Claude", providerKey: "anthropic",
                                   label: "5h", remainingPercent: 50,
@@ -156,6 +158,7 @@ final class SourceRefreshTests: XCTestCase {
         }
         model.refresh()
         await model.refreshTaskForTesting?.value
+        XCTAssertEqual(accountReads, 0, "server-only refresh must not read local Codex auth")
         XCTAssertFalse(model.response.windows.isEmpty)
         model.disableServerPull()
         XCTAssertTrue(model.response.windows.isEmpty)

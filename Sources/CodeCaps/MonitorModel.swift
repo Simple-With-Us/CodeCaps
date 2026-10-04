@@ -1604,7 +1604,9 @@ final class MonitorModel: ObservableObject {
                 }
             }
             let providerRead = await localRead
-            let currentAccount = await self?.codexAccountID()
+            let currentAccount: String?
+            if useLocal { currentAccount = await self?.codexAccountID() }
+            else { currentAccount = nil }
             guard !Task.isCancelled, let self, self.revision == generation else { return }
             if useServer {
                 self.readTokenState = SavedTokenState.resolve(hasSavedFlag: self.hasSavedToken,
@@ -1612,7 +1614,7 @@ final class MonitorModel: ObservableObject {
             }
             self.now = Date()
             self.lastChecked = self.now
-            self.currentCodexAccountID = currentAccount
+            if useLocal { self.currentCodexAccountID = currentAccount }
             self.providerResult = providerRead
             let local = self.currentLocalResult()
             if let local {
@@ -1701,6 +1703,11 @@ final class MonitorModel: ObservableObject {
 
     func refreshSessionFiles() {
         guard localEnabled, sessionFileChecksEnabled, sessionFileRequest == nil else { return }
+        // An injected model read must not silently start a real auth/session
+        // file scan from the parallel timer in an offline test.
+        if sessionFileReadForTesting == nil,
+           skipsSnapshotIOForTesting || localReadForTesting != nil || localResultForTesting != nil
+                || serverFetchForTesting != nil { return }
         let generation = sessionFileRevision
         let reader = sessionFileReader
         let readForTesting = sessionFileReadForTesting
@@ -1724,6 +1731,8 @@ final class MonitorModel: ObservableObject {
 
     private func codexAccountID() async -> String? {
         if let sessionAccountIDForTesting { return await sessionAccountIDForTesting() }
+        if skipsSnapshotIOForTesting || localReadForTesting != nil || localResultForTesting != nil
+            || sessionFileReadForTesting != nil || serverFetchForTesting != nil { return nil }
         return await sessionFileReader.currentAccountID()
     }
 
