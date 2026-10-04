@@ -5,8 +5,8 @@ import SwiftUI
 /// Floating on-screen Picture-in-Picture (PiP) HUD widget for CodeCaps.
 /// Keeps critical AI quota meters visible on top of all windows at all times.
 @MainActor
-public final class PipWidgetController: NSObject, NSWindowDelegate {
-    public static let shared = PipWidgetController()
+final class PipWidgetController: NSObject, NSWindowDelegate {
+    static let shared = PipWidgetController()
 
     private var panel: NSPanel?
     private weak var currentModel: MonitorModel?
@@ -15,7 +15,7 @@ public final class PipWidgetController: NSObject, NSWindowDelegate {
         super.init()
     }
 
-    public func update(model: MonitorModel) {
+    func update(model: MonitorModel) {
         self.currentModel = model
         guard model.isPipEnabled else {
             close()
@@ -24,7 +24,7 @@ public final class PipWidgetController: NSObject, NSWindowDelegate {
         show(model: model)
     }
 
-    public func show(model: MonitorModel) {
+    func show(model: MonitorModel) {
         self.currentModel = model
         if let panel {
             panel.contentView = NSHostingView(rootView: PipWidgetView(model: model))
@@ -34,7 +34,7 @@ public final class PipWidgetController: NSObject, NSWindowDelegate {
         }
     }
 
-    public func close() {
+    func close() {
         panel?.orderOut(nil)
         panel = nil
     }
@@ -63,14 +63,14 @@ public final class PipWidgetController: NSObject, NSWindowDelegate {
         p.orderFrontRegardless()
     }
 
-    public func windowWillClose(_ notification: Notification) {
+    func windowWillClose(_ notification: Notification) {
         currentModel?.isPipEnabled = false
         panel = nil
     }
 }
 
 /// The SwiftUI view for the floating PiP HUD widget.
-public struct PipWidgetView: View {
+struct PipWidgetView: View {
     @ObservedObject var model: MonitorModel
     @State private var isHovering = false
 
@@ -87,7 +87,7 @@ public struct PipWidgetView: View {
         return pinned.isEmpty ? Array(all.prefix(2)) : pinned
     }
 
-    public var body: some View {
+    var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             // Header bar
             HStack(spacing: 6) {

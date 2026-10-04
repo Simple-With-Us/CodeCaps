@@ -319,13 +319,11 @@ struct GlancePopover: View {
                 provider = model.sections.first { $0.providerKey == anomaly.providerKey }?.providerLabel
                     ?? anomaly.providerKey.capitalized
             }
-            let matchingSnapshot = model.displaySections.flatMap { $0.section.windows }
-                .first { $0.window.id == anomaly.windowId }
-                ?? model.sections.flatMap(\.windows).first { $0.window.id == anomaly.windowId }
-            let windowLabel = matchingSnapshot.map { glanceMeterCaption($0) } ?? anomaly.windowId
-            let normalized = runawayNormalizedTitle(provider: provider, window: windowLabel)
+            // The marquee names the provider and the anomaly, not the window's
+            // cadence tag:  the row it sits under already shows that, and a
+            // compact "MiniMax: 2.0× vs peak" stays readable while scrolling.
             let comp = anomaly.kind == .vsPeak ? "peak" : "avg"
-            var parts = ["\(normalized): \(anomaly.multiplier.formatted(.number.precision(.fractionLength(1))))× vs \(comp)"]
+            var parts = ["\(provider): \(anomaly.multiplier.formatted(.number.precision(.fractionLength(1))))× vs \(comp)"]
             if let rate = anomaly.ratePercentPerHour {
                 parts.append("\(rate.formatted(.number.precision(.fractionLength(1)))) %/hr")
             }
