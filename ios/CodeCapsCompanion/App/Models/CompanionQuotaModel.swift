@@ -1284,7 +1284,7 @@ public final class CompanionQuotaModel: ObservableObject {
     }
 
     /// The manifest's `iconHint` for the canonicalized key, if any.
-    static func iconHint(for canonicalKey: String, in manifest: [WireProviderGroup]?) -> String? {
+    private static func iconHint(for canonicalKey: String, in manifest: [WireProviderGroup]?) -> String? {
         guard let manifest else { return nil }
         return manifest.first { canonicalManifestKey(provider: $0.provider, via: $0.via) == canonicalKey }?.iconHint
     }
