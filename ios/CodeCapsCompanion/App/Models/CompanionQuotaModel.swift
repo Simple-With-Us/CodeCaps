@@ -293,6 +293,7 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
         if key.contains("grok-bot") { return "provider-grok-bot" }
         if key.contains("grok") || key.contains("xai") { return "provider-grok" }
         if key.contains("minimax") { return "provider-minimax" }
+        if key.contains("muse") { return "provider-muse" }
         if key.contains("antigravity") || key.contains("gemini") { return "provider-gemini" }
         return nil
     }

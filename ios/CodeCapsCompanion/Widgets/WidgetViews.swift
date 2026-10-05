@@ -139,6 +139,7 @@ struct ProviderMarkView: View {
         if low.contains("openai") || low.contains("codex") { return "provider-openai" }
         if low.contains("cursor") { return "provider-cursor" }
         if low.contains("minimax") { return "provider-minimax" }
+        if low.contains("muse") { return "provider-muse" }
         if low.contains("antigravity") { return "provider-antigravity" }
         if low.contains("gemini") { return "provider-gemini" }
         if low.contains("grok-bot") { return "provider-grok-bot" }

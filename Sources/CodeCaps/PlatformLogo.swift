@@ -253,7 +253,7 @@ public enum PlatformLogoImage {
         "grok-cli": ("grok", "svg"),
         "grok-bot": ("grok-bot", "svg"),
         "minimax": ("minimax", "png"),
-        "muse": ("muse", "svg"),
+        "muse": ("muse", "png"),
         "cursor": ("cursor", "svg"),
     ]
 
