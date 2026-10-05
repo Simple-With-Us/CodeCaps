@@ -295,6 +295,24 @@ struct SettingsSourcesFleetPage: View {
 
             Toggle("Read Quotas From This Mac",
                    isOn: Binding(get: { model.localEnabled }, set: { model.setLocalEnabled($0) }))
+            Toggle("Provider Checks", isOn: Binding(
+                get: { model.providerChecksEnabled }, set: { model.setProviderChecksEnabled($0) }))
+                .disabled(!model.localEnabled)
+            Picker("Provider Check Interval", selection: $model.providerCheckCadence) {
+                ForEach(SourceRefreshCadence.allCases) { cadence in
+                    Text(cadence.title).tag(cadence)
+                }
+            }
+            .disabled(!model.localEnabled || !model.providerChecksEnabled)
+            Toggle("Codex Session File Checks", isOn: Binding(
+                get: { model.sessionFileChecksEnabled }, set: { model.setSessionFileChecksEnabled($0) }))
+                .disabled(!model.localEnabled)
+            Picker("Session File Check Interval", selection: $model.sessionFileCadence) {
+                ForEach(SourceRefreshCadence.allCases) { cadence in
+                    Text(cadence.title).tag(cadence)
+                }
+            }
+            .disabled(!model.localEnabled || !model.sessionFileChecksEnabled)
             ForEach(ReaderStatus.all, id: \.providerKey) { reader in
                 readerRow(reader)
             }
@@ -304,6 +322,10 @@ struct SettingsSourcesFleetPage: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("CodeCaps reads each CLI's own saved credentials in place." + sentenceGap
                      + "It never asks you for a provider API key.")
+                Text("Provider Checks: 7 HTTP paths and 3 local helpers across 8 AI plan families." + sentenceGap
+                     + "These are source capabilities, not a request count per check.")
+                Text("Codex Session File Checks: 1 local quota source." + sentenceGap
+                     + "File checks do not upload or download on their own.")
                 Text("A snapshot is written to ~/Library/Application Support/Usage Monitor/quota-windows.json for BotFleet.")
                 if let widgetSharingError = model.widgetSharingError {
                     Text(widgetSharingError).foregroundStyle(Theme.warning)
@@ -1136,6 +1158,15 @@ struct SettingsNotificationsPage: View {
 
     var body: some View {
         SettingsPage {
+            if let row = model.displaySections.first(where: {
+                $0.providerKey == model.runawayAlertHistory.first?.providerKey
+            }) ?? model.displaySections.first {
+                Section {
+                    UsageHistoryView(model: model, state: state, row: row)
+                } header: {
+                    Eyebrow("RECENT USAGE HISTORY")
+                }
+            }
             Section {
                 Toggle("Reset Alarms For All Providers", isOn: $model.alarmsAll)
                     .help("The same switch as the All bell at the top of the Docked Bar.")

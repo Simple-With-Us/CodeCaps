@@ -251,6 +251,20 @@ final class MonitorModel: ObservableObject {
 
     // Local & Remote Reading
     @Published private(set) var localEnabled: Bool
+    @Published private(set) var providerChecksEnabled: Bool
+    @Published private(set) var sessionFileChecksEnabled: Bool
+    @Published var providerCheckCadence: SourceRefreshCadence {
+        didSet {
+            defaults.set(providerCheckCadence.rawValue, forKey: SourceRefreshPreference.providerMinutes)
+            scheduleSourceTimers()
+        }
+    }
+    @Published var sessionFileCadence: SourceRefreshCadence {
+        didSet {
+            defaults.set(sessionFileCadence.rawValue, forKey: SourceRefreshPreference.sessionMinutes)
+            scheduleSourceTimers()
+        }
+    }
     @Published private(set) var serverEnabled: Bool
     @Published private(set) var endpoint: String
     @Published private(set) var hasSavedToken: Bool
@@ -331,10 +345,19 @@ final class MonitorModel: ObservableObject {
 
     private let defaults: UserDefaults
     private let burnRateHistoryURL: URL
+    /// Memoized historySamples(): the burn-rate file is parsed once per
+    /// on-disk change instead of once per view construction (UsageHistoryView
+    /// init runs on every SwiftUI body evaluation).  Keyed on the file's
+    /// modification date + size; appends and trims both change those.
+    private var historySamplesCache: (modification: Date?, size: Int, samples: [AnomalyDetector.Sample])?
     private var lastRunawayAlertAt: [String: Double] = [:]
     private var hasCurrentLocalRead = false
     var localResultForTesting: LocalQuotaResult?
     var localReadForTesting: (@MainActor () async -> LocalQuotaResult?)?
+    var sessionFileReadForTesting: (@MainActor () async -> LocalQuotaResult)?
+    var sessionAccountIDForTesting: (@MainActor () async -> String?)?
+    var handoffWriteForTesting: (([QuotaWindow]) -> Void)?
+    var widgetWriteForTesting: (([QuotaWindow]) -> Void)?
     var serverFetchForTesting: (@MainActor () async throws -> QuotaResponse)?
     var syncTokenReadForTesting: (@MainActor () async -> String?)?
     var readTokenReadForTesting: (@MainActor () async -> String?)?
@@ -343,11 +366,20 @@ final class MonitorModel: ObservableObject {
     var runawayNotificationForTesting: ((BurnRateNotification) -> Void)?
     var skipsSnapshotIOForTesting = false
     private var localWindows: [QuotaWindow] = []
+    private var providerResult: LocalQuotaResult?
+    private var sessionFileResult: LocalQuotaResult?
+    private var currentCodexAccountID: String?
+    private let sessionFileReader = CodexSessionQuotaReader()
     private var serverWindows: [QuotaWindow] = []
     @Published private(set) var fleetWindowGroups: [FleetWindowGroup] = []
     private var refreshTimer: Timer?
+    private var sessionFileTimer: Timer?
+    private var hasStarted = false
     private var clockTimer: Timer?
     private var request: Task<Void, Never>?
+    private var sessionFileRequest: Task<Void, Never>?
+    var sessionFileTaskForTesting: Task<Void, Never>? { sessionFileRequest }
+    private var sessionFileRevision = 0
     var refreshTaskForTesting: Task<Void, Never>? { request }
     private var revision = 0
     private var pushRevision = 0
@@ -418,6 +450,12 @@ final class MonitorModel: ObservableObject {
         }
         disabledSources = Set((defaults.stringArray(forKey: "disabledSources") ?? []))
         localEnabled = defaults.object(forKey: "localEnabled") as? Bool ?? true
+        providerChecksEnabled = SourceRefreshPreference.enabled(SourceRefreshPreference.providerEnabled, defaults: defaults)
+        sessionFileChecksEnabled = SourceRefreshPreference.enabled(SourceRefreshPreference.sessionEnabled, defaults: defaults)
+        providerCheckCadence = SourceRefreshPreference.cadence(SourceRefreshPreference.providerMinutes,
+                                                               fallback: .five, defaults: defaults)
+        sessionFileCadence = SourceRefreshPreference.cadence(SourceRefreshPreference.sessionMinutes,
+                                                              fallback: .one, defaults: defaults)
         serverEnabled = defaults.bool(forKey: "serverEnabled")
         hasSavedToken = defaults.bool(forKey: "hasSavedToken")
         syncEnabled = defaults.bool(forKey: "syncEnabled")
@@ -467,7 +505,16 @@ final class MonitorModel: ObservableObject {
     }
 
     func historySamples() -> [AnomalyDetector.Sample] {
-        BurnRateMonitor.loadSamples(historyURL: burnRateHistoryURL)
+        let attrs = try? FileManager.default.attributesOfItem(atPath: burnRateHistoryURL.path)
+        let modification = attrs?[.modificationDate] as? Date
+        let size = (attrs?[.size] as? Int) ?? -1
+        if let cache = historySamplesCache,
+           cache.modification == modification, cache.size == size {
+            return cache.samples
+        }
+        let samples = BurnRateMonitor.loadSamples(historyURL: burnRateHistoryURL)
+        historySamplesCache = (modification, size, samples)
+        return samples
     }
 
     func hasLocalHistorySource(for row: DisplaySection) -> Bool {
@@ -860,10 +907,9 @@ final class MonitorModel: ObservableObject {
     }
 
     func start() {
+        hasStarted = true
         refresh()
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.refresh() }
-        }
+        scheduleSourceTimers()
         clockTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
@@ -886,13 +932,31 @@ final class MonitorModel: ObservableObject {
     }
 
     func stop() {
+        hasStarted = false
         revision += 1
         request?.cancel()
         request = nil
+        invalidateSessionFileRefresh()
         cancelPendingPush()
         isRefreshing = false
         refreshTimer?.invalidate()
+        sessionFileTimer?.invalidate()
         clockTimer?.invalidate()
+    }
+
+    private func scheduleSourceTimers() {
+        refreshTimer?.invalidate()
+        sessionFileTimer?.invalidate()
+        guard hasStarted else { return }
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: providerCheckCadence.seconds, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.providerChecksEnabled || self.serverEnabled else { return }
+                self.refreshProviderChecks()
+            }
+        }
+        sessionFileTimer = Timer.scheduledTimer(withTimeInterval: sessionFileCadence.seconds, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.refreshSessionFiles() }
+        }
     }
 
     func movePlatformUp(providerKey: String) {
@@ -1056,15 +1120,45 @@ final class MonitorModel: ObservableObject {
     func setLocalEnabled(_ value: Bool) {
         guard value != localEnabled else { return }
         invalidateRefresh()
+        invalidateSessionFileRefresh()
         localEnabled = value
         defaults.set(value, forKey: "localEnabled")
         if !value {
             hasCurrentLocalRead = false
+            providerResult = nil
+            sessionFileResult = nil
+            currentCodexAccountID = nil
             localWindows = []
             activeRunawayAnomalies = []
             if !skipsSnapshotIOForTesting { try? LocalQuotaSnapshot.remove() }
+            rebuildLocalState(recordSamples: false)
         }
         refresh()
+    }
+
+    func setProviderChecksEnabled(_ value: Bool) {
+        guard value != providerChecksEnabled else { return }
+        invalidateRefresh()
+        providerChecksEnabled = value
+        defaults.set(value, forKey: SourceRefreshPreference.providerEnabled)
+        if !value { providerResult = nil }
+        rebuildLocalState(recordSamples: false)
+        if value || serverEnabled { refreshProviderChecks() }
+    }
+
+    func setSessionFileChecksEnabled(_ value: Bool) {
+        guard value != sessionFileChecksEnabled else { return }
+        invalidateRefresh()
+        invalidateSessionFileRefresh()
+        sessionFileChecksEnabled = value
+        defaults.set(value, forKey: SourceRefreshPreference.sessionEnabled)
+        if value {
+            refreshSessionFiles()
+        } else {
+            sessionFileResult = nil
+            rebuildLocalState(recordSamples: false)
+        }
+        if providerChecksEnabled || serverEnabled { refreshProviderChecks() }
     }
 
     /// Turns push sharing off without needing a valid endpoint.  Turning it on
@@ -1086,6 +1180,7 @@ final class MonitorModel: ObservableObject {
         serverWindows = []
         fleetWindowGroups = []
         serverError = nil
+        rebuildLocalState(recordSamples: false)
         refresh()
     }
 
@@ -1200,6 +1295,7 @@ final class MonitorModel: ObservableObject {
         guard let url = URL(string: value), QuotaClient.isAllowedEndpoint(url) else { throw QuotaClientError.invalidEndpoint }
         let cleanToken = sanitizedToken(token)
         invalidateRefresh()
+        invalidateSessionFileRefresh()
         if !cleanToken.isEmpty {
             guard !cleanToken.contains("\n"), !cleanToken.contains("\r") else { throw QuotaClientError.invalidToken }
             try await TokenStore.save(cleanToken, server: value, service: TokenStore.readService)
@@ -1226,6 +1322,7 @@ final class MonitorModel: ObservableObject {
         // A timer refresh can start while the token read above is suspended.
         // Invalidate it again before installing the new read modes.
         invalidateRefresh()
+        invalidateSessionFileRefresh()
         localEnabled = local
         serverEnabled = server
         endpoint = value
@@ -1236,6 +1333,9 @@ final class MonitorModel: ObservableObject {
         defaults.set(server, forKey: "serverEnabled")
         defaults.set(value, forKey: "endpoint")
         localWindows = []
+        providerResult = nil
+        sessionFileResult = nil
+        currentCodexAccountID = nil
         hasCurrentLocalRead = false
         activeRunawayAnomalies = []
         serverWindows = []
@@ -1475,6 +1575,12 @@ final class MonitorModel: ObservableObject {
         isRefreshing = false
     }
 
+    private func invalidateSessionFileRefresh() {
+        sessionFileRevision += 1
+        sessionFileRequest?.cancel()
+        sessionFileRequest = nil
+    }
+
     private func cancelPendingPush() {
         pushRevision += 1
         pushTask?.cancel()
@@ -1485,10 +1591,15 @@ final class MonitorModel: ObservableObject {
     // MARK: - Refresh Loop
 
     func refresh() {
+        if providerChecksEnabled || serverEnabled { refreshProviderChecks() }
+        refreshSessionFiles()
+    }
+
+    func refreshProviderChecks() {
         guard !isRefreshing else { return }
         isRefreshing = true
         let generation = revision
-        let useLocal = localEnabled
+        let useLocal = localEnabled && providerChecksEnabled
         let useServer = serverEnabled
         let currentEndpoint = endpoint
         request = Task { [weak self] in
@@ -1528,7 +1639,10 @@ final class MonitorModel: ObservableObject {
                     }
                 }
             }
-            let local = await localRead
+            let providerRead = await localRead
+            let currentAccount: String?
+            if useLocal { currentAccount = await self?.codexAccountID() }
+            else { currentAccount = nil }
             guard !Task.isCancelled, let self, self.revision == generation else { return }
             if useServer {
                 self.readTokenState = SavedTokenState.resolve(hasSavedFlag: self.hasSavedToken,
@@ -1536,6 +1650,9 @@ final class MonitorModel: ObservableObject {
             }
             self.now = Date()
             self.lastChecked = self.now
+            if useLocal { self.currentCodexAccountID = currentAccount }
+            self.providerResult = providerRead
+            let local = self.currentLocalResult()
             if let local {
                 self.issues = local.issues
                 self.consentNeeded = local.consentNeeded
@@ -1558,9 +1675,11 @@ final class MonitorModel: ObservableObject {
                 // `issues` is still the local read's own map here — the server
                 // failure below is merged in afterwards and must never reach a
                 // file that promises local-only readings.
-                if self.skipsSnapshotIOForTesting {
+                if let writeForTesting = self.handoffWriteForTesting {
+                    writeForTesting(self.localWindows)
+                } else if self.skipsSnapshotIOForTesting {
                     self.handoffError = nil
-                } else if useLocal {
+                } else if self.localEnabled && local != nil {
                     try LocalQuotaSnapshot.write(windows: self.localWindows, issues: self.issues, customMarks: exportedCustomMarks(), now: self.now)
                 }
                 else { try LocalQuotaSnapshot.remove() }
@@ -1570,7 +1689,7 @@ final class MonitorModel: ObservableObject {
             }
 
             // Push to remote server if enabled
-            if self.syncEnabled && !self.localWindows.isEmpty {
+            if useLocal && self.syncEnabled && !self.localWindows.isEmpty {
                 _ = await self.pushQuotasIfEnabled(windows: self.localWindows)
             }
 
@@ -1610,32 +1729,172 @@ final class MonitorModel: ObservableObject {
             self.originByProvider = origins
             if newServer != nil { self.lastPullTime = self.now }
             self.response = QuotaResponse(generatedAt: ISO8601DateFormatter().string(from: self.now), windows: merged)
-            if !self.skipsSnapshotIOForTesting {
-                do {
-                    let widgetCandidates = merged + split.groups.flatMap(\.windows)
-                    let visibleProviderKeys = Set(QuotaResponse(generatedAt: "", windows: widgetCandidates)
-                        .platformSections(now: self.now).map(\.providerKey))
-                    let widgetWindows = widgetCandidates.filter {
-                        visibleProviderKeys.contains($0.canonicalProviderKey)
-                            && !self.disabledSources.contains($0.source ?? "")
-                            && !$0.isSupplementaryVideoQuota
-                    }
-                    try LocalQuotaSnapshot.writeWidgetSnapshot(windows: widgetWindows,
-                                                              customMarks: self.exportedCustomMarks(), now: self.now)
-                    self.widgetSharingError = nil
-                    UserDefaults(suiteName: LocalQuotaSnapshot.appGroupId)?.set(self.platformOrder, forKey: "platformOrder")
-                    #if canImport(WidgetKit)
-                    WidgetCenter.shared.reloadAllTimelines()
-                    #endif
-                } catch {
-                    self.widgetSharingError = "Widgets cannot access the shared quota cache." + sentenceGap
-                        + "Install a build with native widget sharing enabled."
-                }
-            }
+            self.publishWidgetSnapshot(candidates: merged + split.groups.flatMap(\.windows))
             self.refreshRunawayUsageState(recordSamples: local != nil)
             self.alarmManager.evaluate(observations: self.resetAlarmObservationsForCurrentReadings(), now: self.now)
             self.isRefreshing = false
             self.request = nil
+        }
+    }
+
+    func refreshSessionFiles() {
+        guard localEnabled, sessionFileChecksEnabled, sessionFileRequest == nil else { return }
+        // An injected model read must not silently start a real auth/session
+        // file scan from the parallel timer in an offline test.
+        if sessionFileReadForTesting == nil,
+           skipsSnapshotIOForTesting || localReadForTesting != nil || localResultForTesting != nil
+                || serverFetchForTesting != nil { return }
+        let generation = sessionFileRevision
+        let reader = sessionFileReader
+        let readForTesting = sessionFileReadForTesting
+        sessionFileRequest = Task { [weak self] in
+            let result = if let readForTesting {
+                await readForTesting()
+            } else {
+                await reader.read()
+            }
+            let currentAccount = await self?.codexAccountID()
+            guard !Task.isCancelled, let self, self.sessionFileRevision == generation,
+                  self.localEnabled, self.sessionFileChecksEnabled else { return }
+            self.sessionFileRequest = nil
+            let accountChanged = self.currentCodexAccountID != currentAccount
+            self.currentCodexAccountID = currentAccount
+            guard accountChanged || result != self.sessionFileResult else { return }
+            self.sessionFileResult = result
+            self.rebuildLocalState(recordSamples: true)
+        }
+    }
+
+    private func codexAccountID() async -> String? {
+        if let sessionAccountIDForTesting { return await sessionAccountIDForTesting() }
+        if skipsSnapshotIOForTesting || localReadForTesting != nil || localResultForTesting != nil
+            || sessionFileReadForTesting != nil || serverFetchForTesting != nil { return nil }
+        return await sessionFileReader.currentAccountID()
+    }
+
+    private func currentLocalResult() -> LocalQuotaResult? {
+        guard localEnabled else { return nil }
+        let provider = providerChecksEnabled ? providerResult : nil
+        let file = sessionFileChecksEnabled ? sessionFileResult : nil
+        guard provider != nil || file != nil else { return nil }
+        let providerWindows = (provider?.windows ?? []).filter {
+            $0.canonicalProviderKey != "openai" || (currentCodexAccountID != nil && $0.accountKey == currentCodexAccountID)
+        }
+        let fileWindows = (file?.windows ?? []).filter {
+            $0.canonicalProviderKey != "openai" || (currentCodexAccountID != nil && $0.accountKey == currentCodexAccountID)
+        }
+        let windows = Self.reconcileLocalWindows(provider: providerWindows, session: fileWindows)
+        var issues = provider?.issues ?? [:]
+        for (key, message) in file?.issues ?? [:] where issues[key] == nil {
+            issues[key] = message
+        }
+        if !fileWindows.filter({ $0.boundedRemainingPercent != nil }).isEmpty {
+            issues["openai"] = nil
+        }
+        if currentCodexAccountID == nil {
+            issues["openai"] = "Codex is not signed in locally."
+        }
+        return LocalQuotaResult(windows: windows, issues: issues,
+                                consentNeeded: provider?.consentNeeded ?? [])
+            .droppingSupersededPlaceholders()
+    }
+
+    static func reconcileLocalWindows(provider: [QuotaWindow], session: [QuotaWindow]) -> [QuotaWindow] {
+        let liveProviderCodex = provider.filter {
+            $0.canonicalProviderKey == "openai" && $0.boundedRemainingPercent != nil
+        }
+        let providerAccount = liveProviderCodex.first?.accountKey
+        var resolved = provider
+        for fileWindow in session {
+            guard fileWindow.canonicalProviderKey == "openai" else { continue }
+            // A provider reading with unknown or different account identity
+            // cannot be replaced by a session event from another login.
+            if !liveProviderCodex.isEmpty && (providerAccount == nil || fileWindow.accountKey != providerAccount) {
+                continue
+            }
+            if let index = resolved.firstIndex(where: { $0.id == fileWindow.id }) {
+                let current = resolved[index]
+                guard current.boundedRemainingPercent == nil
+                        || (fileWindow.occurredDate ?? .distantPast) > (current.occurredDate ?? .distantPast)
+                else { continue }
+                resolved[index] = fileWindow
+            } else {
+                resolved.append(fileWindow)
+            }
+        }
+        return resolved
+    }
+
+    /// File checks publish only changed local readings.  Fleet pull and push
+    /// stay on the provider/manual path, so a one-minute file poll is passive.
+    private func rebuildLocalState(recordSamples: Bool) {
+        let local = currentLocalResult()
+        if recordSamples {
+            // Only a real read advances the check clock.  Preference toggles
+            // rebuild state with no I/O; stamping lastChecked there made
+            // ConsoleState.reconcile treat the toggle as a completed read and
+            // abandon the saved-platform wait.  (`now` itself is still kept
+            // fresh by the 30-second clock timer.)
+            now = Date()
+            lastChecked = now
+        }
+        issues = local?.issues ?? [:]
+        consentNeeded = local?.consentNeeded ?? []
+        localWindows = AntigravityQuotaGroups.normalize(local?.windows ?? [])
+        hasCurrentLocalRead = local != nil
+        let localProviders = Set(localWindows.map(\.canonicalProviderKey))
+        let split = FleetOrigin.split(serverWindows)
+        let ownPush = split.ownPush
+        let adopted = ownPush.filter { !localProviders.contains($0.canonicalProviderKey) }
+        let merged = localWindows + adopted
+        originByProvider = Dictionary(uniqueKeysWithValues: Set(merged.map(\.canonicalProviderKey)).map { ($0, .local) })
+        response = QuotaResponse(generatedAt: ISO8601DateFormatter().string(from: now), windows: merged)
+        if let writeForTesting = handoffWriteForTesting {
+            writeForTesting(localWindows)
+            handoffError = nil
+        } else if !skipsSnapshotIOForTesting {
+            do {
+                if localEnabled {
+                    try LocalQuotaSnapshot.write(windows: localWindows, issues: issues,
+                                                 customMarks: exportedCustomMarks(), now: now)
+                } else {
+                    try LocalQuotaSnapshot.remove()
+                }
+                handoffError = nil
+            } catch {
+                handoffError = "BotFleet quota sharing is unavailable."
+            }
+        }
+        publishWidgetSnapshot(candidates: merged + split.groups.flatMap(\.windows))
+        refreshRunawayUsageState(recordSamples: recordSamples)
+        alarmManager.evaluate(observations: resetAlarmObservationsForCurrentReadings(), now: now)
+    }
+
+    private func publishWidgetSnapshot(candidates: [QuotaWindow]) {
+        let visibleProviderKeys = Set(QuotaResponse(generatedAt: "", windows: candidates)
+            .platformSections(now: now).map(\.providerKey))
+        let windows = candidates.filter {
+            visibleProviderKeys.contains($0.canonicalProviderKey)
+                && !disabledSources.contains($0.source ?? "")
+                && !$0.isSupplementaryVideoQuota
+        }
+        if let writeForTesting = widgetWriteForTesting {
+            writeForTesting(windows)
+            widgetSharingError = nil
+            return
+        }
+        guard !skipsSnapshotIOForTesting else { return }
+        do {
+            try LocalQuotaSnapshot.writeWidgetSnapshot(windows: windows,
+                                                      customMarks: exportedCustomMarks(), now: now)
+            widgetSharingError = nil
+            UserDefaults(suiteName: LocalQuotaSnapshot.appGroupId)?.set(platformOrder, forKey: "platformOrder")
+            #if canImport(WidgetKit)
+            WidgetCenter.shared.reloadAllTimelines()
+            #endif
+        } catch {
+            widgetSharingError = "Widgets cannot access the shared quota cache." + sentenceGap
+                + "Install a build with native widget sharing enabled."
         }
     }
 

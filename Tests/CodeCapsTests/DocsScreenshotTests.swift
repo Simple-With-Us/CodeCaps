@@ -31,7 +31,8 @@ final class DocsScreenshotTests: XCTestCase {
         return GlanceFixtures.png(of: popover, size: CGSize(width: Metrics.glanceWidth, height: height), dark: dark)
     }
 
-    private func console(page: ConsolePage, dark: Bool, selectedAlert: Bool = false) throws -> Data? {
+    private func console(page: ConsolePage, dark: Bool, selectedAlert: Bool = false,
+                         settingsAlert: Bool = false) throws -> Data? {
         let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let historyURL = temporary.appendingPathComponent("history.jsonl")
         defer { try? FileManager.default.removeItem(at: temporary) }
@@ -60,11 +61,21 @@ final class DocsScreenshotTests: XCTestCase {
         let (model, defaults, suite) = GlanceFixtures.makeModel(view: .fromMac, alarmsAll: true, fleet: false,
                                                                 localReadersOn: true,
                                                                 historyURL: historyURL,
-                                                                alertHistory: selectedAlert ? [alert] : [])
+                                                                alertHistory: (selectedAlert || settingsAlert) ? [alert] : [])
         defer { defaults.removePersistentDomain(forName: suite) }
         XCTAssertEqual(model.historySamples().count, samples.count,
                        "the screenshot must use the saved local sample fixture")
+        let historyKey: String?
         if case .platform(let key) = page {
+            historyKey = key
+        } else if case .settingsNotifications = page, settingsAlert {
+            historyKey = "anthropic"
+            XCTAssertEqual(model.runawayAlertHistory.first?.windowId, alert.windowId,
+                           "Alerts & Alarms screenshot must include the recent runaway alert")
+        } else {
+            historyKey = nil
+        }
+        if let key = historyKey {
             guard let row = model.displaySections.first(where: { $0.id == key }) else {
                 XCTFail("the screenshot platform must exist")
                 return nil
@@ -78,9 +89,9 @@ final class DocsScreenshotTests: XCTestCase {
             let readingsByWindow = Dictionary(grouping: plotted, by: \.windowId)
             XCTAssertTrue(readingsByWindow.values.contains { $0.count >= 2 },
                           "the screenshot platform needs two readings of the same window to draw a line")
-            if selectedAlert {
+            if selectedAlert || settingsAlert {
                 XCTAssertGreaterThanOrEqual(readingsByWindow[alert.windowId]?.count ?? 0, 2,
-                                            "the selected alert window needs its own visible history")
+                                            "the alert window needs its own visible history")
             }
         }
         let state = ConsoleState(defaults: defaults)
@@ -109,6 +120,8 @@ final class DocsScreenshotTests: XCTestCase {
                   "platform-alert-history.png", to: directory)
         try write(try console(page: .platform("google-antigravity:gemini"), dark: false),
                   "platform-antigravity.png", to: directory)
+        try write(try console(page: .settingsNotifications, dark: false, settingsAlert: true),
+                  "settings-alerts-history.png", to: directory)
         try write(try console(page: .settingsSourcesFleet, dark: false), "settings-sources-fleet.png", to: directory)
     }
 }
