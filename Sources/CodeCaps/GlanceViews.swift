@@ -1668,7 +1668,8 @@ struct GlanceRow: View {
             // Keyed by the row, not the platform, so each Antigravity pool
             // wears its own mark: the colour Gemini star, or the solid
             // Third-Party star.
-            PlatformLogo(providerKey: row.id, size: 16, style: markStyle)
+            PlatformLogo(providerKey: row.id, size: 16, style: markStyle,
+                         iconHint: row.poolKey == nil ? row.section.iconHint : nil)
                 .frame(width: Metrics.glanceLogoWidth, height: Metrics.glanceLogoWidth)
             Spacer().frame(width: Metrics.glanceLogoGap)
             VStack(alignment: .leading, spacing: 1) {

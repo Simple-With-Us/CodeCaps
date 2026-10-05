@@ -42,6 +42,94 @@ final class QuotaCoreTests: XCTestCase {
         XCTAssertEqual(response.platformSections(now: now).first?.providerKey, "anthropic")
     }
 
+    func testProviderGroupDecodesAdditiveFields() throws {
+        // Phase 2 backend manifest carries the new additive fields per group.
+        let data = #"{"provider":"anthropic","providerLabel":"Claude Code","via":null,"expected":true,"windows":[],"sortOrder":0,"iconHint":"claude","terms":{"defaultWindowLabel":"5h"}}"#.data(using: .utf8)!
+        let group = try JSONDecoder().decode(QuotaProviderGroup.self, from: data)
+        XCTAssertEqual(group.provider, "anthropic")
+        XCTAssertEqual(group.providerLabel, "Claude Code")
+        XCTAssertEqual(group.sortOrder, 0)
+        XCTAssertEqual(group.iconHint, "claude")
+        XCTAssertEqual(group.terms?.defaultWindowLabel, "5h")
+    }
+
+    func testProviderGroupDecodesWithoutAdditiveFields() throws {
+        // Legacy payloads without sortOrder/iconHint/terms must still decode.
+        let data = #"{"provider":"openai","providerLabel":"Codex","via":null,"expected":true,"windows":[]}"#.data(using: .utf8)!
+        let group = try JSONDecoder().decode(QuotaProviderGroup.self, from: data)
+        XCTAssertNil(group.sortOrder)
+        XCTAssertNil(group.iconHint)
+        XCTAssertNil(group.terms)
+    }
+
+    func testPlatformSectionsHonoursServerSortOrderAndLabels() {
+        // The server returns providerGroups in a custom order with a renamed
+        // label; the section order and labels must reflect the server view.
+        let groups: [QuotaProviderGroup] = [
+            QuotaProviderGroup(provider: "minimax", providerLabel: "Hailuo Video", via: nil, expected: false, windows: [], sortOrder: 0, iconHint: "minimax", terms: QuotaProviderTerms(defaultWindowLabel: "5h")),
+            QuotaProviderGroup(provider: "anthropic", providerLabel: "Claude Code", via: nil, expected: true, windows: [], sortOrder: 1, iconHint: "claude", terms: QuotaProviderTerms(defaultWindowLabel: "5h")),
+            QuotaProviderGroup(provider: "openai", providerLabel: "ChatGPT Plus", via: nil, expected: true, windows: [], sortOrder: 2, iconHint: "openai", terms: nil),
+        ]
+        let response = QuotaResponse(generatedAt: "", windows: [], providerGroups: groups)
+        let sections = response.platformSections(now: now)
+        XCTAssertEqual(sections.map(\.providerKey), ["minimax", "anthropic", "openai"])
+        XCTAssertEqual(sections.map(\.providerLabel), ["Hailuo Video", "Claude Code", "ChatGPT Plus"])
+        XCTAssertEqual(sections.first?.iconHint, "minimax")
+        // `defaultWindowLabel` is carried on the group; the section carries
+        // the icon hint.  The widget reads the label off the group.
+        XCTAssertEqual(groups[1].terms?.defaultWindowLabel, "5h")
+    }
+
+    func testPlatformSectionsFallBackToHardcodedListWhenProviderGroupsEmpty() {
+        // Offline / pre-manifest path: no providerGroups, fall back to the
+        // bundled list.  The list's order and labels must match.
+        let response = QuotaResponse(generatedAt: "", windows: [])
+        let sections = response.platformSections(now: now)
+        XCTAssertEqual(Array(sections.prefix(7)).map(\.providerKey), [
+            "anthropic", "openai", "google-antigravity", "cursor", "xai", "grok-bot", "minimax",
+        ])
+        XCTAssertEqual(sections.first?.providerLabel, "Claude")
+        XCTAssertNil(sections.first?.iconHint)
+    }
+
+    func testPlatformSectionsServerLabelWinsOnRename() {
+        // Server renames "Codex" to "ChatGPT Plus"; the bundled label must
+        // not appear, and the server-supplied label must win.
+        let groups = [
+            QuotaProviderGroup(provider: "openai", providerLabel: "ChatGPT Plus", via: nil, expected: true, windows: [], sortOrder: 0, iconHint: "openai", terms: nil)
+        ]
+        let response = QuotaResponse(generatedAt: "", windows: [], providerGroups: groups)
+        let sections = response.platformSections(now: now)
+        let openai = sections.first { $0.providerKey == "openai" }
+        XCTAssertNotNil(openai)
+        XCTAssertEqual(openai?.providerLabel, "ChatGPT Plus")
+        XCTAssertEqual(openai?.iconHint, "openai")
+    }
+
+    func testPlatformSectionsHiddenProvidersStillFilteredWithManifest() {
+        // The `hidden` set drops retired keys even when the manifest names them.
+        let groups = [
+            QuotaProviderGroup(provider: "kimi", providerLabel: "Kimi", via: nil, expected: true, windows: [], sortOrder: 0, iconHint: nil, terms: nil)
+        ]
+        let response = QuotaResponse(generatedAt: "", windows: [], providerGroups: groups)
+        let sections = response.platformSections(now: now)
+        XCTAssertFalse(sections.contains { $0.providerKey == "kimi" })
+    }
+
+    func testPlatformSectionsFutureKeyStillAppearsAfterManifest() {
+        // A window whose canonical key is not in the manifest must still get
+        // a section.  The server label wins when present, the hardcoded one
+        // otherwise.
+        let groups = [
+            QuotaProviderGroup(provider: "anthropic", providerLabel: "Claude Code", via: nil, expected: true, windows: [], sortOrder: 0, iconHint: nil, terms: nil)
+        ]
+        let future = window(provider: "new-provider", occurred: "2023-11-14T22:05:00Z")
+        let response = QuotaResponse(generatedAt: "2023-11-14T22:10:00Z", windows: [future], providerGroups: groups)
+        let sections = response.platformSections(now: now)
+        XCTAssertEqual(sections.first?.providerKey, "anthropic")
+        XCTAssertTrue(sections.contains { $0.providerKey == "new-provider" })
+    }
+
     func testAliasesAndAntigravityIdentity() {
         let antigravity = window(provider: "anthropic", via: "antigravity")
         let claude = window(provider: "claude-code")

@@ -85,6 +85,11 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
     public let isExhausted: Bool
     public let isMasked: Bool
     public let windows: [WidgetWindowItem]
+    /// Server-supplied icon hint (Phase 2 backend manifest).  When nil the
+    /// widget falls back to its built-in logo map (Phase 1 behaviour).
+    public let iconHint: String?
+    /// Server-supplied fallback window label (Phase 2 backend manifest).
+    public let defaultWindowLabel: String?
 
     public init(
         id: String,
@@ -95,7 +100,9 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
         resetAt: Date?,
         isExhausted: Bool = false,
         isMasked: Bool = false,
-        windows: [WidgetWindowItem] = []
+        windows: [WidgetWindowItem] = [],
+        iconHint: String? = nil,
+        defaultWindowLabel: String? = nil
     ) {
         self.id = id
         self.providerKey = providerKey
@@ -106,6 +113,8 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
         self.isExhausted = isExhausted
         self.isMasked = isMasked
         self.windows = windows
+        self.iconHint = iconHint
+        self.defaultWindowLabel = defaultWindowLabel
     }
 
     public var displayPercent: String {
@@ -294,6 +303,7 @@ public enum WidgetPresentation {
 
     private struct WireEnvelope: Decodable {
         let windows: [WireRawWindow]?
+        let providerGroups: [WireProviderGroup]?
     }
 
     private struct WireRawWindow: Decodable {
@@ -307,6 +317,40 @@ public enum WidgetPresentation {
         let modelId: String?
         let window: String?
         let resetAt: String?
+    }
+
+    /// Mirrors the backend manifest's provider group on the wire.  Optional
+    /// fields decode as absent — older envelopes keep working.  `providerLabel`
+    /// falls back to `provider` exactly like the canonical
+    /// `QuotaProviderGroup` decoder, so a manifest group that omits the label
+    /// can never make the whole `WireEnvelope` decode throw.
+    private struct WireProviderGroup: Decodable {
+        let provider: String
+        let providerKey: String?
+        let providerLabel: String
+        let via: String?
+        let sortOrder: Int?
+        let iconHint: String?
+        let terms: WireProviderTerms?
+
+        private enum CodingKeys: String, CodingKey {
+            case provider, providerKey, providerLabel, via, sortOrder, iconHint, terms
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            provider = try container.decode(String.self, forKey: .provider)
+            providerLabel = try container.decodeIfPresent(String.self, forKey: .providerLabel) ?? provider
+            providerKey = try container.decodeIfPresent(String.self, forKey: .providerKey)
+            via = try container.decodeIfPresent(String.self, forKey: .via)
+            sortOrder = try container.decodeIfPresent(Int.self, forKey: .sortOrder)
+            iconHint = try container.decodeIfPresent(String.self, forKey: .iconHint)
+            terms = try container.decodeIfPresent(WireProviderTerms.self, forKey: .terms)
+        }
+    }
+
+    private struct WireProviderTerms: Decodable {
+        let defaultWindowLabel: String?
     }
 
     public static func parseSnapshot(
@@ -334,13 +378,15 @@ public enum WidgetPresentation {
             }
         }
 
-        var platformGroups: [String: (providerKey: String, title: String, windows: [WireRawWindow])] = [:]
+        var platformGroups: [String: (providerKey: String, title: String, iconHint: String?, defaultWindowLabel: String?, windows: [WireRawWindow])] = [:]
         var platformKeyOrder: [String] = []
 
         for w in nonAntigravityWindows {
-            let (platKey, platTitle, provKey) = canonicalPlatformKey(for: w)
+            let (platKey, platTitle, provKey) = canonicalPlatformKey(for: w, manifest: envelope.providerGroups)
             if platformGroups[platKey] == nil {
-                platformGroups[platKey] = (providerKey: provKey, title: platTitle, windows: [])
+                let manifestHint = iconHint(for: platKey, in: envelope.providerGroups)
+                let defaultLabel = defaultWindowLabel(for: platKey, in: envelope.providerGroups)
+                platformGroups[platKey] = (providerKey: provKey, title: platTitle, iconHint: manifestHint, defaultWindowLabel: defaultLabel, windows: [])
                 platformKeyOrder.append(platKey)
             }
             platformGroups[platKey]?.windows.append(w)
@@ -348,61 +394,44 @@ public enum WidgetPresentation {
 
         var platforms: [WidgetPlatformItem] = []
 
-        for platKey in platformKeyOrder {
+        // Server-first ordering when the envelope carries a manifest: walk the
+        // manifest entries first so the provider list reflects the admin's
+        // current sort order, then append any future keys that arrived in the
+        // windows payload but were not in the manifest.  An empty manifest
+        // keeps the legacy "first-seen-wins" order (the offline-fallback path).
+        let manifest = envelope.providerGroups ?? []
+        let manifestKeys: [String] = manifest.isEmpty
+            ? platformKeyOrder
+            : manifest.compactMap { group in
+                let key = canonicalManifestKey(provider: group.provider, via: group.via)
+                return key.isEmpty ? nil : key
+            }
+
+        for platKey in manifestKeys {
             guard let group = platformGroups[platKey] else { continue }
-            var childWindows: [WidgetWindowItem] = []
-            var seenCadenceKeys: Set<String> = []
-
-            for w in group.windows {
-                let cadence = formatCadence(w.label, window: w.window)
-                let parsedReset = parseDate(from: w.resetAt)
-                let pct = w.remainingPercent
-                let exhausted = (pct ?? 100) <= 0 || (w.isExhausted ?? false)
-
-                let cadenceKey = cadence.lowercased()
-                if !seenCadenceKeys.contains(cadenceKey) {
-                    seenCadenceKeys.insert(cadenceKey)
-                    childWindows.append(WidgetWindowItem(
-                        id: w.id,
-                        label: w.label.isEmpty ? cadence : w.label,
-                        cadence: cadence,
-                        remainingPercent: pct,
-                        resetAt: parsedReset,
-                        isExhausted: exhausted,
-                        isMasked: false
-                    ))
-                }
-            }
-
-            // Standardize cadence order: shorter periods (e.g. 5-hour) precede longer periods (e.g. weekly).
-            childWindows.sort { left, right in
-                let lPeriod = ResetAlarmCadence.periodSeconds(token: left.cadence, label: left.label) ?? 86400
-                let rPeriod = ResetAlarmCadence.periodSeconds(token: right.cadence, label: right.label) ?? 86400
-                if lPeriod != rPeriod {
-                    return lPeriod < rPeriod
-                }
-                return left.id < right.id
-            }
-
-            let validPercents = childWindows.compactMap(\.remainingPercent)
-            let controllingPct = validPercents.min()
-            let isExhausted = (controllingPct ?? 100) <= 0
-            let nearestReset = childWindows.compactMap(\.resetAt).filter { $0 > now }.min()
-                ?? childWindows.compactMap(\.resetAt).min()
-
-            let subtitle = childWindows.first?.cadence ?? "Subscription Plan"
-
-            platforms.append(WidgetPlatformItem(
+            let built = buildPlatformItem(
                 id: platKey,
                 providerKey: group.providerKey,
                 title: group.title,
-                subtitle: subtitle,
-                remainingPercent: controllingPct,
-                resetAt: nearestReset,
-                isExhausted: isExhausted,
-                isMasked: false,
-                windows: childWindows
-            ))
+                iconHint: group.iconHint,
+                defaultWindowLabel: group.defaultWindowLabel,
+                rawWindows: group.windows,
+                now: now
+            )
+            platforms.append(built)
+        }
+        for platKey in platformKeyOrder where !manifestKeys.contains(platKey) {
+            guard let group = platformGroups[platKey] else { continue }
+            let built = buildPlatformItem(
+                id: platKey,
+                providerKey: group.providerKey,
+                title: group.title,
+                iconHint: group.iconHint,
+                defaultWindowLabel: group.defaultWindowLabel,
+                rawWindows: group.windows,
+                now: now
+            )
+            platforms.append(built)
         }
 
         // Antigravity consolidation
@@ -420,7 +449,9 @@ public enum WidgetPresentation {
                 poolKey: "gemini",
                 title: "Gemini",
                 windows: geminiWindows,
-                now: now
+                now: now,
+                iconHint: iconHint(for: "google-antigravity:gemini", in: manifest) ?? "gemini-color",
+                defaultLabel: defaultWindowLabel(for: "google-antigravity", in: manifest)
             ) {
                 platforms.append(item)
             }
@@ -429,7 +460,9 @@ public enum WidgetPresentation {
                 poolKey: "third-party",
                 title: "3rd-Party",
                 windows: thirdPartyWindows,
-                now: now
+                now: now,
+                iconHint: "gemini-mono",
+                defaultLabel: defaultWindowLabel(for: "google-antigravity", in: manifest)
             ) {
                 platforms.append(item)
             }
@@ -452,11 +485,90 @@ public enum WidgetPresentation {
         return platforms
     }
 
+    /// Build a single WidgetPlatformItem from a window group + manifest hints.
+    private static func buildPlatformItem(
+        id: String,
+        providerKey: String,
+        title: String,
+        iconHint: String?,
+        defaultWindowLabel: String?,
+        rawWindows: [WireRawWindow],
+        now: Date
+    ) -> WidgetPlatformItem {
+        var childWindows: [WidgetWindowItem] = []
+        var seenCadenceKeys: Set<String> = []
+
+        for w in rawWindows {
+            let cadence = formatCadence(w.label, window: w.window)
+            let parsedReset = parseDate(from: w.resetAt)
+            let pct = w.remainingPercent
+            let exhausted = (pct ?? 100) <= 0 || (w.isExhausted ?? false)
+
+            let cadenceKey = cadence.lowercased()
+            if !seenCadenceKeys.contains(cadenceKey) {
+                seenCadenceKeys.insert(cadenceKey)
+                childWindows.append(WidgetWindowItem(
+                    id: w.id,
+                    label: w.label.isEmpty ? cadence : w.label,
+                    cadence: cadence,
+                    remainingPercent: pct,
+                    resetAt: parsedReset,
+                    isExhausted: exhausted,
+                    isMasked: false
+                ))
+            }
+        }
+
+        // Standardize cadence order: shorter periods (e.g. 5-hour) precede longer periods (e.g. weekly).
+        childWindows.sort { left, right in
+            let lPeriod = ResetAlarmCadence.periodSeconds(token: left.cadence, label: left.label) ?? 86400
+            let rPeriod = ResetAlarmCadence.periodSeconds(token: right.cadence, label: right.label) ?? 86400
+            if lPeriod != rPeriod {
+                return lPeriod < rPeriod
+            }
+            return left.id < right.id
+        }
+
+        let validPercents = childWindows.compactMap(\.remainingPercent)
+        let controllingPct = validPercents.min()
+        let isExhausted = (controllingPct ?? 100) <= 0
+        let nearestReset = childWindows.compactMap(\.resetAt).filter { $0 > now }.min()
+            ?? childWindows.compactMap(\.resetAt).min()
+
+        // Window label: prefer the per-window cadence.  When the provider has
+        // no windows yet, fall back to the server's `terms.defaultWindowLabel`
+        // (e.g. "5h" / "weekly") so the row does not go blank.
+        let subtitle: String
+        if let firstCadence = childWindows.first?.cadence, !firstCadence.isEmpty {
+            subtitle = firstCadence
+        } else if let defaultWindowLabel, !defaultWindowLabel.isEmpty {
+            subtitle = defaultWindowLabel
+        } else {
+            subtitle = "Subscription Plan"
+        }
+
+        return WidgetPlatformItem(
+            id: id,
+            providerKey: providerKey,
+            title: title,
+            subtitle: subtitle,
+            remainingPercent: controllingPct,
+            resetAt: nearestReset,
+            isExhausted: isExhausted,
+            isMasked: false,
+            windows: childWindows,
+            iconHint: iconHint,
+            defaultWindowLabel: defaultWindowLabel
+        )
+    }
+
     private static func consolidateAntigravityPool(
         poolKey: String,
         title: String,
         windows: [WireRawWindow],
-        now: Date
+        now: Date,
+        iconHint: String? = nil,
+        defaultLabel: String? = nil
     ) -> WidgetPlatformItem? {
         guard !windows.isEmpty else { return nil }
 
@@ -513,20 +625,46 @@ public enum WidgetPresentation {
         let nearestReset = childWindows.compactMap(\.resetAt).filter { $0 > now }.min()
             ?? childWindows.compactMap(\.resetAt).min()
 
+        let subtitle = poolKey == "gemini" ? "Gemini Models" : "Third-Party Models"
+
         return WidgetPlatformItem(
             id: "antigravity-\(poolKey)",
             providerKey: "google-antigravity",
             title: title,
-            subtitle: poolKey == "gemini" ? "Gemini Models" : "Third-Party Models",
+            subtitle: subtitle,
             remainingPercent: controllingPct,
             resetAt: nearestReset,
             isExhausted: isExhausted,
             isMasked: false,
-            windows: childWindows
+            windows: childWindows,
+            iconHint: iconHint,
+            defaultWindowLabel: defaultLabel
         )
     }
 
-    private static func canonicalPlatformKey(for raw: WireRawWindow) -> (key: String, title: String, providerKey: String) {
+    private static func canonicalPlatformKey(
+        for raw: WireRawWindow,
+        manifest: [WireProviderGroup]? = nil
+    ) -> (key: String, title: String, providerKey: String) {
+        let legacy = canonicalPlatformKeyLegacy(for: raw)
+        // Server-first: when the manifest lists this provider, its label
+        // wins.  Generic over the manifest's keys, so a provider added purely
+        // via the backend manifest gets its server label with no app change.
+        // (The manifest lookup is by the window's canonical key — never by
+        // substring — so unrelated windows can never collapse onto one entry.)
+        if let manifest,
+           let group = manifest.first(where: {
+               canonicalManifestKey(provider: $0.provider, via: $0.via) == legacy.key
+           }) {
+            let label = group.providerLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (legacy.key, label.isEmpty ? legacy.title : label, legacy.providerKey)
+        }
+        return legacy
+    }
+
+    /// The pre-manifest hardcoded mapping.  Kept as the offline fallback and
+    /// as the canonical-key computation the manifest lookup keys off.
+    private static func canonicalPlatformKeyLegacy(for raw: WireRawWindow) -> (key: String, title: String, providerKey: String) {
         let pKey = (raw.providerKey ?? raw.provider).lowercased()
         let prov = raw.provider.lowercased()
         let id = raw.id.lowercased()
@@ -551,6 +689,40 @@ public enum WidgetPresentation {
         }
         let fallbackKey = (raw.providerKey ?? raw.provider).trimmingCharacters(in: .whitespacesAndNewlines)
         return (fallbackKey.isEmpty ? "other" : fallbackKey, raw.provider, fallbackKey)
+    }
+
+    /// Mirror of `QuotaProviders.canonicalKey` for the wire manifest.  Kept
+    /// local because the widget bundle cannot import the Mac-side helpers.
+    static func canonicalManifestKey(provider: String, via: String?) -> String {
+        let trimmedVia = via?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        if trimmedVia == "antigravity" { return "google-antigravity" }
+        let raw = provider.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let aliases: [String: String] = [
+            "anthropic": "anthropic", "claude": "anthropic", "claude-code": "anthropic", "claude.ai": "anthropic",
+            "openai": "openai", "openai-codex": "openai", "codex": "openai",
+            "google": "google-antigravity", "google-antigravity": "google-antigravity", "antigravity": "google-antigravity", "antigravity-cli": "google-antigravity", "gemini": "google-antigravity",
+            "cursor": "cursor",
+            "xai": "xai", "grok": "xai", "grok-build": "xai",
+            "grok-bot": "grok-bot", "grok bot": "grok-bot", "grokbot": "grok-bot",
+            "minimax": "minimax", "minimax-code": "minimax",
+            "kimi": "kimi", "moonshot": "kimi", "moonshot-ai": "kimi",
+            "gemini-cli": "gemini-cli",
+            "copilot": "github-copilot", "github-copilot": "github-copilot", "github_copilot": "github-copilot",
+            "windsurf": "windsurf", "codeium": "windsurf",
+        ]
+        return aliases[raw] ?? raw
+    }
+
+    /// The manifest's `iconHint` for the canonicalized key, if any.
+    private static func iconHint(for canonicalKey: String, in manifest: [WireProviderGroup]?) -> String? {
+        guard let manifest else { return nil }
+        return manifest.first { canonicalManifestKey(provider: $0.provider, via: $0.via) == canonicalKey }?.iconHint
+    }
+
+    /// The manifest's `terms.defaultWindowLabel` for the canonicalized key.
+    private static func defaultWindowLabel(for canonicalKey: String, in manifest: [WireProviderGroup]?) -> String? {
+        guard let manifest else { return nil }
+        return manifest.first { canonicalManifestKey(provider: $0.provider, via: $0.via) == canonicalKey }?.terms?.defaultWindowLabel
     }
 
     public static func formatCadence(_ label: String, window: String? = nil) -> String {

@@ -152,7 +152,8 @@ struct PipWidgetView: View {
         return HStack(spacing: 6) {
             PlatformLogo(providerKey: row.providerKey,
                          size: 14,
-                         style: model.markStyle(for: row.providerKey))
+                         style: model.markStyle(for: row.providerKey),
+                         iconHint: row.poolKey == nil ? row.section.iconHint : nil)
 
             Text(row.title)
                 .font(.system(size: 11, weight: .medium))

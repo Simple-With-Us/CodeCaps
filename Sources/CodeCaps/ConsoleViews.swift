@@ -577,7 +577,8 @@ struct ConsoleSidebar: View {
     private func quotaRow(_ row: DisplaySection) -> some View {
         HStack(spacing: 6) {
             PlatformLogo(providerKey: row.id, size: 16,
-                         style: model.markStyle(for: row.id))
+                         style: model.markStyle(for: row.id),
+                         iconHint: row.poolKey == nil ? row.section.iconHint : nil)
             // A pool name is half again as long as a platform name, and
             // "Antigravity · Cl…" hides the very thing the row adds, so the
             // pool takes a second line in this 200pt column.

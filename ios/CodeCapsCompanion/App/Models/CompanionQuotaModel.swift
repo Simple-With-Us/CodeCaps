@@ -167,6 +167,13 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
     public var isAlarmEnabled: Bool
     public let windows: [CompanionWindowItem]
     public let duplicateWindows: [CompanionWindowItem]
+    /// Server-supplied icon hint (Phase 2 backend manifest).  Optional, so
+    /// older snapshots still decode; populated only when the iOS companion
+    /// received an envelope with `providerGroups[].iconHint`.
+    public let iconHint: String?
+    /// Server-supplied fallback window label for this provider.  Used by the
+    /// widget when the provider has no windows yet.
+    public let defaultWindowLabel: String?
 
     public var shortWindow: CompanionWindowItem? {
         windows.first(where: { $0.isShortCadence }) ?? windows.first
@@ -241,7 +248,9 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
         isExhausted: Bool,
         isAlarmEnabled: Bool,
         windows: [CompanionWindowItem] = [],
-        duplicateWindows: [CompanionWindowItem] = []
+        duplicateWindows: [CompanionWindowItem] = [],
+        iconHint: String? = nil,
+        defaultWindowLabel: String? = nil
     ) {
         self.id = id
         self.providerKey = providerKey
@@ -253,6 +262,8 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
         self.isAlarmEnabled = isAlarmEnabled
         self.windows = windows
         self.duplicateWindows = duplicateWindows
+        self.iconHint = iconHint
+        self.defaultWindowLabel = defaultWindowLabel
     }
 
     public var displayPercent: String {
@@ -725,6 +736,7 @@ public final class CompanionQuotaModel: ObservableObject {
     private struct WireEnvelope: Decodable {
         let windows: [WireRawWindow]?
         let customMarks: [String: WireCustomMark]?
+        let providerGroups: [WireProviderGroup]?
     }
 
     private struct WireCustomMark: Decodable {
@@ -752,6 +764,41 @@ public final class CompanionQuotaModel: ObservableObject {
         let absoluteLimit: Double?
         let skip: Bool?
         let skipReason: String?
+    }
+
+    /// Mirrors the backend manifest's provider group on the wire.  Optional
+    /// fields decode as absent — older envelopes keep working.  `providerLabel`
+    /// falls back to `provider` exactly like the canonical
+    /// `QuotaProviderGroup` decoder, so a manifest group that omits the label
+    /// can never make the whole `WireEnvelope` decode throw.  Encodable so
+    /// the parsed manifest can be persisted for the widget byte-for-byte.
+    private struct WireProviderGroup: Codable {
+        let provider: String
+        let providerKey: String?
+        let providerLabel: String
+        let via: String?
+        let sortOrder: Int?
+        let iconHint: String?
+        let terms: WireProviderTerms?
+
+        private enum CodingKeys: String, CodingKey {
+            case provider, providerKey, providerLabel, via, sortOrder, iconHint, terms
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            provider = try container.decode(String.self, forKey: .provider)
+            providerLabel = try container.decodeIfPresent(String.self, forKey: .providerLabel) ?? provider
+            providerKey = try container.decodeIfPresent(String.self, forKey: .providerKey)
+            via = try container.decodeIfPresent(String.self, forKey: .via)
+            sortOrder = try container.decodeIfPresent(Int.self, forKey: .sortOrder)
+            iconHint = try container.decodeIfPresent(String.self, forKey: .iconHint)
+            terms = try container.decodeIfPresent(WireProviderTerms.self, forKey: .terms)
+        }
+    }
+
+    private struct WireProviderTerms: Codable {
+        let defaultWindowLabel: String?
     }
 
     @discardableResult
@@ -805,13 +852,14 @@ public final class CompanionQuotaModel: ObservableObject {
             }
         }
 
-        var platformGroups: [String: (providerKey: String, title: String, windows: [WireRawWindow])] = [:]
+        var platformGroups: [String: (providerKey: String, title: String, iconHint: String?, windows: [WireRawWindow])] = [:]
         var platformKeyOrder: [String] = []
 
         for w in nonAntigravityWindows {
-            let (platKey, platTitle, provKey) = Self.canonicalPlatformKey(for: w)
+            let (platKey, platTitle, provKey) = Self.canonicalPlatformKey(for: w, manifest: envelope.providerGroups)
             if platformGroups[platKey] == nil {
-                platformGroups[platKey] = (providerKey: provKey, title: platTitle, windows: [])
+                let manifestHint = Self.iconHint(for: platKey, in: envelope.providerGroups)
+                platformGroups[platKey] = (providerKey: provKey, title: platTitle, iconHint: manifestHint, windows: [])
                 platformKeyOrder.append(platKey)
             }
             platformGroups[platKey]?.windows.append(w)
@@ -819,13 +867,38 @@ public final class CompanionQuotaModel: ObservableObject {
 
         var newItems: [CompanionQuotaItem] = []
 
-        // Process non-Antigravity platform sections
-        for platKey in platformKeyOrder {
+        // Server-first ordering when the envelope carries a manifest: walk the
+        // manifest entries first so the provider list reflects the admin's
+        // current sort order, then append any future keys that arrived in the
+        // windows payload but were not in the manifest.  An empty manifest
+        // keeps the legacy "first-seen-wins" order (the offline-fallback path).
+        let manifest = envelope.providerGroups ?? []
+        let manifestKeys: [String] = manifest.isEmpty
+            ? platformKeyOrder
+            : manifest.compactMap { group in
+                let key = Self.canonicalManifestKey(provider: group.provider, via: group.via)
+                return key.isEmpty ? nil : key
+            }
+
+        for platKey in manifestKeys {
             guard let group = platformGroups[platKey] else { continue }
             let item = buildPlatformSection(
                 id: platKey,
                 providerKey: group.providerKey,
                 title: group.title,
+                iconHint: group.iconHint,
+                rawWindows: group.windows
+            )
+            newItems.append(item)
+        }
+        // Future keys: in the windows payload but not in the manifest.
+        for platKey in platformKeyOrder where !manifestKeys.contains(platKey) {
+            guard let group = platformGroups[platKey] else { continue }
+            let item = buildPlatformSection(
+                id: platKey,
+                providerKey: group.providerKey,
+                title: group.title,
+                iconHint: group.iconHint,
                 rawWindows: group.windows
             )
             newItems.append(item)
@@ -861,6 +934,22 @@ public final class CompanionQuotaModel: ObservableObject {
             }
         }
 
+        // Persist the manifest into the App Group so the widget reads the same
+        // labels/order/icon hints without redeclaring its own hardcoded table.
+        // Encoded with JSONEncoder (never hand-rolled dictionaries: a nil
+        // value in a [String: Any?] dictionary makes JSONSerialization throw,
+        // which would silently skip persisting the manifest altogether).
+        // Only touch the persisted key when the envelope actually supplied the
+        // field: a local fallback file the Mac app wrote without a manifest
+        // must not wipe a manifest a prior network sync persisted.
+        if let groups = envelope.providerGroups {
+            if groups.isEmpty {
+                sharedDefaults.removeObject(forKey: "providerGroups")
+            } else if let data = try? JSONEncoder().encode(groups) {
+                sharedDefaults.set(data, forKey: "providerGroups")
+            }
+        }
+
         let sortedItems = sortPlatforms(newItems)
         evaluateResets(newItems: sortedItems)
         self.items = sortedItems
@@ -871,6 +960,7 @@ public final class CompanionQuotaModel: ObservableObject {
         id: String,
         providerKey: String,
         title: String,
+        iconHint: String? = nil,
         rawWindows: [WireRawWindow]
     ) -> CompanionQuotaItem {
         var primaryWindows: [CompanionWindowItem] = []
@@ -972,7 +1062,8 @@ public final class CompanionQuotaModel: ObservableObject {
             isExhausted: isExhausted,
             isAlarmEnabled: alarmProviderIds.contains(id),
             windows: primaryWindows,
-            duplicateWindows: duplicateWindows
+            duplicateWindows: duplicateWindows,
+            iconHint: iconHint
         )
     }
 
@@ -1050,7 +1141,8 @@ public final class CompanionQuotaModel: ObservableObject {
             isExhausted: isExhausted,
             isAlarmEnabled: alarmProviderIds.contains(itemId),
             windows: childWindows,
-            duplicateWindows: []
+            duplicateWindows: [],
+            iconHint: "gemini-color"
         )
     }
 
@@ -1140,7 +1232,29 @@ public final class CompanionQuotaModel: ObservableObject {
         }
     }
 
-    private static func canonicalPlatformKey(for raw: WireRawWindow) -> (key: String, title: String, providerKey: String) {
+    private static func canonicalPlatformKey(
+        for raw: WireRawWindow,
+        manifest: [WireProviderGroup]? = nil
+    ) -> (key: String, title: String, providerKey: String) {
+        let legacy = canonicalPlatformKeyLegacy(for: raw)
+        // Server-first: when the manifest lists this provider, its label
+        // wins.  Generic over the manifest's keys, so a provider added purely
+        // via the backend manifest gets its server label with no app change.
+        // (The manifest lookup is by the window's canonical key — never by
+        // substring — so unrelated windows can never collapse onto one entry.)
+        if let manifest,
+           let group = manifest.first(where: {
+               canonicalManifestKey(provider: $0.provider, via: $0.via) == legacy.key
+           }) {
+            let label = group.providerLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (legacy.key, label.isEmpty ? legacy.title : label, legacy.providerKey)
+        }
+        return legacy
+    }
+
+    /// The pre-manifest hardcoded mapping.  Kept as the offline fallback and
+    /// as the canonical-key computation the manifest lookup keys off.
+    private static func canonicalPlatformKeyLegacy(for raw: WireRawWindow) -> (key: String, title: String, providerKey: String) {
         let pKey = (raw.providerKey ?? raw.provider).lowercased()
         let prov = raw.provider.lowercased()
         let id = raw.id.lowercased()
@@ -1165,6 +1279,35 @@ public final class CompanionQuotaModel: ObservableObject {
         }
         let fallbackKey = (raw.providerKey ?? raw.provider).trimmingCharacters(in: .whitespacesAndNewlines)
         return (fallbackKey.isEmpty ? "other" : fallbackKey, raw.provider, fallbackKey)
+    }
+
+    /// Mirror of `QuotaProviders.canonicalKey` for the wire manifest.  Kept
+    /// local because the iOS bundle cannot import the Mac-side helpers; the
+    /// aliases match.
+    static func canonicalManifestKey(provider: String, via: String?) -> String {
+        let trimmedVia = via?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        if trimmedVia == "antigravity" { return "google-antigravity" }
+        let raw = provider.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let aliases: [String: String] = [
+            "anthropic": "anthropic", "claude": "anthropic", "claude-code": "anthropic", "claude.ai": "anthropic",
+            "openai": "openai", "openai-codex": "openai", "codex": "openai",
+            "google": "google-antigravity", "google-antigravity": "google-antigravity", "antigravity": "google-antigravity", "antigravity-cli": "google-antigravity", "gemini": "google-antigravity",
+            "cursor": "cursor",
+            "xai": "xai", "grok": "xai", "grok-build": "xai",
+            "grok-bot": "grok-bot", "grok bot": "grok-bot", "grokbot": "grok-bot",
+            "minimax": "minimax", "minimax-code": "minimax",
+            "kimi": "kimi", "moonshot": "kimi", "moonshot-ai": "kimi",
+            "gemini-cli": "gemini-cli",
+            "copilot": "github-copilot", "github-copilot": "github-copilot", "github_copilot": "github-copilot",
+            "windsurf": "windsurf", "codeium": "windsurf",
+        ]
+        return aliases[raw] ?? raw
+    }
+
+    /// The manifest's `iconHint` for the canonicalized key, if any.
+    private static func iconHint(for canonicalKey: String, in manifest: [WireProviderGroup]?) -> String? {
+        guard let manifest else { return nil }
+        return manifest.first { canonicalManifestKey(provider: $0.provider, via: $0.via) == canonicalKey }?.iconHint
     }
 
     public static func formatCadence(_ label: String, window: String? = nil) -> String {

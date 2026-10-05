@@ -135,6 +135,10 @@ public enum CustomMarkMode: String, CaseIterable, Identifiable, Codable, Sendabl
 public struct PlatformLogo: View {
     @Environment(\.colorScheme) private var colorScheme
     public let providerKey: String
+    /// Server-supplied mark asset hint (from the manifest's `iconHint`).  When
+    /// non-nil, `PlatformLogoImage` looks it up first and only falls back to
+    /// the built-in `resourceNames` map when the hint does not resolve.
+    public let iconHint: String?
     public let size: CGFloat
     public let style: MarkStyle
     public let customMode: CustomMarkMode?
@@ -150,8 +154,10 @@ public struct PlatformLogo: View {
                 size: CGFloat = 22,
                 style: MarkStyle,
                 customMode: CustomMarkMode? = nil,
-                tint: Color? = nil) {
+                tint: Color? = nil,
+                iconHint: String? = nil) {
         self.providerKey = providerKey
+        self.iconHint = iconHint
         self.size = size
         self.style = style
         self.customMode = customMode
@@ -178,7 +184,7 @@ public struct PlatformLogo: View {
     public var body: some View {
         Group {
             let isDark = colorScheme == .dark
-            if let image = PlatformLogoImage.load(providerKey: providerKey, style: style, isDarkMode: isDark) {
+            if let image = PlatformLogoImage.load(providerKey: providerKey, iconHint: iconHint, style: style, isDarkMode: isDark) {
                 if rendersAsTemplate {
                     Image(nsImage: image)
                         .renderingMode(.template)
@@ -263,13 +269,33 @@ public enum PlatformLogoImage {
         return nil
     }
 
-    private static func bundledImage(providerKey: String, style: MarkStyle = .template) -> NSImage? {
+    private static func bundledImage(providerKey: String, style: MarkStyle = .template, iconHint: String? = nil) -> NSImage? {
         let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() as NSString
+        // Cache dimension: a manifest hint change must not keep serving the
+        // previously cached mark for the same provider key.
+        let hintName = iconHint?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let cacheKey = ((hintName?.isEmpty == false) ? "\(key)|\(hintName!)" : (key as String)) as NSString
         let cache = (style == .standard) ? standardCache : templateCache
-        if let cached = cache.object(forKey: key) { return cached }
-        guard let resource = resourceNames[key as String] ?? resourceNames[platformKey(of: key as String)] else {
-            return nil
+        if let cached = cache.object(forKey: cacheKey) { return cached }
+        // Server-first: try the manifest-supplied hint name first; fall back
+        // to the built-in `resourceNames` map (pre-manifest behaviour) when
+        // the hint does not resolve to a file, so a bad hint can never blank
+        // a mark the bundled map would have found.
+        let hintResource: (name: String, ext: String)? = hintName.flatMap { name in
+            guard !name.isEmpty else { return nil }
+            if let existing = resourceNames[name] { return existing }
+            return (name, "svg")
         }
+        let mapResource = resourceNames[key as String] ?? resourceNames[platformKey(of: key as String)]
+        for resource in [hintResource, mapResource].compactMap({ $0 }) {
+            if let image = imageFromBundle(resource: resource, key: key, cacheKey: cacheKey, cache: cache, style: style) {
+                return image
+            }
+        }
+        return nil
+    }
+
+    private static func imageFromBundle(resource: (name: String, ext: String), key: NSString, cacheKey: NSString, cache: NSCache<NSString, NSImage>, style: MarkStyle) -> NSImage? {
         let bundle = currentBundle()
         let candidates: [URL?] = [
             bundle?.url(forResource: resource.name, withExtension: resource.ext),
@@ -299,11 +325,11 @@ public enum PlatformLogoImage {
         let colorCopy = NSImage(contentsOf: url) ?? NSImage(contentsOfFile: url.path)
         // A monochrome mark adapts to Light and Dark mode across all styles.
         colorCopy?.isTemplate = isMonochromeMark(key as String)
-        standardCache.setObject(colorCopy ?? image, forKey: key)
+        standardCache.setObject(colorCopy ?? image, forKey: cacheKey)
         let templateCopy = NSImage(contentsOf: url) ?? NSImage(contentsOfFile: url.path)
         templateCopy?.isTemplate = true
-        templateCache.setObject(templateCopy ?? image, forKey: key)
-        return cache.object(forKey: key)
+        templateCache.setObject(templateCopy ?? image, forKey: cacheKey)
+        return cache.object(forKey: cacheKey)
     }
 
     /// Marks that are a single colour by design: they carry no brand colour to
@@ -373,19 +399,23 @@ public enum PlatformLogoImage {
     /// resolved relative to `customMarksDirectory`; an unreadable file falls
     /// back to the bundled asset so a stale selection does not blank the menu
     /// bar.
-    public static func load(providerKey: String, style: MarkStyle, isDarkMode: Bool = false) -> NSImage? {
+    ///
+    /// `iconHint` is the manifest-supplied asset name (Phase 2 backend).  When
+    /// present, `load` tries the hint first and falls back to the legacy
+    /// `resourceNames` map; when absent, behaviour is unchanged from Phase 1.
+    public static func load(providerKey: String, iconHint: String? = nil, style: MarkStyle, isDarkMode: Bool = false) -> NSImage? {
         let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         switch style {
         case .standard:
-            return bundledImage(providerKey: key, style: .standard)
+            return bundledImage(providerKey: key, style: .standard, iconHint: iconHint)
         case .template:
-            return bundledImage(providerKey: key, style: .template)
+            return bundledImage(providerKey: key, style: .template, iconHint: iconHint)
         case .custom:
             if let custom = loadCustom(providerKey: key, isDarkMode: isDarkMode)
                 ?? loadCustom(providerKey: platformKey(of: key), isDarkMode: isDarkMode) {
                 return custom
             }
-            return bundledImage(providerKey: key, style: .standard)
+            return bundledImage(providerKey: key, style: .standard, iconHint: iconHint)
         }
     }
 
