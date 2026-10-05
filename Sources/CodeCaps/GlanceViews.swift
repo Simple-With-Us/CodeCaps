@@ -12,6 +12,10 @@ import SwiftUI
 /// lays it out.
 struct GlancePopover: View {
     @ObservedObject var model: MonitorModel
+    /// Set by AppDelegate while the console window is elevated above the
+    /// popover.  The popover is fully covered then, so the runaway marquee is
+    /// stopped rather than left animating for a window nobody can see.
+    @ObservedObject var occlusion: GlanceOcclusionState
     var openConsole: (ConsolePage) -> Void
     var openAlert: (String, String?, Date?) -> Void
     /// Settings has its own entry point rather than a fixed page, so the gear
@@ -30,8 +34,10 @@ struct GlancePopover: View {
          openConsole: @escaping (ConsolePage) -> Void,
          openSettings: @escaping () -> Void,
          openAlert: @escaping (String, String?, Date?) -> Void = { _, _, _ in },
-         initiallyExpanded: Set<String> = []) {
+         initiallyExpanded: Set<String> = [],
+         occlusion: GlanceOcclusionState = GlanceOcclusionState()) {
         self.model = model
+        self.occlusion = occlusion
         self.openConsole = openConsole
         self.openSettings = openSettings
         self.openAlert = openAlert
@@ -287,7 +293,8 @@ struct GlancePopover: View {
                     MarqueeText(
                         text: runawayCombinedMarqueeText,
                         font: .system(size: 16, weight: .heavy, design: .rounded),
-                        color: Theme.warning
+                        color: Theme.warning,
+                        isPaused: occlusion.isOccluded
                     )
                     .padding(.horizontal, 10)
                     .frame(maxWidth: .infinity, maxHeight: 28)
@@ -398,10 +405,20 @@ struct GlancePopover: View {
     }
 }
 
+/// Whether the Glance popover is currently covered by the elevated console
+/// window.  Owned by AppDelegate and observed by `GlancePopover`; only ever
+/// written from the main thread.
+final class GlanceOcclusionState: ObservableObject {
+    @Published var isOccluded = false
+}
+
 struct MarqueeText: View {
     let text: String
     var font: Font = .system(size: 13, weight: .bold, design: .rounded)
     var color: Color = Theme.warning
+    /// When true the scroll animation is torn down and the text rests at its
+    /// leading edge; flipping back to false restarts it.
+    var isPaused: Bool = false
     var speed: Double = 30.0
     var gap: CGFloat = 40.0
 
@@ -421,9 +438,9 @@ struct MarqueeText: View {
                     .foregroundStyle(color)
                     .lineLimit(1)
                     .fixedSize()
-                    .offset(x: needsScroll ? offset : 0)
+                    .offset(x: needsScroll && !isPaused ? offset : 0)
 
-                if needsScroll {
+                if needsScroll && !isPaused {
                     Text(text)
                         .font(font)
                         .foregroundStyle(color)
@@ -454,21 +471,29 @@ struct MarqueeText: View {
             .onChange(of: available) { _, newAvailable in
                 restartAnimation(needsScroll: textWidth > (newAvailable - 6), width: textWidth)
             }
+            .onChange(of: isPaused) { _, _ in
+                restartAnimation(needsScroll: textWidth > (available - 6), width: textWidth)
+            }
         }
     }
 
     private func restartAnimation(needsScroll: Bool, width: CGFloat) {
-        offset = 0
-        isAnimating = false
-        guard needsScroll && width > 0 else { return }
-
+        // A fresh token invalidates any start still pending in the 1.2 s
+        // delay below, and the animation-free transaction replaces the
+        // repeat-forever animation on `offset` instead of letting it run on.
         let token = UUID()
         animationToken = token
+        var reset = Transaction()
+        reset.disablesAnimations = true
+        withTransaction(reset) { offset = 0 }
+        isAnimating = false
+        guard needsScroll && width > 0 && !isPaused else { return }
+
         let cycleDistance = width + gap
         let duration = Double(cycleDistance) / speed
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-            guard animationToken == token else { return }
+            guard animationToken == token, !isPaused else { return }
             isAnimating = true
             withAnimation(.linear(duration: duration).repeatForever(autoreverses: false)) {
                 offset = -cycleDistance
