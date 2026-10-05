@@ -18,6 +18,8 @@ struct GlancePopover: View {
     /// and `⌘,` land in the same place: the Settings page last used.
     var openSettings: () -> Void
 
+    @Environment(\.colorScheme) private var colorScheme
+
     /// Rows the owner has expanded inline.  Lives in the popover so it survives
     /// re-renders while the popover is open, and is cleared when the popover
     /// dismisses — persisting across launches would imply the popover remembers
@@ -298,14 +300,14 @@ struct GlancePopover: View {
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(runawayFooterAccessibilityLabel)
                 .help("Runaway Usage Notice: click to inspect")
-                .padding(.trailing, 4)
             } else {
                 Spacer()
             }
 
             openCodeCapsButton
         }
-        .padding(.horizontal, Metrics.glanceGutter)
+        .padding(.leading, Metrics.glanceGutter)
+        .padding(.trailing, 6)
         .frame(height: Metrics.glanceFooterHeight)
     }
 
@@ -315,13 +317,12 @@ struct GlancePopover: View {
         } label: {
             HStack(spacing: 5) {
                 Text("Open CodeCaps")
-                Text("⌘1").font(.system(size: 10)).foregroundStyle(.tertiary)
+                Text("⌘1")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(colorScheme == .dark ? Color.black.opacity(0.55) : Color.white.opacity(0.75))
             }
-            .font(.system(size: 12, weight: .medium))
-            .padding(.horizontal, 10)
-            .frame(height: 28)
         }
-        .buttonStyle(.borderedProminent)
+        .buttonStyle(GlanceFooterProminentButtonStyle())
         .help("Open CodeCaps")
         .accessibilityLabel("Open CodeCaps")
     }
@@ -1963,4 +1964,29 @@ func glanceResetHelp(_ reset: Date?, now: Date) -> String? {
     let when = reset.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().hour().minute())
     guard reset > now else { return "Reset was due \(when)" }
     return "Resets in \(glanceResetFullCountdown(reset, now: now)), on \(when)"
+}
+
+/// Dedicated prominent button style matching the runaway notice banner in height (28pt)
+/// and corner radius (6pt), while maintaining high contrast in both dark and light modes.
+struct GlanceFooterProminentButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.colorScheme) private var colorScheme
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(colorScheme == .dark ? Color.black.opacity(0.92) : Color.white)
+            .padding(.horizontal, 10)
+            .frame(height: 28)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Theme.accent.opacity(configuration.isPressed ? 0.82 : 1.0))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(Color.white.opacity(colorScheme == .dark ? 0.25 : 0.15), lineWidth: 0.5)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 6))
+            .shadow(color: Color.black.opacity(configuration.isPressed ? 0.02 : 0.12), radius: 1, y: 1)
+    }
 }

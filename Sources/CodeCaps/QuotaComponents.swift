@@ -222,7 +222,7 @@ enum Metrics {
     static let glanceHeaderSegmentPadding: CGFloat = 11
     /// The dots between the cluster's phrases.
     static let glanceHeaderDotSize: CGFloat = 3
-    static let glanceFooterHeight: CGFloat = 38
+    static let glanceFooterHeight: CGFloat = 40
     /// A source's heading band in From Fleet.
     static let glanceGroupHeaderHeight: CGFloat = 22
     /// The list's own padding above the first row and below the last.

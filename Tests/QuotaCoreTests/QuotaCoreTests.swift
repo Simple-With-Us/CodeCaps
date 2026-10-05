@@ -202,10 +202,10 @@ final class QuotaCoreTests: XCTestCase {
         let future = window(provider: "new-provider", occurred: "2023-11-14T22:05:00Z")
         let response = QuotaResponse(generatedAt: "2023-11-14T22:10:00Z", windows: [future])
         let sections = response.platformSections(now: now)
-        XCTAssertEqual(Array(sections.prefix(8)).map(\.providerKey), [
-            "anthropic", "openai", "google-antigravity", "cursor", "xai", "grok-bot", "minimax", "muse",
+        XCTAssertEqual(Array(sections.prefix(9)).map(\.providerKey), [
+            "anthropic", "openai", "google-antigravity", "cursor", "xai", "grok-bot", "minimax", "muse-assist", "muse-code",
         ])
-        XCTAssertTrue(sections.prefix(8).allSatisfy(\.isMissing))
+        XCTAssertTrue(sections.prefix(9).allSatisfy(\.isMissing))
         XCTAssertEqual(sections.last?.providerKey, "new-provider")
     }
 
