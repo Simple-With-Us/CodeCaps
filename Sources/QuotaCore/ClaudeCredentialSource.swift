@@ -296,38 +296,57 @@ public enum ClaudeCredentialSource {
         case .unknown:
             return .temporarilyUnavailable
         case .present:
-            if let data = rememberedCredential() {
-                // The item was authorized and read from Keychain into memory.
-                // Even if the token inside is expired, macOS Keychain access was
-                // already granted. Return .authorized(data) so LocalQuotaReader
-                // and ClaudeLoginState report it as signedOut/idle, not
-                // needsPermission.
+            // Memory is a permission fact, not a freshness fact.  It records
+            // that macOS already granted `/usr/bin/security` this item, which
+            // is what stops the consent row from re-arming on every launch.
+            // It does NOT record the current token: Claude Code rewrites this
+            // same item every time it renews its own login, so a payload
+            // captured at launch goes stale within the hour.  Answering from it
+            // forever (which is what shipped in #156) pinned the row to
+            // "login idle" while Claude Code sat right there signed in — the
+            // Keychain item held a fresh token the app simply never re-read.
+            // So: serve memory only while its own access token is unexpired.
+            let remembered = rememberedCredential()
+            if let data = remembered, rememberedGrantIsFresh(data) {
                 return .authorized(data)
             }
-            // Nothing in memory, but the item is here.  Before this was a bare
-            // `.unauthorized`, which re-armed the "needs permission" row on
-            // every single launch and made the owner re-click Allow Access
-            // forever — the grant was process-memory only, so it never
-            // survived a relaunch.
-            //
-            // Try the one read that can still succeed quietly.  Once the owner
-            // has answered Always Allow, `/usr/bin/security` is on the item's
-            // access list and this returns the bytes without a panel, so the
-            // app reads itself for the rest of the session with no further
-            // prompting.  The panel only reappears if the ACL is revoked, which
-            // is precisely when the owner should be asked again.
-            //
-            // A refusal here is not a failure: it is the first run on a fresh
-            // install that has never been granted, and the caller's
-            // `.unauthorized` is the correct answer for that case.
+            // Past that point, or with nothing remembered at all, read the
+            // bytes again.  This is the one read that can succeed quietly:
+            // once the owner has answered Always Allow, `/usr/bin/security` is
+            // on the item's access list, so it returns without a panel and the
+            // app refreshes itself with no prompting.  The panel only reappears
+            // if the ACL is revoked, which is precisely when the owner should
+            // be asked again.  It is also what lets a renewal that Claude Code
+            // performed on our behalf actually be seen.
             let outcome = probe.readViaSecurityCLI(attemptDeadline, { isAbandoned() })
             log.notice("claude keychain silent security CLI: \(outcome.logLabel, privacy: .public)")
             if case .found(let data) = outcome {
                 remember(data)
                 return .authorized(data)
             }
+            // The read produced nothing.  With a grant already remembered that
+            // is not a permission problem — it is a slow or refused read on a
+            // loaded Mac, and reporting `.unauthorized` here is exactly the
+            // consent loop #156 closed.  Serve what we already hold and let the
+            // row report signedOut/idle, which is the honest state.
+            if let remembered { return .authorized(remembered) }
+            // Nothing remembered and nothing readable: a fresh install that has
+            // never been granted, so `.unauthorized` is the correct answer.
             return .unauthorized
         }
+    }
+
+    /// Whether the remembered payload still carries an access token that has
+    /// not expired.  Only then may the refresh loop answer from memory.
+    ///
+    /// This is deliberately stricter than `rememberedGrantStillUsable`, which
+    /// also accepts an expired-but-renewable record.  That looser rule is right
+    /// for deciding whether to keep trusting the *grant*, and wrong for
+    /// deciding whether to keep sending the *bytes*: an expired token answers
+    /// 401 no matter how renewable it is.
+    static func rememberedGrantIsFresh(_ data: Data, now: Date = Date()) -> Bool {
+        guard let root = ClaudeOAuthParser.parse(data) else { return false }
+        return ClaudeOAuthParser.validOAuth(in: root, now: now) != nil
     }
 
     /// A remembered payload is usable while its access token is still
