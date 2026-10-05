@@ -29,6 +29,12 @@ struct UsageHistoryView: View {
     @State private var span: HistorySpan = .day
     @State private var samples: [AnomalyDetector.Sample] = []
 
+    init(model: MonitorModel, state: ConsoleState, row: DisplaySection) {
+        self.model = model
+        self.state = state
+        self.row = row
+    }
+
     private var now: Date { model.now }
     private var start: Date { now.addingTimeInterval(-span.interval) }
     private var primaryWindows: [QuotaWindowSnapshot] {
