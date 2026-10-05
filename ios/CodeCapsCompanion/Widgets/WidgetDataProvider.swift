@@ -98,6 +98,12 @@ public enum WidgetSnapshotStore {
     /// snapshots keep working.
     private static func injectManifest(into data: Data, manifest: [[String: Any]]) -> Data? {
         guard var object = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] else { return nil }
+        // A payload that already carries its own manifest wins: overwriting
+        // it with the cached copy would freeze server-side renames, new
+        // providers, and sort changes until the companion app re-synced.
+        if let existing = object["providerGroups"] as? [[String: Any]], !existing.isEmpty {
+            return data
+        }
         object["providerGroups"] = manifest
         return try? JSONSerialization.data(withJSONObject: object, options: [])
     }

@@ -863,9 +863,22 @@ public struct CompanionProviderLogo: View {
     /// `provider-antigravity` is the Antigravity Third-Party pool's solid star;
     /// the Gemini pool's `provider-gemini` keeps its colour gradient.
     private var isMonochrome: Bool {
-        guard let name = item.providerLogoName else { return false }
+        guard let name = resolvedLogoName else { return false }
         return ["provider-openai", "provider-cursor", "provider-grok", "provider-grok-bot", "provider-antigravity"]
             .contains(name)
+    }
+
+    /// Server-first logo resolution, mirroring the Mac app's
+    /// `PlatformLogoImage.bundledImage`: the manifest's `iconHint` wins when
+    /// it resolves to a bundled asset, otherwise the hardcoded map runs, so
+    /// a bad hint can never blank a mark the map would have found.
+    private var resolvedLogoName: String? {
+        if let hint = item.iconHint?.trimmingCharacters(in: .whitespacesAndNewlines), !hint.isEmpty {
+            let hinted = hint.hasPrefix("provider-") ? hint : "provider-\(hint)"
+            if logoExists(hinted) { return hinted }
+        }
+        guard let name = item.providerLogoName, logoExists(name) else { return nil }
+        return name
     }
 
     public var body: some View {
@@ -893,7 +906,7 @@ public struct CompanionProviderLogo: View {
                         .aspectRatio(contentMode: .fit)
                         .frame(width: size * 0.62, height: size * 0.62)
                 }
-            } else if let logoName = item.providerLogoName, logoExists(logoName) {
+            } else if let logoName = resolvedLogoName {
                 if isMonochrome {
                     Image(logoName)
                         .renderingMode(.template)

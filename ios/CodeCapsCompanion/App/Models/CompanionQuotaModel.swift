@@ -921,12 +921,15 @@ public final class CompanionQuotaModel: ObservableObject {
         // Encoded with JSONEncoder (never hand-rolled dictionaries: a nil
         // value in a [String: Any?] dictionary makes JSONSerialization throw,
         // which would silently skip persisting the manifest altogether).
-        if !manifest.isEmpty {
-            if let data = try? JSONEncoder().encode(manifest) {
+        // Only touch the persisted key when the envelope actually supplied the
+        // field: a local fallback file the Mac app wrote without a manifest
+        // must not wipe a manifest a prior network sync persisted.
+        if let groups = envelope.providerGroups {
+            if groups.isEmpty {
+                sharedDefaults.removeObject(forKey: "providerGroups")
+            } else if let data = try? JSONEncoder().encode(groups) {
                 sharedDefaults.set(data, forKey: "providerGroups")
             }
-        } else {
-            sharedDefaults.removeObject(forKey: "providerGroups")
         }
 
         let sortedItems = sortPlatforms(newItems)
