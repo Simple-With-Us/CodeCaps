@@ -4,7 +4,7 @@ Owner direction, October 3, 2026: remove All Platforms and make usage history vi
 
 ## Review Evidence
 
-The UI review used the supplied macOS notification screenshot and the native source at `659e6f5`, including the alert identity/history work in PR #134.  The screenshot showed a generic runaway banner with a 13.7× comparison.  It did not show the full application window.  These recommendations are a source-based design review, not a completed runtime visual audit.
+The design review used a supplied macOS notification screenshot plus native source at `659e6f5`, including the alert identity/history work in PR #134.  The screenshot showed a generic runaway banner with a 13.7× comparison and did not show the full application window.  That input informed layout and copy only; it is not acceptance evidence for native Mac UI.  Ship validation follows the Validation section below (code review and CI-based verification).
 
 ## Page Hierarchy
 
@@ -32,4 +32,4 @@ The attached menu-bar popover is the Docked Bar.  Floating Window describes a de
 
 ## Validation
 
-Navigation migration, alert identity routing, legacy history decoding, finite quota values, duplicate timestamps, reset/gap segmentation, and sparse or flat comparison history need behavioral tests.  Native Mac visual claims require code review and CI-based verification — a supplied or manually captured screenshot is not sufficient evidence.  iOS UI changes require CI-generated simulator screenshots.
+Navigation migration, alert identity routing, legacy history decoding, finite quota values, duplicate timestamps, reset/gap segmentation, and sparse or flat comparison history need behavioral tests.  Native Mac visual claims require code review and CI-based verification; iOS UI changes require CI-generated simulator screenshots.
