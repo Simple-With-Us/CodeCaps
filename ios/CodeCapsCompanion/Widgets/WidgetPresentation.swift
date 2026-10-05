@@ -523,8 +523,8 @@ public enum WidgetPresentation {
         let subtitle: String
         if let firstCadence = childWindows.first?.cadence, !firstCadence.isEmpty {
             subtitle = firstCadence
-        } else if let defaultLabel, !defaultLabel.isEmpty {
-            subtitle = defaultLabel
+        } else if let defaultWindowLabel, !defaultWindowLabel.isEmpty {
+            subtitle = defaultWindowLabel
         } else {
             subtitle = "Subscription Plan"
         }
