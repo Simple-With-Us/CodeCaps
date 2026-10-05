@@ -525,6 +525,7 @@ private enum QuotaProviders {
             "xai": "xai", "grok": "xai", "grok-build": "xai",
             "grok-bot": "grok-bot", "grok bot": "grok-bot", "grokbot": "grok-bot",
             "minimax": "minimax", "minimax-code": "minimax",
+            "muse": "muse", "muse-cli": "muse", "muse-sdk": "muse",
             "kimi": "kimi", "moonshot": "kimi", "moonshot-ai": "kimi",
             "gemini-cli": "gemini-cli",
             "copilot": "github-copilot", "github-copilot": "github-copilot", "github_copilot": "github-copilot",
