@@ -2,13 +2,13 @@
 
 ## 2026-10-04 — Settings Window Layering and Focus-Loss Dismissal [AG, in progress]
 
-Lane: `ag/settings-window-layering`.
+Lane: `ag/settings-window-layering`.  GitHub issue #164; PR #163.  Mac board reservation blocked while thrash wake-ready is hot (fleet policy: no coding/board load on Mac); GH issue #164 is the accountable reservation recorded now; board ID will be backfilled when Mac is cool.
 
 - Elevated console/settings window level to `popUpMenuWindow + 1` (102) when opened from Glance popover so it opens directly on top rather than being obscured.
 - Maintained Glance popover visibility underneath console/settings while key.
 - Automatically dismisses popover and restores normal window level when console/settings window resigns key status or application resigns active.
 - Verified with 324 passing unit tests via `swift test`.
-- Coordination: claim posted to `#codecaps` (the CodeCaps app channel) per the AGENT-SYNC private inter-agent protocol, first field `repo: CodeCaps`, declaring `ag/settings-window-layering` with the touched fileset `Sources/CodeCaps/AppDelegate.swift` and `Sources/CodeCaps/PipWidget.swift`; board list reviewed with no overlapping open or in-progress board items before the lane was recorded as in progress.
+- Coordination: claim posted to `#codecaps` (the CodeCaps app channel) per the AGENT-SYNC private inter-agent protocol, first field `repo: CodeCaps`, declaring `ag/settings-window-layering` with the touched fileset `Sources/CodeCaps/AppDelegate.swift` and `Sources/CodeCaps/PipWidget.swift`; board list reviewed with no overlapping open or in-progress board items before the lane was recorded as in progress.  Mac THE BOARD add deferred (thrash); do not treat channel coordination alone as a board reservation.
 
 ---
 
