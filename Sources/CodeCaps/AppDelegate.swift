@@ -144,6 +144,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.infisicalIdentityDidChange() }
         }
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didResignActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.popover.close()
+                self?.consoleWindow?.level = .normal
+            }
+        }
         NSWorkspace.shared.notificationCenter.addObserver(
             self, selector: #selector(refresh), name: NSWorkspace.didWakeNotification, object: nil)
     }
@@ -358,7 +366,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// The single window.  `page` nil means "leave the selection alone", which
     /// is what a reopen or a Dock-mode switch wants.
     func showConsole(page: ConsolePage?) {
-        popover.performClose(nil)
+        let shouldElevate = popover.isShown
         if let page {
             consoleState.clearHistoryFocus()
             consoleState.page = page
@@ -390,7 +398,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             consoleWindow = window
         }
         consoleWindow?.title = consoleState.page.isSettings ? "CodeCaps Settings" : "CodeCaps"
+        if shouldElevate {
+            consoleWindow?.level = NSWindow.Level(Int(CGWindowLevelForKey(.popUpMenuWindow)) + 1)
+        }
         consoleWindow?.makeKeyAndOrderFront(nil)
+        consoleWindow?.orderFrontRegardless()
         // Re-opening from the menu bar should raise the window that is already
         // open, not a second copy of it, and it has to come forward even if it
         // is behind whatever the owner was using.
@@ -451,10 +463,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         NSApp.setActivationPolicy((docked || hasWindow) ? .regular : .accessory)
     }
 
+    func windowDidResignKey(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow, window === consoleWindow else { return }
+        popover.close()
+        window.level = .normal
+    }
+
     /// Closing the console is what takes the Dock icon away in menu bar mode.
     /// In Dock mode, the icon is kept.
     func windowWillClose(_ notification: Notification) {
         guard let window = notification.object as? NSWindow, window === consoleWindow else { return }
+        popover.close()
+        window.level = .normal
         let docked = model.displayMode != .menuBar
         NSApp.setActivationPolicy(docked ? .regular : .accessory)
     }

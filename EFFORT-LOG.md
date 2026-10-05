@@ -1,5 +1,16 @@
 # CodeCaps — Effort Log
 
+## 2026-10-04 — Settings Window Layering and Focus-Loss Dismissal [AG, in progress]
+
+Lane: `ag/settings-window-layering`.
+
+- Elevated console/settings window level to `popUpMenuWindow + 1` (102) when opened from Glance popover so it opens directly on top rather than being obscured.
+- Maintained Glance popover visibility underneath console/settings while key.
+- Automatically dismisses popover and restores normal window level when console/settings window resigns key status or application resigns active.
+- Verified with 324 passing unit tests via `swift test`.
+
+---
+
 ## 2026-10-03 — Audit 9 Residual Reconciliation [CODEX, in progress]
 
 Lane: `codex/audit-residuals`.  Board `1ac04ba99f13478da0564f802d3af3e8`; GitHub #19.
