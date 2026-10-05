@@ -97,6 +97,12 @@ jobs:
           sleep 3
           xcrun simctl io "$SIMULATOR_ID" screenshot "$screenshot"
           test -s "$screenshot"
+          settings_shot="$RUNNER_TEMP/codecaps-ios-settings.png"
+          xcrun simctl terminate "$SIMULATOR_ID" "$bundle_id"
+          xcrun simctl launch --terminate-running-process "$SIMULATOR_ID" "$bundle_id" -openSettings
+          sleep 3
+          xcrun simctl io "$SIMULATOR_ID" screenshot "$settings_shot"
+          test -s "$settings_shot"
           xcrun simctl terminate "$SIMULATOR_ID" "$bundle_id"
           python3 - "$app_data/Library/Application Support/CodeCaps/quota-windows.json" <<'PYEMPTY'
           import json, sys
@@ -120,4 +126,5 @@ jobs:
           path: |
             ${{ runner.temp }}/codecaps-ios-reorder.png
             ${{ runner.temp }}/codecaps-ios-empty.png
+            ${{ runner.temp }}/codecaps-ios-settings.png
           if-no-files-found: error

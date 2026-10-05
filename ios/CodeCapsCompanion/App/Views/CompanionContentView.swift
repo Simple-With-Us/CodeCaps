@@ -530,6 +530,8 @@ public struct CompanionContentView: View {
                     Text("CodeCaps monitors primary and mirror feeds for each platform." + sentenceGap
                          + "Discrepancies greater than 3% between feeds trigger a warning flag on the platform card.")
                 }
+                .id("dataSourcesMirrorsSection")
+                .accessibilityIdentifier("dataSourcesMirrorsSection")
 
                 Section("Alerts & Notifications") {
                     Toggle("Reset Alarms For All Providers", isOn: $model.alarmsAll)

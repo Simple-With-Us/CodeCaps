@@ -644,6 +644,7 @@ private enum QuotaProviders {
         Expected(key: "xai", label: "Grok", via: nil),
         Expected(key: "grok-bot", label: "Grok Bot", via: "cursor"),
         Expected(key: "minimax", label: "MiniMax", via: nil),
+        Expected(key: "muse", label: "Muse", via: nil),
     ]
 
     static func canonicalKey(provider: String, providerKey: String?, via: String?) -> String {
@@ -660,6 +661,7 @@ private enum QuotaProviders {
             "xai": "xai", "grok": "xai", "grok-build": "xai",
             "grok-bot": "grok-bot", "grok bot": "grok-bot", "grokbot": "grok-bot",
             "minimax": "minimax", "minimax-code": "minimax",
+            "muse": "muse", "muse-cli": "muse", "muse-sdk": "muse",
             "kimi": "kimi", "moonshot": "kimi", "moonshot-ai": "kimi",
             "gemini-cli": "gemini-cli",
             "copilot": "github-copilot", "github-copilot": "github-copilot", "github_copilot": "github-copilot",

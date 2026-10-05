@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <!-- Muse: template monogram. currentColor so Light/Dark and menu-bar selection tint it. -->
+  <path fill="currentColor" d="M3.5 20V4h4.1l4.4 8.6L16.4 4h4.1v16h-3.4V9.6L12 18.1 7 9.6V20H3.5z"/>
+</svg>
