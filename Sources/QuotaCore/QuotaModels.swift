@@ -469,14 +469,14 @@ public extension QuotaResponse {
         // of producing two sections with the same providerKey.  Future keys
         // without a manifest entry still cannot collide with a
         // canonicalized form.
-        var manifest: [(key: String, label: String, via: String?, expected: Bool, iconHint: String?, sortOrder: Int?)] = []
+        var manifest: [(key: String, label: String, labelFromServer: Bool, via: String?, expected: Bool, iconHint: String?, sortOrder: Int?)] = []
         if providerGroups.isEmpty {
             // OFFLINE FALLBACK: server returned no provider groups.  Use the
             // bundled list as the only source of order/labels.  An admin who
             // adds a provider must ship it through the server manifest, not by
             // editing this list.
             for provider in QuotaProviders.expected {
-                manifest.append((provider.key, provider.label, provider.via, true, nil, 0))
+                manifest.append((provider.key, provider.label, false, provider.via, true, nil, 0))
             }
         } else {
             // Server-first: the manifest is authoritative.  Iterate in the
@@ -485,26 +485,31 @@ public extension QuotaResponse {
             // (e.g. two `via == "antigravity"` groups fold onto
             // "google-antigravity") onto the first entry instead of emitting
             // duplicate sections with the same providerKey.  Fields the
-            // first entry lacked are filled in from the later group.
+            // first entry lacked are filled in from the later group; a
+            // non-empty server label in a later group also replaces the
+            // hardcoded fallback the entry carried when its own group
+            // omitted the label.
             var manifestIndex: [String: Int] = [:]
             for group in providerGroups {
                 let key = QuotaProviders.canonicalKey(provider: group.provider, providerKey: nil, via: group.via)
                 guard !QuotaProviders.hidden.contains(key) else { continue }
                 if let existing = manifestIndex[key] {
-                    let entry = manifest[existing]
-                    manifest[existing] = (
-                        entry.key,
-                        entry.label,
-                        entry.via ?? group.via,
-                        entry.expected || group.expected,
-                        entry.iconHint ?? group.iconHint,
-                        entry.sortOrder ?? group.sortOrder
-                    )
+                    var entry = manifest[existing]
+                    let serverLabel = group.providerLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !entry.labelFromServer, !serverLabel.isEmpty {
+                        entry.label = serverLabel
+                        entry.labelFromServer = true
+                    }
+                    entry.via = entry.via ?? group.via
+                    entry.expected = entry.expected || group.expected
+                    entry.iconHint = entry.iconHint ?? group.iconHint
+                    entry.sortOrder = entry.sortOrder ?? group.sortOrder
+                    manifest[existing] = entry
                 } else {
                     manifestIndex[key] = manifest.count
                     let trimmed = group.providerLabel.trimmingCharacters(in: .whitespacesAndNewlines)
                     let label = trimmed.isEmpty ? QuotaProviders.label(for: key) : trimmed
-                    manifest.append((key, label, group.via, group.expected, group.iconHint, group.sortOrder))
+                    manifest.append((key, label, !trimmed.isEmpty, group.via, group.expected, group.iconHint, group.sortOrder))
                 }
             }
             // Re-sort only when at least one group actually supplied a

@@ -767,7 +767,10 @@ public final class CompanionQuotaModel: ObservableObject {
     }
 
     /// Mirrors the backend manifest's provider group on the wire.  Optional
-    /// fields decode as absent — older envelopes keep working.  Encodable so
+    /// fields decode as absent — older envelopes keep working.  `providerLabel`
+    /// falls back to `provider` exactly like the canonical
+    /// `QuotaProviderGroup` decoder, so a manifest group that omits the label
+    /// can never make the whole `WireEnvelope` decode throw.  Encodable so
     /// the parsed manifest can be persisted for the widget byte-for-byte.
     private struct WireProviderGroup: Codable {
         let provider: String
@@ -777,6 +780,21 @@ public final class CompanionQuotaModel: ObservableObject {
         let sortOrder: Int?
         let iconHint: String?
         let terms: WireProviderTerms?
+
+        private enum CodingKeys: String, CodingKey {
+            case provider, providerKey, providerLabel, via, sortOrder, iconHint, terms
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            provider = try container.decode(String.self, forKey: .provider)
+            providerLabel = try container.decodeIfPresent(String.self, forKey: .providerLabel) ?? provider
+            providerKey = try container.decodeIfPresent(String.self, forKey: .providerKey)
+            via = try container.decodeIfPresent(String.self, forKey: .via)
+            sortOrder = try container.decodeIfPresent(Int.self, forKey: .sortOrder)
+            iconHint = try container.decodeIfPresent(String.self, forKey: .iconHint)
+            terms = try container.decodeIfPresent(WireProviderTerms.self, forKey: .terms)
+        }
     }
 
     private struct WireProviderTerms: Codable {

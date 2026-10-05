@@ -98,10 +98,16 @@ public enum WidgetSnapshotStore {
     /// snapshots keep working.
     private static func injectManifest(into data: Data, manifest: [[String: Any]]) -> Data? {
         guard var object = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] else { return nil }
-        // A payload that already carries its own manifest wins: overwriting
-        // it with the cached copy would freeze server-side renames, new
-        // providers, and sort changes until the companion app re-synced.
-        if let existing = object["providerGroups"] as? [[String: Any]], !existing.isEmpty {
+        // Only touch the manifest key when the payload does not state its own
+        // manifest state: overwriting an explicitly supplied manifest with
+        // the cached copy would freeze server-side renames, new providers,
+        // and sort changes until the companion app re-synced.  An explicitly
+        // empty array is authoritative — it means "no manifest" (the same
+        // signal `CompanionQuotaModel.parseSnapshot` honors by clearing its
+        // persisted key) — so honor it instead of re-injecting the stale
+        // cached copy, or the widget would never converge once the server
+        // stops emitting provider groups.
+        if object.keys.contains("providerGroups") {
             return data
         }
         object["providerGroups"] = manifest
