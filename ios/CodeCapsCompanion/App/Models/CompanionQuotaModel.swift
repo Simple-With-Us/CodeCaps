@@ -293,7 +293,9 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
         if key.contains("grok-bot") { return "provider-grok-bot" }
         if key.contains("grok") || key.contains("xai") { return "provider-grok" }
         if key.contains("minimax") { return "provider-minimax" }
-        if key.contains("muse") { return "provider-muse" }
+        if key.contains("muse-assist") || key.contains("muse_assist") { return "provider-muse-assist" }
+        if key.contains("muse-code") || key.contains("muse_code") { return "provider-muse-code" }
+        if key.contains("muse") { return "provider-muse-code" }
         if key.contains("antigravity") || key.contains("gemini") { return "provider-gemini" }
         return nil
     }
@@ -1269,8 +1271,14 @@ public final class CompanionQuotaModel: ObservableObject {
         if pKey.contains("minimax") || prov.contains("minimax") {
             return ("minimax", "MiniMax", "minimax")
         }
+        if pKey.contains("muse-assist") || prov.contains("muse-assist") || prov.contains("muse assist") || id.contains("assist") {
+            return ("muse-assist", "Muse Assist", "muse-assist")
+        }
+        if pKey.contains("muse-code") || prov.contains("muse-code") || prov.contains("muse code") || id.contains("code") {
+            return ("muse-code", "Muse Code", "muse-code")
+        }
         if pKey.contains("muse") || prov.contains("muse") {
-            return ("muse", "Muse", "muse")
+            return ("muse-code", "Muse Code", "muse-code")
         }
         if pKey.contains("grok-bot") || prov.contains("grok-bot") || prov.contains("grok bot") || id.contains("grok-bot") {
             return ("grok-bot", "Grok Bot", "grok-bot")

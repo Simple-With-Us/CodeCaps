@@ -678,8 +678,14 @@ public enum WidgetPresentation {
         if pKey.contains("minimax") || prov.contains("minimax") {
             return ("minimax", "MiniMax", "minimax")
         }
+        if pKey.contains("muse-assist") || prov.contains("muse-assist") || prov.contains("muse assist") || id.contains("assist") {
+            return ("muse-assist", "Muse Assist", "muse-assist")
+        }
+        if pKey.contains("muse-code") || prov.contains("muse-code") || prov.contains("muse code") || id.contains("code") {
+            return ("muse-code", "Muse Code", "muse-code")
+        }
         if pKey.contains("muse") || prov.contains("muse") {
-            return ("muse", "Muse", "muse")
+            return ("muse-code", "Muse Code", "muse-code")
         }
         if pKey.contains("grok-bot") || prov.contains("grok-bot") || prov.contains("grok bot") || id.contains("grok-bot") {
             return ("grok-bot", "Grok Bot", "grok-bot")
