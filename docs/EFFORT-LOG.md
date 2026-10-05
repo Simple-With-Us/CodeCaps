@@ -502,13 +502,14 @@ without inspecting the underlying window.
 
 Board 42ae688ab3b84d9aa65e445aab072a15.  Closes #37.
 
-## 2026-10-03 — Independent Provider and File Refresh [CODEX, in progress]
+## 2026-10-03 — Independent Provider and File Refresh [CODEX, PR #142]
 
-- Board `4bcf84f1`, GitHub #137; branch `codex/independent-source-refresh` in managed codecaps-refresh checkout.
-- Reserve new `CodexSessionQuotaReader` and tests first.  MonitorModel/Settings scheduling integration follows the graph/navigation writer's handback in #139.
-- Current pipeline has seven direct HTTP reader paths, three helper paths, and no passive CLI quota-file input.  Source-path counts are not request counts.
-- A private metadata-only comparison found matching current-account IDs in 18 of 20 recent Codex session files; the other two lacked usable identity.  Passive quota reads must require exact account identity, bounded regular files, complete allowlisted events, and original event timestamps.  Missing identity is excluded.
-- Provider checks retain the existing five-minute default.  Independent passive-file scheduling, counters, cancellation, and unchanged-input behavior require tests before shipping.
+Lane: `codex/independent-source-refresh`.  Board `4bcf84f1`; GitHub #137.  PR #142 open on this branch (depends on #139; refs #136).
+
+- Added `CodexSessionQuotaReader` for bounded passive Codex session JSONL reads with exact account identity, incremental append tracking, symlink-safe paths, and original event timestamps.  Unchanged files do not invoke provider, Fleet, upload, or download work.
+- Split Settings → Sources & Fleet into independent **Provider Checks** and **Codex Session File Checks** toggles with separate 1-, 3-, 5-, and 15-minute intervals (five-minute provider default, one-minute file default).  Manual refresh runs both enabled paths; disabling one source preserves the other when possible.
+- Integrated scheduling, merge rules, and cancellation in `MonitorModel` / `SourceRefreshSettings`; documented behavior in `docs/REFRESH.md`.
+- Verification: `CodexSessionQuotaReaderTests`, `SourceRefreshTests`, and related refresh tests on the branch; hosted Swift CI green.  Native Mac UI claims rely on code review and CI fixture rendering in `DocsScreenshotTests`, not supplied or manually captured screenshots.
 
 ## 2026-10-03 — Platform History and Alert Navigation [CODEX, in progress]
 
