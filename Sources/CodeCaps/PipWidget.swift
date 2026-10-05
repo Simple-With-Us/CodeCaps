@@ -39,6 +39,23 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
         panel = nil
     }
 
+    /// Re-raises the always-on-top PiP HUD above the given level.  The console
+    /// window briefly sits at `popUpMenuWindow + 1` to layer above the Glance
+    /// popover; without this the PiP panel (at `.floating`, 3) would be drawn
+    /// under the elevated console.  Safe to call when the panel does not exist.
+    func raise(above level: NSWindow.Level) {
+        guard let panel else { return }
+        let promoted = NSWindow.Level(max(Int(level.rawValue) + 1, Int(NSWindow.Level.floating.rawValue)))
+        if panel.level != promoted { panel.level = promoted }
+    }
+
+    /// Restores the PiP HUD to its default `.floating` level after the console
+    /// has been lowered.  Idempotent.
+    func demoteToFloating() {
+        guard let panel else { return }
+        if panel.level != .floating { panel.level = .floating }
+    }
+
     private func createPanel(model: MonitorModel) {
         let p = NSPanel(
             contentRect: NSRect(x: 120, y: 120, width: 260, height: 120),
