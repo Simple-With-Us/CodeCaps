@@ -188,6 +188,18 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
             }
         }
     }
+
+    /// The pair of windows that represent this plan when a row displays two quota bars side by side.
+    ///
+    /// When a plan reports two or more windows (such as a 5-hour and a 7-day cap),
+    /// this returns the pair (shortest period first).  Returns nil if the plan does not have two distinct windows.
+    public func dualWindows() -> (window1: WidgetWindowItem, window2: WidgetWindowItem)? {
+        guard windows.count >= 2 else { return nil }
+        let visible = windows.filter { !$0.isMasked }
+        let pool = visible.count >= 2 ? visible : windows
+        guard pool.count >= 2 else { return nil }
+        return (pool[0], pool[1])
+    }
 }
 
 /// Pure presentation logic and parser for WidgetKit widgets.

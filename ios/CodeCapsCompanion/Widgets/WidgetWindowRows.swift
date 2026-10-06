@@ -97,6 +97,7 @@ struct WindowCaptionRow: View {
 struct PlanBarRow: View {
     let platform: WidgetPlatformItem
     var pick: WidgetWindowPick = .mostUrgent
+    var quotasPerProvider: WidgetQuotasPerProvider = .oneQuota
     var showMark: Bool = true
     var markSize: CGFloat = 14
     var titleFont: CGFloat = 12
@@ -135,51 +136,169 @@ struct PlanBarRow: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 5) {
-                if showMark {
-                    ProviderMarkView(
-                        providerKey: platform.providerKey,
-                        itemId: platform.id,
-                        size: markSize
-                    )
+        if quotasPerProvider == .twoIfAvailable, let pair = platform.dualWindows() {
+            PlanDualBarRow(
+                platform: platform,
+                window1: pair.window1,
+                window2: pair.window2,
+                showMark: showMark,
+                markSize: markSize,
+                titleFont: titleFont,
+                captionFont: captionFont,
+                percentFont: percentFont,
+                barHeight: barHeight
+            )
+        } else {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 5) {
+                    if showMark {
+                        ProviderMarkView(
+                            providerKey: platform.providerKey,
+                            itemId: platform.id,
+                            size: markSize
+                        )
+                    }
+                    Text(platform.title)
+                        .font(.system(size: titleFont, weight: .semibold))
+                        .lineLimit(1)
+                    Spacer(minLength: 2)
+                    Text(WidgetPresentation.displayPercent(percent: percent, isMasked: shown.window?.isMasked ?? platform.isMasked))
+                        .font(.system(size: percentFont, weight: .bold, design: .rounded))
+                        .foregroundColor(statusColor)
                 }
-                Text(platform.title)
-                    .font(.system(size: titleFont, weight: .semibold))
-                    .lineLimit(1)
-                Spacer(minLength: 2)
-                Text(WidgetPresentation.displayPercent(percent: percent, isMasked: shown.window?.isMasked ?? platform.isMasked))
-                    .font(.system(size: percentFont, weight: .bold, design: .rounded))
-                    .foregroundColor(statusColor)
+
+                MiniProgressBar(
+                    fraction: fraction,
+                    color: statusColor,
+                    elapsedFraction: shown.window?.elapsedFraction(),
+                    height: barHeight
+                )
+
+                WindowCaptionRow(
+                    token: captionToken,
+                    resetCaption: captionReset,
+                    font: captionFont
+                )
+            }
+        }
+    }
+}
+
+// MARK: - Dual Quota Bars For A Plan
+
+/// Two quota bars side by side for a plan that reports multiple windows,
+/// giving each window its own bar, percent, and reset caption in the row.
+struct PlanDualBarRow: View {
+    let platform: WidgetPlatformItem
+    let window1: WidgetWindowItem
+    let window2: WidgetWindowItem
+    var showMark: Bool = true
+    var markSize: CGFloat = 14
+    var titleFont: CGFloat = 12
+    var captionFont: CGFloat = 9
+    var percentFont: CGFloat = 12
+    var barHeight: CGFloat = 3.5
+    var columnSpacing: CGFloat = 10
+
+    private var fraction1: Double {
+        guard let pct = window1.remainingPercent, !window1.isMasked else { return 0.0 }
+        return max(0.0, min(1.0, pct / 100.0))
+    }
+
+    private var fraction2: Double {
+        guard let pct = window2.remainingPercent, !window2.isMasked else { return 0.0 }
+        return max(0.0, min(1.0, pct / 100.0))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: columnSpacing) {
+                // Left Column header: Mark, title, and Window 1 percent
+                HStack(spacing: 5) {
+                    if showMark {
+                        ProviderMarkView(
+                            providerKey: platform.providerKey,
+                            itemId: platform.id,
+                            size: markSize
+                        )
+                    }
+                    Text(platform.title)
+                        .font(.system(size: titleFont, weight: .semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                    Spacer(minLength: 2)
+                    Text(window1.displayPercent)
+                        .font(.system(size: percentFont, weight: .bold, design: .rounded))
+                        .foregroundColor(window1.statusColor)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                // Right Column header: Window 2 cadence token or label, and Window 2 percent
+                HStack(spacing: 4) {
+                    Text(window2.cadenceToken.isEmpty ? window2.label : window2.cadenceToken)
+                        .font(.system(size: captionFont, weight: .semibold, design: .rounded))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                    Spacer(minLength: 2)
+                    Text(window2.displayPercent)
+                        .font(.system(size: percentFont, weight: .bold, design: .rounded))
+                        .foregroundColor(window2.statusColor)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            MiniProgressBar(
-                fraction: fraction,
-                color: statusColor,
-                elapsedFraction: shown.window?.elapsedFraction(),
-                height: barHeight
-            )
+            // Dual bars
+            HStack(spacing: columnSpacing) {
+                MiniProgressBar(
+                    fraction: fraction1,
+                    color: window1.statusColor,
+                    elapsedFraction: window1.elapsedFraction(),
+                    height: barHeight
+                )
+                .frame(maxWidth: .infinity)
 
-            WindowCaptionRow(
-                token: captionToken,
-                resetCaption: captionReset,
-                font: captionFont
-            )
+                MiniProgressBar(
+                    fraction: fraction2,
+                    color: window2.statusColor,
+                    elapsedFraction: window2.elapsedFraction(),
+                    height: barHeight
+                )
+                .frame(maxWidth: .infinity)
+            }
+
+            // Dual captions
+            HStack(spacing: columnSpacing) {
+                WindowCaptionRow(
+                    token: window1.cadenceToken,
+                    resetCaption: window1.resetCaption(),
+                    font: captionFont
+                )
+                .frame(maxWidth: .infinity)
+
+                WindowCaptionRow(
+                    token: window2.cadenceToken,
+                    resetCaption: window2.resetCaption(),
+                    font: captionFont
+                )
+                .frame(maxWidth: .infinity)
+            }
         }
     }
 }
 
 // MARK: - Plan Grid
 
-/// The plan list for a widget, honouring one or two plans per row.
+/// The plan list for a widget, honouring one or two plans per row, and
+/// single or dual quota bars per provider.
 ///
 /// One plan per row gives each plan the full width and lets its caption breathe.
-/// Two per row halves the width, so it is only worth choosing when the owner
-/// wants more plans on screen than width allows.
+/// When two quotas per provider is enabled, plans with multiple windows show
+/// both bars side by side.  Two plans per row halves the width to fit more plans.
 struct PlanGrid: View {
     let platforms: [WidgetPlatformItem]
     var columns: Int = 1
     var pick: WidgetWindowPick = .mostUrgent
+    var quotasPerProvider: WidgetQuotasPerProvider = .twoIfAvailable
     var markSize: CGFloat = 16
     var titleFont: CGFloat = 12
     var captionFont: CGFloat = 9
@@ -192,15 +311,32 @@ struct PlanGrid: View {
         if columns <= 1 {
             VStack(spacing: spacing) {
                 ForEach(platforms) { platform in
-                    PlanBarRow(
-                        platform: platform,
-                        pick: pick,
-                        markSize: markSize,
-                        titleFont: titleFont,
-                        captionFont: captionFont,
-                        percentFont: percentFont,
-                        barHeight: barHeight
-                    )
+                    if quotasPerProvider == .twoIfAvailable, let pair = platform.dualWindows() {
+                        PlanDualBarRow(
+                            platform: platform,
+                            window1: pair.window1,
+                            window2: pair.window2,
+                            showMark: true,
+                            markSize: markSize,
+                            titleFont: titleFont,
+                            captionFont: captionFont,
+                            percentFont: percentFont,
+                            barHeight: barHeight,
+                            columnSpacing: horizontalSpacing
+                        )
+                    } else {
+                        PlanBarRow(
+                            platform: platform,
+                            pick: pick,
+                            quotasPerProvider: quotasPerProvider,
+                            showMark: true,
+                            markSize: markSize,
+                            titleFont: titleFont,
+                            captionFont: captionFont,
+                            percentFont: percentFont,
+                            barHeight: barHeight
+                        )
+                    }
                 }
             }
         } else {
@@ -213,6 +349,8 @@ struct PlanGrid: View {
                     PlanBarRow(
                         platform: platform,
                         pick: pick,
+                        quotasPerProvider: .oneQuota,
+                        showMark: true,
                         markSize: markSize,
                         titleFont: titleFont,
                         captionFont: captionFont,

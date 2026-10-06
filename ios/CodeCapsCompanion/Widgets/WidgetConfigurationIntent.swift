@@ -23,6 +23,25 @@ public enum WidgetRowLayout: String, AppEnum, Sendable {
     public var columns: Int { self == .twoPlansPerRow ? 2 : 1 }
 }
 
+// MARK: - Quotas Per Provider
+
+/// How many quota bars a single plan displays in widgets wider than small.
+///
+/// When a plan reports multiple windows (such as a 5-hour and 7-day cap),
+/// choosing two quotas per row displays both bars side by side with their own
+/// percentages and reset countdowns.  Choosing one quota displays a single wide
+/// bar for the controlling window.
+public enum WidgetQuotasPerProvider: String, AppEnum, Sendable {
+    case twoIfAvailable
+    case oneQuota
+
+    public static var typeDisplayRepresentation = TypeDisplayRepresentation(name: "Quotas Per Provider")
+    public static var caseDisplayRepresentations: [WidgetQuotasPerProvider: DisplayRepresentation] = [
+        .twoIfAvailable: "Two Quotas (When Available)",
+        .oneQuota: "One Quota"
+    ]
+}
+
 // MARK: - Which Window Stands In
 
 /// Which single window represents a plan that reports more than one.
@@ -120,7 +139,7 @@ public struct SelectQuotaIntent: WidgetConfigurationIntent {
     public init() {}
 
     public static var title: LocalizedStringResource = "Choose Quotas"
-    public static var description = IntentDescription("Pick which plan this widget shows, how many plans share a row, and which window stands in when a plan reports more than one.")
+    public static var description = IntentDescription("Pick which plan this widget shows, how many plans share a row, whether to show two quotas per provider, and which window stands in when displaying a single bar.")
 
     /// The plan to show.  Unset means every plan, in the overview widgets, and
     /// the most urgent one in the focus widget.
@@ -131,12 +150,16 @@ public struct SelectQuotaIntent: WidgetConfigurationIntent {
     @Parameter(title: "Plans Per Row", default: .onePlanPerRow)
     public var rowLayout: WidgetRowLayout
 
+    /// Quotas shown per provider in a row when space permits.
+    @Parameter(title: "Quotas Per Provider", default: .twoIfAvailable)
+    public var quotasPerProvider: WidgetQuotasPerProvider
+
     /// Which window stands in for a plan that reports two.
     @Parameter(title: "Window Shown", default: .mostUrgent)
     public var windowPick: WidgetWindowPick
 
     public static var parameterSummary: some ParameterSummary {
-        Summary("Show \(\.$plan) \(\.$rowLayout) \(\.$windowPick)")
+        Summary("Show \(\.$plan) \(\.$rowLayout) with \(\.$quotasPerProvider) (\(\.$windowPick))")
     }
 }
 

@@ -30,7 +30,7 @@ struct CodeCapsOverviewWidget: Widget {
                 }
         }
         .configurationDisplayName("AI Subscription Overview")
-        .description("Monitor quotas, remaining percentages, and reset countdowns across your AI subscription plans. Edit to pick a plan, choose one or two plans per row, and pick which window stands in.")
+        .description("Monitor quotas, remaining percentages, and reset countdowns across your AI subscription plans.  Edit to pick a plan, choose one or two plans per row, toggle two quotas per provider, and pick which window stands in.")
         .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
     }
 }
@@ -44,11 +44,26 @@ struct OverviewWidgetEntryView: View {
         case .systemSmall:
             OverviewSmallView(entry: entry, pick: entry.windowPick)
         case .systemMedium:
-            OverviewMediumView(entry: entry, pick: entry.windowPick, columns: entry.rowLayout.columns)
+            OverviewMediumView(
+                entry: entry,
+                pick: entry.windowPick,
+                columns: entry.rowLayout.columns,
+                quotasPerProvider: entry.quotasPerProvider
+            )
         case .systemLarge:
-            OverviewLargeView(entry: entry, pick: entry.windowPick, columns: entry.rowLayout.columns)
+            OverviewLargeView(
+                entry: entry,
+                pick: entry.windowPick,
+                columns: entry.rowLayout.columns,
+                quotasPerProvider: entry.quotasPerProvider
+            )
         default:
-            OverviewSmallView(entry: entry, pick: entry.windowPick)
+            OverviewLargeView(
+                entry: entry,
+                pick: entry.windowPick,
+                columns: entry.rowLayout.columns,
+                quotasPerProvider: entry.quotasPerProvider
+            )
         }
     }
 }
