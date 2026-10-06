@@ -1,5 +1,16 @@
 # CodeCaps — Effort Log
 
+## 2026-10-06 — Infisical three-field setup [dot, draft validation pending]
+
+- Lane: `dot/infisical-project-selector`.  Owner-approved task-note reservation because the board app picker omits CodeCaps; no board claim exists.
+- Coordination: [app scope](https://simplewithus.slack.com/archives/C0C6NFR5QRJ/p1791272490794519), [fleet reservation](https://simplewithus.slack.com/archives/C0BEZDJDNKV/p1791272598316679); AGENT-SYNC.md read.  Fresh main `14760c2`; PR #175 has no changed-file overlap.  PR #163 shares AppDelegate but its window-layering hunks are independent of the Infisical lifecycle methods.
+- Editable Client ID, Client Secret, and Project ID; atomic Keychain setup, explicit nonblank Project ID with no legacy fallback, isolated candidate validation, revision-fenced network results, and interrupted-operation tests.
+- Draft PR: https://github.com/Simple-With-Us/CodeCaps/pull/177 .  Owner explicitly chooses to re-enter Project ID; no fixed project is retained.
+- Scope excludes telemetry, real credential/grant changes, quota mode changes, merge, and deployment.  Existing local endpoint/token protections are unchanged.
+- Validation: `git diff --check`; independent review completed for initial draft; owner then requested removal of the original project fallback.  Updated review and exact-head CI pending.  Local `swift build` / `swift test` unavailable (no Swift toolchain or macOS SDK in cloud executor); hosted macOS exact-head CI is required before completion.
+
+---
+
 ## 2026-10-03 — Independent Provider and File Refresh [CODEX, PR #142]
 
 repo: CodeCaps; pre-work claim: posted to #agent-sync after reading AGENT-SYNC.md; Lane: `codex/independent-source-refresh`; Board `4bcf84f1`; GitHub #137; PR #142 open on this branch (depends on #139; refs #136).

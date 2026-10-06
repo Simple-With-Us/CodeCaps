@@ -30,9 +30,6 @@ public final class InfisicalSettings: @unchecked Sendable {
 
     // MARK: - Inventory
 
-    /// The Infisical project that owns CodeCaps' app-level settings.
-    public static let codeCapsProjectId = "cd278860-c3bc-466f-9256-22385e64551b"
-
     /// Keys this app manages in Infisical.  The full inventory, sensitivity,
     /// and defaults live in INFISICAL.md.
     public enum Keys {
@@ -63,7 +60,7 @@ public final class InfisicalSettings: @unchecked Sendable {
 
     // MARK: - Configuration
 
-    public struct Configuration: Sendable {
+    public struct Configuration: Equatable, Sendable {
         public var siteURL: URL
         public var projectId: String
         public var environment: String
@@ -72,7 +69,7 @@ public final class InfisicalSettings: @unchecked Sendable {
 
         public init(
             siteURL: URL = URL(string: "https://app.infisical.com")!,
-            projectId: String = InfisicalSettings.codeCapsProjectId,
+            projectId: String,
             environment: String,
             clientId: String,
             clientSecret: String
@@ -89,6 +86,9 @@ public final class InfisicalSettings: @unchecked Sendable {
 
     public enum SettingsError: Error, LocalizedError {
         case notConfigured
+        case superseded
+        case invalidDestination
+        case projectUnavailable(status: Int)
         case loginFailed(status: Int)
         case fetchFailed(status: Int)
         case writeFailed(status: Int)
@@ -97,6 +97,12 @@ public final class InfisicalSettings: @unchecked Sendable {
 
         public var errorDescription: String? {
             switch self {
+            case .superseded:
+                return "Infisical setup changed while this request was running.  Try again with the current setup."
+            case .invalidDestination:
+                return "Infisical did not confirm the selected Project ID and environment.  The previous setup is unchanged."
+            case .projectUnavailable(let status):
+                return "Infisical project verification failed (HTTP \(status)).  Check the Project ID and identity access."
             case .notConfigured:
                 return "Infisical sync is not set up.  Add your client identity under Settings → Infisical Sync (see INFISICAL.md)."
             case .loginFailed(let status):
@@ -164,6 +170,28 @@ public final class InfisicalSettings: @unchecked Sendable {
     private let transport: Transport
     private let lock = NSLock()
     private var _configuration: Configuration?
+    private var _generation: UInt64 = 0
+
+    /// A fence for callers that adopt results after awaiting network work.
+    public struct Revision: Equatable, Sendable {
+        fileprivate let generation: UInt64
+    }
+
+    public var revision: Revision {
+        lock.lock()
+        defer { lock.unlock() }
+        return Revision(generation: _generation)
+    }
+
+    public func isCurrent(_ revision: Revision) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return revision.generation == _generation
+    }
+
+    private func checkCurrent(_ revision: Revision) throws {
+        guard isCurrent(revision) else { throw SettingsError.superseded }
+    }
     private var _cache: [String: String] = [:]
     private var _loadedAt: Date?
     private var _lastError: String?
@@ -177,16 +205,70 @@ public final class InfisicalSettings: @unchecked Sendable {
     public func configure(_ configuration: Configuration) {
         lock.lock()
         defer { lock.unlock() }
+        guard _configuration != configuration else { return }
+        _generation &+= 1
         _configuration = configuration
+        _cache = [:]
+        _loadedAt = nil
+        _lastError = nil
     }
 
     public func clearConfiguration() {
+        // The no-persistence overload is useful at startup and in core tests.
+        try? clearConfiguration(persist: {})
+    }
+
+    /// Persistence and the runtime switch share a synchronous commit boundary.
+    /// A Keychain failure leaves the active configuration and cache intact.
+    public func clearConfiguration(persist: () throws -> Void) throws {
         lock.lock()
         defer { lock.unlock() }
+        _generation &+= 1
+        try persist()
         _configuration = nil
         _cache = [:]
         _loadedAt = nil
         _lastError = nil
+    }
+
+    public func beginSetupChange() -> Revision {
+        lock.lock()
+        defer { lock.unlock() }
+        _generation &+= 1
+        return Revision(generation: _generation)
+    }
+
+    /// Explicit Save validates a candidate in isolation. No new secret listing
+    /// permission is needed: project metadata verifies the destination, followed
+    /// by the same three named reads used for refresh. The synchronous persistence
+    /// callback must not call back into this settings instance.
+    @discardableResult
+    public func validateAndConfigure(
+        _ configuration: Configuration,
+        revision: Revision? = nil,
+        persist: () throws -> Void
+    ) async throws -> Revision {
+        let revision = revision ?? beginSetupChange()
+        guard !configuration.projectId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !configuration.environment.isEmpty else { throw SettingsError.invalidDestination }
+        let values = try await fetchManaged(configuration: configuration, revision: revision,
+                                            verifyDestination: true)
+        return try commitSetup(configuration, values: values, revision: revision, persist: persist)
+    }
+
+    private func commitSetup(_ configuration: Configuration, values: [String: String],
+                             revision: Revision, persist: () throws -> Void) throws -> Revision {
+        lock.lock()
+        defer { lock.unlock() }
+        guard revision.generation == _generation else { throw SettingsError.superseded }
+        try persist()
+        // Retire refreshes that started against the old setup during validation.
+        _generation &+= 1
+        _configuration = configuration
+        _cache = values
+        _loadedAt = Date()
+        _lastError = nil
+        return Revision(generation: _generation)
     }
 
     /// Whether the owner has provisioned an Infisical identity.  With no
@@ -198,13 +280,13 @@ public final class InfisicalSettings: @unchecked Sendable {
         return _configuration != nil
     }
 
-    private func configurationOrThrow() throws -> Configuration {
+    private func configurationOrThrow() throws -> (Configuration, Revision) {
         lock.lock()
         defer { lock.unlock() }
         guard let configuration = _configuration else {
             throw SettingsError.notConfigured
         }
-        return configuration
+        return (configuration, Revision(generation: _generation))
     }
 
     // MARK: - Memory-only reads
@@ -256,39 +338,54 @@ public final class InfisicalSettings: @unchecked Sendable {
     /// and leaves the previous cache untouched.  Off the main thread by
     /// construction — every caller awaits it from a background task.
     public func load() async throws {
-        let configuration = try configurationOrThrow()
-        let values = try await fetchManaged(configuration: configuration)
+        let (configuration, revision) = try configurationOrThrow()
+        let values = try await fetchManaged(configuration: configuration, revision: revision)
+        try install(values, revision: revision)
+    }
+
+    private func install(_ values: [String: String], revision: Revision) throws {
         lock.lock()
         defer { lock.unlock() }
+        guard revision.generation == _generation else { throw SettingsError.superseded }
         _cache = values
         _loadedAt = Date()
         _lastError = nil
     }
 
-    /// Best-effort refresh for the timer and `applicationDidBecomeActive`.
-    /// Never throws: a failure is recorded on `lastError` and the
-    /// last-known-good cache keeps serving.  A no-op until provisioned.
+    /// Best-effort refresh. Failures from a retired destination cannot replace
+    /// the current status, and success cannot resurrect its cached endpoints.
     public func refresh() async {
-        guard isProvisioned else { return }
+        guard let (configuration, revision) = try? configurationOrThrow() else { return }
         do {
-            try await load()
+            let values = try await fetchManaged(configuration: configuration, revision: revision)
+            try install(values, revision: revision)
         } catch {
-            let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            lock.lock()
-            defer { lock.unlock() }
-            _lastError = message
+            record(error, revision: revision)
         }
+    }
+
+    private func record(_ error: Error, revision: Revision) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard revision.generation == _generation else { return }
+        _lastError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
     }
 
     // MARK: - Write-through
 
     /// Writes `value` to Infisical FIRST, then updates the cache.  A failed
     /// Infisical write throws and the cache is left exactly as it was.
-    public func set(_ value: String, for key: String) async throws {
-        let configuration = try configurationOrThrow()
-        try await writeSecret(configuration: configuration, key: key, value: value)
+    public func set(_ value: String, for key: String, expectedRevision: Revision? = nil) async throws {
+        let (configuration, revision) = try configurationOrThrow()
+        if let expectedRevision, expectedRevision != revision { throw SettingsError.superseded }
+        try await writeSecret(configuration: configuration, revision: revision, key: key, value: value)
+        try install(value, for: key, revision: revision)
+    }
+
+    private func install(_ value: String, for key: String, revision: Revision) throws {
         lock.lock()
         defer { lock.unlock() }
+        guard revision.generation == _generation else { throw SettingsError.superseded }
         _cache[key] = value
         _loadedAt = Date()
         _lastError = nil
@@ -298,13 +395,14 @@ public final class InfisicalSettings: @unchecked Sendable {
     /// so settings call sites stay one line and unprovisioned behaviour is
     /// byte-for-byte today's.
     public func writeThrough(_ value: String, for key: String) async throws {
-        guard isProvisioned else { return }
-        try await set(value, for: key)
+        guard let (_, revision) = try? configurationOrThrow() else { return }
+        try await set(value, for: key, expectedRevision: revision)
     }
 
     // MARK: - Infisical REST
 
-    private func accessToken(for configuration: Configuration) async throws -> String {
+    private func accessToken(for configuration: Configuration, revision: Revision) async throws -> String {
+        try checkCurrent(revision)
         let url = configuration.siteURL.appendingPathComponent("api/v1/auth/universal-auth/login")
         let body = try JSONSerialization.data(withJSONObject: [
             "clientId": configuration.clientId,
@@ -318,6 +416,7 @@ public final class InfisicalSettings: @unchecked Sendable {
                 body: body
             )
         }
+        try checkCurrent(revision)
         guard status == 200 else { throw SettingsError.loginFailed(status: status) }
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let token = json["accessToken"] as? String, !token.isEmpty else {
@@ -326,10 +425,34 @@ public final class InfisicalSettings: @unchecked Sendable {
         return token
     }
 
-    private func fetchManaged(configuration: Configuration) async throws -> [String: String] {
-        let token = try await accessToken(for: configuration)
+    private func verifyProject(configuration: Configuration, token: String, revision: Revision) async throws {
+        try checkCurrent(revision)
+        let url = configuration.siteURL.appendingPathComponent("api/v1/projects")
+            .appendingPathComponent(configuration.projectId)
+        let (data, status) = try await sending {
+            try await self.transport.send(method: "GET", url: url,
+                                          headers: ["Authorization": "Bearer \(token)"], body: nil)
+        }
+        try checkCurrent(revision)
+        guard status == 200 else { throw SettingsError.projectUnavailable(status: status) }
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let project = json["project"] as? [String: Any],
+              project["id"] as? String == configuration.projectId,
+              let environments = project["environments"] as? [[String: Any]],
+              environments.contains(where: { $0["slug"] as? String == configuration.environment }) else {
+            throw SettingsError.invalidDestination
+        }
+    }
+
+    private func fetchManaged(configuration: Configuration, revision: Revision,
+                              verifyDestination: Bool = false) async throws -> [String: String] {
+        let token = try await accessToken(for: configuration, revision: revision)
+        if verifyDestination {
+            try await verifyProject(configuration: configuration, token: token, revision: revision)
+        }
         var values: [String: String] = [:]
         for key in Self.managedKeys {
+            try checkCurrent(revision)
             guard var components = URLComponents(
                 url: configuration.siteURL.appendingPathComponent("api/v3/secrets/raw").appendingPathComponent(key),
                 resolvingAgainstBaseURL: false
@@ -355,6 +478,7 @@ public final class InfisicalSettings: @unchecked Sendable {
                     body: nil
                 )
             }
+            try checkCurrent(revision)
             if status == 404 { continue }
             guard status == 200 else { throw SettingsError.fetchFailed(status: status) }
             guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -368,8 +492,8 @@ public final class InfisicalSettings: @unchecked Sendable {
         return values
     }
 
-    private func writeSecret(configuration: Configuration, key: String, value: String) async throws {
-        let token = try await accessToken(for: configuration)
+    private func writeSecret(configuration: Configuration, revision: Revision, key: String, value: String) async throws {
+        let token = try await accessToken(for: configuration, revision: revision)
         let encoded = key.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? key
         // The /raw/ write path accepts a plaintext secretValue (the pilot
         // validated this: the non-raw path demands client-side E2EE fields).
@@ -385,11 +509,13 @@ public final class InfisicalSettings: @unchecked Sendable {
         let (_, patchStatus) = try await sending {
             try await self.transport.send(method: "PATCH", url: url, headers: headers, body: body)
         }
+        try checkCurrent(revision)
         if patchStatus == 404 {
             // Secret does not exist yet — create it.
             let (_, postStatus) = try await sending {
                 try await self.transport.send(method: "POST", url: url, headers: headers, body: body)
             }
+            try checkCurrent(revision)
             guard (200...299).contains(postStatus) else {
                 throw SettingsError.writeFailed(status: postStatus)
             }
