@@ -185,6 +185,48 @@ final class LocalQuotaReaderTests: XCTestCase {
         XCTAssertNil(ClaudeCredentialSource.rememberedCredential())
     }
 
+    func testARenewalThatLandsIsActuallyUsedOnTheSameRefresh() async throws {
+        // The self-healing path, end to end: the stored token is expired but
+        // renewable, so the reader asks Claude Code to renew its own login and
+        // then reads the result back.  This failed silently for as long as the
+        // remembered-grant cache returned the pre-renewal bytes on that read-back
+        // (board dd5f6702), which made the row sit on "login idle" even while
+        // Claude Code was renewing happily in the background.
+        let home = try makeFixtureHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        try writeJSON(["mcpOAuth": [:]], to: home.appendingPathComponent(".claude/.credentials.json"))
+
+        let expired = Data(#"{"claudeAiOauth":{"accessToken":"old","refreshToken":"r","expiresAt":1}}"#.utf8)
+        let renewed = Data(#"{"claudeAiOauth":{"accessToken":"renewed","expiresAt":4102444800000}}"#.utf8)
+
+        // First read yields the expired record; after the renewal run, every
+        // later read yields the one Claude Code just wrote.
+        let renewedByClaudeCode = ClaudeRenewalGate()
+        defer { ClaudeCredentialSource.resetRememberedCredential() }
+
+        var renewalRan = 0
+        let reader = LocalQuotaReader(
+            homeDirectory: home,
+            fetchJSON: { request in
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer renewed")
+                return Self.httpResponse(#"{"five_hour":{"utilization":42}}"#)
+            },
+            runAntigravity: { Data("{}".utf8) },
+            readClaudeCredential: { renewedByClaudeCode.hasRenewed ? .authorized(renewed) : .authorized(expired) },
+            renewClaudeLogin: {
+                renewalRan += 1
+                renewedByClaudeCode.hasRenewed = true
+            },
+            renewalThrottle: ClaudeRenewalThrottle(minimumInterval: 0))
+
+        let result = await reader.read()
+
+        XCTAssertEqual(renewalRan, 1, "an expired but renewable login must trigger one renewal run")
+        XCTAssertEqual(result.windows.first { $0.providerKey == "anthropic" }?.remainingPercent, 58)
+        XCTAssertNil(result.issues["anthropic"], "a renewal that landed must not report an issue")
+        XCTAssertTrue(result.consentNeeded.isEmpty)
+    }
+
     func testClaudeKeychainReaderTimeoutDoesNotHoldRefresh() async throws {
         let home = try makeFixtureHome()
         defer { try? FileManager.default.removeItem(at: home) }
@@ -281,5 +323,18 @@ final class LocalQuotaReaderTests: XCTestCase {
         let url = URL(string: "https://fixture.invalid/quota")!
         let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
         return (Data(text.utf8), response)
+    }
+}
+
+/// A one-way flag standing in for "Claude Code has rewritten its own login".
+/// The reader's renewal closure and its credential closure both touch it, and
+/// they run on different tasks, so it needs a lock rather than a bare `var`.
+private final class ClaudeRenewalGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var renewed = false
+
+    var hasRenewed: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return renewed }
+        set { lock.lock(); renewed = newValue; lock.unlock() }
     }
 }
