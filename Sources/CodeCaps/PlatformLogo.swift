@@ -255,8 +255,15 @@ public enum PlatformLogoImage {
         "minimax": ("minimax", "png"),
         "muse": ("muse", "png"),
         "muse-assist": ("muse-assist", "png"),
-        "muse-code": ("muse-code", "png"),
+        "muse-code": ("muse-code", "svg"),
         "cursor": ("cursor", "svg"),
+    ]
+
+    /// Dedicated monochrome/template marks used when Light/Dark (template) style
+    /// is active, providing high-contrast silhouette rendering.
+    private static let templateResourceNames: [String: (name: String, ext: String)] = [
+        "muse-code": ("muse-code-dark", "svg"),
+        "muse": ("muse-code-dark", "svg"),
     ]
 
     /// Return the bundled asset for `providerKey`, or `nil` if no artwork ships.
@@ -289,7 +296,12 @@ public enum PlatformLogoImage {
             if let existing = resourceNames[name] { return existing }
             return (name, "svg")
         }
-        let mapResource = resourceNames[key as String] ?? resourceNames[platformKey(of: key as String)]
+        let mapResource: (name: String, ext: String)?
+        if style == .template, let tmpl = templateResourceNames[key as String] ?? templateResourceNames[platformKey(of: key as String)] {
+            mapResource = tmpl
+        } else {
+            mapResource = resourceNames[key as String] ?? resourceNames[platformKey(of: key as String)]
+        }
         for resource in [hintResource, mapResource].compactMap({ $0 }) {
             if let image = imageFromBundle(resource: resource, key: key, cacheKey: cacheKey, cache: cache, style: style) {
                 return image
