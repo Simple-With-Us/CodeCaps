@@ -333,3 +333,54 @@ quota shown two ways.  The expanded row labels now make origin legible
 without inspecting the underlying window.
 
 Board 42ae688ab3b84d9aa65e445aab072a15.  Closes #37.
+
+## PiP window fit, centred header, resizable, sidebar polish (2026-10-05)
+
+Board 6a3f582af81347f5ad678ec925e40089.  Closes #170.  PR #171, branch
+mm/pip-window-layout.  Owner-reported, with screenshots, after watching the
+floating PiP HUD with five pinned rows.
+
+PipWidget.swift:
+- The panel was a fixed 260x120 and the view pinned between minWidth 230 and
+  maxWidth 280, so a provider drawing two quota bars overflowed the panel and
+  clipped its percentage and countdown on the right.  There was no responsive
+  path and no resize affordance at all.
+- PipMetrics now declares every dimension once and derives the responsive
+  thresholds from those constants, so the AppKit side that sizes the panel and
+  the SwiftUI side that draws in it cannot drift apart.  Breakpoints tuned by
+  hand to match a drawing are breakpoints that rot the next time a constant
+  moves; these are computed, and a test pins that.
+- Two zones edge to edge: lighter header on Theme.surface, darker rows panel on
+  Theme.groupBand.
+- The header carries the owner's own black-on-transparent artwork as a template
+  mark, centred as one unit with "CodeCaps" (no "PiP") at 22pt.  One asset is
+  black-on-transparent on the light band and white-on-transparent on the dark
+  one.  The artwork is reused as-is; nothing here re-cuts, re-exports or
+  substitutes icon art.
+- Close button always visible, in the header rather than hovering in over the
+  meters.
+- Resizable and bounded; refits whenever the pinned row set changes, so
+  pinning always gets the window back to a size that fits.  A drag-resized
+  window stays the owner's size.
+- Content compresses rather than clips, down to the owner's floor of one or two
+  bars and their percentages; shortening hides whole rows, never fewer than
+  one.
+- The hosting view is built once instead of being swapped on every poll.
+
+ConsoleViews.swift:
+- Removed the "Reading from this Mac" sidebar footer.  It was a duplicate of a
+  Settings switch that is on for almost everyone, so the sidebar carried a
+  status line that never changed.  The footer now appears only for a BotFleet
+  sharing error, which nothing else surfaces in the console window.
+- Added .focusEffectDisabled() to the sidebar list.  The list stays focusable
+  so arrow keys move the selection, but the system focus ring was drawing a
+  blue rectangle around three edges of the sidebar - system blue next to this
+  app's teal, reappearing whenever the window was resized.
+
+Tests: PipMetricsTests pins the width ladder, the height ladder, the absence of
+a double-counted outer padding term, and the panel bounds.  swift test is 343
+tests, 0 failures.
+
+Open: the drag-the-edge resize affordance is enforced in code but the physical
+edge-drag is only visible on a real launch, and PR #163 (ag/settings-window-
+layering) also edits PipWidget.swift and is currently CONFLICTING with main.
