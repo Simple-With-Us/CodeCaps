@@ -154,6 +154,41 @@ final class MonitorModelRunawayAlertTests: XCTestCase {
         XCTAssertNotNil(defaults.dictionary(forKey: "runawayAlertLastSent"))
     }
 
+    func testSettingsPlanChangeSuppressesRunawayDelivery() async throws {
+        try seedSteadyHistory()
+        let model = makeModel()
+        model.burnRateAlertsEnabled = true
+        model.setCustomInfo(for: "anthropic", info: PlatformCustomInfo(planName: "downgrade to Basic"))
+        var delivered: [BurnRateNotification] = []
+        model.runawayNotificationForTesting = { delivered.append($0) }
+        model.localResultForTesting = LocalQuotaResult(windows: [localWindow(remaining: latestRemaining(drop: 10))])
+
+        await refreshAndWait(model)
+
+        XCTAssertTrue(model.activeRunawayAnomalies.isEmpty,
+                      "a Settings-text plan change suppresses the red runaway card")
+        XCTAssertTrue(delivered.isEmpty)
+        XCTAssertTrue(model.activePlanChanges.contains { $0.isManual && $0.providerKey == "anthropic" })
+    }
+
+    func testPreloadedSamplesSkipTheHistoryFile() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        func sample(_ secondsAgo: Int, _ percent: Double) -> AnomalyDetector.Sample {
+            .init(providerKey: "p", windowId: "w",
+                  observedAt: now.addingTimeInterval(-Double(secondsAgo)),
+                  remainingPercent: percent)
+        }
+        let samples = [sample(10_800, 90), sample(9_000, 85), sample(7_200, 80),
+                       sample(5_400, 75), sample(1_800, 70), sample(300, 20)]
+        let missing = directory.appendingPathComponent("missing.jsonl")
+        let anomalies = BurnRateMonitor.evaluate(baseline: 5, peak: 2, now: now,
+                                                  historyURL: missing, samples: samples)
+        XCTAssertFalse(anomalies.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: missing.path))
+        let changes = BurnRateMonitor.evaluatePlanChanges(now: now, historyURL: missing, samples: samples)
+        XCTAssertTrue(changes.isEmpty)
+    }
+
     func testHasActiveRunawayAnomalyAccuratelyIdentifiesRowAndPool() {
         let now = Date()
         let model = makeModel()

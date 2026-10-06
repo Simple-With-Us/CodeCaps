@@ -86,12 +86,12 @@ public struct AnomalyDetector: Sendable {
     /// remainingPercent mid-window that is NOT a window reset.  Resets (a jump
     /// back up to a fresh window) already split history segments; a plan
     /// change is a sudden level shift that then holds.  The same size of drop
-    /// with no later sample is the live burn interval, and it stays a runaway
-    /// signal.  While the baseline is still mostly old-plan data, burn-rate
-    /// comparisons are invalid, so the runaway detector stands down for this
-    /// window until the baseline is all new-plan data (7 days).  Downgrades
-    /// are detected from the % step; upgrades (a jump up that is not a reset)
-    /// are not yet distinguished from resets.
+    /// with no later sample stays a runaway signal until it has aged out of
+    /// the live-burn hour.  While the baseline is still mostly old-plan data,
+    /// burn-rate comparisons are invalid, so the runaway detector stands down
+    /// for this window until the baseline is all new-plan data (7 days).
+    /// Downgrades are detected from the % step; upgrades (a jump up that is
+    /// not a reset) are not yet distinguished from resets.
     public struct PlanChange: Equatable, Sendable, Codable {
         public let providerKey: String
         public let windowId: String
@@ -134,6 +134,12 @@ public struct AnomalyDetector: Sendable {
     /// The maximum gap between the two samples of a step.  A 25-point move
     /// spread over many hours is heavy use, not a discontinuity.
     public static let planChangeMaxGap: TimeInterval = 2 * 3600
+
+    /// How long a trailing step must sit with no follow-up sample before it
+    /// counts as a plan change.  The runaway check only treats the last 15
+    /// minutes as the live burn; an hour without a confirming sample means
+    /// that interval is no longer the current burn.
+    public static let planChangeUnconfirmedQuiet: TimeInterval = 3600
 
     public var baselineMultiplier: Double
     public var peakMultiplier: Double
@@ -211,21 +217,33 @@ public struct AnomalyDetector: Sendable {
         return out
     }
 
-    /// Detect plan/quota-size changes across the sample history: a step
-    /// discontinuity in remainingPercent mid-window that is not a window
-    /// reset, and that a later sample shows has settled.  Returns the latest
-    /// change per provider+window; callers filter with `isActive(now:)` for
-    /// the 7-day recalibration window.
+    /// Detect plan/quota-size changes across the sample history.  A step is a
+    /// drop of at least `planChangeStepPoints` inside `planChangeMaxGap` that
+    /// is not a window reset.  An interior step counts once a later sample
+    /// shows it settled.  The trailing step of a segment has no later sample
+    /// there, so it counts only after `planChangeUnconfirmedQuiet`.  Returns
+    /// the latest change per provider+window; callers filter with
+    /// `isActive(now:)` for the 7-day recalibration window.
     public static func detectPlanChanges(samples: [Sample], now: Date = Date()) -> [PlanChange] {
         var latest: [PairKey: PlanChange] = [:]
         for segment in Self.historySegments(samples: samples, now: now) {
-            guard let first = segment.first, segment.count >= 3 else { continue }
+            guard let first = segment.first, segment.count >= 2 else { continue }
             let key = PairKey(provider: first.providerKey, window: first.windowId)
             let pts = segment.sorted { $0.observedAt < $1.observedAt }
-            for index in 0..<(pts.count - 2) {
-                let prev = pts[index]
-                let curr = pts[index + 1]
-                let next = pts[index + 2]
+            // Interior intervals have a follow-up sample that can prove the
+            // level held.  The trailing interval has none, so it qualifies
+            // only once it has aged out of the live-burn hour.
+            var candidates: [(Sample, Sample, Sample?)] = []
+            if pts.count >= 3 {
+                for index in 0..<(pts.count - 2) {
+                    candidates.append((pts[index], pts[index + 1], pts[index + 2]))
+                }
+            }
+            let last = pts[pts.count - 1]
+            if last.observedAt.timeIntervalSince(now) <= -planChangeUnconfirmedQuiet {
+                candidates.append((pts[pts.count - 2], last, nil))
+            }
+            for (prev, curr, next) in candidates {
                 guard Self.isSettledPlanStep(prev: prev, curr: curr, next: next) else { continue }
                 let change = PlanChange(providerKey: key.provider,
                                         windowId: key.window,
@@ -235,7 +253,6 @@ public struct AnomalyDetector: Sendable {
                     continue
                 }
                 latest[key] = change
-                break  // One step per segment; a later segment overwrites.
             }
         }
         return latest.values.sorted {
@@ -246,17 +263,19 @@ public struct AnomalyDetector: Sendable {
     /// A resize teleports, then sits.  The follow-up sample has to fall
     /// inside the step window and spend at less than half the step's rate.
     /// Another large step means the burn is still running, which is a runaway
-    /// signal rather than a new plan.
-    private static func isSettledPlanStep(prev: Sample, curr: Sample, next: Sample) -> Bool {
+    /// signal rather than a new plan.  A nil follow-up is the aged trailing
+    /// step: the caller has already required `planChangeUnconfirmedQuiet`.
+    private static func isSettledPlanStep(prev: Sample, curr: Sample, next: Sample?) -> Bool {
         guard let prevPct = prev.remainingPercent,
-              let currPct = curr.remainingPercent,
-              let nextPct = next.remainingPercent else { return false }
+              let currPct = curr.remainingPercent else { return false }
         let gap = curr.observedAt.timeIntervalSince(prev.observedAt)
-        let laterGap = next.observedAt.timeIntervalSince(curr.observedAt)
-        guard gap > 0, laterGap > 0,
-              gap <= planChangeMaxGap, laterGap <= planChangeMaxGap else { return false }
+        guard gap > 0, gap <= planChangeMaxGap else { return false }
         let drop = prevPct - currPct
         guard drop >= planChangeStepPoints else { return false }
+        guard let next else { return true }
+        guard let nextPct = next.remainingPercent else { return false }
+        let laterGap = next.observedAt.timeIntervalSince(curr.observedAt)
+        guard laterGap > 0, laterGap <= planChangeMaxGap else { return false }
         let laterDrop = currPct - nextPct
         guard laterDrop < planChangeStepPoints else { return false }
         let stepRate = drop / (gap / 3600)

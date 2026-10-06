@@ -72,21 +72,33 @@ enum BurnRateMonitor {
         (try? history(at: historyURL).load()) ?? []
     }
 
-    /// Evaluate the owner's current thresholds against everything on disk.
+    /// Evaluate the owner's current thresholds.  Pass `samples` when the caller
+    /// already loaded the history, so a refresh does not parse the file twice.
     static func evaluate(baseline: Double, peak: Double, now: Date = Date(),
-                         historyURL: URL? = nil) -> [AnomalyDetector.Anomaly] {
-        guard let samples = try? history(at: historyURL).load(), !samples.isEmpty else { return [] }
+                         historyURL: URL? = nil,
+                         samples: [AnomalyDetector.Sample]? = nil) -> [AnomalyDetector.Anomaly] {
+        let loaded = resolvedSamples(samples, historyURL: historyURL)
+        guard !loaded.isEmpty else { return [] }
         return AnomalyDetector(baselineMultiplier: baseline, peakMultiplier: peak)
-            .evaluate(samples: samples, now: now)
+            .evaluate(samples: loaded, now: now)
     }
 
     /// Plan/quota-size changes detected as step discontinuities.  The runaway
     /// detector already suppresses these windows; this exposes them so the UI
     /// can show the informational plan-change state instead of an alert.
+    /// Pass `samples` when the caller already loaded the history.
     static func evaluatePlanChanges(now: Date = Date(),
-                                    historyURL: URL? = nil) -> [AnomalyDetector.PlanChange] {
-        guard let samples = try? history(at: historyURL).load(), !samples.isEmpty else { return [] }
-        return AnomalyDetector.detectPlanChanges(samples: samples, now: now)
+                                    historyURL: URL? = nil,
+                                    samples: [AnomalyDetector.Sample]? = nil) -> [AnomalyDetector.PlanChange] {
+        let loaded = resolvedSamples(samples, historyURL: historyURL)
+        guard !loaded.isEmpty else { return [] }
+        return AnomalyDetector.detectPlanChanges(samples: loaded, now: now)
+    }
+
+    private static func resolvedSamples(_ samples: [AnomalyDetector.Sample]?,
+                                        historyURL: URL?) -> [AnomalyDetector.Sample] {
+        if let samples { return samples }
+        return (try? history(at: historyURL).load()) ?? []
     }
 
     /// A descriptive count only.  Detector readiness is per provider, window,

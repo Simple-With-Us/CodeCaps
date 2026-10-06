@@ -2038,9 +2038,17 @@ final class MonitorModel: ObservableObject {
     }
 
     private func publishWidgetSnapshot(candidates: [QuotaWindow]) {
-        let visibleProviderKeys = Set(QuotaResponse(generatedAt: "", windows: candidates)
+        // Fleet-fallback windows already sit in `merged`, and the caller also
+        // appends every fleet group.  The widget cache stores this array
+        // verbatim, so an equal window is published once.
+        var unique: [QuotaWindow] = []
+        unique.reserveCapacity(candidates.count)
+        for window in candidates where !unique.contains(window) {
+            unique.append(window)
+        }
+        let visibleProviderKeys = Set(QuotaResponse(generatedAt: "", windows: unique)
             .platformSections(now: now).map(\.providerKey))
-        let windows = candidates.filter {
+        let windows = unique.filter {
             visibleProviderKeys.contains($0.canonicalProviderKey)
                 && !disabledSources.contains($0.source ?? "")
                 && !$0.isSupplementaryVideoQuota
@@ -2094,21 +2102,28 @@ final class MonitorModel: ObservableObject {
             activePlanChanges = []
             return
         }
+        // One read feeds both the runaway check and plan-change detection.
+        // The menu-bar refresh runs on the main actor.
+        let samples = BurnRateMonitor.loadSamples(historyURL: burnRateHistoryURL)
+        // Settings text is a provider-level signal.  It has to join the skip
+        // set before anomalies are published, or the red card and the
+        // notification still fire beside the teal plan-change card.
+        let manualProviders = Set(platformCustomInfo.compactMap { key, info in
+            info.mentionsPlanChange ? key : nil
+        })
         let anomalies = BurnRateMonitor.evaluate(baseline: anomalyBaselineMultiplier,
                                                   peak: anomalyPeakMultiplier,
                                                   now: now,
-                                                  historyURL: burnRateHistoryURL)
+                                                  samples: samples)
             .filter { currentKeys.contains(Self.runawayKey($0.providerKey, $0.windowId)) }
+            .filter { !manualProviders.contains($0.providerKey) }
         activeRunawayAnomalies = anomalies
         // Plan changes: automatic discontinuity detection plus the owner's
         // explicit Settings-text signal.  Either one puts the window in the
         // informational plan-change state instead of a runaway alert.
-        var planChanges = BurnRateMonitor.evaluatePlanChanges(now: now, historyURL: burnRateHistoryURL)
+        var planChanges = BurnRateMonitor.evaluatePlanChanges(now: now, samples: samples)
             .filter { $0.isActive(now: now) }
             .filter { currentKeys.contains(Self.runawayKey($0.providerKey, $0.windowId)) }
-        let manualProviders = Set(platformCustomInfo.compactMap { key, info in
-            info.mentionsPlanChange ? key : nil
-        })
         for window in localWindows {
             let providerKey = window.canonicalProviderKey
             guard manualProviders.contains(providerKey),
