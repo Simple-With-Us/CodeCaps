@@ -1408,7 +1408,7 @@ struct SettingsInfisicalPage: View {
 
     @State private var clientId = ""
     @State private var clientSecret = ""
-    @State private var projectId = InfisicalSettings.codeCapsProjectId
+    @State private var projectId = ""
     @State private var savedIdentity: InfisicalIdentityStore.Identity?
     @State private var operationId = UUID()
     @State private var hasIdentity = false
@@ -1549,7 +1549,7 @@ struct SettingsInfisicalPage: View {
         if reloadSetup {
             clientId = savedIdentity?.clientId ?? ""
             clientSecret = ""
-            projectId = savedIdentity?.projectId ?? InfisicalSettings.codeCapsProjectId
+            projectId = savedIdentity?.projectId ?? ""
         }
         pullEndpoint = settings.value(for: InfisicalSettings.Keys.pullEndpoint) ?? ""
         pushEndpoint = settings.value(for: InfisicalSettings.Keys.pushEndpoint) ?? ""

@@ -106,6 +106,20 @@ final class InfisicalProjectSelectionTests: XCTestCase {
         }
     }
 
+    func testBlankProjectIsRejectedBeforeNetworkOrPersistence() async throws {
+        let transport = ProjectSelectionTransport()
+        let settings = InfisicalSettings(transport: transport)
+        for project in ["", " \n"] {
+            do {
+                try await settings.validateAndConfigure(projectConfiguration(project)) { XCTFail("Must not persist") }
+                XCTFail("Expected blank project rejection")
+            } catch InfisicalSettings.SettingsError.invalidDestination {} catch { XCTFail("Unexpected error: \(error)") }
+        }
+        let requests = await transport.requests
+        XCTAssertTrue(requests.isEmpty)
+        XCTAssertFalse(settings.isProvisioned)
+    }
+
     func testExistingProjectWithNoManagedKeysIsValid() async throws {
         let transport = ProjectSelectionTransport()
         await transport.setValues([:])
@@ -237,7 +251,7 @@ final class InfisicalProjectSelectionTests: XCTestCase {
         XCTAssertFalse(settings.isCurrent(retired))
         XCTAssertTrue(settings.isProvisioned)
         XCTAssertEqual(settings.value(for: InfisicalSettings.Keys.pullEndpoint), "https://a.example/pull")
-        // The UI's failure notification restarts the same persisted setup.
+        // The UI's failure notification restarts the unchanged runtime setup.
         settings.configure(projectConfiguration("A"))
         await transport.setValues(["A": "https://a.example/refreshed"])
         await settings.refresh()

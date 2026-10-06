@@ -30,9 +30,6 @@ public final class InfisicalSettings: @unchecked Sendable {
 
     // MARK: - Inventory
 
-    /// The Infisical project that owns CodeCaps' app-level settings.
-    public static let codeCapsProjectId = "cd278860-c3bc-466f-9256-22385e64551b"
-
     /// Keys this app manages in Infisical.  The full inventory, sensitivity,
     /// and defaults live in INFISICAL.md.
     public enum Keys {
@@ -72,7 +69,7 @@ public final class InfisicalSettings: @unchecked Sendable {
 
         public init(
             siteURL: URL = URL(string: "https://app.infisical.com")!,
-            projectId: String = InfisicalSettings.codeCapsProjectId,
+            projectId: String,
             environment: String,
             clientId: String,
             clientSecret: String

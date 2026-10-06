@@ -4,8 +4,7 @@ Infisical is the sole source of truth for CodeCaps' app-level settings: secrets,
 
 ## Project
 
-- Default Infisical project: **CodeCaps** (`cd278860-c3bc-466f-9256-22385e64551b`), environments `dev` / `staging` / `prod`.
-- The owner can save a different Project ID under Settings → Infisical Sync.  Existing two-field identities continue using the default above until explicitly changed.
+- Project ID must be entered explicitly under Settings → Infisical Sync.  There is no built-in project or migration fallback.  Legacy two-field identities are not activated; the owner enters the three-field setup.
 - Release builds read `prod`; `.dev` builds read `dev` (`InfisicalSettings.defaultEnvironment`, mirroring how `TokenStore` scopes Keychain items per build).
 - REST surface used: universal-auth login → project/environment metadata verification on explicit setup Save → three named `GET /api/v3/secrets/raw/{name}` requests → `PATCH` / `POST /api/v3/secrets/raw/{name}` for write-through.  The app never lists root secrets or fetches an unrelated secret value.  A missing managed key (404) remains unset, so its existing local/default behavior applies; any other read failure keeps the entire last-known-good cache.  Implemented with zero new dependencies in `Sources/QuotaCore/InfisicalSettings.swift` (`URLSession` only).
 
@@ -56,7 +55,7 @@ CodeCaps is a single-user local app: the owner is the only user and therefore th
 
 Changing Project ID never carries cached values or status from the previous destination into the new cache.  Existing local endpoint overrides, quota modes, read/ingest tokens, and provider sign-ins remain untouched.  In-flight old reads, writes, and validation cannot install stale cache/status or initiate a follow-up create after a switch or Forget.  An already submitted HTTP write cannot be recalled, but its response cannot affect the new setup.
 
-Forget Setup removes the stored identity and selected destination together.  A persisted tombstone prevents legacy credentials from reappearing on restart.  Keychain failures retain a complete prior setup.  Failed saves and clears restart the prior setup’s refresh cycle.  No credential-file fallback is added.
+Forget Setup atomically deletes the single stored identity/destination record.  Legacy two-field records are never loaded.  Keychain failures retain a complete prior three-field setup.  Failed saves and clears restart the prior setup’s refresh cycle.  No credential-file fallback is added.
 
 ## Rotating A Value
 

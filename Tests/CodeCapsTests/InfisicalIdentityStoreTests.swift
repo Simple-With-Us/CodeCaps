@@ -36,13 +36,13 @@ final class InfisicalIdentityStoreTests: XCTestCase {
     }
 
     func testSaveThenLoadRoundTrips() throws {
-        let identity = InfisicalIdentityStore.Identity(clientId: "cid-1", clientSecret: "csec-1")
+        let identity = InfisicalIdentityStore.Identity(clientId: "cid-1", clientSecret: "csec-1", projectId: "project-A")
         try InfisicalIdentityStore.save(identity, bundleIdentifier: "com.jays.agent-bar.mac.test")
         XCTAssertEqual(InfisicalIdentityStore.load(bundleIdentifier: "com.jays.agent-bar.mac.test"), identity)
     }
 
     func testDeleteRemovesTheIdentity() throws {
-        let identity = InfisicalIdentityStore.Identity(clientId: "cid-1", clientSecret: "csec-1")
+        let identity = InfisicalIdentityStore.Identity(clientId: "cid-1", clientSecret: "csec-1", projectId: "project-A")
         try InfisicalIdentityStore.save(identity, bundleIdentifier: "com.jays.agent-bar.mac.test")
         try InfisicalIdentityStore.delete(bundleIdentifier: "com.jays.agent-bar.mac.test")
         XCTAssertNil(InfisicalIdentityStore.load(bundleIdentifier: "com.jays.agent-bar.mac.test"))
@@ -70,14 +70,19 @@ final class InfisicalIdentityStoreTests: XCTestCase {
             InfisicalIdentityStore.serviceName(bundleIdentifier: "com.jays.agent-bar.mac")
         )
     }
-    func testLegacyIdentityUsesDefaultProjectWithoutRewritingKeychain() {
+    func testLegacyIdentityRequiresExplicitProjectSetup() {
         let service = "com.jays.agent-bar.mac.test.infisical-identity"
         vault["\(service)/client-id"] = "legacy-id"
         vault["\(service)/client-secret"] = "legacy-secret"
-        let identity = InfisicalIdentityStore.load(bundleIdentifier: "com.jays.agent-bar.mac.test")
-        XCTAssertEqual(identity?.projectId, InfisicalSettings.codeCapsProjectId)
-        XCTAssertEqual(identity?.clientId, "legacy-id")
+        XCTAssertNil(InfisicalIdentityStore.load(bundleIdentifier: "com.jays.agent-bar.mac.test"))
         XCTAssertNil(vault["\(service)/setup-v1"])
+    }
+
+    func testBlankProjectCannotBePersisted() {
+        XCTAssertThrowsError(try InfisicalIdentityStore.save(
+            .init(clientId: "id", clientSecret: "secret", projectId: " \n"),
+            bundleIdentifier: "com.jays.agent-bar.mac.test"))
+        XCTAssertTrue(vault.isEmpty)
     }
 
     func testProjectAndIdentityPersistAsOneAtomicRecord() throws {
@@ -97,47 +102,20 @@ final class InfisicalIdentityStoreTests: XCTestCase {
         XCTAssertEqual(InfisicalIdentityStore.load(bundleIdentifier: "com.jays.agent-bar.mac.test"), old)
     }
 
-    func testForgetLegacyIdentityCannotResurrectIt() throws {
-        let service = "com.jays.agent-bar.mac.test.infisical-identity"
-        vault["\(service)/client-id"] = "legacy-id"
-        vault["\(service)/client-secret"] = "legacy-secret"
-        try InfisicalIdentityStore.delete(bundleIdentifier: "com.jays.agent-bar.mac.test")
-        XCTAssertNil(InfisicalIdentityStore.load(bundleIdentifier: "com.jays.agent-bar.mac.test"))
-        XCTAssertNil(vault["\(service)/client-id"])
-        XCTAssertNil(vault["\(service)/client-secret"])
-        XCTAssertNotNil(vault["\(service)/setup-v1"])
-    }
-
-    func testFailedLegacyDeleteLeavesCompleteActiveIdentity() throws {
-        let service = "com.jays.agent-bar.mac.test.infisical-identity"
-        vault["\(service)/client-id"] = "legacy-id"
-        vault["\(service)/client-secret"] = "legacy-secret"
-        InfisicalIdentityStore.calls.delete = { [weak self] service, account in
-            if account == "client-secret" { throw InfisicalIdentityStore.StoreError.keychain(status: -1) }
-            self?.vault.removeValue(forKey: "\(service)/\(account)")
-        }
+    func testFailedDeletePreservesCompleteSetup() throws {
+        let old = InfisicalIdentityStore.Identity(clientId: "old-id", clientSecret: "old-secret", projectId: "project-A")
+        try InfisicalIdentityStore.save(old, bundleIdentifier: "com.jays.agent-bar.mac.test")
+        InfisicalIdentityStore.calls.delete = { _, _ in throw InfisicalIdentityStore.StoreError.keychain(status: -1) }
         XCTAssertThrowsError(try InfisicalIdentityStore.delete(bundleIdentifier: "com.jays.agent-bar.mac.test"))
-        XCTAssertEqual(InfisicalIdentityStore.load(bundleIdentifier: "com.jays.agent-bar.mac.test")?.clientSecret, "legacy-secret")
+        XCTAssertEqual(InfisicalIdentityStore.load(bundleIdentifier: "com.jays.agent-bar.mac.test"), old)
     }
 
-    func testLegacyReadFailureAbortsForgetBeforeDeletingAnything() {
+    func testRecordReadErrorDoesNotActivateLegacyIdentity() {
         InfisicalIdentityStore.calls.read = { _, account in
-            if account == "setup-v1" { return nil }
-            if account == "client-id" { return "legacy-id" }
+            XCTAssertEqual(account, "setup-v1")
             throw InfisicalIdentityStore.StoreError.keychain(status: -1)
         }
-        InfisicalIdentityStore.calls.delete = { _, _ in XCTFail("Must not delete unreadable legacy setup") }
-        InfisicalIdentityStore.calls.save = { _, _, _ in XCTFail("Must not replace unreadable legacy setup") }
-        XCTAssertThrowsError(try InfisicalIdentityStore.delete(bundleIdentifier: "com.jays.agent-bar.mac.test"))
-    }
-
-    func testNewRecordReadErrorDoesNotReviveReadableLegacyIdentity() {
-        InfisicalIdentityStore.calls.read = { _, account in
-            if account == "setup-v1" { throw InfisicalIdentityStore.StoreError.keychain(status: -1) }
-            return account == "client-id" ? "legacy-id" : "legacy-secret"
-        }
         XCTAssertNil(InfisicalIdentityStore.load(bundleIdentifier: "com.jays.agent-bar.mac.test"))
-        XCTAssertThrowsError(try InfisicalIdentityStore.delete(bundleIdentifier: "com.jays.agent-bar.mac.test"))
     }
 
     func testCorruptNewRecordDoesNotFallBackToLegacyProject() {

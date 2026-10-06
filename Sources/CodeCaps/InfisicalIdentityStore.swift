@@ -18,7 +18,7 @@ enum InfisicalIdentityStore {
     struct Identity: Codable, Equatable, Sendable {
         var clientId: String
         var clientSecret: String
-        var projectId: String = InfisicalSettings.codeCapsProjectId
+        var projectId: String
 
         var configuration: InfisicalSettings.Configuration {
             InfisicalSettings.Configuration(projectId: projectId,
@@ -27,8 +27,7 @@ enum InfisicalIdentityStore {
         }
     }
 
-    /// One Keychain item holds the entire setup. A tombstone prevents legacy
-    /// credentials from reappearing after Forget, including across relaunches.
+    /// One Keychain item holds the entire explicitly entered setup.
     private struct Record: Codable {
         var version = 1
         var identity: Identity?
@@ -78,8 +77,6 @@ enum InfisicalIdentityStore {
     }
 
     private static let setupAccount = "setup-v1"
-    private static let clientIdAccount = "client-id"
-    private static let clientSecretAccount = "client-secret"
 
     /// The provisioned identity, or nil when the owner has not set one up.
     /// A half-written identity (one half missing) reads as absent.
@@ -89,25 +86,19 @@ enum InfisicalIdentityStore {
         let service = serviceName(bundleIdentifier: bundleIdentifier)
         let raw: String?
         do { raw = try calls.read(service, setupAccount) }
-        catch { return nil } // Read failure is not absence; never revive legacy A.
+        catch { return nil } // Read failure must never activate another destination.
         if let raw {
-            // A malformed/unsupported record fails closed rather than silently
-            // reconnecting to the old default project.
+            // A malformed/unsupported record fails closed.
             guard let data = raw.data(using: .utf8),
                   let record = try? JSONDecoder().decode(Record.self, from: data),
                   record.version == 1,
                   let identity = record.identity,
                   !identity.clientId.isEmpty, !identity.clientSecret.isEmpty,
-                  !identity.projectId.isEmpty else { return nil }
+                  !identity.projectId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
             return identity
         }
-        // Existing installations keep their original CodeCaps project until
-        // the owner explicitly saves a different destination.
-        guard let clientId = try? calls.read(service, clientIdAccount),
-              !clientId.isEmpty,
-              let clientSecret = try? calls.read(service, clientSecretAccount),
-              !clientSecret.isEmpty else { return nil }
-        return Identity(clientId: clientId, clientSecret: clientSecret)
+        // Two-field records have no explicit destination and are not loaded.
+        return nil
     }
 
     static func save(
@@ -115,6 +106,9 @@ enum InfisicalIdentityStore {
         bundleIdentifier: String? = Bundle.main.bundleIdentifier
     ) throws {
         let service = serviceName(bundleIdentifier: bundleIdentifier)
+        guard !identity.projectId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw StoreError.invalidRecord
+        }
         try write(Record(identity: identity), service: service)
     }
 
@@ -122,21 +116,7 @@ enum InfisicalIdentityStore {
         bundleIdentifier: String? = Bundle.main.bundleIdentifier
     ) throws {
         let service = serviceName(bundleIdentifier: bundleIdentifier)
-        // First promote a legacy setup so a deletion failure cannot leave a
-        // half-written identity as the only persisted copy.
-        if try calls.read(service, setupAccount) == nil {
-            // Unlike the nonthrowing startup load, deletion must distinguish
-            // an incomplete legacy setup from a credential we could not read.
-            let clientId = try calls.read(service, clientIdAccount)
-            let clientSecret = try calls.read(service, clientSecretAccount)
-            if let clientId, !clientId.isEmpty, let clientSecret, !clientSecret.isEmpty {
-                try write(Record(identity: Identity(clientId: clientId, clientSecret: clientSecret)),
-                          service: service)
-            }
-        }
-        try calls.delete(service, clientIdAccount)
-        try calls.delete(service, clientSecretAccount)
-        try write(Record(identity: nil), service: service)
+        try calls.delete(service, setupAccount)
     }
 
     private static func write(_ record: Record, service: String) throws {
