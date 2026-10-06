@@ -85,8 +85,9 @@ public struct AnomalyDetector: Sendable {
     /// A detected plan/quota-size change: a step discontinuity in
     /// remainingPercent mid-window that is NOT a window reset.  Resets (a jump
     /// back up to a fresh window) already split history segments; a plan
-    /// change is a sudden level shift — typically one huge instant drop — with
-    /// no reset.  While the baseline is still mostly old-plan data, burn-rate
+    /// change is a sudden level shift that then holds.  The same size of drop
+    /// with no later sample is the live burn interval, and it stays a runaway
+    /// signal.  While the baseline is still mostly old-plan data, burn-rate
     /// comparisons are invalid, so the runaway detector stands down for this
     /// window until the baseline is all new-plan data (7 days).  Downgrades
     /// are detected from the % step; upgrades (a jump up that is not a reset)
@@ -212,21 +213,20 @@ public struct AnomalyDetector: Sendable {
 
     /// Detect plan/quota-size changes across the sample history: a step
     /// discontinuity in remainingPercent mid-window that is not a window
-    /// reset.  Returns the latest change per provider+window; callers filter
-    /// with `isActive(now:)` for the 7-day recalibration window.
+    /// reset, and that a later sample shows has settled.  Returns the latest
+    /// change per provider+window; callers filter with `isActive(now:)` for
+    /// the 7-day recalibration window.
     public static func detectPlanChanges(samples: [Sample], now: Date = Date()) -> [PlanChange] {
         var latest: [PairKey: PlanChange] = [:]
         for segment in Self.historySegments(samples: samples, now: now) {
-            guard let first = segment.first else { continue }
+            guard let first = segment.first, segment.count >= 3 else { continue }
             let key = PairKey(provider: first.providerKey, window: first.windowId)
             let pts = segment.sorted { $0.observedAt < $1.observedAt }
-            for (prev, curr) in zip(pts, pts.dropFirst()) {
-                guard let prevPct = prev.remainingPercent,
-                      let currPct = curr.remainingPercent else { continue }
-                let gap = curr.observedAt.timeIntervalSince(prev.observedAt)
-                guard gap >= 0, gap <= planChangeMaxGap else { continue }
-                let drop = prevPct - currPct
-                guard drop >= planChangeStepPoints else { continue }
+            for index in 0..<(pts.count - 2) {
+                let prev = pts[index]
+                let curr = pts[index + 1]
+                let next = pts[index + 2]
+                guard Self.isSettledPlanStep(prev: prev, curr: curr, next: next) else { continue }
                 let change = PlanChange(providerKey: key.provider,
                                         windowId: key.window,
                                         changedAt: curr.observedAt)
@@ -241,6 +241,27 @@ public struct AnomalyDetector: Sendable {
         return latest.values.sorted {
             ($0.changedAt ?? .distantPast) < ($1.changedAt ?? .distantPast)
         }
+    }
+
+    /// A resize teleports, then sits.  The follow-up sample has to fall
+    /// inside the step window and spend at less than half the step's rate.
+    /// Another large step means the burn is still running, which is a runaway
+    /// signal rather than a new plan.
+    private static func isSettledPlanStep(prev: Sample, curr: Sample, next: Sample) -> Bool {
+        guard let prevPct = prev.remainingPercent,
+              let currPct = curr.remainingPercent,
+              let nextPct = next.remainingPercent else { return false }
+        let gap = curr.observedAt.timeIntervalSince(prev.observedAt)
+        let laterGap = next.observedAt.timeIntervalSince(curr.observedAt)
+        guard gap > 0, laterGap > 0,
+              gap <= planChangeMaxGap, laterGap <= planChangeMaxGap else { return false }
+        let drop = prevPct - currPct
+        guard drop >= planChangeStepPoints else { return false }
+        let laterDrop = currPct - nextPct
+        guard laterDrop < planChangeStepPoints else { return false }
+        let stepRate = drop / (gap / 3600)
+        let laterRate = laterDrop / (laterGap / 3600)
+        return laterRate < stepRate * 0.5
     }
 
     private struct PairKey: Hashable {
