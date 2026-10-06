@@ -154,6 +154,41 @@ final class MonitorModelRunawayAlertTests: XCTestCase {
         XCTAssertNotNil(defaults.dictionary(forKey: "runawayAlertLastSent"))
     }
 
+    func testHasActiveRunawayAnomalyAccuratelyIdentifiesRowAndPool() {
+        let now = Date()
+        let model = makeModel()
+        let geminiWindow = QuotaWindow(id: "gemini-5h", provider: "Antigravity", providerKey: "google-antigravity",
+                                       label: "Gemini 5h", remainingPercent: 71, resetAt: nil, window: "5h", occurredAt: ISO8601DateFormatter().string(from: now))
+        let thirdPartyWindow = QuotaWindow(id: "third-5h", provider: "Antigravity", providerKey: "google-antigravity",
+                                           label: "Third-Party 5h", remainingPercent: 100, resetAt: nil, window: "5h", occurredAt: ISO8601DateFormatter().string(from: now))
+        let claudeWindow = QuotaWindow(id: "claude-5h", provider: "anthropic", providerKey: "anthropic",
+                                       label: "Claude 5h", remainingPercent: 1, resetAt: nil, window: "5h", occurredAt: ISO8601DateFormatter().string(from: now))
+
+        let geminiSection = QuotaPlatformSection(providerKey: "google-antigravity", providerLabel: "Antigravity", via: "antigravity", expected: true, windows: [QuotaWindowSnapshot(window: geminiWindow, now: now)])
+        let thirdSection = QuotaPlatformSection(providerKey: "google-antigravity", providerLabel: "Antigravity", via: "antigravity", expected: true, windows: [QuotaWindowSnapshot(window: thirdPartyWindow, now: now)])
+        let claudeSection = QuotaPlatformSection(providerKey: "anthropic", providerLabel: "Claude", via: nil, expected: true, windows: [QuotaWindowSnapshot(window: claudeWindow, now: now)])
+
+        let geminiRow = DisplaySection(id: "google-antigravity:gemini", providerKey: "google-antigravity", title: "Antigravity · Gemini", platformTitle: "Antigravity", section: geminiSection, poolKey: "gemini", remainingPercent: 71, resetAt: nil, maskedWindowIds: [])
+        let thirdRow = DisplaySection(id: "google-antigravity:third-party", providerKey: "google-antigravity", title: "Antigravity · Third-Party", platformTitle: "Antigravity", section: thirdSection, poolKey: "third-party", remainingPercent: 100, resetAt: nil, maskedWindowIds: [])
+        let claudeRow = DisplaySection(id: "anthropic", providerKey: "anthropic", title: "Claude", platformTitle: "Claude", section: claudeSection, poolKey: nil, remainingPercent: 1, resetAt: nil, maskedWindowIds: [])
+
+        // Inject anomaly targeting ONLY Gemini
+        let geminiAnomaly = AnomalyDetector.Anomaly(providerKey: "google-antigravity", windowId: "gemini-5h", kind: .vsBaseline, multiplier: 3.7, summary: "Spending fast")
+        model.injectRunawayAnomaliesForTests([geminiAnomaly])
+
+        XCTAssertTrue(model.hasActiveRunawayAnomaly(for: geminiRow))
+        XCTAssertFalse(model.hasActiveRunawayAnomaly(for: thirdRow), "Third-Party pool must not show flame when only Gemini triggered anomaly")
+        XCTAssertFalse(model.hasActiveRunawayAnomaly(for: claudeRow))
+
+        // Now inject anomaly for Claude too
+        let claudeAnomaly = AnomalyDetector.Anomaly(providerKey: "anthropic", windowId: "claude-5h", kind: .vsBaseline, multiplier: 4.2, summary: "Spending fast")
+        model.injectRunawayAnomaliesForTests([geminiAnomaly, claudeAnomaly])
+
+        XCTAssertTrue(model.hasActiveRunawayAnomaly(for: geminiRow))
+        XCTAssertFalse(model.hasActiveRunawayAnomaly(for: thirdRow))
+        XCTAssertTrue(model.hasActiveRunawayAnomaly(for: claudeRow))
+    }
+
     private func makeModel() -> MonitorModel {
         let model = MonitorModel(defaults: defaults, burnRateHistoryURL: historyURL)
         model.skipsSnapshotIOForTesting = true

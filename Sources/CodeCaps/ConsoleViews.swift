@@ -589,10 +589,19 @@ struct ConsoleSidebar: View {
             // "Antigravity · Cl…" hides the very thing the row adds, so the
             // pool takes a second line in this 200pt column.
             VStack(alignment: .leading, spacing: 0) {
-                Text(row.platformTitle)
-                    .font(.system(size: 13, weight: .medium))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                HStack(spacing: 4) {
+                    Text(row.platformTitle)
+                        .font(.system(size: 13, weight: .medium))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    if model.hasActiveRunawayAnomaly(for: row) {
+                        Image(systemName: "flame.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(Theme.warning)
+                            .help("Active runaway usage anomaly detected")
+                            .accessibilityLabel("Active runaway usage anomaly")
+                    }
+                }
                 if let poolTitle = row.poolTitle {
                     Text(poolTitle)
                         .font(.system(size: 11))

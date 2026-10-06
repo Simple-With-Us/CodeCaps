@@ -140,6 +140,44 @@ final class MenuBarPresetTests: XCTestCase {
                        "the existing unavailable-window fallback remains automatic")
     }
 
+    func testPinToPlatformPairShowsBothQuotasForMultiWindowPlatform() throws {
+        let now = Date()
+        let windows = [
+            window("minimax-short", provider: "minimax", token: "5h", remaining: 0,
+                   model: "general", now: now),
+            window("minimax-week", provider: "minimax", token: "weekly", remaining: 65,
+                   model: "general", now: now),
+            window("claude-short", provider: "anthropic", token: "5h", remaining: 10, now: now),
+        ]
+        let model = makeModel(windows, selection: "platform_pair:minimax", now: now)
+        XCTAssertEqual(model.menuBarTargetSnapshots.count, 2)
+        XCTAssertEqual(model.menuBarTargetSnapshots[0].window.id, "minimax-short")
+        XCTAssertEqual(model.menuBarTargetSnapshots[1].window.id, "minimax-week")
+        XCTAssertEqual(model.menuBarTitle, "0% / 65%")
+        XCTAssertTrue(model.menuBarDetail.contains("MiniMax"))
+        XCTAssertTrue(model.menuBarDetail.contains("0%"))
+        XCTAssertTrue(model.menuBarDetail.contains("65%"))
+
+        // Single quota platform pin still yields 1 quota (lowest)
+        model.menuBarQuotaSelection = "platform:minimax"
+        XCTAssertEqual(model.menuBarTargetSnapshots.count, 1)
+        XCTAssertEqual(model.menuBarTargetSnapshots[0].window.id, "minimax-short")
+        XCTAssertEqual(model.menuBarTitle, "0%")
+    }
+
+    func testMenuBarQuotaDescriptionProvidesClearExplanation() {
+        let now = Date()
+        let windows = [
+            window("minimax-short", provider: "minimax", token: "5h", remaining: 0, model: "general", now: now),
+            window("minimax-week", provider: "minimax", token: "weekly", remaining: 65, model: "general", now: now),
+        ]
+        let model = makeModel(windows, selection: "smart_pair", now: now)
+        XCTAssertTrue(model.menuBarQuotaDescription(for: "smart_pair").contains("Automatically monitors the most urgent platform"))
+        XCTAssertTrue(model.menuBarQuotaDescription(for: "platform_pair:minimax").contains("displays both its short and weekly quota percentages side by side"))
+        XCTAssertTrue(model.menuBarQuotaDescription(for: "platform:minimax").contains("showing the lowest remaining percentage"))
+        XCTAssertTrue(model.menuBarQuotaDescription(for: "auto_lowest_active").contains("above 0%"))
+    }
+
     private func makeModel(_ windows: [QuotaWindow], selection: String, now: Date) -> MonitorModel {
         let model = MonitorModel(defaults: defaults)
         model.menuBarQuotaSelection = selection

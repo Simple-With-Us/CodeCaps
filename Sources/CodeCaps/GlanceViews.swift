@@ -178,11 +178,7 @@ struct GlancePopover: View {
     private func glanceRow(_ row: DisplaySection, issue: String?, origin: QuotaOrigin,
                            expansionKey: String? = nil) -> some View {
         let key = expansionKey ?? row.id
-        let rowCanonical = quotaProviderKey(row.providerKey, providerKey: row.providerKey)
-        let hasAnomaly = model.activeRunawayAnomalies.contains { anomaly in
-            if anomaly.providerKey == row.providerKey { return true }
-            return quotaProviderKey(anomaly.providerKey, providerKey: anomaly.providerKey) == rowCanonical
-        }
+        let hasAnomaly = model.hasActiveRunawayAnomaly(for: row)
         return GlanceRow(row: row,
                          now: model.now,
                          issue: issue,
