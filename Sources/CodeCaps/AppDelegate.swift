@@ -157,18 +157,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// The load runs off the main thread and never blocks launch: until it
     /// succeeds the app simply keeps its local values.
     private func startInfisicalSync() {
-        Task.detached(priority: .utility) { [weak self] in
-            guard let identity = InfisicalIdentityStore.load() else { return }
-            let settings = InfisicalSettings.shared
-            settings.configure(InfisicalSettings.Configuration(
-                environment: InfisicalSettings.defaultEnvironment(),
-                clientId: identity.clientId,
-                clientSecret: identity.clientSecret))
+        // Install persisted configuration synchronously on the main actor.
+        // A delayed startup task must never restore A after Settings saved B.
+        let settings = InfisicalSettings.shared
+        guard let identity = InfisicalIdentityStore.load() else {
+            settings.clearConfiguration()
+            return
+        }
+        settings.configure(identity.configuration)
+        refreshInfisicalSettings()
+    }
+
+    private func refreshInfisicalSettings() {
+        let settings = InfisicalSettings.shared
+        guard settings.isProvisioned else { return }
+        let revision = settings.revision
+        Task { [weak self] in
+            guard settings.isCurrent(revision) else { return }
             await settings.refresh()
-            await MainActor.run { [weak self] in
-                self?.model.adoptInfisicalEndpointsIfUnset()
-                self?.scheduleInfisicalRefresh()
-            }
+            guard settings.isCurrent(revision) else { return }
+            self?.model.adoptInfisicalEndpointsIfUnset()
+            self?.scheduleInfisicalRefresh()
         }
     }
 
@@ -178,16 +187,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// than an outage.
     private func scheduleInfisicalRefresh() {
         infisicalRefreshTimer?.invalidate()
+        let settings = InfisicalSettings.shared
+        guard settings.isProvisioned else {
+            infisicalRefreshTimer = nil
+            return
+        }
+        let revision = settings.revision
         infisicalRefreshTimer = Timer.scheduledTimer(
-            withTimeInterval: InfisicalSettings.shared.refreshInterval,
+            withTimeInterval: settings.refreshInterval,
             repeats: false
         ) { [weak self] _ in
-            Task {
-                await InfisicalSettings.shared.refresh()
-                await MainActor.run { [weak self] in
-                    self?.model.adoptInfisicalEndpointsIfUnset()
-                    self?.scheduleInfisicalRefresh()
-                }
+            Task { @MainActor [weak self] in
+                guard settings.isCurrent(revision) else { return }
+                self?.refreshInfisicalSettings()
             }
         }
     }
@@ -198,18 +210,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private func infisicalIdentityDidChange() {
         infisicalRefreshTimer?.invalidate()
         infisicalRefreshTimer = nil
-        startInfisicalSync()
+        // Save/Forget commit runtime and persistence together. Do not reread
+        // Keychain here: a failed/locked Keychain operation must not clear the
+        // still-active last-known-good setup when its timer is restarted.
+        refreshInfisicalSettings()
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
-        guard InfisicalSettings.shared.isProvisioned else { return }
-        Task {
-            await InfisicalSettings.shared.refresh()
-            await MainActor.run { [weak self] in
-                self?.model.adoptInfisicalEndpointsIfUnset()
-                self?.scheduleInfisicalRefresh()
-            }
-        }
+        refreshInfisicalSettings()
     }
 
     func applicationWillTerminate(_ notification: Notification) { model.stop() }

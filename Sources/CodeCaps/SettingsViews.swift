@@ -1402,11 +1402,15 @@ struct CommitButton: View {
 /// in the app and never leaves the machine.  The iOS companion cannot hold a
 /// client secret, so it stays out of Infisical entirely and keeps reading
 /// through its existing quota API — the Mac app owns the Infisical read.
+@MainActor
 struct SettingsInfisicalPage: View {
     @ObservedObject var model: MonitorModel
 
     @State private var clientId = ""
     @State private var clientSecret = ""
+    @State private var projectId = InfisicalSettings.codeCapsProjectId
+    @State private var savedIdentity: InfisicalIdentityStore.Identity?
+    @State private var operationId = UUID()
     @State private var hasIdentity = false
     @State private var pullEndpoint = ""
     @State private var pushEndpoint = ""
@@ -1423,19 +1427,22 @@ struct SettingsInfisicalPage: View {
         SettingsPage {
             Section {
                 TextField("Client ID", text: $clientId,
-                          prompt: Text(hasIdentity ? "Saved in Keychain" : "Client ID"))
+                          prompt: Text("Client ID"))
+                    .disabled(working)
                 SecureField("Client Secret", text: $clientSecret,
-                            prompt: Text(hasIdentity ? "Saved in Keychain" : "Client Secret"))
+                            prompt: Text(savedIdentity?.clientId == clientId && hasIdentity
+                                         ? "Saved in Keychain (leave blank to keep)" : "Client Secret"))
+                    .disabled(working)
+                TextField("Project ID", text: $projectId)
+                    .disabled(working)
                 HStack {
                     if hasIdentity {
-                        Button("Forget Identity", role: .destructive, action: forgetIdentity)
-                            .disabled(working)
+                        Button("Forget Setup", role: .destructive, action: forgetIdentity)
                     }
                     Spacer()
                     if working { ProgressView().controlSize(.small) }
-                    CommitButton(title: "Save Identity", prominent: !clientId.isEmpty, action: saveIdentity)
-                        .disabled(working || clientId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                  || clientSecret.isEmpty)
+                    CommitButton(title: "Save Setup", prominent: !clientId.isEmpty, action: saveIdentity)
+                        .disabled(working || candidateIdentity == nil)
                 }
                 if let message {
                     Text(message)
@@ -1444,7 +1451,7 @@ struct SettingsInfisicalPage: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             } header: {
-                Eyebrow("CLIENT IDENTITY")
+                Eyebrow("CLIENT IDENTITY & PROJECT")
             } footer: {
                 Text("Your own Infisical machine identity, kept in your Keychain." + sentenceGap
                      + "Nothing here is embedded in the app or sent anywhere but Infisical.")
@@ -1456,6 +1463,9 @@ struct SettingsInfisicalPage: View {
             Section {
                 LabeledContent("Status") { Text(statusLine).font(.system(size: 11)).foregroundStyle(.secondary) }
                 LabeledContent("Environment") { Text(settingsEnvironment).font(.system(size: 11)) }
+                if let savedIdentity {
+                    LabeledContent("Saved Project ID") { Text(savedIdentity.projectId).font(.system(size: 11)) }
+                }
                 if let loaded = settings.lastLoadedAt {
                     LabeledContent("Last Synced") {
                         Text(loaded.formatted(date: .omitted, time: .shortened)).font(.system(size: 11))
@@ -1501,7 +1511,7 @@ struct SettingsInfisicalPage: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .onAppear(perform: refreshFromStore)
+        .onAppear { refreshFromStore(reloadSetup: true) }
     }
 
     private var statusLine: String {
@@ -1524,117 +1534,127 @@ struct SettingsInfisicalPage: View {
             || refreshSeconds != (settings.value(for: InfisicalSettings.Keys.refreshSeconds) ?? "")
     }
 
-    private func refreshFromStore() {
-        hasIdentity = InfisicalIdentityStore.load() != nil
+    private var candidateIdentity: InfisicalIdentityStore.Identity? {
+        let id = clientId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let project = projectId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let secret = clientSecret.isEmpty && savedIdentity?.clientId == id
+            ? (savedIdentity?.clientSecret ?? "") : clientSecret
+        guard !id.isEmpty, !secret.isEmpty, !project.isEmpty else { return nil }
+        return InfisicalIdentityStore.Identity(clientId: id, clientSecret: secret, projectId: project)
+    }
+
+    private func refreshFromStore(reloadSetup: Bool = false) {
+        savedIdentity = InfisicalIdentityStore.load()
+        hasIdentity = savedIdentity != nil
+        if reloadSetup {
+            clientId = savedIdentity?.clientId ?? ""
+            clientSecret = ""
+            projectId = savedIdentity?.projectId ?? InfisicalSettings.codeCapsProjectId
+        }
         pullEndpoint = settings.value(for: InfisicalSettings.Keys.pullEndpoint) ?? ""
         pushEndpoint = settings.value(for: InfisicalSettings.Keys.pushEndpoint) ?? ""
         refreshSeconds = settings.value(for: InfisicalSettings.Keys.refreshSeconds) ?? ""
     }
 
-    private func saveIdentity() {
+    private func beginOperation() -> UUID {
+        let id = UUID()
+        operationId = id
         working = true
+        return id
+    }
+
+    private func saveIdentity() {
+        guard let identity = candidateIdentity else { return }
+        let operation = beginOperation()
+        let revision = settings.beginSetupChange()
         message = nil
-        let identity = InfisicalIdentityStore.Identity(
-            clientId: clientId.trimmingCharacters(in: .whitespacesAndNewlines),
-            clientSecret: clientSecret)
+        keyMessage = nil
         Task {
-            defer { working = false }
+            defer { if operationId == operation { working = false } }
             do {
-                try InfisicalIdentityStore.save(identity)
-                settings.configure(InfisicalSettings.Configuration(
-                    environment: InfisicalSettings.defaultEnvironment(),
-                    clientId: identity.clientId,
-                    clientSecret: identity.clientSecret))
-                // Validate the identity immediately: a bad secret fails here,
-                // while the owner is looking at the message, not at 3 AM.
-                try await settings.load()
-                await MainActor.run {
-                    model.adoptInfisicalEndpointsIfUnset()
-                    clientSecret = ""
-                    refreshFromStore()
-                    succeeded = true
-                    message = "Identity saved and verified against Infisical."
-                    NotificationCenter.default.post(name: .infisicalIdentityChanged, object: nil)
+                let committed = try await settings.validateAndConfigure(identity.configuration, revision: revision) {
+                    try InfisicalIdentityStore.save(identity)
                 }
+                guard operationId == operation, settings.isCurrent(committed) else { return }
+                model.adoptInfisicalEndpointsIfUnset()
+                refreshFromStore(reloadSetup: true)
+                succeeded = true
+                message = "Setup saved and project verified against Infisical."
+                NotificationCenter.default.post(name: .infisicalIdentityChanged, object: nil)
             } catch {
-                await MainActor.run {
-                    succeeded = false
-                    message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                }
+                guard operationId == operation, settings.isCurrent(revision) else { return }
+                succeeded = false
+                message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                // Validation retires the old timer revision even on failure.
+                // Resume refreshes for the still-persisted setup.
+                NotificationCenter.default.post(name: .infisicalIdentityChanged, object: nil)
             }
         }
     }
 
     private func forgetIdentity() {
-        working = true
-        Task {
-            defer { working = false }
-            do {
-                try InfisicalIdentityStore.delete()
-                settings.clearConfiguration()
-                await MainActor.run {
-                    clientId = ""
-                    clientSecret = ""
-                    refreshFromStore()
-                    succeeded = true
-                    message = "Identity removed.  Settings stay local until you add one again."
-                    NotificationCenter.default.post(name: .infisicalIdentityChanged, object: nil)
-                }
-            } catch {
-                await MainActor.run {
-                    succeeded = false
-                    message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                }
-            }
+        // Clear can interrupt validation or a read/write. The core's revision
+        // fence prevents their eventual completions from reinstalling old data.
+        operationId = UUID()
+        working = false
+        do {
+            try settings.clearConfiguration { try InfisicalIdentityStore.delete() }
+            refreshFromStore(reloadSetup: true)
+            succeeded = true
+            message = "Setup removed." + sentenceGap + "Settings stay local until you add one again."
+            keyMessage = nil
+            NotificationCenter.default.post(name: .infisicalIdentityChanged, object: nil)
+        } catch {
+            succeeded = false
+            message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            NotificationCenter.default.post(name: .infisicalIdentityChanged, object: nil)
         }
     }
 
     private func reloadNow() {
-        working = true
+        let operation = beginOperation()
+        let revision = settings.revision
         Task {
+            defer { if operationId == operation { working = false } }
             await settings.refresh()
-            await MainActor.run {
-                model.adoptInfisicalEndpointsIfUnset()
-                working = false
-                refreshFromStore()
-            }
+            guard operationId == operation, settings.isCurrent(revision) else { return }
+            model.adoptInfisicalEndpointsIfUnset()
+            refreshFromStore()
         }
     }
 
     private func saveKeys() {
-        working = true
+        let operation = beginOperation()
+        let revision = settings.revision
         keyMessage = nil
+        // Snapshot the form before any suspension; every key belongs to this
+        // setup, even if a different settings window switches projects mid-save.
+        let updates = [
+            (InfisicalSettings.Keys.pullEndpoint, pullEndpoint),
+            (InfisicalSettings.Keys.pushEndpoint, pushEndpoint),
+            (InfisicalSettings.Keys.refreshSeconds, refreshSeconds),
+        ]
         Task {
-            defer { working = false }
+            defer { if operationId == operation { working = false } }
             do {
-                // Write-through, one key at a time: each `set` lands in
-                // Infisical before the cache moves, and any failure aborts
-                // the save with the earlier keys already committed.
-                // Unchanged keys are skipped — no redundant writes.
-                let updates = [
-                    (InfisicalSettings.Keys.pullEndpoint, pullEndpoint),
-                    (InfisicalSettings.Keys.pushEndpoint, pushEndpoint),
-                    (InfisicalSettings.Keys.refreshSeconds, refreshSeconds),
-                ]
                 var wroteAny = false
                 for (key, field) in updates {
+                    guard operationId == operation, settings.isCurrent(revision) else { return }
                     let value = field.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard value != (settings.value(for: key) ?? "") else { continue }
-                    try await settings.set(value, for: key)
+                    try await settings.set(value, for: key, expectedRevision: revision)
                     wroteAny = true
                 }
-                await MainActor.run {
-                    model.adoptInfisicalEndpointsIfUnset()
-                    refreshFromStore()
-                    keySucceeded = true
-                    keyMessage = wroteAny ? "Keys saved to Infisical." : "No changes to save."
-                }
+                guard operationId == operation, settings.isCurrent(revision) else { return }
+                model.adoptInfisicalEndpointsIfUnset()
+                refreshFromStore()
+                keySucceeded = true
+                keyMessage = wroteAny ? "Keys saved to Infisical." : "No changes to save."
             } catch {
-                await MainActor.run {
-                    refreshFromStore()
-                    keySucceeded = false
-                    keyMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                }
+                guard operationId == operation, settings.isCurrent(revision) else { return }
+                refreshFromStore()
+                keySucceeded = false
+                keyMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             }
         }
     }

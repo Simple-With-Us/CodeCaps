@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import QuotaCore
 
 /// The owner-provisioned Infisical universal-auth identity that lets this Mac
 /// act as an Infisical client (see INFISICAL.md).
@@ -14,9 +15,23 @@ import Security
 /// Every Keychain call goes through `calls`, so tests inject a fake and never
 /// touch the real Keychain.  Values are never logged anywhere on this path.
 enum InfisicalIdentityStore {
-    struct Identity: Equatable, Sendable {
+    struct Identity: Codable, Equatable, Sendable {
         var clientId: String
         var clientSecret: String
+        var projectId: String = InfisicalSettings.codeCapsProjectId
+
+        var configuration: InfisicalSettings.Configuration {
+            InfisicalSettings.Configuration(projectId: projectId,
+                                            environment: InfisicalSettings.defaultEnvironment(),
+                                            clientId: clientId, clientSecret: clientSecret)
+        }
+    }
+
+    /// One Keychain item holds the entire setup. A tombstone prevents legacy
+    /// credentials from reappearing after Forget, including across relaunches.
+    private struct Record: Codable {
+        var version = 1
+        var identity: Identity?
     }
 
     /// Test seam: the live implementation shells out to the Security
@@ -24,12 +39,12 @@ enum InfisicalIdentityStore {
     /// The closures are plain (non-`@Sendable`) function types on purpose, so
     /// test fakes can capture their fixtures without Sendable checking noise.
     struct KeychainCalls {
-        var read: (_ service: String, _ account: String) -> String?
+        var read: (_ service: String, _ account: String) throws -> String?
         var save: (_ service: String, _ account: String, _ value: String) throws -> Void
         var delete: (_ service: String, _ account: String) throws -> Void
 
         static let live = KeychainCalls(
-            read: { SecItem.read(service: $0, account: $1) },
+            read: { try SecItem.read(service: $0, account: $1) },
             save: { try SecItem.save(service: $0, account: $1, value: $2) },
             delete: { try SecItem.delete(service: $0, account: $1) }
         )
@@ -39,9 +54,12 @@ enum InfisicalIdentityStore {
 
     enum StoreError: Error, LocalizedError {
         case keychain(status: OSStatus)
+        case invalidRecord
 
         var errorDescription: String? {
             switch self {
+            case .invalidRecord:
+                return "The saved Infisical setup could not be read or encoded."
             case .keychain(let status):
                 return "The Keychain refused the Infisical identity (OSStatus \(status))."
             }
@@ -59,6 +77,7 @@ enum InfisicalIdentityStore {
         return base + ".infisical-identity"
     }
 
+    private static let setupAccount = "setup-v1"
     private static let clientIdAccount = "client-id"
     private static let clientSecretAccount = "client-secret"
 
@@ -68,9 +87,25 @@ enum InfisicalIdentityStore {
         bundleIdentifier: String? = Bundle.main.bundleIdentifier
     ) -> Identity? {
         let service = serviceName(bundleIdentifier: bundleIdentifier)
-        guard let clientId = calls.read(service, clientIdAccount),
+        let raw: String?
+        do { raw = try calls.read(service, setupAccount) }
+        catch { return nil } // Read failure is not absence; never revive legacy A.
+        if let raw {
+            // A malformed/unsupported record fails closed rather than silently
+            // reconnecting to the old default project.
+            guard let data = raw.data(using: .utf8),
+                  let record = try? JSONDecoder().decode(Record.self, from: data),
+                  record.version == 1,
+                  let identity = record.identity,
+                  !identity.clientId.isEmpty, !identity.clientSecret.isEmpty,
+                  !identity.projectId.isEmpty else { return nil }
+            return identity
+        }
+        // Existing installations keep their original CodeCaps project until
+        // the owner explicitly saves a different destination.
+        guard let clientId = try? calls.read(service, clientIdAccount),
               !clientId.isEmpty,
-              let clientSecret = calls.read(service, clientSecretAccount),
+              let clientSecret = try? calls.read(service, clientSecretAccount),
               !clientSecret.isEmpty else { return nil }
         return Identity(clientId: clientId, clientSecret: clientSecret)
     }
@@ -80,16 +115,34 @@ enum InfisicalIdentityStore {
         bundleIdentifier: String? = Bundle.main.bundleIdentifier
     ) throws {
         let service = serviceName(bundleIdentifier: bundleIdentifier)
-        try calls.save(service, clientIdAccount, identity.clientId)
-        try calls.save(service, clientSecretAccount, identity.clientSecret)
+        try write(Record(identity: identity), service: service)
     }
 
     static func delete(
         bundleIdentifier: String? = Bundle.main.bundleIdentifier
     ) throws {
         let service = serviceName(bundleIdentifier: bundleIdentifier)
+        // First promote a legacy setup so a deletion failure cannot leave a
+        // half-written identity as the only persisted copy.
+        if try calls.read(service, setupAccount) == nil {
+            // Unlike the nonthrowing startup load, deletion must distinguish
+            // an incomplete legacy setup from a credential we could not read.
+            let clientId = try calls.read(service, clientIdAccount)
+            let clientSecret = try calls.read(service, clientSecretAccount)
+            if let clientId, !clientId.isEmpty, let clientSecret, !clientSecret.isEmpty {
+                try write(Record(identity: Identity(clientId: clientId, clientSecret: clientSecret)),
+                          service: service)
+            }
+        }
         try calls.delete(service, clientIdAccount)
         try calls.delete(service, clientSecretAccount)
+        try write(Record(identity: nil), service: service)
+    }
+
+    private static func write(_ record: Record, service: String) throws {
+        let data = try JSONEncoder().encode(record)
+        guard let raw = String(data: data, encoding: .utf8) else { throw StoreError.invalidRecord }
+        try calls.save(service, setupAccount, raw)
     }
 }
 
@@ -103,7 +156,7 @@ extension Notification.Name {
 // MARK: - Security framework calls
 
 private enum SecItem {
-    static func read(service: String, account: String) -> String? {
+    static func read(service: String, account: String) throws -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -112,9 +165,15 @@ private enum SecItem {
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
         var result: AnyObject?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let data = result as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess else {
+            throw InfisicalIdentityStore.StoreError.keychain(status: status)
+        }
+        guard let data = result as? Data, let value = String(data: data, encoding: .utf8) else {
+            throw InfisicalIdentityStore.StoreError.invalidRecord
+        }
+        return value
     }
 
     static func save(service: String, account: String, value: String) throws {
