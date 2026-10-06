@@ -563,18 +563,38 @@ final class MonitorModel: ObservableObject {
     var nearCapCount: Int { freshWindows.filter { ($0.remainingPercent ?? 100) <= 20 }.count }
     var nextReset: Date? { freshWindows.compactMap(\.resetAt).filter { $0 > now }.min() }
 
-    /// All individual quotas available for pinning to the menu bar.
-    var availableMenuBarQuotas: [(id: String, label: String)] {
-        var result: [(id: String, label: String)] = [
+    /// Automatic fleet-wide menu-bar preset choices.
+    var menuBarAutomaticOptions: [(id: String, label: String)] {
+        [
             (id: "most_urgent_5h", label: "Most Urgent 5h"),
             (id: "most_urgent_weekly", label: "Most Urgent Weekly"),
             (id: "smart_pair", label: "Smart Pair"),
             (id: "auto_lowest_active", label: "Lowest active quota"),
             (id: "auto_lowest", label: "Lowest quota"),
         ]
-        for row in displaySections {
-            result.append((id: "platform:\(row.id)", label: "Pin to \(row.title)"))
+    }
+
+    /// Options to pin to a platform and show both quotas side by side.
+    var menuBarPlatformPairOptions: [(id: String, label: String)] {
+        displaySections.compactMap { row in
+            let windows = row.section.windows.filter {
+                $0.isFresh && $0.remainingPercent != nil && !$0.window.isSupplementaryVideoQuota && !row.isMasked($0)
+            }
+            guard windows.count >= 2 else { return nil }
+            return (id: "platform_pair:\(row.id)", label: "Pin to \(row.title) (Both Quotas)")
         }
+    }
+
+    /// Options to pin to a platform and show its lowest quota.
+    var menuBarPlatformSingleOptions: [(id: String, label: String)] {
+        displaySections.map { row in
+            (id: "platform:\(row.id)", label: "Pin to \(row.title)")
+        }
+    }
+
+    /// Specific individual quota windows.
+    var menuBarIndividualWindowOptions: [(id: String, label: String)] {
+        var result: [(id: String, label: String)] = []
         for row in displaySections {
             let windows = row.section.windows.filter {
                 $0.isFresh && $0.remainingPercent != nil && !$0.window.isSupplementaryVideoQuota && !row.isMasked($0)
@@ -584,6 +604,12 @@ final class MonitorModel: ObservableObject {
                 result.append((id: snapshot.window.id, label: label))
             }
         }
+        return result
+    }
+
+    /// All individual quotas available for pinning to the menu bar.
+    var availableMenuBarQuotas: [(id: String, label: String)] {
+        var result = menuBarAutomaticOptions + menuBarPlatformPairOptions + menuBarPlatformSingleOptions + menuBarIndividualWindowOptions
         // A pinned window can be absent — a retired platform, a reader that is
         // signed out, a refresh that failed.  Without a matching tag the Picker
         // draws empty and says nothing, so the selection carries its own row
@@ -625,6 +651,21 @@ final class MonitorModel: ObservableObject {
         case "auto_lowest":
             return [pickMenuBarTarget(from: freshWindows)].compactMap { $0 }
         default:
+            if menuBarQuotaSelection.hasPrefix("platform_pair:") {
+                let rowID = String(menuBarQuotaSelection.dropFirst("platform_pair:".count))
+                guard let row = displaySections.first(where: { $0.id == rowID }) else { return [] }
+                let scopedPair = glanceMeterPair(for: row, now: now)
+                if let short = scopedPair.short, let weekly = scopedPair.long {
+                    return [short, weekly]
+                }
+                let valid = row.section.windows.filter {
+                    $0.isFresh && $0.remainingPercent != nil && !$0.window.isSupplementaryVideoQuota && !row.isMasked($0)
+                }
+                if valid.count >= 2 {
+                    return [valid[0], valid[1]]
+                }
+                return valid.prefix(1).map { $0 }
+            }
             if menuBarQuotaSelection.hasPrefix("platform:") {
                 let rowID = String(menuBarQuotaSelection.dropFirst("platform:".count))
                 guard let row = displaySections.first(where: { $0.id == rowID }) else { return [] }
@@ -843,13 +884,75 @@ final class MonitorModel: ObservableObject {
         activeRunawayAnomalies = anomalies
     }
 
+    /// Whether this platform or pool currently has an active runaway usage anomaly.
+    func hasActiveRunawayAnomaly(for row: DisplaySection) -> Bool {
+        let rowCanonical = quotaProviderKey(row.providerKey, providerKey: row.providerKey)
+        return activeRunawayAnomalies.contains { anomaly in
+            let canonicalAnomaly = quotaProviderKey(anomaly.providerKey, providerKey: anomaly.providerKey)
+            guard anomaly.providerKey == row.providerKey
+                || anomaly.providerKey == row.id
+                || canonicalAnomaly == rowCanonical else {
+                return false
+            }
+            if row.isPool {
+                return row.section.windows.contains { $0.window.id == anomaly.windowId }
+            }
+            return true
+        }
+    }
+
     var menuBarDetail: String {
-        guard let target = menuBarTargetSnapshot else { return "No current quota report" }
+        let targets = menuBarTargetSnapshots
+        guard !targets.isEmpty else { return "No current quota report" }
+        if targets.count >= 2 {
+            let first = targets[0]
+            let second = targets[1]
+            let title = displayRow(for: first.window)?.title
+                ?? sections.first { $0.providerKey == first.window.canonicalProviderKey }?.providerLabel
+                ?? first.window.provider
+            let p1 = first.remainingPercent.map { "\(Int($0.rounded()))%" } ?? "—"
+            let p2 = second.remainingPercent.map { "\(Int($0.rounded()))%" } ?? "—"
+            return "\(title), \(windowCadenceName(first.window)) (\(p1)) & \(windowCadenceName(second.window)) (\(p2))"
+        }
+        let target = targets[0]
         let title = displayRow(for: target.window)?.title
             ?? sections.first { $0.providerKey == target.window.canonicalProviderKey }?.providerLabel
             ?? target.window.provider
         let pct = target.remainingPercent.map { "\(Int($0.rounded()))%" } ?? "—"
         return "\(title), \(windowCadenceName(target.window)): \(pct) remaining"
+    }
+
+    /// Clear user-facing explanation for each menu-bar preset.
+    func menuBarQuotaDescription(for selection: String) -> String {
+        switch selection {
+        case "smart_pair":
+            return "Automatically monitors the most urgent platform across all sources.  If that platform reports both short and weekly quotas, displays both side by side (e.g. 0% / 65%)."
+        case "auto_lowest_active":
+            return "Automatically monitors whichever quota has the lowest remaining percentage above 0% across all platforms."
+        case "auto_lowest":
+            return "Automatically monitors the single lowest remaining quota percentage across all platforms and windows."
+        case "most_urgent_5h":
+            return "Automatically monitors the single lowest remaining 5-hour quota across all platforms."
+        case "most_urgent_weekly":
+            return "Automatically monitors the single lowest remaining weekly quota across all platforms."
+        default:
+            if selection.hasPrefix("platform_pair:") {
+                let rowID = String(selection.dropFirst("platform_pair:".count))
+                let title = displaySections.first(where: { $0.id == rowID })?.title ?? rowID
+                return "Permanently pins to \(title) and displays both its short and weekly quota percentages side by side in the menu bar."
+            }
+            if selection.hasPrefix("platform:") {
+                let rowID = String(selection.dropFirst("platform:".count))
+                let title = displaySections.first(where: { $0.id == rowID })?.title ?? rowID
+                return "Permanently pins to \(title), showing the lowest remaining percentage among its quotas."
+            }
+            if let window = freshWindows.first(where: { $0.window.id == selection }) {
+                let title = displayRow(for: window.window)?.title ?? window.window.provider
+                let label = AntigravityDisplay.windowLabel(window.window.label)
+                return "Permanently pins to the specific \(title) \(label) quota window."
+            }
+            return "Monitors the selected quota."
+        }
     }
 
     // MARK: - Reset Alarms

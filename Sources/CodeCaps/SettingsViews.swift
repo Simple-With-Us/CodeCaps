@@ -42,10 +42,40 @@ struct SettingsMenuBarPage: View {
                 .pickerStyle(.segmented)
 
                 Picker("Displayed Quota", selection: $model.menuBarQuotaSelection) {
-                    ForEach(model.availableMenuBarQuotas, id: \.id) { item in
-                        Text(item.label).tag(item.id)
+                    Section("Automatic (Fleet-Wide)") {
+                        ForEach(model.menuBarAutomaticOptions, id: \.id) { item in
+                            Text(item.label).tag(item.id)
+                        }
+                    }
+                    if !model.menuBarPlatformPairOptions.isEmpty {
+                        Section("Pin to Platform (Both Quotas)") {
+                            ForEach(model.menuBarPlatformPairOptions, id: \.id) { item in
+                                Text(item.label).tag(item.id)
+                            }
+                        }
+                    }
+                    Section("Pin to Platform (Lowest Quota)") {
+                        ForEach(model.menuBarPlatformSingleOptions, id: \.id) { item in
+                            Text(item.label).tag(item.id)
+                        }
+                    }
+                    Section("Specific Quota Window") {
+                        ForEach(model.menuBarIndividualWindowOptions, id: \.id) { item in
+                            Text(item.label).tag(item.id)
+                        }
+                    }
+                    if !model.menuBarAutomaticOptions.contains(where: { $0.id == model.menuBarQuotaSelection })
+                        && !model.menuBarPlatformPairOptions.contains(where: { $0.id == model.menuBarQuotaSelection })
+                        && !model.menuBarPlatformSingleOptions.contains(where: { $0.id == model.menuBarQuotaSelection })
+                        && !model.menuBarIndividualWindowOptions.contains(where: { $0.id == model.menuBarQuotaSelection }) {
+                        Text("Pinned quota unavailable").tag(model.menuBarQuotaSelection)
                     }
                 }
+
+                Text(model.menuBarQuotaDescription(for: model.menuBarQuotaSelection))
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 Picker("Menu Bar Mark", selection: $model.menuBarMarkStyle) {
                     ForEach(MenuBarMarkStyle.allCases) { Text($0.title).tag($0) }
