@@ -49,6 +49,20 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
         WidgetPresentation.shortCadence(cadence: cadence, label: label)
     }
 
+    /// Short distinguishing label for a bar when two bars share one cadence
+    /// token (e.g. two "7d" bars).  "Free weekly limit" reads "weekly",
+    /// "Additional tokens" reads "additional".  Empty when the window label
+    /// carries no such qualifier.
+    public var barQualifier: String {
+        let text = label.lowercased()
+        if text.contains("additional") { return "additional" }
+        if text.contains("weekly") { return "weekly" }
+        if text.contains("monthly") { return "monthly" }
+        if text.contains("daily") { return "daily" }
+        if text.contains("hourly") { return "hourly" }
+        return ""
+    }
+
     /// `Resets in 12d 22m`, or an empty string when the provider reports no reset.
     public func resetCaption(now: Date = Date()) -> String {
         WidgetPresentation.resetCaption(resetAt: resetAt, now: now)

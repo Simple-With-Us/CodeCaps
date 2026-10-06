@@ -60,6 +60,7 @@ enum BurnRateMonitor {
                 windowId: window.id,
                 observedAt: window.occurredDate ?? now,
                 remainingPercent: percent,
+                absoluteRemaining: window.absoluteRemaining,
                 accountKey: window.accountKey,
                 resetAt: window.resetDate,
                 periodStart: window.periodStartDate)
@@ -77,6 +78,15 @@ enum BurnRateMonitor {
         guard let samples = try? history(at: historyURL).load(), !samples.isEmpty else { return [] }
         return AnomalyDetector(baselineMultiplier: baseline, peakMultiplier: peak)
             .evaluate(samples: samples, now: now)
+    }
+
+    /// Plan/quota-size changes detected as step discontinuities.  The runaway
+    /// detector already suppresses these windows; this exposes them so the UI
+    /// can show the informational plan-change state instead of an alert.
+    static func evaluatePlanChanges(now: Date = Date(),
+                                    historyURL: URL? = nil) -> [AnomalyDetector.PlanChange] {
+        guard let samples = try? history(at: historyURL).load(), !samples.isEmpty else { return [] }
+        return AnomalyDetector.detectPlanChanges(samples: samples, now: now)
     }
 
     /// A descriptive count only.  Detector readiness is per provider, window,

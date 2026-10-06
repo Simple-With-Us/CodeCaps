@@ -672,7 +672,7 @@ private enum QuotaProviders {
             "minimax": "minimax", "minimax-code": "minimax",
             "muse-assist": "muse-assist", "muse assist": "muse-assist", "muse_assist": "muse-assist", "muse-assistant": "muse-assist", "muse assistant": "muse-assist",
             "muse-code": "muse-code", "muse code": "muse-code", "muse_code": "muse-code",
-            "muse": "muse-code", "muse-cli": "muse-code", "muse-sdk": "muse-code",
+            "muse": "muse-assist", "muse-cli": "muse-assist", "muse-sdk": "muse-assist",
             "kimi": "kimi", "moonshot": "kimi", "moonshot-ai": "kimi",
             "gemini-cli": "gemini-cli",
             "copilot": "github-copilot", "github-copilot": "github-copilot", "github_copilot": "github-copilot",
@@ -869,6 +869,17 @@ public struct PlatformCustomInfo: Codable, Equatable, Sendable {
         self.costUsd = costUsd
         self.renewalDateText = renewalDateText
         self.showCostAndRenewal = showCostAndRenewal
+    }
+
+    /// Whether the owner's free-text Settings fields mention a plan or cost
+    /// change (e.g. "↓ $50/mo plan then").  Treated as an explicit plan-change
+    /// signal: the runaway detector stands down for this provider and the
+    /// informational plan-change state shows until the text no longer
+    /// mentions a change.
+    public var mentionsPlanChange: Bool {
+        let text = [planName, costUsd, renewalDateText].joined(separator: " ").lowercased()
+        let markers = ["↓", "↑", "→", "downgrade", "upgrade"]
+        return markers.contains { text.contains($0) }
     }
 }
 

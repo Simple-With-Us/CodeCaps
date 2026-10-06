@@ -23,16 +23,22 @@ public struct AnomalyDetector: Sendable {
         public let observedAt: Date
         /// 0…100.  nil is treated as "not measurable" and skipped.
         public let remainingPercent: Double?
+        /// Absolute remaining quota (tokens, USD, videos…) when the reader
+        /// reports it.  The detector prefers this over % when consistently
+        /// available: absolute burn is immune to plan-size changes.
+        public let absoluteRemaining: Double?
         public let accountKey: String?
         public let resetAt: Date?
         public let periodStart: Date?
 
         public init(providerKey: String, windowId: String, observedAt: Date, remainingPercent: Double?,
+                    absoluteRemaining: Double? = nil,
                     accountKey: String? = nil, resetAt: Date? = nil, periodStart: Date? = nil) {
             self.providerKey = providerKey
             self.windowId = windowId
             self.observedAt = observedAt
             self.remainingPercent = remainingPercent
+            self.absoluteRemaining = absoluteRemaining
             self.accountKey = accountKey
             self.resetAt = resetAt
             self.periodStart = periodStart
@@ -76,6 +82,58 @@ public struct AnomalyDetector: Sendable {
         }
     }
 
+    /// A detected plan/quota-size change: a step discontinuity in
+    /// remainingPercent mid-window that is NOT a window reset.  Resets (a jump
+    /// back up to a fresh window) already split history segments; a plan
+    /// change is a sudden level shift — typically one huge instant drop — with
+    /// no reset.  While the baseline is still mostly old-plan data, burn-rate
+    /// comparisons are invalid, so the runaway detector stands down for this
+    /// window until the baseline is all new-plan data (7 days).  Downgrades
+    /// are detected from the % step; upgrades (a jump up that is not a reset)
+    /// are not yet distinguished from resets.
+    public struct PlanChange: Equatable, Sendable, Codable {
+        public let providerKey: String
+        public let windowId: String
+        /// The sample time at which the discontinuity was observed, or nil
+        /// when the owner noted the change in Settings text (no date known).
+        public let changedAt: Date?
+        /// True when the owner noted the change in Settings text rather than
+        /// the detector finding a discontinuity.  Stays active until the
+        /// Settings text no longer mentions a change.
+        public let isManual: Bool
+
+        /// Stats become valid again 7 days after the change, once the rolling
+        /// baseline is all new-plan data.  Nil for manual signals.
+        public var recalibratedAt: Date? {
+            changedAt.map { $0.addingTimeInterval(7 * 86_400) }
+        }
+
+        public func isActive(now: Date = Date()) -> Bool {
+            if isManual { return true }
+            guard let recalibratedAt else { return false }
+            return now < recalibratedAt
+        }
+
+        /// Stable identity for SwiftUI lists.
+        public var planChangeId: String { "\(providerKey)\u{1F}\(windowId)" }
+
+        public init(providerKey: String, windowId: String, changedAt: Date?, isManual: Bool = false) {
+            self.providerKey = providerKey
+            self.windowId = windowId
+            self.changedAt = changedAt
+            self.isManual = isManual
+        }
+    }
+
+    /// The minimum single-interval drop (percentage points) that counts as a
+    /// plan-change step.  Normal burn — even a heavy agent afternoon — moves a
+    /// few points per sample; a plan resize teleports the level.
+    public static let planChangeStepPoints: Double = 25
+
+    /// The maximum gap between the two samples of a step.  A 25-point move
+    /// spread over many hours is heavy use, not a discontinuity.
+    public static let planChangeMaxGap: TimeInterval = 2 * 3600
+
     public var baselineMultiplier: Double
     public var peakMultiplier: Double
 
@@ -95,8 +153,17 @@ public struct AnomalyDetector: Sendable {
                                                                maxGap: 3600)) {
             PairKey(provider: $0[0].providerKey, window: $0[0].windowId)
         }
+        // A plan change invalidates the baseline for its window: the runaway
+        // check stands down there until the baseline is all new-plan data.
+        // Thresholds and tuning are untouched; the window is simply skipped.
+        let planChanged: Set<PairKey> = Set(
+            Self.detectPlanChanges(samples: samples, now: now)
+                .filter { $0.isActive(now: now) }
+                .map { PairKey(provider: $0.providerKey, window: $0.windowId) }
+        )
         var out: [Anomaly] = []
         for (key, segments) in groups {
+            guard !planChanged.contains(key) else { continue }
             guard let latest = segments.max(by: { $0.last!.observedAt < $1.last!.observedAt }),
                   let observedAt = latest.last?.observedAt,
                   now.timeIntervalSince(observedAt) <= 15 * 60,
@@ -141,6 +208,39 @@ public struct AnomalyDetector: Sendable {
             }
         }
         return out
+    }
+
+    /// Detect plan/quota-size changes across the sample history: a step
+    /// discontinuity in remainingPercent mid-window that is not a window
+    /// reset.  Returns the latest change per provider+window; callers filter
+    /// with `isActive(now:)` for the 7-day recalibration window.
+    public static func detectPlanChanges(samples: [Sample], now: Date = Date()) -> [PlanChange] {
+        var latest: [PairKey: PlanChange] = [:]
+        for segment in Self.historySegments(samples: samples, now: now) {
+            guard let first = segment.first else { continue }
+            let key = PairKey(provider: first.providerKey, window: first.windowId)
+            let pts = segment.sorted { $0.observedAt < $1.observedAt }
+            for (prev, curr) in zip(pts, pts.dropFirst()) {
+                guard let prevPct = prev.remainingPercent,
+                      let currPct = curr.remainingPercent else { continue }
+                let gap = curr.observedAt.timeIntervalSince(prev.observedAt)
+                guard gap >= 0, gap <= planChangeMaxGap else { continue }
+                let drop = prevPct - currPct
+                guard drop >= planChangeStepPoints else { continue }
+                let change = PlanChange(providerKey: key.provider,
+                                        windowId: key.window,
+                                        changedAt: curr.observedAt)
+                if let existing = latest[key], let existingAt = existing.changedAt,
+                   (change.changedAt ?? .distantPast) <= existingAt {
+                    continue
+                }
+                latest[key] = change
+                break  // One step per segment; a later segment overwrites.
+            }
+        }
+        return latest.values.sorted {
+            ($0.changedAt ?? .distantPast) < ($1.changedAt ?? .distantPast)
+        }
     }
 
     private struct PairKey: Hashable {

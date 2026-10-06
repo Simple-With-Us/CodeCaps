@@ -184,10 +184,16 @@ final class MonitorModel: ObservableObject {
                 refreshRunawayUsageState(recordSamples: false)
             } else {
                 activeRunawayAnomalies = []
+                activePlanChanges = []
             }
         }
     }
     @Published private(set) var activeRunawayAnomalies: [AnomalyDetector.Anomaly] = []
+    /// Windows whose baseline is currently invalid because the plan/quota size
+    /// changed (automatic discontinuity detection) or the owner noted a change
+    /// in Settings text.  The runaway detector stands down for these; the UI
+    /// shows the informational plan-change state instead of an alert.
+    @Published private(set) var activePlanChanges: [AnomalyDetector.PlanChange] = []
     @Published public private(set) var runawayAlertHistory: [RunawayAlertRecord] = []
     @Published var menuBarQuotaSelection: String {
         didSet { defaults.set(menuBarQuotaSelection, forKey: "menuBarQuotaSelection") }
@@ -901,6 +907,41 @@ final class MonitorModel: ObservableObject {
         }
     }
 
+    /// Whether this platform or pool is in the plan-change recalibration state
+    /// (automatic discontinuity detection or the owner's Settings-text signal).
+    func hasActivePlanChange(for row: DisplaySection) -> Bool {
+        let rowCanonical = quotaProviderKey(row.providerKey, providerKey: row.providerKey)
+        return activePlanChanges.contains { change in
+            let canonicalChange = quotaProviderKey(change.providerKey, providerKey: change.providerKey)
+            guard change.providerKey == row.providerKey
+                || change.providerKey == row.id
+                || canonicalChange == rowCanonical else {
+                return false
+            }
+            if row.isPool {
+                return row.section.windows.contains { $0.window.id == change.windowId }
+            }
+            return true
+        }
+    }
+
+    /// The active plan changes for this platform or pool, if any.
+    func planChanges(for row: DisplaySection) -> [AnomalyDetector.PlanChange] {
+        let rowCanonical = quotaProviderKey(row.providerKey, providerKey: row.providerKey)
+        return activePlanChanges.filter { change in
+            let canonicalChange = quotaProviderKey(change.providerKey, providerKey: change.providerKey)
+            guard change.providerKey == row.providerKey
+                || change.providerKey == row.id
+                || canonicalChange == rowCanonical else {
+                return false
+            }
+            if row.isPool {
+                return row.section.windows.contains { $0.window.id == change.windowId }
+            }
+            return true
+        }
+    }
+
     var menuBarDetail: String {
         let targets = menuBarTargetSnapshots
         guard !targets.isEmpty else { return "No current quota report" }
@@ -1233,6 +1274,7 @@ final class MonitorModel: ObservableObject {
             currentCodexAccountID = nil
             localWindows = []
             activeRunawayAnomalies = []
+            activePlanChanges = []
             if !skipsSnapshotIOForTesting { try? LocalQuotaSnapshot.remove() }
             rebuildLocalState(recordSamples: false)
         }
@@ -1441,6 +1483,7 @@ final class MonitorModel: ObservableObject {
         currentCodexAccountID = nil
         hasCurrentLocalRead = false
         activeRunawayAnomalies = []
+        activePlanChanges = []
         serverWindows = []
         response = QuotaResponse(generatedAt: "")
         issues = [:]
@@ -1771,6 +1814,7 @@ final class MonitorModel: ObservableObject {
                 self.localWindows = []
                 self.hasCurrentLocalRead = false
                 self.activeRunawayAnomalies = []
+                self.activePlanChanges = []
             }
 
             // Publish local snapshot to BotFleet on disk
@@ -1826,7 +1870,18 @@ final class MonitorModel: ObservableObject {
             // This Mac's own push fills in only a provider no local reader
             // produced — with local readers off, that is every provider.
             let adopted = ownPush.filter { !localProviders.contains($0.canonicalProviderKey) }
-            let merged = self.localWindows + adopted
+            let adoptedKeys = Set(adopted.map(\.canonicalProviderKey))
+            // A provider this Mac can never read locally still deserves its
+            // server reading in the local list instead of "no report": the
+            // Muse Assist collector runs on the VM, so its windows are never
+            // this Mac's own push.  Limited to expected providers so unknown
+            // fleet-only keys don't sprout local rows.
+            let fleetFallback = split.groups.flatMap(\.windows).filter {
+                let key = $0.canonicalProviderKey
+                return !localProviders.contains(key) && !adoptedKeys.contains(key)
+                    && expectedQuotaProviderKeys.contains(key)
+            }
+            let merged = self.localWindows + adopted + fleetFallback
             var origins: [String: QuotaOrigin] = [:]
             for key in Set(merged.map(\.canonicalProviderKey)) { origins[key] = .local }
             self.originByProvider = origins
@@ -1949,7 +2004,16 @@ final class MonitorModel: ObservableObject {
         let split = FleetOrigin.split(serverWindows)
         let ownPush = split.ownPush
         let adopted = ownPush.filter { !localProviders.contains($0.canonicalProviderKey) }
-        let merged = localWindows + adopted
+        let adoptedKeys = Set(adopted.map(\.canonicalProviderKey))
+        // Same fleet fallback as the refresh path: providers this Mac can
+        // never read locally (e.g. Muse Assist, collected on the VM) show
+        // their server reading instead of "no report".
+        let fleetFallback = split.groups.flatMap(\.windows).filter {
+            let key = $0.canonicalProviderKey
+            return !localProviders.contains(key) && !adoptedKeys.contains(key)
+                && expectedQuotaProviderKeys.contains(key)
+        }
+        let merged = localWindows + adopted + fleetFallback
         originByProvider = Dictionary(uniqueKeysWithValues: Set(merged.map(\.canonicalProviderKey)).map { ($0, .local) })
         response = QuotaResponse(generatedAt: ISO8601DateFormatter().string(from: now), windows: merged)
         if let writeForTesting = handoffWriteForTesting {
@@ -2004,6 +2068,7 @@ final class MonitorModel: ObservableObject {
     private func refreshRunawayUsageState(recordSamples: Bool) {
         guard localEnabled, hasCurrentLocalRead else {
             activeRunawayAnomalies = []
+            activePlanChanges = []
             return
         }
         if recordSamples {
@@ -2011,6 +2076,7 @@ final class MonitorModel: ObservableObject {
         }
         guard burnRateAlertsEnabled else {
             activeRunawayAnomalies = []
+            activePlanChanges = []
             return
         }
 
@@ -2025,6 +2091,7 @@ final class MonitorModel: ObservableObject {
         })
         guard !currentKeys.isEmpty else {
             activeRunawayAnomalies = []
+            activePlanChanges = []
             return
         }
         let anomalies = BurnRateMonitor.evaluate(baseline: anomalyBaselineMultiplier,
@@ -2033,6 +2100,27 @@ final class MonitorModel: ObservableObject {
                                                   historyURL: burnRateHistoryURL)
             .filter { currentKeys.contains(Self.runawayKey($0.providerKey, $0.windowId)) }
         activeRunawayAnomalies = anomalies
+        // Plan changes: automatic discontinuity detection plus the owner's
+        // explicit Settings-text signal.  Either one puts the window in the
+        // informational plan-change state instead of a runaway alert.
+        var planChanges = BurnRateMonitor.evaluatePlanChanges(now: now, historyURL: burnRateHistoryURL)
+            .filter { $0.isActive(now: now) }
+            .filter { currentKeys.contains(Self.runawayKey($0.providerKey, $0.windowId)) }
+        let manualProviders = Set(platformCustomInfo.compactMap { key, info in
+            info.mentionsPlanChange ? key : nil
+        })
+        for window in localWindows {
+            let providerKey = window.canonicalProviderKey
+            guard manualProviders.contains(providerKey),
+                  currentKeys.contains(Self.runawayKey(providerKey, window.id)),
+                  !planChanges.contains(where: { $0.providerKey == providerKey && $0.windowId == window.id })
+            else { continue }
+            planChanges.append(AnomalyDetector.PlanChange(providerKey: providerKey,
+                                                          windowId: window.id,
+                                                          changedAt: nil,
+                                                          isManual: true))
+        }
+        activePlanChanges = planChanges
         guard !anomalies.isEmpty else { return }
 
         var groups: [String: [AnomalyDetector.Anomaly]] = [:]

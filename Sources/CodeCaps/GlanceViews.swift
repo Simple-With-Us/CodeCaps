@@ -107,6 +107,10 @@ struct GlancePopover: View {
     @ViewBuilder
     private var fromMacContent: some View {
         VStack(alignment: .leading, spacing: 0) {
+            if !model.activePlanChanges.isEmpty {
+                planChangeSection
+                Spacer().frame(height: 8)
+            }
             if localSections.isEmpty && !model.localEnabled {
                 GlanceEmptyState(
                     symbol: "laptopcomputer",
@@ -133,6 +137,24 @@ struct GlancePopover: View {
                     .padding(.horizontal, Metrics.glanceGutter)
             }
         }
+    }
+
+    /// Informational plan-change notices, shown instead of runaway alerts
+    /// while the baseline recalibrates.  Teal, never red/orange.
+    private var planChangeSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(model.activePlanChanges, id: \.planChangeId) { change in
+                PlanChangeGlanceCard(
+                    change: change,
+                    providerLabel: model.sections.first { $0.providerKey == change.providerKey }?.providerLabel
+                        ?? change.providerKey,
+                    windowLabel: model.displaySections.flatMap { $0.section.windows }
+                        .first { $0.window.id == change.windowId }
+                        .map { glanceMeterCaption($0) }
+                )
+            }
+        }
+        .padding(.horizontal, Metrics.glanceGutter)
     }
 
     @ViewBuilder
@@ -190,6 +212,7 @@ struct GlancePopover: View {
                          isExpanded: expandedIds.contains(key),
                          hasAnomaly: hasAnomaly,
                          pacingHighlights: model.pacingColorHighlights,
+                         customInfo: model.platformCustomInfo[row.providerKey],
                          onTap: { toggleExpanded(key) },
                          onToggleAlarm: { model.toggleAlarm(for: row.id) })
     }
@@ -583,6 +606,57 @@ struct RunawayAnomalyGlanceCard: View {
         .padding(.vertical, 6)
         .background(Theme.warning.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
         .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Theme.warning.opacity(0.35), lineWidth: 1))
+    }
+}
+
+/// The plan-change notice: shown instead of a runaway alert when the
+/// plan/quota size changed.  Informational teal, never the runaway
+/// red/orange — the burn stats are less valid, not alarming.
+struct PlanChangeGlanceCard: View {
+    let change: AnomalyDetector.PlanChange
+    let providerLabel: String
+    let windowLabel: String?
+
+    private var detailText: String {
+        if let changedAt = change.changedAt, let recalibratedAt = change.recalibratedAt {
+            let fmt = DateFormatter()
+            fmt.setLocalizedDateFormatFromTemplate("MMMd")
+            return "Plan Changed on \(fmt.string(from: changedAt)),"
+                + sentenceGap
+                + "Stats Less Valid Until \(fmt.string(from: recalibratedAt))"
+        }
+        return "Plan change noted in Settings,"
+            + sentenceGap
+            + "stats less valid while the baseline recalibrates"
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text("Δ")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(Theme.accent)
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 4) {
+                    Text("Plan Change:")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(Theme.accent)
+                    Text(windowLabel.map { "\(providerLabel) (\($0))" } ?? providerLabel)
+                        .font(.system(size: 11, weight: .semibold))
+                        .lineLimit(1)
+                }
+                Text(detailText)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 4)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Theme.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Theme.accent.opacity(0.30), lineWidth: 1))
     }
 }
 
@@ -1585,6 +1659,10 @@ struct GlanceRow: View {
     var isExpanded: Bool = false
     var hasAnomaly: Bool = false
     var pacingHighlights: Bool = false
+    /// The owner's per-provider Settings (plan name, cost, renewal, custom
+    /// subtitle).  Lets the row show the plan/cost/renewal detail line even
+    /// when a custom subtitle is set — the two never swallow each other here.
+    var customInfo: PlatformCustomInfo? = nil
     /// Tap handler for the row's body — opening or closing the expansion.
     /// The bell is a sibling of the tappable body, so a tap on the bell never
     /// expands a row.
@@ -1621,6 +1699,13 @@ struct GlanceRow: View {
 
     private var statusText: String {
         glanceRowStatusText(issue: issue, hasWindows: !section.windows.isEmpty)
+    }
+
+    /// The plan/cost/renewal detail line for this row, shown under the provider
+    /// name whenever the owner enabled "Display Plan, Cost and Renewal" —
+    /// regardless of any custom subtitle, which the card keeps showing.
+    private var planDetail: String? {
+        section.planCostRenewalDetail(customInfo: customInfo)
     }
 
     /// The long column's explanation when this fleet row has no weekly meter.
@@ -1687,6 +1772,16 @@ struct GlanceRow: View {
                 }
                 if let subtitle = row.poolTitle {
                     Text(subtitle)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                        .truncationMode(.tail)
+                }
+                // Plan/cost/renewal lives on its own detail line, never merged
+                // into the subtitle: a custom subtitle must not swallow it.
+                if let planDetail {
+                    Text(planDetail)
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)

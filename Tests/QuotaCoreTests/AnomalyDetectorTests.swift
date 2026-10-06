@@ -276,3 +276,95 @@ final class AnomalyDetectorTests: XCTestCase {
         XCTAssertEqual(attributes[.posixPermissions] as? Int, 0o600)
     }
 }
+
+/// Pinned tests for plan-change detection: a step discontinuity in
+/// remainingPercent mid-window suppresses the runaway alert while the
+/// baseline recalibrates (7 days).
+final class PlanChangeDetectionTests: XCTestCase {
+    private func sample(_ provider: String, _ window: String, at offset: TimeInterval, percent: Double,
+                        from now: Date) -> AnomalyDetector.Sample {
+        .init(providerKey: provider, windowId: window,
+              observedAt: now.addingTimeInterval(offset), remainingPercent: percent)
+    }
+
+    /// A 40-point instant drop (the $100→$20 plan resize shape) is a plan change.
+    func testDetectsPlanChangeStep() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        var samples: [AnomalyDetector.Sample] = []
+        // Steady baseline: 90% an hour ago, 88% 45 min ago.
+        samples.append(sample("antigravity", "gemini:5h", at: -3600, percent: 90, from: now))
+        samples.append(sample("antigravity", "gemini:5h", at: -2700, percent: 88, from: now))
+        // Plan resize: 88% -> 48% in one 15-minute interval.
+        samples.append(sample("antigravity", "gemini:5h", at: -1800, percent: 48, from: now))
+        samples.append(sample("antigravity", "gemini:5h", at: -900, percent: 47, from: now))
+
+        let changes = AnomalyDetector.detectPlanChanges(samples: samples, now: now)
+        XCTAssertEqual(changes.count, 1)
+        XCTAssertEqual(changes[0].providerKey, "antigravity")
+        XCTAssertEqual(changes[0].windowId, "gemini:5h")
+        XCTAssertTrue(changes[0].isActive(now: now))
+        // Recalibration is 7 days after the change.
+        let expected = now.addingTimeInterval(-1800).addingTimeInterval(7 * 86_400)
+        XCTAssertEqual(changes[0].recalibratedAt?.timeIntervalSince1970 ?? 0,
+                       expected.timeIntervalSince1970, accuracy: 1)
+    }
+
+    /// A 10-point drop is heavy use, not a plan change.
+    func testSmallDropIsNotPlanChange() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let samples = [
+            sample("antigravity", "gemini:5h", at: -3600, percent: 90, from: now),
+            sample("antigravity", "gemini:5h", at: -1800, percent: 80, from: now),
+        ]
+        XCTAssertTrue(AnomalyDetector.detectPlanChanges(samples: samples, now: now).isEmpty)
+    }
+
+    /// A 30-point move spread over 3 hours is a burn, not a discontinuity.
+    func testGradualMoveIsNotPlanChange() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let samples = [
+            sample("antigravity", "gemini:5h", at: -3 * 3600, percent: 90, from: now),
+            sample("antigravity", "gemini:5h", at: 0, percent: 60, from: now),
+        ]
+        XCTAssertTrue(AnomalyDetector.detectPlanChanges(samples: samples, now: now).isEmpty)
+    }
+
+    /// A jump back up is a window reset, not a plan change — and resets
+    /// already split segments, so no step is visible.
+    func testResetJumpIsNotPlanChange() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let samples = [
+            sample("antigravity", "gemini:5h", at: -3600, percent: 10, from: now),
+            sample("antigravity", "gemini:5h", at: -1800, percent: 100, from: now),
+        ]
+        XCTAssertTrue(AnomalyDetector.detectPlanChanges(samples: samples, now: now).isEmpty)
+    }
+
+    /// A plan change older than 7 days no longer suppresses anomalies.
+    func testPlanChangeExpiresAfter7Days() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let old = now.addingTimeInterval(-8 * 86_400)
+        let change = AnomalyDetector.PlanChange(providerKey: "p", windowId: "w", changedAt: old)
+        XCTAssertFalse(change.isActive(now: now))
+        XCTAssertTrue(change.isActive(now: old.addingTimeInterval(6 * 86_400)))
+    }
+
+    /// The owner's Settings-text signal stays active until the text changes.
+    func testManualPlanChangeStaysActive() {
+        let change = AnomalyDetector.PlanChange(providerKey: "p", windowId: "w",
+                                                changedAt: nil, isManual: true)
+        XCTAssertTrue(change.isActive())
+        XCTAssertTrue(change.isActive(now: Date.distantFuture))
+        XCTAssertNil(change.recalibratedAt)
+    }
+
+    /// Settings text mentioning a plan/cost change is an explicit signal.
+    func testMentionsPlanChange() {
+        XCTAssertTrue(PlatformCustomInfo(renewalDateText: "on 5th, but ↓ $50/mo plan then (1x)").mentionsPlanChange)
+        XCTAssertTrue(PlatformCustomInfo(planName: "downgrade to Basic").mentionsPlanChange)
+        XCTAssertTrue(PlatformCustomInfo(costUsd: "$20 → $100").mentionsPlanChange)
+        XCTAssertFalse(PlatformCustomInfo(planName: "Pro", costUsd: "$20/mo",
+                                          renewalDateText: "on the 5th").mentionsPlanChange)
+        XCTAssertFalse(PlatformCustomInfo().mentionsPlanChange)
+    }
+}

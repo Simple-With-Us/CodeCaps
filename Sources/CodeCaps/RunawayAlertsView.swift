@@ -42,6 +42,10 @@ struct RunawayAlertsPage: View {
                 activeAnomaliesSection
             }
 
+            if !model.activePlanChanges.isEmpty {
+                planChangesSection
+            }
+
             historySection
         }
         .confirmationDialog(
@@ -159,6 +163,68 @@ struct RunawayAlertsPage: View {
                 activeAnomalyRow(anomaly)
             }
         }
+    }
+
+    /// Plan changes in their recalibration window: informational, never an
+    /// alert.  The runaway detector stands down here until the baseline is
+    /// all new-plan data.
+    private var planChangesSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label("Plan Changes — Baseline Recalibrating", systemImage: "arrow.triangle.2.circlepath")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(Theme.accent)
+                Spacer()
+            }
+
+            ForEach(model.activePlanChanges, id: \.planChangeId) { change in
+                planChangeRow(change)
+            }
+        }
+    }
+
+    private func planChangeRow(_ change: AnomalyDetector.PlanChange) -> some View {
+        let matchingSnapshot = model.displaySections.flatMap { $0.section.windows }
+            .first { $0.window.id == change.windowId }
+            ?? model.sections.flatMap(\.windows).first { $0.window.id == change.windowId }
+        let providerTitle = model.sections.first { $0.providerKey == change.providerKey }?.providerLabel
+            ?? change.providerKey.capitalized
+        let windowTitle = matchingSnapshot.map { snapshot in
+            let raw = snapshot.window.label.trimmingCharacters(in: .whitespacesAndNewlines)
+            return raw.isEmpty ? glanceMeterCaption(snapshot) : raw
+        } ?? change.windowId
+
+        let detail: String
+        if let changedAt = change.changedAt, let recalibratedAt = change.recalibratedAt {
+            let fmt = DateFormatter()
+            fmt.setLocalizedDateFormatFromTemplate("MMMd")
+            detail = "Plan Changed on \(fmt.string(from: changedAt)),"
+                + sentenceGap
+                + "Stats Less Valid Until \(fmt.string(from: recalibratedAt))"
+        } else {
+            detail = "Plan change noted in Settings,"
+                + sentenceGap
+                + "stats less valid while the baseline recalibrates"
+        }
+
+        return HStack(alignment: .center, spacing: 12) {
+            Text("Δ")
+                .font(.system(size: 20, weight: .bold))
+                .foregroundStyle(Theme.accent)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(providerTitle) · \(windowTitle)")
+                    .font(.system(size: 13, weight: .semibold))
+                Text(detail)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+        }
+        .padding(10)
+        .background(Theme.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Theme.accent.opacity(0.25), lineWidth: 1))
     }
 
     private func activeAnomalyRow(_ anomaly: AnomalyDetector.Anomaly) -> some View {

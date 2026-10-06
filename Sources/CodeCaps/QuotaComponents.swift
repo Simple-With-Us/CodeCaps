@@ -576,19 +576,28 @@ extension QuotaPlatformSection {
         if let custom = customInfo, !custom.customSubtitle.isEmpty {
             return custom.customSubtitle
         }
-        if let custom = customInfo, custom.showCostAndRenewal {
-            let renewal = custom.renewalDateText.isEmpty
-                ? (BillingRenewal.text(for: windows.map(\.window)) ?? "")
-                : custom.renewalDateText
-            let parts = [custom.planName,
-                         custom.costUsd,
-                         renewal.isEmpty ? "" : "Renews \(renewal)"]
-                .filter { !$0.isEmpty }
-            if !parts.isEmpty { return parts.joined(separator: " · ") }
+        if let detail = planCostRenewalDetail(customInfo: customInfo) {
+            return detail
         }
         if via == "antigravity" { return "Antigravity subscription" }
         if let plan = windows.compactMap(\.window.planName).first, !plan.isEmpty { return plan }
         return nil
+    }
+
+    /// The plan/cost/renewal detail line, independent of the custom subtitle.
+    /// Unlike `displaySubtitle`, a set custom subtitle does not suppress this:
+    /// the dropdown row shows both lines so plan info is never silently
+    /// swallowed.
+    func planCostRenewalDetail(customInfo: PlatformCustomInfo?) -> String? {
+        guard let custom = customInfo, custom.showCostAndRenewal else { return nil }
+        let renewal = custom.renewalDateText.isEmpty
+            ? (BillingRenewal.text(for: windows.map(\.window)) ?? "")
+            : custom.renewalDateText
+        let parts = [custom.planName,
+                     custom.costUsd,
+                     renewal.isEmpty ? "" : "Renews \(renewal)"]
+            .filter { !$0.isEmpty }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     /// The window a one-line row speaks for: whichever is closest to its cap.
