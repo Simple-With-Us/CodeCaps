@@ -78,6 +78,49 @@ final class PlatformLogoResourceTests: XCTestCase {
         }
     }
 
+    /// Owner report 2026-10-06: in the PiP HUD every bundled mark drew as the
+    /// SF Symbol fallback, opening the window repeatedly never fixed it, and
+    /// only the one platform with a custom mark *on disk* rendered.  A working
+    /// `NSImage(contentsOf:)` in a plain process proved the artwork and the
+    /// extensions were fine, so the fault had to be in resolution order rather
+    /// than in the files.
+    ///
+    /// The bundle handle is cached for the life of the process, and it was
+    /// cached without ever confirming the bundle could produce an image.  A
+    /// handle resolved before the resource bundle was reachable — or pointing
+    /// at a half-copied directory — stayed pinned, and every later lookup
+    /// reused it.  Disk-backed custom marks do not go through that handle, which
+    /// is exactly the "only MiniMax shows up" shape.
+    ///
+    /// So this pins the two properties that make that failure impossible to
+    /// repeat silently: marks still resolve after a full cache invalidation,
+    /// and a key with no artwork still degrades to the documented fallback
+    /// rather than to something else.
+    func testMarksStillResolveAfterCacheInvalidation() {
+        for key in ["anthropic", "openai", "cursor", "grok-bot", "minimax"] {
+            for style in [MarkStyle.standard, .template] {
+                XCTAssertNotNil(PlatformLogoImage.load(providerKey: key, style: style),
+                                "'\(key)' did not resolve before invalidation")
+            }
+        }
+        // This is the path the owner exercised: import a mark, then keep
+        // drawing.  Every bundled mark must survive it.
+        PlatformLogoImage.invalidateCaches()
+        for key in ["anthropic", "openai", "cursor", "grok-bot"] {
+            XCTAssertNotNil(PlatformLogoImage.load(providerKey: key, style: .template),
+                            "'\(key)' did not resolve after invalidateCaches() — a pinned bundle handle is being reused")
+        }
+    }
+
+    /// A key with no artwork must fall back rather than invent one, and must
+    /// not leave a stale image behind after invalidation.
+    func testUnknownKeyFallsBackAndStaysEmptyAfterInvalidation() {
+        XCTAssertNil(PlatformLogoImage.load(providerKey: "not-a-real-provider", style: .template))
+        PlatformLogoImage.invalidateCaches()
+        XCTAssertNil(PlatformLogoImage.load(providerKey: "not-a-real-provider", style: .template),
+                     "an unknown provider began resolving something, which means a cache is serving the wrong key")
+    }
+
     /// The pool-qualified Antigravity keys are the newest mapping and the only
     /// ones that resolve through `platformKey(of:)`; pin that the fallback
     /// still finds the platform-level mark for an unknown pool.

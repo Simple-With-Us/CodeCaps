@@ -136,6 +136,13 @@ enum Theme {
     /// background in both appearances, so each source reads as a section.
     static let groupBand = dyn(hex(0xE1E6E7), hex(0x111214))
 
+    /// A band that is slightly lighter than `groupBand`, for a header that has
+    /// to read as sitting above it rather than as an unrelated surface.  The PiP
+    /// HUD is the caller: it used the near-white/near-black `surface` token
+    /// there, which on the dark HUD became a second, unrelated band instead of
+    /// a header.
+    static let raisedBand = dyn(hex(0xEFF3F3), hex(0x1E2124))
+
     /// Text on that band: the source's name and its "reported" time.  The
     /// system secondary and tertiary greys are tuned for the list background
     /// and fall under 3:1 on the darker band, so the band carries its own
