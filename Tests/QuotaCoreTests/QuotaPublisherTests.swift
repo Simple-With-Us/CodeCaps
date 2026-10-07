@@ -348,13 +348,16 @@ final class QuotaPublisherTests: XCTestCase {
     }
 
     func testPublishReportsPartialAndFullRejectionWithoutServerDetails() async throws {
-        for rejected in [1, 2] {
-            var response = acknowledgment(persisted: 2 - rejected, rejected: rejected)
-            response["errors"] = ["private-server-detail"]
-            await assertInvalidAcknowledgment(
-                try JSONSerialization.data(withJSONObject: response),
-                message: "rejected \(rejected) of 2 quota events"
-            )
+        for statusCode in [200, 202] {
+            for rejected in [1, 2] {
+                var response = acknowledgment(persisted: 2 - rejected, rejected: rejected)
+                response["rejections"] = [["index": 0, "reason": "private-server-detail"]]
+                await assertInvalidAcknowledgment(
+                    try JSONSerialization.data(withJSONObject: response),
+                    statusCode: statusCode,
+                    message: "rejected \(rejected) of 2 quota events"
+                )
+            }
         }
     }
 
