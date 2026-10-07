@@ -443,7 +443,10 @@ private struct ConsoleSidebarSplitter: View {
                 )
         }
         .frame(width: 8)
-        .background(isHovering ? Color.accentColor.opacity(0.15) : Color.clear)
+        // `Color.accentColor` is the macOS system accent, not the one the
+        // owner picked, so the grabber glowed system blue next to an accent
+        // that was doing everything else in the sidebar.
+        .background(isHovering ? Theme.accent.opacity(0.15) : Color.clear)
     }
 }
 

@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import XCTest
 @testable import CodeCaps
 
@@ -89,5 +90,57 @@ final class ThemePreferenceTests: XCTestCase {
         XCTAssertNotNil(Theme.barRemaining)
         AccentChoice.current = .teal
         XCTAssertNotNil(Theme.barRemaining)
+    }
+
+    /// `Theme.selection` is the fill behind a selected sidebar row and behind
+    /// the selected segment of the Glance header toggle.  It was declared with
+    /// the teal hexes inlined, so it stayed teal under every accent while the
+    /// row's border and label moved — a violet border around a teal wash.
+    func testSelectionFollowsTheChosenAccentInBothAppearances() {
+        func components(_ color: Color, _ appearance: NSAppearance.Name) -> (r: Double, g: Double, b: Double, a: Double) {
+            let saved = NSAppearance.current
+            NSAppearance.current = NSAppearance(named: appearance)!
+            defer { NSAppearance.current = saved }
+            // `Theme`'s colours are dynamic `NSColor`s, so they have to be
+            // resolved against an appearance and moved into sRGB before their
+            // components can be read at all.
+            guard let ns = NSColor(color).usingColorSpace(.sRGB) else {
+                XCTFail("selection did not resolve to an RGB colour under \(appearance.rawValue)")
+                return (0, 0, 0, 0)
+            }
+            var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+            ns.getRed(&r, green: &g, blue: &b, alpha: &a)
+            return (Double(r), Double(g), Double(b), Double(a))
+        }
+        func expected(_ hex: UInt32, alpha: Double) -> (Double, Double, Double, Double) {
+            (Double((hex >> 16) & 0xFF) / 255,
+             Double((hex >> 8) & 0xFF) / 255,
+             Double(hex & 0xFF) / 255,
+             alpha)
+        }
+        func close(_ a: (r: Double, g: Double, b: Double, a: Double),
+                   _ b: (r: Double, g: Double, b: Double, a: Double),
+                   _ label: String) {
+            XCTAssertEqual(a.r, b.r, accuracy: 0.01, label)
+            XCTAssertEqual(a.g, b.g, accuracy: 0.01, label)
+            XCTAssertEqual(a.b, b.b, accuracy: 0.01, label)
+            XCTAssertEqual(a.a, b.a, accuracy: 0.01, label)
+        }
+
+        // Teal is unchanged, so the default app looks exactly as it shipped.
+        AccentChoice.current = .teal
+        close(components(Theme.selection, .aqua), expected(AccentChoice.teal.lightHex, alpha: 0.12), "teal light")
+        close(components(Theme.selection, .darkAqua), expected(AccentChoice.teal.darkHex, alpha: 0.18), "teal dark")
+
+        // Any other accent moves both the hue and the alpha is kept per appearance.
+        for accent in AccentChoice.allCases where accent != .teal {
+            AccentChoice.current = accent
+            close(components(Theme.selection, .aqua), expected(accent.lightHex, alpha: 0.12),
+                  "\(accent.title) light must tint the selection, not stay teal")
+            close(components(Theme.selection, .darkAqua), expected(accent.darkHex, alpha: 0.18),
+                  "\(accent.title) dark must tint the selection, not stay teal")
+        }
+
+        AccentChoice.current = .teal
     }
 }

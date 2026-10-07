@@ -126,8 +126,17 @@ enum Theme {
         : dyn(NSColor.black.withAlphaComponent(0.08), NSColor.white.withAlphaComponent(0.14))
 
     /// Fill behind a selected or highlighted row.
-    static let selection = dyn(hex(0x087370).withAlphaComponent(0.12),
-                               hex(0x4FD1C5).withAlphaComponent(0.18))
+    ///
+    /// Derived from the owner's accent rather than pinned to the teal the app
+    /// shipped with: this is the fill *behind* the row's accent border, so a
+    /// hardcoded value left a violet border sitting on a teal wash the moment
+    /// any other accent was picked.  Same alphas as before, so the fill keeps
+    /// the contrast it had against the surface.
+    static var selection: Color {
+        let choice = AccentChoice.current
+        return dyn(hex(choice.lightHex).withAlphaComponent(0.12),
+                   hex(choice.darkHex).withAlphaComponent(0.18))
+    }
 
     /// The outline of a small header control: the From Mac / From Fleet switch.
     static let controlBorder: Color = highContrast
