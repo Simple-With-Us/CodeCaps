@@ -34,7 +34,7 @@ jobs:
         run: swift test
       - name: Upload native UI screenshots
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: codecaps-native-ui
           path: ${{ runner.temp }}/codecaps-native-ui/*.png
@@ -120,7 +120,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             build
       - name: Upload iOS platform-reordering screenshot
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: codecaps-ios-platform-reordering
           path: |
