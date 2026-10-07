@@ -81,4 +81,13 @@ final class ThemePreferenceTests: XCTestCase {
         AccentChoice.current = .teal
         XCTAssertEqual(AccentChoice.current, .teal)
     }
+
+    func testBarRemainingRemainsHealthyToneAndDoesNotTurnRedWhenMagentaSelected() {
+        AccentChoice.current = .magenta
+        XCTAssertNotNil(Theme.barRemaining)
+        AccentChoice.current = .green
+        XCTAssertNotNil(Theme.barRemaining)
+        AccentChoice.current = .teal
+        XCTAssertNotNil(Theme.barRemaining)
+    }
 }

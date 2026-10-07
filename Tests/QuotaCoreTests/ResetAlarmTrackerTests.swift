@@ -871,4 +871,16 @@ final class ResetAlarmTrackerTests: XCTestCase {
         let decoded = ResetAlarmTrackerState.decoded(from: tracker.state.encoded())
         XCTAssertEqual(decoded, tracker.state)
     }
+
+    func testWindowWithoutInitialResetAtFiresWhenJumpingToFull() {
+        var tracker = ResetAlarmTracker()
+        let obs1 = reading("primary", period: 7 * day, resetAt: nil, remaining: 20, observedAt: t0, provider: "openai")
+        _ = tracker.process([obs1], now: t0)
+        let t1 = t0 + 2 * hour
+        let obs2 = reading("primary", period: 7 * day, resetAt: nil, remaining: 100, observedAt: t1, provider: "openai")
+        let events = tracker.process([obs2], now: t1)
+        XCTAssertEqual(events.count, 1)
+        XCTAssertEqual(events.first?.providerId, "openai")
+        XCTAssertEqual(events.first?.remainingPercent, 100)
+    }
 }
