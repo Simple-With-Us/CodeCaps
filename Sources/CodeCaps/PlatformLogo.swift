@@ -270,6 +270,16 @@ public enum PlatformLogoImage {
     /// The standard cache preserves brand colors; the template cache marks the
     /// image as a template so it adapts to Light/Dark and menu bar selection.
     private static var cachedBundle: Bundle? = nil
+    /// A latch that only remembers success is a latch that can be poisoned
+    /// before the bundle is reachable: the first call can land while the
+    /// resource bundle is not yet resolvable, and every later call would then
+    /// re-run resolution rather than serve the pinned `nil`.  Worse, a
+    /// *resolved* bundle is cached without ever confirming it can produce an
+    /// image, so a bundle pointing at a half-copied directory stays cached for
+    /// the life of the process and every mark reads as missing.  The owner saw
+    /// exactly that: only the one platform with a custom mark on disk drew
+    /// anything in the PiP, which looked like a broken artwork cache but was a
+    /// bundle that resolved and could not deliver.
     private static func currentBundle() -> Bundle? {
         if let cached = cachedBundle { return cached }
         if let b = ResourceBundle.resolved ?? ResourceBundle.resolveBundle() {
@@ -277,6 +287,28 @@ public enum PlatformLogoImage {
             return b
         }
         return nil
+    }
+
+    /// Forget every cached bundle and mark.  Called when something changes that
+    /// could have invalidated them — a custom mark import, or a resource bundle
+    /// that appears after the first lookup.
+    public static func invalidateCaches() {
+        cachedBundle = nil
+        standardCache.removeAllObjects()
+        templateCache.removeAllObjects()
+        menuBarCache.removeAllObjects()
+    }
+
+    /// Why the last bundled lookup failed, for the log line the owner reads
+    /// when a mark goes missing.  A silent nil here is what made this take days
+    /// to find: there was no way to tell "no artwork for this key" from
+    /// "artwork is there and the bundle could not open it".
+    private static var lastFailure: String? = nil
+
+    private static func noteFailure(_ reason: String) {
+        guard lastFailure != reason else { return }
+        lastFailure = reason
+        NSLog("CodeCaps: provider mark unavailable — %@", reason)
     }
 
     private static func bundledImage(providerKey: String, style: MarkStyle = .template, iconHint: String? = nil) -> NSImage? {
@@ -311,34 +343,65 @@ public enum PlatformLogoImage {
     }
 
     private static func imageFromBundle(resource: (name: String, ext: String), key: NSString, cacheKey: NSString, cache: NSCache<NSString, NSImage>, style: MarkStyle) -> NSImage? {
-        let bundle = currentBundle()
-        let candidates: [URL?] = [
-            bundle?.url(forResource: resource.name, withExtension: resource.ext),
-            bundle?.url(forResource: resource.name, withExtension: resource.ext, subdirectory: "ProviderMarks"),
-            bundle?.resourceURL?.appendingPathComponent("\(resource.name).\(resource.ext)"),
-            bundle?.bundleURL.appendingPathComponent("Contents/Resources/\(resource.name).\(resource.ext)"),
-            bundle?.bundleURL.appendingPathComponent("\(resource.name).\(resource.ext)"),
-            Bundle.main.resourceURL?.appendingPathComponent("CodeCaps_CodeCaps.bundle/Contents/Resources/\(resource.name).\(resource.ext)"),
-            Bundle.main.resourceURL?.appendingPathComponent("CodeCaps_CodeCaps.bundle/\(resource.name).\(resource.ext)"),
-            Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/CodeCaps_CodeCaps.bundle/Contents/Resources/\(resource.name).\(resource.ext)"),
-            Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/CodeCaps_CodeCaps.bundle/\(resource.name).\(resource.ext)"),
-            Bundle.main.resourceURL?.appendingPathComponent("\(resource.name).\(resource.ext)"),
-            Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/\(resource.name).\(resource.ext)")
-        ]
-        var targetURL: URL?
-        for candidate in candidates.compactMap({ $0 }) {
-            if FileManager.default.fileExists(atPath: candidate.path) {
-                targetURL = candidate
-                break
+        // Walk EVERY candidate, decoding as we go, and take the first that
+        // yields pixels.
+        //
+        // The previous version picked the first candidate whose *path existed*
+        // and returned nil if that one would not decode — so a single stale or
+        // wrong entry near the front of the list masked every good copy further
+        // down.  That is the shape of a bug that survives ten "cache" fixes: it
+        // is not the cache at all, it is a resolution order that gives up early.
+        // Existence and decodability are now checked together, per candidate.
+        let filename = "\(resource.name).\(resource.ext)"
+        for candidate in candidateURLs(filename: filename) {
+            guard FileManager.default.fileExists(atPath: candidate.path) else { continue }
+            guard let image = NSImage(contentsOf: candidate) ?? NSImage(contentsOfFile: candidate.path) else {
+                noteFailure("'\(filename)' exists at \(candidate.path) but would not decode; trying the next location")
+                continue
             }
+            return finalize(image: image, url: candidate, key: key,
+                            cacheKey: cacheKey, cache: cache)
         }
-        guard let url = targetURL,
-              let image = NSImage(contentsOf: url) ?? NSImage(contentsOfFile: url.path) else {
-            return nil
+        noteFailure("'\(filename)' is mapped for '\(key as String)' but was not found in any of the \(candidateURLs(filename: filename).count) known locations")
+        return nil
+    }
+
+    /// Every place the mark could legitimately live, across both the resolved
+    /// bundle and `Bundle.main`.  Built fresh each call so a bundle that appears
+    /// later is found without clearing anything: there is no cached answer to
+    /// go stale.
+    private static func candidateURLs(filename: String) -> [URL] {
+        var urls: [URL] = []
+        let bundles = [currentBundle(), Bundle(url: Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/CodeCaps_CodeCaps.bundle"))]
+        for bundle in bundles.compactMap({ $0 }) {
+            let name = (filename as NSString).deletingPathExtension
+            let ext = (filename as NSString).pathExtension
+            if let u = bundle.url(forResource: name, withExtension: ext) { urls.append(u) }
+            if let u = bundle.url(forResource: name, withExtension: ext, subdirectory: "ProviderMarks") { urls.append(u) }
+            if let base = bundle.resourceURL { urls.append(base.appendingPathComponent(filename)) }
+            urls.append(bundle.bundleURL.appendingPathComponent("Contents/Resources/\(filename)"))
+            urls.append(bundle.bundleURL.appendingPathComponent(filename))
         }
-        // Keep the brand color cached separately from the template copy.
+        if let res = Bundle.main.resourceURL {
+            urls.append(res.appendingPathComponent("CodeCaps_CodeCaps.bundle/Contents/Resources/\(filename)"))
+            urls.append(res.appendingPathComponent("CodeCaps_CodeCaps.bundle/\(filename)"))
+            urls.append(res.appendingPathComponent(filename))
+        }
+        urls.append(Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/CodeCaps_CodeCaps.bundle/Contents/Resources/\(filename)"))
+        urls.append(Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/CodeCaps_CodeCaps.bundle/\(filename)"))
+        urls.append(Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/\(filename)"))
+
+        // De-duplicate while preserving order, so the common case (the first
+        // candidate hits) does the least work.
+        var seen = Set<String>()
+        return urls.filter { seen.insert($0.path).inserted }
+    }
+
+    private static func finalize(image: NSImage, url: URL, key: NSString,
+                                  cacheKey: NSString, cache: NSCache<NSString, NSImage>) -> NSImage? {
+        // Keep the brand-colour copy and the template copy separate: a
+        // monochrome mark adapts to Light and Dark, a colour one does not.
         let colorCopy = NSImage(contentsOf: url) ?? NSImage(contentsOfFile: url.path)
-        // A monochrome mark adapts to Light and Dark mode across all styles.
         colorCopy?.isTemplate = isMonochromeMark(key as String)
         standardCache.setObject(colorCopy ?? image, forKey: cacheKey)
         let templateCopy = NSImage(contentsOf: url) ?? NSImage(contentsOfFile: url.path)
@@ -528,6 +591,11 @@ public enum PlatformLogoImage {
     /// Bust the render cache so marks reload on the next draw.
     public static func invalidateCache(for providerKey: String) {
         let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        // A custom-mark import is proof that the marks directory changed, so the
+        // pinned bundle gets re-resolved too: it may have been resolved before
+        // the bundle existed, and that stale pin is what leaves every bundled
+        // mark drawing as a fallback for the rest of the process.
+        cachedBundle = nil
         standardCache.removeObject(forKey: key as NSString)
         templateCache.removeObject(forKey: key as NSString)
         for style in MarkStyle.allCases {
