@@ -1891,7 +1891,7 @@ final class MonitorModel: ObservableObject {
         for (key, message) in file?.issues ?? [:] where issues[key] == nil {
             issues[key] = message
         }
-        if !fileWindows.filter({ $0.boundedRemainingPercent != nil }).isEmpty {
+        if !windows.filter({ $0.canonicalProviderKey == "openai" && $0.boundedRemainingPercent != nil }).isEmpty {
             issues["openai"] = nil
         }
         if currentCodexAccountID == nil {

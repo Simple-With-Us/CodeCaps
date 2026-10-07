@@ -106,9 +106,17 @@ enum Theme {
                                       NSColor.black.withAlphaComponent(0.7))
     /// The share of a quota window already used: the left segment of the bar.
     static let barUsed = danger
-    /// The share still available: the right segment of the bar.  This is the
-    /// same teal as the "% remaining" text, which the owner reads as green.
-    static let barRemaining = accent
+    /// The share still available: the right segment of the bar.  Healthy capacity
+    /// uses teal (or green if chosen), keeping the bar distinguishable from the red
+    /// `barUsed` segment even if the user picks a warm or danger-like UI accent (e.g. magenta, orange).
+    static var barRemaining: Color {
+        switch AccentChoice.current {
+        case .green:
+            return dyn(hex(AccentChoice.green.lightHex), hex(AccentChoice.green.darkHex))
+        default:
+            return dyn(hex(AccentChoice.teal.lightHex), hex(AccentChoice.teal.darkHex))
+        }
+    }
     static let fleet = dyn(hex(0x4B4FA8), hex(0x8A8EE0))
 
     /// Unfilled portion of any progress bar.  A black 6% track disappears on a

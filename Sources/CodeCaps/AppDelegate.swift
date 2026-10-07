@@ -53,7 +53,7 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDelegate, NSMenuItemValidation {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDelegate, NSMenuItemValidation, NSPopoverDelegate {
     let model = MonitorModel()
     let consoleState = ConsoleState()
     private var statusItem: NSStatusItem?
@@ -69,6 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         return image
     }()
     private let popover = NSPopover()
+    private var outsideClickMonitor: Any?
     private var consoleWindow: NSWindow?
     private var statusMenu: NSMenu?
     private var subscriptions = Set<AnyCancellable>()
@@ -81,6 +82,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         AppUpdater.shared.start()
         configureMenu()
         popover.behavior = .transient
+        popover.delegate = self
         let glance = NSHostingController(rootView:
             GlancePopover(model: model,
                           openConsole: { [weak self] page in self?.showConsole(page: page) },
@@ -359,6 +361,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             popover.contentViewController?.view.window?.makeKey()
         }
+    }
+
+    // MARK: - Popover outside-click dismissal
+
+    private func startOutsideClickMonitor() {
+        stopOutsideClickMonitor()
+        outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.popover.isShown else { return }
+                self.popover.performClose(nil)
+            }
+        }
+    }
+
+    private func stopOutsideClickMonitor() {
+        if let monitor = outsideClickMonitor {
+            NSEvent.removeMonitor(monitor)
+            outsideClickMonitor = nil
+        }
+    }
+
+    func popoverWillShow(_ notification: Notification) {
+        startOutsideClickMonitor()
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        stopOutsideClickMonitor()
     }
 
     // MARK: - Console
