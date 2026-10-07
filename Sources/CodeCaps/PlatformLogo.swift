@@ -235,36 +235,47 @@ public enum PlatformLogoImage {
         return dir
     }()
 
-    private static let resourceNames: [String: (name: String, ext: String)] = [
-        "anthropic": ("claude", "svg"),
-        "claude": ("claude", "svg"),
-        "openai": ("openai", "svg"),
-        "codex": ("openai", "svg"),
-        "google-antigravity": ("gemini", "svg"),
-        "antigravity": ("gemini", "svg"),
-        // The two Antigravity pools are told apart by their mark as well as
-        // their name: the Gemini pool wears the colour Gemini star, and the
-        // Third-Party pool the same star as a solid one-colour glyph.
-        "google-antigravity:gemini": ("gemini-color", "png"),
-        "google-antigravity:third-party": ("gemini-mono", "svg"),
-        "gemini": ("gemini", "svg"),
-        "xai": ("grok", "svg"),
-        "grok": ("grok", "svg"),
-        "grok-cli": ("grok", "svg"),
-        "grok-bot": ("grok-bot", "svg"),
-        "minimax": ("minimax", "png"),
-        "muse": ("muse", "png"),
-        "muse-assist": ("muse-assist", "png"),
-        "muse-code": ("muse-code", "svg"),
-        "cursor": ("cursor", "svg"),
-    ]
+    /// Provider key -> mark base name.  Every base has three shipped variants:
+/// `-color` (brand colours, Standard style), `-light` (silhouette in the app's
+/// Light ink) and `-dark` (silhouette in the app's Dark ink).
+///
+/// These used to be `name, ext` pairs pointing at SVG files with a hardcoded
+/// `monochromeKeys` Set deciding which ones adapted to appearance.  Two problems
+/// that measured, not assumed: the SVGs came back as `_NSSVGImageRep`, a PRIVATE
+/// AppKit class, and the Muse rasters shipped a baked-in opaque white background.
+/// Shipping the three variants as PNG makes appearance a property of the data
+/// rather than of a guess, and puts every mark on `NSBitmapImageRep`.
+private static let resourceNames: [String: String] = [
+    "anthropic": "claude",
+    "claude": "claude",
+    "openai": "openai",
+    "codex": "openai",
+    "google-antigravity": "gemini",
+    "antigravity": "gemini",
+    // The two Antigravity pools are told apart by their mark as well as
+    // their name: the Gemini pool wears the colour Gemini star, and the
+    // Third-Party pool the same star as a solid one-colour glyph.
+    "google-antigravity:gemini": "gemini-color",
+    "google-antigravity:third-party": "gemini-mono",
+    "gemini": "gemini",
+    "xai": "grok",
+    "grok": "grok",
+    "grok-cli": "grok",
+    "grok-bot": "grok-bot",
+    "minimax": "minimax",
+    "muse": "muse",
+    "muse-assist": "muse-assist",
+    "muse-code": "muse-code",
+    "cursor": "cursor",
+]
 
-    /// Dedicated monochrome/template marks used when Light/Dark (template) style
-    /// is active, providing high-contrast silhouette rendering.
-    private static let templateResourceNames: [String: (name: String, ext: String)] = [
-        "muse-code": ("muse-code-dark", "svg"),
-        "muse": ("muse-code-dark", "svg"),
-    ]
+/// The file a style and appearance ask for, or `nil` when the mark is absent.
+private static func variantFile(base: String, style: MarkStyle, isDark: Bool) -> String? {
+    switch style {
+    case .standard, .custom: return "\(base)-color.png"
+    case .template: return isDark ? "\(base)-dark.png" : "\(base)-light.png"
+    }
+}
 
     /// Return the bundled asset for `providerKey`, or `nil` if no artwork ships.
     /// The standard cache preserves brand colors; the template cache marks the
@@ -311,38 +322,35 @@ public enum PlatformLogoImage {
         NSLog("CodeCaps: provider mark unavailable — %@", reason)
     }
 
-    private static func bundledImage(providerKey: String, style: MarkStyle = .template, iconHint: String? = nil) -> NSImage? {
+    private static func bundledImage(providerKey: String, style: MarkStyle = .template, iconHint: String? = nil, isDark: Bool = false) -> NSImage? {
         let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() as NSString
         // Cache dimension: a manifest hint change must not keep serving the
-        // previously cached mark for the same provider key.
+        // previously cached mark for the same provider key, and appearance must
+        // never serve a Light silhouette onto a Dark surface (or the reverse).
         let hintName = iconHint?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let cacheKey = ((hintName?.isEmpty == false) ? "\(key)|\(hintName!)" : (key as String)) as NSString
+        let stem = (hintName?.isEmpty == false) ? "\(key)|\(hintName!)" : (key as String)
+        let cacheKey = "\(stem)|v2|\(style.rawValue)|\(isDark ? "dark" : "light")" as NSString
         let cache = (style == .standard) ? standardCache : templateCache
         if let cached = cache.object(forKey: cacheKey) { return cached }
-        // Server-first: try the manifest-supplied hint name first; fall back
-        // to the built-in `resourceNames` map (pre-manifest behaviour) when
-        // the hint does not resolve to a file, so a bad hint can never blank
-        // a mark the bundled map would have found.
-        let hintResource: (name: String, ext: String)? = hintName.flatMap { name in
+        // Server-first: try the manifest-supplied hint name first; fall back to
+        // the built-in map when the hint does not resolve to a file, so a bad
+        // hint can never blank a mark the map would have found.
+        let hintResource: String? = hintName.flatMap { name in
             guard !name.isEmpty else { return nil }
-            if let existing = resourceNames[name] { return existing }
-            return (name, "svg")
+            return resourceNames[name] ?? "\(name)-color.png"
         }
-        let mapResource: (name: String, ext: String)?
-        if style == .template, let tmpl = templateResourceNames[key as String] ?? templateResourceNames[platformKey(of: key as String)] {
-            mapResource = tmpl
-        } else {
-            mapResource = resourceNames[key as String] ?? resourceNames[platformKey(of: key as String)]
-        }
-        for resource in [hintResource, mapResource].compactMap({ $0 }) {
-            if let image = imageFromBundle(resource: resource, key: key, cacheKey: cacheKey, cache: cache, style: style) {
+        let mapResource: String? = {
+            let base = resourceNames[key as String] ?? resourceNames[platformKey(of: key as String)]
+            return base.flatMap { variantFile(base: $0, style: style, isDark: isDark) }
+        }()
+        for filename in [hintResource, mapResource].compactMap({ $0 }) {
+            if let image = imageFromBundle(filename: filename, key: key, cacheKey: cacheKey, cache: cache, style: style) {
                 return image
             }
         }
         return nil
     }
-
-    private static func imageFromBundle(resource: (name: String, ext: String), key: NSString, cacheKey: NSString, cache: NSCache<NSString, NSImage>, style: MarkStyle) -> NSImage? {
+    private static func imageFromBundle(filename: String, key: NSString, cacheKey: NSString, cache: NSCache<NSString, NSImage>, style: MarkStyle) -> NSImage? {
         // Walk EVERY candidate, decoding as we go, and take the first that
         // yields pixels.
         //
@@ -352,7 +360,6 @@ public enum PlatformLogoImage {
         // down.  That is the shape of a bug that survives ten "cache" fixes: it
         // is not the cache at all, it is a resolution order that gives up early.
         // Existence and decodability are now checked together, per candidate.
-        let filename = "\(resource.name).\(resource.ext)"
         for candidate in candidateURLs(filename: filename) {
             guard FileManager.default.fileExists(atPath: candidate.path) else { continue }
             guard let image = NSImage(contentsOf: candidate) ?? NSImage(contentsOfFile: candidate.path) else {
@@ -485,15 +492,18 @@ public enum PlatformLogoImage {
         let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         switch style {
         case .standard:
-            return bundledImage(providerKey: key, style: .standard, iconHint: iconHint)
+            return bundledImage(providerKey: key, style: .standard, iconHint: iconHint, isDark: isDarkMode)
         case .template:
-            return bundledImage(providerKey: key, style: .template, iconHint: iconHint)
+            return bundledImage(providerKey: key, style: .template, iconHint: iconHint, isDark: isDarkMode)
         case .custom:
             if let custom = loadCustom(providerKey: key, isDarkMode: isDarkMode)
                 ?? loadCustom(providerKey: platformKey(of: key), isDarkMode: isDarkMode) {
                 return custom
             }
-            return bundledImage(providerKey: key, style: .standard, iconHint: iconHint)
+            // No custom mark on disk for this provider: fall back to the
+            // bundled colour mark so the row still shows something real rather
+            // than the placeholder glyph.
+            return bundledImage(providerKey: key, style: .standard, iconHint: iconHint, isDark: isDarkMode)
         }
     }
 
