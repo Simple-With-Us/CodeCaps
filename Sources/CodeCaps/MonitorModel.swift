@@ -395,6 +395,7 @@ final class MonitorModel: ObservableObject {
     private enum PushOutcome {
         case success(QuotaPublishResult)
         case failure(String)
+        case noPublishableWindows
         case cancelled
     }
 
@@ -1591,6 +1592,8 @@ final class MonitorModel: ObservableObject {
             return (true, result.message)
         case let .failure(message):
             return (false, message)
+        case .noPublishableWindows:
+            return (false, "No quota windows with a known remaining percentage to publish.")
         case .cancelled:
             return (false, "Push cancelled because sharing was disabled or its settings changed.")
         }
@@ -1659,6 +1662,13 @@ final class MonitorModel: ObservableObject {
                 guard !Task.isCancelled,
                       self.isCurrentPushSettings(generation, endpoint: targetEndpoint, format: targetFormat) else {
                     return .cancelled
+                }
+                // Unknown/credits-only readings are a valid local state, not
+                // a failed sync.  The publisher rejects this batch before any
+                // request; preserve prior status and never claim an ACK.
+                if let publishError = error as? QuotaPublisherError,
+                   publishError == .noPublishableWindows {
+                    return .noPublishableWindows
                 }
                 let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
                 self.lastSyncStatus = "Error: \(message)"
