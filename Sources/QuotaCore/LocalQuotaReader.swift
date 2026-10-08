@@ -575,6 +575,14 @@ private func parseGrok(_ root: [String: Any], observedAt: Date) -> [QuotaWindow]
     return [window(provider: .grok, id: token ?? "quota", label: token.map { "\($0) window" } ?? "Quota window", remaining: remaining, resetAt: firstTimestamp(merged, ["resetAt", "reset_at", "nextResetAt", "next_reset_at", "resets_at", "resetsAt", "renewal_date", "period_end"]), windowToken: token, absoluteRemaining: absoluteRemaining, absoluteLimit: limit, quotaUnit: limit == nil ? nil : "credits", planName: firstString(merged, ["tier", "plan", "plan_type", "planType", "subscription"]), observedAt: observedAt)]
 }
 
+/// Test seam for the MiniMax payload parser, which is otherwise file-private.
+/// The window-length contract is asserted from `MiniMaxWindowTests`.
+public enum MiniMaxWindowProbe {
+    public static func parse(_ root: [String: Any], observedAt: Date) -> [QuotaWindow] {
+        parseMiniMax(root, observedAt: observedAt)
+    }
+}
+
 private func parseMiniMax(_ root: [String: Any], observedAt: Date) -> [QuotaWindow] {
     let status = firstNumber(record(root["base_resp"] ?? root["baseResp"]), ["status_code", "statusCode"])
     if status != nil && status != 0 { return [] }
@@ -618,11 +626,19 @@ private func parseMiniMax(_ root: [String: Any], observedAt: Date) -> [QuotaWind
             ?? millisReset(firstNumber(row, ["weekly_remains_time", "weeklyRemainsTime"]))
         let intervalStart = firstTimestamp(row, ["current_interval_start_time", "currentIntervalStartTime", "start_time", "startTime"])
         let weeklyStart = firstTimestamp(row, ["current_weekly_start_time", "currentWeeklyStartTime", "weekly_start_time", "weeklyStartTime"])
-        let intervalToken: String? = if let intervalStart, let intervalReset, let start = parseDate(intervalStart), let end = parseDate(intervalReset) {
-            windowToken(seconds: end.timeIntervalSince(start))
-        } else {
-            nil
-        }
+        // The vendor's interval window is 5 hours.  It is NOT derived from the
+        // start/end timestamps: MiniMax reports a rolling interval whose
+        // boundaries drift, and measuring it produced a "4h" token that then
+        // reached the UI as "4h window" in the Glance row, the menu bar and
+        // reset notifications.  Nothing in the payload declares 4 hours.
+        let isVideoRow = model.lowercased().contains("video") || model.lowercased().contains("hailuo")
+        let videoIntervalSeconds: TimeInterval? = {
+            guard let start = intervalStart.flatMap(parseDate), let end = intervalReset.flatMap(parseDate) else { return nil }
+            return end.timeIntervalSince(start)
+        }()
+        let intervalToken: String? = isVideoRow
+            ? (windowToken(seconds: videoIntervalSeconds) ?? "1d")
+            : "5h"
         let weeklyToken: String? = if let weeklyStart, let weeklyReset, let start = parseDate(weeklyStart), let end = parseDate(weeklyReset) {
             windowToken(seconds: end.timeIntervalSince(start))
         } else {
@@ -637,7 +653,7 @@ private func parseMiniMax(_ root: [String: Any], observedAt: Date) -> [QuotaWind
         let intervalLabel: String
         let weeklyLabel: String
         if isGeneral {
-            intervalLabel = intervalToken == "5h" ? "5-hour window" : (intervalToken.map { "\($0) window" } ?? "5-hour window")
+            intervalLabel = "5-hour window"
             weeklyLabel = (weeklyToken == "1w" || weeklyToken == "weekly") ? "Weekly window" : (weeklyToken.map { "\($0) window" } ?? "Weekly window")
         } else if isVideo {
             intervalLabel = "Video"

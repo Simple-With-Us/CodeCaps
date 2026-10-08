@@ -1110,6 +1110,43 @@ struct SettingsAboutPage: View {
 
     private static let projectPage = URL(string: "https://github.com/Simple-With-Us/codecaps")!
 
+    /// The owner's mark, drawn once and tinted per appearance.
+    private struct AboutBrandMark: View {
+        let size: CGFloat
+        @Environment(\.colorScheme) private var colorScheme
+
+        /// The owner's cropped black-on-transparent artwork, resolved through
+        /// the same bundle the menu bar and PiP use.  Loaded once; it is drawn
+        /// as a template, which is what makes one asset correct in both
+        /// appearances.
+        static let asset: NSImage? = {
+            guard let url = ResourceBundle.resolved?.url(forResource: "CodeCapsMenuBarIcon", withExtension: "png"),
+                  let image = NSImage(contentsOf: url) else { return nil }
+            image.isTemplate = true
+            return image
+        }()
+
+        var body: some View {
+            Group {
+                if let image = AboutBrandMark.asset {
+                    Image(nsImage: image)
+                        .resizable()
+                        .renderingMode(.template)
+                        .interpolation(.high)
+                        .foregroundStyle(colorScheme == .dark ? Color.white : Theme.ink)
+                } else {
+                    // Only if the owner's artwork is ever missing from the
+                    // bundle: keep a mark on screen rather than an empty gap.
+                    Image(systemName: "gauge.with.dots.needle.50percent")
+                        .font(.system(size: size))
+                        .foregroundStyle(Theme.accent)
+                }
+            }
+            .frame(width: size, height: size)
+            .accessibilityHidden(true)
+        }
+    }
+
     private var pushingDetail: String {
         guard model.syncEnabled else { return "Off" }
         guard let host = URL(string: model.syncEndpoint)?.host() else { return "On" }
@@ -1125,10 +1162,12 @@ struct SettingsAboutPage: View {
         SettingsPage {
             Section {
                 VStack(spacing: 6) {
-                    Image(systemName: "gauge.with.dots.needle.50percent")
-                        .font(.system(size: 34))
-                        .foregroundStyle(Theme.accent)
-                        .accessibilityHidden(true)
+                    // The owner's own mark, the same asset the menu bar and the
+                    // PiP header draw.  This was a hardcoded
+                    // "gauge.with.dots.needle.50percent" SF Symbol tinted with
+                    // the accent, which read as an older app's logo next to
+                    // the real one in the Dock.
+                    AboutBrandMark(size: 34)
                     Text("CodeCaps").font(.system(size: 16, weight: .semibold))
                     Text(CodeCapsVersion.display)
                         .font(.system(size: 11))
