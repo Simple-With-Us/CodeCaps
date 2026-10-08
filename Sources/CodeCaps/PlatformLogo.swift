@@ -337,7 +337,13 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
         // hint can never blank a mark the map would have found.
         let hintResource: String? = hintName.flatMap { name in
             guard !name.isEmpty else { return nil }
-            return resourceNames[name] ?? "\(name)-color.png"
+            // Known provider keys are base names ("claude"), not filenames.
+            // Route them through variantFile so we ask for claude-color.png
+            // (or -light/-dark) instead of looking up a file named "claude".
+            if let base = resourceNames[name] {
+                return variantFile(base: base, style: style, isDark: isDark)
+            }
+            return "\(name)-color.png"
         }
         let mapResource: String? = {
             let base = resourceNames[key as String] ?? resourceNames[platformKey(of: key as String)]
