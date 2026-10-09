@@ -311,8 +311,8 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
         // and its frame overlaps the console.
         p.level = .floating
         p.isMovableByWindowBackground = true
-        p.titleVisibility = .hidden
-        p.titlebarAppearsTransparent = true
+        // Borderless panel: the rounded SwiftUI surface is the whole window, so
+        // there is no titlebar strip to keep invisible.  See `panelStyleMask`.
         p.isOpaque = false
         p.backgroundColor = .clear
         p.hasShadow = true
@@ -408,8 +408,21 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
 extension PipMetrics {
     /// `.resizable` is what turns this from a fixed HUD into a window the owner
     /// can drag the edge of; the view inside degrades rather than clips.
+    ///
+    /// There is deliberately **no `.titled` and no `.hudWindow`** (owner report,
+    /// 2026-10-08: "it needs to not have the blank silver part on top for no
+    /// reason").  Both of those make AppKit paint a titlebar strip at the top
+    /// of the window that sits *outside* the SwiftUI content, so it shows as a
+    /// blank light band above the rounded panel — and with `titleVisibility`
+    /// hidden and `titlebarAppearsTransparent` set, it was a strip with nothing
+    /// on it at all.  `.fullSizeContentView` cannot hide it either, because the
+    /// strip is drawn by the window frame rather than by the content view.
+    ///
+    /// A borderless, nonactivating, resizable panel has no such strip: the
+    /// rounded panel *is* the window.  `isMovableByWindowBackground` already
+    /// makes the body draggable, so the titlebar was never load-bearing.
     static var panelStyleMask: NSWindow.StyleMask {
-        [.titled, .nonactivatingPanel, .fullSizeContentView, .utilityWindow, .hudWindow, .resizable]
+        [.borderless, .nonactivatingPanel, .resizable]
     }
 }
 

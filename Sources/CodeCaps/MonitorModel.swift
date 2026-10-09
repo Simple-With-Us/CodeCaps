@@ -1788,7 +1788,9 @@ final class MonitorModel: ObservableObject {
                 } else if self.skipsSnapshotIOForTesting {
                     self.handoffError = nil
                 } else if self.localEnabled && local != nil {
-                    try LocalQuotaSnapshot.write(windows: self.localWindows, issues: self.issues, customMarks: exportedCustomMarks(), now: self.now)
+                    try LocalQuotaSnapshot.write(windows: self.localWindows, issues: self.issues,
+                                                 customMarks: exportedCustomMarks(),
+                                                 alerts: exportedAlerts(now: self.now), now: self.now)
                 }
                 else { try LocalQuotaSnapshot.remove() }
                 self.handoffError = nil
@@ -1964,7 +1966,8 @@ final class MonitorModel: ObservableObject {
             do {
                 if localEnabled {
                     try LocalQuotaSnapshot.write(windows: localWindows, issues: issues,
-                                                 customMarks: exportedCustomMarks(), now: now)
+                                                 customMarks: exportedCustomMarks(),
+                                                 alerts: exportedAlerts(now: now), now: now)
                 } else {
                     try LocalQuotaSnapshot.remove()
                 }
@@ -2174,4 +2177,49 @@ func resetCountdown(_ reset: Date?, now: Date) -> String {
     if minutes >= 1440 { return "Resets in \(minutes / 1440)d \((minutes % 1440) / 60)h" }
     if minutes >= 60 { return "Resets in \(minutes / 60)h \(minutes % 60)m" }
     return "Resets in \(minutes)m"
+}
+
+// MARK: - Alert export for the iOS companion
+
+extension MonitorModel {
+    /// The alerts the companion should raise, in the same shape it reads.
+    ///
+    /// Owner request 2026-10-08: "iOS should have info about heavy anomalies in
+    /// usage or runaway usage like the mac."  The decision is made **here** and
+    /// shipped as data, rather than recomputed on the phone, for two reasons.
+    ///
+    /// The rules need this Mac's burn-rate history — a per-machine file of
+    /// measured hourly intervals built from local readings.  The companion has
+    /// no access to it and could not reproduce the comparison, so a phone-side
+    /// implementation would either alert on much weaker evidence or not at all.
+    ///
+    /// And the identity matters more than the text: if each surface evaluated
+    /// its own thresholds they could disagree about whether something was
+    /// anomalous, which is worse than one surface being silent.  One decision,
+    /// two notifications.
+    ///
+    /// `id` is stable for a given anomaly so the companion can raise it once
+    /// rather than once per poll — this payload is rewritten on every refresh.
+    func exportedAlerts(now: Date = Date()) -> [LocalQuotaSnapshot.AlertPayload] {
+        var out: [LocalQuotaSnapshot.AlertPayload] = []
+        let formatter = ISO8601DateFormatter()
+
+        // Runaway usage currently burning far faster than the owner's own
+        // pattern.  Only the live set, so a resolved anomaly stops being
+        // re-offered on the next poll.
+        for anomaly in activeRunawayAnomalies {
+            let label = AnomalyDetector.windowLabel(windowId: anomaly.windowId)
+            let title = displaySections.first { $0.id == anomaly.providerKey }?.title
+                ?? anomaly.providerKey
+            out.append(LocalQuotaSnapshot.AlertPayload(
+                id: "runaway|\(anomaly.providerKey)|\(anomaly.windowId)|\(anomaly.kind.rawValue)",
+                kind: "runaway",
+                providerKey: anomaly.providerKey,
+                providerTitle: title,
+                windowLabel: label,
+                summary: anomaly.summary,
+                occurredAt: formatter.string(from: anomaly.observedAt ?? now)))
+        }
+        return out
+    }
 }
