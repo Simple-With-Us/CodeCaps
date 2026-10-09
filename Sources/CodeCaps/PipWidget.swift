@@ -14,7 +14,6 @@ enum PipMetrics {
 
     static let padding: CGFloat = 10
     static let cornerRadius: CGFloat = 12
-    static let headerHeight: CGFloat = 42
     static let rowHeight: CGFloat = 20
     static let bodyVerticalPadding: CGFloat = 6
 
@@ -33,23 +32,21 @@ enum PipMetrics {
     static let barMinWidth: CGFloat = 28
     static let barHeight: CGFloat = 4
 
-    // MARK: Header
+    // MARK: Floating controls
 
-    /// Big enough to read as the app's mark rather than as an icon in a list.
-    /// It replaces a 12pt fallback that read as a smudge at HUD scale.
-    static let markSize: CGFloat = 22
-    static let markTextSize: CGFloat = 12
-    /// Below this the word "CodeCaps" is what collides with the close button,
-    /// so the mark travels alone.
-    static let headerTextMinWidth: CGFloat = 130
+    /// The close/back control floats over the rows rather than living in a band
+    /// of its own (owner, 2026-10-08), so it is inset from the corner rather
+    /// than laid out beside a title.
+    static let controlInset: CGFloat = 4
+    static let controlHitSize: CGFloat = 18
 
     // MARK: Panel bounds
 
     static let minWidth: CGFloat = 110
     static let maxWidth: CGFloat = 520
-    /// One header, one row, and the body's own vertical padding.  The two
-    /// zones run edge to edge, so this is the whole panel height.
-    static let minHeight: CGFloat = headerHeight + rowHeight + bodyVerticalPadding * 2
+    /// One row plus the body's own vertical padding, now that the header band
+    /// is gone and the panel is rows only.
+    static let minHeight: CGFloat = rowHeight + bodyVerticalPadding * 2
     static let maxHeight: CGFloat = 460
 
     /// A window with no dual-meter row opens comfortably wide without being
@@ -84,6 +81,10 @@ enum PipMetrics {
     static let singleMeterMinWidth: CGFloat =
         providerLogoSize + rowSpacing + titleWidth + rowSpacing + meterMinWidthWithCountdown
 
+    /// Provider logo and two meters, no countdowns and no title.
+    static let logoOnlyMinWidth: CGFloat =
+        providerLogoSize + rowSpacing + meterMinWidth + rowSpacing + meterMinWidth
+
     /// Two labelled meters, with no provider identity at all.
     static let minimalMinWidth: CGFloat = meterMinWidth + rowSpacing + meterMinWidth
 
@@ -109,7 +110,15 @@ enum PipMetrics {
         case noCountdown
         /// One meter, with its countdown, still named.
         case singleMeter
-        /// Two labelled meters, provider identity dropped.
+        /// Two meters and the provider's logo, but its NAME dropped.
+        ///
+        /// Owner, 2026-10-08: "when the window is getting narrower, the first
+        /// thing to go (after things have compressed as much as allowable) is
+        /// the platform name ASSUMING WE FINALLY CAN MAKE THE LOGOS ACTUALLY
+        /// SHOW UP".  The logo and the name used to disappear together, so
+        /// there was nothing to fall back to; this is that level.
+        case logoOnly
+        /// Two labelled meters, provider identity dropped entirely.
         case minimal
         /// Two bars and two percentages, captions dropped.
         case barsOnly
@@ -124,7 +133,7 @@ enum PipMetrics {
 
         var maxMeters: Int {
             switch self {
-            case .full, .noCountdown, .minimal, .barsOnly: return 2
+            case .full, .noCountdown, .logoOnly, .minimal, .barsOnly: return 2
             case .singleMeter, .singleBar: return 1
             }
         }
@@ -138,10 +147,14 @@ enum PipMetrics {
         }
 
         var showsProviderLogo: Bool {
-            self == .full || self == .noCountdown || self == .singleMeter
+            self == .full || self == .noCountdown || self == .singleMeter || self == .logoOnly
         }
 
-        var showsTitle: Bool { showsProviderLogo }
+        /// The name outlives the logo nowhere: the logo is what identifies a row
+        /// once the name is gone, so the name is the first of the two to drop.
+        var showsTitle: Bool {
+            self == .full || self == .noCountdown || self == .singleMeter
+        }
     }
 
     /// The richest level whose content fits `width`, content width being what
@@ -152,26 +165,22 @@ enum PipMetrics {
         case fullMinWidth...: return .full
         case noCountdownMinWidth...: return .noCountdown
         case singleMeterMinWidth...: return .singleMeter
+        case logoOnlyMinWidth...: return .logoOnly
         case minimalMinWidth...: return .minimal
         case barsOnlyMinWidth...: return .barsOnly
         default: return .singleBar
         }
     }
 
-    /// Whether the header can carry the word as well as the mark.
-    static func showsHeaderText(forWidth width: CGFloat) -> Bool {
-        width >= headerTextMinWidth
-    }
-
     /// How many rows fit in `height` without clipping, never fewer than one:
     /// a PiP HUD that has been shrunk is still a PiP HUD, and one visible meter
     /// is the honest answer to "no room".
     ///
-    /// The two zones run edge to edge, so `height` is the header, the body's
-    /// own vertical padding and the rows — there is no outer padding to remove.
+    /// `height` is the body's own vertical padding plus the rows — the header
+    /// band is gone, so there is nothing else to take out.
     static func visibleRowCount(total: Int, height: CGFloat) -> Int {
         guard total > 0 else { return 0 }
-        let available = height - headerHeight - bodyVerticalPadding * 2
+        let available = height - bodyVerticalPadding * 2
         guard available >= rowHeight else { return 1 }
         return min(total, max(1, Int(available / rowHeight)))
     }
@@ -182,7 +191,7 @@ enum PipMetrics {
     /// failure the owner reported.
     static func fitSize(rowCount: Int, hasDualMeterRow: Bool) -> NSSize {
         let rows = CGFloat(max(1, rowCount))
-        let height = headerHeight + rows * rowHeight + bodyVerticalPadding * 2
+        let height = rows * rowHeight + bodyVerticalPadding * 2
         let width = hasDualMeterRow
             ? padding * 2 + fullMinWidth
             : max(singleMeterDefaultWidth, padding * 2 + singleMeterMinWidth)
@@ -430,13 +439,21 @@ struct PipWidgetView: View {
             // their own contents, so the ladder below reads real panel width
             // rather than width that has already had the padding taken out of it.
             let detail = PipMetrics.detail(forWidth: geo.size.width)
-            VStack(spacing: 0) {
-                header(width: geo.size.width)
+            // No header band.  The owner read the raised strip as a stray silver
+            // tab (2026-10-08) and, with it gone, asked that the app's own mark
+            // and name not appear on the HUD at all — the provider logos are what
+            // identify it now.  The close/back control floats over the rows
+            // instead, still only while the pointer is over the window.
+            ZStack(alignment: .topTrailing) {
                 if let detailRow {
                     detailPanel(detailRow, detail: detail)
                 } else {
                     rowsPanel(detail: detail, height: geo.size.height)
                 }
+                floatingControl
+                    // Without this the 18x18 control sat flush in the corner and
+                    // overlapped the first row's right-edge percentage.
+                    .padding(PipMetrics.controlInset)
             }
         }
         .background {
@@ -455,66 +472,18 @@ struct PipWidgetView: View {
 
     // MARK: Header
 
-    /// The header band, edge to edge with the rows panel below it.  The
-    /// material strip that used to sit above it (the window's own background
-    /// showing through) is gone: the owner read it as a stray silver tab and
-    /// nothing looked right on it.
-    ///
-    /// The close button appears only while the mouse is over the window.  The
-    /// owner saw it permanently after it was made always-on and asked for the
-    /// hover behaviour back: a control that never moves is furniture, and this
-    /// one sits on top of the quota numbers.
-    private func header(width: CGFloat) -> some View {
-        ZStack {
-            // Centred as its own layer, so the close button appearing and
-            // disappearing cannot shift the mark and title sideways.
-            HStack(spacing: 6) {
-                mark
-                if PipMetrics.showsHeaderText(forWidth: width) {
-                    Text("CodeCaps")
-                        .font(.system(size: PipMetrics.markTextSize, weight: .bold))
-                        .foregroundStyle(Theme.solidMark)
-                        .fixedSize()
-                }
-            }
-
-            HStack(spacing: 0) {
-                Spacer(minLength: 0)
-                if isHovering {
-                    if detailRow == nil {
-                        closeButton
-                    } else {
-                        backButton
-                    }
-                }
-            }
-        }
-        .frame(height: PipMetrics.headerHeight)
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, PipMetrics.padding)
-        .background(Theme.raisedBand)
-    }
-
-    /// CodeCaps' own mark, from the owner's black-on-transparent artwork, drawn
-    /// as a template so the same asset is black-on-transparent on the light
-    /// band and white-on-transparent on the dark one.  It is the app's mark
-    /// reused as-is — never re-cut, re-exported or substituted.
-    private var mark: some View {
-        Group {
-            if let image = PipWidgetController.brandMark {
-                Image(nsImage: image)
-                    .resizable()
-                    .renderingMode(.template)
-                    .aspectRatio(contentMode: .fit)
-                    .foregroundStyle(Theme.solidMark)
+    /// Close, or Back when a platform detail is open.  It floats over the
+    /// rows' top-right corner and appears only on hover, so it never occupies
+    /// permanent space above the numbers.
+    @ViewBuilder
+    private var floatingControl: some View {
+        if isHovering {
+            if detailRow == nil {
+                closeButton
             } else {
-                Image(systemName: "gauge.with.needle.fill")
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .foregroundStyle(Theme.solidMark)
+                backButton
             }
         }
-        .frame(width: PipMetrics.markSize, height: PipMetrics.markSize)
     }
 
     private var closeButton: some View {
