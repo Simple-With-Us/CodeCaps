@@ -220,6 +220,19 @@ final class MonitorModel: ObservableObject {
     /// in Settings text.  The runaway detector stands down for these; the UI
     /// shows the informational plan-change state instead of an alert.
     @Published private(set) var activePlanChanges: [AnomalyDetector.PlanChange] = []
+    @Published var dismissedPlanChangeIds: Set<String> {
+        didSet {
+            defaults.set(Array(dismissedPlanChangeIds), forKey: "dismissedPlanChangeIds")
+        }
+    }
+
+    var visiblePlanChanges: [AnomalyDetector.PlanChange] {
+        activePlanChanges.filter { !dismissedPlanChangeIds.contains($0.planChangeId) }
+    }
+
+    func dismissPlanChange(_ id: String) {
+        dismissedPlanChangeIds.insert(id)
+    }
     @Published public private(set) var runawayAlertHistory: [RunawayAlertRecord] = []
     @Published var menuBarQuotaSelection: String {
         didSet { defaults.set(menuBarQuotaSelection, forKey: "menuBarQuotaSelection") }
@@ -454,6 +467,7 @@ final class MonitorModel: ObservableObject {
         }
         viewLayout = QuotaViewLayout(rawValue: defaults.string(forKey: "quotaViewLayout") ?? "") ?? .summary
         platformOrder = defaults.stringArray(forKey: "platformOrder") ?? []
+        dismissedPlanChangeIds = Set(defaults.stringArray(forKey: "dismissedPlanChangeIds") ?? [])
         if let customData = defaults.data(forKey: "platformCustomInfo"),
            let decoded = try? JSONDecoder().decode([String: PlatformCustomInfo].self, from: customData) {
             platformCustomInfo = decoded

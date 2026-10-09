@@ -120,10 +120,6 @@ struct GlancePopover: View {
     @ViewBuilder
     private var fromMacContent: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if !model.activePlanChanges.isEmpty {
-                planChangeSection
-                Spacer().frame(height: 8)
-            }
             if localSections.isEmpty && !model.localEnabled {
                 GlanceEmptyState(
                     symbol: "laptopcomputer",
@@ -139,6 +135,10 @@ struct GlancePopover: View {
                     glanceRow(row, issue: model.issues[row.providerKey], origin: .local)
                 }
             }
+            if !model.visiblePlanChanges.isEmpty {
+                Spacer().frame(height: 8)
+                planChangeSection
+            }
             if let consentMessage {
                 Spacer().frame(height: 10)
                 ConsentRow(message: consentMessage) { openConsole(.settingsSourcesFleet) }
@@ -153,17 +153,19 @@ struct GlancePopover: View {
     }
 
     /// Informational plan-change notices, shown instead of runaway alerts
-    /// while the baseline recalibrates.  Teal, never red/orange.
+    /// while the baseline recalibrates.  Placed below quotas with dismiss button.
     private var planChangeSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            ForEach(model.activePlanChanges, id: \.planChangeId) { change in
+            ForEach(model.visiblePlanChanges, id: \.planChangeId) { change in
                 PlanChangeGlanceCard(
                     change: change,
                     providerLabel: model.sections.first { $0.providerKey == change.providerKey }?.providerLabel
                         ?? change.providerKey,
                     windowLabel: model.displaySections.flatMap { $0.section.windows }
                         .first { $0.window.id == change.windowId }
-                        .map { glanceMeterCaption($0) }
+                        .map { glanceMeterCaption($0) },
+                    accentColor: model.accentColor,
+                    onDismiss: { model.dismissPlanChange(change.planChangeId) }
                 )
             }
         }
@@ -663,6 +665,8 @@ struct PlanChangeGlanceCard: View {
     let change: AnomalyDetector.PlanChange
     let providerLabel: String
     let windowLabel: String?
+    var accentColor: Color = Theme.accent
+    var onDismiss: () -> Void = {}
 
     private var detailText: String {
         if let changedAt = change.changedAt, let recalibratedAt = change.recalibratedAt {
@@ -681,13 +685,13 @@ struct PlanChangeGlanceCard: View {
         HStack(spacing: 8) {
             Text("Δ")
                 .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(Theme.accent)
+                .foregroundStyle(accentColor)
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
                     Text("Plan Change:")
                         .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(Theme.accent)
+                        .foregroundStyle(accentColor)
                     Text(windowLabel.map { "\(providerLabel) (\($0))" } ?? providerLabel)
                         .font(.system(size: 11, weight: .semibold))
                         .lineLimit(1)
@@ -699,11 +703,22 @@ struct PlanChangeGlanceCard: View {
             }
 
             Spacer(minLength: 4)
+
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.secondary)
+                    .padding(4)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Hide this notice")
+            .accessibilityLabel("Hide notice")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .background(Theme.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 6))
-        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Theme.accent.opacity(0.30), lineWidth: 1))
+        .background(accentColor.opacity(0.10), in: RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(accentColor.opacity(0.30), lineWidth: 1))
     }
 }
 
@@ -974,6 +989,7 @@ struct GlanceViewToggle: View {
                 segment(mode)
             }
         }
+        .background(Theme.surface)
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Theme.controlBorder))
         .fixedSize()
@@ -991,10 +1007,10 @@ struct GlanceViewToggle: View {
             .font(.system(size: 11, weight: .semibold))
             .lineLimit(1)
             .fixedSize()
-            .foregroundStyle(selected ? AnyShapeStyle(model.accentColor) : AnyShapeStyle(.secondary))
+            .foregroundStyle(selected ? Theme.onAccent : .secondary)
             .padding(.horizontal, Metrics.glanceHeaderSegmentPadding)
             .frame(height: Metrics.glanceHeaderControlHeight)
-            .background(selected ? Theme.selection : Color.clear)
+            .background(selected ? model.accentColor : Color.clear)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -1124,6 +1140,18 @@ func glanceMeterPair(for row: DisplaySection, now: Date) -> GlanceMeterPair {
         ? [row.driving].compactMap { $0 }
         : trustworthy
     guard let anchor = candidates.first else { return GlanceMeterPair() }
+
+    if row.providerKey == "muse-assist" {
+        let weekly = candidates.first { isMuseAssistWeekly($0) }
+        let extra = candidates.first { isMuseAssistExtra($0) }
+        if let weekly, let extra {
+            return GlanceMeterPair(short: weekly, long: extra)
+        } else if let weekly {
+            return GlanceMeterPair(short: weekly, long: nil)
+        } else if let extra {
+            return GlanceMeterPair(short: extra, long: nil)
+        }
+    }
 
     let shortest = candidates.filter { glanceCadence($0, now: now) == .short }
     let longest = candidates.filter { glanceCadence($0, now: now) == .long }
@@ -1284,12 +1312,42 @@ func glanceCadence(_ snapshot: QuotaWindowSnapshot, now: Date) -> GlanceCadence 
 /// The unit tag beside a meter: "5h", "7d", "1m".  Kept to five characters so
 /// the caption column never has to truncate, and derived from the window's own
 /// cadence token rather than its label alone, because a label is allowed to be
+func isMuseAssistExtra(_ snapshot: QuotaWindowSnapshot) -> Bool {
+    let key = snapshot.window.canonicalProviderKey
+    guard key == "muse-assist" else { return false }
+    let label = snapshot.window.label.lowercased()
+    return label.contains("additional") || label.contains("extra")
+}
+
+func isMuseAssistWeekly(_ snapshot: QuotaWindowSnapshot) -> Bool {
+    let key = snapshot.window.canonicalProviderKey
+    guard key == "muse-assist" else { return false }
+    let label = snapshot.window.label.lowercased()
+    let token = (snapshot.window.window ?? "").lowercased()
+    return label.contains("weekly") || token.contains("weekly") || label.contains("limit") || label.contains("free")
+}
+
+/// The unit tag beside a meter: "5h", "7d", "1m".  Kept to five characters so
+/// the caption column never has to truncate, and derived from the window's own
+/// cadence token rather than its label alone, because a label is allowed to be
 /// "Third-Party · Weekly" while its caption has to be "7d".
 ///
 /// Every monthly or billing-cycle window reads "1m" — Cursor's included plan
 /// among them — so a month is spelled one way on every row (owner ruling
 /// 2026-09-30, replacing "Plan" and "30d").
 func glanceMeterCaption(_ snapshot: QuotaWindowSnapshot) -> String {
+    if isMuseAssistExtra(snapshot) {
+        return "+"
+    }
+    // MiniMax has NO 4hr window: its coding plan is 5 hours.
+    let key = snapshot.window.canonicalProviderKey
+    if key == "minimax", !snapshot.window.isSupplementaryVideoQuota {
+        let tok = (snapshot.window.window ?? "").lowercased()
+        let lbl = snapshot.window.label.lowercased()
+        if tok.contains("4h") || tok.contains("4-hour") || lbl.contains("4h") || lbl.contains("4-hour") || lbl.contains("4 hour") {
+            return "5h"
+        }
+    }
     let token = (snapshot.window.window ?? "")
         .lowercased()
         .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1381,7 +1439,12 @@ struct GlanceMeter: View {
 
     private var percent: Double? { snapshot.remainingPercent }
     private var tint: Color { quotaStatusColor(for: snapshot, sourceFailed: false) }
-    private var countdown: String { glanceResetCountdown(snapshot.resetAt, now: now) }
+    private var countdown: String {
+        if isMuseAssistExtra(snapshot) {
+            return "Extra Usage"
+        }
+        return glanceResetCountdown(snapshot.resetAt, now: now)
+    }
     private var metrics: QuotaBarMetrics { QuotaBarMetrics(snapshot: snapshot, now: now) }
 
     var body: some View {
@@ -1401,7 +1464,7 @@ struct GlanceMeter: View {
             // marker for how far through the period we are.  This is the one
             // place the status colour appears.
             QuotaUsageBar(metrics: metrics, height: Metrics.glanceMeterBarHeight,
-                          dimmed: quotaBarIsDimmed(for: snapshot, sourceFailed: false),
+                          dimmed: false,
                           markerHeight: Metrics.glanceMeterMarkerHeight)
                 .frame(width: Metrics.glanceMeterBarWidth, height: Metrics.glanceMeterBarHeight)
             Text(percent.map { "\(Int($0.rounded()))%" } ?? "—")
@@ -1425,8 +1488,9 @@ struct GlanceMeter: View {
                     .font(.system(size: 10, weight: .medium).monospacedDigit())
                     .foregroundStyle(Theme.ink.opacity(0.75))
                     .lineLimit(1)
+                    .minimumScaleFactor(0.75)
                     .frame(width: Metrics.glanceMeterCountdownWidth, alignment: .center)
-                    .help(glanceResetHelp(snapshot.resetAt, now: now) ?? "")
+                    .help(isMuseAssistExtra(snapshot) ? "Extra token usage" : (glanceResetHelp(snapshot.resetAt, now: now) ?? ""))
             } else {
                 Color.clear
                     .frame(width: Metrics.glanceMeterCountdownWidth, height: 1)
@@ -1440,6 +1504,9 @@ struct GlanceMeter: View {
 
     private var spokenValue: String {
         let reading = metrics.spokenSummary
+        if isMuseAssistExtra(snapshot) {
+            return "\(reading), Extra Usage"
+        }
         if !countdown.isEmpty {
             return "\(reading), resets in \(glanceResetFullCountdown(snapshot.resetAt, now: now))"
         }
@@ -1831,16 +1898,6 @@ struct GlanceRow: View {
                 }
                 if let subtitle = row.poolTitle {
                     Text(subtitle)
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
-                        .truncationMode(.tail)
-                }
-                // Plan/cost/renewal lives on its own detail line, never merged
-                // into the subtitle: a custom subtitle must not swallow it.
-                if let planDetail {
-                    Text(planDetail)
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)

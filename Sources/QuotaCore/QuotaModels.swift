@@ -222,6 +222,22 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
     /// is there to derive it from.  Applying this twice is a no-op.
     public func normalizedForExport() -> QuotaWindow {
         var copy = self
+        // MiniMax has NO 4-hour window. The coding plan is 5 hours.
+        // If an upstream fleet source, older cache, or rolling calculation
+        // emits "4h" / "4-hour", normalize it to "5h" / "5-hour window".
+        if copy.canonicalProviderKey == "minimax", !copy.isSupplementaryVideoQuota {
+            let tok = (copy.window ?? "").lowercased()
+            let lbl = copy.label.lowercased()
+            if tok.contains("4h") || tok.contains("4-hour") || lbl.contains("4h") || lbl.contains("4-hour") || lbl.contains("4 hour") {
+                copy.window = "5h"
+                if lbl.contains("4h") || lbl.contains("4-hour") || lbl.contains("4 hour") {
+                    copy.label = copy.label
+                        .replacingOccurrences(of: "4-hour", with: "5-hour")
+                        .replacingOccurrences(of: "4 hour", with: "5-hour")
+                        .replacingOccurrences(of: "4h", with: "5h")
+                }
+            }
+        }
         let bounded = boundedRemainingPercent
         copy.remainingPercent = bounded
         copy.remainingUnknown = bounded == nil

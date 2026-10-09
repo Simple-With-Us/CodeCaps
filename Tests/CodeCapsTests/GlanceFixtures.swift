@@ -86,11 +86,11 @@ enum GlanceFixtures {
         ]
     }
 
-    /// MiniMax as its reader reports it: a "general" 4h and weekly pair, which
+    /// MiniMax as its reader reports it: a "general" 5h and weekly pair, which
     /// the row meters, and a "video" daily and weekly pair, which it does not.
     static func miniMaxWindows(prefix: String) -> [QuotaWindow] {
         [
-            window("\(prefix)general:interval", provider: "minimax", label: "general (4h window)", token: "4h",
+            window("\(prefix)general:interval", provider: "minimax", label: "general (5h window)", token: "5h",
                    remaining: 92, resetIn: 3 * hour + 10 * 60, model: "general"),
             window("\(prefix)general:weekly", provider: "minimax", label: "general (1w window)", token: "1w",
                    remaining: 81, resetIn: 4 * day + 2 * hour + 42 * 60, model: "general"),

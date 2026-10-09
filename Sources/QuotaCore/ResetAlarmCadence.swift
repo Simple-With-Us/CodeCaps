@@ -39,7 +39,10 @@ public enum ResetAlarmCadence {
     public static func durationSeconds(_ token: String) -> TimeInterval? {
         let digits = token.prefix { $0.isNumber || $0 == "." }
         guard !digits.isEmpty, let value = Double(digits), value > 0 else { return nil }
-        let unit = String(token.dropFirst(digits.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        var unit = String(token.dropFirst(digits.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        if unit.hasPrefix("-") || unit.hasPrefix("_") {
+            unit = String(unit.dropFirst()).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
         switch unit {
         case "s", "sec", "secs", "second", "seconds": return value
         case "m", "min", "mins", "minute", "minutes": return value * 60

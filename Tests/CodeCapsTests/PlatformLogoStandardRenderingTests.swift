@@ -62,7 +62,7 @@ final class PlatformLogoStandardRenderingTests: XCTestCase {
     /// The known single-colour marks must still adapt, or the fix for the
     /// above reintroduces black-on-black on a dark surface.
     func testSingleColourMarksStayTemplateInEveryStyle() {
-        for key in ["codex", "cursor", "grok", "grok-bot", "minimax"] {
+        for key in ["codex", "cursor", "grok", "grok-bot"] {
             XCTAssertTrue(PlatformLogoImage.isMonochromeMark(key),
                           "\(key) ships single-colour artwork and must stay a template")
         }

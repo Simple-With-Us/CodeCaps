@@ -285,12 +285,12 @@ final class GlanceToggleTests: XCTestCase {
 
     func testOneColourMarksFollowLightAndDarkAndBrandColoursStay() {
         // Near-black on the dark Glance surface was the bug for these four.
-        for key in ["openai", "codex", "cursor", "minimax", "xai", "grok", "grok-cli", "grok-bot"] {
+        for key in ["openai", "codex", "cursor", "xai", "grok", "grok-cli", "grok-bot"] {
             XCTAssertTrue(PlatformLogoImage.isMonochromeMark(key), "\(key) is a one-colour mark")
             XCTAssertEqual(PlatformLogoImage.load(providerKey: key, style: .standard)?.isTemplate, true,
                            "\(key) must adapt to a dark surface in the default Glance style")
         }
-        for key in ["anthropic", "claude", "google-antigravity:gemini", "google-antigravity"] {
+        for key in ["anthropic", "claude", "google-antigravity:gemini", "google-antigravity", "minimax"] {
             XCTAssertFalse(PlatformLogoImage.isMonochromeMark(key), "\(key) keeps its brand colour")
         }
     }
