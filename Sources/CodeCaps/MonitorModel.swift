@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 import QuotaCore
+import SwiftUI
 #if canImport(WidgetKit)
 import WidgetKit
 #endif
@@ -161,6 +162,26 @@ final class MonitorModel: ObservableObject {
     /// default and the `Theme` lookup all read the same value.
     @Published var accent: AccentChoice {
         didSet { AccentChoice.current = accent }
+    }
+
+    /// The accent as a drawable colour, resolved the same way `Theme.accent`
+    /// resolves it.
+    ///
+    /// Surfaces that are already on screen when the owner picks a colour must
+    /// read *this* rather than `Theme.accent`.  `Theme.accent` is a computed
+    /// `UserDefaults` read: nothing observes it, so a SwiftUI body that is
+    /// already displayed is never re-evaluated and keeps drawing the colour it
+    /// resolved when it was built.  That is why the Glance popover — a separate
+    /// window, usually already open when the swatch is clicked — kept its old
+    /// accent on From Mac / From Fleet, the alarm bell and Open CodeCaps.
+    var accentColor: Color {
+        // Reads `accent` on purpose.  SwiftUI registers the dependency during
+        // body evaluation, so touching the `@Published` property here is what
+        // makes an on-screen surface re-render when the owner picks a colour.
+        // Reading `Theme.accent` instead would resolve the same colour but
+        // register nothing, which is the bug this replaces.
+        _ = accent
+        return Theme.accent
     }
     @Published var highContrast: Bool {
         didSet { defaults.set(highContrast, forKey: "highContrast") }
@@ -455,6 +476,7 @@ final class MonitorModel: ObservableObject {
         }
         disabledSources = Set((defaults.stringArray(forKey: "disabledSources") ?? []))
         localEnabled = defaults.object(forKey: "localEnabled") as? Bool ?? true
+        glanceLogosFollowAccent = defaults.bool(forKey: "glanceLogosFollowAccent")
         providerChecksEnabled = SourceRefreshPreference.enabled(SourceRefreshPreference.providerEnabled, defaults: defaults)
         sessionFileChecksEnabled = SourceRefreshPreference.enabled(SourceRefreshPreference.sessionEnabled, defaults: defaults)
         providerCheckCadence = SourceRefreshPreference.cadence(SourceRefreshPreference.providerMinutes,
@@ -1121,7 +1143,22 @@ final class MonitorModel: ObservableObject {
         if PlatformLogoImage.hasCustomMark(providerKey: key) || PlatformLogoImage.hasCustomMark(providerKey: platform) {
             return .custom
         }
-        return .standard
+        // Owner's explicit per-provider choice beats the "recolour the logos
+        // with the accent" switch: if they picked a style for this platform,
+        // that is the answer they gave.
+        return glanceLogosFollowAccent ? .template : .standard
+    }
+
+    /// Whether the Glance popover's provider logos wear the chosen accent.
+    ///
+    /// Off by default, and deliberately so.  A logo in the accent stops looking
+    /// like the provider it stands for -- the owner called recolouring every
+    /// logo "a bit extreme", and a screenshot showed Muse Assist turning cyan
+    /// beside MiniMax still pink, which reads as an inconsistency rather than a
+    /// theme.  Offered as a switch because some people do want the popover to
+    /// read as one piece.
+    @Published var glanceLogosFollowAccent: Bool {
+        didSet { defaults.set(glanceLogosFollowAccent, forKey: "glanceLogosFollowAccent") }
     }
 
     func setMarkStyle(_ style: MarkStyle, for providerKey: String) {

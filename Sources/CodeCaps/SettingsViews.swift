@@ -904,6 +904,10 @@ struct SettingsAppearancePage: View {
 
                 AccentPicker(model: model)
 
+                Toggle("Accent on Platform Logos", isOn: $model.glanceLogosFollowAccent)
+                    .help("Draws the Glance popover's platform logos in your accent colour instead of their own brand colours.")
+                    .accessibilityLabel("Accent on Platform Logos")
+
                 Toggle("High Contrast", isOn: $model.highContrast)
                     .help("Stronger surfaces, borders and greys, for a display where the soft defaults fall together.")
                     .accessibilityLabel("High Contrast")
@@ -913,6 +917,7 @@ struct SettingsAppearancePage: View {
                     .accessibilityLabel("Dynamic Pacing Highlights")
             } footer: {
                 Text("System is the default." + sentenceGap + "Light and Dark ignore your Mac's setting." + sentenceGap
+                     + "Accent on Platform Logos is off by default, because a logo in your accent colour stops looking like the provider it stands for." + sentenceGap
                      + "Dynamic Pacing Highlights variably tints percentage pills greener when under cap pace and redder when burning quota faster than elapsed time.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
