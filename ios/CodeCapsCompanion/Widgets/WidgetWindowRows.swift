@@ -64,15 +64,29 @@ struct WindowCaptionRow: View {
     let token: String
     let resetCaption: String
     var font: CGFloat = 9
+    /// Short distinguishing label shown after the token when two bars share
+    /// one cadence (e.g. "weekly" / "additional" for two "7d" bars).
+    var qualifier: String = ""
 
     var body: some View {
         HStack(spacing: 4) {
-            if !token.isEmpty {
-                Text(token)
-                    .font(.system(size: font, weight: .semibold, design: .rounded))
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
-                    .fixedSize()
+            if !token.isEmpty || !qualifier.isEmpty {
+                HStack(spacing: 3) {
+                    if !token.isEmpty {
+                        Text(token)
+                            .font(.system(size: font, weight: .semibold, design: .rounded))
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                            .fixedSize()
+                    }
+                    if !qualifier.isEmpty {
+                        Text(qualifier)
+                            .font(.system(size: font, weight: .medium))
+                            .foregroundColor(.secondary.opacity(0.8))
+                            .lineLimit(1)
+                            .fixedSize()
+                    }
+                }
             }
             Spacer(minLength: 0)
             if !resetCaption.isEmpty {
@@ -271,14 +285,16 @@ struct PlanDualBarRow: View {
                 WindowCaptionRow(
                     token: window1.cadenceToken,
                     resetCaption: window1.resetCaption(),
-                    font: captionFont
+                    font: captionFont,
+                    qualifier: window1.barQualifier
                 )
                 .frame(maxWidth: .infinity)
 
                 WindowCaptionRow(
                     token: window2.cadenceToken,
                     resetCaption: window2.resetCaption(),
-                    font: captionFont
+                    font: captionFont,
+                    qualifier: window2.barQualifier
                 )
                 .frame(maxWidth: .infinity)
             }

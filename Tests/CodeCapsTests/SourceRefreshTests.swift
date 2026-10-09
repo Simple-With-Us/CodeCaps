@@ -164,6 +164,39 @@ final class SourceRefreshTests: XCTestCase {
         XCTAssertTrue(model.response.windows.isEmpty)
     }
 
+    func testFleetFallbackWindowIsPublishedOnce() async throws {
+        let settings = defaults()
+        settings.set(true, forKey: "serverEnabled")
+        let model = MonitorModel(defaults: settings, burnRateHistoryURL: historyURL())
+        model.skipsSnapshotIOForTesting = true
+        let iso = ISO8601DateFormatter().string(from: Date())
+        let local = QuotaWindow(id: "anthropic:5h", provider: "Claude", providerKey: "anthropic",
+                                label: "5h", remainingPercent: 80, occurredAt: iso, source: "Claude")
+        let otherMac = QuotaWindow(id: "other:anthropic:5h", provider: "Claude", providerKey: "anthropic",
+                                   label: "5h", remainingPercent: 22, occurredAt: iso, source: "CodeCaps",
+                                   producerInstanceId: "other-mac-instance", machine: "kitchen-mac")
+        let fleet = QuotaWindow(id: "muse:weekly", provider: "Muse", providerKey: "muse-assist",
+                                label: "Weekly", remainingPercent: 40, occurredAt: iso,
+                                source: "muse-collector",
+                                producerInstanceId: "vm-collector-9f3a", machine: "quota-vm")
+        model.localResultForTesting = LocalQuotaResult(windows: [local])
+        model.serverFetchForTesting = {
+            QuotaResponse(generatedAt: "test", windows: [otherMac, fleet])
+        }
+        var published: [[QuotaWindow]] = []
+        model.widgetWriteForTesting = { published.append($0) }
+
+        model.refresh()
+        await model.refreshTaskForTesting?.value
+
+        let windows = try XCTUnwrap(published.last)
+        XCTAssertEqual(windows.filter { $0.canonicalProviderKey == "muse-assist" }.count, 1,
+                       "a fleet-fallback window is already in the merged list and must not be written again")
+        XCTAssertEqual(windows.filter { $0.id == "other:anthropic:5h" }.count, 1,
+                       "a real other-Mac window is not the fallback duplicate and stays in the cache")
+        XCTAssertEqual(windows.filter { $0.id == "anthropic:5h" }.count, 1)
+    }
+
     func testCodexReconciliationRequiresAccountAndNewerEvent() {
         let instant = Date(timeIntervalSince1970: 1_700_000_000)
         let http = codex(60, at: instant, source: "Codex")

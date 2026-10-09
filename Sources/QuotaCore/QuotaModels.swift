@@ -875,6 +875,17 @@ public struct PlatformCustomInfo: Codable, Equatable, Sendable {
         self.renewalDateText = renewalDateText
         self.showCostAndRenewal = showCostAndRenewal
     }
+
+    /// Whether the owner's free-text Settings fields mention a plan or cost
+    /// change (e.g. "↓ $50/mo plan then").  Treated as an explicit plan-change
+    /// signal: the runaway detector stands down for this provider and the
+    /// informational plan-change state shows until the text no longer
+    /// mentions a change.
+    public var mentionsPlanChange: Bool {
+        let text = [planName, costUsd, renewalDateText].joined(separator: " ").lowercased()
+        let markers = ["↓", "↑", "→", "downgrade", "upgrade"]
+        return markers.contains { text.contains($0) }
+    }
 }
 
 /// The Renewal Date field is a free-text override.  When the owner has not

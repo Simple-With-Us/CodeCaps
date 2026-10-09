@@ -722,12 +722,21 @@ public struct CompanionMeterView: View {
 
     public var body: some View {
         HStack(spacing: 4) {
-            Text(caption)
-                .font(.system(size: 11, weight: .bold))
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-                .frame(width: 24, alignment: .trailing)
+            VStack(alignment: .trailing, spacing: 0) {
+                Text(caption)
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                if !window.barQualifier.isEmpty {
+                    Text(window.barQualifier)
+                        .font(.system(size: 8, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+            }
+            .frame(width: 34, alignment: .trailing)
 
             CompanionUsageBar(
                 remainingPercent: window.remainingPercent,

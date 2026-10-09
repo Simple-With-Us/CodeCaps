@@ -130,6 +130,20 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
         return "7d"
     }
 
+    /// Short distinguishing label for a bar when a card shows several windows
+    /// sharing one cadence caption (e.g. two "7d" bars).  "Free weekly limit"
+    /// reads "weekly", "Additional tokens" reads "additional".  Empty when the
+    /// window label carries no such qualifier.
+    public var barQualifier: String {
+        let text = label.lowercased()
+        if text.contains("additional") { return "additional" }
+        if text.contains("weekly") { return "weekly" }
+        if text.contains("monthly") { return "monthly" }
+        if text.contains("daily") { return "daily" }
+        if text.contains("hourly") { return "hourly" }
+        return ""
+    }
+
     public var isShortCadence: Bool {
         let text = (cadence.isEmpty ? label : cadence).lowercased()
         if text.contains("7d") || text.contains("1w") || text.contains("weekly") || text.contains("month") || text.contains("billing") || text.contains("cycle") || text.contains("30d") || text.contains("1m") || text.contains("org") || text.contains("quota") { return false }
@@ -295,7 +309,7 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
         if key.contains("minimax") { return "provider-minimax" }
         if key.contains("muse-assist") || key.contains("muse_assist") { return "provider-muse-assist" }
         if key.contains("muse-code") || key.contains("muse_code") { return "provider-muse-code" }
-        if key.contains("muse") { return "provider-muse-code" }
+        if key.contains("muse") { return "provider-muse-assist" }
         if key.contains("antigravity") || key.contains("gemini") { return "provider-gemini" }
         return nil
     }
@@ -1361,7 +1375,7 @@ public final class CompanionQuotaModel: ObservableObject {
             return ("muse-code", "Muse Code", "muse-code")
         }
         if pKey.contains("muse") || prov.contains("muse") {
-            return ("muse-code", "Muse Code", "muse-code")
+            return ("muse-assist", "Muse Assist", "muse-assist")
         }
         if pKey.contains("grok-bot") || prov.contains("grok-bot") || prov.contains("grok bot") || id.contains("grok-bot") {
             return ("grok-bot", "Grok Bot", "grok-bot")

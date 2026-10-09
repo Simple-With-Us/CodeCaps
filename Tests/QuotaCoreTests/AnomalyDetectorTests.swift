@@ -345,7 +345,7 @@ extension AnomalyDetectorTests {
     /// The percentile that replaced the maximum: rare enough to mean something,
     /// and it must not be reachable by the median hour.
     func testPeakReferenceIsAPercentileNotTheMaximum() throws {
-        let rates: [Double] = Array(repeating: 10, count: 97) + [500]
+        let rates: [Double] = Array(repeating: 10, count: 99) + [500]
         let reference = try XCTUnwrap(AnomalyDetector.peakRatePercentile(rates))
         XCTAssertEqual(reference, 10, accuracy: 0.001,
                        "with one outlier in a hundred, the reference should be the ordinary rate, not 500")
@@ -367,5 +367,203 @@ extension AnomalyDetectorTests {
             .evaluate(samples: busySamples(now: now), now: now).first { $0.windowId == "w" })
         let rate = try XCTUnwrap(anomaly.ratePercentPerHour)
         XCTAssertGreaterThan(rate, 0, "the %/hour reading is the one number that needs no prior week")
+    }
+}
+
+/// Pinned tests for plan-change detection: a step discontinuity in
+/// remainingPercent mid-window suppresses the runaway alert while the
+/// baseline recalibrates (7 days).
+final class PlanChangeDetectionTests: XCTestCase {
+    private func sample(_ provider: String, _ window: String, at offset: TimeInterval, percent: Double,
+                        from now: Date) -> AnomalyDetector.Sample {
+        .init(providerKey: provider, windowId: window,
+              observedAt: now.addingTimeInterval(offset), remainingPercent: percent)
+    }
+
+    /// A 40-point instant drop (the $100→$20 plan resize shape) is a plan change.
+    func testDetectsPlanChangeStep() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        var samples: [AnomalyDetector.Sample] = []
+        // Steady baseline: 90% an hour ago, 88% 45 min ago.
+        samples.append(sample("antigravity", "gemini:5h", at: -3600, percent: 90, from: now))
+        samples.append(sample("antigravity", "gemini:5h", at: -2700, percent: 88, from: now))
+        // Plan resize: 88% -> 48% in one 15-minute interval.
+        samples.append(sample("antigravity", "gemini:5h", at: -1800, percent: 48, from: now))
+        samples.append(sample("antigravity", "gemini:5h", at: -900, percent: 47, from: now))
+
+        let changes = AnomalyDetector.detectPlanChanges(samples: samples, now: now)
+        XCTAssertEqual(changes.count, 1)
+        XCTAssertEqual(changes[0].providerKey, "antigravity")
+        XCTAssertEqual(changes[0].windowId, "gemini:5h")
+        XCTAssertTrue(changes[0].isActive(now: now))
+        // Recalibration is 7 days after the change.
+        let expected = now.addingTimeInterval(-1800).addingTimeInterval(7 * 86_400)
+        XCTAssertEqual(changes[0].recalibratedAt?.timeIntervalSince1970 ?? 0,
+                       expected.timeIntervalSince1970, accuracy: 1)
+    }
+
+    /// A 10-point drop is heavy use, not a plan change.
+    func testSmallDropIsNotPlanChange() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let samples = [
+            sample("antigravity", "gemini:5h", at: -3600, percent: 90, from: now),
+            sample("antigravity", "gemini:5h", at: -1800, percent: 80, from: now),
+        ]
+        XCTAssertTrue(AnomalyDetector.detectPlanChanges(samples: samples, now: now).isEmpty)
+    }
+
+    /// A 30-point move spread over 3 hours is a burn, not a discontinuity.
+    func testGradualMoveIsNotPlanChange() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let samples = [
+            sample("antigravity", "gemini:5h", at: -3 * 3600, percent: 90, from: now),
+            sample("antigravity", "gemini:5h", at: 0, percent: 60, from: now),
+        ]
+        XCTAssertTrue(AnomalyDetector.detectPlanChanges(samples: samples, now: now).isEmpty)
+    }
+
+    /// A jump back up is a window reset, not a plan change — and resets
+    /// already split segments, so no step is visible.
+    func testResetJumpIsNotPlanChange() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let samples = [
+            sample("antigravity", "gemini:5h", at: -3600, percent: 10, from: now),
+            sample("antigravity", "gemini:5h", at: -1800, percent: 100, from: now),
+        ]
+        XCTAssertTrue(AnomalyDetector.detectPlanChanges(samples: samples, now: now).isEmpty)
+    }
+
+    /// A plan change older than 7 days no longer suppresses anomalies.
+    func testPlanChangeExpiresAfter7Days() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let old = now.addingTimeInterval(-8 * 86_400)
+        let change = AnomalyDetector.PlanChange(providerKey: "p", windowId: "w", changedAt: old)
+        XCTAssertFalse(change.isActive(now: now))
+        XCTAssertTrue(change.isActive(now: old.addingTimeInterval(6 * 86_400)))
+    }
+
+    /// The owner's Settings-text signal stays active until the text changes.
+    func testManualPlanChangeStaysActive() {
+        let change = AnomalyDetector.PlanChange(providerKey: "p", windowId: "w",
+                                                changedAt: nil, isManual: true)
+        XCTAssertTrue(change.isActive())
+        XCTAssertTrue(change.isActive(now: Date.distantFuture))
+        XCTAssertNil(change.recalibratedAt)
+    }
+
+    /// Settings text mentioning a plan/cost change is an explicit signal.
+    func testMentionsPlanChange() {
+        XCTAssertTrue(PlatformCustomInfo(renewalDateText: "on 5th, but ↓ $50/mo plan then (1x)").mentionsPlanChange)
+        XCTAssertTrue(PlatformCustomInfo(planName: "downgrade to Basic").mentionsPlanChange)
+        XCTAssertTrue(PlatformCustomInfo(costUsd: "$20 → $100").mentionsPlanChange)
+        XCTAssertFalse(PlatformCustomInfo(planName: "Pro", costUsd: "$20/mo",
+                                          renewalDateText: "on the 5th").mentionsPlanChange)
+        XCTAssertFalse(PlatformCustomInfo().mentionsPlanChange)
+    }
+
+    /// The package failures: a cliff that is still the latest sample is the
+    /// live burn.  It must stay a runaway, not a 7-day plan change.
+    func testLiveCliffStaysRunaway() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        func sample(_ secondsAgo: Int, _ percent: Double) -> AnomalyDetector.Sample {
+            .init(providerKey: "p", windowId: "w",
+                  observedAt: now.addingTimeInterval(-Double(secondsAgo)),
+                  remainingPercent: percent)
+        }
+        let samples = [sample(10_800, 90), sample(9000, 85), sample(7200, 80),
+                       sample(5400, 75), sample(1800, 70), sample(300, 20)]
+        XCTAssertTrue(AnomalyDetector.detectPlanChanges(samples: samples, now: now).isEmpty)
+        let anomaly = AnomalyDetector().evaluate(samples: samples, now: now).first
+        XCTAssertNotNil(anomaly)
+        XCTAssertEqual(anomaly?.ratePercentPerHour ?? 0, 120, accuracy: 0.001)
+    }
+
+    /// The same size of drop, once a later sample shows the new level held,
+    /// is a plan change and the runaway check stands down.
+    func testSettledStepSuppressesRunaway() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        func sample(_ secondsAgo: Int, _ percent: Double) -> AnomalyDetector.Sample {
+            .init(providerKey: "p", windowId: "w",
+                  observedAt: now.addingTimeInterval(-Double(secondsAgo)),
+                  remainingPercent: percent)
+        }
+        let samples = [sample(10_800, 90), sample(9000, 85), sample(7200, 80),
+                       sample(5400, 75), sample(1800, 70), sample(900, 30), sample(300, 29)]
+        XCTAssertEqual(AnomalyDetector.detectPlanChanges(samples: samples, now: now).count, 1)
+        XCTAssertTrue(AnomalyDetector().evaluate(samples: samples, now: now).isEmpty)
+    }
+
+    /// Two large steps in a row are still spending.  That is not a settled resize.
+    func testContinuedBurnIsNotPlanChange() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let samples = [
+            sample("antigravity", "gemini:5h", at: -2700, percent: 90, from: now),
+            sample("antigravity", "gemini:5h", at: -1800, percent: 50, from: now),
+            sample("antigravity", "gemini:5h", at: -900, percent: 20, from: now),
+        ]
+        XCTAssertTrue(AnomalyDetector.detectPlanChanges(samples: samples, now: now).isEmpty)
+    }
+
+    /// A downgrade that ends a segment (the next sample is a later session)
+    /// still counts once the step has aged out of the live-burn hour, and the
+    /// runaway check stands down for the fresh burn that follows.
+    func testAgedTrailingStepIsPlanChangeAndSuppressesRunaway() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        var samples: [AnomalyDetector.Sample] = []
+        var percent = 90.0
+        for ago in stride(from: 14_400, through: 7_200, by: -300) {
+            samples.append(sample("p", "w", at: -Double(ago), percent: percent, from: now))
+            percent -= 0.2
+        }
+        samples.append(sample("p", "w", at: -6_900, percent: percent, from: now))
+        samples.append(sample("p", "w", at: -6_600, percent: percent - 44, from: now))
+        samples.append(sample("p", "w", at: -600, percent: percent - 45, from: now))
+        samples.append(sample("p", "w", at: -300, percent: percent - 74, from: now))
+
+        let changes = AnomalyDetector.detectPlanChanges(samples: samples, now: now)
+        XCTAssertEqual(changes.count, 1)
+        XCTAssertEqual(changes[0].changedAt?.timeIntervalSince1970 ?? 0,
+                       now.addingTimeInterval(-6_600).timeIntervalSince1970, accuracy: 1)
+        XCTAssertTrue(AnomalyDetector().evaluate(samples: samples, now: now).isEmpty,
+                      "the aged step invalidates the baseline, so the later burn is not a runaway")
+    }
+
+    /// The same cliff, while its newest sample is still inside the live-burn
+    /// hour, stays a runaway.  Ten minutes is not `planChangeUnconfirmedQuiet`.
+    func testRecentTrailingCliffStaysRunaway() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let samples = [
+            sample("p", "w", at: -10_800, percent: 99, from: now),
+            sample("p", "w", at: -9_000, percent: 98.5, from: now),
+            sample("p", "w", at: -7_200, percent: 98, from: now),
+            sample("p", "w", at: -5_400, percent: 97.5, from: now),
+            sample("p", "w", at: -3_000, percent: 92, from: now),
+            sample("p", "w", at: -2_700, percent: 90, from: now),
+            sample("p", "w", at: -2_400, percent: 89, from: now),
+            sample("p", "w", at: -600, percent: 19, from: now),
+        ]
+        XCTAssertTrue(AnomalyDetector.detectPlanChanges(samples: samples, now: now).isEmpty)
+        XCTAssertFalse(AnomalyDetector().evaluate(samples: samples, now: now).isEmpty)
+    }
+
+    /// Two settled resizes in one continuously polled segment: the later
+    /// change is the anchor, so recalibration follows the second resize.
+    func testLatestSettledStepWins() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let samples = [
+            sample("p", "w", at: -3_600, percent: 90, from: now),
+            sample("p", "w", at: -3_300, percent: 88, from: now),
+            sample("p", "w", at: -3_000, percent: 48, from: now),
+            sample("p", "w", at: -2_700, percent: 47, from: now),
+            sample("p", "w", at: -2_400, percent: 46, from: now),
+            sample("p", "w", at: -2_100, percent: 45, from: now),
+            sample("p", "w", at: -1_800, percent: 15, from: now),
+            sample("p", "w", at: -1_500, percent: 14, from: now),
+            sample("p", "w", at: -1_200, percent: 13, from: now),
+        ]
+        let changes = AnomalyDetector.detectPlanChanges(samples: samples, now: now)
+        XCTAssertEqual(changes.count, 1)
+        XCTAssertEqual(changes[0].changedAt?.timeIntervalSince1970 ?? 0,
+                       now.addingTimeInterval(-1_800).timeIntervalSince1970, accuracy: 1)
     }
 }
