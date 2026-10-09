@@ -884,3 +884,117 @@ final class ResetAlarmTrackerTests: XCTestCase {
         XCTAssertEqual(events.first?.remainingPercent, 100)
     }
 }
+
+// MARK: - Vendor resets that land after the window's published end
+//
+// Owner report 2026-10-06: "codex and claude just reset usage caps tonight
+// randomly and I didn't get an alert."
+//
+// The mid-window detection in `advance` was guarded by `!hasPassed`, so a
+// vendor restore was only recognised while the window's *own* end time was
+// still in the future.  A restore that arrived after it — an app that was
+// asleep, a slow poll, a laptop that had just woken — fell through to the
+// ordinary period-end path, was classified `isVendorReset: false`, and then
+// had to clear the near-cap rule before it would fire.  Usage that was never
+// near the cap produced no alert at all, which is exactly what the owner saw.
+//
+// The distinguishing evidence is not the clock, it is the shape of the reading:
+// a big rise in remaining quota whose period end did not move forward with
+// the passage of time.  That holds whether or not the published end has
+// already passed.
+
+extension ResetAlarmTrackerTests {
+    /// A 5h window whose quota was at 0%, with the vendor handing it back to
+    /// 100% after the window's published end had already gone by.  Without the
+    /// fix this reads as an ordinary period end, needs near-cap to fire, and
+    /// the owner gets nothing.
+    func testVendorRestoreAfterThePublishedEndStillAlerts() {
+        var tracker = ResetAlarmTracker()
+        let fiveEnd = t0 + 5 * self.hour
+        _ = tracker.process(
+            claude(at: t0, fiveResetAt: fiveEnd, five: 0,
+                   weekResetAt: t0 + 7 * self.day, week: 100),
+            now: t0)
+
+        // 20 minutes past the published end, still reporting the *same* end
+        // time — the vendor did not roll the window, it just gave the quota
+        // back.
+        let later = fiveEnd.addingTimeInterval(20 * 60)
+        let events = tracker.process(
+            claude(at: later, fiveResetAt: fiveEnd, five: 100,
+                   weekResetAt: t0 + 7 * self.day, week: 100),
+            now: later)
+
+        XCTAssertEqual(events.count, 1,
+                       "a vendor restore after the published end produced no alert at all")
+        XCTAssertTrue(events[0].isVendorReset,
+                      "it should be reported as a vendor reset, not an ordinary period end")
+    }
+
+    /// The same shape on a partial restore, which is what "reset usage caps"
+    /// usually looks like in practice: not a clean jump to 100%.
+    func testPartialVendorRestoreAfterThePublishedEndStillAlerts() {
+        var tracker = ResetAlarmTracker()
+        let fiveEnd = t0 + 5 * self.hour
+        _ = tracker.process(
+            claude(at: t0, fiveResetAt: fiveEnd, five: 2,
+                   weekResetAt: t0 + 7 * self.day, week: 100),
+            now: t0)
+
+        let later = fiveEnd.addingTimeInterval(30 * 60)
+        let events = tracker.process(
+            claude(at: later, fiveResetAt: fiveEnd, five: 97,
+                   weekResetAt: t0 + 7 * self.day, week: 100),
+            now: later)
+
+        XCTAssertEqual(events.count, 1,
+                       "a partial restore after the published end produced no alert")
+        XCTAssertTrue(events[0].isVendorReset)
+    }
+
+    /// The rule must not become a false-positive machine: a window that merely
+    /// drifted past its end and reported a *new, later* end is an ordinary
+    /// rolling reset, and a reading that has not risen at all is nothing.
+    func testAnOrdinaryLatePeriodEndIsStillNotAVendorReset() {
+        var tracker = ResetAlarmTracker()
+        let fiveEnd = t0 + 5 * self.hour
+        _ = tracker.process(
+            claude(at: t0, fiveResetAt: fiveEnd, five: 40,
+                   weekResetAt: t0 + 7 * self.day, week: 100),
+            now: t0)
+
+        // Past the end, but the provider has published the *next* window's end
+        // and usage continued downward: a normal rollover, not a restore.
+        let later = fiveEnd.addingTimeInterval(60)
+        let events = tracker.process(
+            claude(at: later, fiveResetAt: later.addingTimeInterval(5 * self.hour), five: 35,
+                   weekResetAt: t0 + 7 * self.day, week: 100),
+            now: later)
+
+        XCTAssertTrue(events.allSatisfy { !$0.isVendorReset },
+                      "an ordinary rollover was misreported as a vendor reset")
+    }
+
+    /// It fires once.  A restore does not re-announce on every subsequent poll.
+    func testTheVendorRestoreAlertDoesNotRepeat() {
+        var tracker = ResetAlarmTracker()
+        let fiveEnd = t0 + 5 * self.hour
+        _ = tracker.process(
+            claude(at: t0, fiveResetAt: fiveEnd, five: 0,
+                   weekResetAt: t0 + 7 * self.day, week: 100),
+            now: t0)
+
+        let first = fiveEnd.addingTimeInterval(20 * 60)
+        XCTAssertEqual(
+            tracker.process(claude(at: first, fiveResetAt: fiveEnd, five: 100,
+                                   weekResetAt: t0 + 7 * self.day, week: 100), now: first).count,
+            1)
+
+        // Same published end, quota still at 100%: nothing new to report.
+        let second = fiveEnd.addingTimeInterval(80 * 60)
+        XCTAssertTrue(
+            tracker.process(claude(at: second, fiveResetAt: fiveEnd, five: 100,
+                                   weekResetAt: t0 + 7 * self.day, week: 100), now: second).isEmpty,
+            "the vendor restore alerted more than once for the same window")
+    }
+}

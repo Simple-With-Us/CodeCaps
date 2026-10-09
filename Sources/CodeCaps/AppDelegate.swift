@@ -312,6 +312,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                 let markKey = model.displayRow(for: target.window)?.id ?? providerKey
                 let isDark = button.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
                 iconImage = PlatformLogoImage.menuBarImage(providerKey: markKey, style: markStyle, isDarkMode: isDark)
+                // Owner report 2026-10-06: changing the accent from green to
+                // maroon retinted the settings button and nothing else — the
+                // menu bar stayed grey.
+                //
+                // The cause is `isTemplate`.  A template image is recoloured by
+                // macOS to whatever the menu bar's own tint is, so the asset's
+                // pixels are discarded and no accent can ever reach it.  This
+                // is also what makes the mark legible on both a light and a
+                // dark menu bar, which is why it was a template in the first
+                // place.
+                //
+                // So the two goals need splitting.  When the owner has pinned a
+                // provider AND wants the brand-colour mark, the accent has to be
+                // applied as an explicit tint instead of by the template
+                // mechanism; when the mark is the CodeCaps silhouette or the
+                // mark is genuinely one colour, template stays correct.  Only
+                // `accentFollowsProvider` mode opts out.
+                if markStyle != .template, MenuBarAccent.isEnabled {
+                    iconImage = PlatformLogoImage.menuBarImage(providerKey: markKey,
+                                                                style: markStyle,
+                                                                isDarkMode: isDark)
+                    iconImage = MenuBarAccent.tinted(iconImage, isDark: isDark)
+                }
             }
             if iconImage == nil {
                 // With no single provider pinned to the menu bar, the item

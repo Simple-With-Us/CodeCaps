@@ -434,6 +434,32 @@ public struct ResetAlarmTracker: Sendable {
                     nextResetAt = reported
                 }
             }
+            // A vendor that hands a cap back does not roll the window: the period end
+            // stays exactly where it was while the quota jumps.  By the time
+            // this Mac reads again, that end is usually in the past — a laptop
+            // asleep, a slow poll, a wake-up later than usual — and the plain
+            // period-end rule below then claims it without marking it as a
+            // restore, so the event has to clear the near-cap bar to alert.
+            // Usage that was never near the cap produced no alert at all, which
+            // is what the owner reported (2026-10-06: "codex and claude just
+            // reset usage caps tonight randomly and I didn't get an alert").
+            //
+            // The tell is the *shape*, not the clock: a large rise while the
+            // reported end does not move forwards.  A rolling reader's end
+            // advances with each poll, so an end that held still or went
+            // backwards means the window did not roll and the quota did.
+            //
+            // Checked before the ordinary period-end rule, because that rule
+            // would otherwise claim the same reading first and the event would
+            // be mislabelled as a plain reset.
+            if !isReset, hasPassed, let reading, let last = window.lastRemaining,
+               reading >= last + ResetAlarmPolicy.vendorRestoreRise,
+               let reportedEnd = observation.resetAt,
+               reportedEnd <= previousReset + ResetAlarmPolicy.resetDriftTolerance {
+                isReset = true
+                isMidWindow = true
+                nextResetAt = observation.resetAt.flatMap { $0 > readAt ? $0 : nil } ?? window.periodResetAt
+            }
             // The old period is over and the percentage went back up, even
             // though the reader has not published the next reset time yet.
             if !isReset, hasPassed, let reading, let last = window.lastRemaining,
