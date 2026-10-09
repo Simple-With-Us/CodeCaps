@@ -61,7 +61,13 @@ struct GlancePopover: View {
         }
         .frame(width: Metrics.glanceWidth)
         .foregroundStyle(Theme.ink)
-        .tint(Theme.accent)
+        // `model.accent`, not `Theme.accent`: this popover is a window that is
+        // often already open when the owner picks a colour, and `Theme.accent`
+        // is a computed `UserDefaults` read with nothing to observe it.  The
+        // body was never re-evaluated, so From Mac / From Fleet, the bell and
+        // Open CodeCaps kept the colour resolved when the window was built
+        // (owner report 2026-10-09).
+        .tint(model.accentColor)
         // The popover's own material is a vibrancy blur; the header and footer
         // need an opaque surface or they read as grey bars.
         .background(Theme.surface)
@@ -72,6 +78,7 @@ struct GlancePopover: View {
     private var header: some View {
         GlanceHeaderBar(view: $model.glanceView,
                         alarmsAll: $model.alarmsAll,
+                        model: model,
                         count: headerParts.first,
                         time: headerParts.count > 1 ? headerParts[1] : nil,
                         isRefreshing: model.isRefreshing,
@@ -325,7 +332,7 @@ struct GlancePopover: View {
                     .foregroundStyle(colorScheme == .dark ? Color.black.opacity(0.55) : Color.white.opacity(0.75))
             }
         }
-        .buttonStyle(GlanceFooterProminentButtonStyle())
+        .buttonStyle(GlanceFooterProminentButtonStyle(model: model))
         .help("Open CodeCaps")
         .accessibilityLabel("Open CodeCaps")
     }
@@ -345,6 +352,18 @@ struct GlancePopover: View {
                 // Owner wording 2026-10-08: "12.5× vs avg", not "12.5*avg".
                 let comp = anomaly.kind == .vsPeak ? "peak" : "avg"
                 var parts = ["\(nameWithWindow): \(anomaly.multiplier.formatted(.number.precision(.fractionLength(1))))× vs \(comp)"]
+                // One event, one line.  When the rate clears both bars the
+                // stronger comparison is the headline and the other is worth a
+                // clause rather than a second alert (owner report 2026-10-09:
+                // "8.0x the 5hr average" then "8.6x the 7d average", back to
+                // back, for one event).
+                if anomaly.baselineRatio != nil, anomaly.peakRatio != nil {
+                    parts.append("clears both bars")
+                }
+                // The plain rate needs no prior week to be read, which is the
+                // owner's point for it (2026-10-09): one number saying how fast
+                // quota is going, averaged over the interval since the last
+                // check.
                 if let rate = anomaly.ratePercentPerHour {
                     parts.append("\(rate.formatted(.number.precision(.fractionLength(1)))) %/hr")
                 }
@@ -737,6 +756,10 @@ func glanceFleetSourceLabel(_ source: String) -> String {
 struct GlanceHeaderBar: View {
     @Binding var view: GlanceViewMode
     @Binding var alarmsAll: Bool
+    /// Observed so the From Mac / From Fleet switch and the bell follow the
+    /// accent live; see `MonitorModel.accentColor` for why a plain
+    /// `Theme.accent` read does not re-render an already-open window.
+    @ObservedObject var model: MonitorModel
     var count: String? = nil
     var time: String? = nil
     let isRefreshing: Bool
@@ -745,6 +768,7 @@ struct GlanceHeaderBar: View {
 
     init(view: Binding<GlanceViewMode>,
          alarmsAll: Binding<Bool>,
+         model: MonitorModel,
          count: String? = nil,
          time: String? = nil,
          isRefreshing: Bool,
@@ -752,6 +776,7 @@ struct GlanceHeaderBar: View {
          openSettings: @escaping () -> Void = {}) {
         self._view = view
         self._alarmsAll = alarmsAll
+        self.model = model
         self.count = count
         self.time = time
         self.isRefreshing = isRefreshing
@@ -761,12 +786,14 @@ struct GlanceHeaderBar: View {
 
     init(view: Binding<GlanceViewMode>,
          alarmsAll: Binding<Bool>,
+         model: MonitorModel,
          parts: [String],
          isRefreshing: Bool,
          refresh: @escaping () -> Void,
          openSettings: @escaping () -> Void = {}) {
         self._view = view
         self._alarmsAll = alarmsAll
+        self.model = model
         self.count = parts.first
         self.time = parts.count > 1 ? parts[1] : nil
         self.isRefreshing = isRefreshing
@@ -792,11 +819,11 @@ struct GlanceHeaderBar: View {
                 Spacer(minLength: 8)
             }
 
-            GlanceViewToggle(selection: $view)
+            GlanceViewToggle(selection: $view, model: model)
 
             Spacer(minLength: 12)
 
-            GlanceAlarmAllToggle(isOn: $alarmsAll)
+            GlanceAlarmAllToggle(isOn: $alarmsAll, model: model)
 
             Spacer(minLength: 12)
 
@@ -856,6 +883,8 @@ struct GlanceHeaderBar: View {
 /// boxes are the same width, so the switch does not change shape as it flips.
 struct GlanceViewToggle: View {
     @Binding var selection: GlanceViewMode
+    /// Observed so the selected box follows the accent live; see `accentColor`.
+    @ObservedObject var model: MonitorModel
 
     /// The label that sets both boxes' width.
     private static let widest = GlanceViewMode.allCases.map(\.title).max { $0.count < $1.count } ?? ""
@@ -888,7 +917,7 @@ struct GlanceViewToggle: View {
             .font(.system(size: 11, weight: .semibold))
             .lineLimit(1)
             .fixedSize()
-            .foregroundStyle(selected ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(.secondary))
+            .foregroundStyle(selected ? AnyShapeStyle(model.accentColor) : AnyShapeStyle(.secondary))
             .padding(.horizontal, Metrics.glanceHeaderSegmentPadding)
             .frame(height: Metrics.glanceHeaderControlHeight)
             .background(selected ? Theme.selection : Color.clear)
@@ -910,6 +939,8 @@ struct GlanceViewToggle: View {
 /// shouted next to two Title Case labels.
 struct GlanceAlarmAllToggle: View {
     @Binding var isOn: Bool
+    /// Observed so the bell follows the accent live; see `GlancePopover`.
+    @ObservedObject var model: MonitorModel
 
     private var helpText: String {
         if isOn {
@@ -919,7 +950,7 @@ struct GlanceAlarmAllToggle: View {
     }
 
     private var tint: AnyShapeStyle {
-        isOn ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(.secondary)
+        isOn ? AnyShapeStyle(model.accentColor) : AnyShapeStyle(.secondary)
     }
 
     private var label: some View {
@@ -1995,6 +2026,8 @@ func glanceResetHelp(_ reset: Date?, now: Date) -> String? {
 struct GlanceFooterProminentButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.colorScheme) private var colorScheme
+    /// Observed so Open CodeCaps follows the accent live; see `accentColor`.
+    @ObservedObject var model: MonitorModel
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -2004,7 +2037,7 @@ struct GlanceFooterProminentButtonStyle: ButtonStyle {
             .frame(height: 28)
             .background(
                 RoundedRectangle(cornerRadius: 6)
-                    .fill(Theme.accent.opacity(configuration.isPressed ? 0.82 : 1.0))
+                    .fill(model.accentColor.opacity(configuration.isPressed ? 0.82 : 1.0))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 6)
