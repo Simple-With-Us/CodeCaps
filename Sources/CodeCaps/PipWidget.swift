@@ -223,20 +223,70 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
 
     func show(model: MonitorModel) {
         self.currentModel = model
-        guard let panel else {
+        if let panel {
+            panel.contentView = NSHostingView(rootView: PipWidgetView(model: model))
+            applyLevel()
+            applyFit(for: model)
+            // The hosting view observes the model, so it is built once and
+            // updated by the model itself.  Swapping it on every refresh
+            // rebuilt the whole view hierarchy every poll and reset the
+            // panel's intrinsic size.
+            panel.orderFrontRegardless()
+        } else {
             createPanel(model: model)
-            return
         }
-        // The hosting view observes the model, so it is built once and updated
-        // by the model itself.  Swapping it on every refresh rebuilt the whole
-        // view hierarchy every poll and reset the panel's intrinsic size.
-        panel.orderFrontRegardless()
-        applyFit(for: model)
     }
 
     func close() {
         panel?.orderOut(nil)
         panel = nil
+    }
+
+    /// The console window while it sits elevated above the Glance popover
+    /// (`popUpMenuWindow + 1`), or nil once it has been lowered.  Remembered
+    /// rather than applied once: the panel is torn down and recreated at
+    /// `.floating` whenever the PiP toggle on the elevated Settings page is
+    /// flipped, and the HUD or the console can be moved while elevated.
+    private weak var elevatedConsole: NSWindow?
+
+    /// Records that `console` is elevated and lifts the PiP HUD above it, but
+    /// only while the HUD's frame actually overlaps the console's frame.  A
+    /// HUD left at `consoleLevel + 1` (103) would draw over the Dock and over
+    /// other apps' menus, so it stays at `.floating` (3) whenever the console
+    /// cannot occlude it.  Safe to call when the panel does not exist.
+    func raise(above console: NSWindow) {
+        elevatedConsole = console
+        applyLevel()
+    }
+
+    /// Forgets the elevated console and restores the PiP HUD to its default
+    /// `.floating` level.  Idempotent.
+    func demoteToFloating() {
+        elevatedConsole = nil
+        applyLevel()
+    }
+
+    /// Re-derives the HUD level after the HUD or the elevated console moved
+    /// or resized, so the promotion tracks the overlap that motivated it.
+    func refreshLevel() {
+        applyLevel()
+    }
+
+    /// `.floating` unless an elevated console's frame would cover the HUD,
+    /// in which case one level above that console.
+    private var desiredLevel: NSWindow.Level {
+        let floating = NSWindow.Level.floating
+        guard let panel,
+              let console = elevatedConsole,
+              console.level.rawValue > floating.rawValue,
+              panel.frame.intersects(console.frame) else { return floating }
+        return NSWindow.Level(console.level.rawValue + 1)
+    }
+
+    private func applyLevel() {
+        guard let panel else { return }
+        let level = desiredLevel
+        if panel.level != level { panel.level = level }
     }
 
     private func createPanel(model: MonitorModel) {
@@ -247,6 +297,9 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
             defer: false
         )
         p.isFloatingPanel = true
+        // Start at `.floating`; `applyLevel()` below lifts the HUD again if it
+        // is recreated (Settings toggle) while the console is still elevated
+        // and its frame overlaps the console.
         p.level = .floating
         p.isMovableByWindowBackground = true
         p.titleVisibility = .hidden
@@ -265,6 +318,7 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
         p.delegate = self
         p.contentView = NSHostingView(rootView: PipWidgetView(model: model))
         self.panel = p
+        applyLevel()
         // Seed the signature from the rows the window is being created for, so
         // a restored size survives a relaunch instead of being overridden by
         // the very first refresh.
@@ -288,6 +342,13 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
             height: min(max(fit.height, panel.minSize.height), panel.maxSize.height)
         )
         panel.setContentSize(clamped)
+    }
+
+    /// The HUD is movable by its background; re-check overlap with the
+    /// elevated console after every drag.
+    func windowDidMove(_ notification: Notification) {
+        guard (notification.object as? NSWindow) === panel else { return }
+        applyLevel()
     }
 
     func windowWillClose(_ notification: Notification) {

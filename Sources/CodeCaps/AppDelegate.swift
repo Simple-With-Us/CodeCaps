@@ -73,6 +73,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private var consoleWindow: NSWindow?
     private var statusMenu: NSMenu?
     private var subscriptions = Set<AnyCancellable>()
+    /// Tells the Glance popover when the elevated console covers it, so its
+    /// runaway marquee stops animating; see `elevateConsole` / `lowerConsole`.
+    private let glanceOcclusion = GlanceOcclusionState()
+
+    /// `true` while the console window is layered above the Glance popover
+    /// (`popUpMenuWindow + 1`) with the popover still shown.  Used to skip
+    /// the popover's live height remeasure / resize, which would otherwise
+    /// fire on every clock tick while the popover is fully occluded.  The
+    /// marquee is paused separately through `glanceOcclusion`.
+    private var isConsoleElevated: Bool {
+        guard let consoleWindow, consoleWindow.isVisible, consoleWindow.level != .normal else { return false }
+        return popover.isShown
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Read before anything can open a window: the launch Sparkle performs
@@ -89,12 +102,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                           openSettings: { [weak self] in self?.showSettings() },
                           openAlert: { [weak self] provider, window, time in
                               self?.showAlert(providerKey: provider, windowId: window, at: time)
-                          }))
+                          },
+                          occlusion: glanceOcclusion))
         // SwiftUI must not publish a preferred content size: NSPopover prefers
         // it over `contentSize`, which would let Glance resize itself while it
         // is open and defeat the height ceiling the scroll view depends on.
         glance.sizingOptions = []
         popover.contentViewController = glance
+        // Required so popoverDidClose can reset the console window's level
+        // when the popover is dismissed for any reason that does not also
+        // resign the console window's key status (right-click, Dock reopen,
+        // notification tap, etc.).
+        popover.delegate = self
         model.$displayMode.removeDuplicates().sink { [weak self] mode in
             self?.apply(mode)
         }.store(in: &subscriptions)
@@ -121,6 +140,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         model.$glanceView.removeDuplicates().sink { [weak self] _ in
             DispatchQueue.main.async {
                 guard let self, self.popover.isShown, let button = self.statusItem?.button else { return }
+                // While the console window is elevated above the popover, the
+                // popover is fully occluded: skip the layout work.  The
+                // marquee is already stopped via `glanceOcclusion`.
+                if self.isConsoleElevated { return }
                 let screen = button.window?.screen ?? NSScreen.main
                 let newHeight = QuotaGlanceMetrics.popoverHeight(for: self.model, on: screen)
                 self.popover.contentSize = NSSize(width: Metrics.glanceWidth, height: newHeight)
@@ -130,6 +153,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             DispatchQueue.main.async {
                 self?.updateStatus()
                 if let self, self.popover.isShown, let button = self.statusItem?.button {
+                    // Once the console window owns the screen at the elevated
+                    // level, every model tick (the 30s clock and the 300s
+                    // refresh both publish) would otherwise remeasure
+                    // QuotaGlanceMetrics.popoverHeight and reassign
+                    // popover.contentSize for a window the user cannot see.
+                    // Skip the resize until the console is no longer on top;
+                    // the marquee is stopped separately via `glanceOcclusion`.
+                    if self.isConsoleElevated { return }
                     let screen = button.window?.screen ?? NSScreen.main
                     let newHeight = QuotaGlanceMetrics.popoverHeight(for: self.model, on: screen)
                     if abs(self.popover.contentSize.height - newHeight) > 1 {
@@ -145,6 +176,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             forName: .infisicalIdentityChanged, object: nil, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.infisicalIdentityDidChange() }
+        }
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didResignActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.popover.close()
+                self?.lowerConsole()
+            }
         }
         NSWorkspace.shared.notificationCenter.addObserver(
             self, selector: #selector(refresh), name: NSWorkspace.didWakeNotification, object: nil)
@@ -386,16 +425,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         startOutsideClickMonitor()
     }
 
-    func popoverDidClose(_ notification: Notification) {
-        stopOutsideClickMonitor()
-    }
 
     // MARK: - Console
 
     /// The single window.  `page` nil means "leave the selection alone", which
     /// is what a reopen or a Dock-mode switch wants.
     func showConsole(page: ConsolePage?) {
-        popover.performClose(nil)
+        let shouldElevate = popover.isShown
         if let page {
             consoleState.clearHistoryFocus()
             consoleState.page = page
@@ -427,7 +463,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             consoleWindow = window
         }
         consoleWindow?.title = consoleState.page.isSettings ? "CodeCaps Settings" : "CodeCaps"
+        // Derive the level unconditionally on every call.  The old branch
+        // only ever raised and left a stale popUpMenuWindow + 1 in place when
+        // the popover had been dismissed by a path that does not also resign
+        // the console window's key status (right-click menu, Dock reopen,
+        // notification tap, etc.).
+        if shouldElevate { elevateConsole() } else { lowerConsole() }
         consoleWindow?.makeKeyAndOrderFront(nil)
+        consoleWindow?.orderFrontRegardless()
         // Re-opening from the menu bar should raise the window that is already
         // open, not a second copy of it, and it has to come forward even if it
         // is behind whatever the owner was using.
@@ -488,10 +531,61 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         NSApp.setActivationPolicy((docked || hasWindow) ? .regular : .accessory)
     }
 
+    func windowDidResignKey(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow, window === consoleWindow else { return }
+        // A click inside Glance hands key to the popover's own window
+        // (togglePopover explicitly calls `makeKey()` on it).  Dismissing the
+        // popover there would destroy the popover this change keeps on screen
+        // and is a regression against `.transient`'s old behaviour, where a
+        // click inside the popover did not dismiss it.  Leave the levels alone
+        // too: the popover sits at `popUpMenuWindow` (101), so dropping the
+        // console to `.normal` here would composite the popover over it.
+        // `popoverDidClose` lowers the console once the popover is gone.
+        let popoverTookKey = NSApp.keyWindow === popover.contentViewController?.view.window
+        if popoverTookKey { return }
+        popover.close()
+        lowerConsole()
+    }
+
+    /// Moving or resizing the elevated console changes whether it covers the
+    /// PiP HUD, so the HUD's level is re-derived.
+    func windowDidMove(_ notification: Notification) {
+        guard (notification.object as? NSWindow) === consoleWindow else { return }
+        PipWidgetController.shared.refreshLevel()
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        guard (notification.object as? NSWindow) === consoleWindow else { return }
+        PipWidgetController.shared.refreshLevel()
+    }
+
+    /// Layers the console above the Glance popover (`popUpMenuWindow + 1`),
+    /// pauses the popover's marquee, and lets the PiP HUD rise above the
+    /// console if (and only while) the console would cover it.
+    private func elevateConsole() {
+        guard let consoleWindow else { return }
+        consoleWindow.level = NSWindow.Level(Int(CGWindowLevelForKey(.popUpMenuWindow)) + 1)
+        glanceOcclusion.isOccluded = true
+        // The PiP HUD is documented to stay "visible on top of all windows at
+        // all times".  The controller remembers the elevated console so a HUD
+        // recreated from the Settings toggle comes back above it too.
+        PipWidgetController.shared.raise(above: consoleWindow)
+    }
+
+    /// Restores the console to `.normal`, resumes the popover's marquee, and
+    /// returns the PiP HUD to `.floating`.  Idempotent.
+    private func lowerConsole() {
+        consoleWindow?.level = .normal
+        glanceOcclusion.isOccluded = false
+        PipWidgetController.shared.demoteToFloating()
+    }
+
     /// Closing the console is what takes the Dock icon away in menu bar mode.
     /// In Dock mode, the icon is kept.
     func windowWillClose(_ notification: Notification) {
         guard let window = notification.object as? NSWindow, window === consoleWindow else { return }
+        popover.close()
+        lowerConsole()
         let docked = model.displayMode != .menuBar
         NSApp.setActivationPolicy(docked ? .regular : .accessory)
     }
@@ -536,5 +630,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         menu.addItem(windowItem)
         NSApp.mainMenu = menu
         NSApp.windowsMenu = windowMenu
+    }
+}
+
+extension AppDelegate {
+    /// Restores the console window's level and the PiP HUD's always-on-top
+    /// contract when the popover is dismissed for any reason that does not
+    /// also resign the console window's key status (NSPopover's `.transient`
+    /// auto-dismiss, a right-click that opens the status menu, the Dock
+    /// reopen, a notification tap, etc.).  Without this hook the elevated
+    /// level would linger until the app deactivated.
+    func popoverDidClose(_ notification: Notification) {
+        // Two jobs meet here when the popover goes away, and merging main's
+        // copy with #163's produced two functions of the same name rather than
+        // one that does both.  Popover closing means: stop watching clicks, and
+        // restore the console window's level and the PiP HUD's always-on-top
+        // contract for any close that does not also resign the console window's
+        // key status (NSPopover's `.transient` auto-dismiss, a right-click that
+        // opens the status menu, a Dock reopen, a notification tap).  Without
+        // the second half the elevated level lingers until the app deactivates.
+        stopOutsideClickMonitor()
+        if let window = notification.object as? NSPopover, window === popover {
+            lowerConsole()
+        }
     }
 }
