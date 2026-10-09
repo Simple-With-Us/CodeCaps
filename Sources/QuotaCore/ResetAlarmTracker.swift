@@ -236,6 +236,22 @@ public enum ResetAlarmPolicy {
     /// cannot regain quota inside its own period, so the size of the rise is
     /// the evidence and 30 points is far beyond rounding or a stale reading.
     public static let vendorRestoreRise: Double = 30
+
+    /// A courtesy reset can land on any level, so "what did it come back to" is
+    /// the wrong question.  What is reliable is the shape: between two
+    /// consecutive readings, quota goes from mostly spent to nearly untouched.
+    ///
+    /// Owner request 2026-10-08 — a reset may be performed by the vendor, or by
+    /// the owner using a reset the provider offers, and either one must alert.
+    /// Missing it means working against a cap that no longer exists.
+    ///
+    /// The thresholds are set by what quota can legitimately do *within* a
+    /// period, which is only fall.  A rise from at-or-below 80% to at-or-above
+    /// 95% is 15 points and cannot happen without a reset; the existing
+    /// `surgeMidWindow` rule already uses this shape, but only while the
+    /// window's own end is still in the future, which is not the owner's case.
+    public static let courtesyRestoreCeiling: Double = 80
+    public static let courtesyRestoreFloor: Double = 95
     /// Windows and fires not seen for this long are forgotten.
     public static let retention: TimeInterval = 45 * 86_400
     /// A window's period counts toward "largest" for this long after it was
@@ -427,6 +443,22 @@ public struct ResetAlarmTracker: Sendable {
                 }
                 if jump > required || (jump > ResetAlarmPolicy.resetDriftTolerance && climbed) {
                     isReset = true
+                    // When the quota also came back from mostly spent to nearly
+                    // untouched, and the window had *not* reached its own end,
+                    // this is a restore rather than an ordinary rollover.
+                    //
+                    // The `!hasPassed` guard is load-bearing.  A window that
+                    // simply reached the end of its period also goes from
+                    // spent to full, and the owner ruled (2026-09-30) that a
+                    // smaller window stays quiet unless it came near its cap.
+                    // Labelling that "mid window" would bypass near-cap and
+                    // alert on every ordinary rollover.  A reset before the
+                    // scheduled end is the case the owner cannot otherwise see
+                    // (2026-10-08), and that is exactly what this catches.
+                    if !hasPassed, let reading, let last = window.lastRemaining {
+                        isMidWindow = reading >= ResetAlarmPolicy.courtesyRestoreFloor
+                            && last <= ResetAlarmPolicy.courtesyRestoreCeiling
+                    }
                     nextResetAt = reported
                 } else if jump > -ResetAlarmPolicy.resetDriftTolerance || reported > readAt {
                     // Jitter, or a correction to a reset still ahead: follow it
@@ -466,6 +498,35 @@ public struct ResetAlarmTracker: Sendable {
                reading > last + ResetAlarmPolicy.riseEpsilon {
                 isReset = true
                 nextResetAt = observation.resetAt.flatMap { $0 > readAt ? $0 : nil }
+            }
+            // A reset that lands before the window's own end: a courtesy reset the
+            // owner performed, or a vendor one, where the quota goes from
+            // mostly spent to nearly untouched between two consecutive checks.
+            //
+            // Owner request 2026-10-08: "can't the app tell if usage suddenly
+            // jumps to almost 100% available between 2 checks that there was a
+            // reset, whether done by the system or by a reset the user was
+            // allowed to optionally use?  Please alert for that since if you
+            // don't know it was reset and they do a courtesy reset then you can
+            // start using again."
+            //
+            // The answer has to be yes: the consequence of missing one is
+            // working against a cap that no longer exists.
+            //
+            // `!hasPassed` is what keeps this from being a false-positive
+            // machine.  A window that simply reached the end of its period also
+            // goes from spent to full, and the owner's standing rule is that a
+            // smaller window stays quiet unless it came near its cap — so the
+            // scheduled rollover must not be caught here.  What this catches is
+            // the case that is otherwise invisible: quota restored *before* the
+            // window was due to end, which no amount of near-cap reasoning can
+            // distinguish from "nothing happened".
+            if !isReset, !hasPassed, let reading, let last = window.lastRemaining,
+               reading >= ResetAlarmPolicy.courtesyRestoreFloor,
+               last <= ResetAlarmPolicy.courtesyRestoreCeiling {
+                isReset = true
+                isMidWindow = true
+                nextResetAt = observation.resetAt.flatMap { $0 > readAt ? $0 : nil } ?? window.periodResetAt
             }
             // Mid-window reset: a quota that jumps back up while the period
             // is still running.  Three ways to see it, and none of them

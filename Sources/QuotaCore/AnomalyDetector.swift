@@ -392,7 +392,7 @@ public struct AnomalyDetector: Sendable {
         return "\(prefix) \(window): \(String(format: "%.1f", ratio))× \(comparison)."
     }
 
-    static func windowLabel(windowId: String) -> String {
+    public static func windowLabel(windowId: String) -> String {
         if let range = windowId.range(of: ":", options: .backwards) {
             return String(windowId[range.upperBound...])
         }

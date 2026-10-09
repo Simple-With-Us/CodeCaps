@@ -165,7 +165,19 @@ final class PipMetricsTests: XCTestCase {
         let mask = PipMetrics.panelStyleMask
         XCTAssertTrue(mask.contains(.resizable),
                       "The owner asked for a resizable window; the style mask is what grants it")
-        XCTAssertTrue(mask.contains(.fullSizeContentView))
+        // Owner report 2026-10-08: a blank silver strip sat along the top of the
+        // HUD "for no reason".  `.titled` and `.hudWindow` both make AppKit paint
+        // a titlebar strip that lives outside the SwiftUI content, and no amount
+        // of `titleVisibility` or `fullSizeContentView` removes it — the strip
+        // belongs to the window frame.  A borderless panel has no strip at all.
+        XCTAssertFalse(mask.contains(.titled),
+                       "`.titled` brings back the blank silver strip the owner asked to remove")
+        XCTAssertFalse(mask.contains(.hudWindow),
+                       "`.hudWindow` paints a titlebar strip outside the content view")
+        XCTAssertTrue(mask.contains(.borderless),
+                      "the rounded panel is now the whole window, so it must be borderless")
+        XCTAssertTrue(mask.contains(.nonactivatingPanel),
+                      "the HUD must still not steal focus from the app the owner is using")
         XCTAssertLessThan(PipMetrics.minWidth, PipMetrics.maxWidth)
         XCTAssertLessThan(PipMetrics.minHeight, PipMetrics.maxHeight)
     }
