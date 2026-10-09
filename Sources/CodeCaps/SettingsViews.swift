@@ -892,6 +892,17 @@ private struct AccentPicker: View {
 struct SettingsAppearancePage: View {
     @ObservedObject var model: MonitorModel
 
+    /// Assembled as a `String` before `Text`.  A chain of `+` inside the view
+    /// builder has to consider both `String.+` and `Text.+`, and that search
+    /// exceeds the type checker's time budget.
+    private var footerCopy: String {
+        let system: String = "System is the default."
+        let theme: String = "Light and Dark ignore your Mac's setting."
+        let logos: String = "Accent on Platform Logos is off by default, because a logo in your accent colour stops looking like the provider it stands for."
+        let pacing: String = "Dynamic Pacing Highlights variably tints percentage pills greener when under cap pace and redder when burning quota faster than elapsed time."
+        return [system, theme, logos, pacing].joined(separator: sentenceGap)
+    }
+
     var body: some View {
         SettingsPage {
             Section {
@@ -916,9 +927,7 @@ struct SettingsAppearancePage: View {
                     .help("Tints percentage pills greener when under cap pace and redder when burning quota faster than time elapsed.")
                     .accessibilityLabel("Dynamic Pacing Highlights")
             } footer: {
-                Text("System is the default." + sentenceGap + "Light and Dark ignore your Mac's setting." + sentenceGap
-                     + "Accent on Platform Logos is off by default, because a logo in your accent colour stops looking like the provider it stands for." + sentenceGap
-                     + "Dynamic Pacing Highlights variably tints percentage pills greener when under cap pace and redder when burning quota faster than elapsed time.")
+                Text(footerCopy)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
