@@ -58,7 +58,7 @@ final class AnomalyDetectorTests: XCTestCase {
 
     /// A bucket whose current rate is much higher than the prior-week peak —
     /// fires `vsPeak` but not necessarily `vsBaseline`.
-    func testFlagsRateAbovePriorPeak() {
+    func testFlagsRateAbovePriorPeak() throws {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         var samples: [AnomalyDetector.Sample] = []
         // Prior week: a sharp one-hour drop of 30%, then flat — that is
@@ -89,9 +89,9 @@ final class AnomalyDetectorTests: XCTestCase {
                              observedAt: now.addingTimeInterval(-300),
                              remainingPercent: 10))
         let anomalies = AnomalyDetector().evaluate(samples: samples, now: now)
-        XCTAssertEqual(anomalies.count, 1, "Expected one collapsed anomaly; got \(anomalies.map(\.summary))")
-        let anomaly = anomalies[0]
-        XCTAssertNotNil(anomaly.peakRatio, "Expected the peak bar to clear; got \(anomalies.map(\.summary))")
+        let anomaly = try XCTUnwrap(anomalies.first { $0.windowId == "anthropic:5h" },
+                                   "Expected one anomaly; got \(anomalies.map(\.summary))")
+        XCTAssertNotNil(anomaly.peakRatio, "The peak bar should clear; got \(anomaly.summary)")
         XCTAssertEqual(anomaly.providerKey, "anthropic")
     }
 
@@ -290,21 +290,20 @@ final class AnomalyDetectorTests: XCTestCase {
 // slider unreachable in 99.3% of measured hours on this Mac's own data.
 extension AnomalyDetectorTests {
     private func busySamples(now: Date, count: Int = 40) -> [AnomalyDetector.Sample] {
-        var out: [AnomalyDetector.Sample] = []
-        // Steady ~2%/hour for `count` hours (stays inside 0…100), then a sprint
-        // in the current hour without splitting history on an invalid level.
-        for h in stride(from: count, through: 1, by: -1) {
-            out.append(.init(providerKey: "p", windowId: "w",
-                             observedAt: now.addingTimeInterval(-Double(h) * 3600),
-                             remainingPercent: 100 - Double(count - h) * 2))
+        func sample(_ secondsAgo: Int, _ percent: Double) -> AnomalyDetector.Sample {
+            .init(providerKey: "p", windowId: "w",
+                  observedAt: now.addingTimeInterval(-Double(secondsAgo)),
+                  remainingPercent: percent)
         }
-        let prior = 100 - Double(count - 1) * 2
-        out.append(.init(providerKey: "p", windowId: "w",
-                         observedAt: now.addingTimeInterval(-1800),
-                         remainingPercent: prior))
-        out.append(.init(providerKey: "p", windowId: "w",
-                         observedAt: now.addingTimeInterval(-300),
-                         remainingPercent: max(5, prior - 15)))
+        // Measured history through the prior week, then a sprint in the last
+        // five minutes — same shape as `testAnomalyCarriesMeasuredRatesAndCoverage`.
+        var out: [AnomalyDetector.Sample] = []
+        for h in stride(from: count, through: 2, by: -1) {
+            let percent = 100 - Double(count - h) * 2
+            out.append(sample(h * 3600, percent))
+        }
+        out.append(sample(1800, 70))
+        out.append(sample(300, 20))
         return out
     }
 

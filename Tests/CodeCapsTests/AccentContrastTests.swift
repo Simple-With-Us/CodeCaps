@@ -127,3 +127,51 @@ final class AccentContrastTests: XCTestCase {
                      "tinting a missing mark must not invent one")
     }
 }
+
+// MARK: - Ink on an accent fill
+//
+// Owner report 2026-10-09: the same accent read as black text on the System
+// control and white text on Open CodeCaps.  Only the hand-drawn surface was
+// wrong — AppKit derives a native control's own label colour from its fill —
+// and it was wrong because the ink was chosen from the *appearance* rather than
+// from the accent.
+//
+// That held only while every accent was dark enough to carry white.  The four
+// light accents (2026-10-06) broke it: in Light appearance a light accent got
+// white on a light fill, roughly 1.8:1.
+
+extension AccentContrastTests {
+    /// Whatever `readableInk` returns is what must be drawn on the accent, so
+    /// this is the assertion that a surface is not allowed to choose for itself.
+    func testInkOnAnAccentFillClearsFourAndAHalfToOne() {
+        for choice in AccentChoice.allCases {
+            for (name, hex) in [("light", choice.lightHex), ("dark", choice.darkHex)] {
+                let ink = Theme.readableInk(on: hex)
+                let inkHex: UInt32 = ink == .white ? 0xFFFFFF : 0x14181C
+                let ratio = contrast(hex, inkHex)
+                XCTAssertGreaterThanOrEqual(ratio, 4.5,
+                                            "\(choice.rawValue) \(name) needs \(String(format: "%.2f", ratio)):1 with the ink it chose")
+            }
+        }
+    }
+
+    /// The appearance must not decide the ink.  This is the specific inversion
+    /// that produced the owner's screenshot: light appearance, light accent,
+    /// white text.
+    func testALightAccentInLightAppearanceStillGetsDarkInk() {
+        // Sky is one of the four light accents.
+        let sky = AccentChoice.sky
+        XCTAssertTrue(sky.isLight)
+        let ink = Theme.readableInk(on: sky.lightHex)
+        XCTAssertNotEqual(ink, .white,
+                          "a light accent in Light appearance got white ink — the appearance is choosing the ink again")
+    }
+
+    /// The same rule for the Dark appearance of the original dark accents,
+    /// which are deliberately bright and therefore also need dark ink.
+    func testTheDarkAppearanceOfADarkAccentAlsoGetsDarkInk() {
+        let ink = Theme.readableInk(on: AccentChoice.teal.darkHex)
+        XCTAssertNotEqual(ink, .white,
+                          "Dark-appearance teal is bright, so white ink on it is unreadable")
+    }
+}

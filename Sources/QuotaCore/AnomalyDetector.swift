@@ -415,7 +415,7 @@ public struct AnomalyDetector: Sendable {
         // Too few samples for a percentile to mean anything; the maximum is
         // then the honest choice rather than a fabricated rank.
         guard positive.count >= 20 else { return positive.last }
-        let rank = Int((Double(positive.count) * 0.99).rounded(.up)) - 1
+        let rank = Int(floor(0.99 * Double(positive.count - 1)))
         return positive[min(max(rank, 0), positive.count - 1)]
     }
 
