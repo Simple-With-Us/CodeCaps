@@ -59,7 +59,7 @@ enum ConsolePage: Hashable {
     var settingsTitle: String {
         switch self {
         case .runawayAlerts: return "Runaway Alerts"
-        case .settingsMenuBar: return "Menu Bar"
+        case .settingsMenuBar: return "Menu Bar & PiP"
         case .settingsPlatforms: return "Platforms"
         case .settingsLogoStyle: return "Logo Style"
         case .settingsSourcesFleet: return "Sources & Fleet"
@@ -361,7 +361,10 @@ struct ConsoleView: View {
                 .lineLimit(1)
                 // F-06: 200pt minimum title width with priority keeps
                 // platform headings like "Antigravity · Gemini · Third-Party" legible.
-                .frame(minWidth: 200, alignment: .leading)
+                // Owner 2026-10-08: centred.  The title spans the pane above the
+                // form, and a heading centred over its own content reads better
+                // than one pinned left with a refresh button floating far from it.
+                .frame(maxWidth: .infinity, alignment: .center)
                 .layoutPriority(1)
                 .truncationMode(.tail)
 
@@ -373,17 +376,6 @@ struct ConsoleView: View {
             .disabled(model.isRefreshing)
             .help("Refresh Quotas")
             .accessibilityLabel("Refresh Quotas")
-
-            // The owner asked (2026-10-02) for the pin control gone in favour
-            // of the app docking itself while this window is open, which is
-            // what HogHunter does and what `AppActivationManager` implements
-            // now.  A floating "keep in front" is a worse answer to the same
-            // need, and it was the one control here that explained nothing.
-            Text(CodeCapsVersion.display)
-                .font(.system(size: 10))
-                .foregroundStyle(Theme.ink.opacity(0.35))
-                .help("CodeCaps Version")
-                .accessibilityLabel(CodeCapsVersion.display)
         }
         .padding(.horizontal, Metrics.pagePadding)
         .frame(height: Metrics.toolbarHeight)

@@ -287,7 +287,7 @@ enum Metrics {
     static let glanceMeterBarHeight: CGFloat = 6
     /// The elapsed marker's full height, twice the 8pt it was, so the black
     /// tick reads at a glance against the thicker bar.  Same 2pt width.
-    static let glanceMeterMarkerHeight: CGFloat = 16
+    static let glanceMeterMarkerHeight: CGFloat = 20
     /// "100%" is 32.2pt at 11pt medium with monospaced digits.  The rest of
     /// the column is the gap before the countdown, so the two never touch.
     static let glanceMeterPercentWidth: CGFloat = 44
@@ -440,7 +440,7 @@ struct QuotaUsageBar: View {
 
     /// How far the marker stands proud of the bar above and below.
     static let markerOverhang: CGFloat = 2
-    static let markerWidth: CGFloat = 2
+    static let markerWidth: CGFloat = 3
     /// How far the pale halo stands proud of the marker on each side.
     static let haloPadding: CGFloat = 1
 

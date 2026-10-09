@@ -43,7 +43,8 @@ final class GlanceToggleTests: XCTestCase {
     func testSwitchLabelsReadFromMacAndFromFleetInTitleCase() {
         // The label on the switch is the title itself: not capitals, not small
         // caps (owner delta 2026-09-30).
-        XCTAssertEqual(GlanceViewMode.allCases.map(\.title), ["From Mac", "From Fleet"])
+        XCTAssertEqual(GlanceViewMode.allCases.map(\.title), ["From Mac", "All Sources"],
+                       "the second box is the union of Mac and fleet; owner renamed it 2026-10-08")
         for mode in GlanceViewMode.allCases {
             XCTAssertNotEqual(mode.title, mode.title.uppercased(), "\(mode.title) is not all capitals")
             XCTAssertNotEqual(mode.title, mode.title.lowercased(), "\(mode.title) is not all lower case")
@@ -54,7 +55,7 @@ final class GlanceToggleTests: XCTestCase {
 
     func testTheSwitchTooltipsAreSentencesThatNameTheirSide() {
         XCTAssertEqual(GlanceViewMode.fromMac.detail, "Quotas this Mac reads from the AI tools signed in on it.")
-        XCTAssertEqual(GlanceViewMode.fromFleet.detail, "Quotas your other machines report to your fleet endpoint.")
+        XCTAssertEqual(GlanceViewMode.fromFleet.detail, "Every source at once: this Mac's own quotas plus those your other machines report.")
         for mode in GlanceViewMode.allCases {
             XCTAssertNotEqual(mode.detail, mode.title, "a tooltip that repeats the label says nothing")
             XCTAssertFalse(mode.detail.contains("FROM"), "no capitals-only copy left over")
@@ -342,7 +343,7 @@ final class GlanceToggleTests: XCTestCase {
         // 1.5x the 4pt bar, and 2x the 8pt (4pt bar + 2pt either side) marker.
         XCTAssertGreaterThanOrEqual(Metrics.glanceMeterBarHeight, 4 * 1.5)
         XCTAssertGreaterThanOrEqual(Metrics.glanceMeterMarkerHeight, 8 * 2)
-        XCTAssertEqual(QuotaUsageBar.markerWidth, 2, "the marker keeps its width")
+        XCTAssertEqual(QuotaUsageBar.markerWidth, 3, "the notch was widened 2026-10-08")
     }
 
     // MARK: - The header, laid out

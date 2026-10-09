@@ -90,27 +90,31 @@ struct SettingsMenuBarPage: View {
             }
 
             Section {
-                LabeledContent("Preview") {
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack(spacing: 4) {
-                            if model.menuBarStyle != .percentOnly {
-                                let previewKey = model.menuBarTargetSnapshot?.window.canonicalProviderKey ?? "auto"
-                                PlatformLogo(providerKey: previewKey,
-                                             size: 14,
-                                             style: model.markStyle(for: previewKey))
-                            }
-                            if model.menuBarStyle != .symbolOnly {
-                                Text(model.menuBarTitle.isEmpty ? "—" : model.menuBarTitle)
-                                    .font(.system(size: 13, weight: .medium).monospacedDigit())
-                            }
+                LabeledContent {
+                    // Owner 2026-10-08: the preview showed only what the menu
+                    // bar draws.  The sentence under it stayed in the control,
+                    // where it read as part of the preview rather than as an
+                    // explanation of what is about to appear above it.
+                    HStack(spacing: 4) {
+                        if model.menuBarStyle != .percentOnly {
+                            let previewKey = model.menuBarTargetSnapshot?.window.canonicalProviderKey ?? "auto"
+                            PlatformLogo(providerKey: previewKey,
+                                         size: 14,
+                                         style: model.markStyle(for: previewKey))
                         }
-                        Text(model.menuBarDetail)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
+                        if model.menuBarStyle != .symbolOnly {
+                            Text(model.menuBarTitle.isEmpty ? "—" : model.menuBarTitle)
+                                .font(.system(size: 13, weight: .medium).monospacedDigit())
+                        }
                     }
                     .accessibilityElement(children: .combine)
                     .accessibilityLabel("Menu Bar Preview")
+                } label: {
+                    Text("Preview")
                 }
+                Text("This is what appears in your menu bar.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
             }
 
             Section {
@@ -1110,6 +1114,43 @@ struct SettingsAboutPage: View {
 
     private static let projectPage = URL(string: "https://github.com/Simple-With-Us/codecaps")!
 
+    /// The owner's mark, drawn once and tinted per appearance.
+    private struct AboutBrandMark: View {
+        let size: CGFloat
+        @Environment(\.colorScheme) private var colorScheme
+
+        /// The owner's cropped black-on-transparent artwork, resolved through
+        /// the same bundle the menu bar and PiP use.  Loaded once; it is drawn
+        /// as a template, which is what makes one asset correct in both
+        /// appearances.
+        static let asset: NSImage? = {
+            guard let url = ResourceBundle.resolved?.url(forResource: "CodeCapsMenuBarIcon", withExtension: "png"),
+                  let image = NSImage(contentsOf: url) else { return nil }
+            image.isTemplate = true
+            return image
+        }()
+
+        var body: some View {
+            Group {
+                if let image = AboutBrandMark.asset {
+                    Image(nsImage: image)
+                        .resizable()
+                        .renderingMode(.template)
+                        .interpolation(.high)
+                        .foregroundStyle(colorScheme == .dark ? Color.white : Theme.ink)
+                } else {
+                    // Only if the owner's artwork is ever missing from the
+                    // bundle: keep a mark on screen rather than an empty gap.
+                    Image(systemName: "gauge.with.dots.needle.50percent")
+                        .font(.system(size: size))
+                        .foregroundStyle(Theme.accent)
+                }
+            }
+            .frame(width: size, height: size)
+            .accessibilityHidden(true)
+        }
+    }
+
     private var pushingDetail: String {
         guard model.syncEnabled else { return "Off" }
         guard let host = URL(string: model.syncEndpoint)?.host() else { return "On" }
@@ -1125,10 +1166,12 @@ struct SettingsAboutPage: View {
         SettingsPage {
             Section {
                 VStack(spacing: 6) {
-                    Image(systemName: "gauge.with.dots.needle.50percent")
-                        .font(.system(size: 34))
-                        .foregroundStyle(Theme.accent)
-                        .accessibilityHidden(true)
+                    // The owner's own mark, the same asset the menu bar and the
+                    // PiP header draw.  This was a hardcoded
+                    // "gauge.with.dots.needle.50percent" SF Symbol tinted with
+                    // the accent, which read as an older app's logo next to
+                    // the real one in the Dock.
+                    AboutBrandMark(size: 34)
                     Text("CodeCaps").font(.system(size: 16, weight: .semibold))
                     Text(CodeCapsVersion.display)
                         .font(.system(size: 11))
@@ -1425,6 +1468,26 @@ struct SettingsInfisicalPage: View {
 
     var body: some View {
         SettingsPage {
+            // Owner 2026-10-08: this page looked like a required setup step,
+            // and it is not one — CodeCaps works entirely from the local AI
+            // tools when nothing is connected here.
+            Section {
+                VStack(alignment: .leading, spacing: 5) {
+                    Eyebrow("OPTIONAL")
+                        .foregroundStyle(Theme.warning)
+                    Text("Share settings across your Macs, and let the fleet push quotas here.")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Theme.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("CodeCaps reads every quota from the AI tools already signed in on this Mac. " + sentenceGap
+                         + "Connecting Infisical is only for setting a machine up to share its own configuration, and to receive quota data from your other Macs.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.vertical, 2)
+            }
+
             Section {
                 TextField("Client ID", text: $clientId,
                           prompt: Text("Client ID"))
