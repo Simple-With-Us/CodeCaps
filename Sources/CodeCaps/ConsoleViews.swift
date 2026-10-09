@@ -59,7 +59,7 @@ enum ConsolePage: Hashable {
     var settingsTitle: String {
         switch self {
         case .runawayAlerts: return "Runaway Alerts"
-        case .settingsMenuBar: return "Menu Bar"
+        case .settingsMenuBar: return "Menu Bar & PiP"
         case .settingsPlatforms: return "Platforms"
         case .settingsLogoStyle: return "Logo Style"
         case .settingsSourcesFleet: return "Sources & Fleet"
@@ -231,7 +231,6 @@ final class ConsoleState: ObservableObject {
         unavailableAlert = nil
         pendingAlert = nil
     }
-
     func clearHistoryFocus() {
         selectedWindowId = nil
         selectedTimestamp = nil
@@ -362,7 +361,10 @@ struct ConsoleView: View {
                 .lineLimit(1)
                 // F-06: 200pt minimum title width with priority keeps
                 // platform headings like "Antigravity · Gemini · Third-Party" legible.
-                .frame(minWidth: 200, alignment: .leading)
+                // Owner 2026-10-08: centred.  The title spans the pane above the
+                // form, and a heading centred over its own content reads better
+                // than one pinned left with a refresh button floating far from it.
+                .frame(maxWidth: .infinity, alignment: .center)
                 .layoutPriority(1)
                 .truncationMode(.tail)
 
@@ -374,17 +376,6 @@ struct ConsoleView: View {
             .disabled(model.isRefreshing)
             .help("Refresh Quotas")
             .accessibilityLabel("Refresh Quotas")
-
-            // The owner asked (2026-10-02) for the pin control gone in favour
-            // of the app docking itself while this window is open, which is
-            // what HogHunter does and what `AppActivationManager` implements
-            // now.  A floating "keep in front" is a worse answer to the same
-            // need, and it was the one control here that explained nothing.
-            Text(CodeCapsVersion.display)
-                .font(.system(size: 10))
-                .foregroundStyle(Theme.ink.opacity(0.35))
-                .help("CodeCaps Version")
-                .accessibilityLabel(CodeCapsVersion.display)
         }
         .padding(.horizontal, Metrics.pagePadding)
         .frame(height: Metrics.toolbarHeight)
@@ -444,7 +435,10 @@ private struct ConsoleSidebarSplitter: View {
                 )
         }
         .frame(width: 8)
-        .background(isHovering ? Color.accentColor.opacity(0.15) : Color.clear)
+        // `Color.accentColor` is the macOS system accent, not the one the
+        // owner picked, so the grabber glowed system blue next to an accent
+        // that was doing everything else in the sidebar.
+        .background(isHovering ? Theme.accent.opacity(0.15) : Color.clear)
     }
 }
 
@@ -526,6 +520,13 @@ struct ConsoleSidebar: View {
             .listStyle(.sidebar)
             .scrollContentBackground(.hidden)
             .focusable()
+            // The list is focusable so arrow keys move the page selection, but
+            // the system focus ring it drew by default was a blue rectangle
+            // around three edges of the sidebar — system blue, next to this
+            // app's teal, and it reappeared whenever the window was resized.
+            // Focus still works; only the ring is gone.  Each row draws its own
+            // accent border for the focused page.
+            .focusEffectDisabled()
             .onMoveCommand { direction in
                 switch direction {
                 case .up: moveSelection(by: -1)
@@ -583,10 +584,19 @@ struct ConsoleSidebar: View {
             // "Antigravity · Cl…" hides the very thing the row adds, so the
             // pool takes a second line in this 200pt column.
             VStack(alignment: .leading, spacing: 0) {
-                Text(row.platformTitle)
-                    .font(.system(size: 13, weight: .medium))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                HStack(spacing: 4) {
+                    Text(row.platformTitle)
+                        .font(.system(size: 13, weight: .medium))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    if model.hasActiveRunawayAnomaly(for: row) {
+                        Image(systemName: "flame.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(Theme.warning)
+                            .help("Active runaway usage anomaly detected")
+                            .accessibilityLabel("Active runaway usage anomaly")
+                    }
+                }
                 if let poolTitle = row.poolTitle {
                     Text(poolTitle)
                         .font(.system(size: 11))
@@ -624,28 +634,23 @@ struct ConsoleSidebar: View {
         }
     }
 
+    /// The sidebar footer exists only for a problem worth interrupting for:
+    /// BotFleet quota sharing is unavailable and nothing else says so.  The
+    /// owner had this pinned here as a second copy of a Settings switch that is
+    /// on for almost everyone (2026-10-05), so a status line that never changes
+    /// was removed with it; the footer now appears only when there is an error
+    /// to show.
+    @ViewBuilder
     private var footer: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            // This used to be a second copy of the control, and it was the
-            // confusing one: grey, status-like, and sitting in a footer where
-            // nothing else in the app is a switch.  The real control is the
-            // first thing on Settings -> Sources & Fleet, under THIS MAC.
-            // One control, one place.
-            Text("Reading from this Mac")
+        if let handoffError = model.handoffError {
+            Divider()
+            Text(handoffError)
                 .font(.system(size: 11))
-                .foregroundStyle(model.localEnabled ? Theme.ink.opacity(0.7) : .secondary)
-                .accessibilityLabel("Reading from this Mac")
-                .accessibilityValue(model.localEnabled ? "On" : "Off")
-                .help("Turn this off in Settings, under Sources & Fleet.")
-            if let handoffError = model.handoffError {
-                Text(handoffError)
-                    .font(.system(size: 11))
-                    .foregroundStyle(Theme.warning)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+                .foregroundStyle(Theme.warning)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
     }
 }
 

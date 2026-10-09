@@ -246,7 +246,9 @@ final class WidgetTests: XCTestCase {
         XCTAssertTrue(intent.contains("WidgetConfigurationIntent"))
         XCTAssertTrue(intent.contains("var plan: WidgetPlanEntity?"))
         XCTAssertTrue(intent.contains("var rowLayout: WidgetRowLayout"))
+        XCTAssertTrue(intent.contains("var quotasPerProvider: WidgetQuotasPerProvider"))
         XCTAssertTrue(intent.contains("var windowPick: WidgetWindowPick"))
+        XCTAssertTrue(intent.contains("enum WidgetQuotasPerProvider"))
         // The options have to be filled from the live snapshot, not a hardcoded
         // list, or the picker offers plans the widget cannot show.
         XCTAssertTrue(intent.contains("WidgetSnapshotStore.readSnapshot()"))
@@ -284,7 +286,9 @@ final class WidgetTests: XCTestCase {
         let rows = try readSource(at: Self.repoRoot.appendingPathComponent("ios/CodeCapsCompanion/Widgets/WidgetWindowRows.swift"))
         XCTAssertTrue(rows.contains("struct WindowCaptionRow"))
         XCTAssertTrue(rows.contains("struct PlanBarRow"))
+        XCTAssertTrue(rows.contains("struct PlanDualBarRow"))
         XCTAssertTrue(rows.contains("struct PlanGrid"))
+        XCTAssertTrue(rows.contains("quotasPerProvider"))
         // The mark replaces the app name in the corner; the asset itself belongs
         // to the owning seat, so this only asserts the view looks for it and
         // degrades to nothing rather than a reserved gap.
@@ -292,6 +296,31 @@ final class WidgetTests: XCTestCase {
         let presentation = try readSource(at: Self.widgetPresentationURL)
         XCTAssertTrue(presentation.contains("static func shortCadence"))
         XCTAssertTrue(presentation.contains("static func resetCaption"))
+        XCTAssertTrue(presentation.contains("func dualWindows()"))
+    }
+
+    func testOverviewViewsPassQuotasPerProviderToPlanGrid() throws {
+        let views = try readSource(at: Self.repoRoot.appendingPathComponent("ios/CodeCapsCompanion/Widgets/WidgetViews.swift"))
+        XCTAssertTrue(views.contains("quotasPerProvider: quotasPerProvider"))
+        let bundle = try readSource(at: Self.repoRoot.appendingPathComponent("ios/CodeCapsCompanion/Widgets/CodeCapsWidgetBundle.swift"))
+        XCTAssertTrue(bundle.contains("quotasPerProvider: entry.quotasPerProvider"))
+        let rows = try readSource(at: Self.repoRoot.appendingPathComponent("ios/CodeCapsCompanion/Widgets/WidgetWindowRows.swift"))
+        XCTAssertTrue(rows.contains("PlanDualBarRow"))
+    }
+
+    func testDualWindowsSelectionPrefersUnmaskedPair() {
+        let windows = [
+            window("5h", percent: 80, hoursToReset: 2, masked: false),
+            window("7d", percent: 90, hoursToReset: 48, masked: false),
+            window("masked-pool", percent: 0, hoursToReset: 0, masked: true)
+        ]
+        let dual = dualWindows(windows)
+        XCTAssertNotNil(dual)
+        XCTAssertEqual(dual?.0.id, "5h")
+        XCTAssertEqual(dual?.1.id, "7d")
+
+        let singleWindow = [window("5h", percent: 80, hoursToReset: 2)]
+        XCTAssertNil(dualWindows(singleWindow))
     }
 
     // MARK: - Helpers mirroring WidgetPresentation logic for test isolation
@@ -384,5 +413,13 @@ final class WidgetTests: XCTestCase {
                 return $0.hoursToReset < $1.hoursToReset
             }
         }
+    }
+
+    private func dualWindows(_ windows: [FixtureWindow]) -> (FixtureWindow, FixtureWindow)? {
+        guard windows.count >= 2 else { return nil }
+        let visible = windows.filter { !$0.masked }
+        let pool = visible.count >= 2 ? visible : windows
+        guard pool.count >= 2 else { return nil }
+        return (pool[0], pool[1])
     }
 }

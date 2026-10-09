@@ -235,31 +235,62 @@ public enum PlatformLogoImage {
         return dir
     }()
 
-    private static let resourceNames: [String: (name: String, ext: String)] = [
-        "anthropic": ("claude", "svg"),
-        "claude": ("claude", "svg"),
-        "openai": ("openai", "svg"),
-        "codex": ("openai", "svg"),
-        "google-antigravity": ("gemini", "svg"),
-        "antigravity": ("gemini", "svg"),
-        // The two Antigravity pools are told apart by their mark as well as
-        // their name: the Gemini pool wears the colour Gemini star, and the
-        // Third-Party pool the same star as a solid one-colour glyph.
-        "google-antigravity:gemini": ("gemini-color", "png"),
-        "google-antigravity:third-party": ("gemini-mono", "svg"),
-        "gemini": ("gemini", "svg"),
-        "xai": ("grok", "svg"),
-        "grok": ("grok", "svg"),
-        "grok-cli": ("grok", "svg"),
-        "grok-bot": ("grok-bot", "svg"),
-        "minimax": ("minimax", "png"),
-        "cursor": ("cursor", "svg"),
-    ]
+    /// Provider key -> mark base name.  Every base has three shipped variants:
+/// `-color` (brand colours, Standard style), `-light` (silhouette in the app's
+/// Light ink) and `-dark` (silhouette in the app's Dark ink).
+///
+/// These used to be `name, ext` pairs pointing at SVG files with a hardcoded
+/// `monochromeKeys` Set deciding which ones adapted to appearance.  Two problems
+/// that measured, not assumed: the SVGs came back as `_NSSVGImageRep`, a PRIVATE
+/// AppKit class, and the Muse rasters shipped a baked-in opaque white background.
+/// Shipping the three variants as PNG makes appearance a property of the data
+/// rather than of a guess, and puts every mark on `NSBitmapImageRep`.
+private static let resourceNames: [String: String] = [
+    "anthropic": "claude",
+    "claude": "claude",
+    "openai": "openai",
+    "codex": "openai",
+    "google-antigravity": "gemini",
+    "antigravity": "gemini",
+    // The two Antigravity pools are told apart by their mark as well as
+    // their name: the Gemini pool wears the colour Gemini star, and the
+    // Third-Party pool the same star as a solid one-colour glyph.
+    "google-antigravity:gemini": "gemini-color",
+    "google-antigravity:third-party": "gemini-mono",
+    "gemini": "gemini",
+    "xai": "grok",
+    "grok": "grok",
+    "grok-cli": "grok",
+    "grok-bot": "grok-bot",
+    "minimax": "minimax",
+    "muse": "muse",
+    "muse-assist": "muse-assist",
+    "muse-code": "muse-code",
+    "cursor": "cursor",
+]
+
+/// The file a style and appearance ask for, or `nil` when the mark is absent.
+private static func variantFile(base: String, style: MarkStyle, isDark: Bool) -> String? {
+    switch style {
+    case .standard, .custom: return "\(base)-color.png"
+    case .template: return isDark ? "\(base)-dark.png" : "\(base)-light.png"
+    }
+}
 
     /// Return the bundled asset for `providerKey`, or `nil` if no artwork ships.
     /// The standard cache preserves brand colors; the template cache marks the
     /// image as a template so it adapts to Light/Dark and menu bar selection.
     private static var cachedBundle: Bundle? = nil
+    /// A latch that only remembers success is a latch that can be poisoned
+    /// before the bundle is reachable: the first call can land while the
+    /// resource bundle is not yet resolvable, and every later call would then
+    /// re-run resolution rather than serve the pinned `nil`.  Worse, a
+    /// *resolved* bundle is cached without ever confirming it can produce an
+    /// image, so a bundle pointing at a half-copied directory stays cached for
+    /// the life of the process and every mark reads as missing.  The owner saw
+    /// exactly that: only the one platform with a custom mark on disk drew
+    /// anything in the PiP, which looked like a broken artwork cache but was a
+    /// bundle that resolved and could not deliver.
     private static func currentBundle() -> Bundle? {
         if let cached = cachedBundle { return cached }
         if let b = ResourceBundle.resolved ?? ResourceBundle.resolveBundle() {
@@ -269,61 +300,121 @@ public enum PlatformLogoImage {
         return nil
     }
 
-    private static func bundledImage(providerKey: String, style: MarkStyle = .template, iconHint: String? = nil) -> NSImage? {
+    /// Forget every cached bundle and mark.  Called when something changes that
+    /// could have invalidated them — a custom mark import, or a resource bundle
+    /// that appears after the first lookup.
+    public static func invalidateCaches() {
+        cachedBundle = nil
+        standardCache.removeAllObjects()
+        templateCache.removeAllObjects()
+        menuBarCache.removeAllObjects()
+    }
+
+    /// Why the last bundled lookup failed, for the log line the owner reads
+    /// when a mark goes missing.  A silent nil here is what made this take days
+    /// to find: there was no way to tell "no artwork for this key" from
+    /// "artwork is there and the bundle could not open it".
+    private static var lastFailure: String? = nil
+
+    private static func noteFailure(_ reason: String) {
+        guard lastFailure != reason else { return }
+        lastFailure = reason
+        NSLog("CodeCaps: provider mark unavailable — %@", reason)
+    }
+
+    private static func bundledImage(providerKey: String, style: MarkStyle = .template, iconHint: String? = nil, isDark: Bool = false) -> NSImage? {
         let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() as NSString
         // Cache dimension: a manifest hint change must not keep serving the
-        // previously cached mark for the same provider key.
+        // previously cached mark for the same provider key, and appearance must
+        // never serve a Light silhouette onto a Dark surface (or the reverse).
         let hintName = iconHint?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let cacheKey = ((hintName?.isEmpty == false) ? "\(key)|\(hintName!)" : (key as String)) as NSString
+        let stem = (hintName?.isEmpty == false) ? "\(key)|\(hintName!)" : (key as String)
+        let cacheKey = "\(stem)|v2|\(style.rawValue)|\(isDark ? "dark" : "light")" as NSString
         let cache = (style == .standard) ? standardCache : templateCache
         if let cached = cache.object(forKey: cacheKey) { return cached }
-        // Server-first: try the manifest-supplied hint name first; fall back
-        // to the built-in `resourceNames` map (pre-manifest behaviour) when
-        // the hint does not resolve to a file, so a bad hint can never blank
-        // a mark the bundled map would have found.
-        let hintResource: (name: String, ext: String)? = hintName.flatMap { name in
+        // Server-first: try the manifest-supplied hint name first; fall back to
+        // the built-in map when the hint does not resolve to a file, so a bad
+        // hint can never blank a mark the map would have found.
+        let hintResource: String? = hintName.flatMap { name in
             guard !name.isEmpty else { return nil }
-            if let existing = resourceNames[name] { return existing }
-            return (name, "svg")
+            // Known provider keys are base names ("claude"), not filenames.
+            // Route them through variantFile so we ask for claude-color.png
+            // (or -light/-dark) instead of looking up a file named "claude".
+            if let base = resourceNames[name] {
+                return variantFile(base: base, style: style, isDark: isDark)
+            }
+            return "\(name)-color.png"
         }
-        let mapResource = resourceNames[key as String] ?? resourceNames[platformKey(of: key as String)]
-        for resource in [hintResource, mapResource].compactMap({ $0 }) {
-            if let image = imageFromBundle(resource: resource, key: key, cacheKey: cacheKey, cache: cache, style: style) {
+        let mapResource: String? = {
+            let base = resourceNames[key as String] ?? resourceNames[platformKey(of: key as String)]
+            return base.flatMap { variantFile(base: $0, style: style, isDark: isDark) }
+        }()
+        for filename in [hintResource, mapResource].compactMap({ $0 }) {
+            if let image = imageFromBundle(filename: filename, key: key, cacheKey: cacheKey, cache: cache, style: style) {
                 return image
             }
         }
         return nil
     }
-
-    private static func imageFromBundle(resource: (name: String, ext: String), key: NSString, cacheKey: NSString, cache: NSCache<NSString, NSImage>, style: MarkStyle) -> NSImage? {
-        let bundle = currentBundle()
-        let candidates: [URL?] = [
-            bundle?.url(forResource: resource.name, withExtension: resource.ext),
-            bundle?.url(forResource: resource.name, withExtension: resource.ext, subdirectory: "ProviderMarks"),
-            bundle?.resourceURL?.appendingPathComponent("\(resource.name).\(resource.ext)"),
-            bundle?.bundleURL.appendingPathComponent("Contents/Resources/\(resource.name).\(resource.ext)"),
-            bundle?.bundleURL.appendingPathComponent("\(resource.name).\(resource.ext)"),
-            Bundle.main.resourceURL?.appendingPathComponent("CodeCaps_CodeCaps.bundle/Contents/Resources/\(resource.name).\(resource.ext)"),
-            Bundle.main.resourceURL?.appendingPathComponent("CodeCaps_CodeCaps.bundle/\(resource.name).\(resource.ext)"),
-            Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/CodeCaps_CodeCaps.bundle/Contents/Resources/\(resource.name).\(resource.ext)"),
-            Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/CodeCaps_CodeCaps.bundle/\(resource.name).\(resource.ext)"),
-            Bundle.main.resourceURL?.appendingPathComponent("\(resource.name).\(resource.ext)"),
-            Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/\(resource.name).\(resource.ext)")
-        ]
-        var targetURL: URL?
-        for candidate in candidates.compactMap({ $0 }) {
-            if FileManager.default.fileExists(atPath: candidate.path) {
-                targetURL = candidate
-                break
+    private static func imageFromBundle(filename: String, key: NSString, cacheKey: NSString, cache: NSCache<NSString, NSImage>, style: MarkStyle) -> NSImage? {
+        // Walk EVERY candidate, decoding as we go, and take the first that
+        // yields pixels.
+        //
+        // The previous version picked the first candidate whose *path existed*
+        // and returned nil if that one would not decode — so a single stale or
+        // wrong entry near the front of the list masked every good copy further
+        // down.  That is the shape of a bug that survives ten "cache" fixes: it
+        // is not the cache at all, it is a resolution order that gives up early.
+        // Existence and decodability are now checked together, per candidate.
+        for candidate in candidateURLs(filename: filename) {
+            guard FileManager.default.fileExists(atPath: candidate.path) else { continue }
+            guard let image = NSImage(contentsOf: candidate) ?? NSImage(contentsOfFile: candidate.path) else {
+                noteFailure("'\(filename)' exists at \(candidate.path) but would not decode; trying the next location")
+                continue
             }
+            return finalize(image: image, url: candidate, key: key,
+                            cacheKey: cacheKey, cache: cache)
         }
-        guard let url = targetURL,
-              let image = NSImage(contentsOf: url) ?? NSImage(contentsOfFile: url.path) else {
-            return nil
+        noteFailure("'\(filename)' is mapped for '\(key as String)' but was not found in any of the \(candidateURLs(filename: filename).count) known locations")
+        return nil
+    }
+
+    /// Every place the mark could legitimately live, across both the resolved
+    /// bundle and `Bundle.main`.  Built fresh each call so a bundle that appears
+    /// later is found without clearing anything: there is no cached answer to
+    /// go stale.
+    private static func candidateURLs(filename: String) -> [URL] {
+        var urls: [URL] = []
+        let bundles = [currentBundle(), Bundle(url: Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/CodeCaps_CodeCaps.bundle"))]
+        for bundle in bundles.compactMap({ $0 }) {
+            let name = (filename as NSString).deletingPathExtension
+            let ext = (filename as NSString).pathExtension
+            if let u = bundle.url(forResource: name, withExtension: ext) { urls.append(u) }
+            if let u = bundle.url(forResource: name, withExtension: ext, subdirectory: "ProviderMarks") { urls.append(u) }
+            if let base = bundle.resourceURL { urls.append(base.appendingPathComponent(filename)) }
+            urls.append(bundle.bundleURL.appendingPathComponent("Contents/Resources/\(filename)"))
+            urls.append(bundle.bundleURL.appendingPathComponent(filename))
         }
-        // Keep the brand color cached separately from the template copy.
+        if let res = Bundle.main.resourceURL {
+            urls.append(res.appendingPathComponent("CodeCaps_CodeCaps.bundle/Contents/Resources/\(filename)"))
+            urls.append(res.appendingPathComponent("CodeCaps_CodeCaps.bundle/\(filename)"))
+            urls.append(res.appendingPathComponent(filename))
+        }
+        urls.append(Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/CodeCaps_CodeCaps.bundle/Contents/Resources/\(filename)"))
+        urls.append(Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/CodeCaps_CodeCaps.bundle/\(filename)"))
+        urls.append(Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/\(filename)"))
+
+        // De-duplicate while preserving order, so the common case (the first
+        // candidate hits) does the least work.
+        var seen = Set<String>()
+        return urls.filter { seen.insert($0.path).inserted }
+    }
+
+    private static func finalize(image: NSImage, url: URL, key: NSString,
+                                  cacheKey: NSString, cache: NSCache<NSString, NSImage>) -> NSImage? {
+        // Keep the brand-colour copy and the template copy separate: a
+        // monochrome mark adapts to Light and Dark, a colour one does not.
         let colorCopy = NSImage(contentsOf: url) ?? NSImage(contentsOfFile: url.path)
-        // A monochrome mark adapts to Light and Dark mode across all styles.
         colorCopy?.isTemplate = isMonochromeMark(key as String)
         standardCache.setObject(colorCopy ?? image, forKey: cacheKey)
         let templateCopy = NSImage(contentsOf: url) ?? NSImage(contentsOfFile: url.path)
@@ -407,15 +498,18 @@ public enum PlatformLogoImage {
         let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         switch style {
         case .standard:
-            return bundledImage(providerKey: key, style: .standard, iconHint: iconHint)
+            return bundledImage(providerKey: key, style: .standard, iconHint: iconHint, isDark: isDarkMode)
         case .template:
-            return bundledImage(providerKey: key, style: .template, iconHint: iconHint)
+            return bundledImage(providerKey: key, style: .template, iconHint: iconHint, isDark: isDarkMode)
         case .custom:
             if let custom = loadCustom(providerKey: key, isDarkMode: isDarkMode)
                 ?? loadCustom(providerKey: platformKey(of: key), isDarkMode: isDarkMode) {
                 return custom
             }
-            return bundledImage(providerKey: key, style: .standard, iconHint: iconHint)
+            // No custom mark on disk for this provider: fall back to the
+            // bundled colour mark so the row still shows something real rather
+            // than the placeholder glyph.
+            return bundledImage(providerKey: key, style: .standard, iconHint: iconHint, isDark: isDarkMode)
         }
     }
 
@@ -513,6 +607,11 @@ public enum PlatformLogoImage {
     /// Bust the render cache so marks reload on the next draw.
     public static func invalidateCache(for providerKey: String) {
         let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        // A custom-mark import is proof that the marks directory changed, so the
+        // pinned bundle gets re-resolved too: it may have been resolved before
+        // the bundle existed, and that stale pin is what leaves every bundled
+        // mark drawing as a fallback for the rest of the process.
+        cachedBundle = nil
         standardCache.removeObject(forKey: key as NSString)
         templateCache.removeObject(forKey: key as NSString)
         for style in MarkStyle.allCases {
@@ -559,5 +658,68 @@ public enum PlatformLogoImage {
     /// Fleet-wide rule: never use lookalike SF symbols to disguise missing marks.
     public static func fallbackSymbolName(for providerKey: String) -> String {
         "questionmark.square.dashed"
+    }
+}
+
+/// The menu bar's own accent behaviour, kept apart from the mark loader.
+///
+/// Owner report 2026-10-06: switching the accent from green to maroon changed
+/// the settings button and nothing else — the menu bar stayed grey.  The cause
+/// was not a missing code path but `isTemplate`: macOS discards a template
+/// image's pixels and repaints it in the menu bar's own tint, so the accent
+/// could never arrive no matter what colour was selected.
+///
+/// That template behaviour is *correct* for a monochrome mark — it is what makes
+/// one asset legible on both a light and a dark menu bar — so it stays the
+/// default.  What is new is the option to paint a colour mark in the accent
+/// instead, which is what "Colour" menu-bar style has always implied and never
+/// delivered.
+public enum MenuBarAccent {
+    /// Whether a colour mark in the menu bar should wear the app accent.
+    /// Defaults on: the owner's expectation is that choosing an accent changes
+    /// the accent-coloured things, and the menu bar is the most visible one.
+    public static var isEnabled: Bool {
+        get {
+            // Absent means the pre-existing default, so an installed app that
+            // never had this key behaves as it did before.
+            UserDefaults.standard.object(forKey: "menuBarAccentTint") as? Bool ?? true
+        }
+        set { UserDefaults.standard.set(newValue, forKey: "menuBarAccentTint") }
+    }
+
+    /// Draw `image`'s silhouette in the accent colour.
+    ///
+    /// Returns nil when there is nothing to tint, so the caller keeps the
+    /// original rather than dropping the mark.  Deliberately *not* a template
+    /// image afterwards: a template is what swallowed the accent in the first
+    /// place.
+    public static func tinted(_ image: NSImage?, isDark: Bool) -> NSImage? {
+        guard let image else { return nil }
+        let choice = AccentChoice.current
+        let tint = NSColor(codecapsHex: isDark ? choice.darkHex : choice.lightHex)
+
+        let size = image.size
+        let out = NSImage(size: size)
+        out.lockFocus()
+        // The mark first, as a mask.
+        image.draw(in: NSRect(origin: .zero, size: size),
+                   from: .zero, operation: .sourceOver, fraction: 1.0)
+        // Then the accent through that mask only, so the silhouette survives and
+        // the transparent background stays transparent.
+        tint.set()
+        NSRect(origin: .zero, size: size).fill(using: .sourceAtop)
+        out.unlockFocus()
+        out.isTemplate = false
+        return out
+    }
+}
+
+extension NSColor {
+    /// Builds a colour from the `0xRRGGBB` values the accent table stores.
+    convenience init(codecapsHex value: UInt32) {
+        self.init(srgbRed: CGFloat((value >> 16) & 0xFF) / 255,
+                  green: CGFloat((value >> 8) & 0xFF) / 255,
+                  blue: CGFloat(value & 0xFF) / 255,
+                  alpha: 1)
     }
 }

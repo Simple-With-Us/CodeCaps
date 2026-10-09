@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 import QuotaCore
+import SwiftUI
 #if canImport(WidgetKit)
 import WidgetKit
 #endif
@@ -102,10 +103,15 @@ enum GlanceViewMode: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 
     /// Title Case: the label on the switch itself, and what VoiceOver says.
+    ///
+    /// Owner wording, 2026-10-08: the second box was "From Fleet", which read
+    /// as a *different* set of sources rather than everything.  It has always
+    /// been the union — the Mac's own readings plus whatever the fleet
+    /// reported — so it now says so.
     var title: String {
         switch self {
         case .fromMac: return "From Mac"
-        case .fromFleet: return "From Fleet"
+        case .fromFleet: return "All Sources"
         }
     }
 
@@ -114,7 +120,7 @@ enum GlanceViewMode: String, CaseIterable, Identifiable {
     var detail: String {
         switch self {
         case .fromMac: return "Quotas this Mac reads from the AI tools signed in on it."
-        case .fromFleet: return "Quotas your other machines report to your fleet endpoint."
+        case .fromFleet: return "Every source at once: this Mac's own quotas plus those your other machines report."
         }
     }
 }
@@ -156,6 +162,26 @@ final class MonitorModel: ObservableObject {
     /// default and the `Theme` lookup all read the same value.
     @Published var accent: AccentChoice {
         didSet { AccentChoice.current = accent }
+    }
+
+    /// The accent as a drawable colour, resolved the same way `Theme.accent`
+    /// resolves it.
+    ///
+    /// Surfaces that are already on screen when the owner picks a colour must
+    /// read *this* rather than `Theme.accent`.  `Theme.accent` is a computed
+    /// `UserDefaults` read: nothing observes it, so a SwiftUI body that is
+    /// already displayed is never re-evaluated and keeps drawing the colour it
+    /// resolved when it was built.  That is why the Glance popover — a separate
+    /// window, usually already open when the swatch is clicked — kept its old
+    /// accent on From Mac / From Fleet, the alarm bell and Open CodeCaps.
+    var accentColor: Color {
+        // Reads `accent` on purpose.  SwiftUI registers the dependency during
+        // body evaluation, so touching the `@Published` property here is what
+        // makes an on-screen surface re-render when the owner picks a colour.
+        // Reading `Theme.accent` instead would resolve the same colour but
+        // register nothing, which is the bug this replaces.
+        _ = accent
+        return Theme.accent
     }
     @Published var highContrast: Bool {
         didSet { defaults.set(highContrast, forKey: "highContrast") }
@@ -251,6 +277,20 @@ final class MonitorModel: ObservableObject {
 
     // Local & Remote Reading
     @Published private(set) var localEnabled: Bool
+    @Published private(set) var providerChecksEnabled: Bool
+    @Published private(set) var sessionFileChecksEnabled: Bool
+    @Published var providerCheckCadence: SourceRefreshCadence {
+        didSet {
+            defaults.set(providerCheckCadence.rawValue, forKey: SourceRefreshPreference.providerMinutes)
+            scheduleSourceTimers()
+        }
+    }
+    @Published var sessionFileCadence: SourceRefreshCadence {
+        didSet {
+            defaults.set(sessionFileCadence.rawValue, forKey: SourceRefreshPreference.sessionMinutes)
+            scheduleSourceTimers()
+        }
+    }
     @Published private(set) var serverEnabled: Bool
     @Published private(set) var endpoint: String
     @Published private(set) var hasSavedToken: Bool
@@ -331,10 +371,19 @@ final class MonitorModel: ObservableObject {
 
     private let defaults: UserDefaults
     private let burnRateHistoryURL: URL
+    /// Memoized historySamples(): the burn-rate file is parsed once per
+    /// on-disk change instead of once per view construction (UsageHistoryView
+    /// init runs on every SwiftUI body evaluation).  Keyed on the file's
+    /// modification date + size; appends and trims both change those.
+    private var historySamplesCache: (modification: Date?, size: Int, samples: [AnomalyDetector.Sample])?
     private var lastRunawayAlertAt: [String: Double] = [:]
     private var hasCurrentLocalRead = false
     var localResultForTesting: LocalQuotaResult?
     var localReadForTesting: (@MainActor () async -> LocalQuotaResult?)?
+    var sessionFileReadForTesting: (@MainActor () async -> LocalQuotaResult)?
+    var sessionAccountIDForTesting: (@MainActor () async -> String?)?
+    var handoffWriteForTesting: (([QuotaWindow]) -> Void)?
+    var widgetWriteForTesting: (([QuotaWindow]) -> Void)?
     var serverFetchForTesting: (@MainActor () async throws -> QuotaResponse)?
     var syncTokenReadForTesting: (@MainActor () async -> String?)?
     var readTokenReadForTesting: (@MainActor () async -> String?)?
@@ -343,11 +392,20 @@ final class MonitorModel: ObservableObject {
     var runawayNotificationForTesting: ((BurnRateNotification) -> Void)?
     var skipsSnapshotIOForTesting = false
     private var localWindows: [QuotaWindow] = []
+    private var providerResult: LocalQuotaResult?
+    private var sessionFileResult: LocalQuotaResult?
+    private var currentCodexAccountID: String?
+    private let sessionFileReader = CodexSessionQuotaReader()
     private var serverWindows: [QuotaWindow] = []
     @Published private(set) var fleetWindowGroups: [FleetWindowGroup] = []
     private var refreshTimer: Timer?
+    private var sessionFileTimer: Timer?
+    private var hasStarted = false
     private var clockTimer: Timer?
     private var request: Task<Void, Never>?
+    private var sessionFileRequest: Task<Void, Never>?
+    var sessionFileTaskForTesting: Task<Void, Never>? { sessionFileRequest }
+    private var sessionFileRevision = 0
     var refreshTaskForTesting: Task<Void, Never>? { request }
     private var revision = 0
     private var pushRevision = 0
@@ -418,6 +476,13 @@ final class MonitorModel: ObservableObject {
         }
         disabledSources = Set((defaults.stringArray(forKey: "disabledSources") ?? []))
         localEnabled = defaults.object(forKey: "localEnabled") as? Bool ?? true
+        glanceLogosFollowAccent = defaults.bool(forKey: "glanceLogosFollowAccent")
+        providerChecksEnabled = SourceRefreshPreference.enabled(SourceRefreshPreference.providerEnabled, defaults: defaults)
+        sessionFileChecksEnabled = SourceRefreshPreference.enabled(SourceRefreshPreference.sessionEnabled, defaults: defaults)
+        providerCheckCadence = SourceRefreshPreference.cadence(SourceRefreshPreference.providerMinutes,
+                                                               fallback: .five, defaults: defaults)
+        sessionFileCadence = SourceRefreshPreference.cadence(SourceRefreshPreference.sessionMinutes,
+                                                              fallback: .one, defaults: defaults)
         serverEnabled = defaults.bool(forKey: "serverEnabled")
         hasSavedToken = defaults.bool(forKey: "hasSavedToken")
         syncEnabled = defaults.bool(forKey: "syncEnabled")
@@ -467,7 +532,16 @@ final class MonitorModel: ObservableObject {
     }
 
     func historySamples() -> [AnomalyDetector.Sample] {
-        BurnRateMonitor.loadSamples(historyURL: burnRateHistoryURL)
+        let attrs = try? FileManager.default.attributesOfItem(atPath: burnRateHistoryURL.path)
+        let modification = attrs?[.modificationDate] as? Date
+        let size = (attrs?[.size] as? Int) ?? -1
+        if let cache = historySamplesCache,
+           cache.modification == modification, cache.size == size {
+            return cache.samples
+        }
+        let samples = BurnRateMonitor.loadSamples(historyURL: burnRateHistoryURL)
+        historySamplesCache = (modification, size, samples)
+        return samples
     }
 
     func hasLocalHistorySource(for row: DisplaySection) -> Bool {
@@ -516,18 +590,38 @@ final class MonitorModel: ObservableObject {
     var nearCapCount: Int { freshWindows.filter { ($0.remainingPercent ?? 100) <= 20 }.count }
     var nextReset: Date? { freshWindows.compactMap(\.resetAt).filter { $0 > now }.min() }
 
-    /// All individual quotas available for pinning to the menu bar.
-    var availableMenuBarQuotas: [(id: String, label: String)] {
-        var result: [(id: String, label: String)] = [
+    /// Automatic fleet-wide menu-bar preset choices.
+    var menuBarAutomaticOptions: [(id: String, label: String)] {
+        [
             (id: "most_urgent_5h", label: "Most Urgent 5h"),
             (id: "most_urgent_weekly", label: "Most Urgent Weekly"),
             (id: "smart_pair", label: "Smart Pair"),
             (id: "auto_lowest_active", label: "Lowest active quota"),
             (id: "auto_lowest", label: "Lowest quota"),
         ]
-        for row in displaySections {
-            result.append((id: "platform:\(row.id)", label: "Pin to \(row.title)"))
+    }
+
+    /// Options to pin to a platform and show both quotas side by side.
+    var menuBarPlatformPairOptions: [(id: String, label: String)] {
+        displaySections.compactMap { row in
+            let windows = row.section.windows.filter {
+                $0.isFresh && $0.remainingPercent != nil && !$0.window.isSupplementaryVideoQuota && !row.isMasked($0)
+            }
+            guard windows.count >= 2 else { return nil }
+            return (id: "platform_pair:\(row.id)", label: "Pin to \(row.title) (Both Quotas)")
         }
+    }
+
+    /// Options to pin to a platform and show its lowest quota.
+    var menuBarPlatformSingleOptions: [(id: String, label: String)] {
+        displaySections.map { row in
+            (id: "platform:\(row.id)", label: "Pin to \(row.title)")
+        }
+    }
+
+    /// Specific individual quota windows.
+    var menuBarIndividualWindowOptions: [(id: String, label: String)] {
+        var result: [(id: String, label: String)] = []
         for row in displaySections {
             let windows = row.section.windows.filter {
                 $0.isFresh && $0.remainingPercent != nil && !$0.window.isSupplementaryVideoQuota && !row.isMasked($0)
@@ -537,6 +631,12 @@ final class MonitorModel: ObservableObject {
                 result.append((id: snapshot.window.id, label: label))
             }
         }
+        return result
+    }
+
+    /// All individual quotas available for pinning to the menu bar.
+    var availableMenuBarQuotas: [(id: String, label: String)] {
+        var result = menuBarAutomaticOptions + menuBarPlatformPairOptions + menuBarPlatformSingleOptions + menuBarIndividualWindowOptions
         // A pinned window can be absent — a retired platform, a reader that is
         // signed out, a refresh that failed.  Without a matching tag the Picker
         // draws empty and says nothing, so the selection carries its own row
@@ -578,6 +678,21 @@ final class MonitorModel: ObservableObject {
         case "auto_lowest":
             return [pickMenuBarTarget(from: freshWindows)].compactMap { $0 }
         default:
+            if menuBarQuotaSelection.hasPrefix("platform_pair:") {
+                let rowID = String(menuBarQuotaSelection.dropFirst("platform_pair:".count))
+                guard let row = displaySections.first(where: { $0.id == rowID }) else { return [] }
+                let scopedPair = glanceMeterPair(for: row, now: now)
+                if let short = scopedPair.short, let weekly = scopedPair.long {
+                    return [short, weekly]
+                }
+                let valid = row.section.windows.filter {
+                    $0.isFresh && $0.remainingPercent != nil && !$0.window.isSupplementaryVideoQuota && !row.isMasked($0)
+                }
+                if valid.count >= 2 {
+                    return [valid[0], valid[1]]
+                }
+                return valid.prefix(1).map { $0 }
+            }
             if menuBarQuotaSelection.hasPrefix("platform:") {
                 let rowID = String(menuBarQuotaSelection.dropFirst("platform:".count))
                 guard let row = displaySections.first(where: { $0.id == rowID }) else { return [] }
@@ -796,13 +911,75 @@ final class MonitorModel: ObservableObject {
         activeRunawayAnomalies = anomalies
     }
 
+    /// Whether this platform or pool currently has an active runaway usage anomaly.
+    func hasActiveRunawayAnomaly(for row: DisplaySection) -> Bool {
+        let rowCanonical = quotaProviderKey(row.providerKey, providerKey: row.providerKey)
+        return activeRunawayAnomalies.contains { anomaly in
+            let canonicalAnomaly = quotaProviderKey(anomaly.providerKey, providerKey: anomaly.providerKey)
+            guard anomaly.providerKey == row.providerKey
+                || anomaly.providerKey == row.id
+                || canonicalAnomaly == rowCanonical else {
+                return false
+            }
+            if row.isPool {
+                return row.section.windows.contains { $0.window.id == anomaly.windowId }
+            }
+            return true
+        }
+    }
+
     var menuBarDetail: String {
-        guard let target = menuBarTargetSnapshot else { return "No current quota report" }
+        let targets = menuBarTargetSnapshots
+        guard !targets.isEmpty else { return "No current quota report" }
+        if targets.count >= 2 {
+            let first = targets[0]
+            let second = targets[1]
+            let title = displayRow(for: first.window)?.title
+                ?? sections.first { $0.providerKey == first.window.canonicalProviderKey }?.providerLabel
+                ?? first.window.provider
+            let p1 = first.remainingPercent.map { "\(Int($0.rounded()))%" } ?? "—"
+            let p2 = second.remainingPercent.map { "\(Int($0.rounded()))%" } ?? "—"
+            return "\(title), \(windowCadenceName(first.window)) (\(p1)) & \(windowCadenceName(second.window)) (\(p2))"
+        }
+        let target = targets[0]
         let title = displayRow(for: target.window)?.title
             ?? sections.first { $0.providerKey == target.window.canonicalProviderKey }?.providerLabel
             ?? target.window.provider
         let pct = target.remainingPercent.map { "\(Int($0.rounded()))%" } ?? "—"
         return "\(title), \(windowCadenceName(target.window)): \(pct) remaining"
+    }
+
+    /// Clear user-facing explanation for each menu-bar preset.
+    func menuBarQuotaDescription(for selection: String) -> String {
+        switch selection {
+        case "smart_pair":
+            return "Automatically monitors the most urgent platform across all sources.  If that platform reports both short and weekly quotas, displays both side by side (e.g. 0% / 65%)."
+        case "auto_lowest_active":
+            return "Automatically monitors whichever quota has the lowest remaining percentage above 0% across all platforms."
+        case "auto_lowest":
+            return "Automatically monitors the single lowest remaining quota percentage across all platforms and windows."
+        case "most_urgent_5h":
+            return "Automatically monitors the single lowest remaining 5-hour quota across all platforms."
+        case "most_urgent_weekly":
+            return "Automatically monitors the single lowest remaining weekly quota across all platforms."
+        default:
+            if selection.hasPrefix("platform_pair:") {
+                let rowID = String(selection.dropFirst("platform_pair:".count))
+                let title = displaySections.first(where: { $0.id == rowID })?.title ?? rowID
+                return "Permanently pins to \(title) and displays both its short and weekly quota percentages side by side in the menu bar."
+            }
+            if selection.hasPrefix("platform:") {
+                let rowID = String(selection.dropFirst("platform:".count))
+                let title = displaySections.first(where: { $0.id == rowID })?.title ?? rowID
+                return "Permanently pins to \(title), showing the lowest remaining percentage among its quotas."
+            }
+            if let window = freshWindows.first(where: { $0.window.id == selection }) {
+                let title = displayRow(for: window.window)?.title ?? window.window.provider
+                let label = AntigravityDisplay.windowLabel(window.window.label)
+                return "Permanently pins to the specific \(title) \(label) quota window."
+            }
+            return "Monitors the selected quota."
+        }
     }
 
     // MARK: - Reset Alarms
@@ -860,10 +1037,9 @@ final class MonitorModel: ObservableObject {
     }
 
     func start() {
+        hasStarted = true
         refresh()
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.refresh() }
-        }
+        scheduleSourceTimers()
         clockTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
@@ -886,13 +1062,31 @@ final class MonitorModel: ObservableObject {
     }
 
     func stop() {
+        hasStarted = false
         revision += 1
         request?.cancel()
         request = nil
+        invalidateSessionFileRefresh()
         cancelPendingPush()
         isRefreshing = false
         refreshTimer?.invalidate()
+        sessionFileTimer?.invalidate()
         clockTimer?.invalidate()
+    }
+
+    private func scheduleSourceTimers() {
+        refreshTimer?.invalidate()
+        sessionFileTimer?.invalidate()
+        guard hasStarted else { return }
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: providerCheckCadence.seconds, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.providerChecksEnabled || self.serverEnabled else { return }
+                self.refreshProviderChecks()
+            }
+        }
+        sessionFileTimer = Timer.scheduledTimer(withTimeInterval: sessionFileCadence.seconds, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.refreshSessionFiles() }
+        }
     }
 
     func movePlatformUp(providerKey: String) {
@@ -949,7 +1143,22 @@ final class MonitorModel: ObservableObject {
         if PlatformLogoImage.hasCustomMark(providerKey: key) || PlatformLogoImage.hasCustomMark(providerKey: platform) {
             return .custom
         }
-        return .standard
+        // Owner's explicit per-provider choice beats the "recolour the logos
+        // with the accent" switch: if they picked a style for this platform,
+        // that is the answer they gave.
+        return glanceLogosFollowAccent ? .template : .standard
+    }
+
+    /// Whether the Glance popover's provider logos wear the chosen accent.
+    ///
+    /// Off by default, and deliberately so.  A logo in the accent stops looking
+    /// like the provider it stands for -- the owner called recolouring every
+    /// logo "a bit extreme", and a screenshot showed Muse Assist turning cyan
+    /// beside MiniMax still pink, which reads as an inconsistency rather than a
+    /// theme.  Offered as a switch because some people do want the popover to
+    /// read as one piece.
+    @Published var glanceLogosFollowAccent: Bool {
+        didSet { defaults.set(glanceLogosFollowAccent, forKey: "glanceLogosFollowAccent") }
     }
 
     func setMarkStyle(_ style: MarkStyle, for providerKey: String) {
@@ -1056,15 +1265,45 @@ final class MonitorModel: ObservableObject {
     func setLocalEnabled(_ value: Bool) {
         guard value != localEnabled else { return }
         invalidateRefresh()
+        invalidateSessionFileRefresh()
         localEnabled = value
         defaults.set(value, forKey: "localEnabled")
         if !value {
             hasCurrentLocalRead = false
+            providerResult = nil
+            sessionFileResult = nil
+            currentCodexAccountID = nil
             localWindows = []
             activeRunawayAnomalies = []
             if !skipsSnapshotIOForTesting { try? LocalQuotaSnapshot.remove() }
+            rebuildLocalState(recordSamples: false)
         }
         refresh()
+    }
+
+    func setProviderChecksEnabled(_ value: Bool) {
+        guard value != providerChecksEnabled else { return }
+        invalidateRefresh()
+        providerChecksEnabled = value
+        defaults.set(value, forKey: SourceRefreshPreference.providerEnabled)
+        if !value { providerResult = nil }
+        rebuildLocalState(recordSamples: false)
+        if value || serverEnabled { refreshProviderChecks() }
+    }
+
+    func setSessionFileChecksEnabled(_ value: Bool) {
+        guard value != sessionFileChecksEnabled else { return }
+        invalidateRefresh()
+        invalidateSessionFileRefresh()
+        sessionFileChecksEnabled = value
+        defaults.set(value, forKey: SourceRefreshPreference.sessionEnabled)
+        if value {
+            refreshSessionFiles()
+        } else {
+            sessionFileResult = nil
+            rebuildLocalState(recordSamples: false)
+        }
+        if providerChecksEnabled || serverEnabled { refreshProviderChecks() }
     }
 
     /// Turns push sharing off without needing a valid endpoint.  Turning it on
@@ -1086,6 +1325,7 @@ final class MonitorModel: ObservableObject {
         serverWindows = []
         fleetWindowGroups = []
         serverError = nil
+        rebuildLocalState(recordSamples: false)
         refresh()
     }
 
@@ -1200,6 +1440,7 @@ final class MonitorModel: ObservableObject {
         guard let url = URL(string: value), QuotaClient.isAllowedEndpoint(url) else { throw QuotaClientError.invalidEndpoint }
         let cleanToken = sanitizedToken(token)
         invalidateRefresh()
+        invalidateSessionFileRefresh()
         if !cleanToken.isEmpty {
             guard !cleanToken.contains("\n"), !cleanToken.contains("\r") else { throw QuotaClientError.invalidToken }
             try await TokenStore.save(cleanToken, server: value, service: TokenStore.readService)
@@ -1226,6 +1467,7 @@ final class MonitorModel: ObservableObject {
         // A timer refresh can start while the token read above is suspended.
         // Invalidate it again before installing the new read modes.
         invalidateRefresh()
+        invalidateSessionFileRefresh()
         localEnabled = local
         serverEnabled = server
         endpoint = value
@@ -1236,6 +1478,9 @@ final class MonitorModel: ObservableObject {
         defaults.set(server, forKey: "serverEnabled")
         defaults.set(value, forKey: "endpoint")
         localWindows = []
+        providerResult = nil
+        sessionFileResult = nil
+        currentCodexAccountID = nil
         hasCurrentLocalRead = false
         activeRunawayAnomalies = []
         serverWindows = []
@@ -1475,6 +1720,12 @@ final class MonitorModel: ObservableObject {
         isRefreshing = false
     }
 
+    private func invalidateSessionFileRefresh() {
+        sessionFileRevision += 1
+        sessionFileRequest?.cancel()
+        sessionFileRequest = nil
+    }
+
     private func cancelPendingPush() {
         pushRevision += 1
         pushTask?.cancel()
@@ -1485,10 +1736,15 @@ final class MonitorModel: ObservableObject {
     // MARK: - Refresh Loop
 
     func refresh() {
+        if providerChecksEnabled || serverEnabled { refreshProviderChecks() }
+        refreshSessionFiles()
+    }
+
+    func refreshProviderChecks() {
         guard !isRefreshing else { return }
         isRefreshing = true
         let generation = revision
-        let useLocal = localEnabled
+        let useLocal = localEnabled && providerChecksEnabled
         let useServer = serverEnabled
         let currentEndpoint = endpoint
         request = Task { [weak self] in
@@ -1528,7 +1784,10 @@ final class MonitorModel: ObservableObject {
                     }
                 }
             }
-            let local = await localRead
+            let providerRead = await localRead
+            let currentAccount: String?
+            if useLocal { currentAccount = await self?.codexAccountID() }
+            else { currentAccount = nil }
             guard !Task.isCancelled, let self, self.revision == generation else { return }
             if useServer {
                 self.readTokenState = SavedTokenState.resolve(hasSavedFlag: self.hasSavedToken,
@@ -1536,6 +1795,9 @@ final class MonitorModel: ObservableObject {
             }
             self.now = Date()
             self.lastChecked = self.now
+            if useLocal { self.currentCodexAccountID = currentAccount }
+            self.providerResult = providerRead
+            let local = self.currentLocalResult()
             if let local {
                 self.issues = local.issues
                 self.consentNeeded = local.consentNeeded
@@ -1558,10 +1820,14 @@ final class MonitorModel: ObservableObject {
                 // `issues` is still the local read's own map here — the server
                 // failure below is merged in afterwards and must never reach a
                 // file that promises local-only readings.
-                if self.skipsSnapshotIOForTesting {
+                if let writeForTesting = self.handoffWriteForTesting {
+                    writeForTesting(self.localWindows)
+                } else if self.skipsSnapshotIOForTesting {
                     self.handoffError = nil
-                } else if useLocal {
-                    try LocalQuotaSnapshot.write(windows: self.localWindows, issues: self.issues, customMarks: exportedCustomMarks(), now: self.now)
+                } else if self.localEnabled && local != nil {
+                    try LocalQuotaSnapshot.write(windows: self.localWindows, issues: self.issues,
+                                                 customMarks: exportedCustomMarks(),
+                                                 alerts: exportedAlerts(now: self.now), now: self.now)
                 }
                 else { try LocalQuotaSnapshot.remove() }
                 self.handoffError = nil
@@ -1570,7 +1836,7 @@ final class MonitorModel: ObservableObject {
             }
 
             // Push to remote server if enabled
-            if self.syncEnabled && !self.localWindows.isEmpty {
+            if useLocal && self.syncEnabled && !self.localWindows.isEmpty {
                 _ = await self.pushQuotasIfEnabled(windows: self.localWindows)
             }
 
@@ -1610,32 +1876,173 @@ final class MonitorModel: ObservableObject {
             self.originByProvider = origins
             if newServer != nil { self.lastPullTime = self.now }
             self.response = QuotaResponse(generatedAt: ISO8601DateFormatter().string(from: self.now), windows: merged)
-            if !self.skipsSnapshotIOForTesting {
-                do {
-                    let widgetCandidates = merged + split.groups.flatMap(\.windows)
-                    let visibleProviderKeys = Set(QuotaResponse(generatedAt: "", windows: widgetCandidates)
-                        .platformSections(now: self.now).map(\.providerKey))
-                    let widgetWindows = widgetCandidates.filter {
-                        visibleProviderKeys.contains($0.canonicalProviderKey)
-                            && !self.disabledSources.contains($0.source ?? "")
-                            && !$0.isSupplementaryVideoQuota
-                    }
-                    try LocalQuotaSnapshot.writeWidgetSnapshot(windows: widgetWindows,
-                                                              customMarks: self.exportedCustomMarks(), now: self.now)
-                    self.widgetSharingError = nil
-                    UserDefaults(suiteName: LocalQuotaSnapshot.appGroupId)?.set(self.platformOrder, forKey: "platformOrder")
-                    #if canImport(WidgetKit)
-                    WidgetCenter.shared.reloadAllTimelines()
-                    #endif
-                } catch {
-                    self.widgetSharingError = "Widgets cannot access the shared quota cache." + sentenceGap
-                        + "Install a build with native widget sharing enabled."
-                }
-            }
+            self.publishWidgetSnapshot(candidates: merged + split.groups.flatMap(\.windows))
             self.refreshRunawayUsageState(recordSamples: local != nil)
             self.alarmManager.evaluate(observations: self.resetAlarmObservationsForCurrentReadings(), now: self.now)
             self.isRefreshing = false
             self.request = nil
+        }
+    }
+
+    func refreshSessionFiles() {
+        guard localEnabled, sessionFileChecksEnabled, sessionFileRequest == nil else { return }
+        // An injected model read must not silently start a real auth/session
+        // file scan from the parallel timer in an offline test.
+        if sessionFileReadForTesting == nil,
+           skipsSnapshotIOForTesting || localReadForTesting != nil || localResultForTesting != nil
+                || serverFetchForTesting != nil { return }
+        let generation = sessionFileRevision
+        let reader = sessionFileReader
+        let readForTesting = sessionFileReadForTesting
+        sessionFileRequest = Task { [weak self] in
+            let result = if let readForTesting {
+                await readForTesting()
+            } else {
+                await reader.read()
+            }
+            let currentAccount = await self?.codexAccountID()
+            guard !Task.isCancelled, let self, self.sessionFileRevision == generation,
+                  self.localEnabled, self.sessionFileChecksEnabled else { return }
+            self.sessionFileRequest = nil
+            let accountChanged = self.currentCodexAccountID != currentAccount
+            self.currentCodexAccountID = currentAccount
+            guard accountChanged || result != self.sessionFileResult else { return }
+            self.sessionFileResult = result
+            self.rebuildLocalState(recordSamples: true)
+        }
+    }
+
+    private func codexAccountID() async -> String? {
+        if let sessionAccountIDForTesting { return await sessionAccountIDForTesting() }
+        if skipsSnapshotIOForTesting || localReadForTesting != nil || localResultForTesting != nil
+            || sessionFileReadForTesting != nil || serverFetchForTesting != nil { return nil }
+        return await sessionFileReader.currentAccountID()
+    }
+
+    private func currentLocalResult() -> LocalQuotaResult? {
+        guard localEnabled else { return nil }
+        let provider = providerChecksEnabled ? providerResult : nil
+        let file = sessionFileChecksEnabled ? sessionFileResult : nil
+        guard provider != nil || file != nil else { return nil }
+        let providerWindows = (provider?.windows ?? []).filter {
+            $0.canonicalProviderKey != "openai" || (currentCodexAccountID != nil && $0.accountKey == currentCodexAccountID)
+        }
+        let fileWindows = (file?.windows ?? []).filter {
+            $0.canonicalProviderKey != "openai" || (currentCodexAccountID != nil && $0.accountKey == currentCodexAccountID)
+        }
+        let windows = Self.reconcileLocalWindows(provider: providerWindows, session: fileWindows)
+        var issues = provider?.issues ?? [:]
+        for (key, message) in file?.issues ?? [:] where issues[key] == nil {
+            issues[key] = message
+        }
+        if !windows.filter({ $0.canonicalProviderKey == "openai" && $0.boundedRemainingPercent != nil }).isEmpty {
+            issues["openai"] = nil
+        }
+        if currentCodexAccountID == nil {
+            issues["openai"] = "Codex is not signed in locally."
+        }
+        return LocalQuotaResult(windows: windows, issues: issues,
+                                consentNeeded: provider?.consentNeeded ?? [])
+            .droppingSupersededPlaceholders()
+    }
+
+    static func reconcileLocalWindows(provider: [QuotaWindow], session: [QuotaWindow]) -> [QuotaWindow] {
+        let liveProviderCodex = provider.filter {
+            $0.canonicalProviderKey == "openai" && $0.boundedRemainingPercent != nil
+        }
+        let providerAccount = liveProviderCodex.first?.accountKey
+        var resolved = provider
+        for fileWindow in session {
+            guard fileWindow.canonicalProviderKey == "openai" else { continue }
+            // A provider reading with unknown or different account identity
+            // cannot be replaced by a session event from another login.
+            if !liveProviderCodex.isEmpty && (providerAccount == nil || fileWindow.accountKey != providerAccount) {
+                continue
+            }
+            if let index = resolved.firstIndex(where: { $0.id == fileWindow.id }) {
+                let current = resolved[index]
+                guard current.boundedRemainingPercent == nil
+                        || (fileWindow.occurredDate ?? .distantPast) > (current.occurredDate ?? .distantPast)
+                else { continue }
+                resolved[index] = fileWindow
+            } else {
+                resolved.append(fileWindow)
+            }
+        }
+        return resolved
+    }
+
+    /// File checks publish only changed local readings.  Fleet pull and push
+    /// stay on the provider/manual path, so a one-minute file poll is passive.
+    private func rebuildLocalState(recordSamples: Bool) {
+        let local = currentLocalResult()
+        if recordSamples {
+            // Only a real read advances the check clock.  Preference toggles
+            // rebuild state with no I/O; stamping lastChecked there made
+            // ConsoleState.reconcile treat the toggle as a completed read and
+            // abandon the saved-platform wait.  (`now` itself is still kept
+            // fresh by the 30-second clock timer.)
+            now = Date()
+            lastChecked = now
+        }
+        issues = local?.issues ?? [:]
+        consentNeeded = local?.consentNeeded ?? []
+        localWindows = AntigravityQuotaGroups.normalize(local?.windows ?? [])
+        hasCurrentLocalRead = local != nil
+        let localProviders = Set(localWindows.map(\.canonicalProviderKey))
+        let split = FleetOrigin.split(serverWindows)
+        let ownPush = split.ownPush
+        let adopted = ownPush.filter { !localProviders.contains($0.canonicalProviderKey) }
+        let merged = localWindows + adopted
+        originByProvider = Dictionary(uniqueKeysWithValues: Set(merged.map(\.canonicalProviderKey)).map { ($0, .local) })
+        response = QuotaResponse(generatedAt: ISO8601DateFormatter().string(from: now), windows: merged)
+        if let writeForTesting = handoffWriteForTesting {
+            writeForTesting(localWindows)
+            handoffError = nil
+        } else if !skipsSnapshotIOForTesting {
+            do {
+                if localEnabled {
+                    try LocalQuotaSnapshot.write(windows: localWindows, issues: issues,
+                                                 customMarks: exportedCustomMarks(),
+                                                 alerts: exportedAlerts(now: now), now: now)
+                } else {
+                    try LocalQuotaSnapshot.remove()
+                }
+                handoffError = nil
+            } catch {
+                handoffError = "BotFleet quota sharing is unavailable."
+            }
+        }
+        publishWidgetSnapshot(candidates: merged + split.groups.flatMap(\.windows))
+        refreshRunawayUsageState(recordSamples: recordSamples)
+        alarmManager.evaluate(observations: resetAlarmObservationsForCurrentReadings(), now: now)
+    }
+
+    private func publishWidgetSnapshot(candidates: [QuotaWindow]) {
+        let visibleProviderKeys = Set(QuotaResponse(generatedAt: "", windows: candidates)
+            .platformSections(now: now).map(\.providerKey))
+        let windows = candidates.filter {
+            visibleProviderKeys.contains($0.canonicalProviderKey)
+                && !disabledSources.contains($0.source ?? "")
+                && !$0.isSupplementaryVideoQuota
+        }
+        if let writeForTesting = widgetWriteForTesting {
+            writeForTesting(windows)
+            widgetSharingError = nil
+            return
+        }
+        guard !skipsSnapshotIOForTesting else { return }
+        do {
+            try LocalQuotaSnapshot.writeWidgetSnapshot(windows: windows,
+                                                      customMarks: exportedCustomMarks(), now: now)
+            widgetSharingError = nil
+            UserDefaults(suiteName: LocalQuotaSnapshot.appGroupId)?.set(platformOrder, forKey: "platformOrder")
+            #if canImport(WidgetKit)
+            WidgetCenter.shared.reloadAllTimelines()
+            #endif
+        } catch {
+            widgetSharingError = "Widgets cannot access the shared quota cache." + sentenceGap
+                + "Install a build with native widget sharing enabled."
         }
     }
 
@@ -1807,4 +2214,49 @@ func resetCountdown(_ reset: Date?, now: Date) -> String {
     if minutes >= 1440 { return "Resets in \(minutes / 1440)d \((minutes % 1440) / 60)h" }
     if minutes >= 60 { return "Resets in \(minutes / 60)h \(minutes % 60)m" }
     return "Resets in \(minutes)m"
+}
+
+// MARK: - Alert export for the iOS companion
+
+extension MonitorModel {
+    /// The alerts the companion should raise, in the same shape it reads.
+    ///
+    /// Owner request 2026-10-08: "iOS should have info about heavy anomalies in
+    /// usage or runaway usage like the mac."  The decision is made **here** and
+    /// shipped as data, rather than recomputed on the phone, for two reasons.
+    ///
+    /// The rules need this Mac's burn-rate history — a per-machine file of
+    /// measured hourly intervals built from local readings.  The companion has
+    /// no access to it and could not reproduce the comparison, so a phone-side
+    /// implementation would either alert on much weaker evidence or not at all.
+    ///
+    /// And the identity matters more than the text: if each surface evaluated
+    /// its own thresholds they could disagree about whether something was
+    /// anomalous, which is worse than one surface being silent.  One decision,
+    /// two notifications.
+    ///
+    /// `id` is stable for a given anomaly so the companion can raise it once
+    /// rather than once per poll — this payload is rewritten on every refresh.
+    func exportedAlerts(now: Date = Date()) -> [LocalQuotaSnapshot.AlertPayload] {
+        var out: [LocalQuotaSnapshot.AlertPayload] = []
+        let formatter = ISO8601DateFormatter()
+
+        // Runaway usage currently burning far faster than the owner's own
+        // pattern.  Only the live set, so a resolved anomaly stops being
+        // re-offered on the next poll.
+        for anomaly in activeRunawayAnomalies {
+            let label = AnomalyDetector.windowLabel(windowId: anomaly.windowId)
+            let title = displaySections.first { $0.id == anomaly.providerKey }?.title
+                ?? anomaly.providerKey
+            out.append(LocalQuotaSnapshot.AlertPayload(
+                id: "runaway|\(anomaly.providerKey)|\(anomaly.windowId)|\(anomaly.kind.rawValue)",
+                kind: "runaway",
+                providerKey: anomaly.providerKey,
+                providerTitle: title,
+                windowLabel: label,
+                summary: anomaly.summary,
+                occurredAt: formatter.string(from: anomaly.observedAt ?? now)))
+        }
+        return out
+    }
 }

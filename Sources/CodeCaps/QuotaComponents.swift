@@ -12,6 +12,13 @@ import SwiftUI
 /// that number is the one the owner reads at a glance.
 enum AccentChoice: String, CaseIterable, Identifiable {
     case teal, blue, royalBlue, violet, orange, green, magenta
+    // Genuinely light accents, added at the owner's request (2026-10-06):
+    // "we should add some light colors as options for theme too since it is
+    // just for a few accents."  These are light enough that anything drawn *on*
+    // them needs dark ink rather than the white the dark-leaning seven suit.
+    // `onAccent` below is the token for that; nothing should hardcode a
+    // foreground to pair with an accent fill.
+    case rose, lemon, sky, lime
 
     var id: String { rawValue }
 
@@ -24,8 +31,32 @@ enum AccentChoice: String, CaseIterable, Identifiable {
         case .orange: return "Orange"
         case .green: return "Green"
         case .magenta: return "Magenta"
+        case .rose: return "Rose"
+        case .lemon: return "Lemon"
+        case .sky: return "Sky"
+        case .lime: return "Lime"
         }
     }
+
+    /// Whether this accent is light enough to need dark ink on top of it.
+    ///
+    /// This is deliberately **not** a property of the enum case.  The Dark
+    /// appearance values are deliberately bright so they read against a
+    /// near-black surface — teal is `#4FD1C5`, orange is `#f0b45a` — and white
+    /// text on either is about 1.9:1, which is unreadable.  A static flag set
+    /// per case would say "dark, use white" for exactly the values that need
+    /// the opposite.  `Theme.onAccent` therefore measures the colour actually
+    /// in use rather than trusting this flag; it exists for the four light
+    /// cases, whose *light-appearance* value is light in both appearances.
+    var isLight: Bool {
+        switch self {
+        case .rose, .lemon, .sky, .lime: return true
+        case .teal, .blue, .royalBlue, .violet, .orange, .green, .magenta: return false
+        }
+    }
+
+    /// The accent value in force for an appearance.
+    func hex(isDark: Bool) -> UInt32 { isDark ? darkHex : lightHex }
 
     /// Light / dark values, as 0xRRGGBB.
     var lightHex: UInt32 {
@@ -39,6 +70,13 @@ enum AccentChoice: String, CaseIterable, Identifiable {
         case .orange: return 0xA85C05
         case .green: return 0x2E6B2E
         case .magenta: return 0xA3225E
+        // The light four are light *by design*, so their light-appearance value
+        // is the light one too.  They are still darkened for Dark appearance so
+        // they do not glare against a near-black surface.
+        case .rose: return 0xF2A8C0
+        case .lemon: return 0xE8C54A
+        case .sky: return 0x8FC9EA
+        case .lime: return 0xA9D96B
         }
     }
 
@@ -51,6 +89,10 @@ enum AccentChoice: String, CaseIterable, Identifiable {
         case .orange: return 0xF0B45A
         case .green: return 0x7FD07F
         case .magenta: return 0xF07AAF
+        case .rose: return 0xD96A8C
+        case .lemon: return 0xB99A2E
+        case .sky: return 0x5A9FC7
+        case .lime: return 0x6E9E3E
         }
     }
 
@@ -106,9 +148,17 @@ enum Theme {
                                       NSColor.black.withAlphaComponent(0.7))
     /// The share of a quota window already used: the left segment of the bar.
     static let barUsed = danger
-    /// The share still available: the right segment of the bar.  This is the
-    /// same teal as the "% remaining" text, which the owner reads as green.
-    static let barRemaining = accent
+    /// The share still available: the right segment of the bar.  Healthy capacity
+    /// uses teal (or green if chosen), keeping the bar distinguishable from the red
+    /// `barUsed` segment even if the user picks a warm or danger-like UI accent (e.g. magenta, orange).
+    static var barRemaining: Color {
+        switch AccentChoice.current {
+        case .green:
+            return dyn(hex(AccentChoice.green.lightHex), hex(AccentChoice.green.darkHex))
+        default:
+            return dyn(hex(AccentChoice.teal.lightHex), hex(AccentChoice.teal.darkHex))
+        }
+    }
     static let fleet = dyn(hex(0x4B4FA8), hex(0x8A8EE0))
 
     /// Unfilled portion of any progress bar.  A black 6% track disappears on a
@@ -118,8 +168,17 @@ enum Theme {
         : dyn(NSColor.black.withAlphaComponent(0.08), NSColor.white.withAlphaComponent(0.14))
 
     /// Fill behind a selected or highlighted row.
-    static let selection = dyn(hex(0x087370).withAlphaComponent(0.12),
-                               hex(0x4FD1C5).withAlphaComponent(0.18))
+    ///
+    /// Derived from the owner's accent rather than pinned to the teal the app
+    /// shipped with: this is the fill *behind* the row's accent border, so a
+    /// hardcoded value left a violet border sitting on a teal wash the moment
+    /// any other accent was picked.  Same alphas as before, so the fill keeps
+    /// the contrast it had against the surface.
+    static var selection: Color {
+        let choice = AccentChoice.current
+        return dyn(hex(choice.lightHex).withAlphaComponent(0.12),
+                   hex(choice.darkHex).withAlphaComponent(0.18))
+    }
 
     /// The outline of a small header control: the From Mac / From Fleet switch.
     static let controlBorder: Color = highContrast
@@ -136,6 +195,13 @@ enum Theme {
     /// background in both appearances, so each source reads as a section.
     static let groupBand = dyn(hex(0xE1E6E7), hex(0x111214))
 
+    /// A band that is slightly lighter than `groupBand`, for a header that has
+    /// to read as sitting above it rather than as an unrelated surface.  The PiP
+    /// HUD is the caller: it used the near-white/near-black `surface` token
+    /// there, which on the dark HUD became a second, unrelated band instead of
+    /// a header.
+    static let raisedBand = dyn(hex(0xEFF3F3), hex(0x1E2124))
+
     /// Text on that band: the source's name and its "reported" time.  The
     /// system secondary and tertiary greys are tuned for the list background
     /// and fall under 3:1 on the darker band, so the band carries its own
@@ -145,6 +211,56 @@ enum Theme {
     /// A one-colour brand mark that has to read as solid, not as body text:
     /// pure black on Light and pure white on Dark, never the ink's grey.
     static let solidMark = dyn(NSColor.black, NSColor.white)
+
+    /// The ink to draw **on** the accent, rather than a hardcoded white.
+    ///
+    /// Owner request 2026-10-06: "if real light then make the text dark over it
+    /// if button or something."  Two families of accent need this:
+    ///
+    ///  - The four light accents (Rose, Lemon, Sky, Lime), which are light in
+    ///    both appearances because that is what they are for.
+    ///  - The Dark-appearance value of *every* accent, including the original
+    ///    seven.  Those are deliberately bright so they read against a
+    ///    near-black surface, and white on teal `#4FD1C5` is 1.87:1 —
+    ///    unreadable.  So this cannot be a per-case flag; it measures the
+    ///    colour actually in force.
+    ///
+    /// Anything filled with `Theme.accent` and labelled should colour its text
+    /// with this instead of `.white`.
+    static var onAccent: Color {
+        let choice = AccentChoice.current
+        // `isDark` is resolved the same way `accentColor` resolves its hex, so
+        // the ink always matches the fill it is paired with.
+        let isDark = NSApp?.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        return Self.readableInk(on: choice.hex(isDark: isDark))
+    }
+
+    /// Black or white, whichever reads better on `hex`.  The decision is made by
+    /// measured contrast rather than by guessing which family the colour is,
+    /// because the Dark appearance turns every accent into a bright value.
+    static func readableInk(on hex: UInt32) -> Color {
+        func channel(_ shift: UInt32) -> Double {
+            let c = Double((hex >> shift) & 0xFF) / 255
+            return c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)
+        }
+        let luminance = 0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0)
+        // Contrast against white and against near-black; take the better one.
+        let onWhite = 1.05 / (luminance + 0.05)
+        let onBlack = (luminance + 0.05) / 0.05
+        return onBlack > onWhite ? Color(white: 0.078) : Color.white
+    }
+
+    /// The track a `Slider` draws on: the unfilled rail behind the thumb.
+    ///
+    /// The runaway-usage sliders were reported as barely visible, and able to
+    /// render as a black bar on a dark surface (owner, 2026-10-06).  macOS
+    /// derives the default track from the control tint with no lower bound, so a
+    /// dark accent on the dark rows surface produced a rail that disappeared.
+    /// This is a token with a floor rather than a computed alpha, because the
+    /// failure was the floor being zero.
+    static let sliderTrack: Color = highContrast
+        ? dyn(NSColor.black.withAlphaComponent(0.45), NSColor.white.withAlphaComponent(0.55))
+        : dyn(NSColor.black.withAlphaComponent(0.20), NSColor.white.withAlphaComponent(0.28))
 
     /// The accent the owner chose, resolved against the current appearance.
     private static var accentColor: Color {
@@ -222,7 +338,7 @@ enum Metrics {
     static let glanceHeaderSegmentPadding: CGFloat = 11
     /// The dots between the cluster's phrases.
     static let glanceHeaderDotSize: CGFloat = 3
-    static let glanceFooterHeight: CGFloat = 38
+    static let glanceFooterHeight: CGFloat = 40
     /// A source's heading band in From Fleet.
     static let glanceGroupHeaderHeight: CGFloat = 22
     /// The list's own padding above the first row and below the last.
@@ -263,7 +379,7 @@ enum Metrics {
     static let glanceMeterBarHeight: CGFloat = 6
     /// The elapsed marker's full height, twice the 8pt it was, so the black
     /// tick reads at a glance against the thicker bar.  Same 2pt width.
-    static let glanceMeterMarkerHeight: CGFloat = 16
+    static let glanceMeterMarkerHeight: CGFloat = 20
     /// "100%" is 32.2pt at 11pt medium with monospaced digits.  The rest of
     /// the column is the gap before the countdown, so the two never touch.
     static let glanceMeterPercentWidth: CGFloat = 44
@@ -416,7 +532,7 @@ struct QuotaUsageBar: View {
 
     /// How far the marker stands proud of the bar above and below.
     static let markerOverhang: CGFloat = 2
-    static let markerWidth: CGFloat = 2
+    static let markerWidth: CGFloat = 3
     /// How far the pale halo stands proud of the marker on each side.
     static let haloPadding: CGFloat = 1
 

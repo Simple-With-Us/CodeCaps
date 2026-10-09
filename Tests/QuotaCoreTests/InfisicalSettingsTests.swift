@@ -50,6 +50,7 @@ private func configuredSettings(
 ) -> InfisicalSettings {
     let settings = InfisicalSettings(transport: transport)
     settings.configure(InfisicalSettings.Configuration(
+        projectId: "synthetic-project",
         environment: "dev",
         clientId: "test-client",
         clientSecret: "test-secret"

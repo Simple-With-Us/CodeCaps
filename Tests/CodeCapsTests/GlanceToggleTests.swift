@@ -13,16 +13,21 @@ final class GlanceToggleTests: XCTestCase {
     private var suiteName = ""
     private var defaults: UserDefaults!
     private let now = Date(timeIntervalSince1970: 1_790_000_000)
+    /// The header bar and its controls observe the model so they follow the
+    /// accent live, so a layout test has to hand one in.
+    private var model: MonitorModel!
 
     override func setUp() {
         super.setUp()
         suiteName = "com.jays.codecaps.glance-toggle." + UUID().uuidString
         defaults = UserDefaults(suiteName: suiteName)
+        model = MonitorModel(defaults: defaults)
     }
 
     override func tearDown() {
         defaults.removePersistentDomain(forName: suiteName)
         defaults = nil
+        model = nil
         super.tearDown()
     }
 
@@ -43,7 +48,8 @@ final class GlanceToggleTests: XCTestCase {
     func testSwitchLabelsReadFromMacAndFromFleetInTitleCase() {
         // The label on the switch is the title itself: not capitals, not small
         // caps (owner delta 2026-09-30).
-        XCTAssertEqual(GlanceViewMode.allCases.map(\.title), ["From Mac", "From Fleet"])
+        XCTAssertEqual(GlanceViewMode.allCases.map(\.title), ["From Mac", "All Sources"],
+                       "the second box is the union of Mac and fleet; owner renamed it 2026-10-08")
         for mode in GlanceViewMode.allCases {
             XCTAssertNotEqual(mode.title, mode.title.uppercased(), "\(mode.title) is not all capitals")
             XCTAssertNotEqual(mode.title, mode.title.lowercased(), "\(mode.title) is not all lower case")
@@ -54,7 +60,7 @@ final class GlanceToggleTests: XCTestCase {
 
     func testTheSwitchTooltipsAreSentencesThatNameTheirSide() {
         XCTAssertEqual(GlanceViewMode.fromMac.detail, "Quotas this Mac reads from the AI tools signed in on it.")
-        XCTAssertEqual(GlanceViewMode.fromFleet.detail, "Quotas your other machines report to your fleet endpoint.")
+        XCTAssertEqual(GlanceViewMode.fromFleet.detail, "Every source at once: this Mac's own quotas plus those your other machines report.")
         for mode in GlanceViewMode.allCases {
             XCTAssertNotEqual(mode.detail, mode.title, "a tooltip that repeats the label says nothing")
             XCTAssertFalse(mode.detail.contains("FROM"), "no capitals-only copy left over")
@@ -342,16 +348,17 @@ final class GlanceToggleTests: XCTestCase {
         // 1.5x the 4pt bar, and 2x the 8pt (4pt bar + 2pt either side) marker.
         XCTAssertGreaterThanOrEqual(Metrics.glanceMeterBarHeight, 4 * 1.5)
         XCTAssertGreaterThanOrEqual(Metrics.glanceMeterMarkerHeight, 8 * 2)
-        XCTAssertEqual(QuotaUsageBar.markerWidth, 2, "the marker keeps its width")
+        XCTAssertEqual(QuotaUsageBar.markerWidth, 3, "the notch was widened 2026-10-08")
     }
 
     // MARK: - The header, laid out
 
     /// The natural width of the header line at one count and time: everything
     /// at its real type size, the springs at their minimum.
-    private func headerIdealWidth(parts: [String], view: GlanceViewMode = .fromMac) -> CGFloat {
-        let bar = GlanceHeaderBar(view: .constant(view), alarmsAll: .constant(true), parts: parts,
-                                  isRefreshing: false, refresh: {})
+    private func headerIdealWidth(parts: [String], view: GlanceViewMode = .fromMac,
+                                  model: MonitorModel) -> CGFloat {
+        let bar = GlanceHeaderBar(view: .constant(view), alarmsAll: .constant(true), model: model,
+                                  parts: parts, isRefreshing: false, refresh: {})
         return NSHostingView(rootView: bar.fixedSize(horizontal: true, vertical: false)).fittingSize.width
     }
 
@@ -367,7 +374,7 @@ final class GlanceToggleTests: XCTestCase {
             (.fromMac, []),
         ]
         for (view, parts) in cases {
-            let ideal = headerIdealWidth(parts: parts, view: view)
+            let ideal = headerIdealWidth(parts: parts, view: view, model: model)
             XCTAssertGreaterThan(ideal, 0)
             // `ideal` already holds the spring at its minimum; what is left of
             // the popover beyond it is the spring growing.
@@ -378,8 +385,8 @@ final class GlanceToggleTests: XCTestCase {
     }
 
     func testAWiderCountOrTimeOnlyTakesSpaceFromTheSpring() {
-        let narrow = headerIdealWidth(parts: ["7 of 7", "9:13 AM"])
-        let wide = headerIdealWidth(parts: ["88 of 88", "12:59 PM"])
+        let narrow = headerIdealWidth(parts: ["7 of 7", "9:13 AM"], model: model)
+        let wide = headerIdealWidth(parts: ["88 of 88", "12:59 PM"], model: model)
         XCTAssertGreaterThan(wide, narrow)
         // The title, the switch and every fixed gap are the same either way, so
         // the difference is exactly the two phrases' extra text.
@@ -396,30 +403,30 @@ final class GlanceToggleTests: XCTestCase {
                              "the title is a group of its own, not another neighbour")
         // And the width really is spent.  With no count or time, the header carries
         // the gutters, title, switch, bell, enlarged refresh button, and settings button.
-        let toggle = NSHostingView(rootView: GlanceViewToggle(selection: .constant(.fromMac))).fittingSize.width
-        let bell = NSHostingView(rootView: GlanceAlarmAllToggle(isOn: .constant(true))).fittingSize.width
+        let toggle = NSHostingView(rootView: GlanceViewToggle(selection: .constant(.fromMac), model: model)).fittingSize.width
+        let bell = NSHostingView(rootView: GlanceAlarmAllToggle(isOn: .constant(true), model: model)).fittingSize.width
         let expected = Metrics.glanceGutter * 2 + width("CodeCaps", size: 13, weight: .semibold)
             + 8 + toggle + 12 + bell + 12 + 22 + 6 + 22
-        XCTAssertEqual(headerIdealWidth(parts: []), expected, accuracy: 3)
+        XCTAssertEqual(headerIdealWidth(parts: [], model: model), expected, accuracy: 3)
     }
 
     func testTheSwitchIsTwoEqualBoxesInTitleCase() {
         let widest = GlanceViewMode.allCases.map { width($0.title, size: 11, weight: .semibold) }.max() ?? 0
         let box = widest + 2 * Metrics.glanceHeaderSegmentPadding
-        let host = NSHostingView(rootView: GlanceViewToggle(selection: .constant(.fromMac)))
+        let host = NSHostingView(rootView: GlanceViewToggle(selection: .constant(.fromMac), model: model))
         XCTAssertEqual(host.fittingSize.width, 2 * box + 1, accuracy: 2, "two equal boxes and the hairline between")
         XCTAssertEqual(host.fittingSize.height, Metrics.glanceHeaderControlHeight)
         // Flipping the selection must not change the switch's shape.
-        let flipped = NSHostingView(rootView: GlanceViewToggle(selection: .constant(.fromFleet)))
+        let flipped = NSHostingView(rootView: GlanceViewToggle(selection: .constant(.fromFleet), model: model))
         XCTAssertEqual(flipped.fittingSize, host.fittingSize)
     }
 
     func testEveryHeaderControlSharesOneHeightSoTheySitOnOneCentreLine() {
-        let bell = NSHostingView(rootView: GlanceAlarmAllToggle(isOn: .constant(true)))
+        let bell = NSHostingView(rootView: GlanceAlarmAllToggle(isOn: .constant(true), model: model))
         XCTAssertEqual(bell.fittingSize.height, Metrics.glanceHeaderControlHeight)
-        let toggle = NSHostingView(rootView: GlanceViewToggle(selection: .constant(.fromMac)))
+        let toggle = NSHostingView(rootView: GlanceViewToggle(selection: .constant(.fromMac), model: model))
         XCTAssertEqual(toggle.fittingSize.height, Metrics.glanceHeaderControlHeight)
-        let bar = GlanceHeaderBar(view: .constant(.fromMac), alarmsAll: .constant(true),
+        let bar = GlanceHeaderBar(view: .constant(.fromMac), alarmsAll: .constant(true), model: model,
                                   parts: ["7 of 7", "9:13 AM"], isRefreshing: false, refresh: {})
         XCTAssertEqual(NSHostingView(rootView: bar.fixedSize(horizontal: true, vertical: false)).fittingSize.height,
                        Metrics.glanceHeaderHeight)

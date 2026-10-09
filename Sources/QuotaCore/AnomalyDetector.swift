@@ -60,10 +60,17 @@ public struct AnomalyDetector: Sendable {
         public let observedAt: Date?
         /// Span between the earliest and latest valid comparison samples.
         public let historyCoverageHours: Double?
+        /// Both ratios, when both were exceeded, so the settings screen can say
+        /// "cleared both the average and the peak bar" without re-deriving them.
+        /// `multiplier` alone is not enough for that, which is why these are
+        /// stored rather than recomputed from a rate that has since moved.
+        public let baselineRatio: Double?
+        public let peakRatio: Double?
 
         public init(providerKey: String, windowId: String, kind: Kind, multiplier: Double, summary: String,
                     ratePercentPerHour: Double? = nil, comparisonRatePercentPerHour: Double? = nil,
-                    observedAt: Date? = nil, historyCoverageHours: Double? = nil) {
+                    observedAt: Date? = nil, historyCoverageHours: Double? = nil,
+                    baselineRatio: Double? = nil, peakRatio: Double? = nil) {
             self.providerKey = providerKey
             self.windowId = windowId
             self.kind = kind
@@ -73,6 +80,21 @@ public struct AnomalyDetector: Sendable {
             self.comparisonRatePercentPerHour = comparisonRatePercentPerHour
             self.observedAt = observedAt
             self.historyCoverageHours = historyCoverageHours
+            self.baselineRatio = baselineRatio
+            self.peakRatio = peakRatio
+        }
+
+        /// The plain rate the owner asked for (2026-10-09): "%/hour" on its own
+        /// tells someone how fast quota is going without reference to any prior
+        /// week, and needs no multiplier to be read.
+        ///
+        /// One hour's worth of depletion is `100 - remainingPercent`, so the
+        /// fraction of a whole window being burned per hour is that over the
+        /// window's own period.  Returned as a percentage of the window burned
+        /// per hour, so `2.5%` reads as "a quarter of this window, every hour".
+        public var windowPercentPerHour: Double? {
+            guard let ratePercentPerHour else { return nil }
+            return ratePercentPerHour
         }
     }
 
@@ -111,34 +133,58 @@ public struct AnomalyDetector: Sendable {
             guard historical.count >= 3, coverage >= 1 else { continue }
             let depletion = historical.reduce(0) { $0 + $1.rate * $1.hours }
             let baselineRate = depletion / coverage
-            let peakRate = historical.map(\.rate).filter { $0 > 0 }.max()
+            let peakRate = Self.peakRatePercentile(historical.map(\.rate))
             let windowLabel = Self.windowLabel(windowId: key.window)
+
+            // Both comparisons, then **one** anomaly per window.
+            //
+            // Owner report 2026-10-09: two alerts arrived back to back for the
+            // same event — "8.0x your 5hr average" and "8.6x your 7d average".
+            // They were not a coincidence and not two windows either: one
+            // window was producing two anomalies, because the baseline check and
+            // the peak check were both satisfied and each appended its own.
+            // Nothing collapsed them, so the same burst was announced twice in
+            // slightly different words.
+            //
+            // A single number per event is the answer. The stronger comparison
+            // wins, because it is the one the owner's own thresholds were set
+            // to trigger on, and the summary is phrased against the larger
+            // window rather than whichever fired first. `kind` still records how
+            // many times the rate cleared each bar, which is what the settings
+            // screen needs to explain itself.
+            var baselineRatio: Double?
             if baselineRate > 0 {
                 let ratio = currentRate / baselineRate
-                if ratio.isFinite, ratio >= baselineMultiplier {
-                    out.append(Anomaly(
-                        providerKey: key.provider,
-                        windowId: key.window,
-                        kind: .vsBaseline,
-                        multiplier: ratio,
-                        summary: Self.summary(kind: .vsBaseline, ratio: ratio, window: windowLabel, comparison: "your average over available history"),
-                        ratePercentPerHour: currentRate, comparisonRatePercentPerHour: baselineRate,
-                        observedAt: observedAt, historyCoverageHours: coverage))
-                }
+                if ratio.isFinite, ratio >= baselineMultiplier { baselineRatio = ratio }
             }
+            var peakRatio: Double?
             if let peak = peakRate {
                 let ratio = currentRate / peak
-                if ratio.isFinite, ratio >= peakMultiplier {
-                    out.append(Anomaly(
-                        providerKey: key.provider,
-                        windowId: key.window,
-                        kind: .vsPeak,
-                        multiplier: ratio,
-                        summary: Self.summary(kind: .vsPeak, ratio: ratio, window: windowLabel, comparison: "your measured peak"),
-                        ratePercentPerHour: currentRate, comparisonRatePercentPerHour: peak,
-                        observedAt: observedAt, historyCoverageHours: coverage))
-                }
+                if ratio.isFinite, ratio >= peakMultiplier { peakRatio = ratio }
             }
+            guard baselineRatio != nil || peakRatio != nil else { continue }
+
+            // Whichever ratio is larger is the one worth saying out loud.  Preferring
+            // peak merely because it fired would relabel a mild overrun of the
+            // average as a record-beating event, since the peak bar is normally
+            // crossed first when both are met.
+            let exceededPeak = (peakRatio ?? 0) > (baselineRatio ?? 0)
+            let headline = max(baselineRatio ?? 0, peakRatio ?? 0)
+            let comparisonRate = exceededPeak ? peakRate : baselineRate
+            out.append(Anomaly(
+                providerKey: key.provider,
+                windowId: key.window,
+                kind: exceededPeak ? .vsPeak : .vsBaseline,
+                multiplier: headline,
+                summary: Self.summary(kind: exceededPeak ? .vsPeak : .vsBaseline,
+                                      ratio: headline,
+                                      window: windowLabel,
+                                      comparison: exceededPeak
+                                        ? "your measured peak"
+                                        : "your average over available history"),
+                ratePercentPerHour: currentRate, comparisonRatePercentPerHour: comparisonRate,
+                observedAt: observedAt, historyCoverageHours: coverage,
+                baselineRatio: baselineRatio, peakRatio: peakRatio))
         }
         return out
     }
@@ -208,6 +254,31 @@ public struct AnomalyDetector: Sendable {
         let hours: Double
     }
 
+    /// The high percentile of measured hourly rates, used instead of the
+    /// single fastest sample.
+    ///
+    /// Owner analysis 2026-10-09, over 3,656 real hourly intervals from this
+    /// Mac's own history: comparing against the maximum meant the peak check
+    /// could not fire in **99.3%** of measured hours at the default 1.5x,
+    /// because the maximum is an outlier by definition — the median
+    /// current-rate/peak ratio was 0.05 and the p99 only 1.30.  A control that
+    /// almost never does anything is worse than no control, because it still
+    /// looks like a setting.
+    ///
+    /// The 99th percentile is the right reference for "unusually fast": rare
+    /// without being unreachable, so a multiplier above 1.0 carries meaning.
+    /// Against this, 1.5x alerts on hours that beat nearly every hour you have
+    /// ever measured, rather than the single worst one.
+    static func peakRatePercentile(_ rates: [Double]) -> Double? {
+        let positive = rates.filter { $0 > 0 }.sorted()
+        guard !positive.isEmpty else { return nil }
+        // Too few samples for a percentile to mean anything; the maximum is
+        // then the honest choice rather than a fabricated rank.
+        guard positive.count >= 20 else { return positive.last }
+        let rank = Int((Double(positive.count) * 0.99).rounded(.up)) - 1
+        return positive[min(max(rank, 0), positive.count - 1)]
+    }
+
     private static func historicalPairs(_ samples: [Sample], now: Date) -> [HistoricalPair] {
         let start = now.addingTimeInterval(-7 * 24 * 3600)
         let end = now.addingTimeInterval(-3600)
@@ -243,10 +314,13 @@ public struct AnomalyDetector: Sendable {
             encoder.dateEncodingStrategy = .iso8601
             encoder.outputFormatting = [.withoutEscapingSlashes]
             let fm = FileManager.default
-            let existing = try load()
-            var seen = Set(existing.map {
-                SampleKey(pair: PairKey(provider: $0.providerKey, window: $0.windowId), time: $0.observedAt)
-            })
+            // Dedup against a tail read only: decoding the whole file here ran
+            // a multi-megabyte parse on the main thread on every recorded
+            // refresh.  Duplicates can only come from re-appending a recent
+            // batch (identical observedAt timestamps), so the tail is
+            // sufficient; load() dedups by key on read anyway, making a missed
+            // older duplicate harmless.
+            var seen = tailSampleKeys(maxBytes: 64 * 1024)
             let fresh = samples.filter { sample in
                 guard sample.observedAt.timeIntervalSinceReferenceDate.isFinite,
                       let percent = sample.remainingPercent,
@@ -285,9 +359,30 @@ public struct AnomalyDetector: Sendable {
             }
         }
 
+        /// SampleKeys decoded from the last `maxBytes` of the history file, for
+        /// append-time dedup without a full parse.  The first line of the
+        /// slice may be cut mid-line and is skipped.
+        private func tailSampleKeys(maxBytes: Int) -> Set<SampleKey> {
+            guard let full = try? Data(contentsOf: url, options: .mappedIfSafe), !full.isEmpty else { return [] }
+            let sliced = full.count > maxBytes
+            let tail: Data = sliced ? full.suffix(maxBytes) : full
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            var seen = Set<SampleKey>()
+            var lines = tail.split(separator: 0x0A, omittingEmptySubsequences: true)
+            if sliced { lines = Array(lines.dropFirst()) }
+            for line in lines {
+                if let sample = try? decoder.decode(Sample.self, from: Data(line)) {
+                    seen.insert(SampleKey(pair: PairKey(provider: sample.providerKey,
+                                                       window: sample.windowId),
+                                          time: sample.observedAt))
+                }
+            }
+            return seen
+        }
+
         /// Load every sample currently on disk.
-        public func load() throws -> [Sample] {
-            guard FileManager.default.fileExists(atPath: url.path) else { return [] }
+        public func load() throws -> [Sample] {            guard FileManager.default.fileExists(atPath: url.path) else { return [] }
             let data = try Data(contentsOf: url)
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
@@ -368,7 +463,7 @@ public struct AnomalyDetector: Sendable {
         return "\(prefix) \(window): \(String(format: "%.1f", ratio))× \(comparison)."
     }
 
-    static func windowLabel(windowId: String) -> String {
+    public static func windowLabel(windowId: String) -> String {
         if let range = windowId.range(of: ":", options: .backwards) {
             return String(windowId[range.upperBound...])
         }

@@ -42,10 +42,40 @@ struct SettingsMenuBarPage: View {
                 .pickerStyle(.segmented)
 
                 Picker("Displayed Quota", selection: $model.menuBarQuotaSelection) {
-                    ForEach(model.availableMenuBarQuotas, id: \.id) { item in
-                        Text(item.label).tag(item.id)
+                    Section("Automatic (Fleet-Wide)") {
+                        ForEach(model.menuBarAutomaticOptions, id: \.id) { item in
+                            Text(item.label).tag(item.id)
+                        }
+                    }
+                    if !model.menuBarPlatformPairOptions.isEmpty {
+                        Section("Pin to Platform (Both Quotas)") {
+                            ForEach(model.menuBarPlatformPairOptions, id: \.id) { item in
+                                Text(item.label).tag(item.id)
+                            }
+                        }
+                    }
+                    Section("Pin to Platform (Lowest Quota)") {
+                        ForEach(model.menuBarPlatformSingleOptions, id: \.id) { item in
+                            Text(item.label).tag(item.id)
+                        }
+                    }
+                    Section("Specific Quota Window") {
+                        ForEach(model.menuBarIndividualWindowOptions, id: \.id) { item in
+                            Text(item.label).tag(item.id)
+                        }
+                    }
+                    if !model.menuBarAutomaticOptions.contains(where: { $0.id == model.menuBarQuotaSelection })
+                        && !model.menuBarPlatformPairOptions.contains(where: { $0.id == model.menuBarQuotaSelection })
+                        && !model.menuBarPlatformSingleOptions.contains(where: { $0.id == model.menuBarQuotaSelection })
+                        && !model.menuBarIndividualWindowOptions.contains(where: { $0.id == model.menuBarQuotaSelection }) {
+                        Text("Pinned quota unavailable").tag(model.menuBarQuotaSelection)
                     }
                 }
+
+                Text(model.menuBarQuotaDescription(for: model.menuBarQuotaSelection))
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 Picker("Menu Bar Mark", selection: $model.menuBarMarkStyle) {
                     ForEach(MenuBarMarkStyle.allCases) { Text($0.title).tag($0) }
@@ -60,27 +90,31 @@ struct SettingsMenuBarPage: View {
             }
 
             Section {
-                LabeledContent("Preview") {
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack(spacing: 4) {
-                            if model.menuBarStyle != .percentOnly {
-                                let previewKey = model.menuBarTargetSnapshot?.window.canonicalProviderKey ?? "auto"
-                                PlatformLogo(providerKey: previewKey,
-                                             size: 14,
-                                             style: model.markStyle(for: previewKey))
-                            }
-                            if model.menuBarStyle != .symbolOnly {
-                                Text(model.menuBarTitle.isEmpty ? "—" : model.menuBarTitle)
-                                    .font(.system(size: 13, weight: .medium).monospacedDigit())
-                            }
+                LabeledContent {
+                    // Owner 2026-10-08: the preview showed only what the menu
+                    // bar draws.  The sentence under it stayed in the control,
+                    // where it read as part of the preview rather than as an
+                    // explanation of what is about to appear above it.
+                    HStack(spacing: 4) {
+                        if model.menuBarStyle != .percentOnly {
+                            let previewKey = model.menuBarTargetSnapshot?.window.canonicalProviderKey ?? "auto"
+                            PlatformLogo(providerKey: previewKey,
+                                         size: 14,
+                                         style: model.markStyle(for: previewKey))
                         }
-                        Text(model.menuBarDetail)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
+                        if model.menuBarStyle != .symbolOnly {
+                            Text(model.menuBarTitle.isEmpty ? "—" : model.menuBarTitle)
+                                .font(.system(size: 13, weight: .medium).monospacedDigit())
+                        }
                     }
                     .accessibilityElement(children: .combine)
                     .accessibilityLabel("Menu Bar Preview")
+                } label: {
+                    Text("Preview")
                 }
+                Text("This is what appears in your menu bar.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
             }
 
             Section {
@@ -295,6 +329,24 @@ struct SettingsSourcesFleetPage: View {
 
             Toggle("Read Quotas From This Mac",
                    isOn: Binding(get: { model.localEnabled }, set: { model.setLocalEnabled($0) }))
+            Toggle("Provider Checks", isOn: Binding(
+                get: { model.providerChecksEnabled }, set: { model.setProviderChecksEnabled($0) }))
+                .disabled(!model.localEnabled)
+            Picker("Provider Check Interval", selection: $model.providerCheckCadence) {
+                ForEach(SourceRefreshCadence.allCases) { cadence in
+                    Text(cadence.title).tag(cadence)
+                }
+            }
+            .disabled(!model.localEnabled || !model.providerChecksEnabled)
+            Toggle("Codex Session File Checks", isOn: Binding(
+                get: { model.sessionFileChecksEnabled }, set: { model.setSessionFileChecksEnabled($0) }))
+                .disabled(!model.localEnabled)
+            Picker("Session File Check Interval", selection: $model.sessionFileCadence) {
+                ForEach(SourceRefreshCadence.allCases) { cadence in
+                    Text(cadence.title).tag(cadence)
+                }
+            }
+            .disabled(!model.localEnabled || !model.sessionFileChecksEnabled)
             ForEach(ReaderStatus.all, id: \.providerKey) { reader in
                 readerRow(reader)
             }
@@ -304,6 +356,10 @@ struct SettingsSourcesFleetPage: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("CodeCaps reads each CLI's own saved credentials in place." + sentenceGap
                      + "It never asks you for a provider API key.")
+                Text("Provider Checks: 7 HTTP paths and 3 local helpers across 8 AI plan families." + sentenceGap
+                     + "These are source capabilities, not a request count per check.")
+                Text("Codex Session File Checks: 1 local quota source." + sentenceGap
+                     + "File checks do not upload or download on their own.")
                 Text("A snapshot is written to ~/Library/Application Support/Usage Monitor/quota-windows.json for BotFleet.")
                 if let widgetSharingError = model.widgetSharingError {
                     Text(widgetSharingError).foregroundStyle(Theme.warning)
@@ -836,6 +892,17 @@ private struct AccentPicker: View {
 struct SettingsAppearancePage: View {
     @ObservedObject var model: MonitorModel
 
+    /// Assembled as a `String` before `Text`.  A chain of `+` inside the view
+    /// builder has to consider both `String.+` and `Text.+`, and that search
+    /// exceeds the type checker's time budget.
+    private var footerCopy: String {
+        let system: String = "System is the default."
+        let theme: String = "Light and Dark ignore your Mac's setting."
+        let logos: String = "Accent on Platform Logos is off by default, because a logo in your accent colour stops looking like the provider it stands for."
+        let pacing: String = "Dynamic Pacing Highlights variably tints percentage pills greener when under cap pace and redder when burning quota faster than elapsed time."
+        return [system, theme, logos, pacing].joined(separator: sentenceGap)
+    }
+
     var body: some View {
         SettingsPage {
             Section {
@@ -848,6 +915,10 @@ struct SettingsAppearancePage: View {
 
                 AccentPicker(model: model)
 
+                Toggle("Accent on Platform Logos", isOn: $model.glanceLogosFollowAccent)
+                    .help("Draws the Glance popover's platform logos in your accent colour instead of their own brand colours.")
+                    .accessibilityLabel("Accent on Platform Logos")
+
                 Toggle("High Contrast", isOn: $model.highContrast)
                     .help("Stronger surfaces, borders and greys, for a display where the soft defaults fall together.")
                     .accessibilityLabel("High Contrast")
@@ -856,8 +927,7 @@ struct SettingsAppearancePage: View {
                     .help("Tints percentage pills greener when under cap pace and redder when burning quota faster than time elapsed.")
                     .accessibilityLabel("Dynamic Pacing Highlights")
             } footer: {
-                Text("System is the default." + sentenceGap + "Light and Dark ignore your Mac's setting." + sentenceGap
-                     + "Dynamic Pacing Highlights variably tints percentage pills greener when under cap pace and redder when burning quota faster than elapsed time.")
+                Text(footerCopy)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
@@ -1058,6 +1128,43 @@ struct SettingsAboutPage: View {
 
     private static let projectPage = URL(string: "https://github.com/Simple-With-Us/codecaps")!
 
+    /// The owner's mark, drawn once and tinted per appearance.
+    private struct AboutBrandMark: View {
+        let size: CGFloat
+        @Environment(\.colorScheme) private var colorScheme
+
+        /// The owner's cropped black-on-transparent artwork, resolved through
+        /// the same bundle the menu bar and PiP use.  Loaded once; it is drawn
+        /// as a template, which is what makes one asset correct in both
+        /// appearances.
+        static let asset: NSImage? = {
+            guard let url = ResourceBundle.resolved?.url(forResource: "CodeCapsMenuBarIcon", withExtension: "png"),
+                  let image = NSImage(contentsOf: url) else { return nil }
+            image.isTemplate = true
+            return image
+        }()
+
+        var body: some View {
+            Group {
+                if let image = AboutBrandMark.asset {
+                    Image(nsImage: image)
+                        .resizable()
+                        .renderingMode(.template)
+                        .interpolation(.high)
+                        .foregroundStyle(colorScheme == .dark ? Color.white : Theme.ink)
+                } else {
+                    // Only if the owner's artwork is ever missing from the
+                    // bundle: keep a mark on screen rather than an empty gap.
+                    Image(systemName: "gauge.with.dots.needle.50percent")
+                        .font(.system(size: size))
+                        .foregroundStyle(Theme.accent)
+                }
+            }
+            .frame(width: size, height: size)
+            .accessibilityHidden(true)
+        }
+    }
+
     private var pushingDetail: String {
         guard model.syncEnabled else { return "Off" }
         guard let host = URL(string: model.syncEndpoint)?.host() else { return "On" }
@@ -1073,10 +1180,12 @@ struct SettingsAboutPage: View {
         SettingsPage {
             Section {
                 VStack(spacing: 6) {
-                    Image(systemName: "gauge.with.dots.needle.50percent")
-                        .font(.system(size: 34))
-                        .foregroundStyle(Theme.accent)
-                        .accessibilityHidden(true)
+                    // The owner's own mark, the same asset the menu bar and the
+                    // PiP header draw.  This was a hardcoded
+                    // "gauge.with.dots.needle.50percent" SF Symbol tinted with
+                    // the accent, which read as an older app's logo next to
+                    // the real one in the Dock.
+                    AboutBrandMark(size: 34)
                     Text("CodeCaps").font(.system(size: 16, weight: .semibold))
                     Text(CodeCapsVersion.display)
                         .font(.system(size: 11))
@@ -1136,6 +1245,15 @@ struct SettingsNotificationsPage: View {
 
     var body: some View {
         SettingsPage {
+            if let row = model.displaySections.first(where: {
+                $0.providerKey == model.runawayAlertHistory.first?.providerKey
+            }) ?? model.displaySections.first {
+                Section {
+                    UsageHistoryView(model: model, state: state, row: row)
+                } header: {
+                    Eyebrow("RECENT USAGE HISTORY")
+                }
+            }
             Section {
                 Toggle("Reset Alarms For All Providers", isOn: $model.alarmsAll)
                     .help("The same switch as the All bell at the top of the Docked Bar.")
@@ -1181,11 +1299,12 @@ struct SettingsNotificationsPage: View {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
                             Text("Versus Your Recent Average")
-                            Slider(value: $model.anomalyBaselineMultiplier,
-                                   in: BurnRateMonitor.baselineRange,
-                                   step: 0.5)
+                            pipSlider(value: $model.anomalyBaselineMultiplier,
+                                      in: BurnRateMonitor.baselineRange,
+                                      step: 0.5)
                             Text(String(format: "%.1f×", model.anomalyBaselineMultiplier))
                                 .font(.system(size: 11).monospacedDigit())
+                                .foregroundStyle(Theme.ink)
                                 .frame(width: 38, alignment: .trailing)
                         }
                         .help("Alerts when the current hour is spending this many times faster than your measured average, using up to seven days of available readings. Recommended 5×.")
@@ -1193,11 +1312,12 @@ struct SettingsNotificationsPage: View {
 
                         HStack {
                             Text("Versus Your Measured Peak")
-                            Slider(value: $model.anomalyPeakMultiplier,
-                                   in: BurnRateMonitor.peakRange,
-                                   step: 0.1)
+                            pipSlider(value: $model.anomalyPeakMultiplier,
+                                      in: BurnRateMonitor.peakRange,
+                                      step: 0.1)
                             Text(String(format: "%.1f×", model.anomalyPeakMultiplier))
                                 .font(.system(size: 11).monospacedDigit())
+                                .foregroundStyle(Theme.ink)
                                 .frame(width: 38, alignment: .trailing)
                         }
                         .help("Alerts when the current hour is spending this many times faster than your fastest measured interval. Recommended 2×.")
@@ -1341,11 +1461,15 @@ struct CommitButton: View {
 /// in the app and never leaves the machine.  The iOS companion cannot hold a
 /// client secret, so it stays out of Infisical entirely and keeps reading
 /// through its existing quota API — the Mac app owns the Infisical read.
+@MainActor
 struct SettingsInfisicalPage: View {
     @ObservedObject var model: MonitorModel
 
     @State private var clientId = ""
     @State private var clientSecret = ""
+    @State private var projectId = ""
+    @State private var savedIdentity: InfisicalIdentityStore.Identity?
+    @State private var operationId = UUID()
     @State private var hasIdentity = false
     @State private var pullEndpoint = ""
     @State private var pushEndpoint = ""
@@ -1360,21 +1484,44 @@ struct SettingsInfisicalPage: View {
 
     var body: some View {
         SettingsPage {
+            // Owner 2026-10-08: this page looked like a required setup step,
+            // and it is not one — CodeCaps works entirely from the local AI
+            // tools when nothing is connected here.
+            Section {
+                VStack(alignment: .leading, spacing: 5) {
+                    Eyebrow("OPTIONAL")
+                        .foregroundStyle(Theme.warning)
+                    Text("Share settings across your Macs, and let the fleet push quotas here.")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Theme.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("CodeCaps reads every quota from the AI tools already signed in on this Mac. " + sentenceGap
+                         + "Connecting Infisical is only for setting a machine up to share its own configuration, and to receive quota data from your other Macs.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.vertical, 2)
+            }
+
             Section {
                 TextField("Client ID", text: $clientId,
-                          prompt: Text(hasIdentity ? "Saved in Keychain" : "Client ID"))
+                          prompt: Text("Client ID"))
+                    .disabled(working)
                 SecureField("Client Secret", text: $clientSecret,
-                            prompt: Text(hasIdentity ? "Saved in Keychain" : "Client Secret"))
+                            prompt: Text(savedIdentity?.clientId == clientId && hasIdentity
+                                         ? "Saved in Keychain (leave blank to keep)" : "Client Secret"))
+                    .disabled(working)
+                TextField("Project ID", text: $projectId)
+                    .disabled(working)
                 HStack {
                     if hasIdentity {
-                        Button("Forget Identity", role: .destructive, action: forgetIdentity)
-                            .disabled(working)
+                        Button("Forget Setup", role: .destructive, action: forgetIdentity)
                     }
                     Spacer()
                     if working { ProgressView().controlSize(.small) }
-                    CommitButton(title: "Save Identity", prominent: !clientId.isEmpty, action: saveIdentity)
-                        .disabled(working || clientId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                  || clientSecret.isEmpty)
+                    CommitButton(title: "Save Setup", prominent: !clientId.isEmpty, action: saveIdentity)
+                        .disabled(working || candidateIdentity == nil)
                 }
                 if let message {
                     Text(message)
@@ -1383,7 +1530,7 @@ struct SettingsInfisicalPage: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             } header: {
-                Eyebrow("CLIENT IDENTITY")
+                Eyebrow("CLIENT IDENTITY & PROJECT")
             } footer: {
                 Text("Your own Infisical machine identity, kept in your Keychain." + sentenceGap
                      + "Nothing here is embedded in the app or sent anywhere but Infisical.")
@@ -1395,6 +1542,9 @@ struct SettingsInfisicalPage: View {
             Section {
                 LabeledContent("Status") { Text(statusLine).font(.system(size: 11)).foregroundStyle(.secondary) }
                 LabeledContent("Environment") { Text(settingsEnvironment).font(.system(size: 11)) }
+                if let savedIdentity {
+                    LabeledContent("Saved Project ID") { Text(savedIdentity.projectId).font(.system(size: 11)) }
+                }
                 if let loaded = settings.lastLoadedAt {
                     LabeledContent("Last Synced") {
                         Text(loaded.formatted(date: .omitted, time: .shortened)).font(.system(size: 11))
@@ -1440,7 +1590,7 @@ struct SettingsInfisicalPage: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .onAppear(perform: refreshFromStore)
+        .onAppear { refreshFromStore(reloadSetup: true) }
     }
 
     private var statusLine: String {
@@ -1463,118 +1613,149 @@ struct SettingsInfisicalPage: View {
             || refreshSeconds != (settings.value(for: InfisicalSettings.Keys.refreshSeconds) ?? "")
     }
 
-    private func refreshFromStore() {
-        hasIdentity = InfisicalIdentityStore.load() != nil
+    private var candidateIdentity: InfisicalIdentityStore.Identity? {
+        let id = clientId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let project = projectId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let secret = clientSecret.isEmpty && savedIdentity?.clientId == id
+            ? (savedIdentity?.clientSecret ?? "") : clientSecret
+        guard !id.isEmpty, !secret.isEmpty, !project.isEmpty else { return nil }
+        return InfisicalIdentityStore.Identity(clientId: id, clientSecret: secret, projectId: project)
+    }
+
+    private func refreshFromStore(reloadSetup: Bool = false) {
+        savedIdentity = InfisicalIdentityStore.load()
+        hasIdentity = savedIdentity != nil
+        if reloadSetup {
+            clientId = savedIdentity?.clientId ?? ""
+            clientSecret = ""
+            projectId = savedIdentity?.projectId ?? ""
+        }
         pullEndpoint = settings.value(for: InfisicalSettings.Keys.pullEndpoint) ?? ""
         pushEndpoint = settings.value(for: InfisicalSettings.Keys.pushEndpoint) ?? ""
         refreshSeconds = settings.value(for: InfisicalSettings.Keys.refreshSeconds) ?? ""
     }
 
-    private func saveIdentity() {
+    private func beginOperation() -> UUID {
+        let id = UUID()
+        operationId = id
         working = true
+        return id
+    }
+
+    private func saveIdentity() {
+        guard let identity = candidateIdentity else { return }
+        let operation = beginOperation()
+        let revision = settings.beginSetupChange()
         message = nil
-        let identity = InfisicalIdentityStore.Identity(
-            clientId: clientId.trimmingCharacters(in: .whitespacesAndNewlines),
-            clientSecret: clientSecret)
+        keyMessage = nil
         Task {
-            defer { working = false }
+            defer { if operationId == operation { working = false } }
             do {
-                try InfisicalIdentityStore.save(identity)
-                settings.configure(InfisicalSettings.Configuration(
-                    environment: InfisicalSettings.defaultEnvironment(),
-                    clientId: identity.clientId,
-                    clientSecret: identity.clientSecret))
-                // Validate the identity immediately: a bad secret fails here,
-                // while the owner is looking at the message, not at 3 AM.
-                try await settings.load()
-                await MainActor.run {
-                    model.adoptInfisicalEndpointsIfUnset()
-                    clientSecret = ""
-                    refreshFromStore()
-                    succeeded = true
-                    message = "Identity saved and verified against Infisical."
-                    NotificationCenter.default.post(name: .infisicalIdentityChanged, object: nil)
+                let committed = try await settings.validateAndConfigure(identity.configuration, revision: revision) {
+                    try InfisicalIdentityStore.save(identity)
                 }
+                guard operationId == operation, settings.isCurrent(committed) else { return }
+                model.adoptInfisicalEndpointsIfUnset()
+                refreshFromStore(reloadSetup: true)
+                succeeded = true
+                message = "Setup saved and project verified against Infisical."
+                NotificationCenter.default.post(name: .infisicalIdentityChanged, object: nil)
             } catch {
-                await MainActor.run {
-                    succeeded = false
-                    message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                }
+                guard operationId == operation, settings.isCurrent(revision) else { return }
+                succeeded = false
+                message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                // Validation retires the old timer revision even on failure.
+                // Resume refreshes for the still-persisted setup.
+                NotificationCenter.default.post(name: .infisicalIdentityChanged, object: nil)
             }
         }
     }
 
     private func forgetIdentity() {
-        working = true
-        Task {
-            defer { working = false }
-            do {
-                try InfisicalIdentityStore.delete()
-                settings.clearConfiguration()
-                await MainActor.run {
-                    clientId = ""
-                    clientSecret = ""
-                    refreshFromStore()
-                    succeeded = true
-                    message = "Identity removed.  Settings stay local until you add one again."
-                    NotificationCenter.default.post(name: .infisicalIdentityChanged, object: nil)
-                }
-            } catch {
-                await MainActor.run {
-                    succeeded = false
-                    message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                }
-            }
+        // Clear can interrupt validation or a read/write. The core's revision
+        // fence prevents their eventual completions from reinstalling old data.
+        operationId = UUID()
+        working = false
+        do {
+            try settings.clearConfiguration { try InfisicalIdentityStore.delete() }
+            refreshFromStore(reloadSetup: true)
+            succeeded = true
+            message = "Setup removed." + sentenceGap + "Settings stay local until you add one again."
+            keyMessage = nil
+            NotificationCenter.default.post(name: .infisicalIdentityChanged, object: nil)
+        } catch {
+            succeeded = false
+            message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            NotificationCenter.default.post(name: .infisicalIdentityChanged, object: nil)
         }
     }
 
     private func reloadNow() {
-        working = true
+        let operation = beginOperation()
+        let revision = settings.revision
         Task {
+            defer { if operationId == operation { working = false } }
             await settings.refresh()
-            await MainActor.run {
-                model.adoptInfisicalEndpointsIfUnset()
-                working = false
-                refreshFromStore()
-            }
+            guard operationId == operation, settings.isCurrent(revision) else { return }
+            model.adoptInfisicalEndpointsIfUnset()
+            refreshFromStore()
         }
     }
 
     private func saveKeys() {
-        working = true
+        let operation = beginOperation()
+        let revision = settings.revision
         keyMessage = nil
+        // Snapshot the form before any suspension; every key belongs to this
+        // setup, even if a different settings window switches projects mid-save.
+        let updates = [
+            (InfisicalSettings.Keys.pullEndpoint, pullEndpoint),
+            (InfisicalSettings.Keys.pushEndpoint, pushEndpoint),
+            (InfisicalSettings.Keys.refreshSeconds, refreshSeconds),
+        ]
         Task {
-            defer { working = false }
+            defer { if operationId == operation { working = false } }
             do {
-                // Write-through, one key at a time: each `set` lands in
-                // Infisical before the cache moves, and any failure aborts
-                // the save with the earlier keys already committed.
-                // Unchanged keys are skipped — no redundant writes.
-                let updates = [
-                    (InfisicalSettings.Keys.pullEndpoint, pullEndpoint),
-                    (InfisicalSettings.Keys.pushEndpoint, pushEndpoint),
-                    (InfisicalSettings.Keys.refreshSeconds, refreshSeconds),
-                ]
                 var wroteAny = false
                 for (key, field) in updates {
+                    guard operationId == operation, settings.isCurrent(revision) else { return }
                     let value = field.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard value != (settings.value(for: key) ?? "") else { continue }
-                    try await settings.set(value, for: key)
+                    try await settings.set(value, for: key, expectedRevision: revision)
                     wroteAny = true
                 }
-                await MainActor.run {
-                    model.adoptInfisicalEndpointsIfUnset()
-                    refreshFromStore()
-                    keySucceeded = true
-                    keyMessage = wroteAny ? "Keys saved to Infisical." : "No changes to save."
-                }
+                guard operationId == operation, settings.isCurrent(revision) else { return }
+                model.adoptInfisicalEndpointsIfUnset()
+                refreshFromStore()
+                keySucceeded = true
+                keyMessage = wroteAny ? "Keys saved to Infisical." : "No changes to save."
             } catch {
-                await MainActor.run {
-                    refreshFromStore()
-                    keySucceeded = false
-                    keyMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                }
+                guard operationId == operation, settings.isCurrent(revision) else { return }
+                refreshFromStore()
+                keySucceeded = false
+                keyMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             }
         }
     }
+}
+
+/// A `Slider` whose rail is always visible.
+///
+/// Owner report 2026-10-06: the runaway-usage sliders were "barely visible" and
+/// the track could come up black.  macOS derives the default rail from the
+/// control tint with no lower bound on contrast, so on the dark rows surface a
+/// dark accent produced a track that vanished — which is why it looked like a
+/// missing control rather than a dark one.
+///
+/// The thumb is drawn with `Theme.onAccent` as a ring rather than a fill, so it
+/// stays legible whether the accent behind it is one of the dark seven or one of
+/// the new light four.
+private func pipSlider(value: Binding<Double>,
+                       in range: ClosedRange<Double>,
+                       step: Double) -> some View {
+    Slider(value: value, in: range, step: step) {
+        EmptyView()
+    }
+    .tint(Theme.accent)
+    .background(Theme.sliderTrack, in: Capsule())
 }

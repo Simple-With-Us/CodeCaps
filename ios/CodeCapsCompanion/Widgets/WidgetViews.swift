@@ -139,6 +139,9 @@ struct ProviderMarkView: View {
         if low.contains("openai") || low.contains("codex") { return "provider-openai" }
         if low.contains("cursor") { return "provider-cursor" }
         if low.contains("minimax") { return "provider-minimax" }
+        if low.contains("muse-assist") || low.contains("muse_assist") { return "provider-muse-assist" }
+        if low.contains("muse-code") || low.contains("muse_code") { return "provider-muse-code" }
+        if low.contains("muse") { return "provider-muse-code" }
         if low.contains("antigravity") { return "provider-antigravity" }
         if low.contains("gemini") { return "provider-gemini" }
         if low.contains("grok-bot") { return "provider-grok-bot" }
@@ -318,6 +321,7 @@ struct OverviewMediumView: View {
     let entry: CodeCapsWidgetEntry
     var pick: WidgetWindowPick = .mostUrgent
     var columns: Int = 1
+    var quotasPerProvider: WidgetQuotasPerProvider = .twoIfAvailable
 
     /// A row is now three lines tall (title, bar, caption), so one plan per row
     /// gets fewer rows than two per row does.  Both counts stay inside the
@@ -350,6 +354,7 @@ struct OverviewMediumView: View {
                     platforms: displayed,
                     columns: columns,
                     pick: pick,
+                    quotasPerProvider: quotasPerProvider,
                     markSize: 15,
                     titleFont: 12,
                     captionFont: 9,
@@ -372,6 +377,7 @@ struct OverviewLargeView: View {
     let entry: CodeCapsWidgetEntry
     var pick: WidgetWindowPick = .mostUrgent
     var columns: Int = 1
+    var quotasPerProvider: WidgetQuotasPerProvider = .twoIfAvailable
 
     /// Seven rows one per row, twelve two per row.  The header dropped the app
     /// name for the mark, which is what paid for the extra row.
@@ -410,6 +416,7 @@ struct OverviewLargeView: View {
                     platforms: displayed,
                     columns: columns,
                     pick: pick,
+                    quotasPerProvider: quotasPerProvider,
                     markSize: 16,
                     titleFont: 12.5,
                     captionFont: 9.5,
@@ -572,10 +579,17 @@ struct ProviderFocusView: View {
                 // that came from preview data and described nothing the owner
                 // could act on.
                 VStack(alignment: .leading, spacing: 7) {
-                    if platform.windows.isEmpty {
+                    let windowsToShow: [WidgetWindowItem] = {
+                        if entry.quotasPerProvider == .oneQuota, let controlling = platform.controllingWindow(pick) {
+                            return [controlling]
+                        }
+                        return platform.windows
+                    }()
+
+                    if windowsToShow.isEmpty {
                         WindowCaptionRow(token: captionToken, resetCaption: captionReset, font: 9.5)
                     } else {
-                        ForEach(platform.windows) { win in
+                        ForEach(windowsToShow) { win in
                             VStack(alignment: .leading, spacing: 2) {
                                 HStack(spacing: 5) {
                                     Text(win.label)
@@ -635,23 +649,65 @@ struct AccessoryView: View {
                 }
 
             case .accessoryRectangular:
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 4) {
-                        CodeCapsMarkView(size: 10)
-                        Text(platform.title)
-                            .font(.system(size: 12, weight: .bold))
-                            .lineLimit(1)
-                        Spacer(minLength: 2)
-                        Text(platform.displayPercent)
-                            .font(.system(size: 12, weight: .bold, design: .rounded))
+                if entry.quotasPerProvider == .twoIfAvailable, let pair = platform.dualWindows() {
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 4) {
+                            CodeCapsMarkView(size: 10)
+                            Text(platform.title)
+                                .font(.system(size: 11, weight: .bold))
+                                .lineLimit(1)
+                            Spacer(minLength: 2)
+                            Text("\(pair.window1.displayPercent) · \(pair.window2.displayPercent)")
+                                .font(.system(size: 11, weight: .bold, design: .rounded))
+                        }
+                        HStack(spacing: 4) {
+                            MiniProgressBar(
+                                fraction: max(0.0, min(1.0, (pair.window1.remainingPercent ?? 0.0) / 100.0)),
+                                color: .primary,
+                                elapsedFraction: pair.window1.elapsedFraction(),
+                                height: 3.5
+                            )
+                            MiniProgressBar(
+                                fraction: max(0.0, min(1.0, (pair.window2.remainingPercent ?? 0.0) / 100.0)),
+                                color: .primary,
+                                elapsedFraction: pair.window2.elapsedFraction(),
+                                height: 3.5
+                            )
+                        }
+                        HStack(spacing: 4) {
+                            WindowCaptionRow(
+                                token: pair.window1.cadenceToken,
+                                resetCaption: pair.window1.resetCaption(),
+                                font: 8.5
+                            )
+                            .frame(maxWidth: .infinity)
+                            WindowCaptionRow(
+                                token: pair.window2.cadenceToken,
+                                resetCaption: pair.window2.resetCaption(),
+                                font: 8.5
+                            )
+                            .frame(maxWidth: .infinity)
+                        }
                     }
-                    MiniProgressBar(fraction: platform.progressFraction, color: .primary, elapsedFraction: platform.elapsedFraction, height: 4)
-                    WindowCaptionRow(
-                        token: platform.controllingWindow(entry.windowPick)?.cadenceToken
-                            ?? WidgetPresentation.shortCadence(cadence: platform.subtitle, label: platform.title),
-                        resetCaption: platform.controllingWindow(entry.windowPick)?.resetCaption() ?? platform.resetCaption(),
-                        font: 9
-                    )
+                } else {
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 4) {
+                            CodeCapsMarkView(size: 10)
+                            Text(platform.title)
+                                .font(.system(size: 12, weight: .bold))
+                                .lineLimit(1)
+                            Spacer(minLength: 2)
+                            Text(platform.displayPercent)
+                                .font(.system(size: 12, weight: .bold, design: .rounded))
+                        }
+                        MiniProgressBar(fraction: platform.progressFraction, color: .primary, elapsedFraction: platform.elapsedFraction, height: 4)
+                        WindowCaptionRow(
+                            token: platform.controllingWindow(entry.windowPick)?.cadenceToken
+                                ?? WidgetPresentation.shortCadence(cadence: platform.subtitle, label: platform.title),
+                            resetCaption: platform.controllingWindow(entry.windowPick)?.resetCaption() ?? platform.resetCaption(),
+                            font: 9
+                        )
+                    }
                 }
 
             case .accessoryInline:

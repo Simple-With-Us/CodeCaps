@@ -4,9 +4,9 @@ Infisical is the sole source of truth for CodeCaps' app-level settings: secrets,
 
 ## Project
 
-- Infisical project: **CodeCaps** (`cd278860-c3bc-466f-9256-22385e64551b`), environments `dev` / `staging` / `prod`.
+- Project ID must be entered explicitly under Settings → Infisical Sync.  There is no built-in project or migration fallback.  Legacy two-field identities are not activated; the owner enters the three-field setup.
 - Release builds read `prod`; `.dev` builds read `dev` (`InfisicalSettings.defaultEnvironment`, mirroring how `TokenStore` scopes Keychain items per build).
-- REST surface used: universal-auth login → three named `GET /api/v3/secrets/raw/{name}` requests → `PATCH` / `POST /api/v3/secrets/raw/{name}` for write-through.  The app never lists root secrets or fetches an unrelated secret value.  A missing managed key (404) remains unset, so its existing local/default behavior applies; any other read failure keeps the entire last-known-good cache.  Implemented with zero new dependencies in `Sources/QuotaCore/InfisicalSettings.swift` (`URLSession` only).
+- REST surface used: universal-auth login → project/environment metadata verification on explicit setup Save → three named `GET /api/v3/secrets/raw/{name}` requests → `PATCH` / `POST /api/v3/secrets/raw/{name}` for write-through.  The app never lists root secrets or fetches an unrelated secret value.  A missing managed key (404) remains unset, so its existing local/default behavior applies; any other read failure keeps the entire last-known-good cache.  Implemented with zero new dependencies in `Sources/QuotaCore/InfisicalSettings.swift` (`URLSession` only).
 
 ## Key Inventory
 
@@ -26,7 +26,7 @@ Non-sensitive defaults above are seeded in the `dev` environment only.  `prod` v
 - Every display preference (`displayMode`, `menuBarStyle`, mark styles, `appearance`, `glanceView`, platform order, source ranking, disabled sources, high contrast) → `UserDefaults`.
 - Reset alarms (sound, cadence, message), anomaly multipliers, burn-rate alert toggles → `UserDefaults`.
 - The Read Token and Ingest Token → the Keychain (`TokenStore`), never Infisical.  They are the owner's per-server credentials; the Keychain is their correct home and Infisical only ever sees service URLs.
-- The Infisical client identity itself (universal-auth client ID + secret) → the Keychain (`InfisicalIdentityStore`), provisioned once by the owner under Settings → Infisical Sync.  A shipped app cannot embed a client secret, so there is no fallback identity.
+- The Infisical client identity itself (universal-auth client ID + secret + selected Project ID) → the Keychain (`InfisicalIdentityStore`), provisioned once by the owner under Settings → Infisical Sync.  A shipped app cannot embed a client secret, so there is no fallback identity.
 
 **Explicitly out — build-time constants:** `SUFeedURL` / `SUPublicEDKey` (Sparkle, baked into the signed bundle — do not move these), provider API endpoints (`api.anthropic.com`, etc.), bundle identifiers, local credential file paths.
 
@@ -34,7 +34,7 @@ Non-sensitive defaults above are seeded in the `dev` environment only.  `prod` v
 
 ## The Runtime Contract
 
-1. **Load at startup.**  `AppDelegate.startInfisicalSync` runs on a background task at launch when an identity is provisioned: configure → `refresh()` → adopt endpoints.  A failure never blocks launch or the main thread; the app keeps its local values.
+1. **Load at startup.**  `AppDelegate.startInfisicalSync` installs persisted configuration synchronously at launch, then asynchronously runs `refresh()` → adopt endpoints.  Revision fences discard completions from a retired setup.  A failure never blocks launch or the main thread; the app keeps its local values.
 2. **Never fetch per-request.**  All runtime reads go through `InfisicalSettings.value(for:)`, a synchronous memory-only read.  The only network calls are the startup load, the refresh timer, `applicationDidBecomeActive`, and explicit admin Save actions.
 3. **Background refresh.**  A one-shot timer rescheduled after every fire (so a cadence change in Infisical takes effect next cycle), plus a refresh on `applicationDidBecomeActive`.  A failed refresh is recorded on `lastError` (visible under Settings → Infisical Sync) and the last-known-good cache keeps serving — staleness is safer than an outage.
    The three named reads complete before the cache changes; partial success never replaces it.  Infisical sync remains optional and separately provisioned.  Reading settings does not turn on quota push or pull.
@@ -48,8 +48,14 @@ CodeCaps is a single-user local app: the owner is the only user and therefore th
 ## Provisioning
 
 1. In Infisical, create a machine identity scoped to the CodeCaps project, the intended environment (dev for `.dev` builds, prod for release), and the root secret path.  Grant read access at that scope; grant write access only if this identity will save settings from the app.  Use the narrowest permissions supported by the Infisical policy.  The client requests only the three managed keys by name, but that request pattern alone does not restrict what an overprivileged identity could access.  Copy its client ID and secret.
-2. Open Settings → Infisical Sync, paste both, press Save Identity.  The app verifies the identity against Infisical immediately and reports success or the exact failure.
+2. Open Settings → Infisical Sync, enter Client ID, Client Secret, and Project ID, then press Save Setup.  With an unchanged Client ID, leaving Client Secret blank retains the saved secret.  Save verifies login, project/environment metadata, and the three managed-key reads before atomically persisting all three fields in one Keychain record and switching the active cache.  A failed validation or Keychain write leaves the previous setup and cached values active.  An existing project with no managed keys is valid; a missing or inaccessible project is not.  Project metadata access is needed for setup validation; routine refresh remains the existing three named reads.
 3. Set `PULL_ENDPOINT` / `PUSH_ENDPOINT` / `SETTINGS_REFRESH_SECONDS` under Managed Keys (or directly in Infisical); the app picks them up on the next refresh.
+
+## Switching and forgetting a setup
+
+Changing Project ID never carries cached values or status from the previous destination into the new cache.  Existing local endpoint overrides, quota modes, read/ingest tokens, and provider sign-ins remain untouched.  In-flight old reads, writes, and validation cannot install stale cache/status or initiate a follow-up create after a switch or Forget.  An already submitted HTTP write cannot be recalled, but its response cannot affect the new setup.
+
+Forget Setup atomically deletes the single stored identity/destination record.  Legacy two-field records are never loaded.  Keychain failures retain a complete prior three-field setup.  Failed saves and clears restart the prior setup’s refresh cycle.  No credential-file fallback is added.
 
 ## Rotating A Value
 

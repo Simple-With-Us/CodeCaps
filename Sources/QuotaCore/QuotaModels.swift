@@ -625,7 +625,7 @@ private enum ISO8601Date {
     }
 }
 
-private enum QuotaProviders {
+enum QuotaProviders {
     struct Expected {
         let key: String
         let label: String
@@ -644,11 +644,21 @@ private enum QuotaProviders {
         Expected(key: "xai", label: "Grok", via: nil),
         Expected(key: "grok-bot", label: "Grok Bot", via: "cursor"),
         Expected(key: "minimax", label: "MiniMax", via: nil),
+        Expected(key: "muse-assist", label: "Muse Assist", via: nil),
+        Expected(key: "muse-code", label: "Muse Code", via: nil),
     ]
 
     static func canonicalKey(provider: String, providerKey: String?, via: String?) -> String {
-        if via?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "antigravity" {
-            return "google-antigravity"
+        if let viaLower = via?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+            if viaLower == "antigravity" {
+                return "google-antigravity"
+            }
+            if viaLower == "assist" || viaLower == "assistant" {
+                return "muse-assist"
+            }
+            if viaLower == "code" {
+                return "muse-code"
+            }
         }
         let raw = (providerKey?.isEmpty == false ? providerKey! : provider)
             .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -660,6 +670,14 @@ private enum QuotaProviders {
             "xai": "xai", "grok": "xai", "grok-build": "xai",
             "grok-bot": "grok-bot", "grok bot": "grok-bot", "grokbot": "grok-bot",
             "minimax": "minimax", "minimax-code": "minimax",
+            "muse-assist": "muse-assist", "muse assist": "muse-assist", "muse_assist": "muse-assist", "muse-assistant": "muse-assist", "muse assistant": "muse-assist",
+            "muse-code": "muse-code", "muse code": "muse-code", "muse_code": "muse-code",
+            // `muse` is what `subscription-status-cli` reports, and its windows
+            // are "Additional tokens" / "Free weekly limit" -- Muse Assist, per
+            // the owner 2026-10-09.  It was aliased to `muse-code` here, which
+            // filed every Assist reading under Muse Code: both rows then showed
+            // "no report" while the data sat in the handoff, correctly formed.
+            "muse": "muse-assist", "muse-cli": "muse-assist", "muse-sdk": "muse-assist",
             "kimi": "kimi", "moonshot": "kimi", "moonshot-ai": "kimi",
             "gemini-cli": "gemini-cli",
             "copilot": "github-copilot", "github-copilot": "github-copilot", "github_copilot": "github-copilot",
