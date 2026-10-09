@@ -451,6 +451,9 @@ struct PipWidgetView: View {
                     rowsPanel(detail: detail, height: geo.size.height)
                 }
                 floatingControl
+                    // Without this the 18x18 control sat flush in the corner and
+                    // overlapped the first row's right-edge percentage.
+                    .padding(PipMetrics.controlInset)
             }
         }
         .background {
