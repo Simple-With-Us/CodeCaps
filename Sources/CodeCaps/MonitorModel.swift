@@ -102,10 +102,15 @@ enum GlanceViewMode: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 
     /// Title Case: the label on the switch itself, and what VoiceOver says.
+    ///
+    /// Owner wording, 2026-10-08: the second box was "From Fleet", which read
+    /// as a *different* set of sources rather than everything.  It has always
+    /// been the union — the Mac's own readings plus whatever the fleet
+    /// reported — so it now says so.
     var title: String {
         switch self {
         case .fromMac: return "From Mac"
-        case .fromFleet: return "From Fleet"
+        case .fromFleet: return "All Sources"
         }
     }
 
@@ -114,7 +119,7 @@ enum GlanceViewMode: String, CaseIterable, Identifiable {
     var detail: String {
         switch self {
         case .fromMac: return "Quotas this Mac reads from the AI tools signed in on it."
-        case .fromFleet: return "Quotas your other machines report to your fleet endpoint."
+        case .fromFleet: return "Every source at once: this Mac's own quotas plus those your other machines report."
         }
     }
 }
