@@ -2032,7 +2032,17 @@ struct GlanceFooterProminentButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 12, weight: .medium))
-            .foregroundStyle(colorScheme == .dark ? Color.black.opacity(0.92) : Color.white)
+            // The ink follows the *accent*, not the appearance.
+            //
+            // This read `colorScheme`, which is only correct while every accent
+            // is dark enough to carry white.  The four light accents (owner
+            // request 2026-10-06) broke that assumption: in Light appearance a
+            // light accent got white text on a light fill, about 1.8:1.  The
+            // owner noticed one swatch reading as black text on the System
+            // control and white text on Open CodeCaps (2026-10-09) -- AppKit
+            // derives a native control's label colour from its own fill, so only
+            // the hand-drawn surfaces were wrong.
+            .foregroundStyle(Theme.onAccent.opacity(colorScheme == .dark ? 0.92 : 1.0))
             .padding(.horizontal, 10)
             .frame(height: 28)
             .background(
@@ -2041,7 +2051,11 @@ struct GlanceFooterProminentButtonStyle: ButtonStyle {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 6)
-                    .strokeBorder(Color.white.opacity(colorScheme == .dark ? 0.25 : 0.15), lineWidth: 0.5)
+                    // The hairline sits half on the fill and half off it, so its
+                    // contrast has to move with the ink rather than being white
+                    // outright and white-at-15%.
+                    .strokeBorder(Theme.onAccent.opacity(colorScheme == .dark ? 0.25 : 0.15),
+                                  lineWidth: 0.5)
             )
             .contentShape(RoundedRectangle(cornerRadius: 6))
             .shadow(color: Color.black.opacity(configuration.isPressed ? 0.02 : 0.12), radius: 1, y: 1)
