@@ -132,11 +132,11 @@ final class GlanceExpandedLineTests: XCTestCase {
         return DisplaySection.rows(for: section, now: now)[0]
     }
 
-    /// MiniMax as it reports: a "general" 4h and weekly pair the row meters,
+    /// MiniMax as it reports: a "general" 5h and weekly pair the row meters,
     /// and a "video" daily and weekly pair it does not.
     private var miniMax: DisplaySection {
         row([
-            window("general:interval", label: "general (4h window)", token: "4h", remaining: 92,
+            window("general:interval", label: "general (5h window)", token: "5h", remaining: 92,
                    resetIn: 3 * 3_600, model: "general"),
             window("general:weekly", label: "general (1w window)", token: "1w", remaining: 81,
                    resetIn: 6 * 86_400, model: "general"),
@@ -269,7 +269,7 @@ final class GlanceExpandedLineTests: XCTestCase {
 
     func testTwoWindowsFromOneSourceWithTheSameNameAreBothKept() {
         let one = row([
-            window("m:a", label: "general (4h window)", token: "4h", remaining: 10, resetIn: 3_600, model: "general"),
+            window("m:a", label: "general (5h window)", token: "5h", remaining: 10, resetIn: 3_600, model: "general"),
             window("m:b", label: "general (1w window)", token: "1w", remaining: 10, resetIn: 86_400, model: "general"),
             window("m:c", label: "fast (1d window)", token: "1d", remaining: 100, resetIn: 3_600, model: "fast"),
             window("m:d", label: "fast (1d window)", token: "1d", remaining: 90, resetIn: 7_200, model: "fast"),
@@ -280,7 +280,7 @@ final class GlanceExpandedLineTests: XCTestCase {
 
     func testAnExpandedLineIsSpokenWithItsCaptionsAndResets() throws {
         let multiModel = row([
-            window("m:a", label: "general (4h window)", token: "4h", remaining: 92, resetIn: 3 * 3_600, model: "general"),
+            window("m:a", label: "general (5h window)", token: "5h", remaining: 92, resetIn: 3 * 3_600, model: "general"),
             window("m:b", label: "general (1w window)", token: "1w", remaining: 81, resetIn: 6 * 86_400, model: "general"),
             window("m:c", label: "extra (1d window)", token: "1d", remaining: 100, resetIn: 20 * 3_600, model: "extra"),
             window("m:d", label: "extra (1w window)", token: "1w", remaining: 97, resetIn: 5 * 86_400, model: "extra"),

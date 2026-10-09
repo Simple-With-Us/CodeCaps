@@ -329,7 +329,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                 // mechanism; when the mark is the CodeCaps silhouette or the
                 // mark is genuinely one colour, template stays correct.  Only
                 // `accentFollowsProvider` mode opts out.
-                if markStyle != .template, MenuBarAccent.isEnabled {
+                if markStyle != .template, model.glanceLogosFollowAccent, MenuBarAccent.isEnabled {
                     iconImage = PlatformLogoImage.menuBarImage(providerKey: markKey,
                                                                 style: markStyle,
                                                                 isDarkMode: isDark)

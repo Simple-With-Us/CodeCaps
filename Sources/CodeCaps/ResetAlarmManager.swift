@@ -553,6 +553,13 @@ public final class ResetAlarmManager: ObservableObject {
 /// nothing says, which the tracker treats as "not the largest window" unless
 /// the provider has nothing better.
 func quotaWindowPeriodSeconds(_ snapshot: QuotaWindowSnapshot) -> TimeInterval? {
+    if snapshot.window.canonicalProviderKey == "minimax", !snapshot.window.isSupplementaryVideoQuota {
+        let token = (snapshot.window.window ?? "").lowercased()
+        let label = snapshot.window.label.lowercased()
+        if !token.contains("week") && !token.contains("7d") && !label.contains("week") && !label.contains("7d") {
+            return 5 * 3_600
+        }
+    }
     let token = (snapshot.window.window ?? "").lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
     if let seconds = glanceDurationSeconds(token) { return seconds }
     if glanceIsMonthly(snapshot) { return 30 * 86_400 }

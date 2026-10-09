@@ -1118,6 +1118,9 @@ public final class CompanionQuotaModel: ObservableObject {
 
         // Standardize cadence order: shorter periods (e.g. 5-hour) precede longer periods (e.g. weekly).
         primaryWindows.sort { left, right in
+            if left.isShortCadence != right.isShortCadence {
+                return left.isShortCadence && !right.isShortCadence
+            }
             if left.cadencePeriodSeconds != right.cadencePeriodSeconds {
                 return left.cadencePeriodSeconds < right.cadencePeriodSeconds
             }
@@ -1144,7 +1147,12 @@ public final class CompanionQuotaModel: ObservableObject {
         } else if primaryWindows.count > 1 {
             let cadences = primaryWindows.map { $0.cadence.lowercased().replacingOccurrences(of: " window", with: "") }
             if cadences.count == 2 {
-                subtitle = "\(cadences[0]) & \(cadences[1])\(sourceSuffix)"
+                if (cadences[0].contains("week") || cadences[0].contains("7d") || cadences[0].contains("month") || cadences[0].contains("1m")) &&
+                   (cadences[1].contains("5-hour") || cadences[1].contains("5h") || cadences[1].contains("hour") || cadences[1].contains("4-hour") || cadences[1].contains("interval")) {
+                    subtitle = "\(cadences[1]) & \(cadences[0])\(sourceSuffix)"
+                } else {
+                    subtitle = "\(cadences[0]) & \(cadences[1])\(sourceSuffix)"
+                }
             } else {
                 subtitle = "\(primaryWindows.count) active allowances\(sourceSuffix)"
             }

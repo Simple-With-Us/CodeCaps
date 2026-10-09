@@ -16,8 +16,14 @@ public enum ResetAlarmMessage {
             ? "Vendor Reset: \(events.first?.providerTitle ?? "Quota")"
             : "Quota Reset: \(events.first?.providerTitle ?? "Quota")"
         var labels: [String] = []
-        for event in events where !labels.contains(event.windowLabel) {
-            labels.append(event.windowLabel)
+        for event in events {
+            var label = event.windowLabel
+            if (label == "4h" || label == "4-hour") && event.providerTitle.lowercased().contains("minimax") {
+                label = "5h"
+            }
+            if !labels.contains(label) {
+                labels.append(label)
+            }
         }
         let joined: String
         switch labels.count {

@@ -448,7 +448,7 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
 
     private static let monochromeKeys: Set<String> = [
         "grok-bot", "google-antigravity:third-party",
-        "openai", "codex", "cursor", "minimax", "xai", "grok", "grok-cli",
+        "openai", "codex", "cursor", "xai", "grok", "grok-cli",
     ]
 
     /// Presentation mode for a user-supplied custom mark.  Defaults to `.color`
