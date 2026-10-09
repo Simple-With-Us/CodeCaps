@@ -90,27 +90,31 @@ struct SettingsMenuBarPage: View {
             }
 
             Section {
-                LabeledContent("Preview") {
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack(spacing: 4) {
-                            if model.menuBarStyle != .percentOnly {
-                                let previewKey = model.menuBarTargetSnapshot?.window.canonicalProviderKey ?? "auto"
-                                PlatformLogo(providerKey: previewKey,
-                                             size: 14,
-                                             style: model.markStyle(for: previewKey))
-                            }
-                            if model.menuBarStyle != .symbolOnly {
-                                Text(model.menuBarTitle.isEmpty ? "—" : model.menuBarTitle)
-                                    .font(.system(size: 13, weight: .medium).monospacedDigit())
-                            }
+                LabeledContent {
+                    // Owner 2026-10-08: the preview showed only what the menu
+                    // bar draws.  The sentence under it stayed in the control,
+                    // where it read as part of the preview rather than as an
+                    // explanation of what is about to appear above it.
+                    HStack(spacing: 4) {
+                        if model.menuBarStyle != .percentOnly {
+                            let previewKey = model.menuBarTargetSnapshot?.window.canonicalProviderKey ?? "auto"
+                            PlatformLogo(providerKey: previewKey,
+                                         size: 14,
+                                         style: model.markStyle(for: previewKey))
                         }
-                        Text(model.menuBarDetail)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
+                        if model.menuBarStyle != .symbolOnly {
+                            Text(model.menuBarTitle.isEmpty ? "—" : model.menuBarTitle)
+                                .font(.system(size: 13, weight: .medium).monospacedDigit())
+                        }
                     }
                     .accessibilityElement(children: .combine)
                     .accessibilityLabel("Menu Bar Preview")
+                } label: {
+                    Text("Preview")
                 }
+                Text("This is what appears in your menu bar.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
             }
 
             Section {
@@ -1464,6 +1468,26 @@ struct SettingsInfisicalPage: View {
 
     var body: some View {
         SettingsPage {
+            // Owner 2026-10-08: this page looked like a required setup step,
+            // and it is not one — CodeCaps works entirely from the local AI
+            // tools when nothing is connected here.
+            Section {
+                VStack(alignment: .leading, spacing: 5) {
+                    Eyebrow("OPTIONAL")
+                        .foregroundStyle(Theme.warning)
+                    Text("Share settings across your Macs, and let the fleet push quotas here.")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Theme.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("CodeCaps reads every quota from the AI tools already signed in on this Mac. " + sentenceGap
+                         + "Connecting Infisical is only for setting a machine up to share its own configuration, and to receive quota data from your other Macs.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.vertical, 2)
+            }
+
             Section {
                 TextField("Client ID", text: $clientId,
                           prompt: Text("Client ID"))
