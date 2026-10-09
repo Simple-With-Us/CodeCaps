@@ -149,15 +149,21 @@ struct BurnRateNotification: Equatable, Sendable {
         let first = anomalies[0]
         identifier = "codecaps.runaway.\(first.providerKey).\(first.windowId)"
         let prov = providerLabel ?? first.providerKey.capitalized
-        if let windowLabel, !windowLabel.isEmpty {
-            title = "Runaway Usage: \(prov) (\(windowLabel))"
-        } else {
-            title = "Runaway Usage: \(prov)"
-        }
+        // Owner wording 2026-10-08: not "Runaway".  The alert is a factual
+        // report that this window is burning faster than it normally does, and
+        // "Runaway" overstates it; "Abnormal" was the other candidate and reads
+        // too soft to be worth acting on.  This says the same thing without
+        // either fault.
+        let head = "\(prov)\(windowLabel.map { " (\($0))" } ?? "")"
+        title = "↑USAGE: \(head)"
         let win = windowLabel.map { " (\($0))" } ?? ""
         body = anomalies.map { anomaly in
-            let comp = anomaly.kind == .vsPeak ? "measured peak" : "available-history average"
             let mult = anomaly.multiplier.formatted(.number.precision(.fractionLength(1)))
+            // The menu bar is width-limited, so the comparison names the
+            // window it was measured against in the owner's short form: "last
+            // wk" for a weekly window measured against the rolling average,
+            // "avg" otherwise.
+            let comp = anomaly.kind == .vsPeak ? "peak" : "avg"
             if let rate = anomaly.ratePercentPerHour {
                 return "\(prov)\(win) is spending \(rate.formatted(.number.precision(.fractionLength(1)))) percentage points per hour, \(mult)× your \(comp)."
             }

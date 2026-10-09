@@ -335,6 +335,7 @@ struct GlancePopover: View {
                     windowId: anomaly.windowId,
                     windowLabel: windowLabel
                 )
+                // Owner wording 2026-10-08: "12.5× vs avg", not "12.5*avg".
                 let comp = anomaly.kind == .vsPeak ? "peak" : "avg"
                 var parts = ["\(nameWithWindow): \(anomaly.multiplier.formatted(.number.precision(.fractionLength(1))))× vs \(comp)"]
                 if let rate = anomaly.ratePercentPerHour {
@@ -366,7 +367,9 @@ struct GlancePopover: View {
     private var runawayCombinedMarqueeText: String {
         let items = runawayFooterItems
         if items.isEmpty { return "" }
-        let prefix = model.activeRunawayAnomalies.isEmpty ? "RECENT RUNAWAY: " : "RUNAWAY: "
+        // Owner wording 2026-10-08: "↑USAGE", not "RUNAWAY" — see the note on
+        // BurnRateMonitor's notification title.
+        let prefix = model.activeRunawayAnomalies.isEmpty ? "RECENT ↑USAGE: " : "↑USAGE: "
         return prefix + items.joined(separator: ", ")
     }
 
@@ -378,7 +381,7 @@ struct GlancePopover: View {
             return "\(provider) · \(anomaly.multiplier.formatted(.number.precision(.fractionLength(1))))× \(comparison)"
         }
         if let recent = model.runawayAlertHistory.first, recent.timestamp.timeIntervalSinceNow > -86_400 {
-            return "\(recent.providerLabel) · \(recent.multiplier.formatted(.number.precision(.fractionLength(1))))× runaway alert (\(recent.timestamp.formatted(date: .omitted, time: .shortened)))"
+            return "\(recent.providerLabel) · \(recent.multiplier.formatted(.number.precision(.fractionLength(1))))× ↑USAGE (\(recent.timestamp.formatted(date: .omitted, time: .shortened)))"
         }
         return nil
     }
@@ -548,7 +551,7 @@ struct RunawayAnomalyGlanceCard: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
-                    Text("Runaway:")
+                    Text("↑USAGE:")
                         .font(.system(size: 11, weight: .bold))
                         .foregroundStyle(Theme.warning)
                     Text(normalizedTitle)
@@ -615,7 +618,7 @@ struct RunawayRecentAlertGlanceCard: View {
                         .lineLimit(1)
                 }
                 HStack(spacing: 6) {
-                    Text("\(alert.multiplier.formatted(.number.precision(.fractionLength(1))))× runaway")
+                    Text("\(alert.multiplier.formatted(.number.precision(.fractionLength(1))))× ↑USAGE")
                         .font(.system(size: 11, weight: .bold, design: .rounded))
                         .foregroundStyle(Theme.warning)
                     Text("· \(alert.timestamp.formatted(date: .omitted, time: .shortened))")
