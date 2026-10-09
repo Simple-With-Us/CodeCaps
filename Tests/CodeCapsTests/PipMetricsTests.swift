@@ -42,6 +42,37 @@ final class PipMetricsTests: XCTestCase {
         }
     }
 
+    /// Owner, 2026-10-08: "when the window is getting narrower, the first
+    /// thing to go (after things have compressed as much as allowable) is the
+    /// platform name ASSUMING WE FINALLY CAN MAKE THE LOGOS ACTUALLY SHOW UP".
+    ///
+    /// The logo and the name used to drop together at `minimal`, so there was
+    /// nothing left to identify the row.  The name now goes first, at its own
+    /// `logoOnly` level, and the logo survives until the identity ladder runs
+    /// out entirely.
+    func testThePlatformNameDropsBeforeTheLogo() {
+        XCTAssertTrue(PipMetrics.Detail.logoOnly.showsProviderLogo,
+                      "the logo must still identify the row at this level")
+        XCTAssertFalse(PipMetrics.Detail.logoOnly.showsTitle,
+                       "the name is the first thing to go")
+
+        // And there is a real width band that selects it, between the named
+        // single-meter row and the identity-free minimal one.
+        XCTAssertEqual(PipMetrics.detail(forWidth: PipMetrics.padding * 2 + PipMetrics.logoOnlyMinWidth),
+                       .logoOnly)
+        XCTAssertEqual(PipMetrics.detail(forWidth: PipMetrics.padding * 2 + PipMetrics.minimalMinWidth),
+                       .minimal)
+        XCTAssertFalse(PipMetrics.Detail.minimal.showsProviderLogo,
+                       "the logo goes only after the name, at the identity-free end")
+
+        // Nothing above logoOnly may lose the name while keeping two meters.
+        for level in [PipMetrics.Detail.full, .noCountdown, .singleMeter, .logoOnly] {
+            if level.maxMeters > 1 || level == .logoOnly {
+                XCTAssertTrue(level.showsProviderLogo, "\(level) must keep the logo")
+            }
+        }
+    }
+
     func testNarrowWindowStillShowsBarAndPercent() {
         // The owner's floor: only the bars and the percentages remain.
         let detail = PipMetrics.detail(forWidth: PipMetrics.minWidth)
@@ -79,13 +110,12 @@ final class PipMetricsTests: XCTestCase {
     }
 
     func testFitHeightHasNoOuterPaddingTerm() {
-        // The two zones run edge to edge, so the panel height is exactly
-        // header + rows + the body's own vertical padding.  If a future change
-        // puts padding back on the outside, `height` starts double-counting it:
-        // the ladder then drops a level early and the panel asks for room it is
-        // no longer using.
-        let expected = PipMetrics.headerHeight
-            + CGFloat(3) * PipMetrics.rowHeight
+        // The rows run edge to edge, so the panel height is exactly the rows
+        // plus the body's own vertical padding — there is no header band (owner,
+        // 2026-10-08).  If a future change puts padding back on the outside,
+        // `height` starts double-counting it: the ladder then drops a level
+        // early and the panel asks for room it is no longer using.
+        let expected = CGFloat(3) * PipMetrics.rowHeight
             + PipMetrics.bodyVerticalPadding * 2
         XCTAssertEqual(PipMetrics.fitSize(rowCount: 3, hasDualMeterRow: false).height, expected)
     }
@@ -129,18 +159,25 @@ final class PipMetricsTests: XCTestCase {
         }
     }
 
-    func testHeaderTextIsDroppedOnlyWhenItWouldCollideWithTheCloseButton() {
-        XCTAssertTrue(PipMetrics.showsHeaderText(forWidth: PipMetrics.minWidth * 2))
-        XCTAssertFalse(PipMetrics.showsHeaderText(forWidth: PipMetrics.minWidth))
-    }
-
     // MARK: Window behaviour
 
     func testPanelIsResizableAndBounded() {
         let mask = PipMetrics.panelStyleMask
         XCTAssertTrue(mask.contains(.resizable),
                       "The owner asked for a resizable window; the style mask is what grants it")
-        XCTAssertTrue(mask.contains(.fullSizeContentView))
+        // Owner report 2026-10-08: a blank silver strip sat along the top of the
+        // HUD "for no reason".  `.titled` and `.hudWindow` both make AppKit paint
+        // a titlebar strip that lives outside the SwiftUI content, and no amount
+        // of `titleVisibility` or `fullSizeContentView` removes it — the strip
+        // belongs to the window frame.  A borderless panel has no strip at all.
+        XCTAssertFalse(mask.contains(.titled),
+                       "`.titled` brings back the blank silver strip the owner asked to remove")
+        XCTAssertFalse(mask.contains(.hudWindow),
+                       "`.hudWindow` paints a titlebar strip outside the content view")
+        XCTAssertTrue(mask.contains(.borderless),
+                      "the rounded panel is now the whole window, so it must be borderless")
+        XCTAssertTrue(mask.contains(.nonactivatingPanel),
+                      "the HUD must still not steal focus from the app the owner is using")
         XCTAssertLessThan(PipMetrics.minWidth, PipMetrics.maxWidth)
         XCTAssertLessThan(PipMetrics.minHeight, PipMetrics.maxHeight)
     }

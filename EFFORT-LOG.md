@@ -1,5 +1,16 @@
 # CodeCaps — Effort Log
 
+## 2026-10-06 — Infisical three-field setup [dot, draft validation pending]
+
+- Lane: `dot/infisical-project-selector`.  Owner-approved task-note reservation because the board app picker omits CodeCaps; no board claim exists.
+- Coordination: [app scope](https://simplewithus.slack.com/archives/C0C6NFR5QRJ/p1791272490794519), [fleet reservation](https://simplewithus.slack.com/archives/C0BEZDJDNKV/p1791272598316679); AGENT-SYNC.md read.  Fresh main `14760c2`; PR #175 has no changed-file overlap.  PR #163 shares AppDelegate but its window-layering hunks are independent of the Infisical lifecycle methods.
+- Editable Client ID, Client Secret, and Project ID; atomic Keychain setup, explicit nonblank Project ID with no legacy fallback, isolated candidate validation, revision-fenced network results, and interrupted-operation tests.
+- Draft PR: https://github.com/Simple-With-Us/CodeCaps/pull/177 .  Owner explicitly chooses to re-enter Project ID; no fixed project is retained.
+- Scope excludes telemetry, real credential/grant changes, quota mode changes, merge, and deployment.  Existing local endpoint/token protections are unchanged.
+- Validation: `git diff --check`; independent review completed for initial draft; owner then requested removal of the original project fallback.  Updated review and exact-head CI pending.  Local `swift build` / `swift test` unavailable (no Swift toolchain or macOS SDK in cloud executor); hosted macOS exact-head CI is required before completion.
+
+---
+
 ## 2026-10-03 — Independent Provider and File Refresh [CODEX, PR #142]
 
 repo: CodeCaps; pre-work claim: posted to #agent-sync after reading AGENT-SYNC.md; Lane: `codex/independent-source-refresh`; Board `4bcf84f1`; GitHub #137; PR #142 open on this branch (depends on #139; refs #136).
@@ -8,6 +19,19 @@ repo: CodeCaps; pre-work claim: posted to #agent-sync after reading AGENT-SYNC.m
 - Split Settings → Sources & Fleet into independent **Provider Checks** and **Codex Session File Checks** toggles with separate 1-, 3-, 5-, and 15-minute intervals (five-minute provider default, one-minute file default).  Manual refresh runs both enabled paths; disabling one source preserves the other when possible.
 - Integrated scheduling, merge rules, and cancellation in `MonitorModel` / `SourceRefreshSettings`; documented behavior in `docs/REFRESH.md`.
 - Verification: `CodexSessionQuotaReaderTests`, `SourceRefreshTests`, and related refresh tests on the branch; hosted Swift CI green.  Native Mac UI claims rely on code review and CI fixture rendering in `DocsScreenshotTests`, not supplied or manually captured screenshots.
+
+---
+
+## 2026-10-04 — Settings Window Layering and Focus-Loss Dismissal [AG, in progress]
+
+Lane: `ag/settings-window-layering`.  GitHub issue #164; PR #163.  Mac board reservation blocked while thrash wake-ready is hot (fleet policy: no coding/board load on Mac); GH issue #164 is the accountable reservation recorded now; board ID will be backfilled when Mac is cool.
+
+- Elevated console/settings window level to `popUpMenuWindow + 1` (102) when opened from Glance popover so it opens directly on top rather than being obscured.
+- Maintained Glance popover visibility underneath console/settings while key.
+- Automatically dismisses popover and restores normal window level when console/settings window resigns key status or application resigns active.
+- Verified with 324 passing unit tests via `swift test`.
+- Coordination: claim posted to `#codecaps` (the CodeCaps app channel) per the AGENT-SYNC private inter-agent protocol, first field `repo: CodeCaps`, declaring `ag/settings-window-layering` with the touched fileset `Sources/CodeCaps/AppDelegate.swift` and `Sources/CodeCaps/PipWidget.swift`; board list reviewed with no overlapping open or in-progress board items before the lane was recorded as in progress.  Mac THE BOARD add deferred (thrash); do not treat channel coordination alone as a board reservation.
+
 
 ---
 

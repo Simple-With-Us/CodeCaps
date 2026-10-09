@@ -1,5 +1,15 @@
 # CodeCaps — Effort Log
 
+## 2026-10-06 — Blue vector SVG for standard and black silhouette SVG for template Muse Code mark [AG, in progress]
+
+Lane: `ag/muse-code-blue-svg-and-black-template`.
+
+- Muse Code vector assets: added authentic square-centered Meta blue gradient vector SVG (`muse-code.svg`) for standard full-color presentation and high-contrast black Meta silhouette vector SVG (`muse-code-dark.svg`, with companion raster `muse-code-dark.png`) for Light/Dark template rendering.
+- Template asset resolution: updated `PlatformLogoImage` with `templateResourceNames` mapping, cleanly routing `style == .template` requests for `muse-code` and `muse` to `muse-code-dark.svg` while serving `muse-code.svg` in standard full-color mode.
+- Verification & test coverage: expanded `PlatformLogoResourceTests` to verify `muse-code-dark` bundling, rasterization, and explicit template vs standard style resolution; all 743 tests passing across `QuotaCoreTests` and `CodeCapsTests`; verified clean simulator build for `CodeCapsCompanion` target.
+
+---
+
 ## 2026-10-05 — Glance footer equidistant polish, Muse Assist & Muse Code quota split [AG, in progress]
 
 Lane: `ag/glance-footer-equidistant-muse-split`.

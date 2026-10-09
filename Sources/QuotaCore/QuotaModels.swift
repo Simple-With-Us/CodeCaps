@@ -625,7 +625,7 @@ private enum ISO8601Date {
     }
 }
 
-private enum QuotaProviders {
+enum QuotaProviders {
     struct Expected {
         let key: String
         let label: String
@@ -672,6 +672,11 @@ private enum QuotaProviders {
             "minimax": "minimax", "minimax-code": "minimax",
             "muse-assist": "muse-assist", "muse assist": "muse-assist", "muse_assist": "muse-assist", "muse-assistant": "muse-assist", "muse assistant": "muse-assist",
             "muse-code": "muse-code", "muse code": "muse-code", "muse_code": "muse-code",
+            // `muse` is what `subscription-status-cli` reports, and its windows
+            // are "Additional tokens" / "Free weekly limit" -- Muse Assist, per
+            // the owner 2026-10-09.  It was aliased to `muse-code` here, which
+            // filed every Assist reading under Muse Code: both rows then showed
+            // "no report" while the data sat in the handoff, correctly formed.
             "muse": "muse-assist", "muse-cli": "muse-assist", "muse-sdk": "muse-assist",
             "kimi": "kimi", "moonshot": "kimi", "moonshot-ai": "kimi",
             "gemini-cli": "gemini-cli",

@@ -14,7 +14,6 @@ enum PipMetrics {
 
     static let padding: CGFloat = 10
     static let cornerRadius: CGFloat = 12
-    static let headerHeight: CGFloat = 42
     static let rowHeight: CGFloat = 20
     static let bodyVerticalPadding: CGFloat = 6
 
@@ -25,28 +24,29 @@ enum PipMetrics {
     static let providerLogoSize: CGFloat = 14
     static let titleWidth: CGFloat = 68
     static let cadenceWidth: CGFloat = 18
+    /// Wide enough for "100%" in bold monospaced digits at 10pt, left-aligned so
+    /// a long number never clips: the owner saw "100%" lose a couple of points
+    /// at the narrow end when it was right-aligned into a tight frame.
     static let percentWidth: CGFloat = 34
     static let countdownWidth: CGFloat = 34
     static let barMinWidth: CGFloat = 28
     static let barHeight: CGFloat = 4
 
-    // MARK: Header
+    // MARK: Floating controls
 
-    /// Big enough to read as the app's mark rather than as an icon in a list.
-    /// It replaces a 12pt fallback that read as a smudge at HUD scale.
-    static let markSize: CGFloat = 22
-    static let markTextSize: CGFloat = 12
-    /// Below this the word "CodeCaps" is what collides with the close button,
-    /// so the mark travels alone.
-    static let headerTextMinWidth: CGFloat = 130
+    /// The close/back control floats over the rows rather than living in a band
+    /// of its own (owner, 2026-10-08), so it is inset from the corner rather
+    /// than laid out beside a title.
+    static let controlInset: CGFloat = 4
+    static let controlHitSize: CGFloat = 18
 
     // MARK: Panel bounds
 
     static let minWidth: CGFloat = 110
     static let maxWidth: CGFloat = 520
-    /// One header, one row, and the body's own vertical padding.  The two
-    /// zones run edge to edge, so this is the whole panel height.
-    static let minHeight: CGFloat = headerHeight + rowHeight + bodyVerticalPadding * 2
+    /// One row plus the body's own vertical padding, now that the header band
+    /// is gone and the panel is rows only.
+    static let minHeight: CGFloat = rowHeight + bodyVerticalPadding * 2
     static let maxHeight: CGFloat = 460
 
     /// A window with no dual-meter row opens comfortably wide without being
@@ -81,6 +81,10 @@ enum PipMetrics {
     static let singleMeterMinWidth: CGFloat =
         providerLogoSize + rowSpacing + titleWidth + rowSpacing + meterMinWidthWithCountdown
 
+    /// Provider logo and two meters, no countdowns and no title.
+    static let logoOnlyMinWidth: CGFloat =
+        providerLogoSize + rowSpacing + meterMinWidth + rowSpacing + meterMinWidth
+
     /// Two labelled meters, with no provider identity at all.
     static let minimalMinWidth: CGFloat = meterMinWidth + rowSpacing + meterMinWidth
 
@@ -106,7 +110,15 @@ enum PipMetrics {
         case noCountdown
         /// One meter, with its countdown, still named.
         case singleMeter
-        /// Two labelled meters, provider identity dropped.
+        /// Two meters and the provider's logo, but its NAME dropped.
+        ///
+        /// Owner, 2026-10-08: "when the window is getting narrower, the first
+        /// thing to go (after things have compressed as much as allowable) is
+        /// the platform name ASSUMING WE FINALLY CAN MAKE THE LOGOS ACTUALLY
+        /// SHOW UP".  The logo and the name used to disappear together, so
+        /// there was nothing to fall back to; this is that level.
+        case logoOnly
+        /// Two labelled meters, provider identity dropped entirely.
         case minimal
         /// Two bars and two percentages, captions dropped.
         case barsOnly
@@ -121,7 +133,7 @@ enum PipMetrics {
 
         var maxMeters: Int {
             switch self {
-            case .full, .noCountdown, .minimal, .barsOnly: return 2
+            case .full, .noCountdown, .logoOnly, .minimal, .barsOnly: return 2
             case .singleMeter, .singleBar: return 1
             }
         }
@@ -135,10 +147,14 @@ enum PipMetrics {
         }
 
         var showsProviderLogo: Bool {
-            self == .full || self == .noCountdown || self == .singleMeter
+            self == .full || self == .noCountdown || self == .singleMeter || self == .logoOnly
         }
 
-        var showsTitle: Bool { showsProviderLogo }
+        /// The name outlives the logo nowhere: the logo is what identifies a row
+        /// once the name is gone, so the name is the first of the two to drop.
+        var showsTitle: Bool {
+            self == .full || self == .noCountdown || self == .singleMeter
+        }
     }
 
     /// The richest level whose content fits `width`, content width being what
@@ -149,26 +165,22 @@ enum PipMetrics {
         case fullMinWidth...: return .full
         case noCountdownMinWidth...: return .noCountdown
         case singleMeterMinWidth...: return .singleMeter
+        case logoOnlyMinWidth...: return .logoOnly
         case minimalMinWidth...: return .minimal
         case barsOnlyMinWidth...: return .barsOnly
         default: return .singleBar
         }
     }
 
-    /// Whether the header can carry the word as well as the mark.
-    static func showsHeaderText(forWidth width: CGFloat) -> Bool {
-        width >= headerTextMinWidth
-    }
-
     /// How many rows fit in `height` without clipping, never fewer than one:
     /// a PiP HUD that has been shrunk is still a PiP HUD, and one visible meter
     /// is the honest answer to "no room".
     ///
-    /// The two zones run edge to edge, so `height` is the header, the body's
-    /// own vertical padding and the rows — there is no outer padding to remove.
+    /// `height` is the body's own vertical padding plus the rows — the header
+    /// band is gone, so there is nothing else to take out.
     static func visibleRowCount(total: Int, height: CGFloat) -> Int {
         guard total > 0 else { return 0 }
-        let available = height - headerHeight - bodyVerticalPadding * 2
+        let available = height - bodyVerticalPadding * 2
         guard available >= rowHeight else { return 1 }
         return min(total, max(1, Int(available / rowHeight)))
     }
@@ -179,7 +191,7 @@ enum PipMetrics {
     /// failure the owner reported.
     static func fitSize(rowCount: Int, hasDualMeterRow: Bool) -> NSSize {
         let rows = CGFloat(max(1, rowCount))
-        let height = headerHeight + rows * rowHeight + bodyVerticalPadding * 2
+        let height = rows * rowHeight + bodyVerticalPadding * 2
         let width = hasDualMeterRow
             ? padding * 2 + fullMinWidth
             : max(singleMeterDefaultWidth, padding * 2 + singleMeterMinWidth)
@@ -220,20 +232,70 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
 
     func show(model: MonitorModel) {
         self.currentModel = model
-        guard let panel else {
+        if let panel {
+            panel.contentView = NSHostingView(rootView: PipWidgetView(model: model))
+            applyLevel()
+            applyFit(for: model)
+            // The hosting view observes the model, so it is built once and
+            // updated by the model itself.  Swapping it on every refresh
+            // rebuilt the whole view hierarchy every poll and reset the
+            // panel's intrinsic size.
+            panel.orderFrontRegardless()
+        } else {
             createPanel(model: model)
-            return
         }
-        // The hosting view observes the model, so it is built once and updated
-        // by the model itself.  Swapping it on every refresh rebuilt the whole
-        // view hierarchy every poll and reset the panel's intrinsic size.
-        panel.orderFrontRegardless()
-        applyFit(for: model)
     }
 
     func close() {
         panel?.orderOut(nil)
         panel = nil
+    }
+
+    /// The console window while it sits elevated above the Glance popover
+    /// (`popUpMenuWindow + 1`), or nil once it has been lowered.  Remembered
+    /// rather than applied once: the panel is torn down and recreated at
+    /// `.floating` whenever the PiP toggle on the elevated Settings page is
+    /// flipped, and the HUD or the console can be moved while elevated.
+    private weak var elevatedConsole: NSWindow?
+
+    /// Records that `console` is elevated and lifts the PiP HUD above it, but
+    /// only while the HUD's frame actually overlaps the console's frame.  A
+    /// HUD left at `consoleLevel + 1` (103) would draw over the Dock and over
+    /// other apps' menus, so it stays at `.floating` (3) whenever the console
+    /// cannot occlude it.  Safe to call when the panel does not exist.
+    func raise(above console: NSWindow) {
+        elevatedConsole = console
+        applyLevel()
+    }
+
+    /// Forgets the elevated console and restores the PiP HUD to its default
+    /// `.floating` level.  Idempotent.
+    func demoteToFloating() {
+        elevatedConsole = nil
+        applyLevel()
+    }
+
+    /// Re-derives the HUD level after the HUD or the elevated console moved
+    /// or resized, so the promotion tracks the overlap that motivated it.
+    func refreshLevel() {
+        applyLevel()
+    }
+
+    /// `.floating` unless an elevated console's frame would cover the HUD,
+    /// in which case one level above that console.
+    private var desiredLevel: NSWindow.Level {
+        let floating = NSWindow.Level.floating
+        guard let panel,
+              let console = elevatedConsole,
+              console.level.rawValue > floating.rawValue,
+              panel.frame.intersects(console.frame) else { return floating }
+        return NSWindow.Level(console.level.rawValue + 1)
+    }
+
+    private func applyLevel() {
+        guard let panel else { return }
+        let level = desiredLevel
+        if panel.level != level { panel.level = level }
     }
 
     private func createPanel(model: MonitorModel) {
@@ -244,10 +306,13 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
             defer: false
         )
         p.isFloatingPanel = true
+        // Start at `.floating`; `applyLevel()` below lifts the HUD again if it
+        // is recreated (Settings toggle) while the console is still elevated
+        // and its frame overlaps the console.
         p.level = .floating
         p.isMovableByWindowBackground = true
-        p.titleVisibility = .hidden
-        p.titlebarAppearsTransparent = true
+        // Borderless panel: the rounded SwiftUI surface is the whole window, so
+        // there is no titlebar strip to keep invisible.  See `panelStyleMask`.
         p.isOpaque = false
         p.backgroundColor = .clear
         p.hasShadow = true
@@ -262,6 +327,7 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
         p.delegate = self
         p.contentView = NSHostingView(rootView: PipWidgetView(model: model))
         self.panel = p
+        applyLevel()
         // Seed the signature from the rows the window is being created for, so
         // a restored size survives a relaunch instead of being overridden by
         // the very first refresh.
@@ -285,6 +351,13 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
             height: min(max(fit.height, panel.minSize.height), panel.maxSize.height)
         )
         panel.setContentSize(clamped)
+    }
+
+    /// The HUD is movable by its background; re-check overlap with the
+    /// elevated console after every drag.
+    func windowDidMove(_ notification: Notification) {
+        guard (notification.object as? NSWindow) === panel else { return }
+        applyLevel()
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -335,17 +408,42 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
 extension PipMetrics {
     /// `.resizable` is what turns this from a fixed HUD into a window the owner
     /// can drag the edge of; the view inside degrades rather than clips.
+    ///
+    /// There is deliberately **no `.titled` and no `.hudWindow`** (owner report,
+    /// 2026-10-08: "it needs to not have the blank silver part on top for no
+    /// reason").  Both of those make AppKit paint a titlebar strip at the top
+    /// of the window that sits *outside* the SwiftUI content, so it shows as a
+    /// blank light band above the rounded panel — and with `titleVisibility`
+    /// hidden and `titlebarAppearsTransparent` set, it was a strip with nothing
+    /// on it at all.  `.fullSizeContentView` cannot hide it either, because the
+    /// strip is drawn by the window frame rather than by the content view.
+    ///
+    /// A borderless, nonactivating, resizable panel has no such strip: the
+    /// rounded panel *is* the window.  `isMovableByWindowBackground` already
+    /// makes the body draggable, so the titlebar was never load-bearing.
     static var panelStyleMask: NSWindow.StyleMask {
-        [.titled, .nonactivatingPanel, .fullSizeContentView, .utilityWindow, .hudWindow, .resizable]
+        [.borderless, .nonactivatingPanel, .resizable]
     }
 }
 
 /// The SwiftUI view for the floating PiP HUD widget.
 struct PipWidgetView: View {
     @ObservedObject var model: MonitorModel
+    /// The row whose platform detail is open, if the owner clicked one.  `nil`
+    /// is the normal all-rows HUD.
+    @State private var detailRowId: String?
+    /// The whole panel, not just the header: the owner asked for the close
+    /// button to appear when the mouse is anywhere over the window.
+    @State private var isHovering = false
 
     private var targetRows: [DisplaySection] {
         PipWidgetController.targetRows(for: model)
+    }
+
+    /// The one row the detail view is showing, or nil.
+    private var detailRow: DisplaySection? {
+        guard let detailRowId else { return nil }
+        return targetRows.first { $0.id == detailRowId }
     }
 
     var body: some View {
@@ -354,75 +452,51 @@ struct PipWidgetView: View {
             // their own contents, so the ladder below reads real panel width
             // rather than width that has already had the padding taken out of it.
             let detail = PipMetrics.detail(forWidth: geo.size.width)
-            let rows = Array(
-                targetRows.prefix(PipMetrics.visibleRowCount(total: targetRows.count,
-                                                             height: geo.size.height))
-            )
-            VStack(spacing: 0) {
-                header(width: geo.size.width)
-                rowsPanel(rows: rows, detail: detail)
+            // No header band.  The owner read the raised strip as a stray silver
+            // tab (2026-10-08) and, with it gone, asked that the app's own mark
+            // and name not appear on the HUD at all — the provider logos are what
+            // identify it now.  The close/back control floats over the rows
+            // instead, still only while the pointer is over the window.
+            ZStack(alignment: .topTrailing) {
+                if let detailRow {
+                    detailPanel(detailRow, detail: detail)
+                } else {
+                    rowsPanel(detail: detail, height: geo.size.height)
+                }
+                floatingControl
+                    // Without this the 18x18 control sat flush in the corner and
+                    // overlapped the first row's right-edge percentage.
+                    .padding(PipMetrics.controlInset)
             }
         }
         .background {
             RoundedRectangle(cornerRadius: PipMetrics.cornerRadius, style: .continuous)
-                .fill(.ultraThinMaterial)
+                .fill(Theme.groupBand)
         }
         .clipShape(RoundedRectangle(cornerRadius: PipMetrics.cornerRadius, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: PipMetrics.cornerRadius, style: .continuous)
                 .strokeBorder(Theme.hairline, lineWidth: 1)
         }
+        .onHover { hovering in
+            isHovering = hovering
+        }
     }
 
     // MARK: Header
 
-    /// The lighter band across the top: the app's own mark and name, centred as
-    /// one unit, with the close button always on screen in this band rather
-    /// than hovering in over the meters.  A HUD the owner cannot dismiss
-    /// without finding the mouse is a HUD that gets turned off and left off.
-    private func header(width: CGFloat) -> some View {
-        ZStack {
-            HStack(spacing: 6) {
-                mark
-                if PipMetrics.showsHeaderText(forWidth: width) {
-                    Text("CodeCaps")
-                        .font(.system(size: PipMetrics.markTextSize, weight: .bold))
-                        .foregroundStyle(Theme.ink)
-                        .fixedSize()
-                }
-            }
-
-            HStack(spacing: 0) {
-                Spacer(minLength: 0)
+    /// Close, or Back when a platform detail is open.  It floats over the
+    /// rows' top-right corner and appears only on hover, so it never occupies
+    /// permanent space above the numbers.
+    @ViewBuilder
+    private var floatingControl: some View {
+        if isHovering {
+            if detailRow == nil {
                 closeButton
-            }
-        }
-        .frame(height: PipMetrics.headerHeight)
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, PipMetrics.padding)
-        .background(Theme.surface)
-    }
-
-    /// CodeCaps' own mark, from the owner's black-on-transparent artwork, drawn
-    /// as a template so the same asset is black-on-transparent on the light
-    /// band and white-on-transparent on the dark one.  It is the app's mark
-    /// reused as-is — never re-cut, re-exported or substituted.
-    private var mark: some View {
-        Group {
-            if let image = PipWidgetController.brandMark {
-                Image(nsImage: image)
-                    .resizable()
-                    .renderingMode(.template)
-                    .aspectRatio(contentMode: .fit)
-                    .foregroundStyle(Theme.solidMark)
             } else {
-                Image(systemName: "gauge.with.needle.fill")
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .foregroundStyle(Theme.solidMark)
+                backButton
             }
         }
-        .frame(width: PipMetrics.markSize, height: PipMetrics.markSize)
     }
 
     private var closeButton: some View {
@@ -431,7 +505,7 @@ struct PipWidgetView: View {
         } label: {
             Image(systemName: "xmark")
                 .font(.system(size: 10, weight: .bold))
-                .foregroundStyle(Theme.ink.opacity(0.55))
+                .foregroundStyle(Theme.solidMark.opacity(0.55))
                 .frame(width: 18, height: 18)
                 .contentShape(Rectangle())
         }
@@ -440,23 +514,69 @@ struct PipWidgetView: View {
         .accessibilityLabel("Close PiP Widget")
     }
 
+    /// Replaces the close button while a platform detail is open.  Dismissing
+    /// the whole HUD is not what the owner wants at that point; going back to
+    /// the rows is.
+    private var backButton: some View {
+        Button {
+            detailRowId = nil
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 9, weight: .bold))
+                Text("Back")
+                    .font(.system(size: 10, weight: .semibold))
+            }
+            .foregroundStyle(Theme.solidMark.opacity(0.75))
+            .frame(height: 18)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Back to all rows")
+        .accessibilityLabel("Back to all rows")
+    }
+
     // MARK: Rows
 
-    /// The darker panel the meters sit on.  It carries its own background so it
-    /// reads as a panel under the header rather than as more header.
-    private func rowsPanel(rows: [DisplaySection], detail: PipMetrics.Detail) -> some View {
-        VStack(spacing: 0) {
-            ForEach(rows) { row in
-                pipRow(row, detail: detail)
+    /// The rows panel: every pinned row, or the ones that fit, or the lot
+    /// scrolled if the owner has made the window shorter than its content.
+    ///
+    /// The three cases are one view.  Rows are dropped whole and never clipped
+    /// when there is no room, but a window the owner has deliberately shortened
+    /// past the last fitting row scrolls instead of silently hiding meters they
+    /// pinned on purpose.  The scroll indicator is off: this is a HUD, and a
+    /// permanent bar in a 200pt window is worse than no affordance at all.
+    private func rowsPanel(detail: PipMetrics.Detail, height: CGFloat) -> some View {
+        let visible = PipMetrics.visibleRowCount(total: targetRows.count, height: height)
+        let overflows = visible < targetRows.count
+
+        return ScrollView(.vertical, showsIndicators: false) {
+            VStack(spacing: 0) {
+                ForEach(Array(targetRows.prefix(max(1, visible)))) { row in
+                    pipRow(row, detail: detail)
+                }
+                if overflows {
+                    // Say so, rather than letting a pinned row look absent.
+                    Text("\(targetRows.count - max(1, visible)) more pinned — scroll")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 2)
+                }
+                Spacer(minLength: 0)
             }
-            Spacer(minLength: 0)
+            .padding(.horizontal, PipMetrics.padding)
+            .padding(.vertical, PipMetrics.bodyVerticalPadding)
         }
-        .padding(.horizontal, PipMetrics.padding)
-        .padding(.vertical, PipMetrics.bodyVerticalPadding)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Theme.groupBand)
     }
 
+    /// One row.  The whole row is the tap target for opening that platform's
+    /// detail, which is what the owner asked for: "clicking on a row anywhere,
+    /// even if all the text is displayed".  `.contentShape` on the row, not just
+    /// on the label, is what makes the empty space between the title and the
+    /// first meter clickable.
     private func pipRow(_ row: DisplaySection, detail: PipMetrics.Detail) -> some View {
         let meters = Array(
             PipWidgetController.meterSnapshots(for: row, now: model.now)
@@ -474,7 +594,7 @@ struct PipWidgetView: View {
             if detail.showsTitle {
                 Text(row.title)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Theme.ink)
+                    .foregroundStyle(Theme.solidMark)
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .frame(width: PipMetrics.titleWidth, alignment: .leading)
@@ -487,6 +607,103 @@ struct PipWidgetView: View {
             }
         }
         .frame(height: PipMetrics.rowHeight)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .onTapGesture { detailRowId = row.id }
+        // Hovering a narrow row is the only way to read the platform name, once
+        // the width ladder has dropped the title.
+        .help(row.title)
+        .accessibilityLabel("\(row.title) — open details")
+        .accessibilityAddTraits(.isButton)
+    }
+
+    // MARK: Platform detail
+
+    /// One platform, in the panel, with every window it publishes rather than
+    /// the two the summary row has room for.  The owner asked for this as the
+    /// click target for a row.
+    private func detailPanel(_ row: DisplaySection, detail: PipMetrics.Detail) -> some View {
+        let windows = row.section.windows
+            .filter { !$0.window.isSupplementaryVideoQuota && !row.isMasked($0) }
+
+        return ScrollView(.vertical, showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    PlatformLogo(providerKey: row.providerKey,
+                                 size: 16,
+                                 style: model.markStyle(for: row.providerKey),
+                                 iconHint: row.poolKey == nil ? row.section.iconHint : nil)
+                    Text(row.title)
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(Theme.solidMark)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                    // `expected` is a flag, not a plan name: the provider is
+                    // one we expect to publish a reading.  When it has none,
+                    // saying so beats an empty panel the owner has to interpret.
+                    if row.section.expected, windows.isEmpty {
+                        Text("No readings published")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(Theme.warning)
+                            .lineLimit(1)
+                    }
+                }
+                .padding(.bottom, 1)
+
+                ForEach(windows, id: \.window.id) { snapshot in
+                    detailWindowRow(snapshot, detail: detail)
+                }
+
+                if windows.isEmpty {
+                    Text("No readings for this platform right now.")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, PipMetrics.padding)
+            .padding(.vertical, PipMetrics.bodyVerticalPadding)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(Theme.groupBand)
+    }
+
+    private func detailWindowRow(_ snapshot: QuotaWindowSnapshot, detail: PipMetrics.Detail) -> some View {
+        let metrics = QuotaBarMetrics(snapshot: snapshot, now: model.now)
+        let remaining = snapshot.remainingPercent
+        let full = glanceResetFullCountdown(snapshot.resetAt, now: model.now)
+
+        return VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 5) {
+                Text(glanceMeterCaption(snapshot))
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: PipMetrics.cadenceWidth, alignment: .leading)
+                Text(snapshot.window.label.isEmpty ? "Quota" : snapshot.window.label)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(Theme.solidMark)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                Text(remaining.map { "\(Int($0.rounded()))%" } ?? "—")
+                    .font(.system(size: 10, weight: .bold, design: .rounded).monospacedDigit())
+                    .foregroundStyle(Theme.solidMark)
+                    .fixedSize()
+                if !full.isEmpty {
+                    Text(full)
+                        .font(.system(size: 9).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            QuotaUsageBar(
+                metrics: metrics,
+                height: 5,
+                dimmed: quotaBarIsDimmed(for: snapshot, sourceFailed: false),
+                markerHeight: 11
+            )
+            .frame(height: 5)
+        }
+        .help(snapshot.resetAt.map { "Resets \(glanceResetCountdown($0, now: model.now))" } ?? "")
     }
 
     private func pipMeter(_ snapshot: QuotaWindowSnapshot, detail: PipMetrics.Detail) -> some View {
@@ -513,21 +730,27 @@ struct PipWidgetView: View {
             )
             .frame(minWidth: PipMetrics.barMinWidth, maxWidth: .infinity)
 
+            /// The remaining percentage, as plain bold digits.
+            ///
+            /// There is no shaded box behind it.  The box was
+            /// `pacingPillBackgroundColor`: a verdict on whether this window is
+            /// ahead of or behind the clock, so two rows both at 63% could get
+            /// different colours.  The owner read that as two different meanings
+            /// for one number and asked for it gone — and the bar beside it
+            /// already carries the severity, with its own marker showing how far
+            /// through the window the owner is.
+            ///
+            /// Left-aligned hard against the bar's right edge: right-aligned
+            /// digits sat a variable distance from their own bar once the
+            /// countdown width changed, which looked ragged when stretched, and
+            /// "100%" clipped by a couple of points at the narrow end.
             Text(remaining.map { "\(Int($0.rounded()))%" } ?? "—")
                 .font(.system(size: 10, weight: .bold, design: .rounded).monospacedDigit())
-                .foregroundStyle(Theme.ink)
+                .foregroundStyle(Theme.solidMark)
                 .lineLimit(1)
                 .fixedSize()
-                .frame(width: PipMetrics.percentWidth, alignment: .trailing)
-                .padding(.vertical, 1)
-                .background(
-                    pacingPillBackgroundColor(
-                        remainingPercent: remaining,
-                        elapsedFraction: snapshot.elapsedFraction(now: model.now),
-                        isEnabled: model.pacingColorHighlights
-                    ),
-                    in: RoundedRectangle(cornerRadius: 3)
-                )
+                .frame(width: PipMetrics.percentWidth, alignment: .leading)
+                .help("Remaining: \(remaining.map { "\(Int($0.rounded()))%" } ?? "unknown")")
 
             if detail.showsCountdown, !cd.isEmpty {
                 Text(cd)

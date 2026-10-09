@@ -91,7 +91,7 @@ final class QuotaUsageBarTests: XCTestCase {
     func testTheBarMarkerKeepsItsSize() {
         // The owner asked for the marker to be the same size it was: two points
         // wide, standing two points proud of the bar above and below.
-        XCTAssertEqual(QuotaUsageBar.markerWidth, 2)
+        XCTAssertEqual(QuotaUsageBar.markerWidth, 3, "owner widened the notch 2026-10-08")
         XCTAssertEqual(QuotaUsageBar.markerOverhang, 2)
     }
 }

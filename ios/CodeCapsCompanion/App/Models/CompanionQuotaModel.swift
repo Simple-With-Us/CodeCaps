@@ -754,6 +754,30 @@ public final class CompanionQuotaModel: ObservableObject {
         let windows: [WireRawWindow]?
         let customMarks: [String: WireCustomMark]?
         let providerGroups: [WireProviderGroup]?
+        /// Alerts the Mac has already decided to raise.
+        ///
+        /// Owner request, 2026-10-08: "iOS should have info about heavy
+        /// anomalies in usage or runaway usage like the mac."  The decision is
+        /// made on the Mac because that is where the burn-rate history lives —
+        /// a per-machine file of measured hourly intervals the phone has no way
+        /// to reproduce.  Recomputing here would mean the two surfaces
+        /// disagreeing about whether something was anomalous, which is worse
+        /// than one surface staying quiet.
+        ///
+        /// Optional, so an older Mac's file still decodes and the companion
+        /// simply has nothing extra to raise.
+        let alerts: [WireAlert]?
+    }
+
+    /// One alert the Mac has already raised a verdict on.
+    private struct WireAlert: Decodable, Equatable {
+        let id: String
+        let kind: String
+        let providerKey: String
+        let providerTitle: String
+        let windowLabel: String
+        let summary: String
+        let occurredAt: String
     }
 
     private struct WireCustomMark: Decodable {
@@ -818,10 +842,69 @@ public final class CompanionQuotaModel: ObservableObject {
         let defaultWindowLabel: String?
     }
 
+    // MARK: - Alerts from the Mac
+
+    /// Alert ids already announced, so a payload rewritten on every refresh
+    /// raises each one once rather than once per poll.
+    private var announcedAlertIds: Set<String> {
+        get {
+            let stored = UserDefaults.standard.stringArray(forKey: "announcedAlertIds") ?? []
+            return Set(stored)
+        }
+        set {
+            UserDefaults.standard.set(Array(newValue).suffix(200), forKey: "announcedAlertIds")
+        }
+    }
+
+    /// Raise each alert the Mac decided on that this phone has not announced.
+    ///
+    /// The Mac is the only surface that can make this call: the rules compare
+    /// against its burn-rate history, a per-machine file of measured hourly
+    /// intervals that does not exist on the phone.  So the phone announces what
+    /// it is told, rather than deciding for itself — which also means the two
+    /// surfaces cannot disagree about whether something counted as runaway.
+    private func raisePendingAlerts(_ alerts: [WireAlert]) {
+        guard !alerts.isEmpty else { return }
+        var announced = announcedAlertIds
+        var fresh: [WireAlert] = []
+        for alert in alerts where !announced.contains(alert.id) {
+            announced.insert(alert.id)
+            fresh.append(alert)
+        }
+        guard !fresh.isEmpty else { return }
+        announcedAlertIds = announced
+
+        for alert in fresh {
+            let content = UNMutableNotificationContent()
+            content.title = "Runaway Usage: \(alert.providerTitle)"
+            content.body = alert.summary
+            content.sound = AlarmSoundPlayer.notificationSound(for: alarmSound) ?? .default
+            // An id per alert rather than a shared one: identical bodies would
+            // otherwise collapse, and the owner does sometimes see the same
+            // wording twice for two different windows.
+            let request = UNNotificationRequest(identifier: "runaway-\(alert.id)",
+                                                content: content,
+                                                trigger: nil)
+            Task { @MainActor in
+                do {
+                    try await UNUserNotificationCenter.current().add(request)
+                } catch {
+                    lastError = "A runaway alert for \(alert.providerTitle) could not be delivered."
+                        + sentenceGap + error.localizedDescription
+                }
+            }
+        }
+    }
+
     @discardableResult
     private func parseSnapshot(data: Data) -> Bool {
         guard let envelope = try? JSONDecoder().decode(WireEnvelope.self, from: data),
               let rawWindows = envelope.windows else { return false }
+
+        // Raise anything the Mac decided to raise that this phone has not
+        // announced yet.  Done before the windows are built so a decode
+        // failure further down cannot leave an alert half-processed.
+        raisePendingAlerts(envelope.alerts ?? [])
 
         guard !rawWindows.isEmpty else {
             items = []

@@ -277,6 +277,94 @@ final class AnomalyDetectorTests: XCTestCase {
     }
 }
 
+// MARK: - One alert per event, and a peak check that can actually fire
+//
+// Owner report 2026-10-09: two alerts arrived back to back for one burst —
+// "8.0x your 5hr average" and "8.6x your 7d average" — and the "Versus Your
+// Measured Peak" slider appeared to do nothing.
+//
+// Both had the same cause.  A single window was appending *two* anomalies when
+// both comparisons were satisfied, and nothing collapsed them; and the peak
+// comparison used the single fastest sample ever recorded, which made the
+// slider unreachable in 99.3% of measured hours on this Mac's own data.
+extension AnomalyDetectorTests {
+    private func busySamples(now: Date, count: Int = 40) -> [AnomalyDetector.Sample] {
+        var out: [AnomalyDetector.Sample] = []
+        // A steady 10%/hour for `count` hours, then a sudden sprint.
+        for h in stride(from: count, through: 1, by: -1) {
+            out.append(.init(providerKey: "p", windowId: "w",
+                             observedAt: now.addingTimeInterval(-Double(h) * 3600),
+                             remainingPercent: 100 - Double(count - h) * 10))
+        }
+        out.append(.init(providerKey: "p", windowId: "w",
+                         observedAt: now.addingTimeInterval(-300),
+                         remainingPercent: 20))
+        return out
+    }
+
+    /// The headline case: one burst, one anomaly.
+    func testOneWindowBurstThatClearsBothBarsProducesOneAnomaly() throws {
+        let now = Date(timeIntervalSince1970: 1_790_000_000)
+        let detector = AnomalyDetector(baselineMultiplier: 3.0, peakMultiplier: 1.1)
+        let anomalies = detector.evaluate(samples: busySamples(now: now), now: now)
+        let forThisWindow = anomalies.filter { $0.windowId == "w" }
+        XCTAssertEqual(forThisWindow.count, 1,
+                       "one window clearing both bars produced \(forThisWindow.count) alerts")
+    }
+
+    /// Both ratios are still recorded, so the UI can say "clears both bars"
+    /// without re-deriving them from a rate that has since moved.
+    func testBothRatiosAreCarriedOnTheSingleAnomaly() throws {
+        let now = Date(timeIntervalSince1970: 1_790_000_000)
+        let detector = AnomalyDetector(baselineMultiplier: 3.0, peakMultiplier: 1.1)
+        let anomaly = try XCTUnwrap(detector.evaluate(samples: busySamples(now: now), now: now)
+            .first { $0.windowId == "w" })
+        XCTAssertNotNil(anomaly.baselineRatio, "the cleared average comparison was dropped")
+        XCTAssertNotNil(anomaly.peakRatio, "the cleared peak comparison was dropped")
+        XCTAssertEqual(anomaly.multiplier, max(anomaly.baselineRatio ?? 0, anomaly.peakRatio ?? 0),
+                       "the headline should be the stronger of the two comparisons")
+    }
+
+    /// The stronger comparison names the event.  Preferring peak merely because
+    /// it fired would relabel a mild overrun of the average as a record.
+    func testTheStrongerComparisonIsTheOneNamed() throws {
+        let now = Date(timeIntervalSince1970: 1_790_000_000)
+        let detector = AnomalyDetector(baselineMultiplier: 1.1, peakMultiplier: 1.05)
+        let anomaly = try XCTUnwrap(detector.evaluate(samples: busySamples(now: now), now: now)
+            .first { $0.windowId == "w" })
+        let stronger = (anomaly.baselineRatio ?? 0) >= (anomaly.peakRatio ?? 0) ? AnomalyDetector.Anomaly.Kind.vsBaseline
+                                                                                 : .vsPeak
+        XCTAssertEqual(anomaly.kind, stronger)
+    }
+
+    /// The percentile that replaced the maximum: rare enough to mean something,
+    /// and it must not be reachable by the median hour.
+    func testPeakReferenceIsAPercentileNotTheMaximum() throws {
+        let rates: [Double] = Array(repeating: 10, count: 97) + [500]
+        let reference = try XCTUnwrap(AnomalyDetector.peakRatePercentile(rates))
+        XCTAssertEqual(reference, 10, accuracy: 0.001,
+                       "with one outlier in a hundred, the reference should be the ordinary rate, not 500")
+        // Against 500 the old slider could never fire; against 10 it can.
+        XCTAssertGreaterThan(50 / reference, 1.5, "a 5x sprint must clear a 1.5x peak bar now")
+    }
+
+    /// Too little history for a percentile to mean anything.
+    func testPeakReferenceFallsBackToTheMaximumWithFewSamples() throws {
+        let reference = try XCTUnwrap(AnomalyDetector.peakRatePercentile([1, 2, 3, 40]))
+        XCTAssertEqual(reference, 40, accuracy: 0.001)
+        XCTAssertNil(AnomalyDetector.peakRatePercentile([]))
+    }
+
+    /// The plain rate the owner asked for, which needs no history at all.
+    func testThePlainRateIsCarriedOnItsOwn() throws {
+        let now = Date(timeIntervalSince1970: 1_790_000_000)
+        let anomaly = try XCTUnwrap(AnomalyDetector(baselineMultiplier: 3.0, peakMultiplier: 2.0)
+            .evaluate(samples: busySamples(now: now), now: now).first { $0.windowId == "w" })
+        let rate = try XCTUnwrap(anomaly.ratePercentPerHour)
+        XCTAssertGreaterThan(rate, 0, "the %/hour reading is the one number that needs no prior week")
+    }
+}
+
 /// Pinned tests for plan-change detection: a step discontinuity in
 /// remainingPercent mid-window suppresses the runaway alert while the
 /// baseline recalibrates (7 days).
