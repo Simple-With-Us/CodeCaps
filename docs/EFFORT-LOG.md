@@ -1,5 +1,26 @@
 # CodeCaps — Effort Log
 
+## 2026-10-06 — Blue vector SVG for standard and black silhouette SVG for template Muse Code mark [AG, in progress]
+
+Lane: `ag/muse-code-blue-svg-and-black-template`.
+
+- Muse Code vector assets: added authentic square-centered Meta blue gradient vector SVG (`muse-code.svg`) for standard full-color presentation and high-contrast black Meta silhouette vector SVG (`muse-code-dark.svg`, with companion raster `muse-code-dark.png`) for Light/Dark template rendering.
+- Template asset resolution: updated `PlatformLogoImage` with `templateResourceNames` mapping, cleanly routing `style == .template` requests for `muse-code` and `muse` to `muse-code-dark.svg` while serving `muse-code.svg` in standard full-color mode.
+- Verification & test coverage: expanded `PlatformLogoResourceTests` to verify `muse-code-dark` bundling, rasterization, and explicit template vs standard style resolution; all 743 tests passing across `QuotaCoreTests` and `CodeCapsTests`; verified clean simulator build for `CodeCapsCompanion` target.
+
+---
+
+## 2026-10-05 — Glance footer equidistant polish, Muse Assist & Muse Code quota split [AG, in progress]
+
+Lane: `ag/glance-footer-equidistant-muse-split`.
+
+- Glance footer geometry & styling polish: updated footer height to 40pt with 28pt custom prominent button style (`GlanceFooterProminentButtonStyle`), exactly matching the runaway marquee notice banner's 28pt height and `RoundedRectangle(cornerRadius: 6)`.  Configured button padding so top (6pt), bottom (6pt), and trailing (6pt) margins to the window and divider edges are mathematically equidistant.  Ensured high-contrast rendering across dark mode (pastel accent with dark ink) and light mode (deep accent with crisp white text).
+- Split Muse into two separate providers: replaced generic `muse` with dedicated `muse-assist` ("Muse Assist") and `muse-code` ("Muse Code") in `QuotaProviders.expected` (total 9 expected providers).  Preserved backward compatibility with aliases for `muse-assist`, `muse-assistant`, `muse-code`, `muse`, `muse-cli`, and `muse-sdk`.
+- Asset bundling & cross-platform mappings: bundled high-resolution `muse-assist.png` (transparent background blue script "m") and authentic Meta gradient loop artwork for `muse-code.png` and `muse-code.svg` (matching user-uploaded Meta mark on transparent background).  Generated 1x/2x/3x asset catalogs (`provider-muse-assist.imageset`, `provider-muse-code.imageset`) for iOS companion and widgets.  Updated `PlatformLogo`, `CompanionQuotaModel`, `WidgetPresentation`, and `WidgetViews`.
+- Verification: all 742 unit tests passing across `QuotaCoreTests` (393 tests) and `CodeCapsTests` (349 tests); clean build of `CodeCapsCompanion` iOS simulator target via `xcodebuild`.
+
+---
+
 ## 2026-10-04 — Glance title breathing room, dynamic pacing highlights, PiP widget, and iOS companion polish [AG, in progress]
 
 Lane: `ag/ui-glance-pacing-pip-ios-polish`.  Board `bb2a8b26`, `7175aba0`, `1ac04ba9`, `4be8a67a`, `4bcf84f1`.
@@ -501,6 +522,15 @@ quota shown two ways.  The expanded row labels now make origin legible
 without inspecting the underlying window.
 
 Board 42ae688ab3b84d9aa65e445aab072a15.  Closes #37.
+
+## 2026-10-03 — Independent Provider and File Refresh [CODEX, PR #142]
+
+repo: CodeCaps; pre-work claim: posted to #agent-sync after reading AGENT-SYNC.md; Lane: `codex/independent-source-refresh`; Board `4bcf84f1`; GitHub #137; PR #142 open on this branch (depends on #139; refs #136).
+
+- Added `CodexSessionQuotaReader` for bounded passive Codex session JSONL reads with exact account identity, incremental append tracking, symlink-safe paths, and original event timestamps.  Unchanged files do not invoke provider, Fleet, upload, or download work.
+- Split Settings → Sources & Fleet into independent **Provider Checks** and **Codex Session File Checks** toggles with separate 1-, 3-, 5-, and 15-minute intervals (five-minute provider default, one-minute file default).  Manual refresh runs both enabled paths; disabling one source preserves the other when possible.
+- Integrated scheduling, merge rules, and cancellation in `MonitorModel` / `SourceRefreshSettings`; documented behavior in `docs/REFRESH.md`.
+- Verification: `CodexSessionQuotaReaderTests`, `SourceRefreshTests`, and related refresh tests on the branch; hosted Swift CI green.  Native Mac UI claims rely on code review and CI fixture rendering in `DocsScreenshotTests`, not supplied or manually captured screenshots.
 
 ## 2026-10-03 — Platform History and Alert Navigation [CODEX, in progress]
 

@@ -33,8 +33,6 @@ struct UsageHistoryView: View {
         self.model = model
         self.state = state
         self.row = row
-        // Offscreen AppKit snapshots can draw before SwiftUI calls onAppear.
-        _samples = State(initialValue: model.historySamples())
     }
 
     private var now: Date { model.now }
@@ -128,7 +126,7 @@ struct UsageHistoryView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Usage History")
                         .font(.system(size: 16, weight: .semibold))
-                    Text("Quota remaining · local readings")
+                    Text("\(row.title) · Quota remaining · local readings")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }

@@ -509,11 +509,19 @@ public struct ResetAlarmTracker: Sendable {
                     nextResetAt = observation.resetAt.flatMap { $0 > readAt ? $0 : nil } ?? window.periodResetAt
                 }
             }
-        } else if let reported = observation.resetAt, reported > readAt {
-            // No period end known — a reset was just detected without the next
-            // one being published.  Adopt the first reset time still ahead; a
-            // stale one would read as a second reset of the same period.
-            nextResetAt = reported
+        } else {
+            if let reported = observation.resetAt, reported > readAt {
+                // No period end known — adopt the first reset time still ahead.
+                nextResetAt = reported
+            }
+            if let reading, let last = window.lastRemaining {
+                let jumpedToFull = reading >= 99.5 && last < 99.5
+                let surgedMidWindow = last < 80.0 && reading >= 95.0
+                if jumpedToFull || surgedMidWindow {
+                    isReset = true
+                    isMidWindow = true
+                }
+            }
         }
 
         let previous = window

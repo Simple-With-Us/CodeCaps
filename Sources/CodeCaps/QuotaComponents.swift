@@ -106,9 +106,17 @@ enum Theme {
                                       NSColor.black.withAlphaComponent(0.7))
     /// The share of a quota window already used: the left segment of the bar.
     static let barUsed = danger
-    /// The share still available: the right segment of the bar.  This is the
-    /// same teal as the "% remaining" text, which the owner reads as green.
-    static let barRemaining = accent
+    /// The share still available: the right segment of the bar.  Healthy capacity
+    /// uses teal (or green if chosen), keeping the bar distinguishable from the red
+    /// `barUsed` segment even if the user picks a warm or danger-like UI accent (e.g. magenta, orange).
+    static var barRemaining: Color {
+        switch AccentChoice.current {
+        case .green:
+            return dyn(hex(AccentChoice.green.lightHex), hex(AccentChoice.green.darkHex))
+        default:
+            return dyn(hex(AccentChoice.teal.lightHex), hex(AccentChoice.teal.darkHex))
+        }
+    }
     static let fleet = dyn(hex(0x4B4FA8), hex(0x8A8EE0))
 
     /// Unfilled portion of any progress bar.  A black 6% track disappears on a
@@ -118,8 +126,17 @@ enum Theme {
         : dyn(NSColor.black.withAlphaComponent(0.08), NSColor.white.withAlphaComponent(0.14))
 
     /// Fill behind a selected or highlighted row.
-    static let selection = dyn(hex(0x087370).withAlphaComponent(0.12),
-                               hex(0x4FD1C5).withAlphaComponent(0.18))
+    ///
+    /// Derived from the owner's accent rather than pinned to the teal the app
+    /// shipped with: this is the fill *behind* the row's accent border, so a
+    /// hardcoded value left a violet border sitting on a teal wash the moment
+    /// any other accent was picked.  Same alphas as before, so the fill keeps
+    /// the contrast it had against the surface.
+    static var selection: Color {
+        let choice = AccentChoice.current
+        return dyn(hex(choice.lightHex).withAlphaComponent(0.12),
+                   hex(choice.darkHex).withAlphaComponent(0.18))
+    }
 
     /// The outline of a small header control: the From Mac / From Fleet switch.
     static let controlBorder: Color = highContrast
@@ -135,6 +152,13 @@ enum Theme {
     /// The band behind a source's heading in From Fleet: darker than the list
     /// background in both appearances, so each source reads as a section.
     static let groupBand = dyn(hex(0xE1E6E7), hex(0x111214))
+
+    /// A band that is slightly lighter than `groupBand`, for a header that has
+    /// to read as sitting above it rather than as an unrelated surface.  The PiP
+    /// HUD is the caller: it used the near-white/near-black `surface` token
+    /// there, which on the dark HUD became a second, unrelated band instead of
+    /// a header.
+    static let raisedBand = dyn(hex(0xEFF3F3), hex(0x1E2124))
 
     /// Text on that band: the source's name and its "reported" time.  The
     /// system secondary and tertiary greys are tuned for the list background
@@ -222,7 +246,7 @@ enum Metrics {
     static let glanceHeaderSegmentPadding: CGFloat = 11
     /// The dots between the cluster's phrases.
     static let glanceHeaderDotSize: CGFloat = 3
-    static let glanceFooterHeight: CGFloat = 38
+    static let glanceFooterHeight: CGFloat = 40
     /// A source's heading band in From Fleet.
     static let glanceGroupHeaderHeight: CGFloat = 22
     /// The list's own padding above the first row and below the last.

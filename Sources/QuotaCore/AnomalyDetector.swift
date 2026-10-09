@@ -243,10 +243,13 @@ public struct AnomalyDetector: Sendable {
             encoder.dateEncodingStrategy = .iso8601
             encoder.outputFormatting = [.withoutEscapingSlashes]
             let fm = FileManager.default
-            let existing = try load()
-            var seen = Set(existing.map {
-                SampleKey(pair: PairKey(provider: $0.providerKey, window: $0.windowId), time: $0.observedAt)
-            })
+            // Dedup against a tail read only: decoding the whole file here ran
+            // a multi-megabyte parse on the main thread on every recorded
+            // refresh.  Duplicates can only come from re-appending a recent
+            // batch (identical observedAt timestamps), so the tail is
+            // sufficient; load() dedups by key on read anyway, making a missed
+            // older duplicate harmless.
+            var seen = tailSampleKeys(maxBytes: 64 * 1024)
             let fresh = samples.filter { sample in
                 guard sample.observedAt.timeIntervalSinceReferenceDate.isFinite,
                       let percent = sample.remainingPercent,
@@ -285,9 +288,30 @@ public struct AnomalyDetector: Sendable {
             }
         }
 
+        /// SampleKeys decoded from the last `maxBytes` of the history file, for
+        /// append-time dedup without a full parse.  The first line of the
+        /// slice may be cut mid-line and is skipped.
+        private func tailSampleKeys(maxBytes: Int) -> Set<SampleKey> {
+            guard let full = try? Data(contentsOf: url, options: .mappedIfSafe), !full.isEmpty else { return [] }
+            let sliced = full.count > maxBytes
+            let tail: Data = sliced ? full.suffix(maxBytes) : full
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            var seen = Set<SampleKey>()
+            var lines = tail.split(separator: 0x0A, omittingEmptySubsequences: true)
+            if sliced { lines = Array(lines.dropFirst()) }
+            for line in lines {
+                if let sample = try? decoder.decode(Sample.self, from: Data(line)) {
+                    seen.insert(SampleKey(pair: PairKey(provider: sample.providerKey,
+                                                       window: sample.windowId),
+                                          time: sample.observedAt))
+                }
+            }
+            return seen
+        }
+
         /// Load every sample currently on disk.
-        public func load() throws -> [Sample] {
-            guard FileManager.default.fileExists(atPath: url.path) else { return [] }
+        public func load() throws -> [Sample] {            guard FileManager.default.fileExists(atPath: url.path) else { return [] }
             let data = try Data(contentsOf: url)
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601

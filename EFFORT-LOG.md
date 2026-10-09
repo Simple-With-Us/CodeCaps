@@ -1,5 +1,27 @@
 # CodeCaps — Effort Log
 
+## 2026-10-06 — Infisical three-field setup [dot, draft validation pending]
+
+- Lane: `dot/infisical-project-selector`.  Owner-approved task-note reservation because the board app picker omits CodeCaps; no board claim exists.
+- Coordination: [app scope](https://simplewithus.slack.com/archives/C0C6NFR5QRJ/p1791272490794519), [fleet reservation](https://simplewithus.slack.com/archives/C0BEZDJDNKV/p1791272598316679); AGENT-SYNC.md read.  Fresh main `14760c2`; PR #175 has no changed-file overlap.  PR #163 shares AppDelegate but its window-layering hunks are independent of the Infisical lifecycle methods.
+- Editable Client ID, Client Secret, and Project ID; atomic Keychain setup, explicit nonblank Project ID with no legacy fallback, isolated candidate validation, revision-fenced network results, and interrupted-operation tests.
+- Draft PR: https://github.com/Simple-With-Us/CodeCaps/pull/177 .  Owner explicitly chooses to re-enter Project ID; no fixed project is retained.
+- Scope excludes telemetry, real credential/grant changes, quota mode changes, merge, and deployment.  Existing local endpoint/token protections are unchanged.
+- Validation: `git diff --check`; independent review completed for initial draft; owner then requested removal of the original project fallback.  Updated review and exact-head CI pending.  Local `swift build` / `swift test` unavailable (no Swift toolchain or macOS SDK in cloud executor); hosted macOS exact-head CI is required before completion.
+
+---
+
+## 2026-10-03 — Independent Provider and File Refresh [CODEX, PR #142]
+
+repo: CodeCaps; pre-work claim: posted to #agent-sync after reading AGENT-SYNC.md; Lane: `codex/independent-source-refresh`; Board `4bcf84f1`; GitHub #137; PR #142 open on this branch (depends on #139; refs #136).
+
+- Added `CodexSessionQuotaReader` for bounded passive Codex session JSONL reads with exact account identity, incremental append tracking, symlink-safe paths, and original event timestamps.  Unchanged files do not invoke provider, Fleet, upload, or download work.
+- Split Settings → Sources & Fleet into independent **Provider Checks** and **Codex Session File Checks** toggles with separate 1-, 3-, 5-, and 15-minute intervals (five-minute provider default, one-minute file default).  Manual refresh runs both enabled paths; disabling one source preserves the other when possible.
+- Integrated scheduling, merge rules, and cancellation in `MonitorModel` / `SourceRefreshSettings`; documented behavior in `docs/REFRESH.md`.
+- Verification: `CodexSessionQuotaReaderTests`, `SourceRefreshTests`, and related refresh tests on the branch; hosted Swift CI green.  Native Mac UI claims rely on code review and CI fixture rendering in `DocsScreenshotTests`, not supplied or manually captured screenshots.
+
+---
+
 ## 2026-10-04 — Settings Window Layering and Focus-Loss Dismissal [AG, in progress]
 
 Lane: `ag/settings-window-layering`.  GitHub issue #164; PR #163.  Mac board reservation blocked while thrash wake-ready is hot (fleet policy: no coding/board load on Mac); GH issue #164 is the accountable reservation recorded now; board ID will be backfilled when Mac is cool.
@@ -9,6 +31,7 @@ Lane: `ag/settings-window-layering`.  GitHub issue #164; PR #163.  Mac board res
 - Automatically dismisses popover and restores normal window level when console/settings window resigns key status or application resigns active.
 - Verified with 324 passing unit tests via `swift test`.
 - Coordination: claim posted to `#codecaps` (the CodeCaps app channel) per the AGENT-SYNC private inter-agent protocol, first field `repo: CodeCaps`, declaring `ag/settings-window-layering` with the touched fileset `Sources/CodeCaps/AppDelegate.swift` and `Sources/CodeCaps/PipWidget.swift`; board list reviewed with no overlapping open or in-progress board items before the lane was recorded as in progress.  Mac THE BOARD add deferred (thrash); do not treat channel coordination alone as a board reservation.
+
 
 ---
 
@@ -334,3 +357,54 @@ quota shown two ways.  The expanded row labels now make origin legible
 without inspecting the underlying window.
 
 Board 42ae688ab3b84d9aa65e445aab072a15.  Closes #37.
+
+## PiP window fit, centred header, resizable, sidebar polish (2026-10-05)
+
+Board 6a3f582af81347f5ad678ec925e40089.  Closes #170.  PR #171, branch
+mm/pip-window-layout.  Owner-reported, with screenshots, after watching the
+floating PiP HUD with five pinned rows.
+
+PipWidget.swift:
+- The panel was a fixed 260x120 and the view pinned between minWidth 230 and
+  maxWidth 280, so a provider drawing two quota bars overflowed the panel and
+  clipped its percentage and countdown on the right.  There was no responsive
+  path and no resize affordance at all.
+- PipMetrics now declares every dimension once and derives the responsive
+  thresholds from those constants, so the AppKit side that sizes the panel and
+  the SwiftUI side that draws in it cannot drift apart.  Breakpoints tuned by
+  hand to match a drawing are breakpoints that rot the next time a constant
+  moves; these are computed, and a test pins that.
+- Two zones edge to edge: lighter header on Theme.surface, darker rows panel on
+  Theme.groupBand.
+- The header carries the owner's own black-on-transparent artwork as a template
+  mark, centred as one unit with "CodeCaps" (no "PiP") at 22pt.  One asset is
+  black-on-transparent on the light band and white-on-transparent on the dark
+  one.  The artwork is reused as-is; nothing here re-cuts, re-exports or
+  substitutes icon art.
+- Close button always visible, in the header rather than hovering in over the
+  meters.
+- Resizable and bounded; refits whenever the pinned row set changes, so
+  pinning always gets the window back to a size that fits.  A drag-resized
+  window stays the owner's size.
+- Content compresses rather than clips, down to the owner's floor of one or two
+  bars and their percentages; shortening hides whole rows, never fewer than
+  one.
+- The hosting view is built once instead of being swapped on every poll.
+
+ConsoleViews.swift:
+- Removed the "Reading from this Mac" sidebar footer.  It was a duplicate of a
+  Settings switch that is on for almost everyone, so the sidebar carried a
+  status line that never changed.  The footer now appears only for a BotFleet
+  sharing error, which nothing else surfaces in the console window.
+- Added .focusEffectDisabled() to the sidebar list.  The list stays focusable
+  so arrow keys move the selection, but the system focus ring was drawing a
+  blue rectangle around three edges of the sidebar - system blue next to this
+  app's teal, reappearing whenever the window was resized.
+
+Tests: PipMetricsTests pins the width ladder, the height ladder, the absence of
+a double-counted outer padding term, and the panel bounds.  swift test is 343
+tests, 0 failures.
+
+Open: the drag-the-edge resize affordance is enforced in code but the physical
+edge-drag is only visible on a real launch, and PR #163 (ag/settings-window-
+layering) also edits PipWidget.swift and is currently CONFLICTING with main.

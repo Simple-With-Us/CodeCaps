@@ -151,12 +151,17 @@ public struct CompanionContentView: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange)
             Text(message)
-                .font(.caption)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.primary)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }
         .padding(12)
-        .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+        .background(Color.orange.opacity(0.14), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Color.orange.opacity(0.28), lineWidth: 0.5)
+        )
     }
 
     // MARK: - Empty State
@@ -319,17 +324,22 @@ public struct CompanionContentView: View {
             if item.hasSourceDiscrepancy {
                 HStack(spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 11))
+                        .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.orange)
                     Text(item.sourceDiscrepancies.first?.description ?? "Source discrepancy > 3%")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.orange)
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundStyle(.primary)
                         .lineLimit(1)
+                        .minimumScaleFactor(0.85)
                     Spacer()
                 }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
+                .padding(.horizontal, 9)
+                .padding(.vertical, 5)
+                .background(Color.orange.opacity(0.14), in: RoundedRectangle(cornerRadius: 6))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color.orange.opacity(0.28), lineWidth: 0.5)
+                )
             }
 
             // Multiple time periods / windows when expanded (only extra allowances not already displayed on the card)
@@ -515,9 +525,14 @@ public struct CompanionContentView: View {
 
                                 if item.hasSourceDiscrepancy {
                                     ForEach(item.sourceDiscrepancies) { disc in
-                                        Text(disc.description)
-                                            .font(.caption2)
-                                            .foregroundStyle(.orange)
+                                        HStack(spacing: 5) {
+                                            Image(systemName: "exclamationmark.triangle.fill")
+                                                .font(.system(size: 10, weight: .semibold))
+                                                .foregroundStyle(.orange)
+                                            Text(disc.description)
+                                                .font(.caption2.weight(.medium))
+                                                .foregroundStyle(.primary)
+                                        }
                                     }
                                 }
                             }
@@ -530,6 +545,8 @@ public struct CompanionContentView: View {
                     Text("CodeCaps monitors primary and mirror feeds for each platform." + sentenceGap
                          + "Discrepancies greater than 3% between feeds trigger a warning flag on the platform card.")
                 }
+                .id("dataSourcesMirrorsSection")
+                .accessibilityIdentifier("dataSourcesMirrorsSection")
 
                 Section("Alerts & Notifications") {
                     Toggle("Reset Alarms For All Providers", isOn: $model.alarmsAll)

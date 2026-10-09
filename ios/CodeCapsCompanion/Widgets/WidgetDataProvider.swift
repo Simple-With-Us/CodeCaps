@@ -32,6 +32,11 @@ public struct CodeCapsWidgetEntry: TimelineEntry {
         configuration?.rowLayout ?? .onePlanPerRow
     }
 
+    /// Quotas per provider from the edit sheet.  Defaults to two if available.
+    public var quotasPerProvider: WidgetQuotasPerProvider {
+        configuration?.quotasPerProvider ?? .twoIfAvailable
+    }
+
     /// Which window stands in for a plan that reports two, from the edit sheet.
     public var windowPick: WidgetWindowPick {
         configuration?.windowPick ?? .mostUrgent

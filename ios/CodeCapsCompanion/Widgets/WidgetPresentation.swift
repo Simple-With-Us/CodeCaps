@@ -188,6 +188,18 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
             }
         }
     }
+
+    /// The pair of windows that represent this plan when a row displays two quota bars side by side.
+    ///
+    /// When a plan reports two or more windows (such as a 5-hour and a 7-day cap),
+    /// this returns the pair (shortest period first).  Returns nil if the plan does not have two distinct windows.
+    public func dualWindows() -> (window1: WidgetWindowItem, window2: WidgetWindowItem)? {
+        guard windows.count >= 2 else { return nil }
+        let visible = windows.filter { !$0.isMasked }
+        let pool = visible.count >= 2 ? visible : windows
+        guard pool.count >= 2 else { return nil }
+        return (pool[0], pool[1])
+    }
 }
 
 /// Pure presentation logic and parser for WidgetKit widgets.
@@ -677,6 +689,15 @@ public enum WidgetPresentation {
         }
         if pKey.contains("minimax") || prov.contains("minimax") {
             return ("minimax", "MiniMax", "minimax")
+        }
+        if pKey.contains("muse-assist") || prov.contains("muse-assist") || prov.contains("muse assist") || id.contains("assist") {
+            return ("muse-assist", "Muse Assist", "muse-assist")
+        }
+        if pKey.contains("muse-code") || prov.contains("muse-code") || prov.contains("muse code") || id.contains("code") {
+            return ("muse-code", "Muse Code", "muse-code")
+        }
+        if pKey.contains("muse") || prov.contains("muse") {
+            return ("muse-code", "Muse Code", "muse-code")
         }
         if pKey.contains("grok-bot") || prov.contains("grok-bot") || prov.contains("grok bot") || id.contains("grok-bot") {
             return ("grok-bot", "Grok Bot", "grok-bot")

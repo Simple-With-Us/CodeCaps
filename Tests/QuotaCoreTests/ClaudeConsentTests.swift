@@ -353,16 +353,63 @@ final class ClaudeConsentTests: XCTestCase {
         XCTAssertNil(ClaudeCredentialSource.rememberedCredential())
     }
 
-    func testExpiredRememberedGrantRemainsAuthorizedWithoutAskingForConsent() {
+    func testExpiredRememberedGrantIsReReadButStillNeverAsksForConsent() {
+        // An expired remembered payload is no longer served as the answer: it
+        // is stale, and Claude Code rewrites the item when it renews its own
+        // login.  So the loop reads the bytes again.  That read must NOT turn a
+        // read failure into `.unauthorized` — a grant already remembered proves
+        // macOS allows this item, and re-arming consent is the loop #156 closed.
         let expired = Data(#"{"claudeAiOauth":{"accessToken":"fixture","expiresAt":1}}"#.utf8)
         ClaudeCredentialSource.remember(expired)
         let log = ProbeLog()
         let access = ClaudeCredentialSource.resolveSilently(
-            probe: makeProbe(log: log, cli: [.found(expired)], presence: .present),
+            probe: makeProbe(log: log, cli: [.denied], presence: .present),
             isAbandoned: { false })
         XCTAssertEqual(access, .authorized(expired))
-        XCTAssertEqual(log.calls, ["lookup"])
+        XCTAssertEqual(log.calls, ["lookup", "cli"], "an expired payload must be re-read")
+        XCTAssertEqual(ClaudeLoginState.resolve(hasUsableCredential: false, access: access),
+                       .signedOut, "and it must not become a consent prompt")
         XCTAssertFalse(ClaudeCredentialSource.rememberedGrantStillUsable(expired, now: Date(timeIntervalSince1970: 10)))
+    }
+
+    func testExpiredRememberedGrantPicksUpTheTokenClaudeCodeRenewedUnderIt() {
+        // The regression, end to end through the silent read.  Launch reads an
+        // expired payload and remembers it; Claude Code then renews and rewrites
+        // the same Keychain item; the next refresh must return the NEW bytes.
+        // Serving the frozen copy forever is what pinned the row to "login idle"
+        // while Claude Code sat right there signed in (board dd5f6702).
+        let stale = Data(#"{"claudeAiOauth":{"accessToken":"old","expiresAt":1}}"#.utf8)
+        let renewed = Data(#"{"claudeAiOauth":{"accessToken":"new","expiresAt":4102444800000}}"#.utf8)
+        ClaudeCredentialSource.remember(stale)
+        let log = ProbeLog()
+        let access = ClaudeCredentialSource.resolveSilently(
+            probe: makeProbe(log: log, cli: [.found(renewed)], presence: .present))
+        XCTAssertEqual(access, .authorized(renewed))
+        XCTAssertEqual(log.calls, ["lookup", "cli"])
+        XCTAssertEqual(ClaudeCredentialSource.rememberedCredential(), renewed)
+        // And the renewed token is now what the reader sends, so the row is
+        // connected rather than idle.
+        XCTAssertEqual(ClaudeLoginState.resolve(hasUsableCredential: true, access: access), .connected)
+        // Being fresh, it is served from memory again on the next cycle.
+        let next = ProbeLog()
+        XCTAssertEqual(ClaudeCredentialSource.resolveSilently(
+            probe: makeProbe(log: next, cli: [.denied], presence: .present)),
+            .authorized(renewed))
+        XCTAssertEqual(next.calls, ["lookup"], "a fresh grant is still served without a child")
+        ClaudeCredentialSource.resetRememberedCredential()
+    }
+
+    func testRememberedGrantIsFreshOnlyWhileItsAccessTokenIsUnexpired() {
+        let fresh = Data(#"{"claudeAiOauth":{"accessToken":"fixture","expiresAt":4102444800000}}"#.utf8)
+        let expired = Data(#"{"claudeAiOauth":{"accessToken":"fixture","expiresAt":1}}"#.utf8)
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        XCTAssertTrue(ClaudeCredentialSource.rememberedGrantIsFresh(fresh, now: now))
+        XCTAssertFalse(ClaudeCredentialSource.rememberedGrantIsFresh(expired, now: now))
+        // Stricter than the grant test on purpose: renewable-but-expired is
+        // still an expired token, and an expired token answers 401.
+        let renewableExpired = Data(#"{"claudeAiOauth":{"accessToken":"old","refreshToken":"r","expiresAt":1}}"#.utf8)
+        XCTAssertTrue(ClaudeCredentialSource.rememberedGrantStillUsable(renewableExpired, now: now))
+        XCTAssertFalse(ClaudeCredentialSource.rememberedGrantIsFresh(renewableExpired, now: now))
     }
 
     func testUnexpiredRememberedGrantStaysUsable() {

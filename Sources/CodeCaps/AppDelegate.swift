@@ -69,6 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         return image
     }()
     private let popover = NSPopover()
+    private var outsideClickMonitor: Any?
     private var consoleWindow: NSWindow?
     private var statusMenu: NSMenu?
     private var subscriptions = Set<AnyCancellable>()
@@ -94,6 +95,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         AppUpdater.shared.start()
         configureMenu()
         popover.behavior = .transient
+        popover.delegate = self
         let glance = NSHostingController(rootView:
             GlancePopover(model: model,
                           openConsole: { [weak self] page in self?.showConsole(page: page) },
@@ -196,18 +198,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// The load runs off the main thread and never blocks launch: until it
     /// succeeds the app simply keeps its local values.
     private func startInfisicalSync() {
-        Task.detached(priority: .utility) { [weak self] in
-            guard let identity = InfisicalIdentityStore.load() else { return }
-            let settings = InfisicalSettings.shared
-            settings.configure(InfisicalSettings.Configuration(
-                environment: InfisicalSettings.defaultEnvironment(),
-                clientId: identity.clientId,
-                clientSecret: identity.clientSecret))
+        // Install persisted configuration synchronously on the main actor.
+        // A delayed startup task must never restore A after Settings saved B.
+        let settings = InfisicalSettings.shared
+        guard let identity = InfisicalIdentityStore.load() else {
+            settings.clearConfiguration()
+            return
+        }
+        settings.configure(identity.configuration)
+        refreshInfisicalSettings()
+    }
+
+    private func refreshInfisicalSettings() {
+        let settings = InfisicalSettings.shared
+        guard settings.isProvisioned else { return }
+        let revision = settings.revision
+        Task { [weak self] in
+            guard settings.isCurrent(revision) else { return }
             await settings.refresh()
-            await MainActor.run { [weak self] in
-                self?.model.adoptInfisicalEndpointsIfUnset()
-                self?.scheduleInfisicalRefresh()
-            }
+            guard settings.isCurrent(revision) else { return }
+            self?.model.adoptInfisicalEndpointsIfUnset()
+            self?.scheduleInfisicalRefresh()
         }
     }
 
@@ -217,16 +228,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// than an outage.
     private func scheduleInfisicalRefresh() {
         infisicalRefreshTimer?.invalidate()
+        let settings = InfisicalSettings.shared
+        guard settings.isProvisioned else {
+            infisicalRefreshTimer = nil
+            return
+        }
+        let revision = settings.revision
         infisicalRefreshTimer = Timer.scheduledTimer(
-            withTimeInterval: InfisicalSettings.shared.refreshInterval,
+            withTimeInterval: settings.refreshInterval,
             repeats: false
         ) { [weak self] _ in
-            Task {
-                await InfisicalSettings.shared.refresh()
-                await MainActor.run { [weak self] in
-                    self?.model.adoptInfisicalEndpointsIfUnset()
-                    self?.scheduleInfisicalRefresh()
-                }
+            Task { @MainActor [weak self] in
+                guard settings.isCurrent(revision) else { return }
+                self?.refreshInfisicalSettings()
             }
         }
     }
@@ -237,18 +251,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private func infisicalIdentityDidChange() {
         infisicalRefreshTimer?.invalidate()
         infisicalRefreshTimer = nil
-        startInfisicalSync()
+        // Save/Forget commit runtime and persistence together. Do not reread
+        // Keychain here: a failed/locked Keychain operation must not clear the
+        // still-active last-known-good setup when its timer is restarted.
+        refreshInfisicalSettings()
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
-        guard InfisicalSettings.shared.isProvisioned else { return }
-        Task {
-            await InfisicalSettings.shared.refresh()
-            await MainActor.run { [weak self] in
-                self?.model.adoptInfisicalEndpointsIfUnset()
-                self?.scheduleInfisicalRefresh()
-            }
-        }
+        refreshInfisicalSettings()
     }
 
     func applicationWillTerminate(_ notification: Notification) { model.stop() }
@@ -391,6 +401,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             popover.contentViewController?.view.window?.makeKey()
         }
     }
+
+    // MARK: - Popover outside-click dismissal
+
+    private func startOutsideClickMonitor() {
+        stopOutsideClickMonitor()
+        outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.popover.isShown else { return }
+                self.popover.performClose(nil)
+            }
+        }
+    }
+
+    private func stopOutsideClickMonitor() {
+        if let monitor = outsideClickMonitor {
+            NSEvent.removeMonitor(monitor)
+            outsideClickMonitor = nil
+        }
+    }
+
+    func popoverWillShow(_ notification: Notification) {
+        startOutsideClickMonitor()
+    }
+
 
     // MARK: - Console
 
@@ -607,7 +641,17 @@ extension AppDelegate {
     /// reopen, a notification tap, etc.).  Without this hook the elevated
     /// level would linger until the app deactivated.
     func popoverDidClose(_ notification: Notification) {
-        guard let window = notification.object as? NSPopover, window === popover else { return }
-        lowerConsole()
+        // Two jobs meet here when the popover goes away, and merging main's
+        // copy with #163's produced two functions of the same name rather than
+        // one that does both.  Popover closing means: stop watching clicks, and
+        // restore the console window's level and the PiP HUD's always-on-top
+        // contract for any close that does not also resign the console window's
+        // key status (NSPopover's `.transient` auto-dismiss, a right-click that
+        // opens the status menu, a Dock reopen, a notification tap).  Without
+        // the second half the elevated level lingers until the app deactivates.
+        stopOutsideClickMonitor()
+        if let window = notification.object as? NSPopover, window === popover {
+            lowerConsole()
+        }
     }
 }
