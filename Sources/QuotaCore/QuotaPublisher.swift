@@ -29,6 +29,7 @@ public struct QuotaPublishResult: Sendable, Equatable {
 public enum QuotaPublisherError: Error, Equatable, Sendable, LocalizedError {
     case invalidEndpoint
     case emptyWindows
+    case noPublishableWindows
     case unauthorized
     case httpStatus(Int, String?)
     case timedOut
@@ -41,6 +42,8 @@ public enum QuotaPublisherError: Error, Equatable, Sendable, LocalizedError {
             return "The sync endpoint URL is invalid or not allowed (must be HTTPS or localhost)."
         case .emptyWindows:
             return "No quota windows to publish."
+        case .noPublishableWindows:
+            return "No quota windows with a known remaining percentage to publish."
         case .unauthorized:
             return "Unauthorized (HTTP 401)." + sentenceGap + "Check your Ingest Token."
         case let .httpStatus(status, detail):
@@ -113,14 +116,21 @@ public actor QuotaPublisher {
         }
 
         let bodyData: Data
+        let eventCount: Int
         let now = Date()
         let occurredAtIso = ISO8601DateFormatter().string(from: now)
 
         switch format {
         case .usageMonitorV2:
-            bodyData = try buildUsageMonitorV2Payload(windows: windows, occurredAtIso: occurredAtIso, machineName: machineName)
+            let payload = try makeUsageMonitorV2Payload(windows: windows, occurredAtIso: occurredAtIso, machineName: machineName)
+            guard payload.eventCount > 0 else {
+                throw QuotaPublisherError.noPublishableWindows
+            }
+            bodyData = payload.data
+            eventCount = payload.eventCount
         case .genericWebhook:
             bodyData = try buildGenericWebhookPayload(windows: windows, occurredAtIso: occurredAtIso, machineName: machineName)
+            eventCount = windows.count
         }
 
         var request = URLRequest(url: endpoint)
@@ -144,6 +154,11 @@ public actor QuotaPublisher {
             }
 
             if (200..<300).contains(http.statusCode) {
+                if format == .usageMonitorV2 {
+                    let acknowledgment = try validateUsageMonitorAcknowledgment(data, eventCount: eventCount)
+                    let message = "Synced \(acknowledgment.received) quotas (\(acknowledgment.persisted) persisted, \(acknowledgment.duplicates) duplicates, \(acknowledgment.pruned) pruned)."
+                    return QuotaPublishResult(statusCode: http.statusCode, count: eventCount, message: message)
+                }
                 var message = "Pushed \(windows.count) quota windows successfully."
                 if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                     if let persisted = json["persisted"] as? Int, let received = json["received"] as? Int {
@@ -170,7 +185,54 @@ public actor QuotaPublisher {
         }
     }
 
+    private struct UsageMonitorAcknowledgment: Decodable {
+        let ok: Bool
+        let schemaVersion: Int
+        let received: Int
+        let persisted: Int
+        let duplicates: Int
+        let pruned: Int
+        let rejected: Int
+    }
+
+    private func validateUsageMonitorAcknowledgment(_ data: Data, eventCount: Int) throws -> UsageMonitorAcknowledgment {
+        // Typed decoding rejects booleans, strings, fractions and out-of-range
+        // counters instead of Foundation's permissive NSNumber bridging.
+        guard let acknowledgment = try? JSONDecoder().decode(UsageMonitorAcknowledgment.self, from: data),
+              acknowledgment.ok, acknowledgment.schemaVersion == 2 else {
+            throw QuotaPublisherError.serverError("Usage Monitor returned an invalid v2 acknowledgment.")
+        }
+        let counts = [acknowledgment.persisted, acknowledgment.duplicates, acknowledgment.pruned, acknowledgment.rejected]
+        guard acknowledgment.received >= 0, counts.allSatisfy({ $0 >= 0 }) else {
+            throw QuotaPublisherError.serverError("Usage Monitor returned invalid acknowledgment counts.")
+        }
+        guard acknowledgment.received == eventCount else {
+            throw QuotaPublisherError.serverError("Usage Monitor acknowledged \(acknowledgment.received) quota events; the request contained \(eventCount).")
+        }
+        // Subtract from the bounded sent count, so hostile counts cannot
+        // overflow while checking the complete disposition of the batch.
+        var unaccounted = acknowledgment.received
+        for count in counts {
+            guard count <= unaccounted else {
+                throw QuotaPublisherError.serverError("Usage Monitor acknowledgment counts do not add up to the received total.")
+            }
+            unaccounted -= count
+        }
+        guard unaccounted == 0 else {
+            throw QuotaPublisherError.serverError("Usage Monitor acknowledgment counts do not add up to the received total.")
+        }
+        guard acknowledgment.rejected == 0 else {
+            // Include only validated counters, never raw server error details.
+            throw QuotaPublisherError.serverError("Usage Monitor rejected \(acknowledgment.rejected) of \(acknowledgment.received) quota events (\(acknowledgment.persisted) persisted, \(acknowledgment.duplicates) duplicates, \(acknowledgment.pruned) pruned).")
+        }
+        return acknowledgment
+    }
+
     public nonisolated func buildUsageMonitorV2Payload(windows: [QuotaWindow], occurredAtIso: String, machineName: String? = nil, producerInstanceId: String = QuotaPublisher.producerInstanceId) throws -> Data {
+        try makeUsageMonitorV2Payload(windows: windows, occurredAtIso: occurredAtIso, machineName: machineName, producerInstanceId: producerInstanceId).data
+    }
+
+    private nonisolated func makeUsageMonitorV2Payload(windows: [QuotaWindow], occurredAtIso: String, machineName: String?, producerInstanceId: String = QuotaPublisher.producerInstanceId) throws -> (data: Data, eventCount: Int) {
         let machine = machineName ?? Self.machineName
         let events: [[String: Any]] = windows.compactMap { window in
             guard let remaining = window.boundedRemainingPercent ?? window.remainingPercent else { return nil }
@@ -241,7 +303,7 @@ public actor QuotaPublisher {
             "producerInstanceId": producerInstanceId,
             "events": events
         ]
-        return try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
+        return (try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys]), events.count)
     }
 
     public nonisolated func buildGenericWebhookPayload(windows: [QuotaWindow], occurredAtIso: String, machineName: String?, producerInstanceId: String = QuotaPublisher.producerInstanceId) throws -> Data {
