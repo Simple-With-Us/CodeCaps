@@ -89,9 +89,10 @@ final class AnomalyDetectorTests: XCTestCase {
                              observedAt: now.addingTimeInterval(-300),
                              remainingPercent: 10))
         let anomalies = AnomalyDetector().evaluate(samples: samples, now: now)
-        let vsPeak = anomalies.first { $0.kind == .vsPeak }
-        XCTAssertNotNil(vsPeak, "Expected a vsPeak anomaly; got \(anomalies.map(\.summary))")
-        XCTAssertEqual(vsPeak?.providerKey, "anthropic")
+        XCTAssertEqual(anomalies.count, 1, "Expected one collapsed anomaly; got \(anomalies.map(\.summary))")
+        let anomaly = anomalies[0]
+        XCTAssertNotNil(anomaly.peakRatio, "Expected the peak bar to clear; got \(anomalies.map(\.summary))")
+        XCTAssertEqual(anomaly.providerKey, "anthropic")
     }
 
     /// Two flat histories should not yield fabricated multipliers.
@@ -290,15 +291,20 @@ final class AnomalyDetectorTests: XCTestCase {
 extension AnomalyDetectorTests {
     private func busySamples(now: Date, count: Int = 40) -> [AnomalyDetector.Sample] {
         var out: [AnomalyDetector.Sample] = []
-        // A steady 10%/hour for `count` hours, then a sudden sprint.
+        // Steady ~2%/hour for `count` hours (stays inside 0…100), then a sprint
+        // in the current hour without splitting history on an invalid level.
         for h in stride(from: count, through: 1, by: -1) {
             out.append(.init(providerKey: "p", windowId: "w",
                              observedAt: now.addingTimeInterval(-Double(h) * 3600),
-                             remainingPercent: 100 - Double(count - h) * 10))
+                             remainingPercent: 100 - Double(count - h) * 2))
         }
+        let prior = 100 - Double(count - 1) * 2
+        out.append(.init(providerKey: "p", windowId: "w",
+                         observedAt: now.addingTimeInterval(-1800),
+                         remainingPercent: prior))
         out.append(.init(providerKey: "p", windowId: "w",
                          observedAt: now.addingTimeInterval(-300),
-                         remainingPercent: 20))
+                         remainingPercent: max(5, prior - 15)))
         return out
     }
 
@@ -340,7 +346,7 @@ extension AnomalyDetectorTests {
     /// The percentile that replaced the maximum: rare enough to mean something,
     /// and it must not be reachable by the median hour.
     func testPeakReferenceIsAPercentileNotTheMaximum() throws {
-        let rates: [Double] = Array(repeating: 10, count: 97) + [500]
+        let rates: [Double] = Array(repeating: 10, count: 99) + [500]
         let reference = try XCTUnwrap(AnomalyDetector.peakRatePercentile(rates))
         XCTAssertEqual(reference, 10, accuracy: 0.001,
                        "with one outlier in a hundred, the reference should be the ordinary rate, not 500")

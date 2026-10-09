@@ -409,7 +409,7 @@ public struct AnomalyDetector: Sendable {
     /// without being unreachable, so a multiplier above 1.0 carries meaning.
     /// Against this, 1.5x alerts on hours that beat nearly every hour you have
     /// ever measured, rather than the single worst one.
-    static func peakRatePercentile(_ rates: [Double]) -> Double? {
+    public static func peakRatePercentile(_ rates: [Double]) -> Double? {
         let positive = rates.filter { $0 > 0 }.sorted()
         guard !positive.isEmpty else { return nil }
         // Too few samples for a percentile to mean anything; the maximum is
