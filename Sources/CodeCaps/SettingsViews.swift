@@ -1285,11 +1285,12 @@ struct SettingsNotificationsPage: View {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
                             Text("Versus Your Recent Average")
-                            Slider(value: $model.anomalyBaselineMultiplier,
-                                   in: BurnRateMonitor.baselineRange,
-                                   step: 0.5)
+                            pipSlider(value: $model.anomalyBaselineMultiplier,
+                                      in: BurnRateMonitor.baselineRange,
+                                      step: 0.5)
                             Text(String(format: "%.1f×", model.anomalyBaselineMultiplier))
                                 .font(.system(size: 11).monospacedDigit())
+                                .foregroundStyle(Theme.ink)
                                 .frame(width: 38, alignment: .trailing)
                         }
                         .help("Alerts when the current hour is spending this many times faster than your measured average, using up to seven days of available readings. Recommended 5×.")
@@ -1297,11 +1298,12 @@ struct SettingsNotificationsPage: View {
 
                         HStack {
                             Text("Versus Your Measured Peak")
-                            Slider(value: $model.anomalyPeakMultiplier,
-                                   in: BurnRateMonitor.peakRange,
-                                   step: 0.1)
+                            pipSlider(value: $model.anomalyPeakMultiplier,
+                                      in: BurnRateMonitor.peakRange,
+                                      step: 0.1)
                             Text(String(format: "%.1f×", model.anomalyPeakMultiplier))
                                 .font(.system(size: 11).monospacedDigit())
+                                .foregroundStyle(Theme.ink)
                                 .frame(width: 38, alignment: .trailing)
                         }
                         .help("Alerts when the current hour is spending this many times faster than your fastest measured interval. Recommended 2×.")
@@ -1721,4 +1723,25 @@ struct SettingsInfisicalPage: View {
             }
         }
     }
+}
+
+/// A `Slider` whose rail is always visible.
+///
+/// Owner report 2026-10-06: the runaway-usage sliders were "barely visible" and
+/// the track could come up black.  macOS derives the default rail from the
+/// control tint with no lower bound on contrast, so on the dark rows surface a
+/// dark accent produced a track that vanished — which is why it looked like a
+/// missing control rather than a dark one.
+///
+/// The thumb is drawn with `Theme.onAccent` as a ring rather than a fill, so it
+/// stays legible whether the accent behind it is one of the dark seven or one of
+/// the new light four.
+private func pipSlider(value: Binding<Double>,
+                       in range: ClosedRange<Double>,
+                       step: Double) -> some View {
+    Slider(value: value, in: range, step: step) {
+        EmptyView()
+    }
+    .tint(Theme.accent)
+    .background(Theme.sliderTrack, in: Capsule())
 }

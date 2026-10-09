@@ -58,6 +58,18 @@ final class ThemePreferenceTests: XCTestCase {
         }
 
         for accent in AccentChoice.allCases {
+            // A light accent is a *fill*, not body text: the owner asked for
+            // light options specifically so something could carry dark ink on
+            // it ("if real light then make the text dark over it if button or
+            // something", 2026-10-06).  By construction it cannot also clear
+            // 4.5:1 as text on a near-white surface, so the text contract does
+            // not apply to it; `AccentContrastTests` covers what does — that it
+            // carries readable ink in both appearances.
+            guard !accent.isLight else {
+                XCTAssertGreaterThanOrEqual(readableInkContrast(for: accent), 4.5,
+                                            "\(accent.title) cannot carry readable ink on its own fill")
+                continue
+            }
             // Default surfaces.
             XCTAssertGreaterThanOrEqual(ratio(accent.lightHex, 0xF5F7F7), 4.5,
                                         "\(accent.title) light fails 4.5:1 on the default light background")
@@ -68,6 +80,28 @@ final class ThemePreferenceTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(ratio(accent.lightHex, 0xFFFFFF), 4.5,
                                         "\(accent.title) fails 4.5:1 on the high-contrast light surface")
         }
+    }
+
+    /// Contrast between an accent's own value in each appearance and the ink
+    /// `Theme.readableInk` would put on it.
+    private func readableInkContrast(for accent: AccentChoice) -> Double {
+        func luminance(_ hex: UInt32) -> Double {
+            func channel(_ value: UInt32) -> Double {
+                let c = Double(value) / 255
+                return c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)
+            }
+            return 0.2126 * channel((hex >> 16) & 0xFF)
+                 + 0.7152 * channel((hex >> 8) & 0xFF)
+                 + 0.0722 * channel(hex & 0xFF)
+        }
+        var worst = Double.infinity
+        for hex in [accent.lightHex, accent.darkHex] {
+            let ink = Theme.readableInk(on: hex)
+            let inkHex: UInt32 = ink == .white ? 0xFFFFFF : 0x14181C
+            let la = luminance(hex), lb = luminance(inkHex)
+            worst = min(worst, (max(la, lb) + 0.05) / (min(la, lb) + 0.05))
+        }
+        return worst
     }
 
     func testHighContrastIsOffUntilTheOwnerTurnsItOn() {

@@ -660,3 +660,66 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
         "questionmark.square.dashed"
     }
 }
+
+/// The menu bar's own accent behaviour, kept apart from the mark loader.
+///
+/// Owner report 2026-10-06: switching the accent from green to maroon changed
+/// the settings button and nothing else — the menu bar stayed grey.  The cause
+/// was not a missing code path but `isTemplate`: macOS discards a template
+/// image's pixels and repaints it in the menu bar's own tint, so the accent
+/// could never arrive no matter what colour was selected.
+///
+/// That template behaviour is *correct* for a monochrome mark — it is what makes
+/// one asset legible on both a light and a dark menu bar — so it stays the
+/// default.  What is new is the option to paint a colour mark in the accent
+/// instead, which is what "Colour" menu-bar style has always implied and never
+/// delivered.
+public enum MenuBarAccent {
+    /// Whether a colour mark in the menu bar should wear the app accent.
+    /// Defaults on: the owner's expectation is that choosing an accent changes
+    /// the accent-coloured things, and the menu bar is the most visible one.
+    public static var isEnabled: Bool {
+        get {
+            // Absent means the pre-existing default, so an installed app that
+            // never had this key behaves as it did before.
+            UserDefaults.standard.object(forKey: "menuBarAccentTint") as? Bool ?? true
+        }
+        set { UserDefaults.standard.set(newValue, forKey: "menuBarAccentTint") }
+    }
+
+    /// Draw `image`'s silhouette in the accent colour.
+    ///
+    /// Returns nil when there is nothing to tint, so the caller keeps the
+    /// original rather than dropping the mark.  Deliberately *not* a template
+    /// image afterwards: a template is what swallowed the accent in the first
+    /// place.
+    public static func tinted(_ image: NSImage?, isDark: Bool) -> NSImage? {
+        guard let image else { return nil }
+        let choice = AccentChoice.current
+        let tint = NSColor(codecapsHex: isDark ? choice.darkHex : choice.lightHex)
+
+        let size = image.size
+        let out = NSImage(size: size)
+        out.lockFocus()
+        // The mark first, as a mask.
+        image.draw(in: NSRect(origin: .zero, size: size),
+                   from: .zero, operation: .sourceOver, fraction: 1.0)
+        // Then the accent through that mask only, so the silhouette survives and
+        // the transparent background stays transparent.
+        tint.set()
+        NSRect(origin: .zero, size: size).fill(using: .sourceAtop)
+        out.unlockFocus()
+        out.isTemplate = false
+        return out
+    }
+}
+
+extension NSColor {
+    /// Builds a colour from the `0xRRGGBB` values the accent table stores.
+    convenience init(codecapsHex value: UInt32) {
+        self.init(srgbRed: CGFloat((value >> 16) & 0xFF) / 255,
+                  green: CGFloat((value >> 8) & 0xFF) / 255,
+                  blue: CGFloat(value & 0xFF) / 255,
+                  alpha: 1)
+    }
+}
