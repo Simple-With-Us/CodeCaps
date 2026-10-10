@@ -1246,6 +1246,47 @@ final class MonitorModel: ObservableObject {
         clockTimer?.invalidate()
     }
 
+    /// Fires only while something is at risk, so the forecast keeps measuring a
+    /// rate from fresh samples instead of a stale gap.
+    ///
+    /// Owner 2026-10-10: "maybe we should double or increase the frequency of
+    /// that one check until quota is hit".  A second timer rather than a faster
+    /// base cadence, because the base cadence is the owner's own setting and
+    /// changing it would slow everything back down afterwards.
+    private var exhaustionBoostTimer: Timer?
+    /// The floor.  One minute is the shortest useful window for a rate: faster
+    /// than this and consecutive samples are too close to time a real drop, so
+    /// it would burn requests to produce a noisier forecast.
+    static let exhaustionBoostInterval: TimeInterval = 60
+
+    /// Start or stop the boost to match the current risk state.  Cheap and
+    /// idempotent, so it can be called on every read.
+    private func updateExhaustionBoostTimer() {
+        let wanted = exhaustionAlertsEnabled
+            && exhaustionWarnings.values.contains(where: { $0.warrantsWarning })
+        if wanted, exhaustionBoostTimer == nil {
+            exhaustionBoostTimer = Timer.scheduledTimer(
+                withTimeInterval: Self.exhaustionBoostInterval, repeats: true) { [weak self] _ in
+                    Task { @MainActor in
+                        guard let self, self.hasStarted else { return }
+                        // Re-checked every tick: the window may have recovered,
+                        // and a boost that outlives its reason is exactly the
+                        // busy loop this is meant to avoid.
+                        guard self.exhaustionAlertsEnabled,
+                              self.exhaustionWarnings.values.contains(where: { $0.warrantsWarning })
+                        else {
+                            self.updateExhaustionBoostTimer()
+                            return
+                        }
+                        self.refreshProviderChecks()
+                    }
+                }
+        } else if !wanted, exhaustionBoostTimer != nil {
+            exhaustionBoostTimer?.invalidate()
+            exhaustionBoostTimer = nil
+        }
+    }
+
     private func scheduleSourceTimers() {
         refreshTimer?.invalidate()
         sessionFileTimer?.invalidate()
