@@ -30,6 +30,15 @@ if [[ -f "${INFISICAL_ENV_FILE}" ]]; then
   set +a
 fi
 
+# 1b.  Prod-only guard (owner, 2026-10-10).  The dev and staging Infisical
+#      environments are retired, so refuse to export from any other
+#      environment, whether the value came from .cursor/infisical.env or from
+#      the session.  Exit 0 so the agent boot still succeeds.
+if [[ "${INFISICAL_ENV:-prod}" != "prod" ]]; then
+  echo "CodeCaps: INFISICAL_ENV is '${INFISICAL_ENV}'; only 'prod' is allowed (dev and staging are retired).  Skipping Infisical export."
+  exit 0
+fi
+
 # 2.  Require the dashboard-injected credentials by NAME only.
 MISSING=()
 [[ -z "${INFISICAL_CLIENT_ID:-}" ]]     && MISSING+=("INFISICAL_CLIENT_ID")
@@ -39,7 +48,7 @@ if (( ${#MISSING[@]} > 0 )); then
   exit 0
 fi
 
-# 3.  Fetch the dev-env secrets via the same API path as
+# 3.  Fetch the prod-env secrets via the same API path as
 #     scripts/infisical-fetch.mjs (loginUniversalAuth + listSecretsRaw),
 #     then emit a dotenv file on stdout.  The script does not echo values
 #     and does not log the response body.  Stderr only carries status.
@@ -51,12 +60,12 @@ trap 'rm -f "${OUT}"' EXIT
 
 if INFISICAL_SITE_URL="${INFISICAL_DOMAIN:-https://app.infisical.com}" \
    INFISICAL_PROJECT_ID="${INFISICAL_PROJECT_ID:-}" \
-   INFISICAL_ENVIRONMENT="${INFISICAL_ENV:-dev}" \
+   INFISICAL_ENVIRONMENT="${INFISICAL_ENV:-prod}" \
    INFISICAL_SECRET_PATH="${INFISICAL_SECRET_PATH:-/}" \
    node -e '
      const site = String(process.env.INFISICAL_SITE_URL || "").replace(/\/+$/, "");
      const projectId = process.env.INFISICAL_PROJECT_ID || "";
-     const env = process.env.INFISICAL_ENVIRONMENT || "dev";
+     const env = process.env.INFISICAL_ENVIRONMENT || "prod";
      const path = process.env.INFISICAL_SECRET_PATH || "/";
      const cid = process.env.INFISICAL_CLIENT_ID || "";
      const cs  = process.env.INFISICAL_CLIENT_SECRET || "";
@@ -103,7 +112,7 @@ if INFISICAL_SITE_URL="${INFISICAL_DOMAIN:-https://app.infisical.com}" \
 fi
 
 if [[ ! -s "${OUT}" ]]; then
-  echo "CodeCaps: no Infisical secrets exported for ${REPO_NAME} (env=${INFISICAL_ENV:-dev}).  Continuing."
+  echo "CodeCaps: no Infisical secrets exported for ${REPO_NAME} (env=${INFISICAL_ENV:-prod}).  Continuing."
   exit 0
 fi
 

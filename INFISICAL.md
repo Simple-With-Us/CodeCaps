@@ -5,18 +5,18 @@ Infisical is the sole source of truth for CodeCaps' app-level settings: secrets,
 ## Project
 
 - Project ID must be entered explicitly under Settings → Infisical Sync.  There is no built-in project or migration fallback.  Legacy two-field identities are not activated; the owner enters the three-field setup.
-- Release builds read `prod`; `.dev` builds read `dev` (`InfisicalSettings.defaultEnvironment`, mirroring how `TokenStore` scopes Keychain items per build).
+- Every build reads `prod`, and only `prod` (`InfisicalSettings.defaultEnvironment`).  The dev and staging environments are retired (owner, 2026-10-10), so a `.dev` build reads `prod` too; `TokenStore` and `InfisicalIdentityStore` still scope Keychain items per build.  The client refuses to log in, read or write for any other environment, and a test pins that.
 - REST surface used: universal-auth login → project/environment metadata verification on explicit setup Save → three named `GET /api/v3/secrets/raw/{name}` requests → `PATCH` / `POST /api/v3/secrets/raw/{name}` for write-through.  The app never lists root secrets or fetches an unrelated secret value.  A missing managed key (404) remains unset, so its existing local/default behavior applies; any other read failure keeps the entire last-known-good cache.  Implemented with zero new dependencies in `Sources/QuotaCore/InfisicalSettings.swift` (`URLSession` only).
 
 ## Key Inventory
 
 | Key | Env | Sensitivity | Default | Notes |
 |---|---|---|---|---|
-| `PULL_ENDPOINT` | dev/prod | Non-sensitive (service URL) | `https://usage.jays.services/api/quota-windows` (dev seeded) | Service URL the Mac app pulls other machines' quota windows from.  Migrated from the `endpoint` UserDefaults key. |
-| `PUSH_ENDPOINT` | dev/prod | Non-sensitive (service URL) | Empty — to be filled by the admin | Service URL the Mac app pushes this Mac's quota windows to.  Migrated from the `syncEndpoint` UserDefaults key. |
-| `SETTINGS_REFRESH_SECONDS` | dev/prod | Non-sensitive (knob) | `300` (dev seeded) | Background refresh cadence for this cache, tunable via Infisical itself.  Clamped to a 60-second floor so a typo cannot hot-loop the timer. |
+| `PULL_ENDPOINT` | prod | Non-sensitive (service URL) | `https://usage.jays.services/api/quota-windows` (not yet set in prod) | Service URL the Mac app pulls other machines' quota windows from.  Migrated from the `endpoint` UserDefaults key. |
+| `PUSH_ENDPOINT` | prod | Non-sensitive (service URL) | Empty — to be filled by the admin | Service URL the Mac app pushes this Mac's quota windows to.  Migrated from the `syncEndpoint` UserDefaults key. |
+| `SETTINGS_REFRESH_SECONDS` | prod | Non-sensitive (knob) | `300` (not yet set in prod) | Background refresh cadence for this cache, tunable via Infisical itself.  Clamped to a 60-second floor so a typo cannot hot-loop the timer. |
 
-Non-sensitive defaults above are seeded in the `dev` environment only.  `prod` values are set by the admin and never invented.  Secret keys are documented as "to be filled by admin" and left empty — no secret value is ever invented, guessed, or copied into the project.
+The `prod` environment holds no CodeCaps keys yet: the two non-sensitive defaults above were only ever seeded in the now-retired `dev` environment and were not copied over.  Until the admin sets them in `prod`, a missing managed key stays unset and the app's local defaults apply.  `prod` values are set by the admin and never invented.  Secret keys are documented as "to be filled by admin" and left empty — no secret value is ever invented, guessed, or copied into the project.
 
 ## What Lives Here Versus What Does Not
 
@@ -47,7 +47,7 @@ CodeCaps is a single-user local app: the owner is the only user and therefore th
 
 ## Provisioning
 
-1. In Infisical, create a machine identity scoped to the CodeCaps project, the intended environment (dev for `.dev` builds, prod for release), and the root secret path.  Grant read access at that scope; grant write access only if this identity will save settings from the app.  Use the narrowest permissions supported by the Infisical policy.  The client requests only the three managed keys by name, but that request pattern alone does not restrict what an overprivileged identity could access.  Copy its client ID and secret.
+1. In Infisical, create a machine identity scoped to the CodeCaps project, the `prod` environment, and the root secret path.  Grant read access at that scope; grant write access only if this identity will save settings from the app.  Use the narrowest permissions supported by the Infisical policy.  The client requests only the three managed keys by name, but that request pattern alone does not restrict what an overprivileged identity could access.  Copy its client ID and secret.
 2. Open Settings → Infisical Sync, enter Client ID, Client Secret, and Project ID, then press Save Setup.  With an unchanged Client ID, leaving Client Secret blank retains the saved secret.  Save verifies login, project/environment metadata, and the three managed-key reads before atomically persisting all three fields in one Keychain record and switching the active cache.  A failed validation or Keychain write leaves the previous setup and cached values active.  An existing project with no managed keys is valid; a missing or inaccessible project is not.  Project metadata access is needed for setup validation; routine refresh remains the existing three named reads.
 3. Set `PULL_ENDPOINT` / `PUSH_ENDPOINT` / `SETTINGS_REFRESH_SECONDS` under Managed Keys (or directly in Infisical); the app picks them up on the next refresh.
 

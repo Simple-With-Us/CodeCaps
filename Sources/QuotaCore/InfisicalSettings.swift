@@ -50,13 +50,12 @@ public final class InfisicalSettings: @unchecked Sendable {
     /// timer into a hot loop.
     public static let minimumRefreshInterval: TimeInterval = 60
 
-    /// Release builds read the `prod` environment; `.dev` builds read `dev`,
-    /// mirroring how `TokenStore` scopes Keychain items per build.
-    public static func defaultEnvironment(
-        bundleIdentifier: String? = Bundle.main.bundleIdentifier
-    ) -> String {
-        (bundleIdentifier ?? "").hasSuffix(".dev") ? "dev" : "prod"
-    }
+    /// Every build reads the `prod` environment, and only `prod`.  The dev and
+    /// staging environments are retired (owner, 2026-10-10), so a `.dev` build
+    /// reads prod too.  `TokenStore` and `InfisicalIdentityStore` still scope
+    /// Keychain items per build.  `accessToken(for:revision:)` refuses any
+    /// configuration whose environment differs, before any request is sent.
+    public static func defaultEnvironment() -> String { "prod" }
 
     // MARK: - Configuration
 
@@ -403,6 +402,10 @@ public final class InfisicalSettings: @unchecked Sendable {
 
     private func accessToken(for configuration: Configuration, revision: Revision) async throws -> String {
         try checkCurrent(revision)
+        // Prod-only guard: no login, read or write goes out for another environment.
+        guard configuration.environment == Self.defaultEnvironment() else {
+            throw SettingsError.invalidDestination
+        }
         let url = configuration.siteURL.appendingPathComponent("api/v1/auth/universal-auth/login")
         let body = try JSONSerialization.data(withJSONObject: [
             "clientId": configuration.clientId,
