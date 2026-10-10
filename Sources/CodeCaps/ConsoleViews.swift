@@ -5,6 +5,7 @@ import SwiftUI
 /// One selection type for the sidebar, the detail pane and every deep link from
 /// Glance, the app menu and the status menu.
 enum ConsolePage: Hashable {
+    case allPlatforms
     case platform(String)
     case runawayAlerts
     case settingsMenuBar
@@ -18,13 +19,14 @@ enum ConsolePage: Hashable {
 
     var isSettings: Bool {
         switch self {
-        case .platform, .runawayAlerts: return false
+        case .allPlatforms, .platform, .runawayAlerts: return false
         default: return true
         }
     }
 
     var storageKey: String {
         switch self {
+        case .allPlatforms: return "allPlatforms"
         case .platform(let providerKey): return "platform:" + providerKey
         case .runawayAlerts: return "runawayAlerts"
         case .settingsMenuBar: return "settingsMenuBar"
@@ -40,6 +42,7 @@ enum ConsolePage: Hashable {
 
     static func fromStorageKey(_ value: String) -> ConsolePage? {
         switch value {
+        case "allPlatforms": return .allPlatforms
         case "runawayAlerts": return .runawayAlerts
         case "settingsMenuBar": return .settingsMenuBar
         case "settingsPlatforms": return .settingsPlatforms
@@ -58,6 +61,7 @@ enum ConsolePage: Hashable {
     /// Sidebar and toolbar label.  A platform page is titled by the model.
     var settingsTitle: String {
         switch self {
+        case .allPlatforms: return "All Platforms"
         case .runawayAlerts: return "Runaway Alerts"
         case .settingsMenuBar: return "Menu Bar & PiP"
         case .settingsPlatforms: return "Platforms"
@@ -73,6 +77,7 @@ enum ConsolePage: Hashable {
 
     var symbol: String {
         switch self {
+        case .allPlatforms: return "square.grid.2x2"
         case .runawayAlerts: return "flame.fill"
         case .settingsMenuBar: return "menubar.rectangle"
         case .settingsPlatforms: return "square.grid.2x2"
@@ -182,6 +187,11 @@ final class ConsoleState: ObservableObject {
             awaitingInitialSelection = false
             return
         }
+        if page == .allPlatforms || page == .runawayAlerts {
+            pendingStoredKey = nil
+            awaitingInitialSelection = false
+            return
+        }
         if page.isSettings && !awaitingInitialSelection { return }
         if sections.isEmpty && !readCompleted { return }
         isReconciling = true
@@ -262,6 +272,7 @@ struct ConsoleView: View {
     /// big display stays wide; a fresh install lands on
     /// `Metrics.sidebarWidthDefault`.
     @State private var sidebarWidth: CGFloat
+    @State private var query = ""
 
     init(model: MonitorModel, state: ConsoleState) {
         self.model = model
@@ -318,6 +329,9 @@ struct ConsoleView: View {
             }
             ScrollView {
                 switch state.page {
+                case .allPlatforms:
+                    AllPlatformsPage(model: model, state: state, query: query)
+                        .padding(Metrics.pagePadding)
                 case .runawayAlerts:
                     RunawayAlertsPage(model: model, state: state)
                         .padding(Metrics.pagePadding)
@@ -367,6 +381,22 @@ struct ConsoleView: View {
                 .frame(maxWidth: .infinity, alignment: .center)
                 .layoutPriority(1)
                 .truncationMode(.tail)
+
+            if state.page == .allPlatforms {
+                HStack(spacing: 5) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                    TextField("Find a platform", text: $query)
+                        .textFieldStyle(.plain)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 6))
+                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Theme.hairline))
+                .frame(width: 160)
+            }
 
             Spacer(minLength: 8)
 
@@ -450,8 +480,7 @@ struct ConsoleSidebar: View {
     @FocusState private var focusedPage: ConsolePage?
 
     private var allPages: [ConsolePage] {
-        var pages: [ConsolePage] = []
-        pages.append(.runawayAlerts)
+        var pages: [ConsolePage] = [.allPlatforms, .runawayAlerts]
         pages.append(contentsOf: model.displaySections.map { .platform($0.id) })
         pages.append(contentsOf: ConsolePage.settingsPages)
         return pages
@@ -477,6 +506,10 @@ struct ConsoleSidebar: View {
             // Drawing the highlight here settles both.
             List {
                 Section {
+                    sidebarRow(page: .allPlatforms) {
+                        Label("All Platforms", systemImage: "square.grid.2x2")
+                            .font(.system(size: 13, weight: .medium))
+                    }
                     sidebarRow(page: .runawayAlerts) {
                         HStack(spacing: 8) {
                             Image(systemName: "flame.fill")
@@ -651,6 +684,185 @@ struct ConsoleSidebar: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(12)
         }
+    }
+}
+
+// MARK: - All platforms
+
+struct AllPlatformsPage: View {
+    @ObservedObject var model: MonitorModel
+    @ObservedObject var state: ConsoleState
+    let query: String
+
+    private var matching: [DisplaySection] {
+        model.displaySections.filter {
+            query.isEmpty || $0.title.localizedCaseInsensitiveContains(query)
+        }
+    }
+    private var localSections: [DisplaySection] {
+        matching.filter { model.originByProvider[$0.providerKey] != .fleet }
+    }
+    /// Fleet rows, filtered by the same search box, grouped by machine.
+    private var fleetGroups: [FleetGroup] {
+        model.fleetGroups.map { group in
+            FleetGroup(id: group.id,
+                       title: group.title,
+                       windowCount: group.windowCount,
+                       rows: group.rows.filter { query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) })
+        }
+        .filter { !$0.rows.isEmpty }
+    }
+    private var compact: Bool { model.viewLayout == .summary }
+    private var columns: [GridItem] { [GridItem(.adaptive(minimum: compact ? 240 : 290), alignment: .top)] }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            tiles
+            if let error = model.serverError { errorBanner(error) }
+
+            if !model.localEnabled && !model.serverEnabled {
+                emptyState
+            } else {
+                HStack {
+                    Text("This Mac").font(.system(size: 13, weight: .semibold))
+                    Spacer()
+                }
+                LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
+                    ForEach(localSections) { row in
+                        card(row, origin: .local)
+                    }
+                }
+                if model.serverEnabled { fleetGroup }
+            }
+
+            Text("Quota windows are independent." + sentenceGap
+                 + "Antigravity meters two model pools separately, so each pool has its own row.")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var tiles: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), alignment: .top)], spacing: 12) {
+            SummaryTile(label: "Reporting",
+                        value: model.lastChecked == nil ? "—" : "\(model.reportingCount) of \(model.sections.count)",
+                        symbol: "antenna.radiowaves.left.and.right",
+                        detail: "reporting")
+            SummaryTile(label: "Near Cap",
+                        value: model.lastChecked == nil ? "—" : "\(model.nearCapCount)",
+                        symbol: "gauge.with.dots.needle.100percent",
+                        detail: "at 20% or less")
+            SummaryTile(label: "Next Reset",
+                        value: model.nextReset.map { glanceResetCountdown($0, now: model.now) } ?? "—",
+                        symbol: "clock",
+                        detail: nextResetDetail)
+            SummaryTile(label: "Fleet",
+                        value: model.serverEnabled ? "\(model.fleetWindowCount) windows" : "Off",
+                        symbol: "arrow.up.arrow.down.circle",
+                        detail: model.serverEnabled
+                            ? (model.lastPullTime.map { "pulled \($0.formatted(date: .omitted, time: .shortened))" } ?? "never pulled")
+                            : "set up fleet pull")
+        }
+    }
+
+    private var nextResetDetail: String {
+        guard let next = model.nextReset else { return "no reset reported" }
+        for row in model.displaySections {
+            for snapshot in row.section.windows where snapshot.resetAt == next && !row.isMasked(snapshot) {
+                return "\(row.title), \(windowCadenceName(snapshot.window))"
+            }
+        }
+        return next.formatted(date: .omitted, time: .shortened)
+    }
+
+    private func errorBanner(_ error: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(Theme.warning)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Fleet pull issue").font(.system(size: 12, weight: .semibold))
+                Text(error).font(.system(size: 11)).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("Open Settings") { state.page = .settingsSourcesFleet }
+                .help("Open Settings")
+                .accessibilityLabel("Open Settings")
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.warning.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Theme.warning.opacity(0.35)))
+    }
+
+    private var emptyState: some View {
+        ContentUnavailableView {
+            Label("Connect a Quota Source", systemImage: "link")
+        } description: {
+            Text("CodeCaps reads quota from the agent CLIs already signed in on this Mac."
+                 + sentenceGap + "You can also pull quota from your other machines.")
+        } actions: {
+            HStack(spacing: 10) {
+                Button("Turn On Local Readers") {
+                    model.setLocalEnabled(true)
+                    state.page = .settingsSourcesFleet
+                }
+                .buttonStyle(.borderedProminent)
+                Button("Set Up Fleet Pull") { state.page = .settingsSourcesFleet }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var fleetGroup: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Rectangle().fill(Theme.fleet).frame(width: 2)
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("Fleet").font(.system(size: 13, weight: .semibold))
+                    Spacer()
+                    Text(model.lastPullTime.map { "Pulled \($0.formatted(date: .omitted, time: .shortened))" } ?? "Never pulled")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                if fleetGroups.isEmpty {
+                    Text("No other machines have reported yet.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(fleetGroups) { group in
+                        HStack {
+                            Text(group.title).font(.system(size: 12, weight: .semibold))
+                            Spacer()
+                            Text("\(group.windowCount) window\(group.windowCount == 1 ? "" : "s")")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                        }
+                        LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
+                            ForEach(group.rows) { row in
+                                card(row, origin: .fleet)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func card(_ row: DisplaySection, origin: QuotaOrigin) -> some View {
+        PlatformCard(row: row,
+                     now: model.now,
+                     issue: origin == .fleet ? nil : model.issues[row.providerKey],
+                     compact: compact,
+                     wide: false,
+                     origin: origin,
+                     customInfo: model.platformCustomInfo[row.providerKey],
+                     markStyle: model.markStyle(for: row.id),
+                     isAlarmArmed: model.isAlarmEnabled(for: row.id),
+                     onToggleAlarm: model.alarmsAll ? nil : { model.toggleAlarm(for: row.id) },
+                     onOpenSettings: model.consentNeeded.contains(row.providerKey)
+                        ? { state.page = .settingsSourcesFleet } : nil)
     }
 }
 

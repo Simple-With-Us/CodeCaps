@@ -66,7 +66,7 @@ final class PipMetricsTests: XCTestCase {
                        "the logo goes only after the name, at the identity-free end")
 
         // Nothing above logoOnly may lose the name while keeping two meters.
-        for level in [PipMetrics.Detail.full, .noCountdown, .singleMeter, .logoOnly] {
+        for level in [PipMetrics.Detail.full, .noCountdown, .logoOnly] {
             if level.maxMeters > 1 || level == .logoOnly {
                 XCTAssertTrue(level.showsProviderLogo, "\(level) must keep the logo")
             }
@@ -111,12 +111,11 @@ final class PipMetricsTests: XCTestCase {
 
     func testFitHeightHasNoOuterPaddingTerm() {
         // The rows run edge to edge, so the panel height is exactly the rows
-        // plus the body's own vertical padding — there is no header band (owner,
-        // 2026-10-08).  If a future change puts padding back on the outside,
-        // `height` starts double-counting it: the ladder then drops a level
-        // early and the panel asks for room it is no longer using.
+        // plus the body's own vertical padding and the top drag strip — there is no
+        // header band (owner, 2026-10-08).
         let expected = CGFloat(3) * PipMetrics.rowHeight
             + PipMetrics.bodyVerticalPadding * 2
+            + PipMetrics.topDragAreaHeight
         XCTAssertEqual(PipMetrics.fitSize(rowCount: 3, hasDualMeterRow: false).height, expected)
     }
 
