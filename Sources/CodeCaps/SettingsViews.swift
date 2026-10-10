@@ -1,6 +1,7 @@
 import AppKit
 import QuotaCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Shared chrome for a settings page.  Every page is a `Form` with no fixed
 /// height, inside the Console's own `ScrollView`, so the 580x510-versus-620x560
@@ -59,7 +60,7 @@ struct SettingsMenuBarPage: View {
                             Text(item.label).tag(item.id)
                         }
                     }
-                    Section("Specific Quota Window") {
+                    Section("Specific quota window") {
                         ForEach(model.menuBarIndividualWindowOptions, id: \.id) { item in
                             Text(item.label).tag(item.id)
                         }
@@ -127,18 +128,11 @@ struct SettingsMenuBarPage: View {
                         Text("Pinned Quotas (Default: Lowest 2 Remaining)")
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(.secondary)
-                        ForEach(model.displaySections) { row in
-                            Toggle(row.title, isOn: Binding(
-                                get: { model.pipPinnedRowIds.contains(row.id) },
-                                set: { checked in
-                                    if checked {
-                                        model.pipPinnedRowIds.insert(row.id)
-                                    } else {
-                                        model.pipPinnedRowIds.remove(row.id)
-                                    }
-                                }
-                            ))
-                        }
+                        Text("Drag to reorder options." + sentenceGap + "Pinned quotas appear in the PiP widget in this order.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+
+                        PipOptionsReorderList(model: model)
                     }
                     .padding(.vertical, 4)
                 }
@@ -148,6 +142,76 @@ struct SettingsMenuBarPage: View {
                 Text("A tiny on-screen HUD stays on top of all windows so you are aware of critical quotas in real time.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+private struct PipRowDropDelegate: DropDelegate {
+    let targetRow: DisplaySection
+    @Binding var draggedRowId: String?
+    let model: MonitorModel
+
+    func dropEntered(info: DropInfo) {
+        guard let dragged = draggedRowId, dragged != targetRow.id else { return }
+        withAnimation(.easeInOut(duration: 0.18)) {
+            model.movePipRow(fromId: dragged, toId: targetRow.id)
+        }
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        draggedRowId = nil
+        return true
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .move)
+    }
+}
+
+private struct PipOptionsReorderList: View {
+    @ObservedObject var model: MonitorModel
+    @State private var draggedRowId: String?
+
+    var body: some View {
+        VStack(spacing: 3) {
+            ForEach(model.orderedPipDisplaySections()) { row in
+                HStack(spacing: 8) {
+                    Image(systemName: "line.3.horizontal")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                        .help("Drag to Reorder")
+                        .accessibilityHidden(true)
+                    PlatformLogo(providerKey: row.providerKey, size: 14,
+                                 style: model.markStyle(for: row.id))
+                    Toggle(row.title, isOn: Binding(
+                        get: { model.pipPinnedRowIds.contains(row.id) },
+                        set: { checked in
+                            if checked {
+                                model.pipPinnedRowIds.insert(row.id)
+                            } else {
+                                model.pipPinnedRowIds.remove(row.id)
+                            }
+                        }
+                    ))
+                    Spacer()
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(draggedRowId == row.id ? Theme.accent.opacity(0.12) : Color.clear)
+                )
+                .contentShape(Rectangle())
+                .onDrag {
+                    draggedRowId = row.id
+                    return NSItemProvider(object: row.id as NSString)
+                }
+                .onDrop(of: [UTType.text], delegate: PipRowDropDelegate(
+                    targetRow: row,
+                    draggedRowId: $draggedRowId,
+                    model: model
+                ))
             }
         }
     }

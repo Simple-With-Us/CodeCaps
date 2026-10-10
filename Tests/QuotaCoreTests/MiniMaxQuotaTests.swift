@@ -58,7 +58,7 @@ final class MiniMaxQuotaTests: XCTestCase {
         XCTAssertEqual(interval.label, "5-hour window")
         XCTAssertEqual(weekly.periodStart, "2026-09-28T00:00:00Z")
         XCTAssertEqual(weekly.window, "1w")
-        XCTAssertEqual(weekly.label, "Weekly window")
+        XCTAssertEqual(weekly.label, "weekly window")
 
         let noStarts = #"{"base_resp":{"status_code":0},"model_remains":[{"model_name":"general","current_interval_remaining_percent":99,"current_weekly_remaining_percent":97,"remains_time":14998196,"weekly_remains_time":547798196}]}"#
         let bare = await makeReader(home: home, body: noStarts).read().windows.filter { $0.providerKey == "minimax" }
@@ -96,7 +96,7 @@ final class MiniMaxQuotaTests: XCTestCase {
             id: "local-mac:minimax:general:weekly",
             provider: "minimax",
             providerKey: "minimax",
-            label: "Weekly window",
+            label: "weekly window",
             remainingPercent: 10,
             occurredAt: "2026-10-04T12:00:00Z"
         )

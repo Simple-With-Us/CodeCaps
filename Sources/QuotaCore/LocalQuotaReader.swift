@@ -654,10 +654,10 @@ private func parseMiniMax(_ root: [String: Any], observedAt: Date) -> [QuotaWind
         let weeklyLabel: String
         if isGeneral {
             intervalLabel = "5-hour window"
-            weeklyLabel = (weeklyToken == "1w" || weeklyToken == "weekly") ? "Weekly window" : (weeklyToken.map { "\($0) window" } ?? "Weekly window")
+            weeklyLabel = (weeklyToken == "1w" || weeklyToken == "weekly") ? "weekly window" : (weeklyToken.map { "\($0) window" } ?? "weekly window")
         } else if isVideo {
             intervalLabel = "Video"
-            weeklyLabel = "Video (Weekly window)"
+            weeklyLabel = "Video (weekly window)"
         } else {
             intervalLabel = intervalToken.map { "\(model) (\($0) window)" } ?? "\(model) (interval window)"
             weeklyLabel = weeklyToken.map { "\(model) (\($0) window)" } ?? "\(model) (weekly window)"

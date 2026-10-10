@@ -64,7 +64,7 @@ struct UsageHistoryView: View {
             let (index, snapshot) = item
             let label = snapshot.window.label
             labels[snapshot.window.id] = (labelCounts[label] ?? 0) > 1
-                ? "\(label) · \(snapshot.window.source ?? "Window") \(index + 1)" : label
+                ? "\(label) · \(snapshot.window.source ?? "window") \(index + 1)" : label
         }
         let byWindow = Dictionary(grouping: relevantSamples, by: \.windowId)
         return byWindow.keys.sorted().flatMap { windowId in
@@ -88,7 +88,7 @@ struct UsageHistoryView: View {
                     let isVendorReset = midWindow && (jumpedToFull || surgedMidWindow || quotaHandedBack)
                     return HistoryPoint(id: "\(windowId):\(segmentIndex):\(index)",
                                         series: "\(windowId):\(segmentIndex)",
-                                        windowLabel: labels[windowId] ?? "Quota Window",
+                                        windowLabel: labels[windowId] ?? "Quota window",
                                         observedAt: sample.observedAt,
                                         remainingPercent: percent,
                                         reset: reset,
@@ -142,7 +142,7 @@ struct UsageHistoryView: View {
                             }
                         }
                     )) {
-                        Text("All Windows").tag("all")
+                        Text("All windows").tag("all")
                         ForEach(primaryWindows, id: \.window.id) { snapshot in
                             Text(snapshot.window.label).tag(snapshot.window.id)
                         }
@@ -150,7 +150,7 @@ struct UsageHistoryView: View {
                     .pickerStyle(.menu)
                     .font(.system(size: 11))
                     .frame(maxWidth: 160)
-                    .accessibilityLabel("Filter Window")
+                    .accessibilityLabel("Filter window")
                 }
                 Picker("History Range", selection: $span) {
                     ForEach(HistorySpan.allCases) { span in Text(span.rawValue).tag(span) }
@@ -165,7 +165,7 @@ struct UsageHistoryView: View {
                     Text("Filtered to: \(primaryWindows.first { $0.window.id == focusedWindowId }?.window.label ?? focusedWindowId)")
                         .font(.system(size: 11, weight: .medium))
                     Spacer()
-                    Button("Show All Windows") { state.clearHistoryFocus() }
+                    Button("Show all windows") { state.clearHistoryFocus() }
                         .font(.system(size: 11))
                 }
             }

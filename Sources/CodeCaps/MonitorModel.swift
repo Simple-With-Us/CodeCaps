@@ -356,6 +356,12 @@ final class MonitorModel: ObservableObject {
             PipWidgetController.shared.update(model: self)
         }
     }
+    @Published var pipRowOrder: [String] {
+        didSet {
+            defaults.set(pipRowOrder, forKey: "pipRowOrder")
+            PipWidgetController.shared.update(model: self)
+        }
+    }
 
     // Dynamic Pacing Highlights
     @Published var pacingColorHighlights: Bool {
@@ -518,6 +524,7 @@ final class MonitorModel: ObservableObject {
         glanceView = GlanceViewMode(rawValue: defaults.string(forKey: "glanceView") ?? "") ?? .fromMac
         isPipEnabled = defaults.bool(forKey: "isPipEnabled")
         pipPinnedRowIds = Set(defaults.stringArray(forKey: "pipPinnedRowIds") ?? [])
+        pipRowOrder = defaults.stringArray(forKey: "pipRowOrder") ?? []
         pacingColorHighlights = defaults.object(forKey: "pacingColorHighlights") as? Bool ?? true
         alarmChanges = alarmManager.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
@@ -1160,6 +1167,30 @@ final class MonitorModel: ObservableObject {
 
     func resetPlatformOrder() {
         platformOrder = []
+    }
+
+    func orderedPipDisplaySections() -> [DisplaySection] {
+        let all = displaySections
+        guard !pipRowOrder.isEmpty else { return all }
+        let known = pipRowOrder.compactMap { id in all.first { $0.id == id } }
+        let remaining = all.filter { !pipRowOrder.contains($0.id) }
+        return known + remaining
+    }
+
+    func movePipRow(fromId: String, toId: String) {
+        var current = orderedPipDisplaySections().map(\.id)
+        guard let fromIndex = current.firstIndex(of: fromId),
+              let toIndex = current.firstIndex(of: toId),
+              fromIndex != toIndex else { return }
+        let item = current.remove(at: fromIndex)
+        current.insert(item, at: toIndex)
+        pipRowOrder = current
+    }
+
+    func movePipRow(from offsets: IndexSet, to offset: Int) {
+        var current = orderedPipDisplaySections().map(\.id)
+        current.move(fromOffsets: offsets, toOffset: offset)
+        pipRowOrder = current
     }
 
     func setCustomInfo(for providerKey: String, info: PlatformCustomInfo) {

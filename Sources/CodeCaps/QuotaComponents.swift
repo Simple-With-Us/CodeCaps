@@ -70,13 +70,12 @@ enum AccentChoice: String, CaseIterable, Identifiable {
         case .orange: return 0xA85C05
         case .green: return 0x2E6B2E
         case .magenta: return 0xA3225E
-        // The light four are light *by design*, so their light-appearance value
-        // is the light one too.  They are still darkened for Dark appearance so
-        // they do not glare against a near-black surface.
-        case .rose: return 0xF2A8C0
-        case .lemon: return 0xE8C54A
-        case .sky: return 0x8FC9EA
-        case .lime: return 0xA9D96B
+        // The light four are light options by design, carrying dark text
+        // via Theme.onAccent.
+        case .rose: return 0xFBB6CE
+        case .lemon: return 0xF6E05E
+        case .sky: return 0x90CDF4
+        case .lime: return 0xB7EB8F
         }
     }
 
@@ -89,10 +88,10 @@ enum AccentChoice: String, CaseIterable, Identifiable {
         case .orange: return 0xF0B45A
         case .green: return 0x7FD07F
         case .magenta: return 0xF07AAF
-        case .rose: return 0xD96A8C
-        case .lemon: return 0xB99A2E
-        case .sky: return 0x5A9FC7
-        case .lime: return 0x6E9E3E
+        case .rose: return 0xF687B3
+        case .lemon: return 0xF6E05E
+        case .sky: return 0x76E4F7
+        case .lime: return 0x9AE6B4
         }
     }
 
@@ -956,7 +955,7 @@ struct PlatformCard: View {
             }
         }
         if primaryWindows.count > 4 {
-            Button(expanded ? "Show Less" : "Show All \(primaryWindows.count) Windows") {
+            Button(expanded ? "Show less" : "Show all \(primaryWindows.count) windows") {
                 expanded.toggle()
             }
             .buttonStyle(.plain)
@@ -995,7 +994,7 @@ struct PlatformCard: View {
                     }
                     .padding(.top, 8)
                 } label: {
-                    Label("Video Quota (\(videoWindows.count) Windows)", systemImage: "video")
+                    Label("Video quota (\(videoWindows.count) windows)", systemImage: "video")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.secondary)
                 }

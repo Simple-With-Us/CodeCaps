@@ -10,6 +10,7 @@ final class ConsoleNavigationTests: XCTestCase {
 
     func testConsolePageSerialization() {
         let pages: [ConsolePage] = [
+            .allPlatforms,
             .platform("anthropic"),
             .runawayAlerts,
             .settingsMenuBar,
@@ -29,8 +30,11 @@ final class ConsoleNavigationTests: XCTestCase {
     }
 
     func testConsolePageIsSettings() {
+        XCTAssertFalse(ConsolePage.allPlatforms.isSettings)
         XCTAssertFalse(ConsolePage.platform("anthropic").isSettings)
         XCTAssertFalse(ConsolePage.runawayAlerts.isSettings)
+        XCTAssertEqual(ConsolePage.allPlatforms.settingsTitle, "All Platforms")
+        XCTAssertEqual(ConsolePage.allPlatforms.symbol, "square.grid.2x2")
         XCTAssertEqual(ConsolePage.runawayAlerts.settingsTitle, "Runaway Alerts")
         XCTAssertEqual(ConsolePage.runawayAlerts.symbol, "flame.fill")
         XCTAssertTrue(ConsolePage.settingsMenuBar.isSettings)
@@ -59,14 +63,24 @@ final class ConsoleSelectionTests: XCTestCase {
                                                        via: nil, expected: true, windows: []), now: Date())[0]
     }
 
-    func testLegacyAggregateSelectionWaitsForFirstPlatform() {
+    func testObsoletePageSelectionWaitsForFirstPlatform() {
         let defaults = defaults()
-        defaults.set("allPlatforms", forKey: "consoleLastPage")
+        defaults.set("obsoletePage", forKey: "consoleLastPage")
         let state = ConsoleState(defaults: defaults)
         state.reconcile(available: [])
         XCTAssertEqual(state.page, .settingsSourcesFleet)
         state.reconcile(available: [row("anthropic"), row("openai")])
         XCTAssertEqual(state.page, .platform("anthropic"))
+    }
+
+    func testAllPlatformsSelectionSurvivesReconcile() {
+        let defaults = defaults()
+        defaults.set("allPlatforms", forKey: "consoleLastPage")
+        let state = ConsoleState(defaults: defaults)
+        state.reconcile(available: [])
+        XCTAssertEqual(state.page, .allPlatforms)
+        state.reconcile(available: [row("anthropic"), row("openai")])
+        XCTAssertEqual(state.page, .allPlatforms)
     }
 
     func testVanishedSavedPlatformFallsBackToFirstAvailable() {
