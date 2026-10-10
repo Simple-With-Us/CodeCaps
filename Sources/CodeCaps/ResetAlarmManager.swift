@@ -443,12 +443,12 @@ public final class ResetAlarmManager: ObservableObject {
         guard Self.canUseUserNotifications else { return }
         let content = UNMutableNotificationContent()
         content.title = "Quota Running Low: \(platformLabel)"
-        content.body = "\\(platformLabel) is about \\(headroom) of quota left."
+        content.body = "\(platformLabel) is about \(headroom) of quota left."
             + sentenceGap
             + "Wind up or hand off anything still running against it."
         content.sound = notificationSound(for: sound)
         let request = UNNotificationRequest(
-            identifier: "codecaps.exhaustion.\\(platformLabel).\\(Int(Date().timeIntervalSince1970))",
+            identifier: "codecaps.exhaustion.\(platformLabel).\(Int(Date().timeIntervalSince1970))",
             content: content, trigger: nil)
         Task { [weak self] in
             let center = UNUserNotificationCenter.current()

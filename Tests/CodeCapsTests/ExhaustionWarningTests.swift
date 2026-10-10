@@ -128,6 +128,29 @@ final class ExhaustionWarningTests: XCTestCase {
         XCTAssertFalse(model.platformIsAtRisk("anthropic"))
     }
 
+    /// A double-escaped `\(` renders as literal backslash-paren, so the owner
+    /// would have read "\(platformLabel) is about \(headroom) of quota left."
+    /// instead of the names.  Assert the sentence, not the plumbing.
+    func testTheWarningSaysThePlatformAndTheHeadroom() throws {
+        let now = Date()
+        try seedDrainingWindow(historyEnd: now)
+        let model = makeModel()
+        model.exhaustionAlertsEnabled = true
+        var said: [String] = []
+        model.exhaustionNotificationForTesting = { platform, headroom in
+            said.append("\(platform) is about \(headroom) of quota left.")
+        }
+
+        model.refreshExhaustionWarningsForTesting(windows: [window(remaining: 20)], now: now)
+
+        XCTAssertEqual(said.count, 1)
+        let sentence = try XCTUnwrap(said.first)
+        XCTAssertFalse(sentence.contains("\\("), "an escaped interpolation must not reach the user")
+        XCTAssertFalse(sentence.contains("("), "no variable name may leak into the sentence: \(sentence)")
+        XCTAssertTrue(sentence.hasPrefix("Claude"), "it names the platform: \(sentence)")
+        XCTAssertTrue(sentence.contains("20 min"), "and the headroom: \(sentence)")
+    }
+
     func testTurningTheMasterSwitchOffClearsTheAtRiskState() throws {
         let now = Date()
         try seedDrainingWindow(historyEnd: now)
