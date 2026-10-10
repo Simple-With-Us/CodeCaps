@@ -248,6 +248,12 @@ enum Theme {
         ? dyn(NSColor.black.withAlphaComponent(0.92), NSColor.white.withAlphaComponent(0.95))
         : dyn(NSColor.black.withAlphaComponent(0.16), NSColor.white.withAlphaComponent(0.22))
 
+    /// The filled track a segmented control sits on, so an unselected segment
+    /// reads as "not chosen" rather than as an outlined box.  Owner 2026-10-10.
+    static let controlTrack: Color = highContrast
+        ? dyn(NSColor.black.withAlphaComponent(0.10), NSColor.white.withAlphaComponent(0.16))
+        : dyn(NSColor.black.withAlphaComponent(0.06), NSColor.white.withAlphaComponent(0.10))
+
     /// A control that is present but off, such as an unchecked row bell:
     /// visible enough to find, quiet enough not to read as a setting.
     static let faint: Color = highContrast
@@ -391,6 +397,12 @@ enum Metrics {
     /// was the 10pt every header gap used, which read as cramped (owner delta,
     /// 2026-09-30); twice that sets the title apart from the controls.
     static let glanceHeaderTitleGap: CGFloat = 20
+
+    /// The owner's mark at the top-left of the Glance header, 2026-10-10.
+    /// Deliberately small: the popover is 570pt wide and the header already
+    /// carries the title, the scope switch, the bell and the two buttons.
+    static let glanceBrandMarkSize: CGFloat = 12
+    static let glanceBrandMarkGap: CGFloat = 4
     /// The least space between the switch and the right-hand cluster.  The
     /// popover is wide, so the two only get this close if the cluster grows.
     static let glanceHeaderClusterGap: CGFloat = 16

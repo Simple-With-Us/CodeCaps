@@ -892,7 +892,20 @@ struct GlanceHeaderBar: View {
     }
 
     var body: some View {
+        // Spacing stays ZERO: this row separates its groups with explicit
+        // Spacers, and a non-zero spacing silently added itself to EVERY
+        // implicit gap in a header with eight or more children — about 32pt of
+        // a 570pt popover, which is what pushed the cluster into crowding.
+        // The mark's own gap is on the mark instead.
         HStack(spacing: 0) {
+            // Owner 2026-10-10: "in top left should have the black on
+            // transparent codecaps logo".  The owner's own artwork, drawn as a
+            // template so one file is correct on both appearances.  This is the
+            // Glance popover, not the PiP: the PiP header is gone by the
+            // owner's own request (#193), and the provider logos identify the
+            // HUD there.
+            GlanceBrandMark()
+                .padding(.trailing, Metrics.glanceBrandMarkGap)
             Text("CodeCaps")
                 .font(.system(size: 13, weight: .semibold))
                 .lineLimit(1)
@@ -969,7 +982,45 @@ struct GlanceHeaderBar: View {
     }
 }
 
-/// The two-box switch between From Mac and From Fleet, in Title Case.  The two
+/// The owner's cropped black-on-transparent mark, resolved through the same
+/// bundle the menu bar and PiP use and drawn as a template.  Never re-cut,
+/// re-exported or substituted.
+struct GlanceBrandMark: View {
+    @Environment(\.colorScheme) private var colorScheme
+    static let asset: NSImage? = {
+        guard let url = ResourceBundle.resolved?.url(forResource: "CodeCapsMenuBarIcon", withExtension: "png"),
+              let image = NSImage(contentsOf: url) else { return nil }
+        image.isTemplate = true
+        return image
+    }()
+
+    /// The frame is applied to EACH branch, not to the Group around them.
+    /// A `.resizable()` image proposes its natural size, and the menu-bar
+    /// artwork is 850pt square: under a `.fixedSize` header that leaked ~40pt
+    /// of the 570pt popover's width into a 12pt mark.  Clamping the Group from
+    /// the outside is too late — the ideal width has already been spent.
+    var body: some View {
+        Group {
+            if let image = Self.asset {
+                Image(nsImage: image)
+                    .resizable()
+                    .renderingMode(.template)
+                    .interpolation(.high)
+                    .foregroundStyle(colorScheme == .dark ? Color.white : Theme.ink)
+                    .frame(width: Metrics.glanceBrandMarkSize, height: Metrics.glanceBrandMarkSize)
+            } else {
+                // Only if the owner's artwork is ever missing from the bundle.
+                Image(systemName: "gauge.with.dots.needle.50percent")
+                    .font(.system(size: Metrics.glanceBrandMarkSize))
+                    .foregroundStyle(Theme.accent)
+                    .frame(width: Metrics.glanceBrandMarkSize, height: Metrics.glanceBrandMarkSize)
+            }
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+/// The two-box switch between From Mac and All Sources, in Title Case.  The two
 /// boxes are the same width, so the switch does not change shape as it flips.
 struct GlanceViewToggle: View {
     @Binding var selection: GlanceViewMode
@@ -980,17 +1031,22 @@ struct GlanceViewToggle: View {
     private static let widest = GlanceViewMode.allCases.map(\.title).max { $0.count < $1.count } ?? ""
 
     var body: some View {
+        // Owner 2026-10-10: "the from mac and from fleet should look more like
+        // a toggle than just outline basic shapes and should match in style
+        // more with the open codecaps in bottom right".
+        //
+        // It had a full-height 1pt rule between the boxes and an outline around
+        // the whole pair, which reads as two adjacent rectangles rather than one
+        // control.  It now reads as the footer's prominent button did: a solid
+        // filled selected segment sitting on a track, with the hairline around
+        // the whole thing instead of down the middle.  Same corner radius, same
+        // accent fill, same on-accent ink — one control vocabulary in the window.
         HStack(spacing: 0) {
-            ForEach(Array(GlanceViewMode.allCases.enumerated()), id: \.element) { index, mode in
-                if index > 0 {
-                    Rectangle()
-                        .fill(Theme.controlBorder)
-                        .frame(width: 1, height: Metrics.glanceHeaderControlHeight)
-                }
+            ForEach(Array(GlanceViewMode.allCases.enumerated()), id: \.element) { _, mode in
                 segment(mode)
             }
         }
-        .background(Theme.surface)
+        .background(Theme.controlTrack)
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Theme.controlBorder))
         .fixedSize()
@@ -1008,7 +1064,7 @@ struct GlanceViewToggle: View {
             .font(.system(size: 11, weight: .semibold))
             .lineLimit(1)
             .fixedSize()
-            .foregroundStyle(selected ? Theme.onAccent : .secondary)
+            .foregroundStyle(selected ? Theme.onAccent : Theme.ink.opacity(0.7))
             .padding(.horizontal, Metrics.glanceHeaderSegmentPadding)
             .frame(height: Metrics.glanceHeaderControlHeight)
             .background(selected ? model.accentColor : Color.clear)
@@ -1051,7 +1107,10 @@ struct GlanceAlarmAllToggle: View {
             Text("All")
                 .font(.system(size: 13, weight: .semibold))
         }
-        .foregroundStyle(tint)
+        // Owner 2026-10-10: "the All next to alarm should be black or normal
+        // dark text not accent color".  Ink follows the appearance and the
+        // high-contrast setting; the accent stays where it carries meaning.
+        .foregroundStyle(Theme.ink)
         .frame(height: Metrics.glanceHeaderControlHeight)
         .contentShape(Rectangle())
         .fixedSize()
