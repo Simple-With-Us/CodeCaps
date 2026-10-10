@@ -215,6 +215,66 @@ final class MonitorModel: ObservableObject {
         }
     }
     @Published private(set) var activeRunawayAnomalies: [AnomalyDetector.Anomaly] = []
+
+    // MARK: - Running-out warnings
+
+    /// Whether to warn at all when a quota window is projected to run out before
+    /// its next reset.  Owner 2026-10-10: "Can we please have a warning alert
+    /// pop up … to tell users that they are at high risk of hitting limit for X
+    /// platform within the next ~X minutes?"
+    @Published var exhaustionAlertsEnabled: Bool {
+        didSet {
+            defaults.set(exhaustionAlertsEnabled, forKey: "exhaustionAlertsEnabled")
+            if exhaustionAlertsEnabled && exhaustionPushEnabled {
+                Task { await alarmManager.requestNotificationPermission() }
+            }
+            if !exhaustionAlertsEnabled {
+                // Drop any pending warning state so re-enabling does not fire
+                // for a window that was already at risk when it was switched off.
+                exhaustionWarnings = [:]
+                exhaustionNotifiedAt = [:]
+            }
+        }
+    }
+
+    /// A real popup window naming the platform and its headroom.  The owner
+    /// asked for "literal pop up window option and push notification option" as
+    /// two separately choosable things, so they are two switches rather than
+    /// one.
+    @Published var exhaustionPopupEnabled: Bool {
+        didSet { defaults.set(exhaustionPopupEnabled, forKey: "exhaustionPopupEnabled") }
+    }
+
+    /// A macOS notification: quieter than a window, still says which platform.
+    @Published var exhaustionPushEnabled: Bool {
+        didSet {
+            defaults.set(exhaustionPushEnabled, forKey: "exhaustionPushEnabled")
+            if exhaustionAlertsEnabled && exhaustionPushEnabled {
+                Task { await alarmManager.requestNotificationPermission() }
+            }
+        }
+    }
+
+    /// How far ahead to warn, in minutes.  The owner said "about 5-15min" and
+    /// accepted that it cannot be exact; a shorter horizon is noisier and a
+    /// longer one arrives too late to wind work up.
+    @Published var exhaustionWarningMinutes: Double {
+        didSet { defaults.set(exhaustionWarningMinutes, forKey: "exhaustionWarningMinutes") }
+    }
+
+    /// The current forecast per window, keyed `providerKey|windowId`, and when
+    /// each was last announced so a window cannot re-announce every refresh.
+    @Published private(set) var exhaustionWarnings: [String: QuotaExhaustionForecast] = [:]
+    @Published private(set) var exhaustionNotifiedAt: [String: TimeInterval] = [:]
+
+    /// How long one window stays quiet after it has announced, in seconds.
+    /// A window being drained over an hour would otherwise announce every
+    /// refresh and become exactly the alert the owner learns to dismiss.
+    static let exhaustionCooldown: TimeInterval = 30 * 60
+
+    /// Whether any delivery method is actually selected: turning the master
+    /// switch on with both channels off would look armed and do nothing.
+    var exhaustionDeliveryEnabled: Bool { exhaustionPopupEnabled || exhaustionPushEnabled }
     /// Windows whose baseline is currently invalid because the plan/quota size
     /// changed (automatic discontinuity detection) or the owner noted a change
     /// in Settings text.  The runaway detector stands down for these; the UI
@@ -460,6 +520,16 @@ final class MonitorModel: ObservableObject {
         accent = AccentChoice.current
         highContrast = defaults.bool(forKey: "highContrast")
         burnRateAlertsEnabled = defaults.object(forKey: "burnRateAlertsEnabled") as? Bool ?? false
+        // The running-out warnings default ON, because the whole point is to
+        // catch a quota before it strands a run of work.  Popup is the default
+        // channel because the owner asked for a window first; push is on too so
+        // it is useful without a second trip to Settings, and either can be
+        // switched off independently.
+        exhaustionAlertsEnabled = defaults.object(forKey: "exhaustionAlertsEnabled") as? Bool ?? true
+        exhaustionPopupEnabled = defaults.object(forKey: "exhaustionPopupEnabled") as? Bool ?? true
+        exhaustionPushEnabled = defaults.object(forKey: "exhaustionPushEnabled") as? Bool ?? true
+        exhaustionWarningMinutes = defaults.object(forKey: "exhaustionWarningMinutes") as? Double
+            ?? (QuotaExhaustionForecast.warningHorizon / 60)
         anomalyBaselineMultiplier = defaults.object(forKey: "anomalyBaselineMultiplier") as? Double
             ?? BurnRateMonitor.recommendedBaselineMultiplier
         anomalyPeakMultiplier = defaults.object(forKey: "anomalyPeakMultiplier") as? Double
