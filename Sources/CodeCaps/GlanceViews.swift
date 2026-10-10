@@ -227,6 +227,7 @@ struct GlancePopover: View {
                          isExpanded: expandedIds.contains(key),
                          hasAnomaly: hasAnomaly,
                          pacingHighlights: model.pacingColorHighlights,
+                         isAtRisk: model.platformIsAtRisk(row.providerKey),
                          customInfo: model.platformCustomInfo[row.providerKey],
                          onTap: { toggleExpanded(key) },
                          onToggleAlarm: { model.toggleAlarm(for: row.id) })
@@ -1785,6 +1786,11 @@ struct GlanceRow: View {
     var isExpanded: Bool = false
     var hasAnomaly: Bool = false
     var pacingHighlights: Bool = false
+    /// Owner 2026-10-10: when a window is projected to run out before its next
+    /// reset, the platform name and its subtitle go italic and grey.  Passed in
+    /// rather than looked up so the row stays a plain view.
+    var isAtRisk: Bool = false
+
     /// The owner's per-provider Settings (plan name, cost, renewal, custom
     /// subtitle).  Lets the row show the plan/cost/renewal detail line even
     /// when a custom subtitle is set — the two never swallow each other here.
@@ -1887,6 +1893,10 @@ struct GlanceRow: View {
                 HStack(spacing: 3) {
                     Text(row.poolTitle == nil ? row.title : row.platformTitle)
                         .font(.system(size: 13, weight: .medium))
+                        // Italic and dimmed while the row is heading for its cap,
+                        // so the eye finds it before the numbers do.
+                        .italic(isAtRisk)
+                        .foregroundStyle(isAtRisk ? Theme.ink.opacity(0.45) : Theme.ink)
                         .lineLimit(1)
                         .truncationMode(.tail)
                     if hasAnomaly {
@@ -1899,7 +1909,8 @@ struct GlanceRow: View {
                 if let subtitle = row.poolTitle {
                     Text(subtitle)
                         .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
+                        .italic(isAtRisk)
+                        .foregroundStyle(isAtRisk ? Theme.ink.opacity(0.40) : .secondary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.85)
                         .truncationMode(.tail)

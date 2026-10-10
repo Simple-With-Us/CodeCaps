@@ -71,6 +71,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private let popover = NSPopover()
     private var outsideClickMonitor: Any?
     private var consoleWindow: NSWindow?
+    /// Presents the "this platform is about to run out" window.  Nil until a
+    /// warning actually fires, so the ordinary path pays nothing for it.
+    private var exhaustionPopupController: ExhaustionPopupController?
     private var statusMenu: NSMenu?
     private var subscriptions = Set<AnyCancellable>()
     /// Tells the Glance popover when the elevated console covers it, so its
@@ -169,6 +172,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                 }
             }
         }.store(in: &subscriptions)
+        exhaustionPopupController = ExhaustionPopupController(model: model)
         if model.displayMode != .menuBar && !relaunchedForUpdate { showConsole(page: nil) }
         model.start()
         startInfisicalSync()
@@ -286,6 +290,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             showConsole(page: nil)
         }
         updateStatus()
+    }
+
+    /// Keeps the warning window in step with the model.  Called on every
+    /// publish; the controller is a no-op unless the popup is actually showing.
+    private func updateExhaustionPopup() {
+        exhaustionPopupController?.update(model.exhaustionPopup)
     }
 
     private func updateStatus() {
