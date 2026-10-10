@@ -295,11 +295,24 @@ final class MonitorModel: ObservableObject {
     /// the window is up; dismissed by the owner or by a newer warning.
     struct ExhaustionPopup: Equatable, Identifiable {
         let id = UUID()
+        /// The window key this warning came from, so dismissing it can stamp
+        /// the right cooldown entry rather than guessing.
+        let windowKey: String
         let platformLabel: String
         let headroom: String
         let shownAt: Date
     }
     @Published var exhaustionPopup: ExhaustionPopup?
+
+    /// Close the warning window.  Clears the popup so it does not reappear for
+    /// a warning already shown, and stamps it as announced so the next read
+    /// inside the cooldown stays quiet rather than popping the window back up.
+    func dismissExhaustionPopup() {
+        if let popup = exhaustionPopup {
+            exhaustionNotifiedAt[popup.windowKey] = now.timeIntervalSince1970
+        }
+        exhaustionPopup = nil
+    }
     /// Windows whose baseline is currently invalid because the plan/quota size
     /// changed (automatic discontinuity detection) or the owner noted a change
     /// in Settings text.  The runaway detector stands down for these; the UI
@@ -2271,6 +2284,7 @@ final class MonitorModel: ObservableObject {
             }
             if exhaustionPopupEnabled {
                 exhaustionPopup = ExhaustionPopup(
+                    windowKey: key,
                     platformLabel: label,
                     headroom: headroom,
                     shownAt: now)
