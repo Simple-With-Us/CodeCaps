@@ -1318,6 +1318,100 @@ struct SettingsNotificationsPage: View {
                     Eyebrow("RECENT USAGE HISTORY")
                 }
             }
+            // Owner 2026-10-10: "add the alert options next to each other or in
+            // a table/matrix style, either way."  They were a vertical stack of
+            // independent sections, which made it impossible to see at a glance
+            // which alerts were on.  A grid puts every alert type on its own row
+            // with its switch and its own options beside it.
+            Section {
+                Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 8) {
+                    GridRow {
+                        Text("")
+                            .gridColumnAlignment(.leading)
+                        Text("On")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 34)
+                        Text("Options")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 300, alignment: .leading)
+                    }
+
+                    GridRow {
+                        Text("Reset Alerts")
+                            .font(.system(size: 11, weight: .medium))
+                            .help("Alert when a quota window resets, so you know a new week or month began.")
+                            .frame(width: 130, alignment: .leading)
+                        Toggle("", isOn: $model.alarmsAll)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .help("The same switch as the All bell at the top of the Docked Bar.")
+                            .accessibilityLabel("Reset Alarms For All Providers")
+                        Picker("", selection: $model.alarmSound) {
+                            ForEach(ResetAlarmSound.defaultPickerOrder, id: \.self) { sound in
+                                Text(sound.displayName).tag(sound)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .help("The sound played when a quota window resets. \"Silent\" keeps the banner and drops the sound.")
+                        .accessibilityLabel("Reset alert sound")
+                        .frame(width: 300, alignment: .leading)
+                    }
+
+                    GridRow {
+                        Text("Runaway Usage")
+                            .font(.system(size: 11, weight: .medium))
+                            .help("Alert when quota is being spent far faster than your own recent pattern.")
+                            .frame(width: 130, alignment: .leading)
+                        Toggle("", isOn: $model.burnRateAlertsEnabled)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .accessibilityLabel("Alert on runaway usage")
+                        exhaustionThresholdCell
+                    }
+
+                    GridRow {
+                        Text("Running Out")
+                            .font(.system(size: 11, weight: .medium))
+                            .help("Warn when a quota window is projected to run out before its next reset, so you can wind work up or leave handover notes.")
+                            .frame(width: 130, alignment: .leading)
+                        Toggle("", isOn: $model.exhaustionAlertsEnabled)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .accessibilityLabel("Warn when a quota window is about to run out")
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 10) {
+                                Toggle("Popup Window", isOn: $model.exhaustionPopupEnabled)
+                                    .labelsHidden()
+                                    .toggleStyle(.checkbox)
+                                    .help("Open a window naming the platform and roughly how long is left.")
+                                    .accessibilityLabel("Exhaustion warning popup window")
+                                Toggle("Push Notification", isOn: $model.exhaustionPushEnabled)
+                                    .labelsHidden()
+                                    .toggleStyle(.checkbox)
+                                    .help("Send a notification naming the platform and roughly how long is left.")
+                                    .accessibilityLabel("Exhaustion warning push notification")
+                            }
+                            Text(exhaustionDeliveryDetail)
+                                .font(.system(size: 10))
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(width: 300, alignment: .leading)
+                    }
+                }
+                .padding(.vertical, 2)
+            } header: {
+                Eyebrow("ALERTS")
+            } footer: {
+                Text("Every alert is independent: turn on the ones you want and leave the rest off." + sentenceGap
+                     + "Running Out measures how fast a window is being spent right now and warns before it empties; Runaway Usage compares your current hour against your own recent pattern; Reset Alerts fire when a window resets.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             Section {
                 Toggle("Reset Alarms For All Providers", isOn: $model.alarmsAll)
                     .help("The same switch as the All bell at the top of the Docked Bar.")
@@ -1491,6 +1585,51 @@ struct SettingsNotificationsPage: View {
             await model.alarmManager.refreshNotificationAuthorization()
         }
     }
+    /// The Runaway row's options cell, kept inside the grid so the alert types
+    /// read as rows rather than as separate stacked sections.
+    @ViewBuilder
+    private var exhaustionThresholdCell: some View {
+        if model.burnRateAlertsEnabled {
+            HStack(spacing: 8) {
+                Text(String(format: "%.0f×", model.anomalyBaselineMultiplier))
+                    .font(.system(size: 10).monospacedDigit())
+                Text("vs avg")
+                    .font(.system(size: 10))
+                Text(String(format: "%.0f×", model.anomalyPeakMultiplier))
+                    .font(.system(size: 10).monospacedDigit())
+                Text("vs peak")
+                    .font(.system(size: 10))
+                Button("Details…") { state.page = .runawayAlerts }
+                    .font(.system(size: 10))
+                    .controlSize(.small)
+                    .accessibilityLabel("Open Runaway Usage alert details")
+            }
+            .foregroundStyle(.secondary)
+            .frame(width: 300, alignment: .leading)
+        } else {
+            Text("Off")
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+                .frame(width: 300, alignment: .leading)
+        }
+    }
+
+    /// Says plainly which channels are armed, so a master switch that is on
+    /// with both channels off does not look like it is doing something.
+    private var exhaustionDeliveryDetail: String {
+        let minutes = Int(model.exhaustionWarningMinutes)
+        switch (model.exhaustionPopupEnabled, model.exhaustionPushEnabled) {
+        case (true, true):
+            return "Warns \(minutes) minutes before a window empties, in a popup and a notification."
+        case (true, false):
+            return "Warns \(minutes) minutes before a window empties, in a popup window."
+        case (false, true):
+            return "Warns \(minutes) minutes before a window empties, as a notification."
+        case (false, false):
+            return "No delivery method is selected, so this will not warn."
+        }
+    }
+
 }
 
 /// A group's single commit-and-exercise button.  Prominent while the group is
