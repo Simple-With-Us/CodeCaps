@@ -435,6 +435,19 @@ struct PipWidgetView: View {
         PipWidgetController.targetRows(for: model)
     }
 
+    /// The chosen background, resolved once and passed down.
+    ///
+    /// Fill, ink and mark variant have to agree; resolving them at each call
+    /// site is how a light HUD ends up with white text or a dark mark on white.
+    private var background: PipBackground { model.pipBackground }
+
+    /// The mark style a provider's logo takes on this background.  Same logos as
+    /// the popover (the owner asked for that on 2026-10-10), then adapted to the
+    /// fill so they read on it.
+    private func markStyle(for row: DisplaySection) -> MarkStyle {
+        background.markStyle(for: model.glanceMarkStyle(for: row.providerKey))
+    }
+
     /// The one row the detail view is showing, or nil.
     private var detailRow: DisplaySection? {
         guard let detailRowId else { return nil }
@@ -449,7 +462,7 @@ struct PipWidgetView: View {
         HStack {
             Spacer()
             Capsule()
-                .fill(Theme.solidMark.opacity(0.18))
+                .fill(background.ink.opacity(0.18))
                 .frame(width: 28, height: 3)
             Spacer()
         }
@@ -475,7 +488,7 @@ struct PipWidgetView: View {
         }
         .background {
             RoundedRectangle(cornerRadius: PipMetrics.cornerRadius, style: .continuous)
-                .fill(Theme.groupBand)
+                .fill(background.fill)
                 .overlay {
                     RoundedRectangle(cornerRadius: PipMetrics.cornerRadius, style: .continuous)
                         .fill(model.accentColor.opacity(0.05))
@@ -526,11 +539,11 @@ struct PipWidgetView: View {
                         .renderingMode(.template)
                         .aspectRatio(contentMode: .fit)
                         .frame(width: 15, height: 15)
-                        .foregroundStyle(Theme.solidMark.opacity(0.85))
+                        .foregroundStyle(background.ink.opacity(0.85))
                 } else {
                     Text("CC")
                         .font(.system(size: 10, weight: .bold, design: .rounded))
-                        .foregroundStyle(Theme.solidMark.opacity(0.85))
+                        .foregroundStyle(background.ink.opacity(0.85))
                 }
             }
             .frame(width: 18, height: 18)
@@ -575,7 +588,7 @@ struct PipWidgetView: View {
                 Text("Back")
                     .font(.system(size: 10, weight: .semibold))
             }
-            .foregroundStyle(Theme.solidMark.opacity(0.75))
+            .foregroundStyle(background.ink.opacity(0.75))
             .frame(height: 18)
             .contentShape(Rectangle())
         }
@@ -601,7 +614,7 @@ struct PipWidgetView: View {
                     // Say so, rather than letting a pinned row look absent.
                     Text("\(targetRows.count - max(1, visible)) more pinned — scroll")
                         .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(background.secondaryInk)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.top, 2)
                 }
@@ -611,7 +624,7 @@ struct PipWidgetView: View {
             .padding(.vertical, PipMetrics.bodyVerticalPadding)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(Theme.groupBand)
+        .background(background.fill)
     }
 
     /// One row.  The whole row is the tap target for opening that platform's
@@ -626,14 +639,14 @@ struct PipWidgetView: View {
             if detail.showsProviderLogo {
                 PlatformLogo(providerKey: row.providerKey,
                              size: PipMetrics.providerLogoSize,
-                             style: model.markStyle(for: row.providerKey),
+                             style: markStyle(for: row),
                              iconHint: row.poolKey == nil ? row.section.iconHint : nil)
             }
 
             if detail.showsTitle {
                 Text(row.title)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Theme.solidMark)
+                    .foregroundStyle(background.ink)
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .frame(width: PipMetrics.titleWidth, alignment: .leading)
@@ -667,11 +680,11 @@ struct PipWidgetView: View {
                 HStack(spacing: 6) {
                     PlatformLogo(providerKey: row.providerKey,
                                  size: 16,
-                                 style: model.markStyle(for: row.providerKey),
+                                 style: markStyle(for: row),
                                  iconHint: row.poolKey == nil ? row.section.iconHint : nil)
                     Text(row.title)
                         .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(Theme.solidMark)
+                        .foregroundStyle(background.ink)
                         .lineLimit(1)
                     Spacer(minLength: 0)
                     if row.section.expected, windows.isEmpty {
@@ -690,7 +703,7 @@ struct PipWidgetView: View {
                 if windows.isEmpty {
                     Text("No readings for this platform right now.")
                         .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(background.secondaryInk)
                 }
                 Spacer(minLength: 0)
             }
@@ -698,7 +711,7 @@ struct PipWidgetView: View {
             .padding(.vertical, PipMetrics.bodyVerticalPadding)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(Theme.groupBand)
+        .background(background.fill)
     }
 
     private func detailWindowRow(_ snapshot: QuotaWindowSnapshot, detail: PipMetrics.Detail) -> some View {
@@ -713,21 +726,21 @@ struct PipWidgetView: View {
             HStack(spacing: 5) {
                 Text(cadenceCaption)
                     .font(.system(size: showExpanded ? 10 : 9, weight: showExpanded ? .bold : .bold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(background.secondaryInk)
                     .frame(width: showExpanded ? PipMetrics.cadenceExpandedWidth : PipMetrics.cadenceWidth, alignment: .leading)
                 Text(cleanLabel)
                     .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(Theme.solidMark)
+                    .foregroundStyle(background.ink)
                     .lineLimit(1)
                 Spacer(minLength: 0)
                 Text(remaining.map { "\(Int($0.rounded()))%" } ?? "—")
                     .font(.system(size: 10, weight: .bold, design: .rounded).monospacedDigit())
-                    .foregroundStyle(Theme.solidMark)
+                    .foregroundStyle(background.ink)
                     .fixedSize()
                 if !cd.isEmpty {
                     Text(cd)
                         .font(.system(size: 9).monospacedDigit())
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(background.secondaryInk)
                         .lineLimit(1)
                 }
             }
@@ -753,7 +766,7 @@ struct PipWidgetView: View {
             if detail.showsCadence {
                 Text(cadenceCaption)
                     .font(.system(size: showExpanded ? 10 : 9, weight: showExpanded ? .bold : .bold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(background.secondaryInk)
                     .frame(width: showExpanded ? PipMetrics.cadenceExpandedWidth : PipMetrics.cadenceWidth, alignment: .trailing)
             }
 
@@ -767,7 +780,7 @@ struct PipWidgetView: View {
 
             Text(remaining.map { "\(Int($0.rounded()))%" } ?? "—")
                 .font(.system(size: 10, weight: .bold, design: .rounded).monospacedDigit())
-                .foregroundStyle(Theme.solidMark)
+                .foregroundStyle(background.ink)
                 .lineLimit(1)
                 .fixedSize()
                 .frame(width: PipMetrics.percentWidth, alignment: .leading)
@@ -776,7 +789,7 @@ struct PipWidgetView: View {
             if detail.showsCountdown, !cd.isEmpty {
                 Text(cd)
                     .font(.system(size: 9, weight: .medium).monospacedDigit())
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(background.secondaryInk)
                     .lineLimit(1)
                     .fixedSize()
                     .frame(width: PipMetrics.countdownWidth, alignment: .trailing)

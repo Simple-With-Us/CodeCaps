@@ -107,6 +107,70 @@ enum AccentChoice: String, CaseIterable, Identifiable {
 /// The whole colour vocabulary, in one place, with a dark value for every
 /// token.  A dynamic `NSColor` resolves per appearance, so the SPM target needs
 /// no asset catalog and nothing has to be re-rendered when the theme changes.
+/// What the PiP HUD's own surface is painted with.
+///
+/// Owner request 2026-10-10: "the background of PiP window should be able to be
+/// white if wanted or black with the text white and appropriate logos chosen if
+/// in dark mode.  It can also have color tint like it has though that should be
+/// custom like accent color."
+///
+/// The three live here rather than at each call site because the HUD needs all
+/// three in step: the fill, the ink drawn on it, and which *variant* of each
+/// provider mark reads against it.  A mark chosen for a light fill on a dark one
+/// is the same class of mistake as white text on a light accent.
+enum PipBackground: String, CaseIterable, Identifiable {
+    case white, black, accent
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .white: return "White"
+        case .black: return "Black"
+        case .accent: return "Accent"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .white: return "Light HUD with dark text and brand-colour marks."
+        case .black: return "Dark HUD with light text and silhouette marks."
+        case .accent: return "Tinted toward your accent, with light text."
+        }
+    }
+
+    /// Whether the HUD's content is drawn light-on-dark.  Decides the ink and
+    /// the mark variant together so they cannot disagree.
+    var isDark: Bool { self != .white }
+
+    /// The panel fill.  `accent` tints toward the chosen accent while staying
+    /// dark enough that light ink still clears 4.5:1 -- a full-strength accent
+    /// would not, which is the same failure the accent-fill ink had.
+    var fill: Color {
+        switch self {
+        case .white: return Color(white: 0.98)
+        case .black: return Color(white: 0.07)
+        case .accent: return Theme.accent.opacity(0.22)
+        }
+    }
+
+    /// Ink for text and for CodeCaps' own mark.
+    var ink: Color {
+        isDark ? Color(white: 0.96) : Color(white: 0.10)
+    }
+
+    /// Secondary ink: countdowns and secondary labels.
+    var secondaryInk: Color { ink.opacity(0.62) }
+
+    /// The mark style this background needs.  A dark fill takes a light
+    /// silhouette, a light fill takes the brand-colour mark -- never the
+    /// reverse.
+    func markStyle(for providerStyle: MarkStyle) -> MarkStyle {
+        guard providerStyle != .custom else { return providerStyle }
+        return isDark ? .template : .standard
+    }
+}
+
 enum Theme {
     /// Pure black on light, pure white on dark, when high contrast is on.
     private static var highContrastInk: Color {
@@ -788,7 +852,17 @@ enum QuotaGlanceMetrics {
             isEmpty: !(model.localEnabled || !model.displaySections.isEmpty)
         ) + consentHeight
         let fleet = fleetListHeight(rowsPerGroup: model.fleetGroups.map { $0.rows.count })
-        let total = popoverHeight(forListHeight: max(local, fleet))
+        // Size for the list actually on screen, not the taller of the two.
+        //
+        // `max(local, fleet)` left the popover as tall as From Fleet while
+        // showing From Mac, so any Fleet list taller than the local one left a
+        // block of empty space under the last row (owner, 2026-10-10).  It also
+        // meant switching modes never shrank the window.
+        //
+        // Both lists are still measured, because a mode switch resizes through
+        // the same path and must not have to wait for that view's rows to load.
+        let active: CGFloat = model.glanceView == .fromFleet ? max(local, fleet) : local
+        let total = popoverHeight(forListHeight: active)
         return min(Metrics.glanceMaxHeight(on: screen), max(Metrics.glanceMinHeight, total))
     }
 }
