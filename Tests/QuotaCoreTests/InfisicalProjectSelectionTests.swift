@@ -10,7 +10,7 @@ private actor ProjectSelectionTransport: InfisicalSettings.Transport {
         var environment: String?
     }
     private(set) var requests: [Request] = []
-    var projects: [String: [String]] = ["A": ["dev"], "B": ["dev"]]
+    var projects: [String: [String]] = ["A": ["prod"], "B": ["prod"]]
     var values: [String: String] = ["A": "https://a.example/pull", "B": "https://b.example/pull"]
     var failure: (suffix: String, status: Int)?
     var pause: (suffix: String, project: String)?
@@ -68,7 +68,7 @@ private actor ProjectSelectionTransport: InfisicalSettings.Transport {
 }
 
 private func projectConfiguration(_ project: String) -> InfisicalSettings.Configuration {
-    .init(projectId: project, environment: "dev", clientId: "synthetic-id", clientSecret: "synthetic-secret")
+    .init(projectId: project, environment: "prod", clientId: "synthetic-id", clientSecret: "synthetic-secret")
 }
 
 final class InfisicalProjectSelectionTests: XCTestCase {
@@ -80,12 +80,12 @@ final class InfisicalProjectSelectionTests: XCTestCase {
         XCTAssertEqual(requests.map(\.method), ["POST", "GET", "GET", "GET", "GET"])
         XCTAssertEqual(requests[1].path, "/api/v1/projects/B")
         XCTAssertEqual(requests.dropFirst(2).map(\.project), ["B", "B", "B"])
-        XCTAssertTrue(requests.dropFirst(2).allSatisfy { $0.environment == "dev" && $0.path.contains("/secrets/raw/") })
+        XCTAssertTrue(requests.dropFirst(2).allSatisfy { $0.environment == "prod" && $0.path.contains("/secrets/raw/") })
         XCTAssertEqual(settings.value(for: InfisicalSettings.Keys.pullEndpoint), "https://b.example/pull")
     }
 
     func testMissingProjectOrEnvironmentNeverPersistsCandidate() async throws {
-        for projects in [["A": ["dev"]], ["A": ["dev"], "B": ["prod"]]] {
+        for projects in [["A": ["prod"]], ["A": ["prod"], "B": ["dev"]]] {
             let transport = ProjectSelectionTransport()
             await transport.setProjects(projects)
             let settings = InfisicalSettings(transport: transport)

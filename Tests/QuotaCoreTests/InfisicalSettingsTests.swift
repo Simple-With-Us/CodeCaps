@@ -51,7 +51,7 @@ private func configuredSettings(
     let settings = InfisicalSettings(transport: transport)
     settings.configure(InfisicalSettings.Configuration(
         projectId: "synthetic-project",
-        environment: "dev",
+        environment: "prod",
         clientId: "test-client",
         clientSecret: "test-secret"
     ))
@@ -331,12 +331,39 @@ final class InfisicalSettingsTests: XCTestCase {
         XCTAssertEqual(settings.refreshInterval, InfisicalSettings.minimumRefreshInterval)
     }
 
-    func testDefaultEnvironmentFollowsBuildVariant() {
-        XCTAssertEqual(InfisicalSettings.defaultEnvironment(bundleIdentifier: "com.jays.agent-bar.mac"),
-                       "prod")
-        XCTAssertEqual(InfisicalSettings.defaultEnvironment(bundleIdentifier: "com.jays.agent-bar.mac.dev"),
-                       "dev")
-        XCTAssertEqual(InfisicalSettings.defaultEnvironment(bundleIdentifier: nil), "prod")
+    /// The dev and staging environments are retired (owner, 2026-10-10), so
+    /// every build variant, `.dev` included, reads prod.
+    func testDefaultEnvironmentIsProdForEveryBuild() {
+        XCTAssertEqual(InfisicalSettings.defaultEnvironment(), "prod")
+    }
+
+    func testNonProdEnvironmentIsRefusedBeforeAnyRequest() async throws {
+        for environment in ["dev", "staging", "production", ""] {
+            let transport = MockInfisicalTransport()
+            let settings = InfisicalSettings(transport: transport)
+            settings.configure(InfisicalSettings.Configuration(
+                projectId: "synthetic-project",
+                environment: environment,
+                clientId: "test-client",
+                clientSecret: "test-secret"
+            ))
+            do {
+                try await settings.load()
+                XCTFail("Expected a refusal for environment \"\(environment)\"")
+            } catch InfisicalSettings.SettingsError.invalidDestination {
+            }
+            do {
+                try await settings.validateAndConfigure(InfisicalSettings.Configuration(
+                    projectId: "synthetic-project",
+                    environment: environment,
+                    clientId: "test-client",
+                    clientSecret: "test-secret"
+                ), persist: {})
+                XCTFail("Expected a refusal for environment \"\(environment)\"")
+            } catch InfisicalSettings.SettingsError.invalidDestination {
+            }
+            XCTAssertTrue(transport.calls.isEmpty, "no request may go out for \"\(environment)\"")
+        }
     }
 
     func testClearConfigurationEmptiesCache() async throws {
