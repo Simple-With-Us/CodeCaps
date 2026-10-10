@@ -265,6 +265,21 @@ final class MonitorModel: ObservableObject {
     /// The current forecast per window, keyed `providerKey|windowId`, and when
     /// each was last announced so a window cannot re-announce every refresh.
     @Published private(set) var exhaustionWarnings: [String: QuotaExhaustionForecast] = [:]
+
+    /// The forecast for one window, for the row that draws it.
+    public func exhaustionForecast(providerKey: String, windowId: String) -> QuotaExhaustionForecast? {
+        exhaustionWarnings["\(providerKey)|\(windowId)"]
+    }
+
+    /// Whether a whole platform should be drawn as at risk: any one of its
+    /// windows heading for the cap is enough, which is what the owner asked
+    /// for — the whole row dims, not just one meter.
+    public func platformIsAtRisk(_ providerKey: String) -> Bool {
+        guard exhaustionAlertsEnabled else { return false }
+        return exhaustionWarnings.contains { key, forecast in
+            key.hasPrefix("\(providerKey)|") && forecast.warrantsWarning
+        }
+    }
     @Published private(set) var exhaustionNotifiedAt: [String: TimeInterval] = [:]
 
     /// How long one window stays quiet after it has announced, in seconds.
@@ -275,6 +290,16 @@ final class MonitorModel: ObservableObject {
     /// Whether any delivery method is actually selected: turning the master
     /// switch on with both channels off would look armed and do nothing.
     var exhaustionDeliveryEnabled: Bool { exhaustionPopupEnabled || exhaustionPushEnabled }
+
+    /// What the popup window shows, set when a warning fires.  Non-nil while
+    /// the window is up; dismissed by the owner or by a newer warning.
+    struct ExhaustionPopup: Equatable, Identifiable {
+        let id = UUID()
+        let platformLabel: String
+        let headroom: String
+        let shownAt: Date
+    }
+    @Published var exhaustionPopup: ExhaustionPopup?
     /// Windows whose baseline is currently invalid because the plan/quota size
     /// changed (automatic discontinuity detection) or the owner noted a change
     /// in Settings text.  The runaway detector stands down for these; the UI
@@ -475,6 +500,8 @@ final class MonitorModel: ObservableObject {
     var settingsWriteForTesting: (@MainActor (String, String) async throws -> Void)?
     var pushForTesting: (@MainActor ([QuotaWindow], URL, String?, QuotaSyncFormat) async throws -> QuotaPublishResult)?
     var runawayNotificationForTesting: ((BurnRateNotification) -> Void)?
+    var exhaustionNotificationForTesting: ((String, String) -> Void)?
+    var exhaustionHistoryURLForTesting: URL?
     var skipsSnapshotIOForTesting = false
     private var localWindows: [QuotaWindow] = []
     private var providerResult: LocalQuotaResult?
@@ -2194,7 +2221,74 @@ final class MonitorModel: ObservableObject {
         }
         publishWidgetSnapshot(candidates: merged + split.groups.flatMap(\.windows))
         refreshRunawayUsageState(recordSamples: recordSamples)
+        refreshExhaustionWarnings(windows: merged + split.groups.flatMap(\.windows), now: now)
         alarmManager.evaluate(observations: resetAlarmObservationsForCurrentReadings(), now: now)
+    }
+
+    /// Re-measure every window's headroom from the recorded history and announce
+    /// the ones heading for their cap.
+    ///
+    /// Runs on every read, after the runaway state, so the alert compares against
+    /// the samples this read itself appended.  Announcing is separate from
+    /// measuring: `exhaustionWarnings` is always current so the rows can style
+    /// themselves, while a delivery is only fired when the cooldown has passed,
+    /// because a window draining over an hour would otherwise re-announce on
+    /// every refresh and become the alert its owner learns to dismiss.
+    /// Test seam: the same evaluation the read path runs, without a read.
+    func refreshExhaustionWarningsForTesting(windows: [QuotaWindow], now: Date) {
+        refreshExhaustionWarnings(windows: windows, now: now)
+    }
+
+    private func refreshExhaustionWarnings(windows: [QuotaWindow], now: Date) {
+        guard exhaustionAlertsEnabled else {
+            if !exhaustionWarnings.isEmpty { exhaustionWarnings = [:] }
+            return
+        }
+        let forecasts = exhaustionHistoryURLForTesting.map {
+            QuotaExhaustionForecast.measureAll(samples: windows, now: now, historyURL: $0)
+        } ?? QuotaExhaustionForecast.measureAll(samples: windows, now: now)
+        exhaustionWarnings = forecasts
+
+        let horizon = exhaustionWarningMinutes * 60
+        for (key, forecast) in forecasts {
+            guard forecast.unavailable == nil,
+                  let minutes = forecast.minutesRemaining,
+                  minutes > 0, minutes <= horizon else { continue }
+
+            let last = exhaustionNotifiedAt[key] ?? 0
+            guard now.timeIntervalSince1970 - last >= Self.exhaustionCooldown else { continue }
+            exhaustionNotifiedAt[key] = now.timeIntervalSince1970
+
+            let headroom = forecast.humanizedHeadroom ?? "very soon"
+            let label = exhaustionWarningLabel(for: key, in: windows)
+            if let exhaustionNotificationForTesting {
+                exhaustionNotificationForTesting(label, headroom)
+            } else if exhaustionPushEnabled {
+                alarmManager.deliverExhaustionWarning(
+                    platformLabel: label,
+                    headroom: headroom,
+                    sound: alarmManager.alarmSound)
+            }
+            if exhaustionPopupEnabled {
+                exhaustionPopup = ExhaustionPopup(
+                    platformLabel: label,
+                    headroom: headroom,
+                    shownAt: now)
+            }
+        }
+    }
+
+    /// The human name for the window a warning key refers to, preferring what
+    /// the row itself shows.
+    private func exhaustionWarningLabel(for key: String, in windows: [QuotaWindow]) -> String {
+        let parts = key.split(separator: "|", maxSplits: 1).map(String.init)
+        guard parts.count == 2 else { return parts.first ?? key }
+        let (providerKey, windowId) = (parts[0], parts[1])
+        if let section = displaySections.first(where: { $0.id == providerKey }) {
+            return section.title
+        }
+        return windows.first { $0.canonicalProviderKey == providerKey && $0.id == windowId }?
+            .label ?? providerKey
     }
 
     private func publishWidgetSnapshot(candidates: [QuotaWindow]) {

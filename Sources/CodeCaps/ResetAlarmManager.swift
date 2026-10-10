@@ -439,6 +439,35 @@ public final class ResetAlarmManager: ObservableObject {
     /// Delivers an opt-in runaway-usage alert through the same notification
     /// authorization path and selected sound as reset alerts.  Runaway alerts
     /// have their own identifier and do not consult reset-alarm selection.
+    func deliverExhaustionWarning(platformLabel: String, headroom: String, sound: ResetAlarmSound) {
+        guard Self.canUseUserNotifications else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "Quota Running Low: \(platformLabel)"
+        content.body = "\\(platformLabel) is about \\(headroom) of quota left."
+            + sentenceGap
+            + "Wind up or hand off anything still running against it."
+        content.sound = notificationSound(for: sound)
+        let request = UNNotificationRequest(
+            identifier: "codecaps.exhaustion.\\(platformLabel).\\(Int(Date().timeIntervalSince1970))",
+            content: content, trigger: nil)
+        Task { [weak self] in
+            let center = UNUserNotificationCenter.current()
+            let settings = await center.notificationSettings()
+            if settings.authorizationStatus == .denied {
+                self?.notificationsDenied = true
+                return
+            }
+            if settings.authorizationStatus == .notDetermined {
+                guard await self?.requestNotificationPermission() == true else { return }
+            }
+            do {
+                try await center.add(request)
+            } catch {
+                self?.notificationsDenied = true
+            }
+        }
+    }
+
     func deliverRunawayUsageAlert(_ payload: BurnRateNotification) {
         guard Self.canUseUserNotifications else { return }
         let content = UNMutableNotificationContent()
