@@ -42,7 +42,7 @@ public enum QuotaPublisherError: Error, Equatable, Sendable, LocalizedError {
         case .emptyWindows:
             return "No quota windows to publish."
         case .unauthorized:
-            return "Unauthorized (HTTP 401)." + sentenceGap + "Check your Ingest Token."
+            return "Unauthorized (HTTP 401)." + sentenceGap + "Check your Push Token."
         case let .httpStatus(status, detail):
             if let detail, !detail.isEmpty {
                 return "Server returned HTTP \(status): \(detail)"

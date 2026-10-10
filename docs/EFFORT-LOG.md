@@ -1,5 +1,15 @@
 # CodeCaps — Effort Log
 
+## 2026-10-10 — Push Token and Push Endpoint labels [CLAUDE, in progress]
+
+Lane: `claude/push-read-token-labels`.  Board `62c8f958`.  Owner request in chat: label the Share This Mac credentials "Push Token" and "Push Endpoint" so they read as a pair with "Read Token" and "Quota Endpoint".
+
+- Renamed the user-visible strings only: Push Endpoint and Push Token fields, the Push Token placeholder, Forget Push Token (button, help, accessibility label), the "Push token removed." and "Please provide a valid Push Token." messages, "Save the Push Endpoint before sending.", the HTTP 401 hint "Check your Push Token.", and the Keychain footnote.  README and INFISICAL.md name the new fields.
+- Left alone on purpose, so saved tokens keep working: the Keychain service suffix `sync-token`, `syncEndpoint` and `hasSavedSyncToken` UserDefaults keys, the `x-usage-ingest-token` header, the `/api/ingest/usage` URL, and the "Usage Monitor (v2 Ingest)" payload format name.
+- Verification: `swift build` and `swift test` in the lane; `TokenHygieneTests` asserts the new 401 hint.
+
+---
+
 ## 2026-10-06 — Blue vector SVG for standard and black silhouette SVG for template Muse Code mark [AG, in progress]
 
 Lane: `ag/muse-code-blue-svg-and-black-template`.

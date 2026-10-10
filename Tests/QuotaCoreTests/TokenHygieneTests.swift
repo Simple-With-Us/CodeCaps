@@ -36,7 +36,7 @@ final class TokenHygieneTests: XCTestCase {
         XCTAssertEqual(QuotaClientError.unauthorized.errorDescription,
                        "Unauthorized (HTTP 401)." + sentenceGap + "Check your Read Token.")
         XCTAssertEqual(QuotaPublisherError.unauthorized.errorDescription,
-                       "Unauthorized (HTTP 401)." + sentenceGap + "Check your Ingest Token.")
+                       "Unauthorized (HTTP 401)." + sentenceGap + "Check your Push Token.")
         XCTAssertEqual(sentenceGap, "\u{00A0} ")
     }
 }

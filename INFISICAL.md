@@ -25,7 +25,7 @@ The `prod` environment holds no CodeCaps keys yet: the two non-sensitive default
 **Explicitly out — per-user settings stay in the app's own store:**
 - Every display preference (`displayMode`, `menuBarStyle`, mark styles, `appearance`, `glanceView`, platform order, source ranking, disabled sources, high contrast) → `UserDefaults`.
 - Reset alarms (sound, cadence, message), anomaly multipliers, burn-rate alert toggles → `UserDefaults`.
-- The Read Token and Ingest Token → the Keychain (`TokenStore`), never Infisical.  They are the owner's per-server credentials; the Keychain is their correct home and Infisical only ever sees service URLs.
+- The Read Token and Push Token → the Keychain (`TokenStore`), never Infisical.  They are the owner's per-server credentials; the Keychain is their correct home and Infisical only ever sees service URLs.
 - The Infisical client identity itself (universal-auth client ID + secret + selected Project ID) → the Keychain (`InfisicalIdentityStore`), provisioned once by the owner under Settings → Infisical Sync.  A shipped app cannot embed a client secret, so there is no fallback identity.
 
 **Explicitly out — build-time constants:** `SUFeedURL` / `SUPublicEDKey` (Sparkle, baked into the signed bundle — do not move these), provider API endpoints (`api.anthropic.com`, etc.), bundle identifiers, local credential file paths.
@@ -53,7 +53,7 @@ CodeCaps is a single-user local app: the owner is the only user and therefore th
 
 ## Switching and forgetting a setup
 
-Changing Project ID never carries cached values or status from the previous destination into the new cache.  Existing local endpoint overrides, quota modes, read/ingest tokens, and provider sign-ins remain untouched.  In-flight old reads, writes, and validation cannot install stale cache/status or initiate a follow-up create after a switch or Forget.  An already submitted HTTP write cannot be recalled, but its response cannot affect the new setup.
+Changing Project ID never carries cached values or status from the previous destination into the new cache.  Existing local endpoint overrides, quota modes, read/push tokens, and provider sign-ins remain untouched.  In-flight old reads, writes, and validation cannot install stale cache/status or initiate a follow-up create after a switch or Forget.  An already submitted HTTP write cannot be recalled, but its response cannot affect the new setup.
 
 Forget Setup atomically deletes the single stored identity/destination record.  Legacy two-field records are never loaded.  Keychain failures retain a complete prior three-field setup.  Failed saves and clears restart the prior setup’s refresh cycle.  No credential-file fallback is added.
 

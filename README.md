@@ -131,7 +131,7 @@ Both off by default, configured on Console → Settings → Sources & Fleet.
 
 **Endpoint rules.**  HTTPS required for any host; plain HTTP only for loopback (`localhost`, `127.0.0.1`, `::1`).  A URL with embedded credentials, a query string, or a fragment is rejected.
 
-**Token storage.**  The Ingest Token and Read Token are the only two secrets stored, both in the macOS Keychain, not a config file.
+**Token storage.**  The Push Token and Read Token are the only two secrets stored, both in the macOS Keychain, not a config file.
 
 ## BotFleet Local Handoff
 
@@ -187,7 +187,7 @@ Console's sidebar has five Settings pages.
 
 - **Menu Bar** — where the icon shows (menu bar, Dock, or both), plus its Displayed Quota picker (above).
 - **Platforms** — platform list order, shared by Glance, Console, and the menu bar.
-- **Sources & Fleet** — three groups: **This Mac** (readers on/off, one status row per platform), **Share This Mac** (push: Ingest Endpoint, Ingest Token, Payload Format, Save & Push Now), **Pull The Fleet** (pull: Quota Endpoint, Read Token, Save & Fetch Now).  Both fleet groups also offer Forget Token and, only when a saved token can't be read back, Re-Authorize Saved Token.
+- **Sources & Fleet** — three groups: **This Mac** (readers on/off, one status row per platform), **Share This Mac** (push: Push Endpoint, Push Token, Payload Format, Save & Push Now), **Pull The Fleet** (pull: Quota Endpoint, Read Token, Save & Fetch Now).  Both fleet groups also offer Forget Token and, only when a saved token can't be read back, Re-Authorize Saved Token.
 - **Appearance** — Light, Dark, or System; System follows your Mac's setting and is the default.
 - **About** — version, push/pull/local-reader status, and a project page link.
 
@@ -197,7 +197,7 @@ Console's sidebar has five Settings pages.
 
 - Never asks for a provider API key; each CLI's own credential file, Keychain item, or session database is reused as-is.
 - Nothing leaves this Mac until you turn on push or pull and enter an endpoint yourself; fields are empty by default.
-- The Ingest Token and Read Token are the only two secrets stored, both in the Keychain.
+- The Push Token and Read Token are the only two secrets stored, both in the Keychain.
 - Endpoints are validated as above (HTTPS, loopback-only HTTP, no embedded credentials/query/fragment).
 - The local handoff file carries quota readings only — no tokens, endpoints, or account identifiers.
 
