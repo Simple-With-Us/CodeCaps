@@ -109,6 +109,19 @@ final class PipMetricsTests: XCTestCase {
         }
     }
 
+    /// Kody caught this on #208: the flame beside the logo added width that
+    /// `rowWidth(for:)` did not know about, so it was clipped in the vertical
+    /// list and overflowed the fixed frame in the horizontal strip.
+    func testARowCarryingAFlameIsWiderThanOneWithout() {
+        for level in PipMetrics.Detail.allCases {
+            XCTAssertEqual(
+                PipMetrics.rowWidth(for: level, hasFlame: true) - PipMetrics.rowWidth(for: level),
+                level.showsProviderLogo ? PipMetrics.flameWidth : 0,
+                "\(level) must reserve exactly the flame's width when it draws one")
+        }
+        XCTAssertGreaterThan(PipMetrics.flameWidth, 0, "the flame is not free")
+    }
+
     func testNarrowWindowStillShowsBarAndPercent() {
         // The owner's floor: only the bars and the percentages remain.
         let detail = PipMetrics.detail(forWidth: PipMetrics.minWidth)

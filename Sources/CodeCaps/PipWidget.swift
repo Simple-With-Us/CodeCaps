@@ -168,17 +168,29 @@ enum PipMetrics {
     static let horizontalPeek: CGFloat = 64
 
     /// The width one row needs at a given detail level.
-    static func rowWidth(for detail: Detail) -> CGFloat {
+    ///
+    /// `hasFlame` widens the row when a usage spike puts the flame beside the
+    /// logo.  It has to be part of this and not just an extra padding on the
+    /// row: the same number drives `fitSize` and `applyFit`, so leaving it out
+    /// both clipped the icon in the vertical list and let it overflow the
+    /// fixed frame in the horizontal one.
+    static func rowWidth(for detail: Detail, hasFlame: Bool = false) -> CGFloat {
+        let base: CGFloat
         switch detail {
-        case .full: return fullMinWidth
-        case .noCountdown: return noCountdownMinWidth
-        case .singleMeter: return singleMeterMinWidth
-        case .logoOnly: return logoOnlyMinWidth
-        case .minimal: return minimalMinWidth
-        case .barsOnly: return barsOnlyMinWidth
-        case .singleBar: return singleMeterMinWidth
+        case .full: base = fullMinWidth
+        case .noCountdown: base = noCountdownMinWidth
+        case .singleMeter: base = singleMeterMinWidth
+        case .logoOnly: base = logoOnlyMinWidth
+        case .minimal: base = minimalMinWidth
+        case .barsOnly: base = barsOnlyMinWidth
+        case .singleBar: base = singleMeterMinWidth
         }
+        return hasFlame && detail.showsProviderLogo ? base + flameWidth : base
     }
+
+    /// The flame's own width plus its gap from the logo.  Fixed so the row
+    /// arithmetic above can be exact rather than approximate.
+    static let flameWidth: CGFloat = rowSpacing + 10
 
     /// Whether the panel is wide enough to scroll its rows sideways.
     ///
@@ -463,7 +475,9 @@ struct PipWidgetView: View {
     /// edge, so scrolling never hides which platform you are looking at —
     /// which was the whole point of the owner's request.
     private func horizontalRows(detail: PipMetrics.Detail) -> some View {
-        let rowWidth = PipMetrics.rowWidth(for: detail)
+        // Wide enough for the widest pinned row, including a flame if any row
+        // has one, so no row is clipped by the frame below.
+        let rowWidth = PipMetrics.rowWidth(for: detail, hasFlame: anyRowSpiking)
         return ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: PipMetrics.rowSpacing * 2) {
                 ForEach(targetRows) { row in
@@ -484,6 +498,13 @@ struct PipWidgetView: View {
     /// The whole panel, not just the header: the owner asked for the close
     /// button to appear when the mouse is anywhere over the window.
     @State private var isHovering = false
+
+    /// Whether any pinned row currently shows a usage spike.  One answer for
+    /// the whole strip: rows are a uniform width by design, so one spiking row
+    /// widens them all rather than each row being a different size.
+    private var anyRowSpiking: Bool {
+        targetRows.contains { model.hasActiveRunawayAnomaly(for: $0) }
+    }
 
     private var targetRows: [DisplaySection] {
         PipWidgetController.targetRows(for: model)
