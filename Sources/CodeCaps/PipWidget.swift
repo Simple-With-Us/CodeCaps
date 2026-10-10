@@ -703,12 +703,26 @@ struct PipWidgetView: View {
                 .prefix(detail.maxMeters)
         )
 
+        let spiking = model.hasActiveRunawayAnomaly(for: row)
+
         return HStack(spacing: PipMetrics.rowSpacing) {
             if detail.showsProviderLogo {
                 PlatformLogo(providerKey: row.providerKey,
                              size: PipMetrics.providerLogoSize,
                              style: markStyle(for: row),
                              iconHint: row.poolKey == nil ? row.section.iconHint : nil)
+                // Owner 2026-10-10: "after the platform name (or logo if no
+                // name shown) there should be a little flame for usage spike".
+                // Beside the LOGO rather than after the name, because the name
+                // is the first thing the width ladder drops — at narrow widths
+                // this is the only place the signal can live.
+                if spiking {
+                    Image(systemName: "flame.fill")
+                        .font(.system(size: PipMetrics.providerLogoSize * 0.7))
+                        .foregroundStyle(Theme.warning)
+                        .help("Usage spike detected on this platform")
+                        .accessibilityLabel("Usage spike detected on this platform")
+                }
             }
 
             if detail.showsTitle {

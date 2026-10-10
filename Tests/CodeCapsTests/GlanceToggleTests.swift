@@ -405,7 +405,11 @@ final class GlanceToggleTests: XCTestCase {
         // the gutters, title, switch, bell, enlarged refresh button, and settings button.
         let toggle = NSHostingView(rootView: GlanceViewToggle(selection: .constant(.fromMac), model: model)).fittingSize.width
         let bell = NSHostingView(rootView: GlanceAlarmAllToggle(isOn: .constant(true), model: model)).fittingSize.width
-        let expected = Metrics.glanceGutter * 2 + width("CodeCaps", size: 13, weight: .semibold)
+        // The header also carries the owner's mark at the top-left (owner
+        // 2026-10-10), so its size and gap are part of the budget here too.
+        let expected = Metrics.glanceGutter * 2
+            + Metrics.glanceBrandMarkSize + Metrics.glanceBrandMarkGap
+            + width("CodeCaps", size: 13, weight: .semibold)
             + 8 + toggle + 12 + bell + 12 + 22 + 6 + 22
         XCTAssertEqual(headerIdealWidth(parts: [], model: model), expected, accuracy: 3)
     }
