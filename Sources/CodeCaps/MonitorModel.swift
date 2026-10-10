@@ -613,6 +613,7 @@ final class MonitorModel: ObservableObject {
         disabledSources = Set((defaults.stringArray(forKey: "disabledSources") ?? []))
         localEnabled = defaults.object(forKey: "localEnabled") as? Bool ?? true
         glanceLogosFollowAccent = defaults.bool(forKey: "glanceLogosFollowAccent")
+        pipBackground = PipBackground(rawValue: defaults.string(forKey: "pipBackground") ?? "") ?? .black
         providerChecksEnabled = SourceRefreshPreference.enabled(SourceRefreshPreference.providerEnabled, defaults: defaults)
         sessionFileChecksEnabled = SourceRefreshPreference.enabled(SourceRefreshPreference.sessionEnabled, defaults: defaults)
         providerCheckCadence = SourceRefreshPreference.cadence(SourceRefreshPreference.providerMinutes,
@@ -1384,6 +1385,14 @@ final class MonitorModel: ObservableObject {
         // with the accent" switch: if they picked a style for this platform,
         // that is the answer they gave.
         return glanceLogosFollowAccent ? .template : .standard
+    }
+
+    /// The PiP HUD's own background.  Independent of `appearance` on purpose:
+    /// the HUD floats over whatever the owner is working in, so "follow the app
+    /// theme" would give a light HUD on a dark desktop and vice versa (owner
+    /// request, 2026-10-10).
+    @Published var pipBackground: PipBackground {
+        didSet { defaults.set(pipBackground.rawValue, forKey: "pipBackground") }
     }
 
     /// Whether the Glance popover's provider logos wear the chosen accent.

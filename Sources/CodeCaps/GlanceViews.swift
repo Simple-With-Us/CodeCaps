@@ -1440,12 +1440,25 @@ struct GlanceMeter: View {
 
     private var percent: Double? { snapshot.remainingPercent }
     private var tint: Color { quotaStatusColor(for: snapshot, sourceFailed: false) }
+    /// The slot a reset countdown would occupy.
+    ///
+    /// Muse Assist's extra-token meter has no reset to count down to, and
+    /// spelling "Extra Usage" there made the row wider than every other row and
+    /// read as a broken column (owner, 2026-10-10).  The owner's word is a bold
+    /// lowercase "extra", which is the same width as any other caption and says
+    /// what the meter is; the full explanation stays in the tooltip and the
+    /// spoken value, so nothing is actually lost.
     private var countdown: String {
         if isMuseAssistExtra(snapshot) {
-            return "Extra Usage"
+            return "extra"
         }
         return glanceResetCountdown(snapshot.resetAt, now: now)
     }
+
+    /// The extra meter is a bold lowercase word rather than a countdown, and it
+    /// is a label rather than a time, so it takes the caption's ink rather than
+    /// the dimmed countdown grey.
+    private var isExtraLabel: Bool { isMuseAssistExtra(snapshot) }
     private var metrics: QuotaBarMetrics { QuotaBarMetrics(snapshot: snapshot, now: now) }
 
     var body: some View {
@@ -1486,12 +1499,22 @@ struct GlanceMeter: View {
                 .frame(width: Metrics.glanceMeterPercentWidth, alignment: .trailing)
             if !countdown.isEmpty {
                 Text(countdown)
-                    .font(.system(size: 10, weight: .medium).monospacedDigit())
-                    .foregroundStyle(Theme.ink.opacity(0.75))
+                    .font(isExtraLabel
+                          ? .system(size: 10, weight: .bold)
+                          : .system(size: 10, weight: .medium).monospacedDigit())
+                    // "As dark as the %", which is `Theme.ink` at full strength.
+                    // The countdown's 75% grey is right for a time that is
+                    // secondary information and wrong for a label standing in
+                    // for one (owner, 2026-10-10).
+                    .foregroundStyle(isExtraLabel ? Theme.ink : Theme.ink.opacity(0.75))
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
+                    // Centred in its own column: the owner asked for the
+                    // days/hours/minutes column to be centred, and a
+                    // variable-width value cannot be centred in a trailing
+                    // frame.
                     .frame(width: Metrics.glanceMeterCountdownWidth, alignment: .center)
-                    .help(isMuseAssistExtra(snapshot) ? "Extra token usage" : (glanceResetHelp(snapshot.resetAt, now: now) ?? ""))
+                    .help(isExtraLabel ? "Extra token usage" : (glanceResetHelp(snapshot.resetAt, now: now) ?? ""))
             } else {
                 Color.clear
                     .frame(width: Metrics.glanceMeterCountdownWidth, height: 1)
@@ -1506,7 +1529,7 @@ struct GlanceMeter: View {
     private var spokenValue: String {
         let reading = metrics.spokenSummary
         if isMuseAssistExtra(snapshot) {
-            return "\(reading), Extra Usage"
+            return "\(reading), extra usage"
         }
         if !countdown.isEmpty {
             return "\(reading), resets in \(glanceResetFullCountdown(snapshot.resetAt, now: now))"

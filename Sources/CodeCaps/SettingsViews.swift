@@ -125,6 +125,23 @@ struct SettingsMenuBarPage: View {
 
                 if model.isPipEnabled {
                     VStack(alignment: .leading, spacing: 6) {
+                        // Owner 2026-10-10: the HUD should be able to be white,
+                        // black, or tinted to the accent -- and each choice has to
+                        // bring its own text ink and logo variants with it, which
+                        // is why this is a background rather than a tint slider.
+                        Picker("PiP Background", selection: $model.pipBackground) {
+                            ForEach(PipBackground.allCases) { choice in
+                                Text(choice.title).tag(choice)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .help(model.pipBackground.detail)
+                        .accessibilityLabel("PiP background")
+
+                        Text(model.pipBackground.detail)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+
                         Text("Pinned Quotas (Default: Lowest 2 Remaining)")
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(.secondary)
