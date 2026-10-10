@@ -125,5 +125,14 @@ final class QuotaExhaustionForecastTests: XCTestCase {
         let long = QuotaExhaustionForecast.measure(
             samples: [sample(20, 40), sample(0, 30)], now: now, cadenceToken: "5h")
         XCTAssertEqual(long.humanizedHeadroom, "about 1 hour")
+        // The [10, 12) hour band: truncating the ratio turned this into
+        // "about 0 hours", which is a forecast of imminent doom for a window
+        // with ten hours left.
+        // 2 points over 25 minutes is 0.08/min; 50 left is 625 minutes, 10.4
+        // hours — inside the [10, 12) band that used to render "about 0 hours".
+        let band = QuotaExhaustionForecast.measure(
+            samples: [sample(25, 52), sample(0, 50)], now: now, cadenceToken: "1w")
+        XCTAssertEqual(try XCTUnwrap(band.minutesRemaining) / 60, 10.4, accuracy: 0.1)
+        XCTAssertEqual(band.humanizedHeadroom, "about 12 hours")
     }
 }

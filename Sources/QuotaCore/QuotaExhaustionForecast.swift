@@ -189,7 +189,10 @@ public struct QuotaExhaustionForecast: Equatable, Sendable {
         if minutes < 60 { return "about \(Int(minutes.rounded())) min" }
         let hours = minutes / 60
         if hours < 10 { return "about \(Int(hours.rounded())) hour\(Int(hours.rounded()) == 1 ? "" : "s")" }
-        return "about \(Int(hours.rounded() / 12) * 12) hours"
+        // Round to the NEAREST 12-hour band before truncating.  Truncating the
+        // ratio first turned any headroom in [10, 12) hours into a factor of
+        // zero, so a window with ten hours left announced "about 0 hours".
+        return "about \(Int((hours / 12).rounded()) * 12) hours"
     }
 }
 
