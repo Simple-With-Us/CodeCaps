@@ -1,12 +1,12 @@
 # CodeCaps — Effort Log
 
-## 2026-10-10 — Push Token and Push Endpoint labels [CLAUDE, in progress]
+## 2026-10-10 — Push Token and Push Endpoint labels [CLAUDE, completed, PR #209]
 
-Lane: `claude/push-read-token-labels`.  Board `62c8f958`.  Owner request in chat: label the Share This Mac credentials "Push Token" and "Push Endpoint" so they read as a pair with "Read Token" and "Quota Endpoint".
+Lane: `claude/push-read-token-labels`.  Board `62c8f958`.  PR #209 merged to `main` on 2026-10-10.  Owner request in chat: label the Share This Mac credentials "Push Token" and "Push Endpoint" so they read as a pair with "Read Token" and "Quota Endpoint".
 
 - Renamed the user-visible strings only: Push Endpoint and Push Token fields, the Push Token placeholder, Forget Push Token (button, help, accessibility label), the "Push token removed." and "Please provide a valid Push Token." messages, "Save the Push Endpoint before sending.", the HTTP 401 hint "Check your Push Token.", and the Keychain footnote.  README and INFISICAL.md name the new fields.
 - Left alone on purpose, so saved tokens keep working: the Keychain service suffix `sync-token`, `syncEndpoint` and `hasSavedSyncToken` UserDefaults keys, the `x-usage-ingest-token` header, the `/api/ingest/usage` URL, and the "Usage Monitor (v2 Ingest)" payload format name.
-- Verification: `swift build` and `swift test` in the lane; `TokenHygieneTests` asserts the new 401 hint.
+- Verification: `swift build` and `swift test` in the lane (395 tests, 0 failures); `TokenHygieneTests` asserts the new 401 hint.  Installed the merged build (Developer ID, build 183) to `~/Applications/CodeCaps.app` and read the Sources & Fleet page through System Events: Push Endpoint, Push Token, Read Token, the Push Token footnote, and the Forget Push Token and Save & Push Now buttons all show the new text, and the saved Keychain tokens still read as "Saved in Keychain".
 
 ---
 
