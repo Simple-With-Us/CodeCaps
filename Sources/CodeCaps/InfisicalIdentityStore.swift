@@ -9,7 +9,7 @@ import QuotaCore
 /// it from the binary — so there is no fallback identity and no default.
 /// The owner pastes his own machine identity's client ID and secret once,
 /// under Settings → Infisical Sync, and they live in his Keychain from then
-/// on, exactly like the read and ingest tokens `TokenStore` already keeps.
+/// on, exactly like the read and push tokens `TokenStore` already keeps.
 /// `InfisicalSettings` itself only ever holds them in memory.
 ///
 /// Every Keychain call goes through `calls`, so tests inject a fake and never

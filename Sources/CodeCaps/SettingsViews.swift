@@ -671,12 +671,12 @@ private struct ReauthorizeCaption: View {
                     pushEnabled = newValue
                     if !newValue { model.disableSync() }
                 }))
-            TextField("Ingest Endpoint", text: $syncEndpoint,
+            TextField("Push Endpoint", text: $syncEndpoint,
                       prompt: Text("https://usage.example.com/api/ingest/usage"))
                 .disabled(!pushEnabled)
                 .onSubmit(savePush)
-            SecureField("Ingest Token", text: $syncToken,
-                        prompt: Text(model.hasSavedSyncToken ? "Saved in Keychain" : "Ingest Token"))
+            SecureField("Push Token", text: $syncToken,
+                        prompt: Text(model.hasSavedSyncToken ? "Saved in Keychain" : "Push Token"))
                 .disabled(!pushEnabled)
                 .onSubmit(savePush)
             Picker("Payload Format", selection: $syncFormat) {
@@ -704,21 +704,21 @@ private struct ReauthorizeCaption: View {
                     .accessibilityLabel("Re-Authorize Saved Token")
                 }
                 if model.hasSavedSyncToken {
-                    Button("Forget Ingest Token", role: .destructive) {
+                    Button("Forget Push Token", role: .destructive) {
                         Task {
                             do {
                                 try await model.forgetSyncServer()
                                 syncToken = ""
                                 pushSucceeded = true
-                                pushMessage = "Ingest token removed."
+                                pushMessage = "Push token removed."
                             } catch {
                                 pushSucceeded = false
                                 pushMessage = error.localizedDescription
                             }
                         }
                     }
-                    .help("Forget Ingest Token")
-                    .accessibilityLabel("Forget Ingest Token")
+                    .help("Forget Push Token")
+                    .accessibilityLabel("Forget Push Token")
                 }
                 Spacer()
                 if pushing { ProgressView().controlSize(.small) }
@@ -755,7 +755,7 @@ private struct ReauthorizeCaption: View {
                 }
             }
         } footer: {
-            Text("The Ingest Token is stored in your Keychain, never in a preference file.")
+            Text("The Push Token is stored in your Keychain, never in a preference file.")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1677,7 +1677,7 @@ struct CommitButton: View {
 /// CodeCaps is a single-user local app, so the owner IS the admin and the gate
 /// is a no-op by design — this page is only reachable on his own Mac.  The
 /// client identity is his own universal-auth machine identity, stored in his
-/// Keychain like the read and ingest tokens already are; it is never embedded
+/// Keychain like the read and push tokens already are; it is never embedded
 /// in the app and never leaves the machine.  The iOS companion cannot hold a
 /// client secret, so it stays out of Infisical entirely and keeps reading
 /// through its existing quota API — the Mac app owns the Infisical read.

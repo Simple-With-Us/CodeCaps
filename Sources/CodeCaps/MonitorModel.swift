@@ -422,7 +422,7 @@ final class MonitorModel: ObservableObject {
     @Published private(set) var syncEndpoint: String
     @Published private(set) var syncFormat: QuotaSyncFormat
     @Published private(set) var hasSavedSyncToken: Bool
-    /// The same, for the Ingest Token.
+    /// The same, for the Push Token.
     @Published private(set) var syncTokenState: SavedTokenState = .none
     @Published private(set) var lastSyncTime: Date?
     @Published private(set) var lastSyncStatus: String?
@@ -1837,7 +1837,7 @@ final class MonitorModel: ObservableObject {
             return (false, "Invalid endpoint URL." + sentenceGap + "Use HTTPS, or HTTP for localhost only.")
         }
         guard targetEndpoint == syncEndpoint else {
-            return (false, "Save the Ingest Endpoint before sending.")
+            return (false, "Save the Push Endpoint before sending.")
         }
         let generation = pushRevision
         let targetFormat = inputFormat ?? syncFormat
@@ -1871,7 +1871,7 @@ final class MonitorModel: ObservableObject {
             return (false, "Push cancelled because sharing was disabled or its settings changed.")
         }
         guard let token = resolvedToken, !token.isEmpty else {
-            return (false, "Please provide a valid Ingest Token.")
+            return (false, "Please provide a valid Push Token.")
         }
         switch await pushQuotasIfEnabled(windows: windowsToPush,
                                          endpointOverride: targetEndpoint,

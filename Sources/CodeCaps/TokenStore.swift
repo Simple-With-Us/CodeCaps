@@ -27,7 +27,7 @@ enum TokenStore {
     static let readService = serviceName(suffix: "read-token")
     static let syncService = serviceName(suffix: "sync-token")
 
-    /// The two service names this build owns: its Read Token and its Ingest
+    /// The two service names this build owns: its Read Token and its Push
     /// Token.  A `.dev` build's names differ from the release app's, so neither
     /// can reach the other's items.
     static var ownServices: Set<String> { [readService, syncService] }
