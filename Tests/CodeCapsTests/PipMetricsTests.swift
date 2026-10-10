@@ -73,6 +73,42 @@ final class PipMetricsTests: XCTestCase {
         }
     }
 
+    /// Owner 2026-10-10: "once it gets to where it is in the screenshot or
+    /// actually 80-100 pixels wider than that so that it could still have
+    /// platform logos at the left … we could make it scroll left to right like
+    /// it now does up and down."
+    ///
+    /// The threshold is derived from the row's own width at the detail level in
+    /// force rather than hardcoded to his 80-100 figure, because that figure is
+    /// only meaningful while the bar metrics behind it hold. The derived value
+    /// lands in his range: the squeeze point is about 222pt, and this is
+    /// roughly 90pt past it.
+    func testRowsScrollSidewaysOnlyWhenOneFullRowAndAPeekFit() {
+        let detail = PipMetrics.Detail.noCountdown
+        let rowWidth = PipMetrics.rowWidth(for: detail)
+        let threshold = PipMetrics.padding * 2 + rowWidth + PipMetrics.horizontalPeek
+
+        XCTAssertFalse(PipMetrics.rowsScrollHorizontally(forWidth: threshold - 1, detail: detail),
+                       "one point short of a full row plus a peek stays vertical")
+        XCTAssertTrue(PipMetrics.rowsScrollHorizontally(forWidth: threshold, detail: detail))
+
+        // The switch point must sit in the owner's stated band, or the feature
+        // is not the thing he asked for.
+        let squeezePoint = PipMetrics.padding * 2 + PipMetrics.logoOnlyMinWidth
+        let past = threshold - squeezePoint
+        XCTAssertGreaterThanOrEqual(past, 60, "switching at \(past)pt past the squeeze point is too eager")
+        XCTAssertLessThanOrEqual(past, 140, "…and \(past)pt is too late to feel responsive")
+
+        // Every detail level agrees with itself: the row always fits.
+        for level in PipMetrics.Detail.allCases {
+            let needed = PipMetrics.padding * 2 + PipMetrics.rowWidth(for: level) + PipMetrics.horizontalPeek
+            XCTAssertTrue(PipMetrics.rowsScrollHorizontally(forWidth: needed, detail: level),
+                          "\(level) must be able to reach its own horizontal layout")
+            XCTAssertFalse(PipMetrics.rowsScrollHorizontally(forWidth: needed - 1, detail: level),
+                           "\(level) must not switch before its own row fits")
+        }
+    }
+
     func testNarrowWindowStillShowsBarAndPercent() {
         // The owner's floor: only the bars and the percentages remain.
         let detail = PipMetrics.detail(forWidth: PipMetrics.minWidth)
