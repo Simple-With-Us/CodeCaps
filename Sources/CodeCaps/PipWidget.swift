@@ -160,6 +160,41 @@ enum PipMetrics {
         }
     }
 
+    // MARK: Horizontal rows
+
+    /// How much of the NEXT row must be visible for a horizontal strip to be
+    /// worth switching to.  Less than this and the owner sees a full row and a
+    /// sliver, which reads as a clipped row rather than as "there is more".
+    static let horizontalPeek: CGFloat = 64
+
+    /// The width one row needs at a given detail level.
+    static func rowWidth(for detail: Detail) -> CGFloat {
+        switch detail {
+        case .full: return fullMinWidth
+        case .noCountdown: return noCountdownMinWidth
+        case .singleMeter: return singleMeterMinWidth
+        case .logoOnly: return logoOnlyMinWidth
+        case .minimal: return minimalMinWidth
+        case .barsOnly: return barsOnlyMinWidth
+        case .singleBar: return singleMeterMinWidth
+        }
+    }
+
+    /// Whether the panel is wide enough to scroll its rows sideways.
+    ///
+    /// Owner 2026-10-10: "once it gets to where it is in the screenshot or
+    /// actually 80-100 pixels wider than that so that it could still have
+    /// platform logos at the left … we could make it scroll left to right like
+    /// it now does up and down."
+    ///
+    /// Derived rather than hardcoded to his 80-100 figure, because the number
+    /// that matters is the row's own width at the detail level in force, which
+    /// moves when any bar metric changes.  The result lands in his range: the
+    /// squeeze point is around 222pt, and this is roughly 90pt past it.
+    static func rowsScrollHorizontally(forWidth width: CGFloat, detail: Detail) -> Bool {
+        width >= padding * 2 + rowWidth(for: detail) + horizontalPeek
+    }
+
     /// How many rows fit in `height` without clipping, never fewer than one.
     static func visibleRowCount(total: Int, height: CGFloat) -> Int {
         guard total > 0 else { return 0 }
@@ -424,6 +459,25 @@ struct WindowDragView: NSViewRepresentable {
 /// The SwiftUI view for the floating PiP HUD widget.
 struct PipWidgetView: View {
     @ObservedObject var model: MonitorModel
+    /// The same rows laid end to end.  Every row keeps its logo at its own left
+    /// edge, so scrolling never hides which platform you are looking at —
+    /// which was the whole point of the owner's request.
+    private func horizontalRows(detail: PipMetrics.Detail) -> some View {
+        let rowWidth = PipMetrics.rowWidth(for: detail)
+        return ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: PipMetrics.rowSpacing * 2) {
+                ForEach(targetRows) { row in
+                    pipRow(row, detail: detail)
+                        .frame(width: rowWidth, alignment: .leading)
+                }
+            }
+            .padding(.horizontal, PipMetrics.padding)
+            .padding(.vertical, PipMetrics.bodyVerticalPadding)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Theme.groupBand)
+    }
+
     /// The row whose platform detail is open, if the owner clicked one.  `nil`
     /// is the normal all-rows HUD.
     @State private var detailRowId: String?
@@ -466,7 +520,7 @@ struct PipWidgetView: View {
                     if let detailRow {
                         detailPanel(detailRow, detail: detail)
                     } else {
-                        rowsPanel(detail: detail, height: geo.size.height)
+                        rowsPanel(detail: detail, height: geo.size.height, width: geo.size.width)
                     }
                 }
                 floatingControl
@@ -588,11 +642,25 @@ struct PipWidgetView: View {
 
     /// The rows panel: every pinned row, or the ones that fit, or the lot
     /// scrolled if the owner has made the window shorter than its content.
-    private func rowsPanel(detail: PipMetrics.Detail, height: CGFloat) -> some View {
+    @ViewBuilder
+    private func rowsPanel(detail: PipMetrics.Detail, height: CGFloat, width: CGFloat) -> some View {
         let visible = PipMetrics.visibleRowCount(total: targetRows.count, height: height)
         let overflows = visible < targetRows.count
 
-        return ScrollView(.vertical, showsIndicators: false) {
+        // Wide enough for one full row and a peek of the next: the rows become
+        // a horizontal strip, each keeping its own logo at its left edge, which
+        // is what the owner asked for.  The detail level is computed from the
+        // panel width first, so the row width the strip needs is the width the
+        // row actually wants — the two cannot disagree.
+        if PipMetrics.rowsScrollHorizontally(forWidth: width, detail: detail) {
+            horizontalRows(detail: detail)
+        } else {
+            verticalRows(detail: detail, visible: visible, overflows: overflows)
+        }
+    }
+
+    private func verticalRows(detail: PipMetrics.Detail, visible: Int, overflows: Bool) -> some View {
+        ScrollView(.vertical, showsIndicators: false) {
             VStack(spacing: 0) {
                 ForEach(Array(targetRows.prefix(max(1, visible)))) { row in
                     pipRow(row, detail: detail)
