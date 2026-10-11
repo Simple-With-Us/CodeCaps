@@ -70,6 +70,17 @@ jobs:
             brew install xcodegen
           fi
 
+      - name: Load Sentry ship secrets (Infisical, then repository secrets)
+        uses: ./.github/actions/infisical-secrets
+        with:
+          names: SENTRY_DSN SENTRY_AUTH_TOKEN
+          project-id: ${{ secrets.INFISICAL_PROJECT_ID }}
+          client-id: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID || secrets.INFISICAL_CLIENT_ID }}
+          client-secret: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET || secrets.INFISICAL_CLIENT_SECRET }}
+        env:
+          GH_FALLBACK_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          GH_FALLBACK_SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+
       - name: Import signing + ASC key
         run: |
           if [ -z "${ASC_KEY_ID:-}" ]; then

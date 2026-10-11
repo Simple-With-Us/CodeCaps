@@ -91,6 +91,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Start Sentry before anything else that can crash.  Missing DSN is a
+        // no-op, so a local or CI build without secrets stays inert.
+        SentryTelemetry.start()
         // Read before anything can open a window: the launch Sparkle performs
         // after installing an update stays in the background.
         let relaunchedForUpdate = UpdateRelaunchMarker().consume()

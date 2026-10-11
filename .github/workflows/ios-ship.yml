@@ -12,6 +12,9 @@ name: iOS TestFlight ship (GitHub-hosted macOS)
 #
 # Marketing train is 0.1.N; build is UTC YYYYMMDDHHMM.
 # Bundle `com.simplewithus.codecaps.ios` and team `CC8UTF7ATG`.
+# SENTRY_DSN and SENTRY_AUTH_TOKEN are best-effort: an inert Sentry beats a
+# red TestFlight ship.  Infisical prod first, same-named GitHub secrets as
+# fallback.  Values are never printed.
 
 on:
   push:
@@ -93,6 +96,18 @@ jobs:
           else
             brew install xcodegen
           fi
+
+      - name: Load Sentry ship secrets (Infisical, then repository secrets)
+        if: steps.gate.outputs.should_ship == '1'
+        uses: ./.github/actions/infisical-secrets
+        with:
+          names: SENTRY_DSN SENTRY_AUTH_TOKEN
+          project-id: ${{ secrets.INFISICAL_PROJECT_ID }}
+          client-id: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID || secrets.INFISICAL_CLIENT_ID }}
+          client-secret: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET || secrets.INFISICAL_CLIENT_SECRET }}
+        env:
+          GH_FALLBACK_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          GH_FALLBACK_SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
 
       - name: Import signing + ASC key
         if: steps.gate.outputs.should_ship == '1'

@@ -595,6 +595,8 @@ build_and_stage() {
   <string>$MIN_SYSTEM_VERSION</string>
   <key>NSPrincipalClass</key>
   <string>NSApplication</string>
+  <key>SENTRY_DSN</key>
+  <string>${SENTRY_DSN:-}</string>
 $(sparkle_plist_entries)
 </dict>
 </plist>
