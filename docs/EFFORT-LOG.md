@@ -1,5 +1,8 @@
 # CodeCaps — Effort Log
 
+> **ARCHIVED Sun, Oct 11, 2026.**  Linear is the system of record: team AFC, https://linear.app/simple-with-us/team/AFC.
+> This file is read-only history.  Do not edit it or add rows.  See EFFORT-LOG-PROTOCOL.md.
+
 ## 2026-10-10 — Push Token and Push Endpoint labels [CLAUDE, completed, PR #209]
 
 Lane: `claude/push-read-token-labels`.  Board `62c8f958`.  PR #209 merged to `main` on 2026-10-10.  Owner request in chat: label the Share This Mac credentials "Push Token" and "Push Endpoint" so they read as a pair with "Read Token" and "Quota Endpoint".
