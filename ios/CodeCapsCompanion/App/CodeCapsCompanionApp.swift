@@ -42,6 +42,10 @@ struct CodeCapsCompanionApp: App {
 
     @StateObject private var model = CompanionQuotaModel()
 
+    init() {
+        SentryTelemetry.start()
+    }
+
     var body: some Scene {
         WindowGroup {
             CompanionContentView(model: model)

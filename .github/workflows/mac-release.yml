@@ -75,13 +75,15 @@ jobs:
         if: github.event_name != 'pull_request'
         uses: ./.github/actions/infisical-secrets
         with:
-          names: MAC_CERT_P12_BASE64 MAC_CERT_PASSWORD
+          names: MAC_CERT_P12_BASE64 MAC_CERT_PASSWORD SENTRY_DSN SENTRY_AUTH_TOKEN
           project-id: ${{ secrets.INFISICAL_PROJECT_ID }}
           client-id: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID || secrets.INFISICAL_CLIENT_ID }}
           client-secret: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET || secrets.INFISICAL_CLIENT_SECRET }}
         env:
           GH_FALLBACK_MAC_CERT_P12_BASE64: ${{ secrets.MAC_CERT_P12_BASE64 }}
           GH_FALLBACK_MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+          GH_FALLBACK_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          GH_FALLBACK_SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
 
       - name: Decide whether this run can publish
         id: gate
@@ -158,6 +160,28 @@ jobs:
           NOTARY_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           NOTARY_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
         run: script/build_and_run.sh --release
+
+      - name: Upload Sentry debug files
+        if: steps.gate.outputs.publish == 'true'
+        run: |
+          set -euo pipefail
+          if [ -z "${SENTRY_AUTH_TOKEN:-}" ]; then
+            echo "::notice::SENTRY_AUTH_TOKEN unset; skipping dSYM upload"
+            exit 0
+          fi
+          if ! command -v sentry-cli >/dev/null 2>&1; then
+            curl -sL https://sentry.io/get-cli/ | SENTRY_CLI_VERSION="" bash >/dev/null 2>&1 || true
+            export PATH="${HOME}/.sentry-cli:${PATH}:/opt/homebrew/bin"
+          fi
+          if ! command -v sentry-cli >/dev/null 2>&1; then
+            echo "::warning::sentry-cli missing; skipping dSYM upload"
+            exit 0
+          fi
+          echo "sentry: uploading debug files for project=codecaps (token length ${#SENTRY_AUTH_TOKEN})"
+          if ! SENTRY_ORG=simple-with-us SENTRY_PROJECT=codecaps \
+            sentry-cli debug-files upload --include-sources .build dist/CodeCaps.app; then
+            echo "::warning::sentry debug-files upload failed; release continues"
+          fi
 
       - name: Name the release
         if: steps.gate.outputs.publish == 'true'

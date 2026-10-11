@@ -30,6 +30,8 @@ The `prod` environment holds no CodeCaps keys yet: the two non-sensitive default
 
 **Explicitly out — build-time constants:** `SUFeedURL` / `SUPublicEDKey` (Sparkle, baked into the signed bundle — do not move these), provider API endpoints (`api.anthropic.com`, etc.), bundle identifiers, local credential file paths.
 
+**Build-time CI secrets (Infisical prod, not runtime app keys):** `SENTRY_DSN` and `SENTRY_AUTH_TOKEN` live in the CodeCaps Infisical project for TestFlight / Sparkle ship jobs.  The Mac and iOS apps never fetch them at runtime; `InfisicalSettings` does not grow a fourth named read.  Ship workflows load them through `.github/actions/infisical-secrets` (GitHub repository secrets of the same name as fallback) and inject `SENTRY_DSN` into the archive as an xcodebuild / Info.plist build setting.  `SentryTelemetry` skips init when the value is empty.  `SENTRY_AUTH_TOKEN` is used only by `sentry-cli` on the runner for dSYM / Size Analysis upload (org `simple-with-us`, project `codecaps`).  `SENTRY_FLEET_DSN` is a GitHub repository secret for `.github/workflows/sentry-ci-report.yml` (fleet-infra), not an Infisical app key.
+
 **iOS companion:** the companion cannot safely hold a client secret, so it never talks to Infisical.  The Mac app owns the Infisical read; the companion keeps reading quota data through its existing API (`https://usage.jays.services/api/quota-windows` with its read token).  No companion code changed for this rollout.
 
 ## The Runtime Contract

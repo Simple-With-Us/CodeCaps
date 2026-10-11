@@ -200,6 +200,7 @@ sentry_project_for_app() {
     autorotate|autorotate-mac) echo "autorotate" ;;
     contactlogo|contactlogo-mac) echo "contactlogo" ;;
     botfleet|botfleet-mac) echo "botfleet" ;;
+    codecaps|codecaps-mac) echo "codecaps" ;;
     MiniMax) echo "" ;;
     *) echo "" ;;
   esac
