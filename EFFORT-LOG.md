@@ -1,5 +1,8 @@
 # CodeCaps — Effort Log
 
+> **ARCHIVED Sun, Oct 11, 2026.**  Linear is the system of record: team AFC, https://linear.app/simple-with-us/team/AFC.
+> This file is read-only history.  Do not edit it or add rows.  See EFFORT-LOG-PROTOCOL.md.
+
 ## 2026-10-06 — Infisical three-field setup [dot, draft validation pending]
 
 - Lane: `dot/infisical-project-selector`.  Owner-approved task-note reservation because the board app picker omits CodeCaps; no board claim exists.
