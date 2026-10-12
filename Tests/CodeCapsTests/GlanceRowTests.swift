@@ -174,23 +174,21 @@ final class GlanceExpandedLineTests: XCTestCase {
         ])
         let lines = glanceExpandedLines(for: claude, now: now)
         XCTAssertEqual(lines.count, 1)
-        XCTAssertEqual(lines.first?.label, "Sonnet")
+        XCTAssertEqual(lines.first?.label, "7-day")
         XCTAssertNil(lines.first?.short, "the first column stays empty")
         XCTAssertEqual(lines.first?.long?.window.id, "seven_day_sonnet")
     }
 
     func testLineLabelsSayWhatTheWindowMeasures() {
-        func label(_ label: String, model: String? = nil) -> String {
-            glanceLineLabel(QuotaWindowSnapshot(window: window("x", label: label, token: nil, model: model), now: now))
+        func label(_ label: String, model: String? = nil, token: String? = nil) -> String {
+            glanceLineLabel(QuotaWindowSnapshot(window: window("x", label: label, token: token, model: model), now: now))
         }
-        XCTAssertEqual(label("video (1d window)", model: "video"), "Video")
-        XCTAssertEqual(label("video (1d window)"), "Video")
-        XCTAssertEqual(label("7-day window (Sonnet)"), "Sonnet")
-        XCTAssertEqual(label("5h window (gpt-5-codex)", model: "gpt-5-codex"), "gpt-5-codex")
-        XCTAssertEqual(label("Kimi Code (5h)"), "Kimi Code")
-        XCTAssertEqual(label("Third-Party Models · Weekly"), "Third-Party")
-        XCTAssertEqual(label("7d window"), "Overall")
-        XCTAssertEqual(label("Included plan"), "Included plan")
+        XCTAssertEqual(label("video (1d window)", model: "video", token: "1d"), QuotaWindowVocabulary.otherLimit)
+        XCTAssertEqual(label("7-day window (Sonnet)", token: "7d"), "7-day")
+        XCTAssertEqual(label("5h window (gpt-5-codex)", model: "gpt-5-codex", token: "5h"), "5-hour")
+        XCTAssertEqual(label("Third-Party Models · Weekly", token: "7d"), "7-day")
+        XCTAssertEqual(label("7d window", token: "7d"), "7-day")
+        XCTAssertEqual(label("Included plan", token: "1m"), QuotaWindowVocabulary.oneMonth)
     }
 
     /// A Claude row whose own two meters are the healthiest-to-worst pair, plus
@@ -219,14 +217,16 @@ final class GlanceExpandedLineTests: XCTestCase {
         // 5h is short; 1d and 7d are long.  The weekly must not land in the
         // first column just because it is the third window.
         let lines = glanceExpandedLines(for: claudeWithOpus(["5h", "1d", "7d"]), now: now)
-        XCTAssertEqual(lines.map(\.label), ["Opus", "Opus"])
-        XCTAssertEqual(ids(lines[0]), ["opus:5h", "opus:1d"])
-        XCTAssertEqual(ids(lines[1]), [nil, "opus:7d"], "the weekly sits under the weekly meter")
+        XCTAssertEqual(lines.map(\.label), ["5-hour", QuotaWindowVocabulary.otherLimit, "7-day"])
+        XCTAssertEqual(ids(lines[0]), ["opus:5h", nil])
+        XCTAssertEqual(ids(lines[1]), [nil, "opus:1d"])
+        XCTAssertEqual(ids(lines[2]), [nil, "opus:7d"], "the weekly sits under the weekly meter")
     }
 
     func testTwoExtraWindowsStillShareOneLine() {
-        let lines = glanceExpandedLines(for: claudeWithOpus(["1d", "7d"]), now: now)
-        XCTAssertEqual(lines.map(ids), [["opus:1d", "opus:7d"]], "MiniMax's video 1d and 1w read as a pair")
+        let lines = glanceExpandedLines(for: claudeWithOpus(["1d", "3d"]), now: now)
+        XCTAssertEqual(lines.map(ids), [["opus:1d", "opus:3d"]],
+                       "two windows of the same cadence still share one line")
     }
 
     func testAGroupOfOneCadenceIsPairedInOrderAndALeftoverSitsInItsCadenceColumn() {
@@ -263,7 +263,7 @@ final class GlanceExpandedLineTests: XCTestCase {
             claude("b:sonnet", source: "claude-cli", token: "7d", remaining: 90, resetIn: 3 * 86_400,
                    model: "sonnet", label: "7d window (Sonnet)"),
         ])
-        XCTAssertEqual(glanceExpandedLines(for: withSonnet, now: now).map(\.label), ["Sonnet"],
+        XCTAssertEqual(glanceExpandedLines(for: withSonnet, now: now).map(\.label), ["7-day"],
                        "a window the row does not show still gets its line")
     }
 
@@ -642,7 +642,7 @@ final class GlanceMeterTests: XCTestCase {
                                 resetIn: 3 * 86_400)
         XCTAssertEqual(glanceDrawableWindows([overall, sonnet]).map(\.window.id), ["7d", "7d-sonnet"])
         let lines = glanceExpandedLines(for: makeRow([fiveHour, overall, sonnet]), now: now)
-        XCTAssertEqual(lines.map(\.label), ["Sonnet"], "the unavailable model keeps its line under the row")
+        XCTAssertEqual(lines.map(\.label), ["7-day"], "the unavailable model keeps its line under the row")
         XCTAssertEqual(lines.first?.long?.window.id, "7d-sonnet")
     }
 
