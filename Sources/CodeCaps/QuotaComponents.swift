@@ -1026,7 +1026,10 @@ struct PlatformCard: View {
 
     @ViewBuilder
     private var windowsBody: some View {
-        if displayedWindows.count > 1 {
+        if let atCap = row.atCapWindow, row.isAtCap {
+            GlanceAtCap(snapshot: atCap, now: now, spansFullMeterRow: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else if displayedWindows.count > 1 {
             HStack(alignment: .top, spacing: 16) {
                 ForEach(displayedWindows, id: \.window.id) { snapshot in
                     QuotaRow(snapshot: snapshot, now: now, sourceFailed: issue != nil, compact: compact,

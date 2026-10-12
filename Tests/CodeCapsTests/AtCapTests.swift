@@ -113,14 +113,13 @@ final class AtCapTests: XCTestCase {
         XCTAssertEqual(row.atCapWindow?.window.id, "weekly")
     }
 
-    func testTheSoonestResetIsTheOneQuoted() {
-        // With two windows spent, the one that frees the plan first is the one
-        // that answers "when can I work again".
+    func testTheLatestResetIsTheOneQuoted() {
+        // With two windows spent, the binding cap is the one that resets last.
         let row = makeRow([
             makeWindow(id: "a", label: "Weekly", token: "168h", remaining: 0, resetIn: 5 * day),
             makeWindow(id: "b", label: "5h window", token: "5h", remaining: 0, resetIn: 2 * hour),
         ])
-        XCTAssertEqual(row.atCapWindow?.window.id, "b")
+        XCTAssertEqual(row.atCapWindow?.window.id, "a")
     }
 
     func testAPlanWithHeadroomEverywhereIsNotCapped() {
@@ -172,7 +171,7 @@ final class AtCapTests: XCTestCase {
         let row = cappedClaudeRow()
         let atCap = row.atCapWindow!
         let spoken = GlanceAtCap(snapshot: atCap, now: now).spokenDescription
-        XCTAssertTrue(spoken.hasPrefix("At cap"), "got \(spoken)")
+        XCTAssertTrue(spoken.contains("Weekly Cap"), "got \(spoken)")
         XCTAssertTrue(spoken.contains("1d 21h"), "the reset of the spent window is quoted: \(spoken)")
         XCTAssertFalse(spoken.contains("100"), "the headroom of the other window is not what this row is about: \(spoken)")
     }
@@ -180,10 +179,16 @@ final class AtCapTests: XCTestCase {
     func testTheCappedRowWithNoResetStillSaysSo() {
         let atCap = makeWindow(id: "w", label: "Weekly", remaining: 0, resetIn: nil)
         let spoken = GlanceAtCap(snapshot: atCap, now: now).spokenDescription
-        XCTAssertEqual(spoken, "At cap, quota exhausted")
+        XCTAssertEqual(spoken, "Weekly Cap, quota exhausted")
     }
 
-    func testTheLabelIsTheOwnersWording() {
-        XCTAssertEqual(GlanceAtCap.label, "At Cap")
+    func testAtCapWindowTitleForFiveHour() {
+        let atCap = makeWindow(id: "session", label: "5h window", token: "5h", remaining: 0, resetIn: hour)
+        XCTAssertEqual(glanceAtCapWindowTitle(atCap), "5 Hour Cap")
+    }
+
+    func testAtCapWindowTitleForWeekly() {
+        let atCap = makeWindow(id: "weekly", label: "7d window", token: "168h", remaining: 0, resetIn: day)
+        XCTAssertEqual(glanceAtCapWindowTitle(atCap), "Weekly Cap")
     }
 }

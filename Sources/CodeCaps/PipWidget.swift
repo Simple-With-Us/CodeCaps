@@ -870,32 +870,34 @@ struct PipWidgetView: View {
     /// how long until the plan is usable again.  Sized like the meter it
     /// replaces so a capped row does not resize the strip.
     private func pipAtCap(_ snapshot: QuotaWindowSnapshot, detail: PipMetrics.Detail) -> some View {
+        let cap = GlanceAtCap(snapshot: snapshot, now: model.now)
         let cd = glanceResetCountdown(snapshot.resetAt, now: model.now)
+        let title = glanceAtCapWindowTitle(snapshot)
         let showCountdown = detail.showsCountdown && !cd.isEmpty
-        return HStack(spacing: PipMetrics.meterSpacing) {
-            // The cadence column is left out rather than filled with a second
-            // "At Cap": the cap is the whole message, and two of them read as a
-            // mistake.  The reset countdown keeps its own column, so the words
-            // still land where the other rows put them.
-            Text(GlanceAtCap.label)
-                .font(.system(size: 10, weight: .bold, design: .rounded))
-                .foregroundStyle(Theme.danger)
-                .lineLimit(1)
-                .fixedSize()
-                .frame(width: PipMetrics.cadenceWidth + PipMetrics.barMinWidth, alignment: .leading)
-            if showCountdown {
-                Text(cd)
-                    .font(.system(size: 9, weight: .medium).monospacedDigit())
+        return VStack(alignment: .leading, spacing: 1) {
+            if showCountdown && !cd.isEmpty {
+                Text("\(title) · Resets In \(cd)")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .foregroundStyle(background.ink)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.8)
+            } else {
+                Text(title)
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .foregroundStyle(Theme.danger)
+                    .lineLimit(1)
+            }
+            let exact = glanceResetExactTime(snapshot.resetAt, now: model.now)
+            if !exact.isEmpty {
+                Text(exact)
+                    .font(.system(size: 9, weight: .medium))
                     .foregroundStyle(background.secondaryInk)
                     .lineLimit(1)
-                    .fixedSize()
-                    .frame(width: PipMetrics.percentWidth, alignment: .leading)
             }
         }
-        .help(snapshot.resetAt.map { "Resets \(glanceResetCountdown($0, now: model.now))" }
-              ?? "At cap")
+        .help(snapshot.resetAt.map { glanceResetHelp($0, now: model.now) ?? "At cap" } ?? "At cap")
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(GlanceAtCap(snapshot: snapshot, now: model.now).spokenDescription)
+        .accessibilityLabel(cap.spokenDescription)
     }
 
     private func pipMeter(_ snapshot: QuotaWindowSnapshot, detail: PipMetrics.Detail) -> some View {

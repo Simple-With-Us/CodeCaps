@@ -472,8 +472,8 @@ public struct QuotaPlatformSection: Equatable, Sendable {
     /// subscription, and a window with no reading reports no cap at all.  A
     /// plan whose only windows are skipped is not treated as capped.
     ///
-    /// When several windows are spent, the one that frees the plan soonest is
-    /// the one that answers "when can I work again", so the soonest reset wins.
+    /// When several windows are spent, the one that resets last is the binding
+    /// limit — the plan stays capped until that window recovers.
     ///
     /// Masked windows — a real number that must not be believed, which only the
     /// Antigravity pool grouper knows about — are filtered by the caller, in
@@ -482,7 +482,7 @@ public struct QuotaPlatformSection: Equatable, Sendable {
         windows
             .filter { !$0.window.isSupplementaryVideoQuota && $0.remainingPercent != nil }
             .filter(\.isAtCap)
-            .min { ($0.resetAt ?? .distantFuture) < ($1.resetAt ?? .distantFuture) }
+            .max { ($0.resetAt ?? .distantPast) < ($1.resetAt ?? .distantPast) }
     }
 
     /// Whether this plan is at its cap on any window it reports honestly.

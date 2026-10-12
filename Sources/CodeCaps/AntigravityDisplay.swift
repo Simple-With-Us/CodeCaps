@@ -105,7 +105,7 @@ struct DisplaySection: Identifiable, Equatable {
             .filter { !$0.window.isSupplementaryVideoQuota && !isMasked($0) }
             .filter { $0.remainingPercent != nil }
             .filter(\.isAtCap)
-            .min { ($0.resetAt ?? .distantFuture) < ($1.resetAt ?? .distantFuture) }
+            .max { ($0.resetAt ?? .distantPast) < ($1.resetAt ?? .distantPast) }
     }
 
     /// Whether this row is at its cap, so every surface can ask the same

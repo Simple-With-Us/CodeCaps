@@ -89,12 +89,12 @@ final class AtCapWindowTests: XCTestCase {
         XCTAssertEqual(subject.atCapWindow()?.window.id, "weekly")
     }
 
-    func testTheSoonestSpentResetIsReported() {
+    func testTheLatestSpentResetIsReported() {
         let subject = section([
             snapshot(id: "weekly", token: "168h", remaining: 0, resetIn: 5 * day),
             snapshot(id: "session", token: "5h", remaining: 0, resetIn: 3 * hour),
         ])
-        XCTAssertEqual(subject.atCapWindow()?.window.id, "session")
+        XCTAssertEqual(subject.atCapWindow()?.window.id, "weekly")
     }
 
     func testASpentWindowWithNoResetSortsLast() {
