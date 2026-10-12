@@ -44,36 +44,42 @@ public struct CompanionContentView: View {
             }
             #if os(iOS)
             .scrollBounceBehavior(.always, axes: .vertical)
-            #endif
-            .navigationTitle("CodeCaps")
-            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(.visible, for: .navigationBar)
             #endif
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    fleetStatusToolbarContent
+                }
                 #if os(iOS)
-                ToolbarItem(placement: .topBarLeading) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
                     Button {
                         showingSettings = true
                     } label: {
                         Image(systemName: "arrow.up.arrow.down")
                     }
                     .accessibilityLabel("Customize Platform Order")
-                }
-                ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         showingSettings = true
                     } label: {
                         Image(systemName: "gearshape")
                     }
-                    .accessibilityLabel("Settings")
+                    .accessibilityLabel("Sort & Sync")
                 }
                 #else
-                ToolbarItem(placement: .primaryAction) {
+                ToolbarItemGroup(placement: .primaryAction) {
+                    Button {
+                        showingSettings = true
+                    } label: {
+                        Image(systemName: "arrow.up.arrow.down")
+                    }
+                    .accessibilityLabel("Customize Platform Order")
                     Button {
                         showingSettings = true
                     } label: {
                         Image(systemName: "gearshape")
                     }
+                    .accessibilityLabel("Sort & Sync")
                 }
                 #endif
             }
@@ -114,41 +120,53 @@ public struct CompanionContentView: View {
         #endif
     }
 
-    // MARK: - Header Card
+    // MARK: - Fleet status (pinned navigation bar)
 
-    private var headerCard: some View {
-        VStack(spacing: 10) {
-            Picker("Source scope", selection: $model.sourceScope) {
-                ForEach(CompanionSourceScope.allCases) { scope in
-                    Text(scope.rawValue).tag(scope)
-                }
-            }
-            .pickerStyle(.segmented)
-
-            HStack(spacing: 12) {
+    private var fleetStatusToolbarContent: some View {
+        HStack(spacing: 8) {
             Image("codecaps-mark")
                 .resizable()
                 .renderingMode(.template)
                 .aspectRatio(contentMode: .fit)
-                .frame(width: 32, height: 32)
+                .frame(width: 26, height: 26)
                 .foregroundStyle(.primary)
+                .accessibilityHidden(true)
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text("FLEET STATUS")
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Fleet Status")
                     .font(.caption2.weight(.bold))
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
                 Text("\(model.items.count) Platforms Monitored")
-                    .font(.headline)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
             }
-            Spacer()
+
+            Spacer(minLength: 4)
+
             if let updated = model.lastUpdated {
                 Text(updated.formatted(date: .omitted, time: .shortened))
-                    .font(.caption)
+                    .font(.caption2)
                     .italic()
                     .foregroundStyle(.secondary)
-            }
+                    .lineLimit(1)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Fleet Status, \(model.items.count) platforms monitored")
+    }
+
+    // MARK: - Source scope
+
+    private var headerCard: some View {
+        Picker("Source scope", selection: $model.sourceScope) {
+            ForEach(CompanionSourceScope.allCases) { scope in
+                Text(scope.rawValue).tag(scope)
+            }
+        }
+        .pickerStyle(.segmented)
         .padding(14)
         .background(cardBackground, in: RoundedRectangle(cornerRadius: 12))
     }
@@ -209,7 +227,7 @@ public struct CompanionContentView: View {
                     }
                     .buttonStyle(.borderedProminent)
 
-                    Button("Companion Settings") {
+                    Button("Sort & Sync") {
                         showingSettings = true
                     }
                     .buttonStyle(.bordered)
@@ -684,7 +702,7 @@ public struct CompanionContentView: View {
             #if os(iOS)
             .environment(\.editMode, $platformOrderEditMode)
             #endif
-            .navigationTitle("Companion Settings")
+            .navigationTitle("Sort & Sync")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif

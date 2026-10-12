@@ -300,6 +300,35 @@ final class CompanionModelTests: XCTestCase {
         XCTAssertTrue(source.contains("group.com.simplewithus.codecaps"))
     }
 
+    func testMainScreenFleetStatusLivesInNavigationBar() throws {
+        let source = try readCompanionContentViewSource()
+        XCTAssertFalse(
+            source.contains(".navigationTitle(\"CodeCaps\")"),
+            "main screen must not repeat the CodeCaps product title"
+        )
+        XCTAssertTrue(
+            source.contains("fleetStatusToolbarContent"),
+            "fleet status must be a toolbar item so it stays pinned while scrolling"
+        )
+        XCTAssertTrue(
+            source.contains("ToolbarItem(placement: .principal)"),
+            "fleet status belongs in the navigation bar title area"
+        )
+        XCTAssertFalse(
+            source.contains("Text(\"FLEET STATUS\")"),
+            "fleet status label should use title case in the navigation bar"
+        )
+        XCTAssertTrue(
+            source.contains("ToolbarItemGroup(placement: .topBarTrailing)"),
+            "reorder and settings controls must share the trailing edge"
+        )
+        XCTAssertTrue(
+            source.contains("navigationTitle(\"Sort & Sync\")"),
+            "settings sheet title must describe platform order and sync, not \"Companion\""
+        )
+        XCTAssertFalse(source.contains("Companion Settings"))
+    }
+
     func testPullToRefreshAndButtonResponsiveness() throws {
         let source = try readCompanionContentViewSource()
         XCTAssertTrue(
