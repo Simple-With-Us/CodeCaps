@@ -323,10 +323,20 @@ final class CompanionModelTests: XCTestCase {
             "reorder and settings controls must share the trailing edge"
         )
         XCTAssertTrue(
-            source.contains("navigationTitle(\"Sort & Sync\")"),
-            "settings sheet title must describe platform order and sync, not \"Companion\""
+            source.contains("navigationTitle(\"Settings\")"),
+            "settings sheet must use the Settings title for both toolbar entry points"
+        )
+        XCTAssertTrue(
+            source.contains(".presentationDetents([.large])"),
+            "settings sheet must open at large height, not a short bottom drawer"
         )
         XCTAssertFalse(source.contains("Companion Settings"))
+        XCTAssertFalse(source.contains("navigationTitle(\"Sort & Sync\")"))
+        XCTAssertFalse(
+            source.contains("ToolbarItem(placement: .navigationBarLeading)") && source.contains("codecaps-mark")
+                && source.contains("navigationTitle(\"Settings\")"),
+            "settings sheet must not show a faux-button logo beside the Settings title"
+        )
     }
 
     func testPullToRefreshAndButtonResponsiveness() throws {

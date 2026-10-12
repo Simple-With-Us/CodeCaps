@@ -757,7 +757,7 @@ public final class CompanionQuotaModel: ObservableObject {
                 } else {
                     let status = (response as? HTTPURLResponse)?.statusCode
                     failure = "The sync endpoint answered \(status.map(String.init) ?? "unexpectedly")." + sentenceGap
-                        + "Check the endpoint and token in Sort & Sync."
+                        + "Check the endpoint and token in Settings."
                 }
             } catch {
                 guard requestedRevision == syncConfigurationRevision,

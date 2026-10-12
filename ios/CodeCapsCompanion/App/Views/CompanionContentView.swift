@@ -64,7 +64,7 @@ public struct CompanionContentView: View {
                     } label: {
                         Image(systemName: "gearshape")
                     }
-                    .accessibilityLabel("Sort & Sync")
+                    .accessibilityLabel("Settings")
                 }
                 #else
                 ToolbarItemGroup(placement: .primaryAction) {
@@ -79,7 +79,7 @@ public struct CompanionContentView: View {
                     } label: {
                         Image(systemName: "gearshape")
                     }
-                    .accessibilityLabel("Sort & Sync")
+                    .accessibilityLabel("Settings")
                 }
                 #endif
             }
@@ -94,7 +94,7 @@ public struct CompanionContentView: View {
             .sheet(isPresented: $showingSettings) {
                 #if os(iOS)
                 companionSettingsView
-                    .presentationDetents([.medium, .large])
+                    .presentationDetents([.large])
                 #else
                 companionSettingsView
                 #endif
@@ -227,7 +227,7 @@ public struct CompanionContentView: View {
                     }
                     .buttonStyle(.borderedProminent)
 
-                    Button("Sort & Sync") {
+                    Button("Settings") {
                         showingSettings = true
                     }
                     .buttonStyle(.bordered)
@@ -702,7 +702,7 @@ public struct CompanionContentView: View {
             #if os(iOS)
             .environment(\.editMode, $platformOrderEditMode)
             #endif
-            .navigationTitle("Sort & Sync")
+            .navigationTitle("Settings")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
@@ -720,14 +720,6 @@ public struct CompanionContentView: View {
             }
             .toolbar {
                 #if os(iOS)
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Image("codecaps-mark")
-                        .resizable()
-                        .renderingMode(.template)
-                        .aspectRatio(contentMode: .fit)
-                        .frame(width: 22, height: 22)
-                        .foregroundStyle(.primary)
-                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { showingSettings = false }
                 }
