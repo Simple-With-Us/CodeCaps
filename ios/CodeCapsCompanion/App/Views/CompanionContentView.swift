@@ -646,7 +646,7 @@ public struct CompanionContentView: View {
                     Text("Data Sources & Mirrors")
                 } footer: {
                     Text("CodeCaps monitors primary and mirror feeds for each platform." + sentenceGap
-                         + "In All Sources, when a card lists two or more feeds reported within 30 minutes that disagree by 10 points or more, a warning appears on the card (hostnames are ignored). Otherwise the newest reading is shown and older feeds are marked Stale here.")
+                         + "In All Sources, when a card lists two or more feeds reported within 20 minutes that disagree by 10 points or more, a warning appears on the card (hostnames are ignored). Otherwise the newest reading is shown and older feeds are marked Stale here.")
                 }
                 .id("dataSourcesMirrorsSection")
                 .accessibilityIdentifier("dataSourcesMirrorsSection")
