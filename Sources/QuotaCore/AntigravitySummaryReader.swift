@@ -37,7 +37,7 @@ public struct AntigravitySummaryReader: Sendable {
                     guard let bucketID = bucket["bucketId"] as? String, let period = period(bucket) else { continue }
                     let fraction = finiteNumber(bucket["remainingFraction"]).flatMap { $0 >= 0 && $0 <= 1 ? $0 : nil }
                     let reset = bucket["resetTime"] as? String
-                    let label = "\(family) · \(period == "5h" ? "5-hour" : "Weekly")"
+                    let label = "\(family) · \(period == "5h" ? QuotaWindowVocabulary.fiveHour : QuotaWindowVocabulary.sevenDay)"
                     windows.append(QuotaWindow(id: "local-mac:antigravity-summary:\(bucketID)", provider: "Antigravity", providerKey: "google-antigravity", providerLabel: "Antigravity", via: "antigravity", sourceApp: "local-mac", label: label, remainingPercent: fraction.map { $0 * 100 }, remainingUnknown: fraction == nil, resetAt: reset, window: period, occurredAt: iso8601(observed), source: "Antigravity quota summary"))
                 }
             }

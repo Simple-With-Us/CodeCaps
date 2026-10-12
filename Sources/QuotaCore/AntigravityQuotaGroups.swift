@@ -31,7 +31,7 @@ public enum AntigravityQuotaGroups {
                 // No single model id survives the pooling, but the pool itself
                 // is the family a consumer can route on, so publish it.
                 value.modelType = family
-                value.label = "\(title) · \(period == "5h" ? "5-hour" : "Weekly")"
+                value.label = "\(title) · \(period == "5h" ? QuotaWindowVocabulary.fiveHour : QuotaWindowVocabulary.sevenDay)"
                 value.window = period
                 // Model-specific units cannot establish a shared absolute cap.
                 value.absoluteRemaining = nil

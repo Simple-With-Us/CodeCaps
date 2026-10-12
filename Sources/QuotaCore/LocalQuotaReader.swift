@@ -493,15 +493,41 @@ private func parseClaude(_ root: [String: Any], planType: String?, observedAt: D
         let utilization = firstNumber(value, ["utilization", "utilization_percent", "utilizationPercent", "used_percent", "usedPercent"])
         let direct = firstNumber(value, ["remaining_percent", "remainingPercent"])
         guard utilization != nil || direct != nil else { continue }
-        var base = key; var model: String?
-        for suffix in suffixes where key.hasSuffix("_\(suffix)") { model = suffix; base = String(key.dropLast(suffix.count + 1)); break }
-        guard let token = claudeToken(base) ?? claudeToken(key) else { continue }
+        var base = key
+        var model: String?
+        for suffix in suffixes where key.hasSuffix("_\(suffix)") {
+            model = suffix
+            base = String(key.dropLast(suffix.count + 1))
+            break
+        }
+        let resetAt = firstTimestamp(value, ["resets_at", "resetsAt", "reset_at", "resetAt"])
+        let resetDate = resetAt.flatMap(parseDate)
         let remaining = direct.map(percentage) ?? utilization.map { 100 - min(100, max(0, $0)) }
-        let title = model.map { "\($0.prefix(1).uppercased())\($0.dropFirst())" }
-        // The rate-limit key's suffix names the model family, not one model id,
-        // so it is the family a consumer can route on.  Keys with no suffix
-        // cover the whole subscription and leave the family empty.
-        result.append(window(provider: .claude, id: key, label: title == nil ? "\(token) window" : "\(token) window (\(title!))", remaining: remaining, resetAt: firstTimestamp(value, ["resets_at", "resetsAt", "reset_at", "resetAt"]), windowToken: token, modelId: model, modelType: model, planName: planType, observedAt: observedAt))
+        let token = claudeToken(base) ?? claudeToken(key)
+        let cadence = QuotaWindowVocabulary.standardCadence(
+            windowToken: token,
+            label: key,
+            resetAt: resetDate,
+            periodStart: nil
+        )
+        let label = QuotaWindowVocabulary.windowLabel(
+            windowToken: token,
+            existingLabel: cadence,
+            resetAt: resetDate,
+            periodStart: nil
+        )
+        result.append(window(
+            provider: .claude,
+            id: key,
+            label: label,
+            remaining: remaining,
+            resetAt: resetAt,
+            windowToken: token,
+            modelId: model,
+            modelType: model,
+            planName: planType,
+            observedAt: observedAt
+        ))
     }
     return result.sorted { $0.id < $1.id }
 }
@@ -525,8 +551,26 @@ private func parseCodex(_ root: [String: Any], planType: String?, accountKey: St
         let token = windowToken(seconds: firstNumber(value, ["limit_window_seconds", "limitWindowSeconds", "window_seconds"])) ?? firstNumber(value, ["window_minutes", "windowMinutes"]).flatMap { windowToken(seconds: $0 * 60) }
         let reset = firstTimestamp(value, ["resets_at", "resetsAt", "reset_at", "resetAt"]) ?? firstNumber(value, ["reset_after_seconds", "resetAfterSeconds", "resets_in_seconds"]).flatMap { seconds in seconds >= 0 && seconds.isFinite && seconds <= 31_536_000 ? isoFormatter.string(from: observedAt.addingTimeInterval(seconds)) : nil }
         let remaining = direct.map(percentage) ?? used.map { 100 - min(100, max(0, $0)) }
-        let suffix = modelId.map { " (\($0))" } ?? ""
-        result.append(window(provider: .codex, id: slot, label: token.map { "\($0) window\(suffix)" } ?? "\(slot.capitalized) window\(suffix)", remaining: remaining, resetAt: reset, windowToken: token, modelId: modelId, planName: planType, accountKey: accountKey, observedAt: observedAt))
+        let resetDate = reset.flatMap(parseDate)
+        let isAdditional = slot.lowercased().contains("additional")
+            || (modelId?.lowercased().contains("additional") == true)
+        let label = if isAdditional {
+            QuotaWindowVocabulary.windowLabel(windowToken: token, existingLabel: QuotaWindowVocabulary.otherLimit, resetAt: resetDate, periodStart: nil)
+        } else {
+            QuotaWindowVocabulary.windowLabel(windowToken: token, existingLabel: slot, resetAt: resetDate, periodStart: nil)
+        }
+        result.append(window(
+            provider: .codex,
+            id: slot,
+            label: label,
+            remaining: remaining,
+            resetAt: reset,
+            windowToken: token,
+            modelId: modelId,
+            planName: planType,
+            accountKey: accountKey,
+            observedAt: observedAt
+        ))
     }
     for (slot, names) in [("primary", ["primary_window", "primaryWindow", "primary"]), ("secondary", ["secondary_window", "secondaryWindow", "secondary"])] {
         var raw: Any?

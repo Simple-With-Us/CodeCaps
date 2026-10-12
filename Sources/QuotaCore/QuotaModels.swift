@@ -249,6 +249,17 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
         }
         copy.skip = skip || copy.isExhausted
         copy.skipReason = skipReason ?? (copy.isExhausted ? "quota exhausted" : nil)
+        let monthlyHint = copy.canonicalProviderKey == "cursor"
+            && copy.label.lowercased().contains("plan")
+        if let rewritten = QuotaWindowVocabulary.sanitizeLabelIfNeeded(
+            copy.label,
+            windowToken: copy.window,
+            resetAt: copy.resetDate,
+            periodStart: copy.periodStartDate,
+            monthlyHint: monthlyHint
+        ) {
+            copy.label = rewritten
+        }
         return copy
     }
 }
