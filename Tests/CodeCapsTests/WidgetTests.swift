@@ -71,6 +71,14 @@ final class WidgetTests: XCTestCase {
         XCTAssertTrue(macAppEntitlements.contains("com.apple.security.network.client"))
     }
 
+    func testWidgetPresentationUsesSharedPlatformDisplayTitles() throws {
+        let source = try readSource(at: Self.widgetPresentationURL)
+        XCTAssertTrue(
+            source.contains("WidgetPlatformDisplay.title"),
+            "Widget parsing must resolve canonical platform display names, not raw provider ids"
+        )
+    }
+
     func testProjectYmlDeclaresWidgetTargets() throws {
         let yml = try readSource(at: Self.projectYmlURL)
         XCTAssertTrue(
@@ -130,6 +138,19 @@ final class WidgetTests: XCTestCase {
         XCTAssertEqual(formatCountdown(resetAt: future2d, now: now), "2d 3h")
         XCTAssertEqual(formatCountdown(resetAt: past, now: now), "due")
         XCTAssertEqual(formatCountdown(resetAt: nil, now: now), "")
+    }
+
+    func testWidgetParserResolvesCanonicalPlatformTitles() {
+        XCTAssertEqual(
+            WidgetPlatformDisplay.title(canonicalKey: "cursor", manifestProviderLabel: "cursor", wireProvider: "cursor"),
+            "Cursor"
+        )
+        XCTAssertFalse(
+            WidgetPlatformDisplay.isRawProviderSlug(
+                WidgetPlatformDisplay.title(canonicalKey: "cursor", manifestProviderLabel: "cursor", wireProvider: "cursor"),
+                canonicalKey: "cursor"
+            )
+        )
     }
 
     func testWirePayloadParsing() throws {

@@ -741,9 +741,19 @@ public enum WidgetPresentation {
                canonicalManifestKey(provider: $0.provider, via: $0.via) == legacy.key
            }) {
             let label = group.providerLabel.trimmingCharacters(in: .whitespacesAndNewlines)
-            return (legacy.key, label.isEmpty ? legacy.title : label, legacy.providerKey)
+            let title = WidgetPlatformDisplay.title(
+                canonicalKey: legacy.key,
+                manifestProviderLabel: label.isEmpty ? nil : label,
+                wireProvider: raw.provider
+            )
+            return (legacy.key, title, legacy.providerKey)
         }
-        return legacy
+        let title = WidgetPlatformDisplay.title(
+            canonicalKey: legacy.key,
+            manifestProviderLabel: legacy.title,
+            wireProvider: raw.provider
+        )
+        return (legacy.key, title, legacy.providerKey)
     }
 
     /// The pre-manifest hardcoded mapping.  Kept as the offline fallback and
@@ -781,7 +791,9 @@ public enum WidgetPresentation {
             return ("xai", "Grok", "xai")
         }
         let fallbackKey = (raw.providerKey ?? raw.provider).trimmingCharacters(in: .whitespacesAndNewlines)
-        return (fallbackKey.isEmpty ? "other" : fallbackKey, raw.provider, fallbackKey)
+        let key = fallbackKey.isEmpty ? "other" : fallbackKey
+        let title = WidgetPlatformDisplay.title(canonicalKey: key, wireProvider: raw.provider)
+        return (key, title, fallbackKey.isEmpty ? key : fallbackKey)
     }
 
     /// Mirror of `QuotaProviders.canonicalKey` for the wire manifest.  Kept
