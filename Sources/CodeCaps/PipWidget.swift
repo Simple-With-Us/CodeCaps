@@ -725,6 +725,10 @@ struct PipWidgetView: View {
         )
 
         let spiking = model.hasActiveRunawayAnomaly(for: row)
+        // Owner 2026-10-11: the HUD showed a capped plan's meters, so a plan
+        // that could not be used at all drew a full 100% bar.  One line of
+        // words is the honest thing in a strip this narrow.
+        let atCap = row.atCapWindow
 
         return HStack(spacing: PipMetrics.rowSpacing) {
             if detail.showsProviderLogo {
@@ -757,8 +761,12 @@ struct PipWidgetView: View {
 
             Spacer(minLength: 0)
 
-            ForEach(Array(meters.enumerated()), id: \.offset) { _, snapshot in
-                pipMeter(snapshot, detail: detail)
+            if let atCap {
+                pipAtCap(atCap, detail: detail)
+            } else {
+                ForEach(Array(meters.enumerated()), id: \.offset) { _, snapshot in
+                    pipMeter(snapshot, detail: detail)
+                }
             }
         }
         .frame(height: PipMetrics.rowHeight)
@@ -856,6 +864,38 @@ struct PipWidgetView: View {
             .frame(height: 5)
         }
         .help(snapshot.resetAt.map { "Resets \(glanceResetCountdown($0, now: model.now))" } ?? "")
+    }
+
+    /// The HUD's capped state, in place of its bars: the words "At Cap" and
+    /// how long until the plan is usable again.  Sized like the meter it
+    /// replaces so a capped row does not resize the strip.
+    private func pipAtCap(_ snapshot: QuotaWindowSnapshot, detail: PipMetrics.Detail) -> some View {
+        let cd = glanceResetCountdown(snapshot.resetAt, now: model.now)
+        let showCountdown = detail.showsCountdown && !cd.isEmpty
+        return HStack(spacing: PipMetrics.meterSpacing) {
+            // The cadence column is left out rather than filled with a second
+            // "At Cap": the cap is the whole message, and two of them read as a
+            // mistake.  The reset countdown keeps its own column, so the words
+            // still land where the other rows put them.
+            Text(GlanceAtCap.label)
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .foregroundStyle(Theme.danger)
+                .lineLimit(1)
+                .fixedSize()
+                .frame(width: PipMetrics.cadenceWidth + PipMetrics.barMinWidth, alignment: .leading)
+            if showCountdown {
+                Text(cd)
+                    .font(.system(size: 9, weight: .medium).monospacedDigit())
+                    .foregroundStyle(background.secondaryInk)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .frame(width: PipMetrics.percentWidth, alignment: .leading)
+            }
+        }
+        .help(snapshot.resetAt.map { "Resets \(glanceResetCountdown($0, now: model.now))" }
+              ?? "At cap")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(GlanceAtCap(snapshot: snapshot, now: model.now).spokenDescription)
     }
 
     private func pipMeter(_ snapshot: QuotaWindowSnapshot, detail: PipMetrics.Detail) -> some View {

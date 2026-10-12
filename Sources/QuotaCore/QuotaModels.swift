@@ -383,6 +383,23 @@ public struct QuotaWindowSnapshot: Equatable, Sendable {
     public var isAwaitingRefresh: Bool { freshness == .awaitingRefresh }
     public var isUnknown: Bool { remainingPercent == nil }
 
+    /// Whether this window's allowance is spent.
+    ///
+    /// The one rule every surface asks, so "at its cap" cannot mean two
+    /// different things in two places.  The reading decides whenever there is
+    /// one: a number of zero is a spent allowance, and a number above zero is
+    /// headroom — even when the window still carries an `isExhausted` flag,
+    /// which `normalizedForExport` never clears and which would otherwise keep
+    /// reporting a cap long after the allowance came back.
+    ///
+    /// With no reading at all, the provider's own word is the only evidence, so
+    /// an explicit exhausted flag still counts.  With neither, the window is
+    /// unreadable rather than spent, and it keeps the neutral track.
+    public var isAtCap: Bool {
+        if let remainingPercent { return remainingPercent <= 0 }
+        return window.isExhausted
+    }
+
     public init(window: QuotaWindow, now: Date = Date()) {
         let normalized = window.normalizedForExport()
         self.window = normalized
@@ -440,6 +457,36 @@ public struct QuotaPlatformSection: Equatable, Sendable {
         self.windows = windows
         self.iconHint = iconHint
     }
+
+    /// The window whose exhausted allowance caps this plan, and whose reset is
+    /// therefore the one worth counting down to.
+    ///
+    /// A plan is capped when *any* of its real windows is at its cap, not when
+    /// all of them are: Claude's weekly allowance being spent stops Claude
+    /// working, whatever its 5-hour window still says.  That is the whole
+    /// reason the popover used to show a green bar labelled 100% beside a plan
+    /// that could not be used at all.
+    ///
+    /// Windows that cannot vouch for themselves are skipped: MiniMax's
+    /// supplementary video quota is a bonus allowance rather than the
+    /// subscription, and a window with no reading reports no cap at all.  A
+    /// plan whose only windows are skipped is not treated as capped.
+    ///
+    /// When several windows are spent, the one that frees the plan soonest is
+    /// the one that answers "when can I work again", so the soonest reset wins.
+    ///
+    /// Masked windows — a real number that must not be believed, which only the
+    /// Antigravity pool grouper knows about — are filtered by the caller, in
+    /// `DisplaySection.atCapWindow()`.
+    public func atCapWindow() -> QuotaWindowSnapshot? {
+        windows
+            .filter { !$0.window.isSupplementaryVideoQuota && $0.remainingPercent != nil }
+            .filter(\.isAtCap)
+            .min { ($0.resetAt ?? .distantFuture) < ($1.resetAt ?? .distantFuture) }
+    }
+
+    /// Whether this plan is at its cap on any window it reports honestly.
+    public var isAtCap: Bool { atCapWindow() != nil }
 }
 
 public extension QuotaResponse {
