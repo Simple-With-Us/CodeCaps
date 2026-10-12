@@ -410,9 +410,9 @@ final class CompanionModelTests: XCTestCase {
     func testSourceDiscrepancyGatingRequiresAllSourcesMultiSourceAndFreshness() throws {
         let source = try readCompanionModelSource()
         XCTAssertTrue(source.contains("guard scope == .allSources, sourceCount >= 2 else { return [] }"))
-        XCTAssertTrue(source.contains("sourceDiscrepancyFreshnessWindow"))
-        XCTAssertTrue(source.contains("20 * 60"))
-        XCTAssertTrue(source.contains("isFreshForSourceDiscrepancy()"))
+        XCTAssertTrue(source.contains("FleetSourceDisagreement.shouldShowDisagreementAlert"))
+        XCTAssertTrue(source.contains("cardWindows(scope:"))
+        XCTAssertTrue(source.contains("isStaleInSourceDetail"))
         XCTAssertTrue(source.contains("delta >= 10.0"))
         XCTAssertTrue(source.contains("Sources differ ·"))
         XCTAssertFalse(source.contains("via codecaps"))

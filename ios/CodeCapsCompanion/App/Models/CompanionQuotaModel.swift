@@ -83,10 +83,9 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
         self.observedAt = observedAt
     }
 
-    /// Whether `observedAt` is within `CompanionQuotaItem.sourceDiscrepancyFreshnessWindow`.
+    /// Whether `observedAt` is within the disagreement alert freshness window.
     public func isFreshForSourceDiscrepancy(now: Date = Date()) -> Bool {
-        guard let observedAt else { return false }
-        return now.timeIntervalSince(observedAt) <= CompanionQuotaItem.sourceDiscrepancyFreshnessWindow
+        FleetSourceDisagreement.isObservedWithinAlertWindow(observedAt, now: now)
     }
 
     /// Hyphenated cadence beside a meter bar (`5-hour`, `7-day`, `1-month`, `Other limit`).
@@ -221,7 +220,7 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
     }
 
     /// Both feeds must report within this window for a source-disagreement banner.
-    public static let sourceDiscrepancyFreshnessWindow: TimeInterval = 20 * 60
+    public static let sourceDiscrepancyFreshnessWindow: TimeInterval = FleetSourceDisagreement.alertFreshnessWindow
 
     /// One discrepancy where an additional/duplicate source diverges from its matching primary window by at least 10 points.
     public struct SourceDiscrepancy: Identifiable, Equatable, Sendable {
@@ -244,25 +243,37 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
     public func sourceDiscrepancies(scope: CompanionSourceScope) -> [SourceDiscrepancy] {
         guard scope == .allSources, sourceCount >= 2 else { return [] }
         var results: [SourceDiscrepancy] = []
+        let now = Date()
         for dup in duplicateWindows {
-            guard dup.isFreshForSourceDiscrepancy(), let dPct = dup.remainingPercent else { continue }
             let dupKey = Self.allowanceKey(for: dup)
             let match = windows.first(where: { Self.allowanceKey(for: $0) == dupKey }) ?? windows.first
-            guard let primary = match, primary.isFreshForSourceDiscrepancy(), let pPct = primary.remainingPercent else { continue }
+            guard let primary = match else { continue }
             if Self.sourceLooksLikeHostname(primary.source) || Self.sourceLooksLikeHostname(primary.via)
                 || Self.sourceLooksLikeHostname(dup.source) || Self.sourceLooksLikeHostname(dup.via) {
                 continue
             }
+            let primaryReading = FleetSourceReading(
+                remainingPercent: primary.remainingPercent,
+                observedAt: primary.observedAt
+            )
+            let duplicateReading = FleetSourceReading(
+                remainingPercent: dup.remainingPercent,
+                observedAt: dup.observedAt
+            )
+            guard FleetSourceDisagreement.shouldShowDisagreementAlert(
+                primary: primaryReading,
+                duplicate: duplicateReading,
+                now: now
+            ) else { continue }
+            guard let pPct = primary.remainingPercent, let dPct = dup.remainingPercent else { continue }
             let delta = abs(pPct - dPct)
-            if delta >= 10.0 {
-                let desc = "Sources differ · \(Int(pPct.rounded()))% and \(Int(dPct.rounded()))%"
-                results.append(SourceDiscrepancy(
-                    primaryWindow: primary,
-                    duplicateWindow: dup,
-                    delta: delta,
-                    description: desc
-                ))
-            }
+            let desc = "Sources differ · \(Int(pPct.rounded()))% and \(Int(dPct.rounded()))%"
+            results.append(SourceDiscrepancy(
+                primaryWindow: primary,
+                duplicateWindow: dup,
+                delta: delta,
+                description: desc
+            ))
         }
         return results
     }
@@ -280,6 +291,70 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
     private static func sourceLooksLikeHostname(_ value: String?) -> Bool {
         guard let raw = value?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return false }
         return raw.contains(".") && !raw.contains(" ")
+    }
+
+    /// Main-card windows: when mirrors exist, each allowance shows its newest observation.
+    public func cardWindows(scope: CompanionSourceScope) -> [CompanionWindowItem] {
+        guard scope == .allSources, !duplicateWindows.isEmpty else { return windows }
+        return windows.map { primary in
+            let key = Self.allowanceKey(for: primary)
+            let mirrors = duplicateWindows.filter { Self.allowanceKey(for: $0) == key }
+            guard !mirrors.isEmpty else { return primary }
+            return Self.freshestWindow(in: [primary] + mirrors) ?? primary
+        }
+    }
+
+    public func cardShortWindow(scope: CompanionSourceScope) -> CompanionWindowItem? {
+        let resolved = cardWindows(scope: scope)
+        return resolved.first(where: { $0.isShortCadence }) ?? resolved.first
+    }
+
+    public func cardLongWindow(scope: CompanionSourceScope) -> CompanionWindowItem? {
+        let resolved = cardWindows(scope: scope)
+        let nonShort = resolved.filter { !$0.isShortCadence }
+        if let match = nonShort.first(where: { $0.id != cardShortWindow(scope: scope)?.id }) {
+            return match
+        }
+        return resolved.first(where: { $0.id != cardShortWindow(scope: scope)?.id })
+    }
+
+    public func cardRemainingPercent(scope: CompanionSourceScope) -> Double? {
+        cardWindows(scope: scope).compactMap(\.remainingPercent).min()
+    }
+
+    public func cardDisplayPercent(scope: CompanionSourceScope) -> String {
+        guard let remainingPercent = cardRemainingPercent(scope: scope) else { return "—" }
+        return "\(Int(remainingPercent.rounded()))%"
+    }
+
+    public func cardStatusColor(scope: CompanionSourceScope) -> Color {
+        guard let remainingPercent = cardRemainingPercent(scope: scope) else { return .secondary }
+        if remainingPercent <= 0 { return CompanionTheme.danger }
+        if remainingPercent < 20 { return CompanionTheme.warning }
+        return CompanionTheme.accent
+    }
+
+    public var sourceDetailWindows: [CompanionWindowItem] {
+        windows + duplicateWindows
+    }
+
+    public func isStaleInSourceDetail(_ window: CompanionWindowItem) -> Bool {
+        let key = Self.allowanceKey(for: window)
+        let peers = sourceDetailWindows.filter { Self.allowanceKey(for: $0) == key }
+        let fleetPeers = peers.map {
+            FleetSourceReading(remainingPercent: $0.remainingPercent, observedAt: $0.observedAt)
+        }
+        let selfReading = FleetSourceReading(
+            remainingPercent: window.remainingPercent,
+            observedAt: window.observedAt
+        )
+        return FleetSourceDisagreement.isStaleAmongPeers(selfReading, peers: fleetPeers)
+    }
+
+    private static func freshestWindow(in pool: [CompanionWindowItem]) -> CompanionWindowItem? {
+        pool.max { left, right in
+            (left.observedAt ?? .distantPast) < (right.observedAt ?? .distantPast)
+        }
     }
 
     public var sourceCount: Int {

@@ -108,6 +108,15 @@ public struct CompanionContentView: View {
         #endif
     }
 
+    private var settingsToolbarButton: some View {
+        Button {
+            showingSettings = true
+        } label: {
+            Image(systemName: "gearshape")
+        }
+        .accessibilityLabel("CodeCaps Settings")
+    }
+
     // MARK: - Fleet status (pinned navigation bar)
 
     private var fleetStatusToolbarContent: some View {
@@ -262,7 +271,10 @@ public struct CompanionContentView: View {
 
     private func quotaCard(_ item: CompanionQuotaItem) -> some View {
         let isExpanded = expandedIds.contains(item.id) && item.isExpandable
-        let extraWindows = item.windows.filter { $0.id != item.shortWindow?.id && $0.id != item.longWindow?.id }
+        let short = item.cardShortWindow(scope: model.sourceScope)
+        let long = item.cardLongWindow(scope: model.sourceScope)
+        let cardWindows = item.cardWindows(scope: model.sourceScope)
+        let extraWindows = cardWindows.filter { $0.id != short?.id && $0.id != long?.id }
 
         return VStack(alignment: .leading, spacing: 12) {
             // Main clickable row
@@ -315,9 +327,9 @@ public struct CompanionContentView: View {
                         .accessibilityValue(item.isAlarmEnabled ? "on" : "off")
                     }
 
-                    Text(item.displayPercent)
+                    Text(item.cardDisplayPercent(scope: model.sourceScope))
                         .font(.system(size: 17, weight: .bold, design: .rounded).monospacedDigit())
-                        .foregroundStyle(item.statusColor)
+                        .foregroundStyle(item.cardStatusColor(scope: model.sourceScope))
 
                     if item.isExpandable {
                         Image(systemName: "chevron.down")
@@ -332,13 +344,13 @@ public struct CompanionContentView: View {
 
             // Quota Bars side by side
             HStack(spacing: 12) {
-                if let short = item.shortWindow {
+                if let short {
                     CompanionMeterView(caption: short.caption, window: short)
                 }
-                if let long = item.longWindow, long.id != item.shortWindow?.id {
+                if let long, long.id != short?.id {
                     CompanionMeterView(caption: long.caption, window: long)
-                } else if item.shortWindow == nil {
-                    if let first = item.windows.first {
+                } else if short == nil {
+                    if let first = cardWindows.first {
                         CompanionMeterView(caption: first.caption, window: first)
                     }
                 }
@@ -575,13 +587,13 @@ public struct CompanionContentView: View {
                                     }
                                 }
 
-                                ForEach(item.duplicateWindows) { dup in
+                                ForEach(item.sourceDetailWindows) { reading in
                                     HStack(spacing: 8) {
                                         VStack(alignment: .leading, spacing: 2) {
                                             HStack(spacing: 6) {
-                                                Text(dup.label)
+                                                Text(reading.meterCaption)
                                                     .font(.system(size: 12, weight: .medium))
-                                                if let src = dup.source ?? dup.via {
+                                                if let src = reading.source ?? reading.via {
                                                     Text("via \(src)")
                                                         .font(.system(size: 10, weight: .medium))
                                                         .foregroundStyle(.secondary)
@@ -589,19 +601,28 @@ public struct CompanionContentView: View {
                                                         .padding(.vertical, 1.5)
                                                         .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 4))
                                                 }
+                                                if item.isStaleInSourceDetail(reading) {
+                                                    Text("Stale")
+                                                        .font(.system(size: 10, weight: .semibold))
+                                                        .foregroundStyle(.secondary)
+                                                        .padding(.horizontal, 5)
+                                                        .padding(.vertical, 1.5)
+                                                        .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 4))
+                                                }
                                             }
-                                            if !dup.countdown().isEmpty {
-                                                Text("Resets in \(dup.countdown())")
+                                            if !reading.countdown().isEmpty {
+                                                Text("Resets in \(reading.countdown())")
                                                     .font(.system(size: 10))
                                                     .foregroundStyle(.secondary)
                                             }
                                         }
                                         Spacer()
-                                        Text(dup.displayPercent)
+                                        Text(reading.displayPercent)
                                             .font(.system(size: 12, weight: .bold, design: .rounded).monospacedDigit())
-                                            .foregroundStyle(dup.statusColor)
+                                            .foregroundStyle(reading.statusColor)
                                     }
                                     .padding(.vertical, 2)
+                                    .opacity(item.isStaleInSourceDetail(reading) ? 0.72 : 1)
                                 }
 
                                 if model.sourceScope == .allSources, item.sourceCount > 1,
@@ -625,7 +646,7 @@ public struct CompanionContentView: View {
                     Text("Data Sources & Mirrors")
                 } footer: {
                     Text("CodeCaps monitors primary and mirror feeds for each platform." + sentenceGap
-                         + "In All Sources, when a card lists two or more feeds reported within 20 minutes that disagree by 10 points or more, a warning appears on the card (hostnames are ignored).")
+                         + "In All Sources, when a card lists two or more feeds reported within 30 minutes that disagree by 10 points or more, a warning appears on the card (hostnames are ignored). Otherwise the newest reading is shown and older feeds are marked Stale here.")
                 }
                 .id("dataSourcesMirrorsSection")
                 .accessibilityIdentifier("dataSourcesMirrorsSection")
