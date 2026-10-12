@@ -117,7 +117,15 @@ public struct CompanionContentView: View {
     // MARK: - Header Card
 
     private var headerCard: some View {
-        HStack(spacing: 12) {
+        VStack(spacing: 10) {
+            Picker("Source scope", selection: $model.sourceScope) {
+                ForEach(CompanionSourceScope.allCases) { scope in
+                    Text(scope.rawValue).tag(scope)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            HStack(spacing: 12) {
             Image("codecaps-mark")
                 .resizable()
                 .renderingMode(.template)
@@ -138,6 +146,7 @@ public struct CompanionContentView: View {
                     .font(.caption)
                     .italic()
                     .foregroundStyle(.secondary)
+            }
             }
         }
         .padding(14)
@@ -259,11 +268,19 @@ public struct CompanionContentView: View {
                         Text(item.title)
                             .font(.system(size: 15, weight: .semibold))
 
-                        if item.hasSourceDiscrepancy {
+                        if model.sourceScope == .allSources, item.sourceCount > 1 {
+                            Text("\(item.sourceCount) sources")
+                                .font(.system(size: 10, weight: .semibold))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.secondary.opacity(0.14), in: Capsule())
+                        }
+
+                        if item.hasSourceDiscrepancy(scope: model.sourceScope) {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .font(.system(size: 11, weight: .semibold))
                                 .foregroundStyle(.orange)
-                                .accessibilityLabel("Warning: Secondary source differs by more than 3%")
+                                .accessibilityLabel("Warning: sources disagree on this allowance")
                         }
                     }
 
@@ -321,12 +338,12 @@ public struct CompanionContentView: View {
             }
 
             // Discrepancy warning banner if secondary source diverges by >3%
-            if item.hasSourceDiscrepancy {
+            if item.hasSourceDiscrepancy(scope: model.sourceScope) {
                 HStack(spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.orange)
-                    Text(item.sourceDiscrepancies.first?.description ?? "Source discrepancy > 3%")
+                    Text(item.sourceDiscrepancies(scope: model.sourceScope).first?.description ?? "Sources differ")
                         .font(.system(size: 11.5, weight: .semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
@@ -348,11 +365,6 @@ public struct CompanionContentView: View {
                     .padding(.vertical, 2)
 
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("ADDITIONAL ALLOWANCES")
-                        .font(.system(size: 10, weight: .bold))
-                        .tracking(0.6)
-                        .foregroundStyle(.secondary)
-
                     ForEach(extraWindows) { win in
                         windowRow(win)
                     }
@@ -487,7 +499,7 @@ public struct CompanionContentView: View {
                                     Text(item.title)
                                         .font(.system(size: 14, weight: .semibold))
                                     Spacer()
-                                    if item.hasSourceDiscrepancy {
+                                    if item.hasSourceDiscrepancy(scope: model.sourceScope) {
                                         Label("Discrepancy > 3%", systemImage: "exclamationmark.triangle.fill")
                                             .font(.system(size: 11, weight: .medium))
                                             .foregroundStyle(.orange)
@@ -523,8 +535,8 @@ public struct CompanionContentView: View {
                                     .padding(.vertical, 2)
                                 }
 
-                                if item.hasSourceDiscrepancy {
-                                    ForEach(item.sourceDiscrepancies) { disc in
+                                if item.hasSourceDiscrepancy(scope: model.sourceScope) {
+                                    ForEach(item.sourceDiscrepancies(scope: model.sourceScope)) { disc in
                                         HStack(spacing: 5) {
                                             Image(systemName: "exclamationmark.triangle.fill")
                                                 .font(.system(size: 10, weight: .semibold))

@@ -2,6 +2,14 @@ import Foundation
 import Security
 import SwiftUI
 import UserNotifications
+
+/// Whether the companion shows only this device's readings or every synced source.
+public enum CompanionSourceScope: String, CaseIterable, Identifiable, Sendable {
+    case thisIPhone = "This iPhone"
+    case allSources = "All Sources"
+
+    public var id: String { rawValue }
+}
 #if canImport(WidgetKit)
 import WidgetKit
 #endif
@@ -119,15 +127,12 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
     }
 
     public var caption: String {
-        let text = (cadence.isEmpty ? label : cadence).lowercased()
-        if text.contains("7d") || text.contains("weekly") || text.contains("1w") || text.contains("org") || text.contains("quota") { return "7d" }
-        if text.contains("5h") || text.contains("5-hour") || text.contains("5 hour") || text.contains("coding plan") || text.contains("coding_plan") || text.contains("interval") { return "5h" }
-        if text.contains("4h") || text.contains("4-hour") || text.contains("four_hour") { return "4h" }
-        if text.contains("24h") || text.contains("daily") || text.contains("1d") { return "24h" }
-        if text.contains("month") || text.contains("billing") || text.contains("cycle") || text.contains("30d") || text.contains("1m") { return "1m" }
-        if text.contains("plan") || text.contains("included") { return "Plan" }
-        if !cadence.isEmpty && cadence.count <= 4 { return cadence }
-        return "7d"
+        QuotaWindowVocabulary.popoverCaption(
+            windowToken: cadence,
+            label: label,
+            resetAt: resetAt,
+            isExtraAllowance: QuotaWindowVocabulary.isExtraAllowanceLabel(label)
+        )
     }
 
     /// Short distinguishing label for a bar when a card shows several windows
@@ -135,12 +140,12 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
     /// reads "weekly", "Additional tokens" reads "additional".  Empty when the
     /// window label carries no such qualifier.
     public var barQualifier: String {
+        if QuotaWindowVocabulary.isExtraAllowanceLabel(label) { return QuotaWindowVocabulary.otherLimit }
         let text = label.lowercased()
-        if text.contains("additional") { return "additional" }
-        if text.contains("weekly") { return "weekly" }
-        if text.contains("monthly") { return "monthly" }
+        if text.contains("weekly") { return QuotaWindowVocabulary.sevenDay }
+        if text.contains("monthly") || text.contains("billing") { return QuotaWindowVocabulary.oneMonth }
         if text.contains("daily") { return "daily" }
-        if text.contains("hourly") { return "hourly" }
+        if text.contains("hourly") { return QuotaWindowVocabulary.fiveHour }
         return ""
     }
 
@@ -223,8 +228,9 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
         }
     }
 
-    /// All source discrepancies greater than 3% between primary windows and mirror/duplicate sources.
-    public var sourceDiscrepancies: [SourceDiscrepancy] {
+    /// Source disagreements when All Sources is on and two fresh feeds differ by at least 10 points.
+    public func sourceDiscrepancies(scope: CompanionSourceScope) -> [SourceDiscrepancy] {
+        guard scope == .allSources else { return [] }
         var results: [SourceDiscrepancy] = []
         for dup in duplicateWindows {
             guard let dPct = dup.remainingPercent else { continue }
@@ -232,10 +238,8 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
                 ?? windows.first
             guard let primary = match, let pPct = primary.remainingPercent else { continue }
             let delta = abs(pPct - dPct)
-            if delta > 3.0 {
-                let diffText = String(format: "%.0f%%", delta)
-                let srcName = dup.source ?? dup.via ?? "mirror source"
-                let desc = "\(primary.label): \(Int(pPct.rounded()))% vs \(Int(dPct.rounded()))% via \(srcName) (Δ\(diffText))"
+            if delta >= 10.0 {
+                let desc = "Sources differ · \(Int(pPct.rounded()))% and \(Int(dPct.rounded()))%"
                 results.append(SourceDiscrepancy(
                     primaryWindow: primary,
                     duplicateWindow: dup,
@@ -247,9 +251,12 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
         return results
     }
 
-    /// Whether any duplicate source diverges from its matching primary window by more than 3%.
-    public var hasSourceDiscrepancy: Bool {
-        !sourceDiscrepancies.isEmpty
+    public func hasSourceDiscrepancy(scope: CompanionSourceScope) -> Bool {
+        !sourceDiscrepancies(scope: scope).isEmpty
+    }
+
+    public var sourceCount: Int {
+        Set(windows.compactMap(\.source) + duplicateWindows.compactMap(\.source)).count
     }
 
     public init(
@@ -421,6 +428,7 @@ public final class CompanionQuotaModel: ObservableObject {
     }
 
     @Published public var items: [CompanionQuotaItem] = []
+    @Published public var sourceScope: CompanionSourceScope = .thisIPhone
     @Published public var isRefreshing: Bool = false
     @Published public var lastUpdated: Date?
     /// Last failure worth telling the owner about.
@@ -1068,8 +1076,13 @@ public final class CompanionQuotaModel: ObservableObject {
         var seenCadenceKeys: Set<String> = []
 
         for w in rawWindows {
-            let cadence = Self.formatCadence(w.label, window: w.window)
             let parsedReset = CompanionDateFormatter.date(from: w.resetAt)
+            let cadence = Self.formatCadence(w.label, window: w.window, resetAt: parsedReset)
+            let displayLabel = QuotaWindowVocabulary.windowLabel(
+                windowToken: w.window,
+                existingLabel: w.label,
+                resetAt: parsedReset
+            )
             let pct = w.remainingPercent
             let exhausted = (pct ?? 100) <= 0 || (w.isExhausted ?? false)
 
@@ -1154,7 +1167,10 @@ public final class CompanionQuotaModel: ObservableObject {
                     subtitle = "\(cadences[0]) & \(cadences[1])\(sourceSuffix)"
                 }
             } else {
-                subtitle = "\(primaryWindows.count) active allowances\(sourceSuffix)"
+                let cadenceList = primaryWindows.map {
+                    QuotaWindowVocabulary.standardCadence(windowToken: nil, label: $0.cadence, resetAt: $0.resetAt)
+                }
+                subtitle = cadenceList.joined(separator: " · ") + sourceSuffix
             }
         } else {
             subtitle = title
@@ -1427,28 +1443,13 @@ public final class CompanionQuotaModel: ObservableObject {
         return manifest.first { canonicalManifestKey(provider: $0.provider, via: $0.via) == canonicalKey }?.iconHint
     }
 
-    public static func formatCadence(_ label: String, window: String? = nil) -> String {
-        let combined = "\(window ?? "") \(label)".lowercased()
-        if combined.contains("7d") || combined.contains("seven_day") || combined.contains("1w") || combined.contains("weekly") {
-            return "weekly"
-        }
-        if combined.contains("5h") || combined.contains("5-hour") || combined.contains("five_hour")
-            || combined.contains("coding_plan") || combined.contains("coding plan") || combined.contains("interval") {
-            return "5-hour"
-        }
-        if combined.contains("4h") || combined.contains("4-hour") || combined.contains("four_hour") {
-            return "4-hour"
-        }
-        if combined.contains("1d") || combined.contains("daily") || combined.contains("24h") {
-            return "daily"
-        }
-        if combined.contains("billing") || combined.contains("cycle") || combined.contains("monthly") || combined.contains("1m") {
-            return "monthly"
-        }
-        if let window, !window.isEmpty {
-            return window.lowercased().replacingOccurrences(of: " window", with: "")
-        }
-        return label.lowercased().replacingOccurrences(of: " window", with: "")
+    public static func formatCadence(_ label: String, window: String? = nil, resetAt: Date? = nil) -> String {
+        QuotaWindowVocabulary.standardCadence(
+            windowToken: window,
+            label: label,
+            resetAt: resetAt,
+            periodStart: nil
+        )
     }
 
     /// Feeds one snapshot's windows through the tracker, saves its state, and
