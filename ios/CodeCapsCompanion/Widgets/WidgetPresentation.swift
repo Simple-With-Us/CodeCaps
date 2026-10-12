@@ -13,6 +13,7 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
     public let resetAt: Date?
     public let isExhausted: Bool
     public let isMasked: Bool
+    public let observedAt: Date?
 
     public init(
         id: String,
@@ -21,7 +22,8 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
         remainingPercent: Double?,
         resetAt: Date?,
         isExhausted: Bool = false,
-        isMasked: Bool = false
+        isMasked: Bool = false,
+        observedAt: Date? = nil
     ) {
         self.id = id
         self.label = label
@@ -30,6 +32,14 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
         self.resetAt = resetAt
         self.isExhausted = isExhausted
         self.isMasked = isMasked
+        self.observedAt = observedAt
+    }
+
+    private static let staleAfter: TimeInterval = 30 * 60
+
+    public func isStale(now: Date = Date()) -> Bool {
+        guard let observedAt else { return false }
+        return now.timeIntervalSince(observedAt) > Self.staleAfter
     }
 
     public var displayPercent: String {
@@ -54,12 +64,12 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
     /// "Additional tokens" reads "additional".  Empty when the window label
     /// carries no such qualifier.
     public var barQualifier: String {
+        if QuotaWindowVocabulary.isExtraAllowanceLabel(label) { return QuotaWindowVocabulary.otherLimit }
         let text = label.lowercased()
-        if text.contains("additional") { return "additional" }
-        if text.contains("weekly") { return "weekly" }
-        if text.contains("monthly") { return "monthly" }
+        if text.contains("weekly") { return QuotaWindowVocabulary.sevenDay }
+        if text.contains("monthly") || text.contains("billing") { return QuotaWindowVocabulary.oneMonth }
         if text.contains("daily") { return "daily" }
-        if text.contains("hourly") { return "hourly" }
+        if text.contains("hourly") { return QuotaWindowVocabulary.fiveHour }
         return ""
     }
 
@@ -328,17 +338,25 @@ public enum WidgetPresentation {
     /// A billing cycle is `1m`, which is what the Mac app's compact rows already
     /// show for Cursor's "Included plan", so the two surfaces agree.
     public static func shortCadence(cadence: String, label: String) -> String {
-        let combined = "\(cadence) \(label)".lowercased()
-        if combined.contains("5h") || combined.contains("5-hour") || combined.contains("5 hour") || combined.contains("five_hour") { return "5h" }
-        if combined.contains("4h") || combined.contains("4-hour") || combined.contains("4 hour") || combined.contains("four_hour") { return "4h" }
-        if combined.contains("7d") || combined.contains("7-day") || combined.contains("7 day") || combined.contains("weekly") || combined.contains("1w") { return "7d" }
-        if combined.contains("daily") || combined.contains("1d") || combined.contains("24h") || combined.contains("24-hour") { return "1d" }
-        if combined.contains("month") || combined.contains("billing") || combined.contains("cycle") || combined.contains("30d") { return "1m" }
-        if combined.contains("year") || combined.contains("annual") || combined.contains("365") { return "1y" }
-        let first = label.trimmingCharacters(in: .whitespacesAndNewlines)
-            .components(separatedBy: " ")
-            .first ?? ""
-        return first.isEmpty ? "Quota" : first
+        QuotaWindowVocabulary.popoverCaption(
+            windowToken: cadence,
+            label: label,
+            isExtraAllowance: QuotaWindowVocabulary.isExtraAllowanceLabel(label)
+        )
+    }
+
+    /// Small-widget caption: `7-day · 1d 14h` (hyphenated cadence, not "remaining").
+    public static func smallWidgetCaption(window: WidgetWindowItem, now: Date = Date()) -> String {
+        let cadence = window.cadence.isEmpty
+            ? QuotaWindowVocabulary.standardCadence(windowToken: nil, label: window.label, resetAt: window.resetAt)
+            : window.cadence
+        let countdown = formatCountdown(resetAt: window.resetAt, now: now)
+        if window.isStale(now: now), let observed = window.observedAt {
+            let updated = observed.formatted(date: .omitted, time: .shortened)
+            return countdown.isEmpty ? "Updated \(updated)" : "\(cadence) · Updated \(updated)"
+        }
+        guard !countdown.isEmpty else { return cadence }
+        return "\(cadence) · \(countdown)"
     }
 
     public static func parseDate(from string: String?) -> Date? {
@@ -372,6 +390,7 @@ public enum WidgetPresentation {
         let modelId: String?
         let window: String?
         let resetAt: String?
+        let occurredAt: String?
     }
 
     /// Mirrors the backend manifest's provider group on the wire.  Optional
@@ -554,22 +573,29 @@ public enum WidgetPresentation {
         var seenCadenceKeys: Set<String> = []
 
         for w in rawWindows {
-            let cadence = formatCadence(w.label, window: w.window)
             let parsedReset = parseDate(from: w.resetAt)
+            let cadence = formatCadence(w.label, window: w.window, resetAt: parsedReset)
+            let observed = parseDate(from: w.occurredAt)
             let pct = w.remainingPercent
             let exhausted = (pct ?? 100) <= 0 || (w.isExhausted ?? false)
+            let displayLabel = QuotaWindowVocabulary.windowLabel(
+                windowToken: w.window,
+                existingLabel: w.label.isEmpty ? cadence : w.label,
+                resetAt: parsedReset
+            )
 
             let cadenceKey = cadence.lowercased()
             if !seenCadenceKeys.contains(cadenceKey) {
                 seenCadenceKeys.insert(cadenceKey)
                 childWindows.append(WidgetWindowItem(
                     id: w.id,
-                    label: w.label.isEmpty ? cadence : w.label,
+                    label: displayLabel,
                     cadence: cadence,
                     remainingPercent: pct,
                     resetAt: parsedReset,
                     isExhausted: exhausted,
-                    isMasked: false
+                    isMasked: false,
+                    observedAt: observed
                 ))
             }
         }
@@ -585,8 +611,11 @@ public enum WidgetPresentation {
         }
 
         let validPercents = childWindows.compactMap(\.remainingPercent)
-        let controllingPct = validPercents.min()
-        let isExhausted = (controllingPct ?? 100) <= 0
+        let atCap = childWindows.first {
+            WidgetPresentation.isAtCap(percent: $0.remainingPercent, isExhausted: $0.isExhausted)
+        }
+        let controllingPct = atCap?.remainingPercent ?? validPercents.min()
+        let isExhausted = atCap != nil || (controllingPct ?? 100) <= 0
         let nearestReset = childWindows.compactMap(\.resetAt).filter { $0 > now }.min()
             ?? childWindows.compactMap(\.resetAt).min()
 
@@ -789,30 +818,13 @@ public enum WidgetPresentation {
         return manifest.first { canonicalManifestKey(provider: $0.provider, via: $0.via) == canonicalKey }?.terms?.defaultWindowLabel
     }
 
-    public static func formatCadence(_ label: String, window: String? = nil) -> String {
-        let combined = "\(window ?? "") \(label)".lowercased()
-        if combined.contains("5h") || combined.contains("5-hour") || combined.contains("five_hour") {
-            return "5-hour window"
-        }
-        if combined.contains("4h") || combined.contains("4-hour") || combined.contains("four_hour") {
-            return "4-hour window"
-        }
-        if combined.contains("7d") || combined.contains("seven_day") {
-            return "7-day window"
-        }
-        if combined.contains("1w") || combined.contains("weekly") {
-            return "Weekly cap"
-        }
-        if combined.contains("daily") || combined.contains("day") || combined.contains("24h") || combined.contains("1d") {
-            return "Daily window"
-        }
-        if combined.contains("month") || combined.contains("30d") || combined.contains("billing") || combined.contains("cycle") {
-            return "Monthly cap"
-        }
-        if let window, !window.isEmpty {
-            return window
-        }
-        return label.isEmpty ? "Quota window" : label
+    public static func formatCadence(_ label: String, window: String? = nil, resetAt: Date? = nil) -> String {
+        QuotaWindowVocabulary.standardCadence(
+            windowToken: window,
+            label: label,
+            resetAt: resetAt,
+            periodStart: nil
+        )
     }
 
     // MARK: - Placeholder Data for Previews and Gallery

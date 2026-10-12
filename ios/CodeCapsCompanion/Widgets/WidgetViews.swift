@@ -529,21 +529,26 @@ struct ProviderFocusView: View {
                         )
                         .rotationEffect(.degrees(-90))
 
-                    VStack(spacing: 1) {
-                        Text(WidgetPresentation.displayPercent(percent: shownPercent, isMasked: shownMasked))
-                            .font(.system(size: 18, weight: .bold, design: .rounded))
-                            .foregroundColor(.primary)
-                        Text("Remaining")
-                            .font(.system(size: 8, weight: .medium))
-                            .foregroundColor(.secondary)
-                    }
+                    Text(WidgetPresentation.displayPercent(percent: shownPercent, isMasked: shownMasked))
+                        .font(.system(size: 18, weight: .bold, design: .rounded))
+                        .foregroundColor(.primary)
                 }
+                .saturation((shownWindow?.isStale() ?? false) ? 0.25 : 1)
+                .opacity((shownWindow?.isStale() ?? false) ? 0.78 : 1)
                 .frame(width: 70, height: 70)
             }
 
             Spacer(minLength: 0)
 
-            WindowCaptionRow(token: captionToken, resetCaption: captionReset, font: 9)
+            if let window = shownWindow {
+                Text(WidgetPresentation.smallWidgetCaption(window: window))
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundColor(.secondary)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.85)
+            } else {
+                WindowCaptionRow(token: captionToken, resetCaption: captionReset, font: 9)
+            }
         }
         .padding(12)
     }

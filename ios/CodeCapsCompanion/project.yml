@@ -55,6 +55,8 @@ targets:
         group: Shared
       - path: ../../Sources/QuotaCore/ResetAlarmCadence.swift
         group: Shared
+      - path: ../../Sources/QuotaCore/QuotaWindowVocabulary.swift
+        group: Shared
       - path: ../../Sources/QuotaCore/CompanionReadTokenStore.swift
         group: Shared
     dependencies:
@@ -94,6 +96,8 @@ targets:
           - "CodeCapsWidgets.Release.entitlements"
       - path: Assets.xcassets
       - path: ../../Sources/QuotaCore/ResetAlarmCadence.swift
+        group: Shared
+      - path: ../../Sources/QuotaCore/QuotaWindowVocabulary.swift
         group: Shared
       - path: ../../Sources/QuotaCore/WidgetSnapshotFetcher.swift
         group: Shared
@@ -138,6 +142,8 @@ targets:
       - path: ../../Sources/QuotaCore/ResetAlarmMessage.swift
         group: Shared
       - path: ../../Sources/QuotaCore/ResetAlarmCadence.swift
+        group: Shared
+      - path: ../../Sources/QuotaCore/QuotaWindowVocabulary.swift
         group: Shared
       - path: ../../Sources/QuotaCore/CompanionReadTokenStore.swift
         group: Shared
@@ -184,6 +190,8 @@ targets:
           - "CodeCapsWidgetsMac.Release.entitlements"
       - path: Assets.xcassets
       - path: ../../Sources/QuotaCore/ResetAlarmCadence.swift
+        group: Shared
+      - path: ../../Sources/QuotaCore/QuotaWindowVocabulary.swift
         group: Shared
       - path: ../../Sources/QuotaCore/WidgetSnapshotFetcher.swift
         group: Shared
