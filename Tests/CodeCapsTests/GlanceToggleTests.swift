@@ -181,6 +181,14 @@ final class GlanceToggleTests: XCTestCase {
         XCTAssertEqual(dark?.blueComponent ?? -1, 1, accuracy: 0.001)
     }
 
+    func testClaudeStaysBrandColourWhenAccentLogosAreOn() {
+        let model = MonitorModel(defaults: defaults)
+        model.glanceLogosFollowAccent = true
+        XCTAssertEqual(model.glanceMarkStyle(for: "anthropic"), .standard)
+        let mark = PlatformLogoImage.load(providerKey: "anthropic", style: model.glanceMarkStyle(for: "anthropic"))
+        XCTAssertEqual(mark?.isTemplate, false, "Claude must stay the orange starburst, not a black template")
+    }
+
     func testTheGeminiRowShowsTheColourStarInTheDefaultGlanceStyle() {
         let model = MonitorModel(defaults: defaults)
         XCTAssertEqual(model.glanceMarkStyle(for: AntigravityDisplay.providerKey), .standard)

@@ -871,22 +871,13 @@ struct PipWidgetView: View {
     /// replaces so a capped row does not resize the strip.
     private func pipAtCap(_ snapshot: QuotaWindowSnapshot, detail: PipMetrics.Detail) -> some View {
         let cap = GlanceAtCap(snapshot: snapshot, now: model.now)
-        let cd = glanceResetCountdown(snapshot.resetAt, now: model.now)
-        let title = glanceAtCapWindowTitle(snapshot)
-        let showCountdown = detail.showsCountdown && !cd.isEmpty
+        let summary = glanceAtCapSummary(snapshot, now: model.now)
         return VStack(alignment: .leading, spacing: 1) {
-            if showCountdown && !cd.isEmpty {
-                Text("\(title) · Resets In \(cd)")
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
-                    .foregroundStyle(background.ink)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.8)
-            } else {
-                Text(title)
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
-                    .foregroundStyle(Theme.danger)
-                    .lineLimit(1)
-            }
+            Text(summary)
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .foregroundStyle(background.ink)
+                .lineLimit(2)
+                .minimumScaleFactor(0.8)
             let exact = glanceResetExactTime(snapshot.resetAt, now: model.now)
             if !exact.isEmpty {
                 Text(exact)

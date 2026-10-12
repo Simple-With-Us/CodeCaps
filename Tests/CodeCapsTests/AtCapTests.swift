@@ -171,7 +171,7 @@ final class AtCapTests: XCTestCase {
         let row = cappedClaudeRow()
         let atCap = row.atCapWindow!
         let spoken = GlanceAtCap(snapshot: atCap, now: now).spokenDescription
-        XCTAssertTrue(spoken.contains("Weekly Cap"), "got \(spoken)")
+        XCTAssertTrue(spoken.contains("7-day cap"), "got \(spoken)")
         XCTAssertTrue(spoken.contains("1d 21h"), "the reset of the spent window is quoted: \(spoken)")
         XCTAssertFalse(spoken.contains("100"), "the headroom of the other window is not what this row is about: \(spoken)")
     }
@@ -179,16 +179,16 @@ final class AtCapTests: XCTestCase {
     func testTheCappedRowWithNoResetStillSaysSo() {
         let atCap = makeWindow(id: "w", label: "Weekly", remaining: 0, resetIn: nil)
         let spoken = GlanceAtCap(snapshot: atCap, now: now).spokenDescription
-        XCTAssertEqual(spoken, "Weekly Cap, quota exhausted")
+        XCTAssertEqual(spoken, "7-day cap, quota exhausted")
     }
 
-    func testAtCapWindowTitleForFiveHour() {
-        let atCap = makeWindow(id: "session", label: "5h window", token: "5h", remaining: 0, resetIn: hour)
-        XCTAssertEqual(glanceAtCapWindowTitle(atCap), "5 Hour Cap")
-    }
+    func testAtCapSummaryUsesHyphenatedCadence() {
+        let fiveHour = makeWindow(id: "session", label: "5h window", token: "5h", remaining: 0, resetIn: hour)
+        XCTAssertEqual(glanceAtCapCadenceLabel(fiveHour), "5-hour")
+        XCTAssertEqual(glanceAtCapSummary(fiveHour, now: now), "5-hour cap resets in 1h")
 
-    func testAtCapWindowTitleForWeekly() {
-        let atCap = makeWindow(id: "weekly", label: "7d window", token: "168h", remaining: 0, resetIn: day)
-        XCTAssertEqual(glanceAtCapWindowTitle(atCap), "Weekly Cap")
+        let weekly = makeWindow(id: "weekly", label: "7d window", token: "168h", remaining: 0, resetIn: day)
+        XCTAssertEqual(glanceAtCapCadenceLabel(weekly), "7-day")
+        XCTAssertTrue(glanceAtCapSummary(weekly, now: now).hasPrefix("7-day cap resets in "))
     }
 }

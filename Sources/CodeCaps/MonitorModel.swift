@@ -1377,14 +1377,18 @@ final class MonitorModel: ObservableObject {
     func glanceMarkStyle(for providerKey: String) -> MarkStyle {
         let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let platform = key.split(separator: ":", maxSplits: 1).first.map(String.init) ?? key
-        if let style = markStyles[key] ?? markStyles[platform] { return style }
-        if PlatformLogoImage.hasCustomMark(providerKey: key) || PlatformLogoImage.hasCustomMark(providerKey: platform) {
-            return .custom
+        let resolved: MarkStyle
+        if let style = markStyles[key] ?? markStyles[platform] {
+            resolved = style
+        } else if PlatformLogoImage.hasCustomMark(providerKey: key) || PlatformLogoImage.hasCustomMark(providerKey: platform) {
+            resolved = .custom
+        } else {
+            // Owner's explicit per-provider choice beats the "recolour the logos
+            // with the accent" switch when they set one above; otherwise accent
+            // on logos means template for every provider that allows it.
+            resolved = glanceLogosFollowAccent ? .template : .standard
         }
-        // Owner's explicit per-provider choice beats the "recolour the logos
-        // with the accent" switch: if they picked a style for this platform,
-        // that is the answer they gave.
-        return glanceLogosFollowAccent ? .template : .standard
+        return PlatformLogoImage.requiresBrandColorMark(platform) ? .standard : resolved
     }
 
     /// The PiP HUD's own background.  Independent of `appearance` on purpose:

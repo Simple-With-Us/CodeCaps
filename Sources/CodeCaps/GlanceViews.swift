@@ -1491,24 +1491,33 @@ private func glanceDurationTag(_ seconds: TimeInterval) -> String {
     return "\(whole)s"
 }
 
-/// Title Case name for the exhausted window: "5 Hour Cap", "Weekly Cap", …
-func glanceAtCapWindowTitle(_ snapshot: QuotaWindowSnapshot) -> String {
+/// Hyphenated cadence for an exhausted window: "5-hour", "7-day", "monthly", …
+func glanceAtCapCadenceLabel(_ snapshot: QuotaWindowSnapshot) -> String {
     switch glanceMeterCaption(snapshot) {
-    case "5h": return "5 Hour Cap"
-    case "7d", "1w": return "Weekly Cap"
-    case "1m": return "Monthly Cap"
-    case "24h", "1d": return "Daily Cap"
+    case "5h": return "5-hour"
+    case "7d", "1w": return "7-day"
+    case "1m": return "monthly"
+    case "24h", "1d": return "daily"
     default:
         let label = AntigravityDisplay.windowLabel(snapshot.window.label)
         let lower = label.lowercased()
-        if lower.contains("month") || lower.contains("billing") { return "Monthly Cap" }
-        if lower.contains("week") || lower.contains("7d") { return "Weekly Cap" }
-        if lower.contains("5h") || lower.contains("5-hour") || lower.contains("5 hour") { return "5 Hour Cap" }
-        if lower.contains("daily") || lower.contains("24h") { return "Daily Cap" }
-        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return "Quota Cap" }
-        return trimmed.hasSuffix("Cap") ? trimmed : "\(trimmed) Cap"
+        if lower.contains("month") || lower.contains("billing") { return "monthly" }
+        if lower.contains("week") || lower.contains("7d") || lower.contains("168h") { return "7-day" }
+        if lower.contains("5h") || lower.contains("5-hour") || lower.contains("5 hour") { return "5-hour" }
+        if lower.contains("daily") || lower.contains("24h") { return "daily" }
+        let token = (snapshot.window.window ?? "").lowercased()
+        if token == "5h" { return "5-hour" }
+        if token == "7d" || token == "weekly" || token == "168h" { return "7-day" }
+        return "quota"
     }
+}
+
+/// One-line cap summary: "7-day cap resets in 1d 13h".
+func glanceAtCapSummary(_ snapshot: QuotaWindowSnapshot, now: Date) -> String {
+    let cadence = glanceAtCapCadenceLabel(snapshot)
+    let countdown = glanceResetCountdown(snapshot.resetAt, now: now)
+    guard !countdown.isEmpty else { return "\(cadence) cap" }
+    return "\(cadence) cap resets in \(countdown)"
 }
 
 /// Short weekday + time for the reset, e.g. "Tue 4:15 PM".
@@ -1521,15 +1530,14 @@ func glanceResetExactTime(_ reset: Date?, now: Date) -> String {
 ///
 /// Owner 2026-10-12: when any window is exhausted, every bar for that platform
 /// hides and one line names the binding cap and when it lifts — e.g.
-/// "Weekly Cap · Resets In 1d 13h", with the exact reset time on a second line.
+/// "7-day cap resets in 1d 13h", with the exact reset time on a second line.
 struct GlanceAtCap: View {
     let snapshot: QuotaWindowSnapshot
     let now: Date
     /// When true, spans both meter columns in a Glance row.
     var spansFullMeterRow: Bool = false
 
-    private var countdown: String { glanceResetCountdown(snapshot.resetAt, now: now) }
-    private var windowTitle: String { glanceAtCapWindowTitle(snapshot) }
+    private var summary: String { glanceAtCapSummary(snapshot, now: now) }
     private var exactTime: String { glanceResetExactTime(snapshot.resetAt, now: now) }
 
     /// Legacy label kept for narrow surfaces that still say "At Cap" alone.
@@ -1537,7 +1545,12 @@ struct GlanceAtCap: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
-            headline
+            Text(summary)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Theme.ink)
+                .lineLimit(2)
+                .minimumScaleFactor(0.8)
+                .help(glanceResetHelp(snapshot.resetAt, now: now) ?? "")
             if !exactTime.isEmpty {
                 Text(exactTime)
                     .font(.system(size: 10, weight: .medium))
@@ -1549,26 +1562,8 @@ struct GlanceAtCap: View {
         .frame(width: spansFullMeterRow ? Metrics.glanceMetersWidth : Metrics.glanceMeterWidth,
                alignment: .leading)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(windowTitle)
+        .accessibilityLabel(glanceAtCapCadenceLabel(snapshot) + " cap")
         .accessibilityValue(spokenValue)
-    }
-
-    @ViewBuilder
-    private var headline: some View {
-        if countdown.isEmpty {
-            Text(windowTitle)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Theme.danger)
-                .lineLimit(2)
-                .minimumScaleFactor(0.8)
-        } else {
-            Text("\(windowTitle) · Resets In \(countdown)")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Theme.ink)
-                .lineLimit(2)
-                .minimumScaleFactor(0.8)
-                .help(glanceResetHelp(snapshot.resetAt, now: now) ?? "")
-        }
     }
 
     private var spokenValue: String { spokenDescription }
@@ -1576,8 +1571,9 @@ struct GlanceAtCap: View {
     /// What VoiceOver reads: the cap, then when it lifts.  Public so the row
     /// can speak the same words its own collapsed view shows.
     var spokenDescription: String {
-        guard !countdown.isEmpty else { return "\(windowTitle), quota exhausted" }
-        var parts = ["\(windowTitle), resets in \(glanceResetFullCountdown(snapshot.resetAt, now: now))"]
+        let countdown = glanceResetCountdown(snapshot.resetAt, now: now)
+        guard !countdown.isEmpty else { return "\(glanceAtCapCadenceLabel(snapshot)) cap, quota exhausted" }
+        var parts = ["\(glanceAtCapCadenceLabel(snapshot)) cap, resets in \(glanceResetFullCountdown(snapshot.resetAt, now: now))"]
         if !exactTime.isEmpty { parts.append("on \(exactTime)") }
         return parts.joined(separator: ", ")
     }
