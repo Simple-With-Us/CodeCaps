@@ -55,6 +55,24 @@ final class CompanionModelTests: XCTestCase {
 
     // MARK: - App Group & Hygiene
 
+    func testCompanionResolvesCanonicalPlatformDisplayTitles() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains("WidgetPlatformDisplay.title"),
+            "Companion parsing must resolve canonical platform names, not raw provider ids"
+        )
+        XCTAssertEqual(
+            WidgetPlatformDisplay.title(canonicalKey: "cursor", manifestProviderLabel: "cursor", wireProvider: "cursor"),
+            "Cursor"
+        )
+        XCTAssertFalse(
+            WidgetPlatformDisplay.isRawProviderSlug(
+                WidgetPlatformDisplay.title(canonicalKey: "cursor", manifestProviderLabel: "cursor", wireProvider: "cursor"),
+                canonicalKey: "cursor"
+            )
+        )
+    }
+
     func testPlatformSpecificAppGroupIds() throws {
         let source = try readCompanionModelSource()
         XCTAssertTrue(
