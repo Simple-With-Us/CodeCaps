@@ -78,7 +78,7 @@ public enum UsageMonitorPushMetadata {
             return "openai:\(slot)"
         }
         if provider == "xai" || provider == "grok-bot" {
-            let token = window.window ?? "weekly"
+            let token = window.window ?? "gbu-weekly"
             return provider == "grok-bot" ? token : "xai:\(token)"
         }
         if provider == "minimax", let model = window.modelId {
