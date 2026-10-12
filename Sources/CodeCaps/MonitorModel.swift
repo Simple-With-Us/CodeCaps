@@ -445,6 +445,9 @@ final class MonitorModel: ObservableObject {
     @Published var isPipEnabled: Bool {
         didSet {
             defaults.set(isPipEnabled, forKey: "isPipEnabled")
+            if oldValue && !isPipEnabled && pipOpenWhenLow {
+                PipLowQuota.noteUserClosedPip(session: &pipLowQuotaSession)
+            }
             PipWidgetController.shared.update(model: self)
         }
     }
@@ -460,6 +463,35 @@ final class MonitorModel: ObservableObject {
             PipWidgetController.shared.update(model: self)
         }
     }
+    /// Rows temporarily added because a quota crossed the low threshold.
+    @Published var pipAutoAddedRowIds: Set<String> {
+        didSet {
+            defaults.set(Array(pipAutoAddedRowIds), forKey: "pipAutoAddedRowIds")
+            PipWidgetController.shared.update(model: self)
+        }
+    }
+    @Published var pipOpenWhenLow: Bool {
+        didSet {
+            defaults.set(pipOpenWhenLow, forKey: "pipOpenWhenLow")
+            if !pipOpenWhenLow {
+                pipLowQuotaSession = PipLowQuotaSession()
+                pipAutoAddedRowIds = []
+            } else {
+                evaluatePipLowQuota()
+            }
+        }
+    }
+    @Published var pipLowThresholdPercent: Int {
+        didSet {
+            let clamped = PipLowQuota.thresholdChoices.contains(pipLowThresholdPercent)
+                ? pipLowThresholdPercent
+                : PipLowQuota.defaultThreshold
+            if clamped != pipLowThresholdPercent { pipLowThresholdPercent = clamped; return }
+            defaults.set(pipLowThresholdPercent, forKey: "pipLowThresholdPercent")
+            evaluatePipLowQuota()
+        }
+    }
+    var pipLowQuotaSession = PipLowQuotaSession()
 
     // Dynamic Pacing Highlights
     @Published var pacingColorHighlights: Bool {
@@ -636,6 +668,12 @@ final class MonitorModel: ObservableObject {
         isPipEnabled = defaults.bool(forKey: "isPipEnabled")
         pipPinnedRowIds = Set(defaults.stringArray(forKey: "pipPinnedRowIds") ?? [])
         pipRowOrder = defaults.stringArray(forKey: "pipRowOrder") ?? []
+        pipAutoAddedRowIds = Set(defaults.stringArray(forKey: "pipAutoAddedRowIds") ?? [])
+        pipOpenWhenLow = defaults.bool(forKey: "pipOpenWhenLow")
+        let storedThreshold = defaults.integer(forKey: "pipLowThresholdPercent")
+        pipLowThresholdPercent = PipLowQuota.thresholdChoices.contains(storedThreshold)
+            ? storedThreshold
+            : PipLowQuota.defaultThreshold
         pacingColorHighlights = defaults.object(forKey: "pacingColorHighlights") as? Bool ?? true
         alarmChanges = alarmManager.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
@@ -1343,6 +1381,22 @@ final class MonitorModel: ObservableObject {
         var current = orderedPipDisplaySections().map(\.id)
         current.move(fromOffsets: offsets, toOffset: offset)
         pipRowOrder = current
+    }
+
+    func evaluatePipLowQuota() {
+        let shouldOpen = PipLowQuota.evaluate(
+            rows: displaySections,
+            thresholdPercent: pipLowThresholdPercent,
+            enabled: pipOpenWhenLow,
+            session: &pipLowQuotaSession
+        )
+        let auto = pipLowQuotaSession.autoAddedRowIds
+        if auto != pipAutoAddedRowIds {
+            pipAutoAddedRowIds = auto
+        }
+        if shouldOpen && pipOpenWhenLow {
+            isPipEnabled = true
+        }
     }
 
     func setCustomInfo(for providerKey: String, info: PlatformCustomInfo) {
@@ -2143,6 +2197,7 @@ final class MonitorModel: ObservableObject {
             self.publishWidgetSnapshot(candidates: merged + split.groups.flatMap(\.windows))
             self.refreshRunawayUsageState(recordSamples: local != nil)
             self.alarmManager.evaluate(observations: self.resetAlarmObservationsForCurrentReadings(), now: self.now)
+            self.evaluatePipLowQuota()
             self.isRefreshing = false
             self.request = nil
         }
@@ -2290,6 +2345,7 @@ final class MonitorModel: ObservableObject {
         refreshRunawayUsageState(recordSamples: recordSamples)
         refreshExhaustionWarnings(windows: merged + split.groups.flatMap(\.windows), now: now)
         alarmManager.evaluate(observations: resetAlarmObservationsForCurrentReadings(), now: now)
+        evaluatePipLowQuota()
     }
 
     /// Re-measure every window's headroom from the recorded history and announce

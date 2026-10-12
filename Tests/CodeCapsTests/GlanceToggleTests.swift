@@ -242,6 +242,28 @@ final class GlanceToggleTests: XCTestCase {
                        "chatgpt.com")
     }
 
+    func testPipCountdownInkMeetsContrastOnEveryBackground() {
+        func relativeLuminance(_ c: (r: CGFloat, g: CGFloat, b: CGFloat)) -> CGFloat {
+            func lin(_ v: CGFloat) -> CGFloat { v <= 0.03928 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
+            return 0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
+        }
+        func components(_ color: Color) -> (r: CGFloat, g: CGFloat, b: CGFloat) {
+            var value: (r: CGFloat, g: CGFloat, b: CGFloat) = (0, 0, 0)
+            NSAppearance(named: .aqua)?.performAsCurrentDrawingAppearance {
+                if let rgb = NSColor(color).usingColorSpace(.sRGB) {
+                    value = (rgb.redComponent, rgb.greenComponent, rgb.blueComponent)
+                }
+            }
+            return value
+        }
+        for background in PipBackground.allCases {
+            let fill = relativeLuminance(components(background.fill))
+            let countdown = relativeLuminance(components(background.countdownInk))
+            let contrast = (max(fill, countdown) + 0.05) / (min(fill, countdown) + 0.05)
+            XCTAssertGreaterThanOrEqual(contrast, 4.5, "\(background.title) countdown ink")
+        }
+    }
+
     func testTextOnTheHeadingBandIsReadableInBothAppearances() {
         func components(_ color: Color, _ appearance: NSAppearance.Name) -> (r: CGFloat, g: CGFloat, b: CGFloat) {
             var value: (r: CGFloat, g: CGFloat, b: CGFloat) = (0, 0, 0)

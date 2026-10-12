@@ -400,14 +400,15 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
     /// count different rows.
     static func targetRows(for model: MonitorModel) -> [DisplaySection] {
         let all = model.orderedPipDisplaySections()
-        if model.pipPinnedRowIds.isEmpty {
-            let sorted = all.sorted { a, b in
-                (a.section.minimumRemainingPercent ?? 100) < (b.section.minimumRemainingPercent ?? 100)
-            }
-            return Array(sorted.prefix(2))
+        let selected = model.pipPinnedRowIds.union(model.pipAutoAddedRowIds)
+        if !selected.isEmpty {
+            let rows = all.filter { selected.contains($0.id) }
+            if !rows.isEmpty { return rows }
         }
-        let pinned = all.filter { model.pipPinnedRowIds.contains($0.id) }
-        return pinned.isEmpty ? Array(all.prefix(2)) : pinned
+        let sorted = all.sorted { a, b in
+            (a.section.minimumRemainingPercent ?? 100) < (b.section.minimumRemainingPercent ?? 100)
+        }
+        return Array(sorted.prefix(2))
     }
 
     private static func rowSignature(for model: MonitorModel) -> [String] {
@@ -703,7 +704,7 @@ struct PipWidgetView: View {
                     // Say so, rather than letting a pinned row look absent.
                     Text("\(targetRows.count - max(1, visible)) more pinned — scroll")
                         .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(background.secondaryInk)
+                        .foregroundStyle(background.countdownInk)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.top, 2)
                 }
@@ -764,9 +765,12 @@ struct PipWidgetView: View {
             if let atCap {
                 pipAtCap(atCap, detail: detail)
             } else {
-                ForEach(Array(meters.enumerated()), id: \.offset) { _, snapshot in
-                    pipMeter(snapshot, detail: detail)
+                HStack(spacing: PipMetrics.meterSpacing) {
+                    ForEach(Array(meters.enumerated()), id: \.offset) { _, snapshot in
+                        pipMeter(snapshot, detail: detail)
+                    }
                 }
+                .fixedSize(horizontal: false, vertical: true)
             }
         }
         .frame(height: PipMetrics.rowHeight)
@@ -814,7 +818,7 @@ struct PipWidgetView: View {
                 if windows.isEmpty {
                     Text("No readings for this platform right now.")
                         .font(.system(size: 10))
-                        .foregroundStyle(background.secondaryInk)
+                        .foregroundStyle(background.countdownInk)
                 }
                 Spacer(minLength: 0)
             }
@@ -837,7 +841,7 @@ struct PipWidgetView: View {
             HStack(spacing: 5) {
                 Text(cadenceCaption)
                     .font(.system(size: showExpanded ? 10 : 9, weight: showExpanded ? .bold : .bold))
-                    .foregroundStyle(background.secondaryInk)
+                    .foregroundStyle(background.countdownInk)
                     .frame(width: showExpanded ? PipMetrics.cadenceExpandedWidth : PipMetrics.cadenceWidth, alignment: .leading)
                 Text(cleanLabel)
                     .font(.system(size: 10, weight: .medium))
@@ -851,7 +855,7 @@ struct PipWidgetView: View {
                 if !cd.isEmpty {
                     Text(cd)
                         .font(.system(size: 9).monospacedDigit())
-                        .foregroundStyle(background.secondaryInk)
+                        .foregroundStyle(background.countdownInk)
                         .lineLimit(1)
                 }
             }
@@ -882,7 +886,7 @@ struct PipWidgetView: View {
             if !exact.isEmpty {
                 Text(exact)
                     .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(background.secondaryInk)
+                    .foregroundStyle(background.countdownInk)
                     .lineLimit(1)
             }
         }
@@ -902,7 +906,7 @@ struct PipWidgetView: View {
             if detail.showsCadence {
                 Text(cadenceCaption)
                     .font(.system(size: showExpanded ? 10 : 9, weight: showExpanded ? .bold : .bold))
-                    .foregroundStyle(background.secondaryInk)
+                    .foregroundStyle(background.countdownInk)
                     .frame(width: showExpanded ? PipMetrics.cadenceExpandedWidth : PipMetrics.cadenceWidth, alignment: .trailing)
             }
 
@@ -925,7 +929,7 @@ struct PipWidgetView: View {
             if detail.showsCountdown, !cd.isEmpty {
                 Text(cd)
                     .font(.system(size: 9, weight: .medium).monospacedDigit())
-                    .foregroundStyle(background.secondaryInk)
+                    .foregroundStyle(background.countdownInk)
                     .lineLimit(1)
                     .fixedSize()
                     .frame(width: PipMetrics.countdownWidth, alignment: .trailing)
