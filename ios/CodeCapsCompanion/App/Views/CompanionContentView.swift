@@ -6,9 +6,18 @@ public struct CompanionContentView: View {
     @StateObject private var soundPlayer = AlarmSoundPlayer()
     @State private var showingSettings: Bool
     @State private var expandedIds: Set<String> = []
+    @State private var settingsTab: CompanionSettingsTab = .display
     #if os(iOS)
     @State private var platformOrderEditMode: EditMode = .inactive
     #endif
+
+    private enum CompanionSettingsTab: String, CaseIterable, Identifiable {
+        case display = "Display"
+        case sources = "Sources"
+        case alarms = "Alarms"
+
+        var id: String { rawValue }
+    }
 
     public init(model: CompanionQuotaModel, showingSettings: Bool = ProcessInfo.processInfo.arguments.contains("-openSettings")) {
         self.model = model
@@ -91,14 +100,15 @@ public struct CompanionContentView: View {
                     await model.refresh()
                 }
             }
-            .sheet(isPresented: $showingSettings) {
-                #if os(iOS)
+            #if os(iOS)
+            .fullScreenCover(isPresented: $showingSettings) {
                 companionSettingsView
-                    .presentationDetents([.large])
-                #else
-                companionSettingsView
-                #endif
             }
+            #else
+            .sheet(isPresented: $showingSettings) {
+                companionSettingsView
+            }
+            #endif
         }
     }
 
@@ -441,70 +451,131 @@ public struct CompanionContentView: View {
 
     private var companionSettingsView: some View {
         NavigationStack {
-            ScrollViewReader { proxy in
-                Form {
-                Section {
-                    ForEach(model.items) { item in
-                        HStack(spacing: 10) {
-                            CompanionProviderLogo(item: item, size: 24)
-                            Text(item.title)
-                                .font(.system(size: 14, weight: .medium))
-                            Spacer()
-                        }
+            VStack(spacing: 0) {
+                Picker("Settings section", selection: $settingsTab) {
+                    ForEach(CompanionSettingsTab.allCases) { tab in
+                        Text(tab.rawValue).tag(tab)
                     }
-                    .onMove(perform: model.movePlatform)
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .padding(.bottom, 4)
 
-                    if !model.platformOrder.isEmpty {
-                        Button("Reset Default Order") {
-                            model.resetPlatformOrder()
+                ScrollViewReader { proxy in
+                    Form {
+                        switch settingsTab {
+                        case .display:
+                            settingsDisplaySections
+                        case .sources:
+                            settingsSourcesSections
+                        case .alarms:
+                            settingsAlarmsSections
                         }
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
                     }
-                } header: {
-                    HStack {
-                        Text("Platform Order")
-                        Spacer()
-                        #if os(iOS)
-                        Button(platformOrderEditMode == .active ? "Done" : "Edit") {
-                            withAnimation {
-                                platformOrderEditMode = platformOrderEditMode == .active ? .inactive : .active
+                    .onAppear {
+                        if ProcessInfo.processInfo.arguments.contains("-scrollToRefresh") {
+                            settingsTab = .sources
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                                withAnimation {
+                                    proxy.scrollTo("refreshSection", anchor: .bottom)
+                                }
                             }
                         }
-                        .accessibilityLabel(platformOrderEditMode == .active
-                                            ? "Done Reordering Platforms"
-                                            : "Reorder Platforms")
-                        #endif
-                    }
-                } footer: {
-                    Text("Customize the order of platforms shown on the main screen." + sentenceGap
-                         + "Tap Edit, then drag to reorder.")
-                }
-
-                Section("Mac Sync Endpoint") {
-                    #if os(iOS)
-                    TextField("Endpoint URL (https://...)", text: $model.syncEndpoint)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled(true)
-                    #else
-                    TextField("Endpoint URL (https://...)", text: $model.syncEndpoint)
-                        .autocorrectionDisabled(true)
-                    #endif
-                    SecureField("Sync Bearer Token", text: $model.syncToken)
-                    Button("Remove Token", role: .destructive) {
-                        model.removeSyncToken()
-                    }
-                    .accessibilityIdentifier("removeSyncToken")
-                    .disabled(model.syncToken.isEmpty && model.tokenStorageError == nil)
-                    if let tokenStorageError = model.tokenStorageError {
-                        Text(tokenStorageError)
-                            .font(.caption)
-                            .foregroundStyle(.red)
                     }
                 }
-                .id("syncTokenSection")
+            }
+            #if os(iOS)
+            .environment(\.editMode, settingsTab == .display ? $platformOrderEditMode : Binding.constant(.inactive))
+            #endif
+            .navigationTitle("Settings")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .refreshable {
+                await model.refresh()
+            }
+            .toolbar {
+                #if os(iOS)
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { showingSettings = false }
+                }
+                #else
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { showingSettings = false }
+                }
+                #endif
+            }
+        }
+    }
 
-                Section {
+    @ViewBuilder
+    private var settingsDisplaySections: some View {
+        Section {
+            ForEach(model.items) { item in
+                HStack(spacing: 10) {
+                    CompanionProviderLogo(item: item, size: 24)
+                    Text(item.title)
+                        .font(.system(size: 14, weight: .medium))
+                    Spacer()
+                }
+            }
+            .onMove(perform: model.movePlatform)
+
+            if !model.platformOrder.isEmpty {
+                Button("Reset Default Order") {
+                    model.resetPlatformOrder()
+                }
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+            }
+        } header: {
+            HStack {
+                Text("Platform Order")
+                Spacer()
+                #if os(iOS)
+                Button(platformOrderEditMode == .active ? "Done" : "Edit") {
+                    withAnimation {
+                        platformOrderEditMode = platformOrderEditMode == .active ? .inactive : .active
+                    }
+                }
+                .accessibilityLabel(platformOrderEditMode == .active
+                                    ? "Done Reordering Platforms"
+                                    : "Reorder Platforms")
+                #endif
+            }
+        } footer: {
+            Text("Customize the order of platforms shown on the main screen." + sentenceGap
+                 + "Tap Edit, then drag to reorder.")
+        }
+    }
+
+    @ViewBuilder
+    private var settingsSourcesSections: some View {
+        Section("Mac Sync Endpoint") {
+            #if os(iOS)
+            TextField("Endpoint URL (https://...)", text: $model.syncEndpoint)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled(true)
+            #else
+            TextField("Endpoint URL (https://...)", text: $model.syncEndpoint)
+                .autocorrectionDisabled(true)
+            #endif
+            SecureField("Sync Bearer Token", text: $model.syncToken)
+            Button("Remove Token", role: .destructive) {
+                model.removeSyncToken()
+            }
+            .accessibilityIdentifier("removeSyncToken")
+            .disabled(model.syncToken.isEmpty && model.tokenStorageError == nil)
+            if let tokenStorageError = model.tokenStorageError {
+                Text(tokenStorageError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+        }
+        .id("syncTokenSection")
+
+        Section {
                     if itemsWithDuplicates.isEmpty {
                         Text("No secondary or mirror sources detected." + sentenceGap
                              + "All allowance windows are sourced directly from your primary sync feed.")
@@ -581,71 +652,7 @@ public struct CompanionContentView: View {
                 .id("dataSourcesMirrorsSection")
                 .accessibilityIdentifier("dataSourcesMirrorsSection")
 
-                Section("Alerts & Notifications") {
-                    Toggle("Reset Alarms For All Providers", isOn: $model.alarmsAll)
-                    Text("A provider's longest window alarms every time it resets." + sentenceGap
-                         + "A shorter window alarms only if it came within 20% of its cap first."
-                         + sentenceGap + "Turn this off to pick providers one by one with the bell on each card.")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    Picker("Reset Alert Sound", selection: $model.alarmSound) {
-                        ForEach(ResetAlarmSound.defaultPickerOrder, id: \.self) { sound in
-                            Text(sound.displayName).tag(sound)
-                        }
-                    }
-                    Text(model.alarmSound.pickerDetail)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-
-                    Button {
-                        soundPlayer.preview(model.alarmSound)
-                    } label: {
-                        Label("Preview Sound", systemImage: "speaker.wave.2")
-                    }
-                    .disabled(model.alarmSound == .silent)
-
-                    if let preview = soundPlayer.lastPreview {
-                        Label {
-                            Text(preview.message).fixedSize(horizontal: false, vertical: true)
-                        } icon: {
-                            Image(systemName: preview.isFailure
-                                  ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                        }
-                        .font(.caption2)
-                        .foregroundStyle(preview.isFailure ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.secondary))
-                    }
-
-                    Button {
-                        Task { await model.sendTestNotification() }
-                    } label: {
-                        Label("Send Test Notification", systemImage: "bell.badge")
-                    }
-
-                    if model.notificationsDenied {
-                        Button {
-                            #if os(iOS)
-                            if let url = URL(string: UIApplication.openSettingsURLString) {
-                                UIApplication.shared.open(url)
-                            }
-                            #endif
-                        } label: {
-                            Label("Open Notification Settings", systemImage: "gearshape")
-                        }
-                    }
-
-                    if let outcome = model.testNotificationOutcome {
-                        Label {
-                            Text(outcome.message).fixedSize(horizontal: false, vertical: true)
-                        } icon: {
-                            Image(systemName: outcome.isFailure
-                                  ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                        }
-                        .font(.caption2)
-                        .foregroundStyle(outcome.isFailure ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.secondary))
-                    }
-                }
-
-                Section("Help") {
+        Section("Help") {
                     Link(
                         "Setup & Data Guide",
                         destination: URL(string: "https://codecaps.simplewithus.com/setup.html")!
@@ -698,37 +705,71 @@ public struct CompanionContentView: View {
                     }
                 }
                 .id("refreshSection")
+    }
+
+    @ViewBuilder
+    private var settingsAlarmsSections: some View {
+        Section("Reset Alarms") {
+            Toggle("Reset Alarms For All Providers", isOn: $model.alarmsAll)
+            Text("A provider's longest window alarms every time it resets." + sentenceGap
+                 + "A shorter window alarms only if it came within 20% of its cap first."
+                 + sentenceGap + "Turn this off to pick providers one by one with the bell on each card.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            Picker("Reset Alert Sound", selection: $model.alarmSound) {
+                ForEach(ResetAlarmSound.defaultPickerOrder, id: \.self) { sound in
+                    Text(sound.displayName).tag(sound)
+                }
             }
-            #if os(iOS)
-            .environment(\.editMode, $platformOrderEditMode)
-            #endif
-            .navigationTitle("Settings")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .refreshable {
-                await model.refresh()
+            Text(model.alarmSound.pickerDetail)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+            Button {
+                soundPlayer.preview(model.alarmSound)
+            } label: {
+                Label("Preview Sound", systemImage: "speaker.wave.2")
             }
-            .onAppear {
-                if ProcessInfo.processInfo.arguments.contains("-scrollToRefresh") {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                        withAnimation {
-                            proxy.scrollTo("refreshSection", anchor: .bottom)
-                        }
+            .disabled(model.alarmSound == .silent)
+
+            if let preview = soundPlayer.lastPreview {
+                Label {
+                    Text(preview.message).fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: preview.isFailure
+                          ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                }
+                .font(.caption2)
+                .foregroundStyle(preview.isFailure ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.secondary))
+            }
+
+            Button {
+                Task { await model.sendTestNotification() }
+            } label: {
+                Label("Send Test Notification", systemImage: "bell.badge")
+            }
+
+            if model.notificationsDenied {
+                Button {
+                    #if os(iOS)
+                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                        UIApplication.shared.open(url)
                     }
+                    #endif
+                } label: {
+                    Label("Open Notification Settings", systemImage: "gearshape")
                 }
             }
-            .toolbar {
-                #if os(iOS)
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { showingSettings = false }
+
+            if let outcome = model.testNotificationOutcome {
+                Label {
+                    Text(outcome.message).fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: outcome.isFailure
+                          ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
                 }
-                #else
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { showingSettings = false }
-                }
-                #endif
-            }
+                .font(.caption2)
+                .foregroundStyle(outcome.isFailure ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.secondary))
             }
         }
     }

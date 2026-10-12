@@ -327,16 +327,21 @@ final class CompanionModelTests: XCTestCase {
             "settings sheet must use the Settings title for both toolbar entry points"
         )
         XCTAssertTrue(
-            source.contains(".presentationDetents([.large])"),
-            "settings sheet must open at large height, not a short bottom drawer"
+            source.contains(".fullScreenCover(isPresented: $showingSettings)"),
+            "settings must present full screen on iOS"
         )
+        XCTAssertTrue(
+            source.contains("enum CompanionSettingsTab"),
+            "settings must be grouped into tabs"
+        )
+        XCTAssertTrue(source.contains("case display = \"Display\""))
+        XCTAssertTrue(source.contains("case sources = \"Sources\""))
+        XCTAssertTrue(source.contains("case alarms = \"Alarms\""))
+        XCTAssertTrue(source.contains("settingsDisplaySections"))
+        XCTAssertTrue(source.contains("settingsSourcesSections"))
+        XCTAssertTrue(source.contains("settingsAlarmsSections"))
         XCTAssertFalse(source.contains("Companion Settings"))
-        XCTAssertFalse(source.contains("navigationTitle(\"Sort & Sync\")"))
-        XCTAssertFalse(
-            source.contains("ToolbarItem(placement: .navigationBarLeading)") && source.contains("codecaps-mark")
-                && source.contains("navigationTitle(\"Settings\")"),
-            "settings sheet must not show a faux-button logo beside the Settings title"
-        )
+        XCTAssertFalse(source.contains(".presentationDetents"))
     }
 
     func testPullToRefreshAndButtonResponsiveness() throws {
