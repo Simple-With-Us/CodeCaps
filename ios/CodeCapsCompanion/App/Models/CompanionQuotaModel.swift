@@ -152,6 +152,10 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
         FleetSourceDisagreement.isReportedWithinAlertWindow(reportedAt, now: now)
     }
 
+    public var isMacCodeCapsReading: Bool {
+        FleetMacReading.isMacCodeCapsReading(id: id, source: source, via: via)
+    }
+
     /// Hyphenated cadence beside a meter bar (`5-hour`, `7-day`, `1-month`, `Other limit`).
     public var meterCaption: String {
         QuotaWindowVocabulary.standardCadence(
@@ -286,6 +290,16 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
     /// Both feeds must report within this window for a source-disagreement banner.
     public static let sourceDiscrepancyFreshnessWindow: TimeInterval = FleetSourceDisagreement.alertFreshnessWindow
 
+    public struct CardWindow: Equatable, Sendable {
+        public let window: CompanionWindowItem
+        public let updatedLabel: String?
+
+        public init(window: CompanionWindowItem, updatedLabel: String?) {
+            self.window = window
+            self.updatedLabel = updatedLabel
+        }
+    }
+
     /// One discrepancy where an additional/duplicate source diverges from its matching primary window by at least 10 points.
     public struct SourceDiscrepancy: Identifiable, Equatable, Sendable {
         public var id: String { "\(primaryWindow.id)-\(duplicateWindow.id)" }
@@ -357,42 +371,47 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
         return raw.contains(".") && !raw.contains(" ")
     }
 
-    /// Main-card windows: when mirrors exist, each allowance shows its newest observation.
-    public func cardWindows(scope: CompanionSourceScope) -> [CompanionWindowItem] {
-        guard scope == .allSources, !duplicateWindows.isEmpty else { return windows }
-        return windows.map { primary in
+    /// Main-card windows: fresh Mac CodeCaps readings win; otherwise the newest feed with an Updated label.
+    public func cardWindowRows(scope: CompanionSourceScope, now: Date = Date()) -> [CardWindow] {
+        windows.map { primary in
             let key = Self.allowanceKey(for: primary)
             let mirrors = duplicateWindows.filter { Self.allowanceKey(for: $0) == key }
-            guard !mirrors.isEmpty else { return primary }
-            return Self.freshestWindow(in: [primary] + mirrors) ?? primary
+            let pool = mirrors.isEmpty ? [primary] : [primary] + mirrors
+            return Self.resolveCardWindow(pool: pool, now: now)
         }
     }
 
-    public func cardShortWindow(scope: CompanionSourceScope) -> CompanionWindowItem? {
-        let resolved = cardWindows(scope: scope)
-        return resolved.first(where: { $0.isShortCadence }) ?? resolved.first
+    public func cardWindows(scope: CompanionSourceScope, now: Date = Date()) -> [CompanionWindowItem] {
+        cardWindowRows(scope: scope, now: now).map(\.window)
     }
 
-    public func cardLongWindow(scope: CompanionSourceScope) -> CompanionWindowItem? {
-        let resolved = cardWindows(scope: scope)
-        let nonShort = resolved.filter { !$0.isShortCadence }
-        if let match = nonShort.first(where: { $0.id != cardShortWindow(scope: scope)?.id }) {
+    public func cardShortWindow(scope: CompanionSourceScope, now: Date = Date()) -> CardWindow? {
+        let resolved = cardWindowRows(scope: scope, now: now)
+        let window = resolved.map(\.window).first(where: { $0.isShortCadence }) ?? resolved.first?.window
+        return resolved.first(where: { $0.window.id == window?.id })
+    }
+
+    public func cardLongWindow(scope: CompanionSourceScope, now: Date = Date()) -> CardWindow? {
+        let resolved = cardWindowRows(scope: scope, now: now)
+        let short = cardShortWindow(scope: scope, now: now)?.window
+        let nonShort = resolved.filter { !$0.window.isShortCadence }
+        if let match = nonShort.first(where: { $0.window.id != short?.id }) {
             return match
         }
-        return resolved.first(where: { $0.id != cardShortWindow(scope: scope)?.id })
+        return resolved.first(where: { $0.window.id != short?.id })
     }
 
-    public func cardRemainingPercent(scope: CompanionSourceScope) -> Double? {
-        cardWindows(scope: scope).compactMap(\.remainingPercent).min()
+    public func cardRemainingPercent(scope: CompanionSourceScope, now: Date = Date()) -> Double? {
+        cardWindows(scope: scope, now: now).compactMap(\.remainingPercent).min()
     }
 
-    public func cardDisplayPercent(scope: CompanionSourceScope) -> String {
-        guard let remainingPercent = cardRemainingPercent(scope: scope) else { return "—" }
+    public func cardDisplayPercent(scope: CompanionSourceScope, now: Date = Date()) -> String {
+        guard let remainingPercent = cardRemainingPercent(scope: scope, now: now) else { return "—" }
         return "\(Int(remainingPercent.rounded()))%"
     }
 
-    public func cardStatusColor(scope: CompanionSourceScope) -> Color {
-        guard let remainingPercent = cardRemainingPercent(scope: scope) else { return .secondary }
+    public func cardStatusColor(scope: CompanionSourceScope, now: Date = Date()) -> Color {
+        guard let remainingPercent = cardRemainingPercent(scope: scope, now: now) else { return .secondary }
         if remainingPercent <= 0 { return CompanionTheme.danger }
         if remainingPercent < 20 { return CompanionTheme.warning }
         return CompanionTheme.accent
@@ -402,23 +421,26 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
         windows + duplicateWindows
     }
 
-    public func isStaleInSourceDetail(_ window: CompanionWindowItem) -> Bool {
+    public func isStaleInSourceDetail(_ window: CompanionWindowItem, scope: CompanionSourceScope, now: Date = Date()) -> Bool {
         let key = Self.allowanceKey(for: window)
         let peers = sourceDetailWindows.filter { Self.allowanceKey(for: $0) == key }
-        let fleetPeers = peers.map {
-            FleetSourceReading(remainingPercent: $0.remainingPercent, reportedAt: $0.reportedAt)
-        }
-        let selfReading = FleetSourceReading(
-            remainingPercent: window.remainingPercent,
-            reportedAt: window.reportedAt
-        )
-        return FleetSourceDisagreement.isStaleAmongPeers(selfReading, peers: fleetPeers)
+        guard peers.count > 1 else { return false }
+        let displayed = Self.resolveCardWindow(pool: peers, now: now).window
+        return window.id != displayed.id
     }
 
-    private static func freshestWindow(in pool: [CompanionWindowItem]) -> CompanionWindowItem? {
-        pool.max { left, right in
-            (left.reportedAt ?? .distantPast) < (right.reportedAt ?? .distantPast)
+    private static func resolveCardWindow(pool: [CompanionWindowItem], now: Date) -> CardWindow {
+        let observations = pool.map {
+            FleetQuotaObservation(
+                remainingPercent: $0.remainingPercent,
+                reportedAt: $0.reportedAt,
+                isMacCodeCapsReading: $0.isMacCodeCapsReading
+            )
         }
+        if let pick = FleetMacReading.pickCardDisplay(from: observations, now: now) {
+            return CardWindow(window: pool[pick.chosenIndex], updatedLabel: pick.updatedLabel)
+        }
+        return CardWindow(window: pool[0], updatedLabel: nil)
     }
 
     public var sourceCount: Int {

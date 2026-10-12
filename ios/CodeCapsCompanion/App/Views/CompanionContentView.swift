@@ -274,7 +274,10 @@ public struct CompanionContentView: View {
         let short = item.cardShortWindow(scope: model.sourceScope)
         let long = item.cardLongWindow(scope: model.sourceScope)
         let cardWindows = item.cardWindows(scope: model.sourceScope)
-        let extraWindows = cardWindows.filter { $0.id != short?.id && $0.id != long?.id }
+        let extraWindows = cardWindows.filter {
+            $0.id != short?.window.id && $0.id != long?.window.id
+        }
+        let headlineUpdatedLabel = [short?.updatedLabel, long?.updatedLabel].compactMap { $0 }.first
 
         return VStack(alignment: .leading, spacing: 12) {
             // Main clickable row
@@ -327,9 +330,17 @@ public struct CompanionContentView: View {
                         .accessibilityValue(item.isAlarmEnabled ? "on" : "off")
                     }
 
-                    Text(item.cardDisplayPercent(scope: model.sourceScope))
-                        .font(.system(size: 17, weight: .bold, design: .rounded).monospacedDigit())
-                        .foregroundStyle(item.cardStatusColor(scope: model.sourceScope))
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text(item.cardDisplayPercent(scope: model.sourceScope))
+                            .font(.system(size: 17, weight: .bold, design: .rounded).monospacedDigit())
+                            .foregroundStyle(item.cardStatusColor(scope: model.sourceScope))
+                        if let headlineUpdatedLabel {
+                            Text(headlineUpdatedLabel)
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
 
                     if item.isExpandable {
                         Image(systemName: "chevron.down")
@@ -345,10 +356,18 @@ public struct CompanionContentView: View {
             // Quota Bars side by side
             HStack(spacing: 12) {
                 if let short {
-                    CompanionMeterView(caption: short.caption, window: short)
+                    CompanionMeterView(
+                        caption: short.window.caption,
+                        window: short.window,
+                        updatedLabel: short.updatedLabel
+                    )
                 }
-                if let long, long.id != short?.id {
-                    CompanionMeterView(caption: long.caption, window: long)
+                if let long, long.window.id != short?.window.id {
+                    CompanionMeterView(
+                        caption: long.window.caption,
+                        window: long.window,
+                        updatedLabel: long.updatedLabel
+                    )
                 } else if short == nil {
                     if let first = cardWindows.first {
                         CompanionMeterView(caption: first.caption, window: first)
@@ -601,7 +620,7 @@ public struct CompanionContentView: View {
                                                         .padding(.vertical, 1.5)
                                                         .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 4))
                                                 }
-                                                if item.isStaleInSourceDetail(reading) {
+                                                if item.isStaleInSourceDetail(reading, scope: model.sourceScope) {
                                                     Text("Stale")
                                                         .font(.system(size: 10, weight: .semibold))
                                                         .foregroundStyle(.secondary)
@@ -622,7 +641,7 @@ public struct CompanionContentView: View {
                                             .foregroundStyle(reading.statusColor)
                                     }
                                     .padding(.vertical, 2)
-                                    .opacity(item.isStaleInSourceDetail(reading) ? 0.72 : 1)
+                                    .opacity(item.isStaleInSourceDetail(reading, scope: model.sourceScope) ? 0.72 : 1)
                                 }
 
                                 if model.sourceScope == .allSources, item.sourceCount > 1,
@@ -779,13 +798,16 @@ public struct CompanionContentView: View {
 public struct CompanionMeterView: View {
     public let caption: String
     public let window: CompanionWindowItem
+    public let updatedLabel: String?
 
-    public init(caption: String, window: CompanionWindowItem) {
+    public init(caption: String, window: CompanionWindowItem, updatedLabel: String? = nil) {
         self.caption = caption
         self.window = window
+        self.updatedLabel = updatedLabel
     }
 
     public var body: some View {
+        VStack(alignment: .trailing, spacing: 2) {
         HStack(spacing: 4) {
             Text(caption)
                 .font(.system(size: 11, weight: .bold))
@@ -817,7 +839,15 @@ public struct CompanionMeterView: View {
                 .frame(width: 44, alignment: .center)
         }
         .minimumScaleFactor(0.85)
-        .frame(maxWidth: .infinity)
+        if let updatedLabel {
+            Text(updatedLabel)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
     }
 }
 

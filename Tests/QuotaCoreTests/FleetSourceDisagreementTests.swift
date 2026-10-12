@@ -59,4 +59,24 @@ final class FleetSourceDisagreementTests: XCTestCase {
     func testAlertFreshnessWindowIsTwentyMinutes() {
         XCTAssertEqual(FleetSourceDisagreement.alertFreshnessWindow, 20 * 60)
     }
+
+    func testFreshMacReadingWinsOverNewerMirror() {
+        let observations = [
+            FleetQuotaObservation(remainingPercent: 96, reportedAt: minutesAgo(1), isMacCodeCapsReading: false),
+            FleetQuotaObservation(remainingPercent: 5, reportedAt: minutesAgo(4), isMacCodeCapsReading: true),
+        ]
+        let pick = FleetMacReading.pickCardDisplay(from: observations, now: now)
+        XCTAssertEqual(pick?.chosenIndex, 1)
+        XCTAssertNil(pick?.updatedLabel)
+    }
+
+    func testStaleMacFallsBackToFreshestWithUpdatedLabel() {
+        let observations = [
+            FleetQuotaObservation(remainingPercent: 5, reportedAt: minutesAgo(25), isMacCodeCapsReading: true),
+            FleetQuotaObservation(remainingPercent: 96, reportedAt: minutesAgo(2), isMacCodeCapsReading: false),
+        ]
+        let pick = FleetMacReading.pickCardDisplay(from: observations, now: now)
+        XCTAssertEqual(pick?.chosenIndex, 1)
+        XCTAssertEqual(pick?.updatedLabel, "Updated " + FleetMacReading.updatedTimeCaption(for: minutesAgo(2)))
+    }
 }
