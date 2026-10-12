@@ -1491,6 +1491,57 @@ private func glanceDurationTag(_ seconds: TimeInterval) -> String {
     return "\(whole)s"
 }
 
+/// What a capped plan says instead of its bars.
+///
+/// Owner 2026-10-11: a plan at its cap drew a full green bar labelled 100%
+/// while being completely unusable, because the row metered whichever window
+/// still had headroom.  The numbers were true and the conclusion was the exact
+/// opposite of what the eye took from them, so the bars go and the row says
+/// "At Cap" with the countdown to the reset that frees the plan.
+///
+/// It occupies the same fixed width a meter would, so a capped row does not
+/// shift the grid the other rows line up on.
+struct GlanceAtCap: View {
+    let snapshot: QuotaWindowSnapshot
+    let now: Date
+
+    private var countdown: String { glanceResetCountdown(snapshot.resetAt, now: now) }
+
+    /// The words, without the countdown, for the spoken value and the tooltip.
+    static var label: String { "At Cap" }
+
+    var body: some View {
+        HStack(spacing: Metrics.glanceMeterGap) {
+            Text(Self.label)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Theme.danger)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            if !countdown.isEmpty {
+                Text("Resets in \(countdown)")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Theme.ink.opacity(0.75))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .help(glanceResetHelp(snapshot.resetAt, now: now) ?? "")
+            }
+        }
+        .frame(width: Metrics.glanceMeterWidth, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("At cap")
+        .accessibilityValue(spokenValue)
+    }
+
+    private var spokenValue: String { spokenDescription }
+
+    /// What VoiceOver reads: the cap, then when it lifts.  Public so the row
+    /// can speak the same words its own collapsed view shows.
+    var spokenDescription: String {
+        guard !countdown.isEmpty else { return "At cap, quota exhausted" }
+        return "At cap, resets in \(glanceResetFullCountdown(snapshot.resetAt, now: now))"
+    }
+}
+
 /// One caption, one bar, one percentage, and one reset countdown.
 struct GlanceMeter: View {
     let snapshot: QuotaWindowSnapshot
@@ -1622,6 +1673,11 @@ struct GlanceMeterColumns: View {
     /// (Grok Bot's weekly, in the first column) still wants.
     var longGap: String? = nil
     var pacingHighlights: Bool = false
+    /// The exhausted window, when this line's plan is at its cap.  Owner
+    /// 2026-10-11: at cap the line drops its bars and says so, because a bar
+    /// labelled 100% next to an unusable plan reads as the opposite of the
+    /// truth.
+    var atCap: QuotaWindowSnapshot? = nil
 
     var body: some View {
         columns
@@ -1635,7 +1691,17 @@ struct GlanceMeterColumns: View {
 
     @ViewBuilder
     private var columns: some View {
-        if short != nil || long != nil {
+        if let atCap {
+            // One caption's width, not two: the plan is capped as a whole, so
+            // saying it once in the first meter column reads better than the
+            // same sentence split across both.
+            HStack(spacing: 0) {
+                GlanceAtCap(snapshot: atCap, now: now)
+                    .frame(width: Metrics.glanceMeterWidth, alignment: .leading)
+                Spacer().frame(width: Metrics.glanceMeterGroupGap)
+                Spacer().frame(width: Metrics.glanceMeterWidth)
+            }
+        } else if short != nil || long != nil {
             HStack(spacing: 0) {
                 column(short)
                 Spacer().frame(width: Metrics.glanceMeterGroupGap)
@@ -2015,7 +2081,8 @@ struct GlanceRow: View {
                 // actually routes on, and hiding the second one behind a
                 // click made the compact row say half the truth.
                 GlanceMeterColumns(short: meters.short, long: meters.long, now: now,
-                                   longGap: weeklyGap, pacingHighlights: pacingHighlights)
+                                   longGap: weeklyGap, pacingHighlights: pacingHighlights,
+                                   atCap: percent == nil ? nil : row.atCapWindow)
             } else {
                 // Where a single meter's bar would start (Cursor's, say),
                 // left-aligned, so a row without a reading still lines up
@@ -2109,7 +2176,8 @@ struct GlanceRow: View {
                         .frame(width: Metrics.glanceRowTitleWidth, alignment: .leading)
                     Spacer().frame(width: Metrics.glanceColumnGap)
                     GlanceMeterColumns(short: line.short, long: line.long, now: now,
-                                       pacingHighlights: pacingHighlights)
+                                       pacingHighlights: pacingHighlights,
+                                       atCap: row.atCapWindow)
                     Spacer(minLength: 0)
                 }
                 .padding(.horizontal, Metrics.glanceGutter)
@@ -2132,14 +2200,20 @@ struct GlanceRow: View {
     /// same two numbers an owner reads at a glance.
     private var spokenValue: String {
         var parts: [String] = []
-        let meterSpeech = glanceMetersSpeech([meters.short, meters.long], now: now)
-        if meterSpeech.isEmpty {
-            parts.append(percent == nil
-                         ? statusText
-                         : QuotaBarMetrics(remainingPercent: percent, elapsedFraction: nil).spokenSummary)
+        // A capped row shows no meters, so speaking them would describe
+        // something the row no longer displays.  Say the cap instead.
+        if let atCap = percent == nil ? nil : row.atCapWindow {
+            parts.append(GlanceAtCap(snapshot: atCap, now: now).spokenDescription)
         } else {
-            // Each meter says its own reset, so the row does not say it again.
-            parts.append(meterSpeech)
+            let meterSpeech = glanceMetersSpeech([meters.short, meters.long], now: now)
+            if meterSpeech.isEmpty {
+                parts.append(percent == nil
+                             ? statusText
+                             : QuotaBarMetrics(remainingPercent: percent, elapsedFraction: nil).spokenSummary)
+            } else {
+                // Each meter says its own reset, so the row does not say it again.
+                parts.append(meterSpeech)
+            }
         }
         switch origin {
         case .fleet: parts.append("from the fleet")

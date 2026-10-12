@@ -102,6 +102,62 @@ struct WindowCaptionRow: View {
 
 // MARK: - Single Bar For A Plan
 
+/// What a plan at its cap shows instead of a bar.
+///
+/// Owner 2026-10-11: the same plan could show "100%" on its 5-hour window
+/// while its weekly allowance was spent, which reads as healthy on a plan that
+/// cannot be used.  So a capped row draws no bar and no percentage: it names
+/// the cap and counts down to the reset that lifts it.
+///
+/// The cadence token and the reset caption keep their usual places, so the
+/// caption line still says *which* window ran out and when it returns.
+struct PlanAtCapRow: View {
+    let platform: WidgetPlatformItem
+    let window: WidgetWindowItem
+    var showMark: Bool = true
+    var markSize: CGFloat = 14
+    var titleFont: CGFloat = 12
+    var captionFont: CGFloat = 9
+    var percentFont: CGFloat = 12
+
+    private var captionToken: String {
+        window.cadenceToken.isEmpty ? window.label : window.cadenceToken
+    }
+
+    /// The words, in Title Case like every other owner-facing string here.
+    static let label = "At Cap"
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 5) {
+                if showMark {
+                    ProviderMarkView(
+                        providerKey: platform.providerKey,
+                        itemId: platform.id,
+                        size: markSize
+                    )
+                }
+                Text(platform.title)
+                    .font(.system(size: titleFont, weight: .semibold))
+                    .lineLimit(1)
+                Spacer(minLength: 2)
+                Text(Self.label)
+                    .font(.system(size: percentFont, weight: .bold, design: .rounded))
+                    .foregroundColor(WidgetPresentation.statusColor(percent: 0, isMasked: false))
+            }
+
+            WindowCaptionRow(
+                token: captionToken,
+                resetCaption: window.resetCaption(),
+                font: captionFont,
+                qualifier: window.barQualifier
+            )
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(platform.title): at cap. \(window.resetCaption())")
+    }
+}
+
 /// One quota bar for a plan, with the caption row that names it.
 ///
 /// When `platform.windows` holds two entries and the row is only wide enough
@@ -150,7 +206,20 @@ struct PlanBarRow: View {
     }
 
     var body: some View {
-        if quotasPerProvider == .twoIfAvailable, let pair = platform.dualWindows() {
+        if let atCap = platform.atCapWindow() {
+            // Owner 2026-10-11: a plan at its cap showed a bar labelled 100%
+            // beside a plan that could not be used.  The words go where the bar
+            // was, and the bar does not get drawn at all.
+            PlanAtCapRow(
+                platform: platform,
+                window: atCap,
+                showMark: showMark,
+                markSize: markSize,
+                titleFont: titleFont,
+                captionFont: captionFont,
+                percentFont: percentFont
+            )
+        } else if quotasPerProvider == .twoIfAvailable, let pair = platform.dualWindows() {
             PlanDualBarRow(
                 platform: platform,
                 window1: pair.window1,
@@ -327,7 +396,20 @@ struct PlanGrid: View {
         if columns <= 1 {
             VStack(spacing: spacing) {
                 ForEach(platforms) { platform in
-                    if quotasPerProvider == .twoIfAvailable, let pair = platform.dualWindows() {
+                    // Checked here too, not only inside `PlanBarRow`: this
+                    // branch builds `PlanDualBarRow` directly, so a capped plan
+                    // would otherwise keep both of its bars.
+                    if let atCap = platform.atCapWindow() {
+                        PlanAtCapRow(
+                            platform: platform,
+                            window: atCap,
+                            showMark: true,
+                            markSize: markSize,
+                            titleFont: titleFont,
+                            captionFont: captionFont,
+                            percentFont: percentFont
+                        )
+                    } else if quotasPerProvider == .twoIfAvailable, let pair = platform.dualWindows() {
                         PlanDualBarRow(
                             platform: platform,
                             window1: pair.window1,

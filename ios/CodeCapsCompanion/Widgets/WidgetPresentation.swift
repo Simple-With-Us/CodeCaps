@@ -162,6 +162,21 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
         windows.compactMap { $0.elapsedFraction() }.first
     }
 
+    /// The window whose exhausted allowance caps this plan, honouring masked
+    /// windows, with the soonest reset winning because that is the one that
+    /// answers "when can I work again".  Mirrors
+    /// `QuotaPlatformSection.atCapWindow()`.
+    public func atCapWindow() -> WidgetWindowItem? {
+        windows
+            .filter { !$0.isMasked && $0.remainingPercent != nil }
+            .filter { WidgetPresentation.isAtCap(percent: $0.remainingPercent, isExhausted: $0.isExhausted) }
+            .min { ($0.resetAt ?? .distantFuture) < ($1.resetAt ?? .distantFuture) }
+    }
+
+    /// Whether this plan is at its cap on any window it reports honestly.
+    /// Owner 2026-10-11: a capped plan shows no bars and says so in words.
+    public var isAtCap: Bool { atCapWindow() != nil }
+
     /// The single window that stands in for this plan when a row shows one bar.
     ///
     /// A plan often reports two windows (Claude Code has a 5-hour and a 7-day
@@ -218,6 +233,20 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
 
 /// Pure presentation logic and parser for WidgetKit widgets.
 public enum WidgetPresentation {
+
+    /// Whether a window's allowance is spent.  Mirrors
+    /// `QuotaWindowSnapshot.isAtCap` in QuotaCore, which the widget target
+    /// cannot import (it includes QuotaCore files by path rather than as a
+    /// module), so the rule is stated twice on purpose — one owner ruling, two
+    /// spellings.
+    ///
+    /// The reading wins whenever there is one, because QuotaCore only ever sets
+    /// `isExhausted` and never clears it; believing the flag over a fresh
+    /// positive reading would report a cap that no longer exists.
+    public static func isAtCap(percent: Double?, isExhausted: Bool) -> Bool {
+        if let percent { return percent <= 0 }
+        return isExhausted
+    }
 
     public static func displayPercent(percent: Double?, isMasked: Bool) -> String {
         if isMasked { return "n/a" }

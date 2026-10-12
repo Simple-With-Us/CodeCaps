@@ -96,6 +96,23 @@ struct DisplaySection: Identifiable, Equatable {
         maskedWindowIds.contains(snapshot.window.id)
     }
 
+    /// The window whose exhausted allowance caps this row, honouring the pool's
+    /// masked windows.  See `QuotaPlatformSection.atCapWindow()` for the rule;
+    /// this only adds the mask filter, because a masked reading is a real
+    /// number that must not be believed and only the pool knows it.
+    var atCapWindow: QuotaWindowSnapshot? {
+        section.windows
+            .filter { !$0.window.isSupplementaryVideoQuota && !isMasked($0) }
+            .filter { $0.remainingPercent != nil }
+            .filter(\.isAtCap)
+            .min { ($0.resetAt ?? .distantFuture) < ($1.resetAt ?? .distantFuture) }
+    }
+
+    /// Whether this row is at its cap, so every surface can ask the same
+    /// question and get the same answer.  Owner 2026-10-11: a capped plan draws
+    /// no bars and says so in words instead.
+    var isAtCap: Bool { atCapWindow != nil }
+
     /// Splits one platform section into the rows the UI shows for it.
     static func rows(for section: QuotaPlatformSection, now: Date) -> [DisplaySection] {
         guard section.providerKey == AntigravityDisplay.providerKey else {

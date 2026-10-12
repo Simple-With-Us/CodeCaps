@@ -1,0 +1,189 @@
+import XCTest
+@testable import CodeCaps
+import QuotaCore
+
+/// A plan at its cap used to draw a bar labelled 100%.
+///
+/// Owner 2026-10-11, with a screenshot of Claude reading 100% on its 5-hour
+/// window while its weekly window sat at 0%: the row metered whichever window
+/// still had headroom, so a plan that could not be used at all looked healthy.
+/// Every surface now drops its bars for a capped plan and says "At Cap" with
+/// the countdown to the reset that lifts it.
+///
+/// These tests pin the rule itself — which windows make a plan capped, and
+/// which window's reset gets quoted — because a surface that asks the question
+/// differently from its neighbour reintroduces exactly the disagreement this
+/// removed.  SwiftUI view bodies are not exercised directly (plain XCTest, not
+/// ViewInspector), so the predicates below are what the views branch on.
+final class AtCapTests: XCTestCase {
+    private let now = Date(timeIntervalSince1970: 1_700_000_000)
+    private let hour: TimeInterval = 3_600
+    private let day: TimeInterval = 86_400
+
+    // MARK: Helpers
+
+    private func makeWindow(
+        id: String,
+        label: String,
+        token: String? = nil,
+        remaining: Double? = 50,
+        resetIn: TimeInterval? = nil,
+        provider: String = "anthropic",
+        model: String? = nil
+    ) -> QuotaWindowSnapshot {
+        let iso = ISO8601DateFormatter()
+        return QuotaWindowSnapshot(window: QuotaWindow(
+            id: id,
+            provider: provider,
+            providerKey: provider,
+            providerLabel: provider,
+            modelId: model,
+            label: label,
+            remainingPercent: remaining,
+            remainingUnknown: remaining == nil,
+            resetAt: resetIn.map { iso.string(from: now.addingTimeInterval($0)) },
+            window: token,
+            occurredAt: iso.string(from: now),
+            source: provider), now: now)
+    }
+
+    private func makeRow(_ windows: [QuotaWindowSnapshot], masked: Set<String> = []) -> DisplaySection {
+        DisplaySection(
+            id: "anthropic",
+            providerKey: "anthropic",
+            title: "Claude",
+            platformTitle: "Claude",
+            section: QuotaPlatformSection(
+                providerKey: "anthropic",
+                providerLabel: "Claude",
+                via: nil,
+                expected: true,
+                windows: windows),
+            poolKey: nil,
+            remainingPercent: windows.compactMap(\.remainingPercent).min(),
+            resetAt: windows.compactMap(\.resetAt).min(),
+            maskedWindowIds: masked)
+    }
+
+    /// The owner's screenshot: Claude's 5-hour window full, its weekly spent.
+    private func cappedClaudeRow() -> DisplaySection {
+        makeRow([
+            makeWindow(id: "session", label: "5h window", token: "5h", remaining: 100, resetIn: 4 * hour + 56 * 60),
+            makeWindow(id: "weekly", label: "7d window", token: "168h", remaining: 0, resetIn: day + 21 * hour),
+        ])
+    }
+
+    // MARK: The window-level rule
+
+    func testAWindowReportingZeroIsAtItsCap() {
+        XCTAssertTrue(makeWindow(id: "w", label: "Weekly", remaining: 0).isAtCap)
+    }
+
+    func testAWindowWithHeadroomIsNotAtItsCap() {
+        XCTAssertFalse(makeWindow(id: "w", label: "Weekly", remaining: 100).isAtCap)
+        XCTAssertFalse(makeWindow(id: "w", label: "Weekly", remaining: 0.4).isAtCap,
+                       "a rounding artefact above zero is not a spent allowance")
+    }
+
+    func testAnUnknownReadingIsNotACap() {
+        // The absence of a number is not the number zero.  Treating it as a cap
+        // would blank the bars of every plan CodeCaps simply cannot read.
+        XCTAssertFalse(makeWindow(id: "w", label: "Weekly", remaining: nil).isAtCap)
+    }
+
+    func testAProviderCanSayExhaustedWithoutAPercentage() {
+        let iso = ISO8601DateFormatter()
+        let exhausted = QuotaWindowSnapshot(window: QuotaWindow(
+            id: "w", provider: "anthropic", providerKey: "anthropic",
+            providerLabel: "anthropic", label: "Weekly",
+            remainingPercent: nil, remainingUnknown: true,
+            isExhausted: true,
+            resetAt: iso.string(from: now.addingTimeInterval(day)),
+            occurredAt: iso.string(from: now)), now: now)
+        XCTAssertTrue(exhausted.isAtCap, "an explicit exhausted flag is a cap even with no percentage")
+    }
+
+    // MARK: The plan-level rule
+
+    func testOneSpentWindowCapsTheWholePlan() {
+        // The owner's exact complaint: 5h at 100% beside a spent weekly.  The
+        // plan is unusable, so the 100% must not be what the row leads with.
+        let row = cappedClaudeRow()
+        XCTAssertTrue(row.isAtCap)
+        XCTAssertEqual(row.atCapWindow?.window.id, "weekly")
+    }
+
+    func testTheSoonestResetIsTheOneQuoted() {
+        // With two windows spent, the one that frees the plan first is the one
+        // that answers "when can I work again".
+        let row = makeRow([
+            makeWindow(id: "a", label: "Weekly", token: "168h", remaining: 0, resetIn: 5 * day),
+            makeWindow(id: "b", label: "5h window", token: "5h", remaining: 0, resetIn: 2 * hour),
+        ])
+        XCTAssertEqual(row.atCapWindow?.window.id, "b")
+    }
+
+    func testAPlanWithHeadroomEverywhereIsNotCapped() {
+        let row = makeRow([
+            makeWindow(id: "session", label: "5h window", token: "5h", remaining: 92, resetIn: 3 * hour),
+            makeWindow(id: "weekly", label: "7d window", token: "168h", remaining: 11, resetIn: 4 * day),
+        ])
+        XCTAssertFalse(row.isAtCap)
+        XCTAssertNil(row.atCapWindow)
+    }
+
+    func testAMaskedWindowIsNotEvidenceOfACap() {
+        // An Antigravity 5-hour window under a spent weekly is masked: the
+        // number is real and meaningless.  Only the unmasked weekly may cap.
+        let row = makeRow([
+            makeWindow(id: "session", label: "Gemini Models · 5-hour", token: "5h",
+                       remaining: 0, resetIn: 2 * hour, provider: "google-antigravity"),
+        ], masked: ["session"])
+        XCTAssertFalse(row.isAtCap,
+                       "a masked reading must not be believed in either direction")
+    }
+
+    func testASupplementaryVideoAllowanceDoesNotCapTheSubscription() {
+        // MiniMax's video quota is a bonus on top of the coding plan; spending
+        // it does not mean the plan is capped.
+        let row = makeRow([
+            makeWindow(id: "session", label: "5-hour window", token: "5h",
+                       remaining: 64, resetIn: 3 * hour, provider: "minimax"),
+            makeWindow(id: "video", label: "Video generation", token: "1d",
+                       remaining: 0, resetIn: day, provider: "minimax", model: "video-hailuo"),
+        ])
+        XCTAssertFalse(row.isAtCap)
+    }
+
+    func testAWindowWithNoReadingNeverCapsThePlan() {
+        let row = makeRow([
+            makeWindow(id: "session", label: "5h window", token: "5h", remaining: nil, resetIn: 3 * hour),
+            makeWindow(id: "weekly", label: "7d window", token: "168h", remaining: 40, resetIn: 4 * day),
+        ])
+        XCTAssertFalse(row.isAtCap)
+    }
+
+    // MARK: What the row says
+
+    func testTheCappedRowSpeaksTheCapNotTheMeters() {
+        // VoiceOver must describe what the row shows.  It no longer shows
+        // meters, so speaking "5h 100 percent remaining" would be describing a
+        // number that is gone from the surface.
+        let row = cappedClaudeRow()
+        let atCap = row.atCapWindow!
+        let spoken = GlanceAtCap(snapshot: atCap, now: now).spokenDescription
+        XCTAssertTrue(spoken.hasPrefix("At cap"), "got \(spoken)")
+        XCTAssertTrue(spoken.contains("1d 21h"), "the reset of the spent window is quoted: \(spoken)")
+        XCTAssertFalse(spoken.contains("100"), "the headroom of the other window is not what this row is about: \(spoken)")
+    }
+
+    func testTheCappedRowWithNoResetStillSaysSo() {
+        let atCap = makeWindow(id: "w", label: "Weekly", remaining: 0, resetIn: nil)
+        let spoken = GlanceAtCap(snapshot: atCap, now: now).spokenDescription
+        XCTAssertEqual(spoken, "At cap, quota exhausted")
+    }
+
+    func testTheLabelIsTheOwnersWording() {
+        XCTAssertEqual(GlanceAtCap.label, "At Cap")
+    }
+}

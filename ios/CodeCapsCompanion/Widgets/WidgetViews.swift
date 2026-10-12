@@ -511,27 +511,35 @@ struct ProviderFocusView: View {
 
             Spacer(minLength: 0)
 
-            ZStack {
-                Circle()
-                    .stroke(Color.primary.opacity(0.12), lineWidth: 9)
-                Circle()
-                    .trim(from: 0, to: CGFloat(fraction))
-                    .stroke(
-                        statusColor,
-                        style: StrokeStyle(lineWidth: 9, lineCap: .round)
-                    )
-                    .rotationEffect(.degrees(-90))
+            // Owner 2026-10-11: a plan at its cap keeps its ring's words and
+            // drops the ring.  A ring reads as a quantity, and "100%" beside a
+            // plan nobody can use is the most misleading quantity there is.
+            if let atCap = platform.atCapWindow() {
+                atCapGauge(window: atCap)
+                    .frame(width: 70, height: 70)
+            } else {
+                ZStack {
+                    Circle()
+                        .stroke(Color.primary.opacity(0.12), lineWidth: 9)
+                    Circle()
+                        .trim(from: 0, to: CGFloat(fraction))
+                        .stroke(
+                            statusColor,
+                            style: StrokeStyle(lineWidth: 9, lineCap: .round)
+                        )
+                        .rotationEffect(.degrees(-90))
 
-                VStack(spacing: 1) {
-                    Text(WidgetPresentation.displayPercent(percent: shownPercent, isMasked: shownMasked))
-                        .font(.system(size: 18, weight: .bold, design: .rounded))
-                        .foregroundColor(.primary)
-                    Text("Remaining")
-                        .font(.system(size: 8, weight: .medium))
-                        .foregroundColor(.secondary)
+                    VStack(spacing: 1) {
+                        Text(WidgetPresentation.displayPercent(percent: shownPercent, isMasked: shownMasked))
+                            .font(.system(size: 18, weight: .bold, design: .rounded))
+                            .foregroundColor(.primary)
+                        Text("Remaining")
+                            .font(.system(size: 8, weight: .medium))
+                            .foregroundColor(.secondary)
+                    }
                 }
+                .frame(width: 70, height: 70)
             }
-            .frame(width: 70, height: 70)
 
             Spacer(minLength: 0)
 
@@ -540,13 +548,37 @@ struct ProviderFocusView: View {
         .padding(12)
     }
 
+    /// The capped gauge: the same slot and the same words a percentage gets,
+    /// with the cap named instead.  Sized in the ring's type so a 100% plan
+    /// and a capped plan occupy the same space in the widget.
+    private func atCapGauge(window: WidgetWindowItem) -> some View {
+        VStack(spacing: 1) {
+            Text(PlanAtCapRow.label)
+                .font(.system(size: 15, weight: .bold, design: .rounded))
+                .foregroundColor(WidgetPresentation.statusColor(percent: 0, isMasked: false))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            Text("Quota Spent")
+                .font(.system(size: 8, weight: .medium))
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("At cap. \(window.resetCaption())")
+    }
+
     private func mediumFocusView(for platform: WidgetPlatformItem) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             WidgetHeaderView(markSize: 15)
 
             HStack(alignment: .top, spacing: 14) {
-                // Left: Gauge
+                // Left: Gauge, or the cap in the gauge's own slot.
                 VStack(spacing: 6) {
+                    if let atCap = platform.atCapWindow() {
+                        atCapGauge(window: atCap)
+                            .frame(width: 80, height: 80)
+                    } else {
                     ZStack {
                         Circle()
                             .stroke(Color.primary.opacity(0.12), lineWidth: 10)
@@ -565,6 +597,7 @@ struct ProviderFocusView: View {
                         }
                     }
                     .frame(width: 80, height: 80)
+                    }
 
                     Text(platform.title)
                         .font(.system(size: 12, weight: .bold))
@@ -579,6 +612,7 @@ struct ProviderFocusView: View {
                 // that came from preview data and described nothing the owner
                 // could act on.
                 VStack(alignment: .leading, spacing: 7) {
+                    let atCap = platform.atCapWindow()
                     let windowsToShow: [WidgetWindowItem] = {
                         if entry.quotasPerProvider == .oneQuota, let controlling = platform.controllingWindow(pick) {
                             return [controlling]
@@ -586,7 +620,21 @@ struct ProviderFocusView: View {
                         return platform.windows
                     }()
 
-                    if windowsToShow.isEmpty {
+                    if let atCap {
+                        // The plan's own windows still get listed, but with the
+                        // cap named once instead of a bar each: the 5-hour
+                        // window's 100% is exactly the number that reads as
+                        // "fine" on a plan nobody can use.
+                        PlanAtCapRow(
+                            platform: platform,
+                            window: atCap,
+                            showMark: false,
+                            markSize: 12,
+                            titleFont: 11,
+                            captionFont: 9,
+                            percentFont: 11
+                        )
+                    } else if windowsToShow.isEmpty {
                         WindowCaptionRow(token: captionToken, resetCaption: captionReset, font: 9.5)
                     } else {
                         ForEach(windowsToShow) { win in
@@ -635,8 +683,51 @@ struct AccessoryView: View {
 
     var body: some View {
         if let platform {
-            switch family {
-            case .accessoryCircular:
+            // Owner 2026-10-11: the Lock Screen has room for words and no room
+            // for nuance, so a capped plan says "At Cap" and counts down rather
+            // than showing a percentage for a plan nobody can use.
+            if let atCap = platform.atCapWindow() {
+                switch family {
+                case .accessoryCircular:
+                    ZStack {
+                        AccessoryWidgetBackground()
+                        VStack(spacing: 0) {
+                            Text("At")
+                                .font(.system(size: 9, weight: .semibold))
+                            Text("Cap")
+                                .font(.system(size: 13, weight: .bold, design: .rounded))
+                        }
+                    }
+                    .accessibilityLabel("\(platform.title): at cap")
+
+                case .accessoryRectangular:
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 4) {
+                            CodeCapsMarkView(size: 10)
+                            Text(platform.title)
+                                .font(.system(size: 12, weight: .bold))
+                                .lineLimit(1)
+                            Spacer(minLength: 2)
+                            Text(PlanAtCapRow.label)
+                                .font(.system(size: 12, weight: .bold, design: .rounded))
+                        }
+                        WindowCaptionRow(
+                            token: atCap.cadenceToken,
+                            resetCaption: atCap.resetCaption(),
+                            font: 9
+                        )
+                    }
+
+                case .accessoryInline:
+                    let cd = atCap.countdown()
+                    Text("\(platform.title): At Cap\(cd.isEmpty ? "" : " \(cd)")")
+
+                default:
+                    Text("CodeCaps")
+                }
+            } else {
+                switch family {
+                case .accessoryCircular:
                 ZStack {
                     AccessoryWidgetBackground()
                     Gauge(value: platform.progressFraction, in: 0...1) {
@@ -717,6 +808,7 @@ struct AccessoryView: View {
 
             default:
                 Text("CodeCaps")
+                }
             }
         } else {
             switch family {
