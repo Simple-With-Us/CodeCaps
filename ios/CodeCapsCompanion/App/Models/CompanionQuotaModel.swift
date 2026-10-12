@@ -51,8 +51,6 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
     public let quotaUnit: String?
     public let observedAt: Date?
 
-    private static let staleAfter: TimeInterval = 30 * 60
-
     public init(
         id: String,
         label: String,
@@ -85,9 +83,10 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
         self.observedAt = observedAt
     }
 
-    public func isFresh(now: Date = Date()) -> Bool {
+    /// Whether `observedAt` is within `CompanionQuotaItem.sourceDiscrepancyFreshnessWindow`.
+    public func isFreshForSourceDiscrepancy(now: Date = Date()) -> Bool {
         guard let observedAt else { return false }
-        return now.timeIntervalSince(observedAt) <= Self.staleAfter
+        return now.timeIntervalSince(observedAt) <= CompanionQuotaItem.sourceDiscrepancyFreshnessWindow
     }
 
     /// Hyphenated cadence beside a meter bar (`5-hour`, `7-day`, `1-month`, `Other limit`).
@@ -221,6 +220,9 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
         windows.count > 2
     }
 
+    /// Both feeds must report within this window for a source-disagreement banner.
+    public static let sourceDiscrepancyFreshnessWindow: TimeInterval = 20 * 60
+
     /// One discrepancy where an additional/duplicate source diverges from its matching primary window by at least 10 points.
     public struct SourceDiscrepancy: Identifiable, Equatable, Sendable {
         public var id: String { "\(primaryWindow.id)-\(duplicateWindow.id)" }
@@ -243,10 +245,10 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
         guard scope == .allSources, sourceCount >= 2 else { return [] }
         var results: [SourceDiscrepancy] = []
         for dup in duplicateWindows {
-            guard dup.isFresh(), let dPct = dup.remainingPercent else { continue }
+            guard dup.isFreshForSourceDiscrepancy(), let dPct = dup.remainingPercent else { continue }
             let dupKey = Self.allowanceKey(for: dup)
             let match = windows.first(where: { Self.allowanceKey(for: $0) == dupKey }) ?? windows.first
-            guard let primary = match, primary.isFresh(), let pPct = primary.remainingPercent else { continue }
+            guard let primary = match, primary.isFreshForSourceDiscrepancy(), let pPct = primary.remainingPercent else { continue }
             if Self.sourceLooksLikeHostname(primary.source) || Self.sourceLooksLikeHostname(primary.via)
                 || Self.sourceLooksLikeHostname(dup.source) || Self.sourceLooksLikeHostname(dup.via) {
                 continue
@@ -757,7 +759,7 @@ public final class CompanionQuotaModel: ObservableObject {
                 } else {
                     let status = (response as? HTTPURLResponse)?.statusCode
                     failure = "The sync endpoint answered \(status.map(String.init) ?? "unexpectedly")." + sentenceGap
-                        + "Check the endpoint and token in Settings."
+                        + "Check the endpoint and token in CodeCaps Settings."
                 }
             } catch {
                 guard requestedRevision == syncConfigurationRevision,

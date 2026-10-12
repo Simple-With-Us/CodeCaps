@@ -318,13 +318,13 @@ final class CompanionModelTests: XCTestCase {
             source.contains("Text(\"FLEET STATUS\")"),
             "fleet status label should use title case in the navigation bar"
         )
-        XCTAssertTrue(
-            source.contains("ToolbarItemGroup(placement: .topBarTrailing)"),
-            "reorder and settings controls must share the trailing edge"
+        XCTAssertFalse(
+            source.contains("arrow.up.arrow.down"),
+            "reorder must live in CodeCaps Settings, not a duplicate toolbar button"
         )
         XCTAssertTrue(
-            source.contains("navigationTitle(\"Settings\")"),
-            "settings sheet must use the Settings title for both toolbar entry points"
+            source.contains("navigationTitle(\"CodeCaps Settings\")"),
+            "full-screen settings must be titled CodeCaps Settings"
         )
         XCTAssertTrue(
             source.contains(".fullScreenCover(isPresented: $showingSettings)"),
@@ -410,8 +410,9 @@ final class CompanionModelTests: XCTestCase {
     func testSourceDiscrepancyGatingRequiresAllSourcesMultiSourceAndFreshness() throws {
         let source = try readCompanionModelSource()
         XCTAssertTrue(source.contains("guard scope == .allSources, sourceCount >= 2 else { return [] }"))
-        XCTAssertTrue(source.contains("dup.isFresh()"))
-        XCTAssertTrue(source.contains("primary.isFresh()"))
+        XCTAssertTrue(source.contains("sourceDiscrepancyFreshnessWindow"))
+        XCTAssertTrue(source.contains("20 * 60"))
+        XCTAssertTrue(source.contains("isFreshForSourceDiscrepancy()"))
         XCTAssertTrue(source.contains("delta >= 10.0"))
         XCTAssertTrue(source.contains("Sources differ ·"))
         XCTAssertFalse(source.contains("via codecaps"))

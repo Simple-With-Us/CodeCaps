@@ -61,34 +61,12 @@ public struct CompanionContentView: View {
                     fleetStatusToolbarContent
                 }
                 #if os(iOS)
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button {
-                        showingSettings = true
-                    } label: {
-                        Image(systemName: "arrow.up.arrow.down")
-                    }
-                    .accessibilityLabel("Customize Platform Order")
-                    Button {
-                        showingSettings = true
-                    } label: {
-                        Image(systemName: "gearshape")
-                    }
-                    .accessibilityLabel("Settings")
+                ToolbarItem(placement: .topBarTrailing) {
+                    settingsToolbarButton
                 }
                 #else
-                ToolbarItemGroup(placement: .primaryAction) {
-                    Button {
-                        showingSettings = true
-                    } label: {
-                        Image(systemName: "arrow.up.arrow.down")
-                    }
-                    .accessibilityLabel("Customize Platform Order")
-                    Button {
-                        showingSettings = true
-                    } label: {
-                        Image(systemName: "gearshape")
-                    }
-                    .accessibilityLabel("Settings")
+                ToolbarItem(placement: .primaryAction) {
+                    settingsToolbarButton
                 }
                 #endif
             }
@@ -237,7 +215,7 @@ public struct CompanionContentView: View {
                     }
                     .buttonStyle(.borderedProminent)
 
-                    Button("Settings") {
+                    Button("CodeCaps Settings") {
                         showingSettings = true
                     }
                     .buttonStyle(.bordered)
@@ -488,7 +466,7 @@ public struct CompanionContentView: View {
             #if os(iOS)
             .environment(\.editMode, settingsTab == .display ? $platformOrderEditMode : Binding.constant(.inactive))
             #endif
-            .navigationTitle("Settings")
+            .navigationTitle("CodeCaps Settings")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
@@ -647,7 +625,7 @@ public struct CompanionContentView: View {
                     Text("Data Sources & Mirrors")
                 } footer: {
                     Text("CodeCaps monitors primary and mirror feeds for each platform." + sentenceGap
-                         + "In All Sources, when a card lists two or more feeds, fresh readings that disagree by 10 points or more show a warning on the card (hostnames are ignored).")
+                         + "In All Sources, when a card lists two or more feeds reported within 20 minutes that disagree by 10 points or more, a warning appears on the card (hostnames are ignored).")
                 }
                 .id("dataSourcesMirrorsSection")
                 .accessibilityIdentifier("dataSourcesMirrorsSection")
