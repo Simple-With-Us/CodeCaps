@@ -346,6 +346,45 @@ final class CompanionModelTests: XCTestCase {
         )
     }
 
+    func testCompanionMeterUsesHyphenatedCaptionsNotPopoverTags() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains("public var meterCaption: String"),
+            "Companion meters must use hyphenated cadence captions"
+        )
+        XCTAssertTrue(
+            source.contains("public var caption: String { meterCaption }"),
+            "card meters must not use popover 5h/7d/1m tags"
+        )
+        let content = try readCompanionContentViewSource()
+        XCTAssertFalse(
+            content.contains("window.barQualifier"),
+            "companion meters must not render weekly/additional qualifier captions"
+        )
+    }
+
+    func testSourceDiscrepancyGatingRequiresAllSourcesMultiSourceAndFreshness() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(source.contains("guard scope == .allSources, sourceCount >= 2 else { return [] }"))
+        XCTAssertTrue(source.contains("dup.isFresh()"))
+        XCTAssertTrue(source.contains("primary.isFresh()"))
+        XCTAssertTrue(source.contains("delta >= 10.0"))
+        XCTAssertTrue(source.contains("Sources differ ·"))
+        XCTAssertFalse(source.contains("via codecaps"))
+        XCTAssertTrue(source.contains("sourceLooksLikeHostname"))
+        let content = try readCompanionContentViewSource()
+        XCTAssertTrue(
+            content.contains("model.sourceScope == .allSources, item.sourceCount > 1"),
+            "discrepancy UI must follow the multi-source chip gate"
+        )
+    }
+
+    func testCompanionSubtitleUsesSubtitlePhraseVocabulary() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(source.contains("static func subtitlePhrase(for windows:"))
+        XCTAssertTrue(source.contains("Self.subtitlePhrase(for: primaryWindows"))
+    }
+
     func testCompanionUsageBarPacingMarkerProminence() throws {
         let source = try readCompanionContentViewSource()
         XCTAssertTrue(

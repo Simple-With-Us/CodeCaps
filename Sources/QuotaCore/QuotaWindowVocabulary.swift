@@ -19,17 +19,27 @@ public enum QuotaWindowVocabulary {
         periodStart: Date? = nil,
         monthlyHint: Bool = false
     ) -> String {
-        if isExtraAllowanceLabel(label) { return otherLimit }
+        let prose = stripTrailingWindowSuffix(label)
+        if isExtraAllowanceLabel(prose) { return otherLimit }
         if let token = windowToken?.trimmingCharacters(in: .whitespacesAndNewlines), !token.isEmpty {
             if let fromToken = cadenceFromToken(token, label: label, resetAt: resetAt, periodStart: periodStart, monthlyHint: monthlyHint) {
                 return fromToken
             }
         }
-        if let fromLabel = cadenceFromProse(label, resetAt: resetAt, periodStart: periodStart, monthlyHint: monthlyHint) {
+        if let fromLabel = cadenceFromProse(prose, resetAt: resetAt, periodStart: periodStart, monthlyHint: monthlyHint) {
             return fromLabel
         }
-        if isOpaqueProviderKey(label) { return classifyOpaqueKey(resetAt: resetAt, periodStart: periodStart) }
+        if isOpaqueProviderKey(prose) { return classifyOpaqueKey(resetAt: resetAt, periodStart: periodStart) }
         return otherLimit
+    }
+
+    private static func stripTrailingWindowSuffix(_ label: String) -> String {
+        var text = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = text.lowercased()
+        if lower.hasSuffix(" window") {
+            text = String(text.dropLast(" window".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return text
     }
 
     /// Label stored on `QuotaWindow.label` (cadence plus optional " window" suffix stripped by callers).

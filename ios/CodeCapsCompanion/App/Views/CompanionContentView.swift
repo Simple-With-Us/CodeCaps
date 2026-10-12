@@ -276,7 +276,8 @@ public struct CompanionContentView: View {
                                 .background(Color.secondary.opacity(0.14), in: Capsule())
                         }
 
-                        if item.hasSourceDiscrepancy(scope: model.sourceScope) {
+                        if model.sourceScope == .allSources, item.sourceCount > 1,
+                           item.hasSourceDiscrepancy(scope: model.sourceScope) {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .font(.system(size: 11, weight: .semibold))
                                 .foregroundStyle(.orange)
@@ -337,8 +338,8 @@ public struct CompanionContentView: View {
                 }
             }
 
-            // Discrepancy warning banner if secondary source diverges by >3%
-            if item.hasSourceDiscrepancy(scope: model.sourceScope) {
+            if model.sourceScope == .allSources, item.sourceCount > 1,
+               item.hasSourceDiscrepancy(scope: model.sourceScope) {
                 HStack(spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 11, weight: .semibold))
@@ -387,11 +388,11 @@ public struct CompanionContentView: View {
     private func windowRow(_ win: CompanionWindowItem) -> some View {
         HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(win.label)
+                Text(win.meterCaption)
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.primary)
-                let cd = win.countdown()
-                if !cd.isEmpty {
+                let cd = win.meterCountdown()
+                if cd != "—" {
                     Text("Resets in \(cd)")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
@@ -499,8 +500,9 @@ public struct CompanionContentView: View {
                                     Text(item.title)
                                         .font(.system(size: 14, weight: .semibold))
                                     Spacer()
-                                    if item.hasSourceDiscrepancy(scope: model.sourceScope) {
-                                        Label("Discrepancy > 3%", systemImage: "exclamationmark.triangle.fill")
+                                    if model.sourceScope == .allSources, item.sourceCount > 1,
+                                       item.hasSourceDiscrepancy(scope: model.sourceScope) {
+                                        Label("Sources differ ≥ 10 pts", systemImage: "exclamationmark.triangle.fill")
                                             .font(.system(size: 11, weight: .medium))
                                             .foregroundStyle(.orange)
                                     }
@@ -535,7 +537,8 @@ public struct CompanionContentView: View {
                                     .padding(.vertical, 2)
                                 }
 
-                                if item.hasSourceDiscrepancy(scope: model.sourceScope) {
+                                if model.sourceScope == .allSources, item.sourceCount > 1,
+                                   item.hasSourceDiscrepancy(scope: model.sourceScope) {
                                     ForEach(item.sourceDiscrepancies(scope: model.sourceScope)) { disc in
                                         HStack(spacing: 5) {
                                             Image(systemName: "exclamationmark.triangle.fill")
@@ -555,7 +558,7 @@ public struct CompanionContentView: View {
                     Text("Data Sources & Mirrors")
                 } footer: {
                     Text("CodeCaps monitors primary and mirror feeds for each platform." + sentenceGap
-                         + "Discrepancies greater than 3% between feeds trigger a warning flag on the platform card.")
+                         + "In All Sources, when a card lists two or more feeds, fresh readings that disagree by 10 points or more show a warning on the card (hostnames are ignored).")
                 }
                 .id("dataSourcesMirrorsSection")
                 .accessibilityIdentifier("dataSourcesMirrorsSection")
@@ -734,21 +737,13 @@ public struct CompanionMeterView: View {
 
     public var body: some View {
         HStack(spacing: 4) {
-            VStack(alignment: .trailing, spacing: 0) {
-                Text(caption)
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                if !window.barQualifier.isEmpty {
-                    Text(window.barQualifier)
-                        .font(.system(size: 8, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-                }
-            }
-            .frame(width: 34, alignment: .trailing)
+            Text(caption)
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(.primary)
+                .lineLimit(2)
+                .minimumScaleFactor(0.75)
+                .multilineTextAlignment(.trailing)
+                .frame(width: 52, alignment: .trailing)
 
             CompanionUsageBar(
                 remainingPercent: window.remainingPercent,
@@ -764,18 +759,12 @@ public struct CompanionMeterView: View {
                 .minimumScaleFactor(0.8)
                 .frame(width: 36, alignment: .trailing)
 
-            let cd = window.countdown()
-            if !cd.isEmpty {
-                Text(cd)
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.primary.opacity(0.85))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                    .frame(width: 44, alignment: .center)
-            } else {
-                Color.clear
-                    .frame(width: 44, height: 1)
-            }
+            Text(window.meterCountdown())
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.primary.opacity(0.85))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .frame(width: 44, alignment: .center)
         }
         .minimumScaleFactor(0.85)
         .frame(maxWidth: .infinity)
