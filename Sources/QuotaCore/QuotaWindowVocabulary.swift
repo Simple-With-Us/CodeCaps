@@ -7,6 +7,7 @@ import Foundation
 /// captions ("5h", "7d", "1m") via `popoverCaption`.
 public enum QuotaWindowVocabulary {
     public static let fiveHour = "5-hour"
+    public static let oneDay = "1-day"
     public static let sevenDay = "7-day"
     public static let oneMonth = "1-month"
     public static let otherLimit = "Other limit"
@@ -121,6 +122,7 @@ public enum QuotaWindowVocabulary {
         )
         switch cadence {
         case fiveHour: return "5h"
+        case oneDay: return "1d"
         case sevenDay: return "7d"
         case oneMonth: return "1m"
         case otherLimit: return "+"
@@ -169,6 +171,7 @@ public enum QuotaWindowVocabulary {
     ) -> String? {
         let lower = token.lowercased()
         if ["5h", "5hr", "5-hour", "5hours", "300m"].contains(lower) { return fiveHour }
+        if ["1d", "24h", "daily", "day"].contains(lower) { return oneDay }
         if ["7d", "168h", "1w", "weekly", "week"].contains(lower) { return sevenDay }
         if ["1m", "30d", "mo", "month", "monthly"].contains(lower) { return oneMonth }
         if let seconds = ResetAlarmCadence.durationSeconds(lower) {
@@ -191,6 +194,9 @@ public enum QuotaWindowVocabulary {
             || lower.contains("coding plan") || lower.contains("coding_plan") || lower.contains("interval") {
             return fiveHour
         }
+        if lower.contains("1-day") || lower.contains("1 day") || lower.contains("daily") || lower.contains("24h") || (lower.contains("1d") && !lower.contains("1d-")) {
+            return oneDay
+        }
         if lower.contains("7-day") || lower.contains("7 day") || lower.contains("weekly") || lower.contains("7d") || lower.contains("1w") {
             return sevenDay
         }
@@ -209,7 +215,8 @@ public enum QuotaWindowVocabulary {
         if (27 * 86_400...31 * 86_400).contains(whole) { return oneMonth }
         if whole >= 6 * 86_400 { return sevenDay }
         if whole >= 4 * 3_600 && whole <= 6 * 3_600 { return fiveHour }
-        if whole >= 86_400 && whole < 6 * 86_400 { return otherLimit }
+        if (20 * 3_600...28 * 3_600).contains(whole) || whole == 86_400 { return oneDay }
+        if whole >= 86_400 && whole < 6 * 86_400 { return oneDay }
         return otherLimit
     }
 

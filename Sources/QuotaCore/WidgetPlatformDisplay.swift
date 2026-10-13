@@ -40,6 +40,11 @@ public enum WidgetPlatformDisplay {
 
         if let wire = wireProvider?.trimmingCharacters(in: .whitespacesAndNewlines), !wire.isEmpty {
             if let known = titlesByCanonicalKey[wire.lowercased()] { return known }
+            // Preserve mixed-case / spaced wire names; only fall through for
+            // raw lowercase slugs that match the canonical key.
+            if wire != wire.lowercased() || wire.contains(" ") {
+                return wire
+            }
         }
 
         if let known = titlesByCanonicalKey[key] { return known }
