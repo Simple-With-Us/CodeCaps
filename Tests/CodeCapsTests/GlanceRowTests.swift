@@ -185,7 +185,10 @@ final class GlanceExpandedLineTests: XCTestCase {
         }
         XCTAssertEqual(label("video (1d window)", model: "video"), "Video")
         XCTAssertEqual(label("video (1d window)"), "Video")
-        XCTAssertEqual(label("7-day window (Sonnet)"), "Sonnet")
+        // Vocabulary sanitize strips parenthetical model names from labels; the
+        // expanded-line name comes from modelId (or an unstripped parenthetical).
+        XCTAssertEqual(label("7-day window (Sonnet)", model: "sonnet"), "Sonnet")
+        XCTAssertEqual(label("7-day window (Sonnet)"), "Overall")
         XCTAssertEqual(label("5h window (gpt-5-codex)", model: "gpt-5-codex"), "gpt-5-codex")
         XCTAssertEqual(label("Kimi Code (5h)"), "Kimi Code")
         XCTAssertEqual(label("Third-Party Models · Weekly"), "Third-Party")
@@ -639,7 +642,7 @@ final class GlanceMeterTests: XCTestCase {
         let fiveHour = makeWindow(id: "5h", label: "5h window", token: "5h", remaining: 70, resetIn: 3_600)
         let overall = makeWindow(id: "7d", label: "7-day window", token: "168h", remaining: 80, resetIn: 3 * 86_400)
         let sonnet = makeWindow(id: "7d-sonnet", label: "7-day window (Sonnet)", token: "168h", remaining: nil,
-                                resetIn: 3 * 86_400)
+                                resetIn: 3 * 86_400, model: "sonnet")
         XCTAssertEqual(glanceDrawableWindows([overall, sonnet]).map(\.window.id), ["7d", "7d-sonnet"])
         let lines = glanceExpandedLines(for: makeRow([fiveHour, overall, sonnet]), now: now)
         XCTAssertEqual(lines.map(\.label), ["Sonnet"], "the unavailable model keeps its line under the row")
