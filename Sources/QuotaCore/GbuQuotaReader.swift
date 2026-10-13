@@ -147,7 +147,7 @@ private func gbuUnknownWindow(observedAt: Date) -> QuotaWindow {
         status: .unknown,
         occurredAt: gbuISOFormatter.string(from: observedAt),
         source: "gbu"
-    )
+    ).normalizedForExport()
 }
 
 private func gbuNumber(_ value: Any?) -> Double? {
