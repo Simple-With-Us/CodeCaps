@@ -1161,7 +1161,7 @@ final class MonitorModel: ObservableObject {
             ?? sections.first { $0.providerKey == target.window.canonicalProviderKey }?.providerLabel
             ?? target.window.provider
         let pct = target.remainingPercent.map { "\(Int($0.rounded()))%" } ?? "—"
-        return "\(title), \(windowCadenceName(target.window)): \(pct) remaining"
+        return "\(title), \(windowCadenceName(target.window)): \(pct)"
     }
 
     /// Clear user-facing explanation for each menu-bar preset.
