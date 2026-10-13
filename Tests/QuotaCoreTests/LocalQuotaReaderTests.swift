@@ -296,6 +296,36 @@ final class LocalQuotaReaderTests: XCTestCase {
         XCTAssertNil(grok.absoluteRemaining)
     }
 
+    func testClaudeSkipsNonCadenceRateLimitKeys() async throws {
+        let root = try makeFixtureHome()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try writeJSON(["claudeAiOauth": ["accessToken": "claude-secret", "expiresAt": observedAt.addingTimeInterval(3600).timeIntervalSince1970]], to: root.appendingPathComponent(".claude/.credentials.json"))
+        let reader = LocalQuotaReader(homeDirectory: root, now: { self.observedAt }, fetchJSON: { _ in
+            Self.httpResponse(#"{"five_hour":{"utilization":10},"extra_usage":{"utilization":100},"opus":{"utilization":50}}"#)
+        }, runAntigravity: { Data("{}".utf8) })
+
+        let claude = await reader.read().windows.filter { $0.providerKey == "anthropic" }
+        XCTAssertEqual(claude.count, 1)
+        XCTAssertEqual(claude.first?.window, "5h")
+        XCTAssertFalse(claude.contains { $0.id.contains("extra_usage") })
+    }
+
+    func testCodexPrimarySecondaryWithoutWindowSecondsKeepDistinctCadence() async throws {
+        let root = try makeFixtureHome()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try writeJSON(["tokens": ["access_token": "codex-secret"]], to: root.appendingPathComponent(".codex/auth.json"))
+        let reader = LocalQuotaReader(homeDirectory: root, now: { self.observedAt }, fetchJSON: { _ in
+            Self.httpResponse(#"{"rate_limit":{"primary":{"used_percent":30},"secondary":{"used_percent":5}}}"#)
+        }, runAntigravity: { Data("{}".utf8) })
+
+        let codex = await reader.read().windows.filter { $0.providerKey == "openai" }
+        XCTAssertEqual(codex.count, 2)
+        XCTAssertEqual(codex.first { $0.id.contains("primary") }?.window, "5h")
+        XCTAssertEqual(codex.first { $0.id.contains("secondary") }?.window, "168h")
+        XCTAssertEqual(codex.first { $0.id.contains("primary") }?.label, "5-hour window")
+        XCTAssertEqual(codex.first { $0.id.contains("secondary") }?.label, "7-day window")
+    }
+
     func testClaudeRateLimitKeySuffixIsPublishedAsTheModelFamily() async throws {
         let root = try makeFixtureHome()
         defer { try? FileManager.default.removeItem(at: root) }

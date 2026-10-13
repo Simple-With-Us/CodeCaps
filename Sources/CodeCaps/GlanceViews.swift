@@ -1380,16 +1380,33 @@ func glanceCadence(_ snapshot: QuotaWindowSnapshot, now: Date) -> GlanceCadence 
 func isMuseAssistExtra(_ snapshot: QuotaWindowSnapshot) -> Bool {
     let key = snapshot.window.canonicalProviderKey
     guard key == "muse-assist" else { return false }
-    let label = snapshot.window.label.lowercased()
-    return label.contains("additional") || label.contains("extra")
+    let label = snapshot.window.label
+    if QuotaWindowVocabulary.isExtraAllowanceLabel(label) { return true }
+    let cadence = QuotaWindowVocabulary.standardCadence(
+        windowToken: snapshot.window.window,
+        label: label,
+        resetAt: snapshot.window.resetDate,
+        periodStart: snapshot.window.periodStartDate
+    )
+    if cadence == QuotaWindowVocabulary.otherLimit { return true }
+    let lower = label.lowercased()
+    return lower.contains("additional") || lower.contains("extra")
 }
 
 func isMuseAssistWeekly(_ snapshot: QuotaWindowSnapshot) -> Bool {
     let key = snapshot.window.canonicalProviderKey
     guard key == "muse-assist" else { return false }
+    if isMuseAssistExtra(snapshot) { return false }
+    let cadence = QuotaWindowVocabulary.standardCadence(
+        windowToken: snapshot.window.window,
+        label: snapshot.window.label,
+        resetAt: snapshot.window.resetDate,
+        periodStart: snapshot.window.periodStartDate
+    )
+    if cadence == QuotaWindowVocabulary.sevenDay { return true }
     let label = snapshot.window.label.lowercased()
     let token = (snapshot.window.window ?? "").lowercased()
-    return label.contains("weekly") || token.contains("weekly") || label.contains("limit") || label.contains("free")
+    return label.contains("weekly") || token.contains("weekly") || label.contains("free")
 }
 
 /// The unit tag beside a meter: "5h", "7d", "1m".  Kept to five characters so

@@ -365,6 +365,33 @@ final class GlanceMeterTests: XCTestCase {
         ])
     }
 
+    private func museAssistRow() -> DisplaySection {
+        DisplaySection(
+            id: "muse-assist",
+            providerKey: "muse-assist",
+            title: "Muse Assist",
+            platformTitle: "Muse Assist",
+            section: QuotaPlatformSection(
+                providerKey: "muse-assist",
+                providerLabel: "Muse Assist",
+                via: nil,
+                expected: true,
+                windows: [
+                    makeWindow(id: "weekly", label: "7-day window", token: "168h", remaining: 40, resetIn: 4 * 86_400, provider: "muse-assist"),
+                    makeWindow(id: "extra", label: "Other limit window", token: nil, remaining: 10, resetIn: 86_400, provider: "muse-assist"),
+                ]),
+            poolKey: nil,
+            remainingPercent: 10,
+            resetAt: now.addingTimeInterval(86_400),
+            maskedWindowIds: [])
+    }
+
+    func testMuseAssistSanitizedLabelsStillPairWeeklyAndExtraMeters() {
+        let pair = glanceMeterPair(for: museAssistRow(), now: now)
+        XCTAssertEqual(pair.short?.window.id, "weekly")
+        XCTAssertEqual(pair.long?.window.id, "extra")
+    }
+
     private func makeRow(_ windows: [QuotaWindowSnapshot], masked: Set<String> = []) -> DisplaySection {
         DisplaySection(
             id: "anthropic",
