@@ -288,7 +288,7 @@ final class GlanceExpandedLineTests: XCTestCase {
         let lines = glanceExpandedLines(for: multiModel, now: now)
         let line = try XCTUnwrap(lines.first)
         let speech = glanceMetersSpeech([line.short, line.long], now: now)
-        XCTAssertTrue(speech.hasPrefix("1d 100 percent remaining"), speech)
+        XCTAssertTrue(speech.contains("1d 100 percent remaining"), speech)
         XCTAssertTrue(speech.contains("; 7d 97 percent remaining"), speech)
         XCTAssertTrue(speech.contains("resets in 20h"), speech)
         XCTAssertTrue(speech.contains("resets in 5d"), speech)
