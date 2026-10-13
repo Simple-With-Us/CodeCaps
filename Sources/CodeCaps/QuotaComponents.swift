@@ -1167,13 +1167,6 @@ struct QuotaRow: View {
     }
     private var barMetrics: QuotaBarMetrics { QuotaBarMetrics(snapshot: snapshot, now: now) }
     private var barDimmed: Bool { quotaBarIsDimmed(for: snapshot, sourceFailed: sourceFailed) }
-    private var stateText: String {
-        if masked { return "not applicable" }
-        if isDiscreteCount { return "left" }
-        if snapshot.remainingPercent == nil { return "unavailable" }
-        return snapshot.isFresh && !sourceFailed ? "remaining" : "last reported"
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(alignment: .firstTextBaseline) {
@@ -1182,14 +1175,9 @@ struct QuotaRow: View {
                     .font(.system(size: 11, weight: .medium))
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 10)
-                VStack(alignment: .trailing, spacing: 1) {
-                    Text(percentText)
-                        .font(.system(size: compact ? 18 : 22, weight: .semibold, design: .rounded).monospacedDigit())
-                        .foregroundStyle(tint)
-                    Text(stateText)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                }
+                Text(percentText)
+                    .font(.system(size: compact ? 18 : 22, weight: .semibold, design: .rounded).monospacedDigit())
+                    .foregroundStyle(tint)
             }
 
             if masked {

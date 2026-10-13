@@ -138,7 +138,7 @@ private func grokBotUnknownWindow(observedAt: Date) -> QuotaWindow {
         status: .unknown,
         occurredAt: grokBotISOFormatter.string(from: observedAt),
         source: "Cursor DashboardService"
-    )
+    ).normalizedForExport()
 }
 
 private func grokBotNumber(_ value: Any?) -> Double? {

@@ -1274,7 +1274,12 @@ private func reportsWeeklyCadence(_ snapshot: QuotaWindowSnapshot) -> Bool {
 /// The meter a window is: what it measures and how often it resets, the same
 /// for a window and for another source's report of it.
 private func glanceMeterKey(_ snapshot: QuotaWindowSnapshot) -> String {
-    glanceLineLabel(snapshot) + "|" + glanceMeterCaption(snapshot)
+    // Line labels are cadence-only after the vocabulary stack, but meters still
+    // differ by model: a Sonnet weekly with no reading must stay beside Overall.
+    let model = (snapshot.window.modelId ?? "")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        .lowercased()
+    return glanceLineLabel(snapshot) + "|" + glanceMeterCaption(snapshot) + "|" + model
 }
 
 /// Whether `snapshot` is another source's report of the meter `other` already
@@ -1375,16 +1380,38 @@ func glanceCadence(_ snapshot: QuotaWindowSnapshot, now: Date) -> GlanceCadence 
 func isMuseAssistExtra(_ snapshot: QuotaWindowSnapshot) -> Bool {
     let key = snapshot.window.canonicalProviderKey
     guard key == "muse-assist" else { return false }
-    let label = snapshot.window.label.lowercased()
-    return label.contains("additional") || label.contains("extra")
+    let label = snapshot.window.label
+    if QuotaWindowVocabulary.isExtraAllowanceLabel(label) { return true }
+    let lower = label.lowercased()
+    if lower.contains("additional") || lower.contains("extra") { return true }
+    // Only lean on the vocabulary's "Other limit" catch-all when the window
+    // carries no cadence token: a token-bearing window with a non-standard
+    // cadence (8h, 12h) also resolves to "Other limit", and reading that as
+    // an extra allowance would caption a real meter "+".
+    guard snapshot.window.window == nil else { return false }
+    let cadence = QuotaWindowVocabulary.standardCadence(
+        windowToken: nil,
+        label: label,
+        resetAt: snapshot.window.resetDate,
+        periodStart: snapshot.window.periodStartDate
+    )
+    return cadence == QuotaWindowVocabulary.otherLimit
 }
 
 func isMuseAssistWeekly(_ snapshot: QuotaWindowSnapshot) -> Bool {
     let key = snapshot.window.canonicalProviderKey
     guard key == "muse-assist" else { return false }
+    if isMuseAssistExtra(snapshot) { return false }
+    let cadence = QuotaWindowVocabulary.standardCadence(
+        windowToken: snapshot.window.window,
+        label: snapshot.window.label,
+        resetAt: snapshot.window.resetDate,
+        periodStart: snapshot.window.periodStartDate
+    )
+    if cadence == QuotaWindowVocabulary.sevenDay { return true }
     let label = snapshot.window.label.lowercased()
     let token = (snapshot.window.window ?? "").lowercased()
-    return label.contains("weekly") || token.contains("weekly") || label.contains("limit") || label.contains("free")
+    return label.contains("weekly") || token.contains("weekly") || label.contains("free")
 }
 
 /// The unit tag beside a meter: "5h", "7d", "1m".  Kept to five characters so
@@ -1493,17 +1520,13 @@ private func glanceDurationTag(_ seconds: TimeInterval) -> String {
 
 /// Hyphenated cadence for an exhausted window: "5-hour", "7-day", "monthly", …
 func glanceAtCapCadenceLabel(_ snapshot: QuotaWindowSnapshot) -> String {
-    switch glanceMeterCaption(snapshot) {
-    case "5h": return "5-hour"
-    case "7d", "1w": return "7-day"
-    case "1m": return "monthly"
-    case "24h", "1d": return "daily"
-    default:
-        let trimmed = AntigravityDisplay.windowLabel(snapshot.window.label)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return "Quota" }
-        return trimmed
-    }
+    QuotaWindowVocabulary.standardCadence(
+        windowToken: snapshot.window.window,
+        label: snapshot.window.label,
+        resetAt: snapshot.resetAt,
+        periodStart: snapshot.window.periodStartDate,
+        monthlyHint: glanceIsMonthly(snapshot)
+    )
 }
 
 /// One-line cap summary: "7-day cap resets in 1d 13h".
@@ -1590,6 +1613,9 @@ struct GlanceMeter: View {
     /// what the meter is; the full explanation stays in the tooltip and the
     /// spoken value, so nothing is actually lost.
     private var countdown: String {
+        if !snapshot.isFresh, let observed = snapshot.observedAt {
+            return "Updated \(observed.formatted(date: .omitted, time: .shortened))"
+        }
         if isMuseAssistExtra(snapshot) {
             return "extra"
         }
@@ -1601,6 +1627,8 @@ struct GlanceMeter: View {
     /// the dimmed countdown grey.
     private var isExtraLabel: Bool { isMuseAssistExtra(snapshot) }
     private var metrics: QuotaBarMetrics { QuotaBarMetrics(snapshot: snapshot, now: now) }
+
+    private var stalePresentation: Bool { !snapshot.isFresh && snapshot.remainingPercent != nil }
 
     var body: some View {
         HStack(spacing: Metrics.glanceMeterGap) {
@@ -1661,6 +1689,8 @@ struct GlanceMeter: View {
                     .frame(width: Metrics.glanceMeterCountdownWidth, height: 1)
             }
         }
+        .saturation(stalePresentation ? 0.2 : 1)
+        .opacity(stalePresentation ? 0.78 : 1)
         .frame(width: Metrics.glanceMeterWidth, alignment: .leading)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(glanceMeterCaption(snapshot))
@@ -1672,7 +1702,10 @@ struct GlanceMeter: View {
         if isMuseAssistExtra(snapshot) {
             return "\(reading), extra usage"
         }
-        if !countdown.isEmpty {
+        if stalePresentation, let observed = snapshot.observedAt {
+            return "\(reading), updated \(observed.formatted(date: .omitted, time: .shortened))"
+        }
+        if !countdown.isEmpty, !stalePresentation {
             return "\(reading), resets in \(glanceResetFullCountdown(snapshot.resetAt, now: now))"
         }
         return reading
@@ -1875,22 +1908,15 @@ private func glanceMeterLines(label: String, windows: [QuotaWindowSnapshot], now
 /// ("7d window (Sonnet)" reads "Sonnet"), or its pool.  A window that names
 /// only its cadence covers the whole subscription, so it reads "Overall".
 func glanceLineLabel(_ snapshot: QuotaWindowSnapshot) -> String {
-    let window = snapshot.window
-    if let model = window.modelId?.trimmingCharacters(in: .whitespacesAndNewlines), !model.isEmpty {
-        return glanceModelName(model)
-    }
-    let label = AntigravityDisplay.windowLabel(window.label).trimmingCharacters(in: .whitespacesAndNewlines)
-    if let open = label.firstIndex(of: "("), let close = label.lastIndex(of: ")"), open < close {
-        let inner = label[label.index(after: open)..<close].trimmingCharacters(in: .whitespacesAndNewlines)
-        let head = label[..<open].trimmingCharacters(in: .whitespacesAndNewlines)
-        let innerIsCadence = inner.lowercased().contains("window") || glanceDurationSeconds(inner.lowercased()) != nil
-        if !inner.isEmpty, !innerIsCadence { return glanceModelName(inner) }
-        if !head.isEmpty, !head.lowercased().hasSuffix("window") { return glanceModelName(head) }
-    }
-    if let separator = label.range(of: " · ") {
-        return String(label[..<separator.lowerBound])
-    }
-    return label.isEmpty || label.lowercased().hasSuffix("window") ? "Overall" : label
+    let cadence = QuotaWindowVocabulary.standardCadence(
+        windowToken: snapshot.window.window,
+        label: snapshot.window.label,
+        resetAt: snapshot.resetAt,
+        periodStart: snapshot.window.periodStartDate,
+        monthlyHint: glanceIsMonthly(snapshot)
+    )
+    if cadence == QuotaWindowVocabulary.otherLimit { return QuotaWindowVocabulary.otherLimit }
+    return cadence
 }
 
 /// A model or family name as a person reads it: a single lower-case word
