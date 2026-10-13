@@ -503,7 +503,7 @@ private func parseClaude(_ root: [String: Any], planType: String?, observedAt: D
         let resetAt = firstTimestamp(value, ["resets_at", "resetsAt", "reset_at", "resetAt"])
         let resetDate = resetAt.flatMap(parseDate)
         let remaining = direct.map(percentage) ?? utilization.map { 100 - min(100, max(0, $0)) }
-        let token = claudeToken(base) ?? claudeToken(key)
+        guard let token = claudeToken(base) ?? claudeToken(key) else { continue }
         let cadence = QuotaWindowVocabulary.standardCadence(
             windowToken: token,
             label: key,
@@ -532,6 +532,14 @@ private func parseClaude(_ root: [String: Any], planType: String?, observedAt: D
     return result.sorted { $0.id < $1.id }
 }
 
+private func fallbackCodexSlotToken(_ slot: String) -> String? {
+    switch slot.lowercased() {
+    case "primary": return "5h"
+    case "secondary": return "168h"
+    default: return nil
+    }
+}
+
 private func claudeToken(_ value: String) -> String? {
     let parts = value.split(separator: "_"); guard parts.count >= 2 else { return nil }
     let units = ["hour": "h", "day": "d", "week": "w", "month": "mo"]
@@ -552,12 +560,15 @@ private func parseCodex(_ root: [String: Any], planType: String?, accountKey: St
         let reset = firstTimestamp(value, ["resets_at", "resetsAt", "reset_at", "resetAt"]) ?? firstNumber(value, ["reset_after_seconds", "resetAfterSeconds", "resets_in_seconds"]).flatMap { seconds in seconds >= 0 && seconds.isFinite && seconds <= 31_536_000 ? isoFormatter.string(from: observedAt.addingTimeInterval(seconds)) : nil }
         let remaining = direct.map(percentage) ?? used.map { 100 - min(100, max(0, $0)) }
         let resetDate = reset.flatMap(parseDate)
+        let resolvedToken = token ?? fallbackCodexSlotToken(slot)
         let isAdditional = slot.lowercased().contains("additional")
             || (modelId?.lowercased().contains("additional") == true)
         let label = if isAdditional {
-            QuotaWindowVocabulary.windowLabel(windowToken: token, existingLabel: QuotaWindowVocabulary.otherLimit, resetAt: resetDate, periodStart: nil)
+            QuotaWindowVocabulary.windowLabel(windowToken: resolvedToken, existingLabel: QuotaWindowVocabulary.otherLimit, resetAt: resetDate, periodStart: nil)
+        } else if let resolvedToken {
+            QuotaWindowVocabulary.windowLabel(windowToken: resolvedToken, existingLabel: slot, resetAt: resetDate, periodStart: nil)
         } else {
-            QuotaWindowVocabulary.windowLabel(windowToken: token, existingLabel: slot, resetAt: resetDate, periodStart: nil)
+            QuotaWindowVocabulary.windowLabel(windowToken: nil, existingLabel: slot, resetAt: resetDate, periodStart: nil)
         }
         result.append(window(
             provider: .codex,
@@ -565,7 +576,7 @@ private func parseCodex(_ root: [String: Any], planType: String?, accountKey: St
             label: label,
             remaining: remaining,
             resetAt: reset,
-            windowToken: token,
+            windowToken: resolvedToken,
             modelId: modelId,
             planName: planType,
             accountKey: accountKey,

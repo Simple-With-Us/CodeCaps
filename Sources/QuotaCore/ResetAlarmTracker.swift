@@ -443,21 +443,11 @@ public struct ResetAlarmTracker: Sendable {
                 }
                 if jump > required || (jump > ResetAlarmPolicy.resetDriftTolerance && climbed) {
                     isReset = true
-                    // When the quota also came back from mostly spent to nearly
-                    // untouched, and the window had *not* reached its own end,
-                    // this is a restore rather than an ordinary rollover.
-                    //
-                    // The `!hasPassed` guard is load-bearing.  A window that
-                    // simply reached the end of its period also goes from
-                    // spent to full, and the owner ruled (2026-09-30) that a
-                    // smaller window stays quiet unless it came near its cap.
-                    // Labelling that "mid window" would bypass near-cap and
-                    // alert on every ordinary rollover.  A reset before the
-                    // scheduled end is the case the owner cannot otherwise see
-                    // (2026-10-08), and that is exactly what this catches.
-                    if !hasPassed, let reading, let last = window.lastRemaining {
-                        isMidWindow = reading >= ResetAlarmPolicy.courtesyRestoreFloor
-                            && last <= ResetAlarmPolicy.courtesyRestoreCeiling
+                    // When the window had *not* reached its own scheduled end,
+                    // any reset is an early / mid-cycle vendor restore rather than
+                    // an ordinary rollover.  Normal time remaining had not passed.
+                    if !hasPassed {
+                        isMidWindow = true
                     }
                     nextResetAt = reported
                 } else if jump > -ResetAlarmPolicy.resetDriftTolerance || reported > readAt {

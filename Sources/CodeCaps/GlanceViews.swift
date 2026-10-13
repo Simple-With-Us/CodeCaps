@@ -1274,7 +1274,12 @@ private func reportsWeeklyCadence(_ snapshot: QuotaWindowSnapshot) -> Bool {
 /// The meter a window is: what it measures and how often it resets, the same
 /// for a window and for another source's report of it.
 private func glanceMeterKey(_ snapshot: QuotaWindowSnapshot) -> String {
-    glanceLineLabel(snapshot) + "|" + glanceMeterCaption(snapshot)
+    // Line labels are cadence-only after the vocabulary stack, but meters still
+    // differ by model: a Sonnet weekly with no reading must stay beside Overall.
+    let model = (snapshot.window.modelId ?? "")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        .lowercased()
+    return glanceLineLabel(snapshot) + "|" + glanceMeterCaption(snapshot) + "|" + model
 }
 
 /// Whether `snapshot` is another source's report of the meter `other` already
@@ -1375,16 +1380,38 @@ func glanceCadence(_ snapshot: QuotaWindowSnapshot, now: Date) -> GlanceCadence 
 func isMuseAssistExtra(_ snapshot: QuotaWindowSnapshot) -> Bool {
     let key = snapshot.window.canonicalProviderKey
     guard key == "muse-assist" else { return false }
-    let label = snapshot.window.label.lowercased()
-    return label.contains("additional") || label.contains("extra")
+    let label = snapshot.window.label
+    if QuotaWindowVocabulary.isExtraAllowanceLabel(label) { return true }
+    let lower = label.lowercased()
+    if lower.contains("additional") || lower.contains("extra") { return true }
+    // Only lean on the vocabulary's "Other limit" catch-all when the window
+    // carries no cadence token: a token-bearing window with a non-standard
+    // cadence (8h, 12h) also resolves to "Other limit", and reading that as
+    // an extra allowance would caption a real meter "+".
+    guard snapshot.window.window == nil else { return false }
+    let cadence = QuotaWindowVocabulary.standardCadence(
+        windowToken: nil,
+        label: label,
+        resetAt: snapshot.window.resetDate,
+        periodStart: snapshot.window.periodStartDate
+    )
+    return cadence == QuotaWindowVocabulary.otherLimit
 }
 
 func isMuseAssistWeekly(_ snapshot: QuotaWindowSnapshot) -> Bool {
     let key = snapshot.window.canonicalProviderKey
     guard key == "muse-assist" else { return false }
+    if isMuseAssistExtra(snapshot) { return false }
+    let cadence = QuotaWindowVocabulary.standardCadence(
+        windowToken: snapshot.window.window,
+        label: snapshot.window.label,
+        resetAt: snapshot.window.resetDate,
+        periodStart: snapshot.window.periodStartDate
+    )
+    if cadence == QuotaWindowVocabulary.sevenDay { return true }
     let label = snapshot.window.label.lowercased()
     let token = (snapshot.window.window ?? "").lowercased()
-    return label.contains("weekly") || token.contains("weekly") || label.contains("limit") || label.contains("free")
+    return label.contains("weekly") || token.contains("weekly") || label.contains("free")
 }
 
 /// The unit tag beside a meter: "5h", "7d", "1m".  Kept to five characters so
