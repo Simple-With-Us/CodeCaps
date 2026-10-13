@@ -435,6 +435,13 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
         return monochromeKeys.contains(key)
     }
 
+    /// Marks that must always render in brand colour (orange Claude starburst,
+    /// colour Gemini star, etc.), never as a black template silhouette.
+    public static func requiresBrandColorMark(_ providerKey: String) -> Bool {
+        let key = platformKey(of: providerKey)
+        return key == "anthropic" || key == "claude"
+    }
+
     /// One-colour marks that draw pure black on Light and pure white on Dark
     /// rather than in the ink's softer grey.  The Third-Party star sits beside
     /// the colour Gemini star, and a grey one read as disabled (owner delta,

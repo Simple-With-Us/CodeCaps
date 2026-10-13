@@ -400,14 +400,15 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
     /// count different rows.
     static func targetRows(for model: MonitorModel) -> [DisplaySection] {
         let all = model.orderedPipDisplaySections()
-        if model.pipPinnedRowIds.isEmpty {
-            let sorted = all.sorted { a, b in
-                (a.section.minimumRemainingPercent ?? 100) < (b.section.minimumRemainingPercent ?? 100)
-            }
-            return Array(sorted.prefix(2))
+        let selected = model.pipPinnedRowIds.union(model.pipAutoAddedRowIds)
+        if !selected.isEmpty {
+            let rows = all.filter { selected.contains($0.id) }
+            if !rows.isEmpty { return rows }
         }
-        let pinned = all.filter { model.pipPinnedRowIds.contains($0.id) }
-        return pinned.isEmpty ? Array(all.prefix(2)) : pinned
+        let sorted = all.sorted { a, b in
+            (a.section.minimumRemainingPercent ?? 100) < (b.section.minimumRemainingPercent ?? 100)
+        }
+        return Array(sorted.prefix(2))
     }
 
     private static func rowSignature(for model: MonitorModel) -> [String] {
@@ -703,7 +704,7 @@ struct PipWidgetView: View {
                     // Say so, rather than letting a pinned row look absent.
                     Text("\(targetRows.count - max(1, visible)) more pinned — scroll")
                         .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(background.secondaryInk)
+                        .foregroundStyle(background.countdownInk)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.top, 2)
                 }
@@ -764,9 +765,12 @@ struct PipWidgetView: View {
             if let atCap {
                 pipAtCap(atCap, detail: detail)
             } else {
-                ForEach(Array(meters.enumerated()), id: \.offset) { _, snapshot in
-                    pipMeter(snapshot, detail: detail)
+                HStack(spacing: PipMetrics.meterSpacing) {
+                    ForEach(Array(meters.enumerated()), id: \.offset) { _, snapshot in
+                        pipMeter(snapshot, detail: detail)
+                    }
                 }
+                .fixedSize(horizontal: false, vertical: true)
             }
         }
         .frame(height: PipMetrics.rowHeight)
@@ -814,7 +818,7 @@ struct PipWidgetView: View {
                 if windows.isEmpty {
                     Text("No readings for this platform right now.")
                         .font(.system(size: 10))
-                        .foregroundStyle(background.secondaryInk)
+                        .foregroundStyle(background.countdownInk)
                 }
                 Spacer(minLength: 0)
             }
@@ -837,7 +841,7 @@ struct PipWidgetView: View {
             HStack(spacing: 5) {
                 Text(cadenceCaption)
                     .font(.system(size: showExpanded ? 10 : 9, weight: showExpanded ? .bold : .bold))
-                    .foregroundStyle(background.secondaryInk)
+                    .foregroundStyle(background.countdownInk)
                     .frame(width: showExpanded ? PipMetrics.cadenceExpandedWidth : PipMetrics.cadenceWidth, alignment: .leading)
                 Text(cleanLabel)
                     .font(.system(size: 10, weight: .medium))
@@ -851,7 +855,7 @@ struct PipWidgetView: View {
                 if !cd.isEmpty {
                     Text(cd)
                         .font(.system(size: 9).monospacedDigit())
-                        .foregroundStyle(background.secondaryInk)
+                        .foregroundStyle(background.countdownInk)
                         .lineLimit(1)
                 }
             }
@@ -870,32 +874,25 @@ struct PipWidgetView: View {
     /// how long until the plan is usable again.  Sized like the meter it
     /// replaces so a capped row does not resize the strip.
     private func pipAtCap(_ snapshot: QuotaWindowSnapshot, detail: PipMetrics.Detail) -> some View {
-        let cd = glanceResetCountdown(snapshot.resetAt, now: model.now)
-        let showCountdown = detail.showsCountdown && !cd.isEmpty
-        return HStack(spacing: PipMetrics.meterSpacing) {
-            // The cadence column is left out rather than filled with a second
-            // "At Cap": the cap is the whole message, and two of them read as a
-            // mistake.  The reset countdown keeps its own column, so the words
-            // still land where the other rows put them.
-            Text(GlanceAtCap.label)
+        let cap = GlanceAtCap(snapshot: snapshot, now: model.now)
+        let summary = glanceAtCapSummary(snapshot, now: model.now)
+        return VStack(alignment: .leading, spacing: 1) {
+            Text(summary)
                 .font(.system(size: 10, weight: .bold, design: .rounded))
-                .foregroundStyle(Theme.danger)
-                .lineLimit(1)
-                .fixedSize()
-                .frame(width: PipMetrics.cadenceWidth + PipMetrics.barMinWidth, alignment: .leading)
-            if showCountdown {
-                Text(cd)
-                    .font(.system(size: 9, weight: .medium).monospacedDigit())
-                    .foregroundStyle(background.secondaryInk)
+                .foregroundStyle(background.ink)
+                .lineLimit(2)
+                .minimumScaleFactor(0.8)
+            let exact = glanceResetExactTime(snapshot.resetAt, now: model.now)
+            if !exact.isEmpty {
+                Text(exact)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(background.countdownInk)
                     .lineLimit(1)
-                    .fixedSize()
-                    .frame(width: PipMetrics.percentWidth, alignment: .leading)
             }
         }
-        .help(snapshot.resetAt.map { "Resets \(glanceResetCountdown($0, now: model.now))" }
-              ?? "At cap")
+        .help(snapshot.resetAt.map { glanceResetHelp($0, now: model.now) ?? "At cap" } ?? "At cap")
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(GlanceAtCap(snapshot: snapshot, now: model.now).spokenDescription)
+        .accessibilityLabel(cap.spokenDescription)
     }
 
     private func pipMeter(_ snapshot: QuotaWindowSnapshot, detail: PipMetrics.Detail) -> some View {
@@ -909,7 +906,7 @@ struct PipWidgetView: View {
             if detail.showsCadence {
                 Text(cadenceCaption)
                     .font(.system(size: showExpanded ? 10 : 9, weight: showExpanded ? .bold : .bold))
-                    .foregroundStyle(background.secondaryInk)
+                    .foregroundStyle(background.countdownInk)
                     .frame(width: showExpanded ? PipMetrics.cadenceExpandedWidth : PipMetrics.cadenceWidth, alignment: .trailing)
             }
 
@@ -932,7 +929,7 @@ struct PipWidgetView: View {
             if detail.showsCountdown, !cd.isEmpty {
                 Text(cd)
                     .font(.system(size: 9, weight: .medium).monospacedDigit())
-                    .foregroundStyle(background.secondaryInk)
+                    .foregroundStyle(background.countdownInk)
                     .lineLimit(1)
                     .fixedSize()
                     .frame(width: PipMetrics.countdownWidth, alignment: .trailing)

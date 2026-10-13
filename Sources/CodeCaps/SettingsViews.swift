@@ -123,6 +123,22 @@ struct SettingsMenuBarPage: View {
                     .help("Keep selected quotas in a compact floating HUD widget on top of all windows.")
                     .accessibilityLabel("Floating On-Screen PiP Widget")
 
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Toggle("Open PiP when a quota runs low", isOn: $model.pipOpenWhenLow)
+                        .help("When a quota drops to the threshold, add that platform to the PiP HUD and open it if it is closed.")
+                        .accessibilityLabel("Open PiP when a quota runs low")
+                    if model.pipOpenWhenLow {
+                        Picker("Low quota threshold", selection: $model.pipLowThresholdPercent) {
+                            ForEach(PipLowQuota.thresholdChoices, id: \.self) { value in
+                                Text("\(value)%").tag(value)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(maxWidth: 88)
+                        .accessibilityLabel("Low quota threshold")
+                    }
+                }
+
                 if model.isPipEnabled {
                     VStack(alignment: .leading, spacing: 6) {
                         // Owner 2026-10-10: the HUD should be able to be white,

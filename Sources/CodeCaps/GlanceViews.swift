@@ -1491,44 +1491,72 @@ private func glanceDurationTag(_ seconds: TimeInterval) -> String {
     return "\(whole)s"
 }
 
+/// Hyphenated cadence for an exhausted window: "5-hour", "7-day", "monthly", …
+func glanceAtCapCadenceLabel(_ snapshot: QuotaWindowSnapshot) -> String {
+    switch glanceMeterCaption(snapshot) {
+    case "5h": return "5-hour"
+    case "7d", "1w": return "7-day"
+    case "1m": return "monthly"
+    case "24h", "1d": return "daily"
+    default:
+        let trimmed = AntigravityDisplay.windowLabel(snapshot.window.label)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return "Quota" }
+        return trimmed
+    }
+}
+
+/// One-line cap summary: "7-day cap resets in 1d 13h".
+func glanceAtCapSummary(_ snapshot: QuotaWindowSnapshot, now: Date) -> String {
+    let cadence = glanceAtCapCadenceLabel(snapshot)
+    let countdown = glanceResetCountdown(snapshot.resetAt, now: now)
+    guard !countdown.isEmpty else { return "\(cadence) cap" }
+    return "\(cadence) cap resets in \(countdown)"
+}
+
+/// Short weekday + time for the reset, e.g. "Tue 4:15 PM".
+func glanceResetExactTime(_ reset: Date?, now: Date) -> String {
+    guard let reset, reset > now else { return "" }
+    return reset.formatted(.dateTime.weekday(.abbreviated).hour().minute())
+}
+
 /// What a capped plan says instead of its bars.
 ///
-/// Owner 2026-10-11: a plan at its cap drew a full green bar labelled 100%
-/// while being completely unusable, because the row metered whichever window
-/// still had headroom.  The numbers were true and the conclusion was the exact
-/// opposite of what the eye took from them, so the bars go and the row says
-/// "At Cap" with the countdown to the reset that frees the plan.
-///
-/// It occupies the same fixed width a meter would, so a capped row does not
-/// shift the grid the other rows line up on.
+/// Owner 2026-10-12: when any window is exhausted, every bar for that platform
+/// hides and one line names the binding cap and when it lifts — e.g.
+/// "7-day cap resets in 1d 13h", with the exact reset time on a second line.
 struct GlanceAtCap: View {
     let snapshot: QuotaWindowSnapshot
     let now: Date
+    /// When true, spans both meter columns in a Glance row.
+    var spansFullMeterRow: Bool = false
 
-    private var countdown: String { glanceResetCountdown(snapshot.resetAt, now: now) }
+    private var summary: String { glanceAtCapSummary(snapshot, now: now) }
+    private var exactTime: String { glanceResetExactTime(snapshot.resetAt, now: now) }
 
-    /// The words, without the countdown, for the spoken value and the tooltip.
+    /// Legacy label kept for narrow surfaces that still say "At Cap" alone.
     static var label: String { "At Cap" }
 
     var body: some View {
-        HStack(spacing: Metrics.glanceMeterGap) {
-            Text(Self.label)
+        VStack(alignment: .leading, spacing: 1) {
+            Text(summary)
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Theme.danger)
-                .lineLimit(1)
+                .foregroundStyle(Theme.ink)
+                .lineLimit(2)
                 .minimumScaleFactor(0.8)
-            if !countdown.isEmpty {
-                Text("Resets in \(countdown)")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Theme.ink.opacity(0.75))
+                .help(glanceResetHelp(snapshot.resetAt, now: now) ?? "")
+            if !exactTime.isEmpty {
+                Text(exactTime)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(Theme.ink.opacity(0.55))
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
-                    .help(glanceResetHelp(snapshot.resetAt, now: now) ?? "")
             }
         }
-        .frame(width: Metrics.glanceMeterWidth, alignment: .leading)
+        .frame(width: spansFullMeterRow ? Metrics.glanceMetersWidth : Metrics.glanceMeterWidth,
+               alignment: .leading)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("At cap")
+        .accessibilityLabel(glanceAtCapCadenceLabel(snapshot) + " cap")
         .accessibilityValue(spokenValue)
     }
 
@@ -1537,8 +1565,11 @@ struct GlanceAtCap: View {
     /// What VoiceOver reads: the cap, then when it lifts.  Public so the row
     /// can speak the same words its own collapsed view shows.
     var spokenDescription: String {
-        guard !countdown.isEmpty else { return "At cap, quota exhausted" }
-        return "At cap, resets in \(glanceResetFullCountdown(snapshot.resetAt, now: now))"
+        let countdown = glanceResetCountdown(snapshot.resetAt, now: now)
+        guard !countdown.isEmpty else { return "\(glanceAtCapCadenceLabel(snapshot)) cap, quota exhausted" }
+        var parts = ["\(glanceAtCapCadenceLabel(snapshot)) cap, resets in \(glanceResetFullCountdown(snapshot.resetAt, now: now))"]
+        if !exactTime.isEmpty { parts.append("on \(exactTime)") }
+        return parts.joined(separator: ", ")
     }
 }
 
@@ -1692,15 +1723,7 @@ struct GlanceMeterColumns: View {
     @ViewBuilder
     private var columns: some View {
         if let atCap {
-            // One caption's width, not two: the plan is capped as a whole, so
-            // saying it once in the first meter column reads better than the
-            // same sentence split across both.
-            HStack(spacing: 0) {
-                GlanceAtCap(snapshot: atCap, now: now)
-                    .frame(width: Metrics.glanceMeterWidth, alignment: .leading)
-                Spacer().frame(width: Metrics.glanceMeterGroupGap)
-                Spacer().frame(width: Metrics.glanceMeterWidth)
-            }
+            GlanceAtCap(snapshot: atCap, now: now, spansFullMeterRow: true)
         } else if short != nil || long != nil {
             HStack(spacing: 0) {
                 column(short)
@@ -1954,8 +1977,11 @@ struct GlanceRow: View {
     /// The windows the row's own meters leave out, as extra lines of meters.
     /// A row showing an issue instead of meters has nothing to open.
     private var extraLines: [GlanceMeterLine] {
-        issue == nil ? glanceExpandedLines(for: row, now: now) : []
+        guard issue == nil, !row.isAtCap else { return [] }
+        return glanceExpandedLines(for: row, now: now)
     }
+
+    private var platformNameDimmed: Bool { isAtRisk || row.isAtCap }
 
     private var canExpand: Bool {
         allowsExpansion && !extraLines.isEmpty
@@ -2041,10 +2067,10 @@ struct GlanceRow: View {
                 HStack(spacing: 3) {
                     Text(row.poolTitle == nil ? row.title : row.platformTitle)
                         .font(.system(size: 13, weight: .medium))
-                        // Italic and dimmed while the row is heading for its cap,
-                        // so the eye finds it before the numbers do.
-                        .italic(isAtRisk)
-                        .foregroundStyle(isAtRisk ? Theme.ink.opacity(0.45) : Theme.ink)
+                        // Italic and dimmed while the row is at risk or already
+                        // capped, so the eye reads the cap line first.
+                        .italic(platformNameDimmed)
+                        .foregroundStyle(platformNameDimmed ? Theme.ink.opacity(0.45) : Theme.ink)
                         .lineLimit(1)
                         .truncationMode(.tail)
                     if hasAnomaly {
@@ -2057,8 +2083,8 @@ struct GlanceRow: View {
                 if let subtitle = row.poolTitle {
                     Text(subtitle)
                         .font(.system(size: 10))
-                        .italic(isAtRisk)
-                        .foregroundStyle(isAtRisk ? Theme.ink.opacity(0.40) : .secondary)
+                        .italic(platformNameDimmed)
+                        .foregroundStyle(platformNameDimmed ? Theme.ink.opacity(0.40) : .secondary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.85)
                         .truncationMode(.tail)

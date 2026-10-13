@@ -35,7 +35,7 @@ final class QuotaPublisherTests: XCTestCase {
     private func makeSampleWindows() -> [QuotaWindow] {
         [
             QuotaWindow(
-                id: "anthropic-5h",
+                id: "local-mac:anthropic:five_hour",
                 provider: "anthropic",
                 providerKey: "anthropic",
                 providerLabel: "Anthropic",
@@ -170,7 +170,7 @@ final class QuotaPublisherTests: XCTestCase {
 
         let meta = try XCTUnwrap(first["metadata"] as? [String: Any])
         XCTAssertEqual(meta["machine"] as? String, "Test-Mac")
-        XCTAssertEqual(meta["bucketId"] as? String, "5h")
+        XCTAssertEqual(meta["bucketId"] as? String, "anthropic:five_hour")
         XCTAssertEqual(meta["quotaWindow"] as? String, "5h")
         XCTAssertEqual(meta["resetAt"] as? String, "2026-09-14T22:00:00Z")
         XCTAssertEqual(meta["source"] as? String, "codecaps")

@@ -448,6 +448,9 @@ final class MonitorModel: ObservableObject {
     @Published var isPipEnabled: Bool {
         didSet {
             defaults.set(isPipEnabled, forKey: "isPipEnabled")
+            if oldValue && !isPipEnabled && pipOpenWhenLow {
+                PipLowQuota.noteUserClosedPip(session: &pipLowQuotaSession)
+            }
             PipWidgetController.shared.update(model: self)
         }
     }
@@ -463,6 +466,35 @@ final class MonitorModel: ObservableObject {
             PipWidgetController.shared.update(model: self)
         }
     }
+    /// Rows temporarily added because a quota crossed the low threshold.
+    @Published var pipAutoAddedRowIds: Set<String> {
+        didSet {
+            defaults.set(Array(pipAutoAddedRowIds), forKey: "pipAutoAddedRowIds")
+            PipWidgetController.shared.update(model: self)
+        }
+    }
+    @Published var pipOpenWhenLow: Bool {
+        didSet {
+            defaults.set(pipOpenWhenLow, forKey: "pipOpenWhenLow")
+            if !pipOpenWhenLow {
+                pipLowQuotaSession = PipLowQuotaSession()
+                pipAutoAddedRowIds = []
+            } else {
+                evaluatePipLowQuota()
+            }
+        }
+    }
+    @Published var pipLowThresholdPercent: Int {
+        didSet {
+            let clamped = PipLowQuota.thresholdChoices.contains(pipLowThresholdPercent)
+                ? pipLowThresholdPercent
+                : PipLowQuota.defaultThreshold
+            if clamped != pipLowThresholdPercent { pipLowThresholdPercent = clamped; return }
+            defaults.set(pipLowThresholdPercent, forKey: "pipLowThresholdPercent")
+            evaluatePipLowQuota()
+        }
+    }
+    var pipLowQuotaSession = PipLowQuotaSession()
 
     // Dynamic Pacing Highlights
     @Published var pacingColorHighlights: Bool {
@@ -640,6 +672,12 @@ final class MonitorModel: ObservableObject {
         isPipEnabled = defaults.bool(forKey: "isPipEnabled")
         pipPinnedRowIds = Set(defaults.stringArray(forKey: "pipPinnedRowIds") ?? [])
         pipRowOrder = defaults.stringArray(forKey: "pipRowOrder") ?? []
+        pipAutoAddedRowIds = Set(defaults.stringArray(forKey: "pipAutoAddedRowIds") ?? [])
+        pipOpenWhenLow = defaults.bool(forKey: "pipOpenWhenLow")
+        let storedThreshold = defaults.integer(forKey: "pipLowThresholdPercent")
+        pipLowThresholdPercent = PipLowQuota.thresholdChoices.contains(storedThreshold)
+            ? storedThreshold
+            : PipLowQuota.defaultThreshold
         pacingColorHighlights = defaults.object(forKey: "pacingColorHighlights") as? Bool ?? true
         alarmChanges = alarmManager.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
@@ -1349,6 +1387,22 @@ final class MonitorModel: ObservableObject {
         pipRowOrder = current
     }
 
+    func evaluatePipLowQuota() {
+        let shouldOpen = PipLowQuota.evaluate(
+            rows: displaySections,
+            thresholdPercent: pipLowThresholdPercent,
+            enabled: pipOpenWhenLow,
+            session: &pipLowQuotaSession
+        )
+        let auto = pipLowQuotaSession.autoAddedRowIds
+        if auto != pipAutoAddedRowIds {
+            pipAutoAddedRowIds = auto
+        }
+        if shouldOpen && pipOpenWhenLow {
+            isPipEnabled = true
+        }
+    }
+
     func setCustomInfo(for providerKey: String, info: PlatformCustomInfo) {
         platformCustomInfo[providerKey] = info
     }
@@ -1381,14 +1435,18 @@ final class MonitorModel: ObservableObject {
     func glanceMarkStyle(for providerKey: String) -> MarkStyle {
         let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let platform = key.split(separator: ":", maxSplits: 1).first.map(String.init) ?? key
-        if let style = markStyles[key] ?? markStyles[platform] { return style }
-        if PlatformLogoImage.hasCustomMark(providerKey: key) || PlatformLogoImage.hasCustomMark(providerKey: platform) {
-            return .custom
+        let resolved: MarkStyle
+        if let style = markStyles[key] ?? markStyles[platform] {
+            resolved = style
+        } else if PlatformLogoImage.hasCustomMark(providerKey: key) || PlatformLogoImage.hasCustomMark(providerKey: platform) {
+            resolved = .custom
+        } else {
+            // Owner's explicit per-provider choice beats the "recolour the logos
+            // with the accent" switch when they set one above; otherwise accent
+            // on logos means template for every provider that allows it.
+            resolved = glanceLogosFollowAccent ? .template : .standard
         }
-        // Owner's explicit per-provider choice beats the "recolour the logos
-        // with the accent" switch: if they picked a style for this platform,
-        // that is the answer they gave.
-        return glanceLogosFollowAccent ? .template : .standard
+        return PlatformLogoImage.requiresBrandColorMark(platform) ? .standard : resolved
     }
 
     /// The PiP HUD's own background.  Independent of `appearance` on purpose:
@@ -2152,6 +2210,7 @@ final class MonitorModel: ObservableObject {
             self.publishWidgetSnapshot(candidates: merged + split.groups.flatMap(\.windows))
             self.refreshRunawayUsageState(recordSamples: local != nil)
             self.alarmManager.evaluate(observations: self.resetAlarmObservationsForCurrentReadings(), now: self.now)
+            self.evaluatePipLowQuota()
             self.isRefreshing = false
             self.request = nil
         }
@@ -2299,6 +2358,7 @@ final class MonitorModel: ObservableObject {
         refreshRunawayUsageState(recordSamples: recordSamples)
         refreshExhaustionWarnings(windows: merged + split.groups.flatMap(\.windows), now: now)
         alarmManager.evaluate(observations: resetAlarmObservationsForCurrentReadings(), now: now)
+        evaluatePipLowQuota()
     }
 
     /// Re-measure every window's headroom from the recorded history and announce

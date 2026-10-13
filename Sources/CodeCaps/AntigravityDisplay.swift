@@ -96,16 +96,16 @@ struct DisplaySection: Identifiable, Equatable {
         maskedWindowIds.contains(snapshot.window.id)
     }
 
-    /// The window whose exhausted allowance caps this row, honouring the pool's
-    /// masked windows.  See `QuotaPlatformSection.atCapWindow()` for the rule;
-    /// this only adds the mask filter, because a masked reading is a real
-    /// number that must not be believed and only the pool knows it.
+    /// The exhausted window that resets last among spent allowances, honouring
+    /// the pool's masked windows.  See `QuotaPlatformSection.atCapWindow()` for
+    /// the rule; this only adds the mask filter, because a masked reading is a
+    /// real number that must not be believed and only the pool knows it.
     var atCapWindow: QuotaWindowSnapshot? {
         section.windows
             .filter { !$0.window.isSupplementaryVideoQuota && !isMasked($0) }
             .filter { $0.remainingPercent != nil }
             .filter(\.isAtCap)
-            .min { ($0.resetAt ?? .distantFuture) < ($1.resetAt ?? .distantFuture) }
+            .max { ($0.resetAt ?? .distantPast) < ($1.resetAt ?? .distantPast) }
     }
 
     /// Whether this row is at its cap, so every surface can ask the same

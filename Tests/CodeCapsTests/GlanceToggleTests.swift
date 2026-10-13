@@ -181,6 +181,14 @@ final class GlanceToggleTests: XCTestCase {
         XCTAssertEqual(dark?.blueComponent ?? -1, 1, accuracy: 0.001)
     }
 
+    func testClaudeStaysBrandColourWhenAccentLogosAreOn() {
+        let model = MonitorModel(defaults: defaults)
+        model.glanceLogosFollowAccent = true
+        XCTAssertEqual(model.glanceMarkStyle(for: "anthropic"), .standard)
+        let mark = PlatformLogoImage.load(providerKey: "anthropic", style: model.glanceMarkStyle(for: "anthropic"))
+        XCTAssertEqual(mark?.isTemplate, false, "Claude must stay the orange starburst, not a black template")
+    }
+
     func testTheGeminiRowShowsTheColourStarInTheDefaultGlanceStyle() {
         let model = MonitorModel(defaults: defaults)
         XCTAssertEqual(model.glanceMarkStyle(for: AntigravityDisplay.providerKey), .standard)
@@ -232,6 +240,28 @@ final class GlanceToggleTests: XCTestCase {
                                 occurredAt: "2026-09-30T12:00:00Z")
         XCTAssertEqual(glanceFleetGroupHeading(FleetOrigin.title(for: FleetOrigin.identity(of: appOnly))),
                        "chatgpt.com")
+    }
+
+    func testPipCountdownInkMeetsContrastOnEveryBackground() {
+        func relativeLuminance(_ c: (r: CGFloat, g: CGFloat, b: CGFloat)) -> CGFloat {
+            func lin(_ v: CGFloat) -> CGFloat { v <= 0.03928 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
+            return 0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
+        }
+        func components(_ color: Color) -> (r: CGFloat, g: CGFloat, b: CGFloat) {
+            var value: (r: CGFloat, g: CGFloat, b: CGFloat) = (0, 0, 0)
+            NSAppearance(named: .aqua)?.performAsCurrentDrawingAppearance {
+                if let rgb = NSColor(color).usingColorSpace(.sRGB) {
+                    value = (rgb.redComponent, rgb.greenComponent, rgb.blueComponent)
+                }
+            }
+            return value
+        }
+        for background in PipBackground.allCases {
+            let fill = relativeLuminance(components(background.fill))
+            let countdown = relativeLuminance(components(background.countdownInk))
+            let contrast = (max(fill, countdown) + 0.05) / (min(fill, countdown) + 0.05)
+            XCTAssertGreaterThanOrEqual(contrast, 4.5, "\(background.title) countdown ink")
+        }
     }
 
     func testTextOnTheHeadingBandIsReadableInBothAppearances() {

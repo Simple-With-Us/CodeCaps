@@ -237,18 +237,7 @@ public actor QuotaPublisher {
         let events: [[String: Any]] = windows.compactMap { window in
             guard let remaining = window.boundedRemainingPercent ?? window.remainingPercent else { return nil }
             let seriesKey = window.resetAt ?? "\(occurredAtIso.prefix(13)):00"
-            let bucketId: String = {
-                if let modelId = window.modelId, !modelId.isEmpty {
-                    return "\(modelId)-\(window.window ?? "window")"
-                }
-                if !window.id.isEmpty && window.id.contains(":") {
-                    let parts = window.id.split(separator: ":").map(String.init)
-                    if parts.count >= 2 {
-                        return parts.dropFirst().joined(separator: "-")
-                    }
-                }
-                return window.window ?? window.label.lowercased().replacingOccurrences(of: " ", with: "-")
-            }()
+            let bucketId = UsageMonitorPushMetadata.bucketId(for: window)
             let readingTime = window.occurredAt.isEmpty ? occurredAtIso : window.occurredAt
             // Include the instance in a length-prefixed key: two Macs can observe
             // the same bucket at the same instant, while retries stay idempotent.
@@ -267,7 +256,9 @@ public actor QuotaPublisher {
                 "producerInstanceId": producerInstanceId
             ]
             if let resetAt = window.resetAt { meta["resetAt"] = resetAt }
-            if let w = window.window { meta["quotaWindow"] = w }
+            if let w = UsageMonitorPushMetadata.quotaWindow(for: window) ?? window.window {
+                meta["quotaWindow"] = w
+            }
             if let modelId = window.modelId { meta["modelId"] = modelId }
             if let plan = window.planName { meta["planType"] = plan }
             meta["usedPercent"] = usedPercent

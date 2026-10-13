@@ -159,8 +159,13 @@ enum PipBackground: String, CaseIterable, Identifiable {
         isDark ? Color(white: 0.96) : Color(white: 0.10)
     }
 
-    /// Secondary ink: countdowns and secondary labels.
-    var secondaryInk: Color { ink.opacity(0.62) }
+    /// Secondary ink: de-emphasised labels that still clear 4.5:1 on the fill.
+    var secondaryInk: Color {
+        isDark ? Color(white: 0.82) : Color(white: 0.28)
+    }
+
+    /// Reset countdowns and time-remaining values use full-contrast ink.
+    var countdownInk: Color { ink }
 
     /// The mark style this background needs.  A dark fill takes a light
     /// silhouette, a light fill takes the brand-colour mark -- never the
@@ -1026,7 +1031,10 @@ struct PlatformCard: View {
 
     @ViewBuilder
     private var windowsBody: some View {
-        if displayedWindows.count > 1 {
+        if let atCap = row.atCapWindow, row.isAtCap {
+            GlanceAtCap(snapshot: atCap, now: now, spansFullMeterRow: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else if displayedWindows.count > 1 {
             HStack(alignment: .top, spacing: 16) {
                 ForEach(displayedWindows, id: \.window.id) { snapshot in
                     QuotaRow(snapshot: snapshot, now: now, sourceFailed: issue != nil, compact: compact,
