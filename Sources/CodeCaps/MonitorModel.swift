@@ -332,6 +332,9 @@ final class MonitorModel: ObservableObject {
         dismissedPlanChangeIds.insert(id)
     }
     @Published public private(set) var runawayAlertHistory: [RunawayAlertRecord] = []
+    public var resetAlertHistory: [ResetAlertRecord] {
+        alarmManager.alertHistory
+    }
     @Published var menuBarQuotaSelection: String {
         didSet { defaults.set(menuBarQuotaSelection, forKey: "menuBarQuotaSelection") }
     }
@@ -2553,6 +2556,10 @@ final class MonitorModel: ObservableObject {
     func clearRunawayAlertHistory() {
         runawayAlertHistory = []
         defaults.removeObject(forKey: "runawayAlertHistory")
+    }
+
+    public func clearResetAlertHistory() {
+        alarmManager.clearAlertHistory()
     }
 
     private static func runawayKey(_ providerKey: String, _ windowId: String) -> String {
