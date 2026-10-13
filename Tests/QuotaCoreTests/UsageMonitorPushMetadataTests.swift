@@ -91,7 +91,21 @@ final class UsageMonitorPushMetadataTests: XCTestCase {
         )
         XCTAssertEqual(UsageMonitorPushMetadata.bucketId(for: interval), "minimax:general")
         XCTAssertEqual(UsageMonitorPushMetadata.bucketId(for: weekly), "minimax:general:weekly")
+        XCTAssertEqual(UsageMonitorPushMetadata.quotaWindow(for: interval), "5h")
         XCTAssertEqual(UsageMonitorPushMetadata.quotaWindow(for: weekly), "weekly")
+    }
+
+    func testGrokBotFallbackBucketUsesGbuWeekly() {
+        let window = QuotaWindow(
+            id: "remote:grok-bot:orphan",
+            provider: "Grok Bot",
+            providerKey: "grok-bot",
+            label: "Grok Bot weekly",
+            remainingPercent: 0,
+            window: nil,
+            occurredAt: "2026-09-14T19:00:00Z"
+        )
+        XCTAssertEqual(UsageMonitorPushMetadata.bucketId(for: window), "gbu-weekly")
     }
 
     func testPublisherPayloadCarriesStableMetadata() throws {

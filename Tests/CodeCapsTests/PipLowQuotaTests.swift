@@ -95,6 +95,7 @@ final class PipLowQuotaTests: XCTestCase {
         XCTAssertTrue(PipLowQuota.evaluate(rows: low, thresholdPercent: 15, enabled: true, session: &session))
     }
 
+    @MainActor
     func testDefaultThresholdAndPersistenceKeys() {
         let suite = "pip-low-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!

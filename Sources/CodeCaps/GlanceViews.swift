@@ -1499,16 +1499,10 @@ func glanceAtCapCadenceLabel(_ snapshot: QuotaWindowSnapshot) -> String {
     case "1m": return "monthly"
     case "24h", "1d": return "daily"
     default:
-        let label = AntigravityDisplay.windowLabel(snapshot.window.label)
-        let lower = label.lowercased()
-        if lower.contains("month") || lower.contains("billing") { return "monthly" }
-        if lower.contains("week") || lower.contains("7d") || lower.contains("168h") { return "7-day" }
-        if lower.contains("5h") || lower.contains("5-hour") || lower.contains("5 hour") { return "5-hour" }
-        if lower.contains("daily") || lower.contains("24h") { return "daily" }
-        let token = (snapshot.window.window ?? "").lowercased()
-        if token == "5h" { return "5-hour" }
-        if token == "7d" || token == "weekly" || token == "168h" { return "7-day" }
-        return "quota"
+        let trimmed = AntigravityDisplay.windowLabel(snapshot.window.label)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return "Quota" }
+        return trimmed
     }
 }
 

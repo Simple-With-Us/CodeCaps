@@ -12,6 +12,11 @@ public enum UsageMonitorPushMetadata {
 
     /// The collector's `quotaWindow` token (`5h`, `7d`, `weekly`, …).
     public static func quotaWindow(for window: QuotaWindow) -> String? {
+        if window.canonicalProviderKey == "minimax",
+           let suffix = localMacSuffix(window.id),
+           suffix.hasSuffix(":weekly") {
+            return "weekly"
+        }
         if let token = window.window?.trimmingCharacters(in: .whitespacesAndNewlines), !token.isEmpty {
             return normalizeQuotaWindowToken(token)
         }
@@ -116,6 +121,7 @@ public enum UsageMonitorPushMetadata {
 
     private static func inferredQuotaWindow(from suffix: String, provider: String) -> String? {
         if provider == "minimax", suffix.hasSuffix(":weekly") { return "weekly" }
+        if provider == "minimax", suffix.hasSuffix(":interval") { return "5h" }
         if suffix == "subscription" { return nil }
         return nil
     }
