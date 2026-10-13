@@ -270,7 +270,10 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
     public let defaultWindowLabel: String?
 
     public var shortWindow: CompanionWindowItem? {
-        windows.first(where: { $0.isShortCadence }) ?? windows.first
+        if let short = windows.first(where: { $0.isShortCadence }) {
+            return short
+        }
+        return windows.first
     }
 
     public var longWindow: CompanionWindowItem? {
@@ -345,6 +348,7 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
             ) else { continue }
             guard let pPct = primary.remainingPercent, let dPct = dup.remainingPercent else { continue }
             let delta = abs(pPct - dPct)
+            guard delta >= 10.0 else { continue }
             let desc = "Sources differ · \(Int(pPct.rounded()))% and \(Int(dPct.rounded()))%"
             results.append(SourceDiscrepancy(
                 primaryWindow: primary,
@@ -375,7 +379,14 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
     public func cardWindowRows(scope: CompanionSourceScope, now: Date = Date()) -> [CardWindow] {
         windows.map { primary in
             let key = Self.allowanceKey(for: primary)
-            let mirrors = duplicateWindows.filter { Self.allowanceKey(for: $0) == key }
+            // This iPhone: only this device's primary windows. All Sources: fold
+            // in mirror feeds so Mac/fleet readings can win when fresher.
+            let mirrors: [CompanionWindowItem]
+            if scope == .allSources {
+                mirrors = duplicateWindows.filter { Self.allowanceKey(for: $0) == key }
+            } else {
+                mirrors = []
+            }
             let pool = mirrors.isEmpty ? [primary] : [primary] + mirrors
             return Self.resolveCardWindow(pool: pool, now: now)
         }
@@ -1668,8 +1679,17 @@ public final class CompanionQuotaModel: ObservableObject {
     }
 
     public static func formatCadence(_ label: String, window: String? = nil, resetAt: Date? = nil) -> String {
-        QuotaWindowVocabulary.standardCadence(
-            windowToken: window,
+        let combined = "\(label) \(window ?? "")".lowercased()
+        // MiniMax coding plan / interval is a 5-hour window even when the wire
+        // token is opaque; classify before vocabulary so export matches Mac.
+        let token: String?
+        if combined.contains("coding plan") || combined.contains("interval") {
+            token = "5h"
+        } else {
+            token = window
+        }
+        return QuotaWindowVocabulary.standardCadence(
+            windowToken: token,
             label: label,
             resetAt: resetAt,
             periodStart: nil

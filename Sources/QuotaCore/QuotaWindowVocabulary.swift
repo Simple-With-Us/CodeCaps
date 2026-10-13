@@ -187,7 +187,8 @@ public enum QuotaWindowVocabulary {
         if monthlyHint || lower.contains("billing") || lower.contains("cycle") || lower.contains("included plan") {
             return oneMonth
         }
-        if lower.contains("5-hour") || lower.contains("5 hour") || lower.contains("5h") || lower.contains("five_hour") {
+        if lower.contains("5-hour") || lower.contains("5 hour") || lower.contains("5h") || lower.contains("five_hour")
+            || lower.contains("coding plan") || lower.contains("coding_plan") || lower.contains("interval") {
             return fiveHour
         }
         if lower.contains("7-day") || lower.contains("7 day") || lower.contains("weekly") || lower.contains("7d") || lower.contains("1w") {
