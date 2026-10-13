@@ -183,7 +183,7 @@ final class GlanceExpandedLineTests: XCTestCase {
         func label(_ label: String, model: String? = nil, token: String? = nil) -> String {
             glanceLineLabel(QuotaWindowSnapshot(window: window("x", label: label, token: token, model: model), now: now))
         }
-        XCTAssertEqual(label("video (1d window)", model: "video", token: "1d"), QuotaWindowVocabulary.otherLimit)
+        XCTAssertEqual(label("video (1d window)", model: "video", token: "1d"), QuotaWindowVocabulary.oneDay)
         XCTAssertEqual(label("7-day window (Sonnet)", token: "7d"), "7-day")
         XCTAssertEqual(label("5h window (gpt-5-codex)", model: "gpt-5-codex", token: "5h"), "5-hour")
         XCTAssertEqual(label("Third-Party Models · Weekly", token: "7d"), "7-day")
@@ -217,7 +217,7 @@ final class GlanceExpandedLineTests: XCTestCase {
         // 5h is short; 1d and 7d are long.  The weekly must not land in the
         // first column just because it is the third window.
         let lines = glanceExpandedLines(for: claudeWithOpus(["5h", "1d", "7d"]), now: now)
-        XCTAssertEqual(lines.map(\.label), ["5-hour", QuotaWindowVocabulary.otherLimit, "7-day"])
+        XCTAssertEqual(lines.map(\.label), ["5-hour", QuotaWindowVocabulary.oneDay, "7-day"])
         XCTAssertEqual(ids(lines[0]), ["opus:5h", nil])
         XCTAssertEqual(ids(lines[1]), [nil, "opus:1d"])
         XCTAssertEqual(ids(lines[2]), [nil, "opus:7d"], "the weekly sits under the weekly meter")
@@ -286,7 +286,7 @@ final class GlanceExpandedLineTests: XCTestCase {
             window("m:d", label: "extra (1w window)", token: "1w", remaining: 97, resetIn: 5 * 86_400, model: "extra"),
         ])
         let lines = glanceExpandedLines(for: multiModel, now: now)
-        // Cadence-only line labels put 1d (Other limit) and 7d on separate lines.
+        // Cadence-only line labels put 1d and 7d on separate lines.
         let speeches = lines.map { glanceMetersSpeech([$0.short, $0.long], now: now) }
         let joined = speeches.joined(separator: " | ")
         XCTAssertTrue(speeches.contains(where: { $0.contains("1d 100 percent remaining") }), joined)
