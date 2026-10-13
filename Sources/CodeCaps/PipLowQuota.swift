@@ -43,7 +43,7 @@ enum PipLowQuota {
 
         let currentLow = lowRowIds(in: rows, thresholdPercent: thresholdPercent)
         if !session.seeded {
-            session.rowsBelowThreshold = currentLow
+            // Establish the session without treating the launch snapshot as a crossing.
             session.seeded = true
             return false
         }
