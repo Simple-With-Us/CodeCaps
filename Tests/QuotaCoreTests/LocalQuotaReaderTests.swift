@@ -326,6 +326,21 @@ final class LocalQuotaReaderTests: XCTestCase {
         XCTAssertEqual(codex.first { $0.id.contains("secondary") }?.label, "7-day window")
     }
 
+    func testCodexTokenlessUnknownSlotLabelsThroughTheVocabulary() async throws {
+        let root = try makeFixtureHome()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try writeJSON(["tokens": ["access_token": "codex-secret"]], to: root.appendingPathComponent(".codex/auth.json"))
+        let reader = LocalQuotaReader(homeDirectory: root, now: { self.observedAt }, fetchJSON: { _ in
+            Self.httpResponse(#"{"rate_limit":{},"additional_rate_limits":[{"name":"gpt-4","used_percent":30}]}"#)
+        }, runAntigravity: { Data("{}".utf8) })
+
+        let codex = await reader.read().windows.filter { $0.providerKey == "openai" }
+        XCTAssertEqual(codex.count, 1)
+        // A tokenless slot with no cadence of its own must not reach the UI as
+        // the raw model name "Gpt-4 window".
+        XCTAssertEqual(codex.first?.label, "Other limit window")
+    }
+
     func testClaudeRateLimitKeySuffixIsPublishedAsTheModelFamily() async throws {
         let root = try makeFixtureHome()
         defer { try? FileManager.default.removeItem(at: root) }

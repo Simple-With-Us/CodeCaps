@@ -1382,15 +1382,20 @@ func isMuseAssistExtra(_ snapshot: QuotaWindowSnapshot) -> Bool {
     guard key == "muse-assist" else { return false }
     let label = snapshot.window.label
     if QuotaWindowVocabulary.isExtraAllowanceLabel(label) { return true }
+    let lower = label.lowercased()
+    if lower.contains("additional") || lower.contains("extra") { return true }
+    // Only lean on the vocabulary's "Other limit" catch-all when the window
+    // carries no cadence token: a token-bearing window with a non-standard
+    // cadence (8h, 12h) also resolves to "Other limit", and reading that as
+    // an extra allowance would caption a real meter "+".
+    guard snapshot.window.window == nil else { return false }
     let cadence = QuotaWindowVocabulary.standardCadence(
-        windowToken: snapshot.window.window,
+        windowToken: nil,
         label: label,
         resetAt: snapshot.window.resetDate,
         periodStart: snapshot.window.periodStartDate
     )
-    if cadence == QuotaWindowVocabulary.otherLimit { return true }
-    let lower = label.lowercased()
-    return lower.contains("additional") || lower.contains("extra")
+    return cadence == QuotaWindowVocabulary.otherLimit
 }
 
 func isMuseAssistWeekly(_ snapshot: QuotaWindowSnapshot) -> Bool {

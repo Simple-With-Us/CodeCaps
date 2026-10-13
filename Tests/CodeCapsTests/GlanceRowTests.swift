@@ -782,6 +782,21 @@ final class GlanceMeterTests: XCTestCase {
         XCTAssertEqual(glanceMeterCaption(makeWindow(id: "y", label: "Gemini Models · 5-hour", token: "shared")), "5h")
     }
 
+    func testMuseAssistNonStandardCadenceWindowIsNotAnExtraAllowance() {
+        // An 8-hour Muse Assist window resolves to the vocabulary's "Other
+        // limit" catch-all, but it is a real meter, not extra usage: captioning
+        // it "+" would hide the reading.
+        XCTAssertFalse(isMuseAssistExtra(makeWindow(id: "h", label: "8h window", token: "8h",
+                                                    provider: "muse-assist")))
+        XCTAssertEqual(glanceMeterCaption(makeWindow(id: "h", label: "8h window", token: "8h",
+                                                     provider: "muse-assist")), "8h")
+        // A tokenless sanitized label still reads as the extra allowance it is.
+        XCTAssertTrue(isMuseAssistExtra(makeWindow(id: "e", label: "Other limit window", token: nil,
+                                                   provider: "muse-assist")))
+        XCTAssertEqual(glanceMeterCaption(makeWindow(id: "e", label: "Other limit window", token: nil,
+                                                     provider: "muse-assist")), "+")
+    }
+
     // MARK: Cadence
 
     func testCadenceReadsTheWindowTokenWhenPresent() {

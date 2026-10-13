@@ -568,7 +568,7 @@ private func parseCodex(_ root: [String: Any], planType: String?, accountKey: St
         } else if let resolvedToken {
             QuotaWindowVocabulary.windowLabel(windowToken: resolvedToken, existingLabel: slot, resetAt: resetDate, periodStart: nil)
         } else {
-            "\(slot.capitalized) window"
+            QuotaWindowVocabulary.windowLabel(windowToken: nil, existingLabel: slot, resetAt: resetDate, periodStart: nil)
         }
         result.append(window(
             provider: .codex,
