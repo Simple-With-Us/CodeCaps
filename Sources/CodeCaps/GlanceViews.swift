@@ -1274,7 +1274,12 @@ private func reportsWeeklyCadence(_ snapshot: QuotaWindowSnapshot) -> Bool {
 /// The meter a window is: what it measures and how often it resets, the same
 /// for a window and for another source's report of it.
 private func glanceMeterKey(_ snapshot: QuotaWindowSnapshot) -> String {
-    glanceLineLabel(snapshot) + "|" + glanceMeterCaption(snapshot)
+    // Line labels are cadence-only after the vocabulary stack, but meters still
+    // differ by model: a Sonnet weekly with no reading must stay beside Overall.
+    let model = (snapshot.window.modelId ?? "")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        .lowercased()
+    return glanceLineLabel(snapshot) + "|" + glanceMeterCaption(snapshot) + "|" + model
 }
 
 /// Whether `snapshot` is another source's report of the meter `other` already

@@ -85,7 +85,16 @@ struct UsageHistoryView: View {
                     let jumpedToFull = percent >= 99.5 && lastPercent < 98.0
                     let surgedMidWindow = lastPercent < 80.0 && percent >= 95.0
                     let quotaHandedBack = percent >= lastPercent + 30.0
-                    let isVendorReset = midWindow && (jumpedToFull || surgedMidWindow || quotaHandedBack)
+                    let resetDateJumpedEarly = prevSample?.resetAt.map { oldReset in
+                        sample.resetAt.map { newReset in
+                            newReset > oldReset && sample.observedAt < oldReset.addingTimeInterval(-60)
+                        } ?? false
+                    } ?? false
+                    let quotaIncreased = percent >= lastPercent + 5.0
+                    let roseMidWindow = midWindow && (percent >= lastPercent + 15.0 || jumpedToFull || surgedMidWindow || quotaHandedBack)
+                    let isVendorReset = (midWindow && (jumpedToFull || surgedMidWindow || quotaHandedBack))
+                        || (resetDateJumpedEarly && quotaIncreased)
+                        || roseMidWindow
                     return HistoryPoint(id: "\(windowId):\(segmentIndex):\(index)",
                                         series: "\(windowId):\(segmentIndex)",
                                         windowLabel: labels[windowId] ?? "Quota window",
@@ -108,6 +117,69 @@ struct UsageHistoryView: View {
                 && alert.timestamp >= start && alert.timestamp <= now
         }
     }
+    private var resetAlerts: [ResetAlertRecord] {
+        let rowCanonical = quotaProviderKey(row.providerKey, providerKey: row.providerKey)
+        return model.resetAlertHistory.filter { alert in
+            let alertCanonical = quotaProviderKey(alert.providerKey, providerKey: alert.providerKey)
+            let matchesProvider = alert.providerKey == row.providerKey || alertCanonical == rowCanonical
+            let matchesWindow = alert.windowId.map { windowIds.contains($0) } ?? true
+            let matchesFocus = focusedWindowId == nil || alert.windowId == nil || alert.windowId == focusedWindowId
+            return matchesProvider && matchesWindow && matchesFocus
+                && alert.timestamp >= start && alert.timestamp <= now
+        }
+    }
+
+    private struct HistoryAlertItem: Identifiable {
+        enum Kind {
+            case runaway(RunawayAlertRecord)
+            case reset(ResetAlertRecord)
+            case vendorPoint(HistoryPoint)
+        }
+        let id: String
+        let timestamp: Date
+        let windowId: String?
+        let label: String
+        let kind: Kind
+    }
+
+    private var allRecentAlerts: [HistoryAlertItem] {
+        let runawayItems: [HistoryAlertItem] = alerts.map { alert in
+            HistoryAlertItem(
+                id: "runaway:\(alert.id)",
+                timestamp: alert.timestamp,
+                windowId: alert.windowId,
+                label: "\(alert.windowLabel) · \(alert.timestamp.formatted(date: .abbreviated, time: .shortened)) · \(alert.multiplier.formatted(.number.precision(.fractionLength(1))))× runaway",
+                kind: .runaway(alert)
+            )
+        }
+        let resetItems: [HistoryAlertItem] = resetAlerts.map { alert in
+            let badge = alert.isVendorReset ? "Vendor Reset" : "Reset"
+            return HistoryAlertItem(
+                id: "reset:\(alert.id)",
+                timestamp: alert.timestamp,
+                windowId: alert.windowId,
+                label: "\(alert.windowLabel) · \(alert.timestamp.formatted(date: .abbreviated, time: .shortened)) · \(badge) (\(alert.remainingPercent)%)",
+                kind: .reset(alert)
+            )
+        }
+        let vendorPointItems: [HistoryAlertItem] = points.filter(\.isVendorReset).compactMap { point in
+            if resetItems.contains(where: { abs($0.timestamp.timeIntervalSince(point.observedAt)) < 300 }) {
+                return nil
+            }
+            let windowId = point.series.components(separatedBy: ":").first
+            return HistoryAlertItem(
+                id: "vendorPoint:\(point.id)",
+                timestamp: point.observedAt,
+                windowId: windowId,
+                label: "\(point.windowLabel) · \(point.observedAt.formatted(date: .abbreviated, time: .shortened)) · Vendor Reset (\(Int(point.remainingPercent.rounded()))%)",
+                kind: .vendorPoint(point)
+            )
+        }
+        var combined = runawayItems + resetItems + vendorPointItems
+        combined.sort { $0.timestamp > $1.timestamp }
+        return combined
+    }
+
     private var selectedAlert: RunawayAlertRecord? {
         guard let selected = state.selectedTimestamp else { return nil }
         let rowCanonical = quotaProviderKey(row.providerKey, providerKey: row.providerKey)
@@ -117,6 +189,23 @@ struct UsageHistoryView: View {
             return matchesProvider
                 && (focusedWindowId == nil || alert.windowId == focusedWindowId)
                 && abs(alert.timestamp.timeIntervalSince(selected)) < 2
+        }
+    }
+    private var selectedResetAlert: ResetAlertRecord? {
+        guard let selected = state.selectedTimestamp else { return nil }
+        let rowCanonical = quotaProviderKey(row.providerKey, providerKey: row.providerKey)
+        return model.resetAlertHistory.first { alert in
+            let alertCanonical = quotaProviderKey(alert.providerKey, providerKey: alert.providerKey)
+            let matchesProvider = alert.providerKey == row.providerKey || alertCanonical == rowCanonical
+            return matchesProvider
+                && (focusedWindowId == nil || alert.windowId == nil || alert.windowId == focusedWindowId)
+                && abs(alert.timestamp.timeIntervalSince(selected)) < 120
+        }
+    }
+    private var selectedVendorResetPoint: HistoryPoint? {
+        guard let selected = state.selectedTimestamp else { return nil }
+        return points.first { point in
+            point.isVendorReset && abs(point.observedAt.timeIntervalSince(selected)) < 120
         }
     }
 
@@ -267,6 +356,52 @@ struct UsageHistoryView: View {
                     .padding(10)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Theme.warning.opacity(0.1), in: RoundedRectangle(cornerRadius: 7))
+                } else if let resetAlert = selectedResetAlert {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 6) {
+                            Text(resetAlert.isVendorReset
+                                ? "Vendor Reset · \(resetAlert.timestamp.formatted(date: .abbreviated, time: .shortened))"
+                                : "Quota Reset · \(resetAlert.timestamp.formatted(date: .abbreviated, time: .shortened))")
+                                .font(.system(size: 12, weight: .semibold))
+                            if resetAlert.isVendorReset {
+                                Text("Mid-cycle restore")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .padding(.horizontal, 5)
+                                    .padding(.vertical, 2)
+                                    .background(Color.green.opacity(0.2), in: Capsule())
+                                    .foregroundStyle(Color.green)
+                            }
+                        }
+                        Text(resetAlert.title).font(.system(size: 11, weight: .medium))
+                        Text(resetAlert.body).font(.system(size: 11)).foregroundStyle(.secondary)
+                        Text("\(resetAlert.windowLabel) restored to \(resetAlert.remainingPercent)% quota remaining.")
+                            .font(.system(size: 11)).foregroundStyle(.secondary)
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.green.opacity(0.1), in: RoundedRectangle(cornerRadius: 7))
+                    .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Color.green.opacity(0.3), lineWidth: 1))
+                } else if let point = selectedVendorResetPoint {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 6) {
+                            Text("Vendor Reset · \(point.observedAt.formatted(date: .abbreviated, time: .shortened))")
+                                .font(.system(size: 12, weight: .semibold))
+                            Text("Mid-cycle restore")
+                                .font(.system(size: 9, weight: .bold))
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 2)
+                                .background(Color.green.opacity(0.2), in: Capsule())
+                                .foregroundStyle(Color.green)
+                        }
+                        Text("\(point.windowLabel) quota was restored mid-cycle before scheduled rollover.")
+                            .font(.system(size: 11))
+                        Text("Reset to \(Int(point.remainingPercent.rounded()))% quota available.")
+                            .font(.system(size: 11)).foregroundStyle(.secondary)
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.green.opacity(0.1), in: RoundedRectangle(cornerRadius: 7))
+                    .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Color.green.opacity(0.3), lineWidth: 1))
                 } else {
                     Text("Selected alert: \(selected.formatted(date: .abbreviated, time: .shortened)).  Its saved detail is unavailable.")
                         .font(.system(size: 11)).foregroundStyle(.secondary)
@@ -276,13 +411,13 @@ struct UsageHistoryView: View {
                         .font(.system(size: 11)).foregroundStyle(Theme.warning)
                 }
             }
-            if !alerts.isEmpty {
+            if !allRecentAlerts.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Recent Alerts").font(.system(size: 11, weight: .semibold))
-                    ForEach(alerts.prefix(3)) { alert in
-                        Button("\(alert.windowLabel) · \(alert.timestamp.formatted(date: .abbreviated, time: .shortened)) · \(alert.multiplier.formatted(.number.precision(.fractionLength(1))))×") {
-                            state.select(providerKey: row.id, windowId: alert.windowId,
-                                         at: alert.timestamp, in: model.displaySections)
+                    ForEach(allRecentAlerts.prefix(5)) { item in
+                        Button(item.label) {
+                            state.select(providerKey: row.id, windowId: item.windowId,
+                                         at: item.timestamp, in: model.displaySections)
                         }
                         .buttonStyle(.link)
                         .font(.system(size: 11))

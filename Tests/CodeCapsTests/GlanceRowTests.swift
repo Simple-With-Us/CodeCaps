@@ -286,12 +286,13 @@ final class GlanceExpandedLineTests: XCTestCase {
             window("m:d", label: "extra (1w window)", token: "1w", remaining: 97, resetIn: 5 * 86_400, model: "extra"),
         ])
         let lines = glanceExpandedLines(for: multiModel, now: now)
-        let line = try XCTUnwrap(lines.first)
-        let speech = glanceMetersSpeech([line.short, line.long], now: now)
-        XCTAssertTrue(speech.contains("1d 100 percent remaining"), speech)
-        XCTAssertTrue(speech.contains("; 7d 97 percent remaining"), speech)
-        XCTAssertTrue(speech.contains("resets in 20h"), speech)
-        XCTAssertTrue(speech.contains("resets in 5d"), speech)
+        // Cadence-only line labels put 1d (Other limit) and 7d on separate lines.
+        let speeches = lines.map { glanceMetersSpeech([$0.short, $0.long], now: now) }
+        let joined = speeches.joined(separator: " | ")
+        XCTAssertTrue(speeches.contains(where: { $0.contains("1d 100 percent remaining") }), joined)
+        XCTAssertTrue(speeches.contains(where: { $0.contains("7d 97 percent remaining") }), joined)
+        XCTAssertTrue(speeches.contains(where: { $0.contains("resets in 20h") }), joined)
+        XCTAssertTrue(speeches.contains(where: { $0.contains("resets in 5d") }), joined)
         XCTAssertEqual(glanceMetersSpeech([nil, nil], now: now), "")
     }
 
@@ -639,7 +640,7 @@ final class GlanceMeterTests: XCTestCase {
         let fiveHour = makeWindow(id: "5h", label: "5h window", token: "5h", remaining: 70, resetIn: 3_600)
         let overall = makeWindow(id: "7d", label: "7-day window", token: "168h", remaining: 80, resetIn: 3 * 86_400)
         let sonnet = makeWindow(id: "7d-sonnet", label: "7-day window (Sonnet)", token: "168h", remaining: nil,
-                                resetIn: 3 * 86_400)
+                                resetIn: 3 * 86_400, model: "sonnet")
         XCTAssertEqual(glanceDrawableWindows([overall, sonnet]).map(\.window.id), ["7d", "7d-sonnet"])
         let lines = glanceExpandedLines(for: makeRow([fiveHour, overall, sonnet]), now: now)
         XCTAssertEqual(lines.map(\.label), ["7-day"], "the unavailable model keeps its line under the row")
