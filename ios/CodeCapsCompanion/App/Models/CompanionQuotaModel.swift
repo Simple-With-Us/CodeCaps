@@ -2,6 +2,14 @@ import Foundation
 import Security
 import SwiftUI
 import UserNotifications
+
+/// Whether the companion shows only this device's readings or every synced source.
+public enum CompanionSourceScope: String, CaseIterable, Identifiable, Sendable {
+    case thisIPhone = "This iPhone"
+    case allSources = "All Sources"
+
+    public var id: String { rawValue }
+}
 #if canImport(WidgetKit)
 import WidgetKit
 #endif
@@ -41,6 +49,10 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
     public let absoluteRemaining: Double?
     public let absoluteLimit: Double?
     public let quotaUnit: String?
+    /// When this feed last reported the window (wire `reportedAt`, else `occurredAt`).
+    public let reportedAt: Date?
+    /// Normalized allowance key used to pair primary and mirror windows.
+    public let normalizedWindowKey: String
 
     public init(
         id: String,
@@ -55,7 +67,9 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
         isMasked: Bool = false,
         absoluteRemaining: Double? = nil,
         absoluteLimit: Double? = nil,
-        quotaUnit: String? = nil
+        quotaUnit: String? = nil,
+        reportedAt: Date? = nil,
+        normalizedWindowKey: String = ""
     ) {
         self.id = id
         self.label = label
@@ -70,6 +84,86 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
         self.absoluteRemaining = absoluteRemaining
         self.absoluteLimit = absoluteLimit
         self.quotaUnit = quotaUnit
+        self.reportedAt = reportedAt
+        self.normalizedWindowKey = normalizedWindowKey.isEmpty
+            ? Self.fallbackNormalizedWindowKey(cadence: cadence, label: label, resetAt: resetAt)
+            : normalizedWindowKey
+    }
+
+    static func fallbackNormalizedWindowKey(cadence: String, label: String, resetAt: Date?) -> String {
+        QuotaWindowVocabulary.standardCadence(
+            windowToken: cadence,
+            label: label,
+            resetAt: resetAt
+        ).lowercased()
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, label, cadence, remainingPercent, resetAt, source, via
+        case isDuplicateSource, isExhausted, isMasked
+        case absoluteRemaining, absoluteLimit, quotaUnit
+        case reportedAt, observedAt, normalizedWindowKey
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        label = try container.decode(String.self, forKey: .label)
+        cadence = try container.decode(String.self, forKey: .cadence)
+        remainingPercent = try container.decodeIfPresent(Double.self, forKey: .remainingPercent)
+        resetAt = try container.decodeIfPresent(Date.self, forKey: .resetAt)
+        source = try container.decodeIfPresent(String.self, forKey: .source)
+        via = try container.decodeIfPresent(String.self, forKey: .via)
+        isDuplicateSource = try container.decodeIfPresent(Bool.self, forKey: .isDuplicateSource) ?? false
+        isExhausted = try container.decodeIfPresent(Bool.self, forKey: .isExhausted) ?? false
+        isMasked = try container.decodeIfPresent(Bool.self, forKey: .isMasked) ?? false
+        absoluteRemaining = try container.decodeIfPresent(Double.self, forKey: .absoluteRemaining)
+        absoluteLimit = try container.decodeIfPresent(Double.self, forKey: .absoluteLimit)
+        quotaUnit = try container.decodeIfPresent(String.self, forKey: .quotaUnit)
+        reportedAt = try container.decodeIfPresent(Date.self, forKey: .reportedAt)
+            ?? container.decodeIfPresent(Date.self, forKey: .observedAt)
+        let decodedKey = try container.decodeIfPresent(String.self, forKey: .normalizedWindowKey) ?? ""
+        normalizedWindowKey = decodedKey.isEmpty
+            ? Self.fallbackNormalizedWindowKey(cadence: cadence, label: label, resetAt: resetAt)
+            : decodedKey
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(label, forKey: .label)
+        try container.encode(cadence, forKey: .cadence)
+        try container.encodeIfPresent(remainingPercent, forKey: .remainingPercent)
+        try container.encodeIfPresent(resetAt, forKey: .resetAt)
+        try container.encodeIfPresent(source, forKey: .source)
+        try container.encodeIfPresent(via, forKey: .via)
+        try container.encode(isDuplicateSource, forKey: .isDuplicateSource)
+        try container.encode(isExhausted, forKey: .isExhausted)
+        try container.encode(isMasked, forKey: .isMasked)
+        try container.encodeIfPresent(absoluteRemaining, forKey: .absoluteRemaining)
+        try container.encodeIfPresent(absoluteLimit, forKey: .absoluteLimit)
+        try container.encodeIfPresent(quotaUnit, forKey: .quotaUnit)
+        try container.encodeIfPresent(reportedAt, forKey: .reportedAt)
+        try container.encode(normalizedWindowKey, forKey: .normalizedWindowKey)
+    }
+
+    /// Whether `reportedAt` is within the disagreement alert freshness window.
+    public func isFreshForSourceDiscrepancy(now: Date = Date()) -> Bool {
+        FleetSourceDisagreement.isReportedWithinAlertWindow(reportedAt, now: now)
+    }
+
+    public var isMacCodeCapsReading: Bool {
+        FleetMacReading.isMacCodeCapsReading(id: id, source: source, via: via)
+    }
+
+    /// Hyphenated cadence beside a meter bar (`5-hour`, `7-day`, `1-month`, `Other limit`).
+    public var meterCaption: String {
+        QuotaWindowVocabulary.standardCadence(
+            windowToken: cadence,
+            label: label,
+            resetAt: resetAt,
+            monthlyHint: label.lowercased().contains("plan") || cadence.lowercased().contains("plan")
+        )
     }
 
     public var displayPercent: String {
@@ -118,30 +212,16 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
         return min(1.0, max(0.0, elapsed / duration))
     }
 
-    public var caption: String {
-        let text = (cadence.isEmpty ? label : cadence).lowercased()
-        if text.contains("7d") || text.contains("weekly") || text.contains("1w") || text.contains("org") || text.contains("quota") { return "7d" }
-        if text.contains("5h") || text.contains("5-hour") || text.contains("5 hour") || text.contains("coding plan") || text.contains("coding_plan") || text.contains("interval") { return "5h" }
-        if text.contains("4h") || text.contains("4-hour") || text.contains("four_hour") { return "4h" }
-        if text.contains("24h") || text.contains("daily") || text.contains("1d") { return "24h" }
-        if text.contains("month") || text.contains("billing") || text.contains("cycle") || text.contains("30d") || text.contains("1m") { return "1m" }
-        if text.contains("plan") || text.contains("included") { return "Plan" }
-        if !cadence.isEmpty && cadence.count <= 4 { return cadence }
-        return "7d"
-    }
+    public var caption: String { meterCaption }
 
-    /// Short distinguishing label for a bar when a card shows several windows
-    /// sharing one cadence caption (e.g. two "7d" bars).  "Free weekly limit"
-    /// reads "weekly", "Additional tokens" reads "additional".  Empty when the
-    /// window label carries no such qualifier.
-    public var barQualifier: String {
-        let text = label.lowercased()
-        if text.contains("additional") { return "additional" }
-        if text.contains("weekly") { return "weekly" }
-        if text.contains("monthly") { return "monthly" }
-        if text.contains("daily") { return "daily" }
-        if text.contains("hourly") { return "hourly" }
-        return ""
+    /// Companion meters use hyphenated cadence only; no secondary qualifier line.
+    public var barQualifier: String { "" }
+
+    /// Countdown or a placeholder when an extra allowance has no reset clock.
+    public func meterCountdown(now: Date = Date()) -> String {
+        if QuotaWindowVocabulary.isExtraAllowanceLabel(label) { return "—" }
+        let cd = countdown(now: now)
+        return cd.isEmpty ? "—" : cd
     }
 
     public var isShortCadence: Bool {
@@ -207,7 +287,20 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
         windows.count > 2
     }
 
-    /// One discrepancy where an additional/duplicate source diverges from its matching primary window by more than 3%.
+    /// Both feeds must report within this window for a source-disagreement banner.
+    public static let sourceDiscrepancyFreshnessWindow: TimeInterval = FleetSourceDisagreement.alertFreshnessWindow
+
+    public struct CardWindow: Equatable, Sendable {
+        public let window: CompanionWindowItem
+        public let updatedLabel: String?
+
+        public init(window: CompanionWindowItem, updatedLabel: String?) {
+            self.window = window
+            self.updatedLabel = updatedLabel
+        }
+    }
+
+    /// One discrepancy where an additional/duplicate source diverges from its matching primary window by at least 10 points.
     public struct SourceDiscrepancy: Identifiable, Equatable, Sendable {
         public var id: String { "\(primaryWindow.id)-\(duplicateWindow.id)" }
         public let primaryWindow: CompanionWindowItem
@@ -223,33 +316,135 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
         }
     }
 
-    /// All source discrepancies greater than 3% between primary windows and mirror/duplicate sources.
-    public var sourceDiscrepancies: [SourceDiscrepancy] {
+    /// Source disagreements when All Sources is on, the card shows a multi-source
+    /// chip, and two fresh feeds for the same allowance differ by at least 10 points.
+    public func sourceDiscrepancies(scope: CompanionSourceScope) -> [SourceDiscrepancy] {
+        guard scope == .allSources, sourceCount >= 2 else { return [] }
         var results: [SourceDiscrepancy] = []
+        let now = Date()
         for dup in duplicateWindows {
-            guard let dPct = dup.remainingPercent else { continue }
-            let match = windows.first(where: { $0.cadence.lowercased() == dup.cadence.lowercased() })
-                ?? windows.first
-            guard let primary = match, let pPct = primary.remainingPercent else { continue }
-            let delta = abs(pPct - dPct)
-            if delta > 3.0 {
-                let diffText = String(format: "%.0f%%", delta)
-                let srcName = dup.source ?? dup.via ?? "mirror source"
-                let desc = "\(primary.label): \(Int(pPct.rounded()))% vs \(Int(dPct.rounded()))% via \(srcName) (Δ\(diffText))"
-                results.append(SourceDiscrepancy(
-                    primaryWindow: primary,
-                    duplicateWindow: dup,
-                    delta: delta,
-                    description: desc
-                ))
+            guard let primary = windows.first(where: { $0.normalizedWindowKey == dup.normalizedWindowKey }) else {
+                continue
             }
+            if Self.sourceLooksLikeHostname(primary.source) || Self.sourceLooksLikeHostname(primary.via)
+                || Self.sourceLooksLikeHostname(dup.source) || Self.sourceLooksLikeHostname(dup.via) {
+                continue
+            }
+            let primaryReading = FleetSourceReading(
+                remainingPercent: primary.remainingPercent,
+                reportedAt: primary.reportedAt
+            )
+            let duplicateReading = FleetSourceReading(
+                remainingPercent: dup.remainingPercent,
+                reportedAt: dup.reportedAt
+            )
+            guard FleetSourceDisagreement.shouldShowDisagreementAlert(
+                primary: primaryReading,
+                duplicate: duplicateReading,
+                now: now
+            ) else { continue }
+            guard let pPct = primary.remainingPercent, let dPct = dup.remainingPercent else { continue }
+            let delta = abs(pPct - dPct)
+            let desc = "Sources differ · \(Int(pPct.rounded()))% and \(Int(dPct.rounded()))%"
+            results.append(SourceDiscrepancy(
+                primaryWindow: primary,
+                duplicateWindow: dup,
+                delta: delta,
+                description: desc
+            ))
         }
         return results
     }
 
-    /// Whether any duplicate source diverges from its matching primary window by more than 3%.
-    public var hasSourceDiscrepancy: Bool {
-        !sourceDiscrepancies.isEmpty
+    public func hasSourceDiscrepancy(scope: CompanionSourceScope) -> Bool {
+        guard scope == .allSources, sourceCount >= 2 else { return false }
+        return !sourceDiscrepancies(scope: scope).isEmpty
+    }
+
+    /// Stable key for matching primary and mirror windows on the same allowance.
+    static func allowanceKey(for window: CompanionWindowItem) -> String {
+        window.normalizedWindowKey
+    }
+
+    private static func sourceLooksLikeHostname(_ value: String?) -> Bool {
+        guard let raw = value?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return false }
+        return raw.contains(".") && !raw.contains(" ")
+    }
+
+    /// Main-card windows: fresh Mac CodeCaps readings win; otherwise the newest feed with an Updated label.
+    public func cardWindowRows(scope: CompanionSourceScope, now: Date = Date()) -> [CardWindow] {
+        windows.map { primary in
+            let key = Self.allowanceKey(for: primary)
+            let mirrors = duplicateWindows.filter { Self.allowanceKey(for: $0) == key }
+            let pool = mirrors.isEmpty ? [primary] : [primary] + mirrors
+            return Self.resolveCardWindow(pool: pool, now: now)
+        }
+    }
+
+    public func cardWindows(scope: CompanionSourceScope, now: Date = Date()) -> [CompanionWindowItem] {
+        cardWindowRows(scope: scope, now: now).map(\.window)
+    }
+
+    public func cardShortWindow(scope: CompanionSourceScope, now: Date = Date()) -> CardWindow? {
+        let resolved = cardWindowRows(scope: scope, now: now)
+        let window = resolved.map(\.window).first(where: { $0.isShortCadence }) ?? resolved.first?.window
+        return resolved.first(where: { $0.window.id == window?.id })
+    }
+
+    public func cardLongWindow(scope: CompanionSourceScope, now: Date = Date()) -> CardWindow? {
+        let resolved = cardWindowRows(scope: scope, now: now)
+        let short = cardShortWindow(scope: scope, now: now)?.window
+        let nonShort = resolved.filter { !$0.window.isShortCadence }
+        if let match = nonShort.first(where: { $0.window.id != short?.id }) {
+            return match
+        }
+        return resolved.first(where: { $0.window.id != short?.id })
+    }
+
+    public func cardRemainingPercent(scope: CompanionSourceScope, now: Date = Date()) -> Double? {
+        cardWindows(scope: scope, now: now).compactMap(\.remainingPercent).min()
+    }
+
+    public func cardDisplayPercent(scope: CompanionSourceScope, now: Date = Date()) -> String {
+        guard let remainingPercent = cardRemainingPercent(scope: scope, now: now) else { return "—" }
+        return "\(Int(remainingPercent.rounded()))%"
+    }
+
+    public func cardStatusColor(scope: CompanionSourceScope, now: Date = Date()) -> Color {
+        guard let remainingPercent = cardRemainingPercent(scope: scope, now: now) else { return .secondary }
+        if remainingPercent <= 0 { return CompanionTheme.danger }
+        if remainingPercent < 20 { return CompanionTheme.warning }
+        return CompanionTheme.accent
+    }
+
+    public var sourceDetailWindows: [CompanionWindowItem] {
+        windows + duplicateWindows
+    }
+
+    public func isStaleInSourceDetail(_ window: CompanionWindowItem, scope: CompanionSourceScope, now: Date = Date()) -> Bool {
+        let key = Self.allowanceKey(for: window)
+        let peers = sourceDetailWindows.filter { Self.allowanceKey(for: $0) == key }
+        guard peers.count > 1 else { return false }
+        let displayed = Self.resolveCardWindow(pool: peers, now: now).window
+        return window.id != displayed.id
+    }
+
+    private static func resolveCardWindow(pool: [CompanionWindowItem], now: Date) -> CardWindow {
+        let observations = pool.map {
+            FleetQuotaObservation(
+                remainingPercent: $0.remainingPercent,
+                reportedAt: $0.reportedAt,
+                isMacCodeCapsReading: $0.isMacCodeCapsReading
+            )
+        }
+        if let pick = FleetMacReading.pickCardDisplay(from: observations, now: now) {
+            return CardWindow(window: pool[pick.chosenIndex], updatedLabel: pick.updatedLabel)
+        }
+        return CardWindow(window: pool[0], updatedLabel: nil)
+    }
+
+    public var sourceCount: Int {
+        Set(windows.compactMap(\.source) + duplicateWindows.compactMap(\.source)).count
     }
 
     public init(
@@ -421,6 +616,7 @@ public final class CompanionQuotaModel: ObservableObject {
     }
 
     @Published public var items: [CompanionQuotaItem] = []
+    @Published public var sourceScope: CompanionSourceScope = .thisIPhone
     @Published public var isRefreshing: Bool = false
     @Published public var lastUpdated: Date?
     /// Last failure worth telling the owner about.
@@ -724,7 +920,7 @@ public final class CompanionQuotaModel: ObservableObject {
                 } else {
                     let status = (response as? HTTPURLResponse)?.statusCode
                     failure = "The sync endpoint answered \(status.map(String.init) ?? "unexpectedly")." + sentenceGap
-                        + "Check the endpoint and token in Companion Settings."
+                        + "Check the endpoint and token in CodeCaps Settings."
                 }
             } catch {
                 guard requestedRevision == syncConfigurationRevision,
@@ -800,6 +996,8 @@ public final class CompanionQuotaModel: ObservableObject {
         let source: String?
         let via: String?
         let resetAt: String?
+        let occurredAt: String?
+        let reportedAt: String?
         let quotaUnit: String?
         let absoluteRemaining: Double?
         let absoluteLimit: Double?
@@ -1056,6 +1254,14 @@ public final class CompanionQuotaModel: ObservableObject {
         return true
     }
 
+    private static func reportedAt(from wire: WireRawWindow) -> Date? {
+        if let reportedAt = wire.reportedAt,
+           let parsed = CompanionDateFormatter.date(from: reportedAt) {
+            return parsed
+        }
+        return CompanionDateFormatter.date(from: wire.occurredAt)
+    }
+
     private func buildPlatformSection(
         id: String,
         providerKey: String,
@@ -1068,33 +1274,34 @@ public final class CompanionQuotaModel: ObservableObject {
         var seenCadenceKeys: Set<String> = []
 
         for w in rawWindows {
-            let cadence = Self.formatCadence(w.label, window: w.window)
             let parsedReset = CompanionDateFormatter.date(from: w.resetAt)
+            let cadence = Self.formatCadence(w.label, window: w.window, resetAt: parsedReset)
+            let displayLabel = QuotaWindowVocabulary.windowLabel(
+                windowToken: w.window,
+                existingLabel: w.label,
+                resetAt: parsedReset
+            )
             let pct = w.remainingPercent
             let exhausted = (pct ?? 100) <= 0 || (w.isExhausted ?? false)
 
-            // Cadence key identifies the underlying allowance window / model tier.
-            // E.g. "weekly", "5h", "general:5h", "video:1d".
             let modelQualifier = (w.modelId ?? "").lowercased()
             let isMiniMax = providerKey.lowercased().contains("minimax") || id.lowercased().contains("minimax")
             let effectiveQualifier = isMiniMax ? "" : modelQualifier
-            let normalizedCadence = cadence.lowercased()
+            let baseAllowanceKey = CompanionWindowItem.fallbackNormalizedWindowKey(
+                cadence: cadence,
+                label: displayLabel,
+                resetAt: parsedReset
+            )
             let cadenceKey = effectiveQualifier.isEmpty
-                ? normalizedCadence
-                : "\(effectiveQualifier):\(normalizedCadence)"
+                ? baseAllowanceKey
+                : "\(effectiveQualifier):\(baseAllowanceKey)"
+            let parsedReportedAt = Self.reportedAt(from: w)
 
             let isDuplicate = seenCadenceKeys.contains(cadenceKey)
 
-            let windowLabel: String
-            if isMiniMax {
-                windowLabel = cadence == "5-hour window" ? "5-hour window" : (cadence == "Weekly window" ? "Weekly window" : (w.label.isEmpty ? cadence : w.label))
-            } else {
-                windowLabel = w.label.isEmpty ? cadence : w.label
-            }
-
             let windowItem = CompanionWindowItem(
                 id: w.id,
-                label: windowLabel,
+                label: displayLabel,
                 cadence: cadence,
                 remainingPercent: pct,
                 resetAt: parsedReset,
@@ -1105,7 +1312,9 @@ public final class CompanionQuotaModel: ObservableObject {
                 isMasked: false,
                 absoluteRemaining: w.absoluteRemaining,
                 absoluteLimit: w.absoluteLimit,
-                quotaUnit: w.quotaUnit
+                quotaUnit: w.quotaUnit,
+                reportedAt: parsedReportedAt,
+                normalizedWindowKey: cadenceKey
             )
 
             if isDuplicate {
@@ -1137,33 +1346,19 @@ public final class CompanionQuotaModel: ObservableObject {
         let futureResets = primaryWindows.compactMap(\.resetAt).filter { $0 > now }
         let nearestReset = futureResets.min() ?? primaryWindows.compactMap(\.resetAt).min()
 
-        // Subtitle describing cadence windows: lowercase, no "window", 2 spaces before (N sources)
-        let subtitle: String
         let sourceCount = Set(primaryWindows.compactMap(\.source) + duplicateWindows.compactMap(\.source)).count
         let sourceSuffix = sourceCount > 1 ? "  (\(sourceCount) sources)" : ""
-        if primaryWindows.count == 1, let single = primaryWindows.first {
-            let base = single.cadence.lowercased().replacingOccurrences(of: " window", with: "")
-            subtitle = "\(base)\(sourceSuffix)"
-        } else if primaryWindows.count > 1 {
-            let cadences = primaryWindows.map { $0.cadence.lowercased().replacingOccurrences(of: " window", with: "") }
-            if cadences.count == 2 {
-                if (cadences[0].contains("week") || cadences[0].contains("7d") || cadences[0].contains("month") || cadences[0].contains("1m")) &&
-                   (cadences[1].contains("5-hour") || cadences[1].contains("5h") || cadences[1].contains("hour") || cadences[1].contains("4-hour") || cadences[1].contains("interval")) {
-                    subtitle = "\(cadences[1]) & \(cadences[0])\(sourceSuffix)"
-                } else {
-                    subtitle = "\(cadences[0]) & \(cadences[1])\(sourceSuffix)"
-                }
-            } else {
-                subtitle = "\(primaryWindows.count) active allowances\(sourceSuffix)"
-            }
-        } else {
-            subtitle = title
-        }
+        let subtitle = Self.subtitlePhrase(for: primaryWindows, fallback: title) + sourceSuffix
+        let displayTitle = WidgetPlatformDisplay.title(
+            canonicalKey: providerKey,
+            manifestProviderLabel: title,
+            wireProvider: nil
+        )
 
         return CompanionQuotaItem(
             id: id,
             providerKey: providerKey,
-            title: title,
+            title: displayTitle,
             subtitle: subtitle,
             remainingPercent: controllingPct,
             resetAt: nearestReset,
@@ -1205,18 +1400,18 @@ public final class CompanionQuotaModel: ObservableObject {
         if weeklyExhausted && weeklyWin != nil {
             controllingPct = weeklyPct ?? 0
             isExhausted = true
-            subtitle = "weekly limit exhausted\(sourceSuffix)"
+            subtitle = "\(QuotaWindowVocabulary.sevenDay) limit exhausted\(sourceSuffix)"
         } else {
             let validPercents = [fiveHourWin?.remainingPercent, weeklyWin?.remainingPercent].compactMap { $0 }
             if validPercents.isEmpty {
                 let allPcts = windows.compactMap { $0.remainingPercent }
                 controllingPct = allPcts.min()
                 isExhausted = (controllingPct ?? 100) <= 0
-                subtitle = "5-hour & weekly\(sourceSuffix)"
+                subtitle = "\(QuotaWindowVocabulary.fiveHour) & \(QuotaWindowVocabulary.sevenDay)\(sourceSuffix)"
             } else {
                 controllingPct = validPercents.min()
                 isExhausted = (controllingPct ?? 100) <= 0
-                subtitle = "5-hour & weekly\(sourceSuffix)"
+                subtitle = "\(QuotaWindowVocabulary.fiveHour) & \(QuotaWindowVocabulary.sevenDay)\(sourceSuffix)"
             }
         }
 
@@ -1317,14 +1512,20 @@ public final class CompanionQuotaModel: ObservableObject {
 
             let pct = driving.remainingPercent
             let exhausted = (pct ?? 100) <= 0 || (driving.isExhausted ?? false)
-            let cadenceLabel = period == "5h" ? "5-hour window" : "Weekly window"
+            let parsedReset = CompanionDateFormatter.date(from: driving.resetAt)
+            let cadenceToken = period == "5h" ? QuotaWindowVocabulary.fiveHour : QuotaWindowVocabulary.sevenDay
+            let displayLabel = QuotaWindowVocabulary.windowLabel(
+                windowToken: period == "5h" ? "5h" : "7d",
+                existingLabel: cadenceToken,
+                resetAt: parsedReset
+            )
 
             return CompanionWindowItem(
                 id: canonicalID,
-                label: cadenceLabel,
-                cadence: cadenceLabel,
+                label: displayLabel,
+                cadence: cadenceToken,
                 remainingPercent: pct,
-                resetAt: CompanionDateFormatter.date(from: driving.resetAt),
+                resetAt: parsedReset,
                 source: driving.source,
                 via: driving.via,
                 isDuplicateSource: false,
@@ -1335,7 +1536,9 @@ public final class CompanionQuotaModel: ObservableObject {
                 isMasked: period == "5h" && weeklyExhausted,
                 absoluteRemaining: nil,
                 absoluteLimit: nil,
-                quotaUnit: nil
+                quotaUnit: nil,
+                reportedAt: Self.reportedAt(from: driving),
+                normalizedWindowKey: cadenceToken.lowercased()
             )
         }
     }
@@ -1355,9 +1558,19 @@ public final class CompanionQuotaModel: ObservableObject {
                canonicalManifestKey(provider: $0.provider, via: $0.via) == legacy.key
            }) {
             let label = group.providerLabel.trimmingCharacters(in: .whitespacesAndNewlines)
-            return (legacy.key, label.isEmpty ? legacy.title : label, legacy.providerKey)
+            let title = WidgetPlatformDisplay.title(
+                canonicalKey: legacy.key,
+                manifestProviderLabel: label.isEmpty ? nil : label,
+                wireProvider: raw.provider
+            )
+            return (legacy.key, title, legacy.providerKey)
         }
-        return legacy
+        let title = WidgetPlatformDisplay.title(
+            canonicalKey: legacy.key,
+            manifestProviderLabel: legacy.title,
+            wireProvider: raw.provider
+        )
+        return (legacy.key, title, legacy.providerKey)
     }
 
     /// The pre-manifest hardcoded mapping.  Kept as the offline fallback and
@@ -1395,7 +1608,9 @@ public final class CompanionQuotaModel: ObservableObject {
             return ("xai", "Grok", "xai")
         }
         let fallbackKey = (raw.providerKey ?? raw.provider).trimmingCharacters(in: .whitespacesAndNewlines)
-        return (fallbackKey.isEmpty ? "other" : fallbackKey, raw.provider, fallbackKey)
+        let key = fallbackKey.isEmpty ? "other" : fallbackKey
+        let title = WidgetPlatformDisplay.title(canonicalKey: key, wireProvider: raw.provider)
+        return (key, title, fallbackKey.isEmpty ? key : fallbackKey)
     }
 
     /// Mirror of `QuotaProviders.canonicalKey` for the wire manifest.  Kept
@@ -1427,28 +1642,38 @@ public final class CompanionQuotaModel: ObservableObject {
         return manifest.first { canonicalManifestKey(provider: $0.provider, via: $0.via) == canonicalKey }?.iconHint
     }
 
-    public static func formatCadence(_ label: String, window: String? = nil) -> String {
-        let combined = "\(window ?? "") \(label)".lowercased()
-        if combined.contains("7d") || combined.contains("seven_day") || combined.contains("1w") || combined.contains("weekly") {
-            return "weekly"
+    /// Card subtitle cadences use the same hyphenated vocabulary as meter captions.
+    static func subtitlePhrase(for windows: [CompanionWindowItem], fallback: String) -> String {
+        guard !windows.isEmpty else { return fallback }
+        var seen = Set<String>()
+        let uniqueTokens: [String] = windows.compactMap { window in
+            let token = window.meterCaption
+            guard !seen.contains(token) else { return nil }
+            seen.insert(token)
+            return token
         }
-        if combined.contains("5h") || combined.contains("5-hour") || combined.contains("five_hour")
-            || combined.contains("coding_plan") || combined.contains("coding plan") || combined.contains("interval") {
-            return "5-hour"
+        guard !uniqueTokens.isEmpty else { return fallback }
+        if uniqueTokens.count == 1 { return uniqueTokens[0] }
+        if uniqueTokens.count == 2 {
+            let first = windows.first { $0.meterCaption == uniqueTokens[0] }
+            let second = windows.first { $0.meterCaption == uniqueTokens[1] }
+            if let first, let second, first.isShortCadence != second.isShortCadence {
+                let short = first.isShortCadence ? uniqueTokens[0] : uniqueTokens[1]
+                let long = first.isShortCadence ? uniqueTokens[1] : uniqueTokens[0]
+                return "\(short) & \(long)"
+            }
+            return "\(uniqueTokens[0]) & \(uniqueTokens[1])"
         }
-        if combined.contains("4h") || combined.contains("4-hour") || combined.contains("four_hour") {
-            return "4-hour"
-        }
-        if combined.contains("1d") || combined.contains("daily") || combined.contains("24h") {
-            return "daily"
-        }
-        if combined.contains("billing") || combined.contains("cycle") || combined.contains("monthly") || combined.contains("1m") {
-            return "monthly"
-        }
-        if let window, !window.isEmpty {
-            return window.lowercased().replacingOccurrences(of: " window", with: "")
-        }
-        return label.lowercased().replacingOccurrences(of: " window", with: "")
+        return uniqueTokens.joined(separator: " · ")
+    }
+
+    public static func formatCadence(_ label: String, window: String? = nil, resetAt: Date? = nil) -> String {
+        QuotaWindowVocabulary.standardCadence(
+            windowToken: window,
+            label: label,
+            resetAt: resetAt,
+            periodStart: nil
+        )
     }
 
     /// Feeds one snapshot's windows through the tracker, saves its state, and

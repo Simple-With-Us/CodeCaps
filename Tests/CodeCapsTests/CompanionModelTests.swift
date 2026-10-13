@@ -55,6 +55,24 @@ final class CompanionModelTests: XCTestCase {
 
     // MARK: - App Group & Hygiene
 
+    func testCompanionResolvesCanonicalPlatformDisplayTitles() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains("WidgetPlatformDisplay.title"),
+            "Companion parsing must resolve canonical platform names, not raw provider ids"
+        )
+        XCTAssertEqual(
+            WidgetPlatformDisplay.title(canonicalKey: "cursor", manifestProviderLabel: "cursor", wireProvider: "cursor"),
+            "Cursor"
+        )
+        XCTAssertFalse(
+            WidgetPlatformDisplay.isRawProviderSlug(
+                WidgetPlatformDisplay.title(canonicalKey: "cursor", manifestProviderLabel: "cursor", wireProvider: "cursor"),
+                canonicalKey: "cursor"
+            )
+        )
+    }
+
     func testPlatformSpecificAppGroupIds() throws {
         let source = try readCompanionModelSource()
         XCTAssertTrue(
@@ -282,6 +300,50 @@ final class CompanionModelTests: XCTestCase {
         XCTAssertTrue(source.contains("group.com.simplewithus.codecaps"))
     }
 
+    func testMainScreenFleetStatusLivesInNavigationBar() throws {
+        let source = try readCompanionContentViewSource()
+        XCTAssertFalse(
+            source.contains(".navigationTitle(\"CodeCaps\")"),
+            "main screen must not repeat the CodeCaps product title"
+        )
+        XCTAssertTrue(
+            source.contains("fleetStatusToolbarContent"),
+            "fleet status must be a toolbar item so it stays pinned while scrolling"
+        )
+        XCTAssertTrue(
+            source.contains("ToolbarItem(placement: .principal)"),
+            "fleet status belongs in the navigation bar title area"
+        )
+        XCTAssertFalse(
+            source.contains("Text(\"FLEET STATUS\")"),
+            "fleet status label should use title case in the navigation bar"
+        )
+        XCTAssertFalse(
+            source.contains("arrow.up.arrow.down"),
+            "reorder must live in CodeCaps Settings, not a duplicate toolbar button"
+        )
+        XCTAssertTrue(
+            source.contains("navigationTitle(\"CodeCaps Settings\")"),
+            "full-screen settings must be titled CodeCaps Settings"
+        )
+        XCTAssertTrue(
+            source.contains(".fullScreenCover(isPresented: $showingSettings)"),
+            "settings must present full screen on iOS"
+        )
+        XCTAssertTrue(
+            source.contains("enum CompanionSettingsTab"),
+            "settings must be grouped into tabs"
+        )
+        XCTAssertTrue(source.contains("case display = \"Display\""))
+        XCTAssertTrue(source.contains("case sources = \"Sources\""))
+        XCTAssertTrue(source.contains("case alarms = \"Alarms\""))
+        XCTAssertTrue(source.contains("settingsDisplaySections"))
+        XCTAssertTrue(source.contains("settingsSourcesSections"))
+        XCTAssertTrue(source.contains("settingsAlarmsSections"))
+        XCTAssertFalse(source.contains("Companion Settings"))
+        XCTAssertFalse(source.contains(".presentationDetents"))
+    }
+
     func testPullToRefreshAndButtonResponsiveness() throws {
         let source = try readCompanionContentViewSource()
         XCTAssertTrue(
@@ -326,6 +388,51 @@ final class CompanionModelTests: XCTestCase {
             source.contains("let effectiveQualifier = isMiniMax ? \"\" : modelQualifier"),
             "MiniMax must not split cadences by modelQualifier, collapsing into two primary windows"
         )
+    }
+
+    func testCompanionMeterUsesHyphenatedCaptionsNotPopoverTags() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains("public var meterCaption: String"),
+            "Companion meters must use hyphenated cadence captions"
+        )
+        XCTAssertTrue(
+            source.contains("public var caption: String { meterCaption }"),
+            "card meters must not use popover 5h/7d/1m tags"
+        )
+        let content = try readCompanionContentViewSource()
+        XCTAssertFalse(
+            content.contains("window.barQualifier"),
+            "companion meters must not render weekly/additional qualifier captions"
+        )
+    }
+
+    func testSourceDiscrepancyGatingRequiresAllSourcesMultiSourceAndFreshness() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(source.contains("guard scope == .allSources, sourceCount >= 2 else { return [] }"))
+        XCTAssertTrue(source.contains("FleetSourceDisagreement.shouldShowDisagreementAlert"))
+        XCTAssertTrue(source.contains("normalizedWindowKey == dup.normalizedWindowKey"))
+        XCTAssertFalse(source.contains("?? windows.first"))
+        XCTAssertTrue(source.contains("reportedAt"))
+        XCTAssertTrue(source.contains("Self.reportedAt(from: w)"))
+        XCTAssertTrue(source.contains("FleetMacReading.pickCardDisplay"))
+        XCTAssertTrue(source.contains("cardWindowRows(scope:"))
+        XCTAssertTrue(source.contains("isStaleInSourceDetail(_ window: CompanionWindowItem, scope:"))
+        XCTAssertTrue(source.contains("delta >= 10.0"))
+        XCTAssertTrue(source.contains("Sources differ ·"))
+        XCTAssertFalse(source.contains("via codecaps"))
+        XCTAssertTrue(source.contains("sourceLooksLikeHostname"))
+        let content = try readCompanionContentViewSource()
+        XCTAssertTrue(
+            content.contains("model.sourceScope == .allSources, item.sourceCount > 1"),
+            "discrepancy UI must follow the multi-source chip gate"
+        )
+    }
+
+    func testCompanionSubtitleUsesSubtitlePhraseVocabulary() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(source.contains("static func subtitlePhrase(for windows:"))
+        XCTAssertTrue(source.contains("Self.subtitlePhrase(for: primaryWindows"))
     }
 
     func testCompanionUsageBarPacingMarkerProminence() throws {

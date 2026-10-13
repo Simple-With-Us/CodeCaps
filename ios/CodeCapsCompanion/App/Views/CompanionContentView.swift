@@ -6,9 +6,18 @@ public struct CompanionContentView: View {
     @StateObject private var soundPlayer = AlarmSoundPlayer()
     @State private var showingSettings: Bool
     @State private var expandedIds: Set<String> = []
+    @State private var settingsTab: CompanionSettingsTab = .display
     #if os(iOS)
     @State private var platformOrderEditMode: EditMode = .inactive
     #endif
+
+    private enum CompanionSettingsTab: String, CaseIterable, Identifiable {
+        case display = "Display"
+        case sources = "Sources"
+        case alarms = "Alarms"
+
+        var id: String { rawValue }
+    }
 
     public init(model: CompanionQuotaModel, showingSettings: Bool = ProcessInfo.processInfo.arguments.contains("-openSettings")) {
         self.model = model
@@ -44,36 +53,20 @@ public struct CompanionContentView: View {
             }
             #if os(iOS)
             .scrollBounceBehavior(.always, axes: .vertical)
-            #endif
-            .navigationTitle("CodeCaps")
-            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(.visible, for: .navigationBar)
             #endif
             .toolbar {
-                #if os(iOS)
-                ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        showingSettings = true
-                    } label: {
-                        Image(systemName: "arrow.up.arrow.down")
-                    }
-                    .accessibilityLabel("Customize Platform Order")
+                ToolbarItem(placement: .principal) {
+                    fleetStatusToolbarContent
                 }
+                #if os(iOS)
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showingSettings = true
-                    } label: {
-                        Image(systemName: "gearshape")
-                    }
-                    .accessibilityLabel("Settings")
+                    settingsToolbarButton
                 }
                 #else
                 ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        showingSettings = true
-                    } label: {
-                        Image(systemName: "gearshape")
-                    }
+                    settingsToolbarButton
                 }
                 #endif
             }
@@ -85,14 +78,15 @@ public struct CompanionContentView: View {
                     await model.refresh()
                 }
             }
-            .sheet(isPresented: $showingSettings) {
-                #if os(iOS)
+            #if os(iOS)
+            .fullScreenCover(isPresented: $showingSettings) {
                 companionSettingsView
-                    .presentationDetents([.medium, .large])
-                #else
-                companionSettingsView
-                #endif
             }
+            #else
+            .sheet(isPresented: $showingSettings) {
+                companionSettingsView
+            }
+            #endif
         }
     }
 
@@ -114,32 +108,62 @@ public struct CompanionContentView: View {
         #endif
     }
 
-    // MARK: - Header Card
+    private var settingsToolbarButton: some View {
+        Button {
+            showingSettings = true
+        } label: {
+            Image(systemName: "gearshape")
+        }
+        .accessibilityLabel("CodeCaps Settings")
+    }
 
-    private var headerCard: some View {
-        HStack(spacing: 12) {
+    // MARK: - Fleet status (pinned navigation bar)
+
+    private var fleetStatusToolbarContent: some View {
+        HStack(spacing: 8) {
             Image("codecaps-mark")
                 .resizable()
                 .renderingMode(.template)
                 .aspectRatio(contentMode: .fit)
-                .frame(width: 32, height: 32)
+                .frame(width: 26, height: 26)
                 .foregroundStyle(.primary)
+                .accessibilityHidden(true)
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text("FLEET STATUS")
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Fleet Status")
                     .font(.caption2.weight(.bold))
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
                 Text("\(model.items.count) Platforms Monitored")
-                    .font(.headline)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
             }
-            Spacer()
+
+            Spacer(minLength: 4)
+
             if let updated = model.lastUpdated {
                 Text(updated.formatted(date: .omitted, time: .shortened))
-                    .font(.caption)
+                    .font(.caption2)
                     .italic()
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Fleet Status, \(model.items.count) platforms monitored")
+    }
+
+    // MARK: - Source scope
+
+    private var headerCard: some View {
+        Picker("Source scope", selection: $model.sourceScope) {
+            ForEach(CompanionSourceScope.allCases) { scope in
+                Text(scope.rawValue).tag(scope)
+            }
+        }
+        .pickerStyle(.segmented)
         .padding(14)
         .background(cardBackground, in: RoundedRectangle(cornerRadius: 12))
     }
@@ -200,7 +224,7 @@ public struct CompanionContentView: View {
                     }
                     .buttonStyle(.borderedProminent)
 
-                    Button("Companion Settings") {
+                    Button("CodeCaps Settings") {
                         showingSettings = true
                     }
                     .buttonStyle(.bordered)
@@ -247,7 +271,13 @@ public struct CompanionContentView: View {
 
     private func quotaCard(_ item: CompanionQuotaItem) -> some View {
         let isExpanded = expandedIds.contains(item.id) && item.isExpandable
-        let extraWindows = item.windows.filter { $0.id != item.shortWindow?.id && $0.id != item.longWindow?.id }
+        let short = item.cardShortWindow(scope: model.sourceScope)
+        let long = item.cardLongWindow(scope: model.sourceScope)
+        let cardWindows = item.cardWindows(scope: model.sourceScope)
+        let extraWindows = cardWindows.filter {
+            $0.id != short?.window.id && $0.id != long?.window.id
+        }
+        let headlineUpdatedLabel = [short?.updatedLabel, long?.updatedLabel].compactMap { $0 }.first
 
         return VStack(alignment: .leading, spacing: 12) {
             // Main clickable row
@@ -259,11 +289,20 @@ public struct CompanionContentView: View {
                         Text(item.title)
                             .font(.system(size: 15, weight: .semibold))
 
-                        if item.hasSourceDiscrepancy {
+                        if model.sourceScope == .allSources, item.sourceCount > 1 {
+                            Text("\(item.sourceCount) sources")
+                                .font(.system(size: 10, weight: .semibold))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.secondary.opacity(0.14), in: Capsule())
+                        }
+
+                        if model.sourceScope == .allSources, item.sourceCount > 1,
+                           item.hasSourceDiscrepancy(scope: model.sourceScope) {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .font(.system(size: 11, weight: .semibold))
                                 .foregroundStyle(.orange)
-                                .accessibilityLabel("Warning: Secondary source differs by more than 3%")
+                                .accessibilityLabel("Warning: sources disagree on this allowance")
                         }
                     }
 
@@ -291,9 +330,17 @@ public struct CompanionContentView: View {
                         .accessibilityValue(item.isAlarmEnabled ? "on" : "off")
                     }
 
-                    Text(item.displayPercent)
-                        .font(.system(size: 17, weight: .bold, design: .rounded).monospacedDigit())
-                        .foregroundStyle(item.statusColor)
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text(item.cardDisplayPercent(scope: model.sourceScope))
+                            .font(.system(size: 17, weight: .bold, design: .rounded).monospacedDigit())
+                            .foregroundStyle(item.cardStatusColor(scope: model.sourceScope))
+                        if let headlineUpdatedLabel {
+                            Text(headlineUpdatedLabel)
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
 
                     if item.isExpandable {
                         Image(systemName: "chevron.down")
@@ -308,25 +355,33 @@ public struct CompanionContentView: View {
 
             // Quota Bars side by side
             HStack(spacing: 12) {
-                if let short = item.shortWindow {
-                    CompanionMeterView(caption: short.caption, window: short)
+                if let short {
+                    CompanionMeterView(
+                        caption: short.window.caption,
+                        window: short.window,
+                        updatedLabel: short.updatedLabel
+                    )
                 }
-                if let long = item.longWindow, long.id != item.shortWindow?.id {
-                    CompanionMeterView(caption: long.caption, window: long)
-                } else if item.shortWindow == nil {
-                    if let first = item.windows.first {
+                if let long, long.window.id != short?.window.id {
+                    CompanionMeterView(
+                        caption: long.window.caption,
+                        window: long.window,
+                        updatedLabel: long.updatedLabel
+                    )
+                } else if short == nil {
+                    if let first = cardWindows.first {
                         CompanionMeterView(caption: first.caption, window: first)
                     }
                 }
             }
 
-            // Discrepancy warning banner if secondary source diverges by >3%
-            if item.hasSourceDiscrepancy {
+            if model.sourceScope == .allSources, item.sourceCount > 1,
+               item.hasSourceDiscrepancy(scope: model.sourceScope) {
                 HStack(spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.orange)
-                    Text(item.sourceDiscrepancies.first?.description ?? "Source discrepancy > 3%")
+                    Text(item.sourceDiscrepancies(scope: model.sourceScope).first?.description ?? "Sources differ")
                         .font(.system(size: 11.5, weight: .semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
@@ -348,11 +403,6 @@ public struct CompanionContentView: View {
                     .padding(.vertical, 2)
 
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("ADDITIONAL ALLOWANCES")
-                        .font(.system(size: 10, weight: .bold))
-                        .tracking(0.6)
-                        .foregroundStyle(.secondary)
-
                     ForEach(extraWindows) { win in
                         windowRow(win)
                     }
@@ -375,11 +425,11 @@ public struct CompanionContentView: View {
     private func windowRow(_ win: CompanionWindowItem) -> some View {
         HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(win.label)
+                Text(win.meterCaption)
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.primary)
-                let cd = win.countdown()
-                if !cd.isEmpty {
+                let cd = win.meterCountdown()
+                if cd != "—" {
                     Text("Resets in \(cd)")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
@@ -410,70 +460,131 @@ public struct CompanionContentView: View {
 
     private var companionSettingsView: some View {
         NavigationStack {
-            ScrollViewReader { proxy in
-                Form {
-                Section {
-                    ForEach(model.items) { item in
-                        HStack(spacing: 10) {
-                            CompanionProviderLogo(item: item, size: 24)
-                            Text(item.title)
-                                .font(.system(size: 14, weight: .medium))
-                            Spacer()
-                        }
+            VStack(spacing: 0) {
+                Picker("Settings section", selection: $settingsTab) {
+                    ForEach(CompanionSettingsTab.allCases) { tab in
+                        Text(tab.rawValue).tag(tab)
                     }
-                    .onMove(perform: model.movePlatform)
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .padding(.bottom, 4)
 
-                    if !model.platformOrder.isEmpty {
-                        Button("Reset Default Order") {
-                            model.resetPlatformOrder()
+                ScrollViewReader { proxy in
+                    Form {
+                        switch settingsTab {
+                        case .display:
+                            settingsDisplaySections
+                        case .sources:
+                            settingsSourcesSections
+                        case .alarms:
+                            settingsAlarmsSections
                         }
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
                     }
-                } header: {
-                    HStack {
-                        Text("Platform Order")
-                        Spacer()
-                        #if os(iOS)
-                        Button(platformOrderEditMode == .active ? "Done" : "Edit") {
-                            withAnimation {
-                                platformOrderEditMode = platformOrderEditMode == .active ? .inactive : .active
+                    .onAppear {
+                        if ProcessInfo.processInfo.arguments.contains("-scrollToRefresh") {
+                            settingsTab = .sources
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                                withAnimation {
+                                    proxy.scrollTo("refreshSection", anchor: .bottom)
+                                }
                             }
                         }
-                        .accessibilityLabel(platformOrderEditMode == .active
-                                            ? "Done Reordering Platforms"
-                                            : "Reorder Platforms")
-                        #endif
-                    }
-                } footer: {
-                    Text("Customize the order of platforms shown on the main screen." + sentenceGap
-                         + "Tap Edit, then drag to reorder.")
-                }
-
-                Section("Mac Sync Endpoint") {
-                    #if os(iOS)
-                    TextField("Endpoint URL (https://...)", text: $model.syncEndpoint)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled(true)
-                    #else
-                    TextField("Endpoint URL (https://...)", text: $model.syncEndpoint)
-                        .autocorrectionDisabled(true)
-                    #endif
-                    SecureField("Sync Bearer Token", text: $model.syncToken)
-                    Button("Remove Token", role: .destructive) {
-                        model.removeSyncToken()
-                    }
-                    .accessibilityIdentifier("removeSyncToken")
-                    .disabled(model.syncToken.isEmpty && model.tokenStorageError == nil)
-                    if let tokenStorageError = model.tokenStorageError {
-                        Text(tokenStorageError)
-                            .font(.caption)
-                            .foregroundStyle(.red)
                     }
                 }
-                .id("syncTokenSection")
+            }
+            #if os(iOS)
+            .environment(\.editMode, settingsTab == .display ? $platformOrderEditMode : Binding.constant(.inactive))
+            #endif
+            .navigationTitle("CodeCaps Settings")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .refreshable {
+                await model.refresh()
+            }
+            .toolbar {
+                #if os(iOS)
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { showingSettings = false }
+                }
+                #else
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { showingSettings = false }
+                }
+                #endif
+            }
+        }
+    }
 
-                Section {
+    @ViewBuilder
+    private var settingsDisplaySections: some View {
+        Section {
+            ForEach(model.items) { item in
+                HStack(spacing: 10) {
+                    CompanionProviderLogo(item: item, size: 24)
+                    Text(item.title)
+                        .font(.system(size: 14, weight: .medium))
+                    Spacer()
+                }
+            }
+            .onMove(perform: model.movePlatform)
+
+            if !model.platformOrder.isEmpty {
+                Button("Reset Default Order") {
+                    model.resetPlatformOrder()
+                }
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+            }
+        } header: {
+            HStack {
+                Text("Platform Order")
+                Spacer()
+                #if os(iOS)
+                Button(platformOrderEditMode == .active ? "Done" : "Edit") {
+                    withAnimation {
+                        platformOrderEditMode = platformOrderEditMode == .active ? .inactive : .active
+                    }
+                }
+                .accessibilityLabel(platformOrderEditMode == .active
+                                    ? "Done Reordering Platforms"
+                                    : "Reorder Platforms")
+                #endif
+            }
+        } footer: {
+            Text("Customize the order of platforms shown on the main screen." + sentenceGap
+                 + "Tap Edit, then drag to reorder.")
+        }
+    }
+
+    @ViewBuilder
+    private var settingsSourcesSections: some View {
+        Section("Mac Sync Endpoint") {
+            #if os(iOS)
+            TextField("Endpoint URL (https://...)", text: $model.syncEndpoint)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled(true)
+            #else
+            TextField("Endpoint URL (https://...)", text: $model.syncEndpoint)
+                .autocorrectionDisabled(true)
+            #endif
+            SecureField("Sync Bearer Token", text: $model.syncToken)
+            Button("Remove Token", role: .destructive) {
+                model.removeSyncToken()
+            }
+            .accessibilityIdentifier("removeSyncToken")
+            .disabled(model.syncToken.isEmpty && model.tokenStorageError == nil)
+            if let tokenStorageError = model.tokenStorageError {
+                Text(tokenStorageError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+        }
+        .id("syncTokenSection")
+
+        Section {
                     if itemsWithDuplicates.isEmpty {
                         Text("No secondary or mirror sources detected." + sentenceGap
                              + "All allowance windows are sourced directly from your primary sync feed.")
@@ -487,20 +598,21 @@ public struct CompanionContentView: View {
                                     Text(item.title)
                                         .font(.system(size: 14, weight: .semibold))
                                     Spacer()
-                                    if item.hasSourceDiscrepancy {
-                                        Label("Discrepancy > 3%", systemImage: "exclamationmark.triangle.fill")
+                                    if model.sourceScope == .allSources, item.sourceCount > 1,
+                                       item.hasSourceDiscrepancy(scope: model.sourceScope) {
+                                        Label("Sources differ ≥ 10 pts", systemImage: "exclamationmark.triangle.fill")
                                             .font(.system(size: 11, weight: .medium))
                                             .foregroundStyle(.orange)
                                     }
                                 }
 
-                                ForEach(item.duplicateWindows) { dup in
+                                ForEach(item.sourceDetailWindows) { reading in
                                     HStack(spacing: 8) {
                                         VStack(alignment: .leading, spacing: 2) {
                                             HStack(spacing: 6) {
-                                                Text(dup.label)
+                                                Text(reading.meterCaption)
                                                     .font(.system(size: 12, weight: .medium))
-                                                if let src = dup.source ?? dup.via {
+                                                if let src = reading.source ?? reading.via {
                                                     Text("via \(src)")
                                                         .font(.system(size: 10, weight: .medium))
                                                         .foregroundStyle(.secondary)
@@ -508,23 +620,33 @@ public struct CompanionContentView: View {
                                                         .padding(.vertical, 1.5)
                                                         .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 4))
                                                 }
+                                                if item.isStaleInSourceDetail(reading, scope: model.sourceScope) {
+                                                    Text("Stale")
+                                                        .font(.system(size: 10, weight: .semibold))
+                                                        .foregroundStyle(.secondary)
+                                                        .padding(.horizontal, 5)
+                                                        .padding(.vertical, 1.5)
+                                                        .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 4))
+                                                }
                                             }
-                                            if !dup.countdown().isEmpty {
-                                                Text("Resets in \(dup.countdown())")
+                                            if !reading.countdown().isEmpty {
+                                                Text("Resets in \(reading.countdown())")
                                                     .font(.system(size: 10))
                                                     .foregroundStyle(.secondary)
                                             }
                                         }
                                         Spacer()
-                                        Text(dup.displayPercent)
+                                        Text(reading.displayPercent)
                                             .font(.system(size: 12, weight: .bold, design: .rounded).monospacedDigit())
-                                            .foregroundStyle(dup.statusColor)
+                                            .foregroundStyle(reading.statusColor)
                                     }
                                     .padding(.vertical, 2)
+                                    .opacity(item.isStaleInSourceDetail(reading, scope: model.sourceScope) ? 0.72 : 1)
                                 }
 
-                                if item.hasSourceDiscrepancy {
-                                    ForEach(item.sourceDiscrepancies) { disc in
+                                if model.sourceScope == .allSources, item.sourceCount > 1,
+                                   item.hasSourceDiscrepancy(scope: model.sourceScope) {
+                                    ForEach(item.sourceDiscrepancies(scope: model.sourceScope)) { disc in
                                         HStack(spacing: 5) {
                                             Image(systemName: "exclamationmark.triangle.fill")
                                                 .font(.system(size: 10, weight: .semibold))
@@ -543,76 +665,12 @@ public struct CompanionContentView: View {
                     Text("Data Sources & Mirrors")
                 } footer: {
                     Text("CodeCaps monitors primary and mirror feeds for each platform." + sentenceGap
-                         + "Discrepancies greater than 3% between feeds trigger a warning flag on the platform card.")
+                         + "In All Sources, when a card lists two or more feeds reported within 20 minutes that disagree by 10 points or more, a warning appears on the card (hostnames are ignored). Otherwise the newest reading is shown and older feeds are marked Stale here.")
                 }
                 .id("dataSourcesMirrorsSection")
                 .accessibilityIdentifier("dataSourcesMirrorsSection")
 
-                Section("Alerts & Notifications") {
-                    Toggle("Reset Alarms For All Providers", isOn: $model.alarmsAll)
-                    Text("A provider's longest window alarms every time it resets." + sentenceGap
-                         + "A shorter window alarms only if it came within 20% of its cap first."
-                         + sentenceGap + "Turn this off to pick providers one by one with the bell on each card.")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    Picker("Reset Alert Sound", selection: $model.alarmSound) {
-                        ForEach(ResetAlarmSound.defaultPickerOrder, id: \.self) { sound in
-                            Text(sound.displayName).tag(sound)
-                        }
-                    }
-                    Text(model.alarmSound.pickerDetail)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-
-                    Button {
-                        soundPlayer.preview(model.alarmSound)
-                    } label: {
-                        Label("Preview Sound", systemImage: "speaker.wave.2")
-                    }
-                    .disabled(model.alarmSound == .silent)
-
-                    if let preview = soundPlayer.lastPreview {
-                        Label {
-                            Text(preview.message).fixedSize(horizontal: false, vertical: true)
-                        } icon: {
-                            Image(systemName: preview.isFailure
-                                  ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                        }
-                        .font(.caption2)
-                        .foregroundStyle(preview.isFailure ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.secondary))
-                    }
-
-                    Button {
-                        Task { await model.sendTestNotification() }
-                    } label: {
-                        Label("Send Test Notification", systemImage: "bell.badge")
-                    }
-
-                    if model.notificationsDenied {
-                        Button {
-                            #if os(iOS)
-                            if let url = URL(string: UIApplication.openSettingsURLString) {
-                                UIApplication.shared.open(url)
-                            }
-                            #endif
-                        } label: {
-                            Label("Open Notification Settings", systemImage: "gearshape")
-                        }
-                    }
-
-                    if let outcome = model.testNotificationOutcome {
-                        Label {
-                            Text(outcome.message).fixedSize(horizontal: false, vertical: true)
-                        } icon: {
-                            Image(systemName: outcome.isFailure
-                                  ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                        }
-                        .font(.caption2)
-                        .foregroundStyle(outcome.isFailure ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.secondary))
-                    }
-                }
-
-                Section("Help") {
+        Section("Help") {
                     Link(
                         "Setup & Data Guide",
                         destination: URL(string: "https://codecaps.simplewithus.com/setup.html")!
@@ -665,45 +723,71 @@ public struct CompanionContentView: View {
                     }
                 }
                 .id("refreshSection")
+    }
+
+    @ViewBuilder
+    private var settingsAlarmsSections: some View {
+        Section("Reset Alarms") {
+            Toggle("Reset Alarms For All Providers", isOn: $model.alarmsAll)
+            Text("A provider's longest window alarms every time it resets." + sentenceGap
+                 + "A shorter window alarms only if it came within 20% of its cap first."
+                 + sentenceGap + "Turn this off to pick providers one by one with the bell on each card.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            Picker("Reset Alert Sound", selection: $model.alarmSound) {
+                ForEach(ResetAlarmSound.defaultPickerOrder, id: \.self) { sound in
+                    Text(sound.displayName).tag(sound)
+                }
             }
-            #if os(iOS)
-            .environment(\.editMode, $platformOrderEditMode)
-            #endif
-            .navigationTitle("Companion Settings")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .refreshable {
-                await model.refresh()
+            Text(model.alarmSound.pickerDetail)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+            Button {
+                soundPlayer.preview(model.alarmSound)
+            } label: {
+                Label("Preview Sound", systemImage: "speaker.wave.2")
             }
-            .onAppear {
-                if ProcessInfo.processInfo.arguments.contains("-scrollToRefresh") {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                        withAnimation {
-                            proxy.scrollTo("refreshSection", anchor: .bottom)
-                        }
+            .disabled(model.alarmSound == .silent)
+
+            if let preview = soundPlayer.lastPreview {
+                Label {
+                    Text(preview.message).fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: preview.isFailure
+                          ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                }
+                .font(.caption2)
+                .foregroundStyle(preview.isFailure ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.secondary))
+            }
+
+            Button {
+                Task { await model.sendTestNotification() }
+            } label: {
+                Label("Send Test Notification", systemImage: "bell.badge")
+            }
+
+            if model.notificationsDenied {
+                Button {
+                    #if os(iOS)
+                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                        UIApplication.shared.open(url)
                     }
+                    #endif
+                } label: {
+                    Label("Open Notification Settings", systemImage: "gearshape")
                 }
             }
-            .toolbar {
-                #if os(iOS)
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Image("codecaps-mark")
-                        .resizable()
-                        .renderingMode(.template)
-                        .aspectRatio(contentMode: .fit)
-                        .frame(width: 22, height: 22)
-                        .foregroundStyle(.primary)
+
+            if let outcome = model.testNotificationOutcome {
+                Label {
+                    Text(outcome.message).fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: outcome.isFailure
+                          ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
                 }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { showingSettings = false }
-                }
-                #else
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { showingSettings = false }
-                }
-                #endif
-            }
+                .font(.caption2)
+                .foregroundStyle(outcome.isFailure ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.secondary))
             }
         }
     }
@@ -714,29 +798,24 @@ public struct CompanionContentView: View {
 public struct CompanionMeterView: View {
     public let caption: String
     public let window: CompanionWindowItem
+    public let updatedLabel: String?
 
-    public init(caption: String, window: CompanionWindowItem) {
+    public init(caption: String, window: CompanionWindowItem, updatedLabel: String? = nil) {
         self.caption = caption
         self.window = window
+        self.updatedLabel = updatedLabel
     }
 
     public var body: some View {
+        VStack(alignment: .trailing, spacing: 2) {
         HStack(spacing: 4) {
-            VStack(alignment: .trailing, spacing: 0) {
-                Text(caption)
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                if !window.barQualifier.isEmpty {
-                    Text(window.barQualifier)
-                        .font(.system(size: 8, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-                }
-            }
-            .frame(width: 34, alignment: .trailing)
+            Text(caption)
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(.primary)
+                .lineLimit(2)
+                .minimumScaleFactor(0.75)
+                .multilineTextAlignment(.trailing)
+                .frame(width: 52, alignment: .trailing)
 
             CompanionUsageBar(
                 remainingPercent: window.remainingPercent,
@@ -752,21 +831,23 @@ public struct CompanionMeterView: View {
                 .minimumScaleFactor(0.8)
                 .frame(width: 36, alignment: .trailing)
 
-            let cd = window.countdown()
-            if !cd.isEmpty {
-                Text(cd)
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.primary.opacity(0.85))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                    .frame(width: 44, alignment: .center)
-            } else {
-                Color.clear
-                    .frame(width: 44, height: 1)
-            }
+            Text(window.meterCountdown())
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.primary.opacity(0.85))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .frame(width: 44, alignment: .center)
         }
         .minimumScaleFactor(0.85)
-        .frame(maxWidth: .infinity)
+        if let updatedLabel {
+            Text(updatedLabel)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
     }
 }
 
