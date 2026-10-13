@@ -13,6 +13,7 @@ public struct ResetAlarmNotification: Equatable, Sendable {
     /// The row the alarm belongs to: a provider key, or a pool-scoped key such
     /// as `google-antigravity:gemini`.
     public let providerId: String
+    public let providerTitle: String
     public let title: String
     public let body: String
     public let remainingPercent: Int
@@ -26,6 +27,7 @@ public struct ResetAlarmNotification: Equatable, Sendable {
     public init(
         id: String,
         providerId: String,
+        providerTitle: String = "",
         title: String,
         body: String,
         remainingPercent: Int,
@@ -37,6 +39,7 @@ public struct ResetAlarmNotification: Equatable, Sendable {
     ) {
         self.id = id
         self.providerId = providerId
+        self.providerTitle = providerTitle.isEmpty ? providerId.capitalized : providerTitle
         self.title = title
         self.body = body
         self.remainingPercent = remainingPercent
@@ -45,6 +48,44 @@ public struct ResetAlarmNotification: Equatable, Sendable {
         self.windowId = windowId
         self.timestamp = timestamp
         self.isVendorReset = isVendorReset
+    }
+}
+
+/// A recorded reset alert, preserved in history so resets (especially
+/// mid-cycle vendor resets) are visible to the owner in Usage History
+/// and Console, even if system notification banners were missed or silenced.
+public struct ResetAlertRecord: Codable, Identifiable, Equatable, Sendable {
+    public let id: String
+    public let timestamp: Date
+    public let providerKey: String
+    public let providerTitle: String
+    public let windowId: String?
+    public let windowLabel: String
+    public let remainingPercent: Int
+    public let isVendorReset: Bool
+    public let title: String
+    public let body: String
+
+    public init(id: String = UUID().uuidString,
+                timestamp: Date = Date(),
+                providerKey: String,
+                providerTitle: String,
+                windowId: String?,
+                windowLabel: String,
+                remainingPercent: Int,
+                isVendorReset: Bool,
+                title: String,
+                body: String) {
+        self.id = id
+        self.timestamp = timestamp
+        self.providerKey = providerKey
+        self.providerTitle = providerTitle
+        self.windowId = windowId
+        self.windowLabel = windowLabel
+        self.remainingPercent = remainingPercent
+        self.isVendorReset = isVendorReset
+        self.title = title
+        self.body = body
     }
 }
 
@@ -130,6 +171,7 @@ public final class ResetAlarmManager: ObservableObject {
         public static let providers = "resetAlarmProviders"
         public static let trackerState = "resetAlarmTrackerState"
         public static let sound = "alarmSound"
+        public static let alertHistory = "resetAlertHistory"
         /// Read once, by the migration, and never written again.
         public static let legacyNotifyOnReset = "notifyOnReset"
         public static let legacyArmedSectionIds = "armedResetAlarmSectionIds"
@@ -137,6 +179,10 @@ public final class ResetAlarmManager: ObservableObject {
     }
 
     private let defaults: UserDefaults
+
+    /// Recorded reset alerts (scheduled and mid-cycle vendor resets),
+    /// kept so the owner can review them in Usage History and Console.
+    @Published public private(set) var alertHistory: [ResetAlertRecord] = []
 
     /// All: every provider's reset alarm is on, and Glance shows no per-row
     /// bells.  Off: only the providers in `enabledProviderIds` alarm.
@@ -226,6 +272,13 @@ public final class ResetAlarmManager: ObservableObject {
             resolved = .systemDefault
         }
         self.alarmSound = resolved
+
+        if let data = defaults.data(forKey: Keys.alertHistory),
+           let history = try? JSONDecoder().decode([ResetAlertRecord].self, from: data) {
+            self.alertHistory = history
+        } else {
+            self.alertHistory = []
+        }
 
         self.tracker = ResetAlarmTracker(
             state: ResetAlarmTrackerState.decoded(from: defaults.data(forKey: Keys.trackerState)))
@@ -354,15 +407,18 @@ public final class ResetAlarmManager: ObservableObject {
             guard let group = byProvider[providerId], !group.isEmpty else { return nil }
             let content = Self.notificationContent(for: group)
             let isVendorReset = group.contains { $0.isVendorReset }
+            let first = group.first
+            let providerTitle = first?.providerTitle ?? providerId.capitalized
             let payload = ResetAlarmNotification(
                 id: UUID().uuidString,
                 providerId: providerId,
+                providerTitle: providerTitle,
                 title: content.title,
                 body: content.body,
-                remainingPercent: Int((group.first?.remainingPercent ?? 100).rounded()),
+                remainingPercent: Int((first?.remainingPercent ?? 100).rounded()),
                 sound: alarmSound,
                 windowLabels: content.windowLabels,
-                windowId: group.first?.windowId,
+                windowId: first?.windowId,
                 timestamp: now,
                 isVendorReset: isVendorReset)
             deliver(payload)
@@ -396,6 +452,7 @@ public final class ResetAlarmManager: ObservableObject {
     private func deliver(_ payload: ResetAlarmNotification) {
         // Only deliver alerts if the master top bell is armed (All) or this specific quota's bell is on
         guard isAlarmEnabled(for: payload.providerId) else { return }
+        appendAlertRecord(for: payload)
         if payload.sound.isAudible {
             playAlarmSound(payload.sound)
         }
@@ -411,7 +468,7 @@ public final class ResetAlarmManager: ObservableObject {
         content.sound = notificationSound(for: payload.sound)
         content.userInfo = AlertNavigation(providerKey: payload.providerId,
                                            windowId: payload.windowId,
-                                           timestamp: nil).userInfo
+                                           timestamp: payload.timestamp).userInfo
 
         let request = UNNotificationRequest(
             identifier: "codecaps.reset.\(payload.providerId).\(Date().timeIntervalSince1970)",
@@ -434,6 +491,41 @@ public final class ResetAlarmManager: ObservableObject {
                 self?.testNotificationOutcome = .failed(error.localizedDescription)
             }
         }
+    }
+
+    public func appendAlertRecord(for payload: ResetAlarmNotification) {
+        let record = ResetAlertRecord(
+            id: payload.id,
+            timestamp: payload.timestamp,
+            providerKey: payload.providerId,
+            providerTitle: payload.providerTitle,
+            windowId: payload.windowId,
+            windowLabel: payload.windowLabels.first ?? "",
+            remainingPercent: payload.remainingPercent,
+            isVendorReset: payload.isVendorReset,
+            title: payload.title,
+            body: payload.body
+        )
+        appendAlertRecord(record)
+    }
+
+    public func appendAlertRecord(_ record: ResetAlertRecord) {
+        alertHistory.insert(record, at: 0)
+        if alertHistory.count > 50 {
+            alertHistory = Array(alertHistory.prefix(50))
+        }
+        persistAlertHistory()
+    }
+
+    private func persistAlertHistory() {
+        if let data = try? JSONEncoder().encode(alertHistory) {
+            defaults.set(data, forKey: Keys.alertHistory)
+        }
+    }
+
+    public func clearAlertHistory() {
+        alertHistory.removeAll()
+        defaults.removeObject(forKey: Keys.alertHistory)
     }
 
     /// Delivers an opt-in runaway-usage alert through the same notification
