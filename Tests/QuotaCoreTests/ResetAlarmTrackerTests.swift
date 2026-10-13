@@ -1098,4 +1098,30 @@ extension ResetAlarmTrackerTests {
             tracker.process(courtesyWindow(resetAt: end, at: second, remaining: 100), now: second).isEmpty,
             "the same reset alerted again on a later poll")
     }
+
+    func testWeeklyCapResettingEarlyWithNormalTimeRemainingTriggersVendorReset() {
+        var tracker = ResetAlarmTracker()
+        let initialResetAt = t0 + 7 * day
+        // Initial reading: weekly cap scheduled for 7 days ahead, at 33% remaining.
+        _ = tracker.process([
+            reading("7d", period: 7 * day, resetAt: initialResetAt, remaining: 33,
+                    observedAt: t0, provider: "openai", label: "7d")
+        ], now: t0)
+
+        // 24 hours later (well under 36 hours, normal time remaining has not passed):
+        // cap gets reset early to 100%, resetAt rolls forward 7 days from now.
+        let resetTime = t0 + 24 * hour
+        let newResetAt = resetTime + 7 * day
+        let events = tracker.process([
+            reading("7d", period: 7 * day, resetAt: newResetAt, remaining: 100,
+                    observedAt: resetTime, provider: "openai", label: "7d")
+        ], now: resetTime)
+
+        XCTAssertEqual(events.count, 1, "Early weekly cap reset must generate an alarm event")
+        guard let event = events.first else { return }
+        XCTAssertEqual(event.windowId, "7d")
+        XCTAssertEqual(event.providerId, "openai")
+        XCTAssertEqual(event.remainingPercent, 100)
+        XCTAssertTrue(event.isVendorReset, "Cap reset before scheduled end is an early vendor reset")
+    }
 }
