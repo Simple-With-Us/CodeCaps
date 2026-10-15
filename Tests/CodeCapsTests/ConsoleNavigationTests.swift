@@ -103,6 +103,13 @@ final class ConsoleSelectionTests: XCTestCase {
         XCTAssertEqual(state.lastSettingsPage, .settingsNotifications)
     }
 
+    func testPinPageForRenderingKeepsDefaultSettingsPage() {
+        let state = ConsoleState(defaults: defaults())
+        state.pinPageForRendering(.settingsSourcesFleet)
+        state.reconcile(available: [row("anthropic"), row("openai")], readCompleted: true)
+        XCTAssertEqual(state.page, .settingsSourcesFleet)
+    }
+
     func testAlertRouteSelectsMatchingPoolWindowAndTime() {
         let (model, defaults, suite) = GlanceFixtures.makeModel(view: .fromMac, alarmsAll: true,
                                                                  fleet: false, localReadersOn: true)

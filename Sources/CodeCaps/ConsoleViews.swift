@@ -159,6 +159,17 @@ final class ConsoleState: ObservableObject {
         if case .platform(let key) = page { pendingStoredKey = key }
     }
 
+    /// Keeps an explicit Console page for off-screen renders.  Assigning the
+    /// default Settings page does not run `page`'s `didSet`, so the first
+    /// reconcile would still treat navigation as unresolved and jump to the
+    /// first platform row.
+    func pinPageForRendering(_ page: ConsolePage) {
+        awaitingInitialSelection = false
+        pendingStoredKey = nil
+        pendingAlert = nil
+        if self.page != page { self.page = page }
+    }
+
     /// Resolve saved selections after the first read and whenever a source disappears.
     func reconcile(available sections: [DisplaySection], readCompleted: Bool = false) {
         if let pendingAlert {

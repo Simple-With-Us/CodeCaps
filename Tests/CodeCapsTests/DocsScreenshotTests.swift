@@ -95,7 +95,7 @@ final class DocsScreenshotTests: XCTestCase {
             }
         }
         let state = ConsoleState(defaults: defaults)
-        state.page = page
+        state.pinPageForRendering(page)
         if selectedAlert {
             state.select(providerKey: "anthropic", windowId: "claude-5h", at: alert.timestamp,
                          in: model.displaySections)
