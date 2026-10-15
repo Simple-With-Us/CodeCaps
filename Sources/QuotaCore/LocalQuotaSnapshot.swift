@@ -130,7 +130,8 @@ public enum LocalQuotaSnapshot {
         customMarks: [String: CustomMarkPayload]? = nil,
         alerts: [AlertPayload]? = nil,
         now: Date = Date(),
-        to url: URL = destination()
+        to url: URL = destination(),
+        stampInstallationProvenance: Bool = false
     ) throws {
         let manager = FileManager.default
         let directory = url.deletingLastPathComponent()
@@ -138,7 +139,12 @@ public enum LocalQuotaSnapshot {
         let published = safeIssues(issues)
         let payload = Payload(format: "usage-monitor-local-quotas", version: 1, producer: producerName,
                               generatedAt: ISO8601DateFormatter().string(from: now),
-                              windows: windows.map { $0.normalizedForExport().filledInstallationProvenance() },
+                              windows: windows.map { window in
+                                  let normalized = window.normalizedForExport()
+                                  return stampInstallationProvenance
+                                      ? normalized.filledInstallationProvenance()
+                                      : normalized
+                              },
                               issues: published.isEmpty ? nil : published,
                               customMarks: customMarks,
                               alerts: (alerts?.isEmpty ?? true) ? nil : alerts)

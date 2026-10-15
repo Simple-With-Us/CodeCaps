@@ -2161,7 +2161,8 @@ final class MonitorModel: ObservableObject {
                 } else if self.localEnabled && local != nil {
                     try LocalQuotaSnapshot.write(windows: self.localWindows, issues: self.issues,
                                                  customMarks: exportedCustomMarks(),
-                                                 alerts: exportedAlerts(now: self.now), now: self.now)
+                                                 alerts: exportedAlerts(now: self.now), now: self.now,
+                                                 stampInstallationProvenance: true)
                 }
                 else { try LocalQuotaSnapshot.remove() }
                 self.handoffError = nil
@@ -2359,7 +2360,8 @@ final class MonitorModel: ObservableObject {
                 if localEnabled {
                     try LocalQuotaSnapshot.write(windows: localWindows, issues: issues,
                                                  customMarks: exportedCustomMarks(),
-                                                 alerts: exportedAlerts(now: now), now: now)
+                                                 alerts: exportedAlerts(now: now), now: now,
+                                                 stampInstallationProvenance: true)
                 } else {
                     try LocalQuotaSnapshot.remove()
                 }
