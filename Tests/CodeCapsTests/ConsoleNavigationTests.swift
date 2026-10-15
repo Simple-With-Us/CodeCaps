@@ -103,6 +103,21 @@ final class ConsoleSelectionTests: XCTestCase {
         XCTAssertEqual(state.lastSettingsPage, .settingsNotifications)
     }
 
+    /// `ConsoleState` starts on Sources & Fleet, so assigning that page before
+    /// reconcile is a no-op; docs screenshots must reconcile first, then set it.
+    func testSourcesFleetSelectionAfterReconcile() {
+        let (model, defaults, suite) = GlanceFixtures.makeModel(view: .fromMac, alarmsAll: true,
+                                                                 fleet: false, localReadersOn: true)
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let state = ConsoleState(defaults: defaults)
+        XCTAssertEqual(state.page, .settingsSourcesFleet)
+        state.reconcile(available: model.displaySections, readCompleted: true)
+        XCTAssertEqual(state.page, .platform("anthropic"))
+        state.page = .settingsSourcesFleet
+        state.reconcile(available: model.displaySections, readCompleted: true)
+        XCTAssertEqual(state.page, .settingsSourcesFleet)
+    }
+
     func testAlertRouteSelectsMatchingPoolWindowAndTime() {
         let (model, defaults, suite) = GlanceFixtures.makeModel(view: .fromMac, alarmsAll: true,
                                                                  fleet: false, localReadersOn: true)
