@@ -35,12 +35,14 @@ public struct CursorQuotaReader: Sendable {
             }
             let observedAt = now()
             async let summaryPayload = Self.fetchUsageSummary(cookie: cookie, fetch: fetch)
-            async let periodPayload = Self.fetchCurrentPeriodUsage(token: token, cookie: cookie, fetch: fetch)
+            async let periodPayload = Self.fetchCurrentPeriodUsageSafely(token: token, cookie: cookie, fetch: fetch)
             let summaryResult = try await summaryPayload
-            let periodResult = try await periodPayload
+            let periodResult = await periodPayload
 
-            if summaryResult.statusCode == 401 || summaryResult.statusCode == 403
-                || periodResult.statusCode == 401 || periodResult.statusCode == 403 {
+            if summaryResult.statusCode == 401 || summaryResult.statusCode == 403 {
+                return LocalQuotaResult(issues: ["cursor": "Cursor session was rejected; sign in again in Cursor."])
+            }
+            if periodResult.statusCode == 401 || periodResult.statusCode == 403 {
                 return LocalQuotaResult(issues: ["cursor": "Cursor session was rejected; sign in again in Cursor."])
             }
 
@@ -235,7 +237,14 @@ private func safeString(_ value: Any?) -> String? {
 private func clampCursorPercent(_ value: Double) -> Double { min(100, max(0, value.isFinite ? value : 0)) }
 
 private func validCursorTimestamp(_ value: Any?) -> String? {
-    cursorTimestampString(value)
+    guard let string = safeString(value),
+          ISO8601DateFormatter().date(from: string) != nil || cursorFractionalFormatter.date(from: string) != nil else {
+        if let date = cursorParseTimestamp(value) {
+            return cursorISOFormatter.string(from: date)
+        }
+        return nil
+    }
+    return string
 }
 
 private func cursorTimestampString(_ value: Any?) -> String? {
@@ -291,6 +300,20 @@ private extension CursorQuotaReader {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         let (data, response) = try await fetch(request)
         return Self.decodePayload(data: data, response: response)
+    }
+
+    /// Current-period usage is best-effort enrichment.  A transport failure must not
+    /// discard a successful usage-summary response.
+    static func fetchCurrentPeriodUsageSafely(
+        token: String,
+        cookie: String,
+        fetch: @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)
+    ) async -> CursorHTTPPayload {
+        do {
+            return try await fetchCurrentPeriodUsage(token: token, cookie: cookie, fetch: fetch)
+        } catch {
+            return CursorHTTPPayload(statusCode: 0, root: nil)
+        }
     }
 
     static func fetchCurrentPeriodUsage(

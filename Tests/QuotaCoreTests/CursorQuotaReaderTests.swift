@@ -218,6 +218,29 @@ final class CursorQuotaReaderTests: XCTestCase {
         XCTAssertEqual(second.resetAt, cursorISOString(ms: newEndMs))
     }
 
+    func testPeriodUsageTransportFailureStillReturnsMonthlySummary() async throws {
+        let token = Self.jwt(subject: "auth0|cursor-user-fallback", expiration: observedAt.addingTimeInterval(3600))
+        let reader = CursorQuotaReader(
+            now: { self.observedAt },
+            accessToken: { token },
+            fetch: { request in
+                if request.url?.absoluteString.contains("GetCurrentPeriodUsage") == true {
+                    throw URLError(.timedOut)
+                }
+                if request.url?.absoluteString.contains("get-current-period-usage") == true {
+                    throw URLError(.networkConnectionLost)
+                }
+                return Self.response(#"{"billingCycleEnd":"2026-10-01T00:00:00Z","membershipType":"pro","individualUsage":{"plan":{"used":2500,"limit":10000,"remaining":7500,"totalPercentUsed":25}}}"#)
+            }
+        )
+        let result = await reader.read()
+        XCTAssertNil(result.issues["cursor"])
+        let window = try XCTUnwrap(result.windows.first)
+        XCTAssertEqual(window.remainingPercent, 75)
+        XCTAssertEqual(window.resetAt, "2026-10-01T00:00:00Z")
+        XCTAssertEqual(window.window, "billing-cycle")
+    }
+
     func testOversizedTokenFailsClosedBeforeRequest() async {
         let oversized = String(repeating: "a", count: 65_537)
         let reader = CursorQuotaReader(accessToken: { oversized }, fetch: { _ in
