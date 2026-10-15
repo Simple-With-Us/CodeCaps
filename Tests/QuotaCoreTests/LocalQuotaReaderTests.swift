@@ -102,7 +102,8 @@ final class LocalQuotaReaderTests: XCTestCase {
         )
 
         let result = await reader.read()
-        XCTAssertEqual(result.issues["anthropic"], "This account needs you to sign in again.")
+        XCTAssertEqual(result.issues["anthropic"], ClaudeLoginState.signedOut.issue)
+        XCTAssertFalse(result.consentNeeded.contains("anthropic"))
         XCTAssertEqual(result.issues["openai"], "Codex is not signed in locally.")
         XCTAssertEqual(result.issues["xai"], "Grok is not signed in locally.")
         XCTAssertFalse(result.issues.values.joined(separator: " ").contains("super-secret"))
@@ -183,6 +184,27 @@ final class LocalQuotaReaderTests: XCTestCase {
         XCTAssertEqual(result.issues["anthropic"], ClaudeLoginState.signedOut.issue)
         XCTAssertEqual(result.consentNeeded, [])
         XCTAssertNil(ClaudeCredentialSource.rememberedCredential())
+    }
+
+    func testClaudeFileTokenUsageRejectionDoesNotSaySignInAgain() async throws {
+        let home = try makeFixtureHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        try writeJSON(
+            ["claudeAiOauth": ["accessToken": "file-token", "subscriptionType": "max",
+                               "expiresAt": observedAt.addingTimeInterval(3600).timeIntervalSince1970]],
+            to: home.appendingPathComponent(".claude/.credentials.json"))
+        let reader = LocalQuotaReader(
+            homeDirectory: home,
+            now: { self.observedAt },
+            fetchJSON: { request in
+                XCTAssertEqual(request.url?.host, "api.anthropic.com")
+                return Self.httpResponse(#"{"error":"unauthorized"}"#, status: 401)
+            },
+            runAntigravity: { Data("{}".utf8) })
+        let result = await reader.read()
+        XCTAssertEqual(result.issues["anthropic"], ClaudeLoginState.signedOut.issue)
+        XCTAssertNotEqual(result.issues["anthropic"], "This account needs you to sign in again.")
+        XCTAssertFalse(result.consentNeeded.contains("anthropic"))
     }
 
     func testARenewalThatLandsIsActuallyUsedOnTheSameRefresh() async throws {

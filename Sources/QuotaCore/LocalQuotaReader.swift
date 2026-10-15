@@ -124,7 +124,7 @@ public struct LocalQuotaReader: Sendable {
         // The Keychain is consulted only when Claude Code's own file has no
         // usable credential, so a fresh file never costs a Keychain call.
         var access = ClaudeCredentialAccess.missing
-        var renewable = false
+        var renewable = ClaudeOAuthParser.isRenewable(in: file, now: now())
         if candidate == nil {
             access = await ClaudeCredentialSource.boundedAccess(timeout: claudeKeychainTimeout) { await readClaudeCredential() }
             // A read that could not finish says nothing about the login, so
@@ -164,43 +164,42 @@ public struct LocalQuotaReader: Sendable {
         request.httpMethod = "GET"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
-        // A file token the server rejects is "sign in again."  Only a token
-        // that came from the remembered Keychain grant asks for Allow Access.
-        let tokenFromKeychain = ClaudeOAuthParser.validOAuth(in: file, now: now()) == nil
         let payload: [String: Any]
         do {
             payload = try await requestJSON(request)
         } catch LocalReaderError.reauth {
+            // A usage 401 or 403 is never the generic "sign in again" sentence.
+            // Drop remembered bytes, try one Claude Code renewal when the login
+            // is renewable, then surface idle or signed-out wording.  Allow
+            // Access stays for a silent Keychain read that was refused, not for
+            // a token Anthropic rejected.
             ClaudeCredentialSource.resetRememberedCredential()
-            if tokenFromKeychain {
-                var renewed = false
-                if renewable {
-                    renewed = await renewalThrottle.perform(now: now(), action: renewClaudeLogin)
-                }
-                if renewed {
-                    let refreshedFile = (try? readJSONObject(relativePath: ".claude/.credentials.json")) ?? [:]
-                    let refreshedAccess = await ClaudeCredentialSource.boundedAccess(timeout: claudeKeychainTimeout) { await readClaudeCredential() }
-                    let refreshedKeychain = credentialRoot(refreshedAccess)
-                    if let refreshedOAuth = ClaudeOAuthParser.validOAuth(in: refreshedFile, now: now())
-                        ?? ClaudeOAuthParser.validOAuth(in: refreshedKeychain, now: now()),
-                       let refreshedToken = firstString(refreshedOAuth, ["accessToken", "access_token"]) {
-                        var retryRequest = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/usage")!)
-                        retryRequest.httpMethod = "GET"
-                        retryRequest.setValue("Bearer \(refreshedToken)", forHTTPHeaderField: "Authorization")
-                        retryRequest.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
-                        if let retryPayload = try? await requestJSON(retryRequest) {
-                            let retryWindows = parseClaude(retryPayload, planType: firstString(refreshedOAuth, ["subscriptionType", "subscription_type"]), observedAt: now())
-                            if !retryWindows.isEmpty {
-                                return ProviderRead(provider: provider, windows: retryWindows, issue: nil)
-                            }
+            var renewed = false
+            if renewable {
+                renewed = await renewalThrottle.perform(now: now(), action: renewClaudeLogin)
+            }
+            if renewed {
+                let refreshedFile = (try? readJSONObject(relativePath: ".claude/.credentials.json")) ?? [:]
+                let refreshedAccess = await ClaudeCredentialSource.boundedAccess(timeout: claudeKeychainTimeout) { await readClaudeCredential() }
+                let refreshedKeychain = credentialRoot(refreshedAccess)
+                if let refreshedOAuth = ClaudeOAuthParser.validOAuth(in: refreshedFile, now: now())
+                    ?? ClaudeOAuthParser.validOAuth(in: refreshedKeychain, now: now()),
+                   let refreshedToken = firstString(refreshedOAuth, ["accessToken", "access_token"]) {
+                    var retryRequest = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/usage")!)
+                    retryRequest.httpMethod = "GET"
+                    retryRequest.setValue("Bearer \(refreshedToken)", forHTTPHeaderField: "Authorization")
+                    retryRequest.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
+                    if let retryPayload = try? await requestJSON(retryRequest) {
+                        let retryWindows = parseClaude(retryPayload, planType: firstString(refreshedOAuth, ["subscriptionType", "subscription_type"]), observedAt: now())
+                        if !retryWindows.isEmpty {
+                            return ProviderRead(provider: provider, windows: retryWindows, issue: nil)
                         }
                     }
                 }
-                let issue = renewable ? ClaudeLoginState.idle.issue : ClaudeLoginState.signedOut.issue
-                return ProviderRead(provider: provider, windows: [], issue: issue,
-                                    needsConsent: false)
             }
-            throw LocalReaderError.reauth
+            let issue = renewable ? ClaudeLoginState.idle.issue : ClaudeLoginState.signedOut.issue
+            return ProviderRead(provider: provider, windows: [], issue: issue,
+                                needsConsent: false)
         }
         let windows = parseClaude(payload, planType: firstString(oauth, ["subscriptionType", "subscription_type"]), observedAt: now())
         guard !windows.isEmpty else {

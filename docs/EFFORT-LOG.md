@@ -106,12 +106,14 @@ Lane: `ag/companion-bars-and-icons`.
 
 ---
 
-## 2026-10-03 — Claude file 401 stays sign-in-again [GROK-BUILD, in progress]
+## 2026-10-03 — Claude file 401 stays sign-in-again [GROK-BUILD, completed]
 
-Follow-up to PR #126.  A 401 from a token in `~/.claude/.credentials.json`
-still says "This account needs you to sign in again."  Allow Access is only
-for a token that came from the remembered Keychain grant.  Both paths drop
-the remembered bytes.
+Follow-up to PR #126.  A usage 401 or 403 from a token in
+`~/.claude/.credentials.json` now surfaces `ClaudeLoginState` idle or
+signed-out wording (with one renewal attempt when renewable), not the generic
+"This account needs you to sign in again."  Allow Access stays for a silent
+Keychain read that was refused.  Both rejection paths still drop remembered
+bytes.
 
 ---
 
