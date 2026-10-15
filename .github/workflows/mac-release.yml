@@ -55,11 +55,10 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Push and workflow_dispatch wait here, on ubuntu, before any macos-latest
-  # release runner starts.  Pull requests skip this job; the release job
-  # below still builds the bundle and does not publish.
+  # Every non-fork event waits here, on ubuntu, before a macos-latest
+  # release runner starts.  Pull request checks are on the head SHA.
   await-swift-ci:
-    if: github.event.repository.fork == false && github.event_name != 'pull_request'
+    if: github.event.repository.fork == false
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
@@ -72,17 +71,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          SHA: ${{ github.sha }}
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: bash scripts/await-swift-ci-checks.sh
 
   release:
     needs: await-swift-ci
-    # always() is required so release still runs when await-swift-ci is skipped
-    # on a pull request.  Without it GitHub treats a skipped need as failure.
     if: >-
-      always() &&
       github.event.repository.fork == false &&
-      (needs.await-swift-ci.result == 'success' || needs.await-swift-ci.result == 'skipped')
+      needs.await-swift-ci.result == 'success'
     runs-on: macos-latest
     timeout-minutes: 60
     env:

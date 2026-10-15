@@ -19,7 +19,8 @@ document gives Jay the exact check names to add in GitHub (admin-only).
 - **Mac Release (Sparkle)** — `await-swift-ci` on `ubuntu-latest` polls until
   `Mac package build and test` and `iOS companion compile` succeed on the
   commit (or fails closed if either fails, is skipped, is cancelled, or
-  times out).  Push and `workflow_dispatch` both wait.  The release job
+  times out).  Push, pull request, and `workflow_dispatch` all wait, so the
+  bundle build does not take a macOS runner beside Swift CI.  The release job
   `needs: await-swift-ci`, so Sparkle cannot publish while companion is
   still running.
 - **iOS and Mac TestFlight** — the same wait runs before a ship.  The
