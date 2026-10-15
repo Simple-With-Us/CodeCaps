@@ -143,6 +143,81 @@ final class CursorQuotaReaderTests: XCTestCase {
         XCTAssertNil(try XCTUnwrap(result.windows.first).periodStart)
     }
 
+    /// X Subscription / merged Ultra accounts expose the Grok + Composer pool on
+    /// DashboardService current-period usage with a ~7-day billing interval.  The
+    /// legacy usage-summary monthly dollar fields can still read 100% after a
+    /// mid-cycle vendor reset.
+    func testWeeklyIncludedPoolUsesAutoPercentAndSevenDayWindow() async throws {
+        let token = Self.jwt(subject: "auth0|cursor-user-weekly", expiration: observedAt.addingTimeInterval(3600))
+        let weeklyStartMs = Int(observedAt.timeIntervalSince1970 * 1_000) - (2 * 86_400 * 1_000)
+        let weeklyEndMs = weeklyStartMs + (7 * 86_400 * 1_000)
+        let reader = CursorQuotaReader(
+            now: { self.observedAt },
+            accessToken: { token },
+            fetch: { request in
+                if request.url?.absoluteString.contains("GetCurrentPeriodUsage") == true {
+                    return Self.response(#"{"billingCycleStart":"\#(weeklyStartMs)","billingCycleEnd":"\#(weeklyEndMs)","planUsage":{"autoPercentUsed":75,"apiPercentUsed":0,"totalPercentUsed":10}}"#)
+                }
+                return Self.response(#"{"billingCycleStart":"2026-08-15T00:00:00Z","billingCycleEnd":"2026-11-01T00:00:00Z","membershipType":"ultra","individualUsage":{"plan":{"used":0,"limit":40000,"remaining":40000,"totalPercentUsed":0}}}"#)
+            }
+        )
+        let result = await reader.read()
+        let window = try XCTUnwrap(result.windows.first)
+        XCTAssertNil(result.issues["cursor"])
+        XCTAssertEqual(window.remainingPercent, 25)
+        XCTAssertEqual(window.window, "weekly")
+        XCTAssertEqual(window.periodStart, cursorISOString(ms: weeklyStartMs))
+        XCTAssertEqual(window.resetAt, cursorISOString(ms: weeklyEndMs))
+    }
+
+    func testMidCycleVendorRestoreOnWeeklyPoolUpdatesRemainingPercent() async throws {
+        let token = Self.jwt(subject: "auth0|cursor-user-restore", expiration: observedAt.addingTimeInterval(3600))
+        let startMs = Int(observedAt.timeIntervalSince1970 * 1_000) - (6 * 86_400 * 1_000)
+        let endMs = startMs + (7 * 86_400 * 1_000)
+        let reader = CursorQuotaReader(
+            now: { self.observedAt },
+            accessToken: { token },
+            fetch: { request in
+                if request.url?.absoluteString.contains("GetCurrentPeriodUsage") == true {
+                    return Self.response(#"{"billingCycleStart":"\#(startMs)","billingCycleEnd":"\#(endMs)","planUsage":{"autoPercentUsed":11}}"#)
+                }
+                return Self.response(#"{"billingCycleEnd":"2026-11-01T00:00:00Z","membershipType":"ultra","individualUsage":{"plan":{"used":8900,"limit":10000,"remaining":1100,"totalPercentUsed":89}}}"#)
+            }
+        )
+        let result = await reader.read()
+        let window = try XCTUnwrap(result.windows.first)
+        XCTAssertEqual(window.remainingPercent, 89)
+        XCTAssertEqual(window.window, "weekly")
+    }
+
+    func testChangedWeeklyBillingAnchorUpdatesPeriodStartAndReset() async throws {
+        let token = Self.jwt(subject: "auth0|cursor-user-anchor", expiration: observedAt.addingTimeInterval(3600))
+        let oldStartMs = 1_760_000_000_000
+        let oldEndMs = oldStartMs + (7 * 86_400 * 1_000)
+        let newStartMs = 1_761_000_000_000
+        let newEndMs = newStartMs + (7 * 86_400 * 1_000)
+        var call = 0
+        let reader = CursorQuotaReader(
+            now: { self.observedAt },
+            accessToken: { token },
+            fetch: { request in
+                if request.url?.absoluteString.contains("GetCurrentPeriodUsage") == true {
+                    call += 1
+                    let start = call == 1 ? oldStartMs : newStartMs
+                    let end = call == 1 ? oldEndMs : newEndMs
+                    return Self.response(#"{"billingCycleStart":"\#(start)","billingCycleEnd":"\#(end)","planUsage":{"autoPercentUsed":40}}"#)
+                }
+                return Self.response(#"{"membershipType":"ultra","individualUsage":{"plan":{"totalPercentUsed":40}}}"#)
+            }
+        )
+        let first = try XCTUnwrap((await reader.read()).windows.first)
+        XCTAssertEqual(first.periodStart, cursorISOString(ms: oldStartMs))
+        XCTAssertEqual(first.resetAt, cursorISOString(ms: oldEndMs))
+        let second = try XCTUnwrap((await reader.read()).windows.first)
+        XCTAssertEqual(second.periodStart, cursorISOString(ms: newStartMs))
+        XCTAssertEqual(second.resetAt, cursorISOString(ms: newEndMs))
+    }
+
     func testOversizedTokenFailsClosedBeforeRequest() async {
         let oversized = String(repeating: "a", count: 65_537)
         let reader = CursorQuotaReader(accessToken: { oversized }, fetch: { _ in
@@ -164,5 +239,11 @@ final class CursorQuotaReaderTests: XCTestCase {
     private static func response(_ text: String, status: Int = 200) -> (Data, HTTPURLResponse) {
         let response = HTTPURLResponse(url: URL(string: "https://fixture.invalid/usage-summary")!, statusCode: status, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
         return (Data(text.utf8), response)
+    }
+
+    private static func cursorISOString(ms: Int) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: Date(timeIntervalSince1970: Double(ms) / 1_000))
     }
 }

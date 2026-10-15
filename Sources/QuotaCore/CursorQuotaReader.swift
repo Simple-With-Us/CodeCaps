@@ -33,27 +33,43 @@ public struct CursorQuotaReader: Sendable {
             guard let cookie = try cursorCookie(for: token, now: now()) else {
                 return LocalQuotaResult(issues: ["cursor": "Cursor local session is not usable; sign in again in Cursor."])
             }
-            var request = URLRequest(url: URL(string: "https://cursor.com/api/usage-summary")!)
-            request.httpMethod = "GET"
-            request.cachePolicy = .reloadIgnoringLocalCacheData
-            request.timeoutInterval = Self.timeout
-            request.setValue(cookie, forHTTPHeaderField: "Cookie")
-            request.setValue("application/json", forHTTPHeaderField: "Accept")
-            let (data, response) = try await fetch(request)
-            guard (200..<300).contains(response.statusCode) else {
-                if response.statusCode == 401 || response.statusCode == 403 {
-                    return LocalQuotaResult(issues: ["cursor": "Cursor session was rejected; sign in again in Cursor."])
+            let observedAt = now()
+            async let summaryPayload = Self.fetchUsageSummary(cookie: cookie, fetch: fetch)
+            async let periodPayload = Self.fetchCurrentPeriodUsage(token: token, cookie: cookie, fetch: fetch)
+            let summaryResult = try await summaryPayload
+            let periodResult = try await periodPayload
+
+            if summaryResult.statusCode == 401 || summaryResult.statusCode == 403
+                || periodResult.statusCode == 401 || periodResult.statusCode == 403 {
+                return LocalQuotaResult(issues: ["cursor": "Cursor session was rejected; sign in again in Cursor."])
+            }
+
+            let summaryRoot = summaryResult.root
+            let membershipType = safeString(summaryRoot?["membershipType"])
+            let planName = membershipType
+
+            if let periodRoot = periodResult.root,
+               let weekly = parseWeeklyIncludedPeriod(
+                periodRoot,
+                membershipType: membershipType,
+                planName: planName,
+                observedAt: observedAt
+               ) {
+                return LocalQuotaResult(windows: [weekly])
+            }
+
+            guard let root = summaryRoot else {
+                if (200..<300).contains(summaryResult.statusCode) {
+                    return LocalQuotaResult(issues: ["cursor": "Cursor quota response was unavailable."])
                 }
                 return LocalQuotaResult(issues: ["cursor": "Cursor quota service is unavailable."])
             }
-            guard data.count <= Self.maxResponseBytes,
-                  let object = try? JSONSerialization.jsonObject(with: data),
-                  let root = object as? [String: Any] else {
-                return LocalQuotaResult(issues: ["cursor": "Cursor quota response was unavailable."])
+            guard (200..<300).contains(summaryResult.statusCode) else {
+                return LocalQuotaResult(issues: ["cursor": "Cursor quota service is unavailable."])
             }
-            let windows = parseSummary(root, observedAt: now())
+            let windows = parseSummary(root, observedAt: observedAt)
             guard !windows.isEmpty else {
-                return LocalQuotaResult(windows: [cursorUnknownWindow(observedAt: now())], issues: ["cursor": "Cursor returned no readable included quota."])
+                return LocalQuotaResult(windows: [cursorUnknownWindow(observedAt: observedAt)], issues: ["cursor": "Cursor returned no readable included quota."])
             }
             let issues = windows.allSatisfy { $0.remainingPercent == nil }
                 ? ["cursor": "Cursor returned no readable included quota."]
@@ -100,6 +116,51 @@ private func cursorCookie(for token: String, now: Date) throws -> String? {
         throw CursorQuotaError.invalidSession
     }
     return "WorkosCursorSessionToken=\(userID)%3A%3A\(token)"
+}
+
+/// The X Subscription weekly pool (Grok + Composer) is exposed on DashboardService
+/// `GetCurrentPeriodUsage` / `get-current-period-usage` as `planUsage.autoPercentUsed`
+/// with a billing interval of about seven days.  Legacy plans keep a monthly
+/// `usage-summary` cycle; that endpoint's dollar fields can read 100% after a
+/// mid-cycle vendor reset while the weekly pool is already partly consumed.
+private func parseWeeklyIncludedPeriod(
+    _ root: [String: Any],
+    membershipType: String?,
+    planName: String?,
+    observedAt: Date
+) -> QuotaWindow? {
+    let plan = root["planUsage"] as? [String: Any] ?? [:]
+    guard let usedPercent = cursorIncludedPoolPercentUsed(plan, membershipType: membershipType) else { return nil }
+    guard let resetAt = cursorTimestampString(root["billingCycleEnd"]),
+          let periodStart = cursorTimestampString(root["billingCycleStart"]),
+          let start = cursorParseTimestamp(periodStart),
+          let end = cursorParseTimestamp(resetAt),
+          end > start else { return nil }
+    let duration = end.timeIntervalSince(start)
+    guard duration >= 4 * 86_400, duration <= 9 * 86_400 else { return nil }
+    let remainingPercent = clampCursorPercent(100 - usedPercent)
+    return QuotaWindow(
+        id: "local-mac:cursor:plan", provider: "Cursor", providerKey: "cursor", providerLabel: "Cursor",
+        sourceApp: "local-mac", label: "Included plan", remainingPercent: remainingPercent,
+        planName: planName,
+        resetAt: resetAt, window: "weekly",
+        occurredAt: cursorISOFormatter.string(from: observedAt), source: "Cursor",
+        periodStart: periodStart
+    ).normalizedForExport()
+}
+
+private func cursorIncludedPoolPercentUsed(_ plan: [String: Any], membershipType: String?) -> Double? {
+    if let auto = finiteNumber(plan["autoPercentUsed"]) { return auto }
+    if cursorUnifiedMembership(planName: membershipType), let total = finiteNumber(plan["totalPercentUsed"]) {
+        return total
+    }
+    return nil
+}
+
+private func cursorUnifiedMembership(planName: String?) -> Bool {
+    guard let raw = planName?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !raw.isEmpty else { return false }
+    if ["plus", "premium", "super"].contains(raw) { return true }
+    return raw.hasPrefix("unified_")
 }
 
 private func parseSummary(_ root: [String: Any], observedAt: Date) -> [QuotaWindow] {
@@ -174,9 +235,31 @@ private func safeString(_ value: Any?) -> String? {
 private func clampCursorPercent(_ value: Double) -> Double { min(100, max(0, value.isFinite ? value : 0)) }
 
 private func validCursorTimestamp(_ value: Any?) -> String? {
-    guard let string = safeString(value),
-          ISO8601DateFormatter().date(from: string) != nil || cursorFractionalFormatter.date(from: string) != nil else { return nil }
-    return string
+    cursorTimestampString(value)
+}
+
+private func cursorTimestampString(_ value: Any?) -> String? {
+    if let date = cursorParseTimestamp(value) {
+        return cursorISOFormatter.string(from: date)
+    }
+    return nil
+}
+
+private func cursorParseTimestamp(_ value: Any?) -> Date? {
+    if let number = finiteNumber(value) {
+        let seconds = abs(number) > 10_000_000_000 ? number / 1_000 : number
+        guard seconds.isFinite, seconds > 0 else { return nil }
+        return Date(timeIntervalSince1970: seconds)
+    }
+    guard let string = safeString(value) else { return nil }
+    if let date = cursorFractionalFormatter.date(from: string) ?? ISO8601DateFormatter().date(from: string) {
+        return date
+    }
+    if let millis = Double(string), millis.isFinite, millis > 0 {
+        let seconds = millis > 10_000_000_000 ? millis / 1_000 : millis
+        return Date(timeIntervalSince1970: seconds)
+    }
+    return nil
 }
 
 private let cursorFractionalFormatter: ISO8601DateFormatter = {
@@ -187,7 +270,71 @@ private let cursorISOFormatter: ISO8601DateFormatter = {
     let formatter = ISO8601DateFormatter(); formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; return formatter
 }()
 
+private struct CursorHTTPPayload {
+    let statusCode: Int
+    let root: [String: Any]?
+}
+
 private extension CursorQuotaReader {
+    static let periodUsageURL = URL(string: "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage")!
+    static let dashboardPeriodURL = URL(string: "https://cursor.com/api/dashboard/get-current-period-usage")!
+
+    static func fetchUsageSummary(
+        cookie: String,
+        fetch: @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)
+    ) async throws -> CursorHTTPPayload {
+        var request = URLRequest(url: URL(string: "https://cursor.com/api/usage-summary")!)
+        request.httpMethod = "GET"
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.timeoutInterval = Self.timeout
+        request.setValue(cookie, forHTTPHeaderField: "Cookie")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        let (data, response) = try await fetch(request)
+        return Self.decodePayload(data: data, response: response)
+    }
+
+    static func fetchCurrentPeriodUsage(
+        token: String,
+        cookie: String,
+        fetch: @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)
+    ) async throws -> CursorHTTPPayload {
+        var rpc = URLRequest(url: periodUsageURL)
+        rpc.httpMethod = "POST"
+        rpc.cachePolicy = .reloadIgnoringLocalCacheData
+        rpc.timeoutInterval = Self.timeout
+        rpc.httpBody = Data("{}".utf8)
+        rpc.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        rpc.setValue("application/json", forHTTPHeaderField: "Accept")
+        rpc.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        rpc.setValue("1", forHTTPHeaderField: "Connect-Protocol-Version")
+        let rpcResult = try await fetch(rpc)
+        let rpcPayload = decodePayload(data: rpcResult.0, response: rpcResult.1)
+        if rpcPayload.root != nil, (200..<300).contains(rpcPayload.statusCode) {
+            return rpcPayload
+        }
+
+        var dashboard = URLRequest(url: dashboardPeriodURL)
+        dashboard.httpMethod = "POST"
+        dashboard.cachePolicy = .reloadIgnoringLocalCacheData
+        dashboard.timeoutInterval = Self.timeout
+        dashboard.httpBody = Data("{}".utf8)
+        dashboard.setValue(cookie, forHTTPHeaderField: "Cookie")
+        dashboard.setValue("https://cursor.com", forHTTPHeaderField: "Origin")
+        dashboard.setValue("application/json", forHTTPHeaderField: "Accept")
+        dashboard.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let dashResult = try await fetch(dashboard)
+        return decodePayload(data: dashResult.0, response: dashResult.1)
+    }
+
+    static func decodePayload(data: Data, response: HTTPURLResponse) -> CursorHTTPPayload {
+        guard data.count <= Self.maxResponseBytes,
+              let object = try? JSONSerialization.jsonObject(with: data),
+              let root = object as? [String: Any] else {
+            return CursorHTTPPayload(statusCode: response.statusCode, root: nil)
+        }
+        return CursorHTTPPayload(statusCode: response.statusCode, root: root)
+    }
+
     static func makeFetcher() -> @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse) {
         return { request in
             let delegate = CursorNoRedirectDelegate()
