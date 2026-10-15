@@ -160,8 +160,9 @@ struct KeychainCalls: Sendable {
             if !allowInteraction {
                 // Ask macOS not to prompt.  `LAContext.interactionNotAllowed`
                 // covers LocalAuthentication UI for items with an access control
-                // policy, and `kSecUseAuthenticationUIFail` (deprecated) covers
-                // the login Keychain's unlock panel.  Neither suppresses the
+                // policy, and `kSecUseAuthenticationUI` = `"fail"` covers the
+                // login Keychain's unlock panel without the deprecated symbol.
+                // Neither suppresses the
                 // legacy access-list or partition panel: on Sep 30 2026
                 // securityd logged `ACL partition mismatch` and `displaying
                 // keychain prompt` for a data read that carried both.  What
@@ -172,7 +173,7 @@ struct KeychainCalls: Sendable {
                 let context = LAContext()
                 context.interactionNotAllowed = true
                 query[kSecUseAuthenticationContext as String] = context
-                query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
+                query[kSecUseAuthenticationUI as String] = "fail"
             }
             var result: CFTypeRef?
             let status = SecItemCopyMatching(query as CFDictionary, &result)
