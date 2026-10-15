@@ -67,4 +67,27 @@ final class QuotaWindowVocabularyTests: XCTestCase {
         XCTAssertTrue(QuotaWindowVocabulary.isExtraAllowanceLabel("Additional additional tokens"))
         XCTAssertTrue(QuotaWindowVocabulary.isExtraAllowanceLabel("plan + extra"))
     }
+
+    func testMuseAssistWeeklyAndExtraMetersAreClassifiedSeparately() {
+        XCTAssertTrue(QuotaWindowVocabulary.isMuseAssistWeekly(
+            providerKey: "muse-assist",
+            windowToken: "168h",
+            label: "Free weekly limit"
+        ))
+        XCTAssertTrue(QuotaWindowVocabulary.isMuseAssistExtra(
+            providerKey: "muse-assist",
+            windowToken: nil,
+            label: "Additional tokens"
+        ))
+        XCTAssertFalse(QuotaWindowVocabulary.isMuseAssistExtra(
+            providerKey: "muse-assist",
+            windowToken: "8h",
+            label: "8h window"
+        ))
+        XCTAssertFalse(QuotaWindowVocabulary.isMuseAssistWeekly(
+            providerKey: "openai",
+            windowToken: "168h",
+            label: "Weekly"
+        ))
+    }
 }

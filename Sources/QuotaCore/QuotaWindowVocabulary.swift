@@ -243,4 +243,53 @@ public enum QuotaWindowVocabulary {
         return cadenceFromProse(lower, resetAt: nil, periodStart: nil, monthlyHint: false) != nil
             || ResetAlarmCadence.durationSeconds(lower) != nil
     }
+
+    // MARK: - Muse Assist meter pairing
+
+    /// Whether a Muse Assist window is the referral / extra allowance meter
+    /// (caption `+`), not a timed cadence such as an 8-hour window.
+    public static func isMuseAssistExtra(
+        providerKey: String,
+        windowToken: String?,
+        label: String,
+        resetAt: Date? = nil,
+        periodStart: Date? = nil
+    ) -> Bool {
+        guard providerKey == "muse-assist" else { return false }
+        if isExtraAllowanceLabel(label) { return true }
+        let lower = label.lowercased()
+        if lower.contains("additional") || lower.contains("extra") { return true }
+        guard windowToken == nil else { return false }
+        let cadence = standardCadence(
+            windowToken: nil,
+            label: label,
+            resetAt: resetAt,
+            periodStart: periodStart
+        )
+        return cadence == otherLimit
+    }
+
+    /// The Muse Assist weekly allowance meter (caption `7d`), distinct from
+    /// `isMuseAssistExtra`.
+    public static func isMuseAssistWeekly(
+        providerKey: String,
+        windowToken: String?,
+        label: String,
+        resetAt: Date? = nil,
+        periodStart: Date? = nil
+    ) -> Bool {
+        guard providerKey == "muse-assist" else { return false }
+        if isMuseAssistExtra(providerKey: providerKey, windowToken: windowToken, label: label,
+                             resetAt: resetAt, periodStart: periodStart) { return false }
+        let cadence = standardCadence(
+            windowToken: windowToken,
+            label: label,
+            resetAt: resetAt,
+            periodStart: periodStart
+        )
+        if cadence == sevenDay { return true }
+        let lower = label.lowercased()
+        let token = (windowToken ?? "").lowercased()
+        return lower.contains("weekly") || token.contains("weekly") || lower.contains("free")
+    }
 }
