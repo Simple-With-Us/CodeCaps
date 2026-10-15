@@ -55,8 +55,73 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  await-swift-ci:
+    if: github.event.repository.fork == false && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      checks: read
+      contents: read
+    steps:
+      - name: Wait for Swift CI compile checks on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          required_checks=("Mac package build and test" "iOS companion compile")
+          deadline=$(( $(date +%s) + 5100 ))
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            payload="$(gh api "repos/${REPO}/commits/${SHA}/check-runs?per_page=100")"
+            pending=0
+            failed=0
+            for check_name in "${required_checks[@]}"; do
+              conclusion="$(printf '%s' "$payload" | python3 -c '
+          import json, sys
+          name = sys.argv[1]
+          data = json.load(sys.stdin)
+          matches = [r for r in data.get("check_runs", []) if r.get("name") == name]
+          if not matches:
+              print("missing")
+          else:
+              print(matches[0].get("conclusion") or "pending")
+          ' "$check_name")"
+              case "$conclusion" in
+                success) ;;
+                failure|cancelled|timed_out|action_required|stale)
+                  echo "::error::Swift CI check '${check_name}' concluded ${conclusion} on ${SHA}"
+                  failed=1
+                  ;;
+                missing|pending|""|null)
+                  pending=1
+                  ;;
+                *)
+                  pending=1
+                  ;;
+              esac
+            done
+            if [ "$failed" -eq 1 ]; then
+              exit 1
+            fi
+            if [ "$pending" -eq 0 ]; then
+              echo "Swift CI compile checks succeeded on ${SHA}"
+              exit 0
+            fi
+            echo "Waiting for Swift CI on ${SHA}..."
+            sleep 30
+          done
+          echo "::error::Timed out waiting for Swift CI compile checks on ${SHA}"
+          exit 1
+
   release:
-    if: github.event.repository.fork == false
+    needs: await-swift-ci
+    # always() is required so release still runs when await-swift-ci is skipped
+    # (pull_request / workflow_dispatch); without it GitHub treats skipped needs as failure.
+    if: >-
+      always() &&
+      github.event.repository.fork == false &&
+      (needs.await-swift-ci.result == 'success' || needs.await-swift-ci.result == 'skipped')
     runs-on: macos-latest
     timeout-minutes: 60
     env:
