@@ -262,6 +262,23 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
         }
         return copy
     }
+
+    /// Fills the stable installation id and machine label when a window still
+    /// names only the shared CodeCaps producer.  Two Macs pushing as AgentBar
+    /// must not share a fleet group merely because their display names match.
+    public func filledInstallationProvenance(
+        instanceId: String = QuotaPublisher.producerInstanceId,
+        machine: String = QuotaPublisher.machineName
+    ) -> QuotaWindow {
+        var copy = self
+        if copy.producerInstanceId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true {
+            copy.producerInstanceId = instanceId
+        }
+        if copy.machine?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true {
+            copy.machine = machine
+        }
+        return copy
+    }
 }
 
 /// Additive per-provider terms the backend can carry on the manifest.
@@ -347,29 +364,55 @@ public struct QuotaResponse: Codable, Equatable, Sendable {
     public var windows: [QuotaWindow]
     public var skipModelTypes: [SkipModelType]
     public var providerGroups: [QuotaProviderGroup]
+    /// Batch-level producer identity when per-window fields are still absent.
+    public var producerInstanceId: String?
+    public var machine: String?
 
     public init(
         generatedAt: String,
         windows: [QuotaWindow] = [],
         skipModelTypes: [SkipModelType] = [],
-        providerGroups: [QuotaProviderGroup] = []
+        providerGroups: [QuotaProviderGroup] = [],
+        producerInstanceId: String? = nil,
+        machine: String? = nil
     ) {
         self.generatedAt = generatedAt
         self.windows = windows
         self.skipModelTypes = skipModelTypes
         self.providerGroups = providerGroups
+        self.producerInstanceId = producerInstanceId
+        self.machine = machine
     }
 
     private enum CodingKeys: String, CodingKey {
-        case generatedAt, windows, skipModelTypes, providerGroups
+        case generatedAt, windows, skipModelTypes, providerGroups, producerInstanceId, machine
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         generatedAt = try container.decode(String.self, forKey: .generatedAt)
-        windows = try container.decode([QuotaWindow].self, forKey: .windows)
+        var decodedWindows = try container.decode([QuotaWindow].self, forKey: .windows)
         skipModelTypes = try container.decodeIfPresent([SkipModelType].self, forKey: .skipModelTypes) ?? []
         providerGroups = try container.decodeIfPresent([QuotaProviderGroup].self, forKey: .providerGroups) ?? []
+        let batchInstance = try container.decodeIfPresent(String.self, forKey: .producerInstanceId)
+        let batchMachine = try container.decodeIfPresent(String.self, forKey: .machine)
+        if batchInstance != nil || batchMachine != nil {
+            decodedWindows = decodedWindows.map { window in
+                var copy = window
+                if let batch = batchInstance?.trimmingCharacters(in: .whitespacesAndNewlines), !batch.isEmpty,
+                   copy.producerInstanceId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true {
+                    copy.producerInstanceId = batch
+                }
+                if let batch = batchMachine?.trimmingCharacters(in: .whitespacesAndNewlines), !batch.isEmpty,
+                   copy.machine?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true {
+                    copy.machine = batch
+                }
+                return copy
+            }
+        }
+        producerInstanceId = batchInstance
+        machine = batchMachine
+        windows = decodedWindows
     }
 }
 

@@ -15,6 +15,12 @@ public enum FleetOrigin {
         return "fleet"
     }
 
+    /// Stable fleet header key: installation id first, then machine, then legacy
+    /// producer labels.
+    private static func fleetGroupKey(for window: QuotaWindow) -> String {
+        identity(of: window).lowercased()
+    }
+
     private static func normalizeMachineString(_ str: String) -> String {
         str.lowercased()
             .replacingOccurrences(of: ".local", with: "")
@@ -110,7 +116,7 @@ public enum FleetOrigin {
             if isOwnPush(window, host: host, localWindows: localWindows) {
                 own.append(window)
             } else {
-                grouped[identity(of: window), default: []].append(window)
+                grouped[fleetGroupKey(for: window), default: []].append(window)
             }
         }
         let groups = grouped.keys.sorted().map { key in

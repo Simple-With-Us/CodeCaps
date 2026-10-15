@@ -24,6 +24,23 @@ final class LocalQuotaSnapshotTests: XCTestCase {
         XCTAssertThrowsError(try LocalQuotaSnapshot.writeWidgetSnapshot(windows: [], to: nil))
     }
 
+    func testHandoffStampingAddsInstallationProvenanceOnlyWhenAsked() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("quota-windows.json")
+        let window = QuotaWindow(id: "local", provider: "openai", label: "5h", remainingPercent: 40,
+                                 occurredAt: "2026-10-03T23:00:00Z")
+        try LocalQuotaSnapshot.write(windows: [window], to: url, stampInstallationProvenance: true)
+        let stamped = try JSONDecoder().decode(LocalQuotaSnapshot.Payload.self, from: Data(contentsOf: url))
+        XCTAssertEqual(stamped.windows.first?.producerInstanceId, QuotaPublisher.producerInstanceId)
+        let remote = QuotaWindow(id: "remote", provider: "anthropic", label: "weekly", remainingPercent: 70,
+                                 occurredAt: "2026-10-03T23:00:00Z")
+        let widget = directory.appendingPathComponent("widget.json")
+        try LocalQuotaSnapshot.write(windows: [remote], to: widget)
+        let untouched = try JSONDecoder().decode(LocalQuotaSnapshot.Payload.self, from: Data(contentsOf: widget))
+        XCTAssertNil(untouched.windows.first?.producerInstanceId)
+    }
+
     func testWritesVersionedPrivateSnapshotAndRemovesWhenDisabled() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
