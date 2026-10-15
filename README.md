@@ -129,6 +129,8 @@ Both off by default, configured on Console → Settings → Sources & Fleet.
 
 **Pull.**  CodeCaps reads a server's aggregated windows back (`generatedAt`, `windows[]`, optional `providerGroups[]`) as `Fleet` rows.  A window is attributed to a machine by whatever `source`/`sourceApp` it carries — no machine identifier field exists yet, so indistinguishable Macs show up as one fleet origin.
 
+**Web embeds.**  Quota bars for third-party websites are not built in this repo.  Usage Monitor owns the public read and embed surface; CodeCaps remains the Mac and iOS client.  See [`docs/PUBLIC-EMBED.md`](docs/PUBLIC-EMBED.md) for ownership, the existing `GET /api/quota-windows` contract, and security constraints.
+
 **Endpoint rules.**  HTTPS required for any host; plain HTTP only for loopback (`localhost`, `127.0.0.1`, `::1`).  A URL with embedded credentials, a query string, or a fragment is rejected.
 
 **Token storage.**  The Push Token and Read Token are the only two secrets stored, both in the macOS Keychain, not a config file.
