@@ -156,10 +156,10 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
         FleetMacReading.isMacCodeCapsReading(id: id, source: source, via: via)
     }
 
-    /// Hyphenated cadence beside a meter bar (`5-hour`, `7-day`, `1-month`, `Other limit`).
+    /// Compact cadence beside a meter bar (`5h`, `7d`, `1m`, `+`), matching Mac Glance.
     public var meterCaption: String {
-        QuotaWindowVocabulary.standardCadence(
-            windowToken: cadence,
+        QuotaWindowVocabulary.popoverCaption(
+            windowToken: cadence.isEmpty ? nil : cadence,
             label: label,
             resetAt: resetAt,
             monthlyHint: label.lowercased().contains("plan") || cadence.lowercased().contains("plan")
@@ -219,7 +219,7 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
 
     /// Countdown or a placeholder when an extra allowance has no reset clock.
     public func meterCountdown(now: Date = Date()) -> String {
-        if QuotaWindowVocabulary.isExtraAllowanceLabel(label) { return "—" }
+        if QuotaWindowVocabulary.isExtraAllowanceLabel(label) { return "extra" }
         let cd = countdown(now: now)
         return cd.isEmpty ? "—" : cd
     }
@@ -398,12 +398,36 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
 
     public func cardShortWindow(scope: CompanionSourceScope, now: Date = Date()) -> CardWindow? {
         let resolved = cardWindowRows(scope: scope, now: now)
+        if providerKey == "muse-assist" {
+            if let weekly = resolved.first(where: {
+                QuotaWindowVocabulary.isMuseAssistWeekly(
+                    providerKey: providerKey,
+                    windowToken: nil,
+                    label: $0.window.label,
+                    resetAt: $0.window.resetAt
+                )
+            }) {
+                return weekly
+            }
+        }
         let window = resolved.map(\.window).first(where: { $0.isShortCadence }) ?? resolved.first?.window
         return resolved.first(where: { $0.window.id == window?.id })
     }
 
     public func cardLongWindow(scope: CompanionSourceScope, now: Date = Date()) -> CardWindow? {
         let resolved = cardWindowRows(scope: scope, now: now)
+        if providerKey == "muse-assist" {
+            if let extra = resolved.first(where: {
+                QuotaWindowVocabulary.isMuseAssistExtra(
+                    providerKey: providerKey,
+                    windowToken: nil,
+                    label: $0.window.label,
+                    resetAt: $0.window.resetAt
+                )
+            }) {
+                return extra
+            }
+        }
         let short = cardShortWindow(scope: scope, now: now)?.window
         let nonShort = resolved.filter { !$0.window.isShortCadence }
         if let match = nonShort.first(where: { $0.window.id != short?.id }) {
@@ -1338,6 +1362,18 @@ public final class CompanionQuotaModel: ObservableObject {
 
         // Standardize cadence order: shorter periods (e.g. 5-hour) precede longer periods (e.g. weekly).
         primaryWindows.sort { left, right in
+            if providerKey == "muse-assist" {
+                let leftWeekly = QuotaWindowVocabulary.isMuseAssistWeekly(
+                    providerKey: providerKey, windowToken: nil, label: left.label, resetAt: left.resetAt)
+                let rightWeekly = QuotaWindowVocabulary.isMuseAssistWeekly(
+                    providerKey: providerKey, windowToken: nil, label: right.label, resetAt: right.resetAt)
+                if leftWeekly != rightWeekly { return leftWeekly }
+                let leftExtra = QuotaWindowVocabulary.isMuseAssistExtra(
+                    providerKey: providerKey, windowToken: nil, label: left.label, resetAt: left.resetAt)
+                let rightExtra = QuotaWindowVocabulary.isMuseAssistExtra(
+                    providerKey: providerKey, windowToken: nil, label: right.label, resetAt: right.resetAt)
+                if leftExtra != rightExtra { return !leftExtra }
+            }
             if left.isShortCadence != right.isShortCadence {
                 return left.isShortCadence && !right.isShortCadence
             }

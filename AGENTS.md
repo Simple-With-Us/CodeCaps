@@ -78,7 +78,8 @@ widgets live under `ios/CodeCapsCompanion`; generate their Xcode project from
 External integrations: BotFleet on-disk
 handoff at `~/Library/Application Support/Usage Monitor/quota-windows.json`,
 HTTP push (`QuotaPublisher`, v2 ingest envelope), HTTP pull (`QuotaClient`,
-`FleetPipeline`).
+`FleetPipeline`).  Public web embeds and the server read API for third-party
+sites are owned by Usage Monitor — see `docs/PUBLIC-EMBED.md` (CC-81).
 
 ## Infisical is the source of truth
 
@@ -90,6 +91,10 @@ HTTP push (`QuotaPublisher`, v2 ingest envelope), HTTP pull (`QuotaClient`,
 swift build
 swift test
 ```
+
+Hosted compile gate: `.github/workflows/swift-ci.yml` and
+`docs/rollouts/2026-10-15-cc19-compile-gate.md` (required check names for
+ruleset `default-main-protection`).
 
 The `script/build_and_run.sh` script is the canonical release pipeline — it
 bundles, codesigns, notarizes, staples, builds a DMG, and writes a ZIP + sha.

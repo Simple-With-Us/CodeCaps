@@ -600,7 +600,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// console if (and only while) the console would cover it.
     private func elevateConsole() {
         guard let consoleWindow else { return }
-        consoleWindow.level = NSWindow.Level(Int(CGWindowLevelForKey(.popUpMenuWindow)) + 1)
+        consoleWindow.level = GlanceWindowLevels.consoleAboveGlance
         glanceOcclusion.isOccluded = true
         // The PiP HUD is documented to stay "visible on top of all windows at
         // all times".  The controller remembers the elevated console so a HUD

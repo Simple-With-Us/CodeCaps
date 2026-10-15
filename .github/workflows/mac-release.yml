@@ -55,8 +55,30 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  release:
+  # Every non-fork event waits here, on ubuntu, before a macos-latest
+  # release runner starts.  Pull request checks are on the head SHA.
+  await-swift-ci:
     if: github.event.repository.fork == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      checks: read
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Wait for Swift CI compile checks on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: bash scripts/await-swift-ci-checks.sh
+
+  release:
+    needs: await-swift-ci
+    if: >-
+      github.event.repository.fork == false &&
+      needs.await-swift-ci.result == 'success'
     runs-on: macos-latest
     timeout-minutes: 60
     env:

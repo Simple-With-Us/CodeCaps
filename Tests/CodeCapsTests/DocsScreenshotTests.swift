@@ -95,6 +95,10 @@ final class DocsScreenshotTests: XCTestCase {
             }
         }
         let state = ConsoleState(defaults: defaults)
+        // Reconcile first: `.settingsSourcesFleet` is the init default, so an
+        // eager `page =` is a no-op and `onAppear` reconcile would land on a
+        // platform page before the PNG is drawn.
+        state.reconcile(available: model.displaySections, readCompleted: model.lastChecked != nil)
         state.page = page
         if selectedAlert {
             state.select(providerKey: "anthropic", windowId: "claude-5h", at: alert.timestamp,
