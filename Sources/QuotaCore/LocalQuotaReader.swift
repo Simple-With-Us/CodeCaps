@@ -124,7 +124,7 @@ public struct LocalQuotaReader: Sendable {
         // The Keychain is consulted only when Claude Code's own file has no
         // usable credential, so a fresh file never costs a Keychain call.
         var access = ClaudeCredentialAccess.missing
-        var renewable = ClaudeOAuthParser.isRenewable(in: file, now: now())
+        var renewable = false
         if candidate == nil {
             access = await ClaudeCredentialSource.boundedAccess(timeout: claudeKeychainTimeout) { await readClaudeCredential() }
             // A read that could not finish says nothing about the login, so
@@ -174,8 +174,14 @@ public struct LocalQuotaReader: Sendable {
             // Access stays for a silent Keychain read that was refused, not for
             // a token Anthropic rejected.
             ClaudeCredentialSource.resetRememberedCredential()
+            let rejectionFile = (try? readJSONObject(relativePath: ".claude/.credentials.json")) ?? file
+            let rejectionAccess = await ClaudeCredentialSource.boundedAccess(timeout: claudeKeychainTimeout) { await readClaudeCredential() }
+            let rejectionKeychain = credentialRoot(rejectionAccess)
+            let mayRenewAfterRejection =
+                ClaudeOAuthParser.canRenewAfterUsageRejection(in: rejectionFile, now: now())
+                || ClaudeOAuthParser.canRenewAfterUsageRejection(in: rejectionKeychain, now: now())
             var renewed = false
-            if renewable {
+            if mayRenewAfterRejection {
                 renewed = await renewalThrottle.perform(now: now(), action: renewClaudeLogin)
             }
             if renewed {
@@ -197,7 +203,9 @@ public struct LocalQuotaReader: Sendable {
                     }
                 }
             }
-            let issue = renewable ? ClaudeLoginState.idle.issue : ClaudeLoginState.signedOut.issue
+            let idleAfterRejection = ClaudeOAuthParser.isRenewable(in: rejectionFile, now: now())
+                || ClaudeOAuthParser.isRenewable(in: rejectionKeychain, now: now())
+            let issue = idleAfterRejection ? ClaudeLoginState.idle.issue : ClaudeLoginState.signedOut.issue
             return ProviderRead(provider: provider, windows: [], issue: issue,
                                 needsConsent: false)
         }
