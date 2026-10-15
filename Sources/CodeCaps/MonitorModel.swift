@@ -156,12 +156,18 @@ final class MonitorModel: ObservableObject {
         didSet { defaults.set(menuBarStyle.rawValue, forKey: "menuBarStyle") }
     }
     @Published var menuBarMarkStyle: MenuBarMarkStyle {
-        didSet { defaults.set(menuBarMarkStyle.rawValue, forKey: "menuBarMarkStyle") }
+        didSet {
+            defaults.set(menuBarMarkStyle.rawValue, forKey: "menuBarMarkStyle")
+            invalidateProviderMarkCaches()
+        }
     }
     /// The accent colour.  Stored through `AccentChoice` so the swatch, the
     /// default and the `Theme` lookup all read the same value.
     @Published var accent: AccentChoice {
-        didSet { AccentChoice.current = accent }
+        didSet {
+            AccentChoice.current = accent
+            invalidateProviderMarkCaches()
+        }
     }
 
     /// The accent as a drawable colour, resolved the same way `Theme.accent`
@@ -1466,13 +1472,21 @@ final class MonitorModel: ObservableObject {
     /// theme.  Offered as a switch because some people do want the popover to
     /// read as one piece.
     @Published var glanceLogosFollowAccent: Bool {
-        didSet { defaults.set(glanceLogosFollowAccent, forKey: "glanceLogosFollowAccent") }
+        didSet {
+            defaults.set(glanceLogosFollowAccent, forKey: "glanceLogosFollowAccent")
+            invalidateProviderMarkCaches()
+        }
+    }
+
+    private func invalidateProviderMarkCaches() {
+        PlatformLogoImage.invalidateCaches()
     }
 
     func setMarkStyle(_ style: MarkStyle, for providerKey: String) {
         let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard markStyles[key] != style else { return }
         markStyles[key] = style
+        invalidateProviderMarkCaches()
     }
 
     func customMarkMode(for providerKey: String) -> CustomMarkMode {
