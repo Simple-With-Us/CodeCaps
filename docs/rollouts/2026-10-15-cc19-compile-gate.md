@@ -16,19 +16,27 @@ document gives Jay the exact check names to add in GitHub (admin-only).
   only after `package` (`needs:`) so a PR never holds two macOS runners at
   once.  Explicit job `name:` values match the contexts GitHub reports for
   required checks.
-- **Mac Release (Sparkle)** — new `await-swift-ci` job on `ubuntu-latest`
-  polls until `package` and `companion` succeed on the merge commit (or fails
-  closed if either fails, is cancelled, or times out).  The release job
-  `needs: await-swift-ci`, closing the race where Sparkle published while
-  companion was still running.
-- **This rollout** — owner steps for ruleset required checks (not applied in
-  CI; Jay has the admin grant).
+- **Mac Release (Sparkle)** — `await-swift-ci` on `ubuntu-latest` polls until
+  `Mac package build and test` and `iOS companion compile` succeed on the
+  commit (or fails closed if either fails, is skipped, is cancelled, or
+  times out).  Push and `workflow_dispatch` both wait.  The release job
+  `needs: await-swift-ci`, so Sparkle cannot publish while companion is
+  still running.
+- **iOS and Mac TestFlight** — the same wait runs before a ship.  The
+  scheduled iOS gate itself runs on ubuntu, so a skip no longer queues a
+  macOS runner.
+- **Ruleset script** — `scripts/apply-main-compile-gate-ruleset.sh` prints
+  the rule change and refuses `--apply` until the three contexts below are
+  already success on the default branch.  It is not run from CI.
 
 ## Verification (agents)
 
 ```bash
+python3 scripts/compile_gate_checks_test.py
 python3 -c "import yaml; yaml.safe_load(open('.github/workflows/swift-ci.yml'))"
 python3 -c "import yaml; yaml.safe_load(open('.github/workflows/mac-release.yml'))"
+python3 -c "import yaml; yaml.safe_load(open('.github/workflows/ios-ship.yml'))"
+python3 -c "import yaml; yaml.safe_load(open('.github/workflows/macos-ship.yml'))"
 ```
 
 Hosted macOS compile is validated on the pull request’s Swift CI run after push.
@@ -71,7 +79,9 @@ Do **not** require workflow names (`Swift CI`, `Secret scanning`).  Require the
 
 ## Deferred
 
-- Ruleset edit itself (Jay admin).
+- Applying the ruleset.  After a green Swift CI on `main`, someone with
+  ruleset admin runs `scripts/apply-main-compile-gate-ruleset.sh --apply`.
+  A dry run is the same command without `--apply`.
 - Moving compile to self-hosted macOS runners (fleet BotFleet pinning work).
-- Requiring Mac Release or TestFlight workflows as merge gates (ship lanes, not
-  compile).
+- Requiring the ship workflows themselves as merge checks.  They wait on the
+  compile checks; they are not compile checks.

@@ -33,24 +33,23 @@ on:
 
 permissions:
   contents: read
+  checks: read
 
 concurrency:
   group: ios-ship-codecaps
   cancel-in-progress: false
 
 jobs:
-  ship:
-    name: TestFlight archive + upload
+  # The scheduled tick used to queue macos-latest just to decide "skip".
+  # That decision, and the wait for Swift CI, both run on ubuntu.  The Mac
+  # runner starts only when this commit should ship and has compiled.
+  gate:
+    name: Ship gate
     if: github.event.repository.fork == false
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
     timeout-minutes: 90
-    env:
-      DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
-      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
-      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
-      ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
-      IOS_DIST_P12_BASE64: ${{ secrets.IOS_DIST_P12_BASE64 }}
-      IOS_DIST_P12_PASSWORD: ${{ secrets.IOS_DIST_P12_PASSWORD }}
+    outputs:
+      should_ship: ${{ steps.gate.outputs.should_ship }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -74,8 +73,45 @@ jobs:
             --repo-root "$GITHUB_WORKSPACE" \
             codecaps
 
-      - name: Assert stable Xcode (never beta)
+      - name: Wait for Swift CI compile checks on this commit
         if: steps.gate.outputs.should_ship == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: bash scripts/await-swift-ci-checks.sh
+
+  ship:
+    name: TestFlight archive + upload
+    needs: gate
+    if: >-
+      github.event.repository.fork == false &&
+      needs.gate.result == 'success' &&
+      needs.gate.outputs.should_ship == '1'
+    runs-on: macos-latest
+    timeout-minutes: 90
+    env:
+      DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+      IOS_DIST_P12_BASE64: ${{ secrets.IOS_DIST_P12_BASE64 }}
+      IOS_DIST_P12_PASSWORD: ${{ secrets.IOS_DIST_P12_PASSWORD }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Restore ship-state cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ios-fleet
+          key: ios-fleet-state-codecaps-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ios-fleet-state-codecaps-${{ github.run_id }}-
+            ios-fleet-state-codecaps-
+
+      - name: Assert stable Xcode (never beta)
         run: |
           echo "DEVELOPER_DIR=${DEVELOPER_DIR}"
           xcodebuild -version
@@ -89,7 +125,6 @@ jobs:
           esac
 
       - name: Install xcodegen
-        if: steps.gate.outputs.should_ship == '1'
         run: |
           if command -v xcodegen >/dev/null 2>&1; then
             xcodegen --version
@@ -98,7 +133,6 @@ jobs:
           fi
 
       - name: Load Sentry ship secrets (Infisical, then repository secrets)
-        if: steps.gate.outputs.should_ship == '1'
         uses: ./.github/actions/infisical-secrets
         with:
           names: SENTRY_DSN SENTRY_AUTH_TOKEN
@@ -110,7 +144,6 @@ jobs:
           GH_FALLBACK_SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
 
       - name: Import signing + ASC key
-        if: steps.gate.outputs.should_ship == '1'
         run: |
           if [ -z "${ASC_KEY_ID:-}" ]; then
             echo "::error::ASC_KEY_ID empty. Confirm ASC_/IOS_DIST_ secrets are configured."
@@ -119,11 +152,9 @@ jobs:
           bash "$GITHUB_WORKSPACE/scripts/ios-appstore-gm-prepare.sh"
 
       - name: Install App Store profiles
-        if: steps.gate.outputs.should_ship == '1'
         run: bash "$GITHUB_WORKSPACE/scripts/ios-install-appstore-profiles.sh"
 
       - name: Ship CodeCaps to TestFlight
-        if: steps.gate.outputs.should_ship == '1'
         env:
           IOS_TF_RELEASE_NOTES: "1"
           IOS_MANUAL_SIGN: "1"
