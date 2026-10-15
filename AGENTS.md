@@ -78,7 +78,8 @@ widgets live under `ios/CodeCapsCompanion`; generate their Xcode project from
 External integrations: BotFleet on-disk
 handoff at `~/Library/Application Support/Usage Monitor/quota-windows.json`,
 HTTP push (`QuotaPublisher`, v2 ingest envelope), HTTP pull (`QuotaClient`,
-`FleetPipeline`).
+`FleetPipeline`).  Public web embeds and the server read API for third-party
+sites are owned by Usage Monitor — see `docs/PUBLIC-EMBED.md` (CC-81).
 
 ## Infisical is the source of truth
 
