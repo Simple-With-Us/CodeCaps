@@ -779,7 +779,7 @@ public enum WidgetPresentation {
             return ("muse-code", "Muse Code", "muse-code")
         }
         if pKey.contains("muse") || prov.contains("muse") {
-            return ("muse-code", "Muse Code", "muse-code")
+            return ("muse-assist", "Muse Assist", "muse-assist")
         }
         if pKey.contains("grok-bot") || prov.contains("grok-bot") || prov.contains("grok bot") || id.contains("grok-bot") {
             return ("grok-bot", "Grok Bot", "grok-bot")

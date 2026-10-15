@@ -114,6 +114,7 @@ public actor QuotaPublisher {
         guard !windows.isEmpty else {
             throw QuotaPublisherError.emptyWindows
         }
+        let windows = windows.map { $0.filledInstallationProvenance() }
 
         let bodyData: Data
         let eventCount: Int

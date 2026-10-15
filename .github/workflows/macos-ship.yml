@@ -15,15 +15,35 @@ on:
 
 permissions:
   contents: read
+  checks: read
 
 concurrency:
   group: macos-ship-codecaps
   cancel-in-progress: true
 
 jobs:
+  await-swift-ci:
+    name: Wait for Swift CI
+    if: github.event.repository.fork == false && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Wait for Swift CI compile checks on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: bash scripts/await-swift-ci-checks.sh
+
   ship:
     name: Mac TestFlight archive + upload
-    if: github.event.repository.fork == false && github.ref == 'refs/heads/main'
+    needs: await-swift-ci
+    if: >-
+      github.event.repository.fork == false &&
+      github.ref == 'refs/heads/main' &&
+      needs.await-swift-ci.result == 'success'
     runs-on: macos-latest
     timeout-minutes: 90
     env:

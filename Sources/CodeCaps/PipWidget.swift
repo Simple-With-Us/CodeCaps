@@ -490,7 +490,9 @@ struct PipWidgetView: View {
             .padding(.vertical, PipMetrics.bodyVerticalPadding)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(Theme.groupBand)
+        // Match the vertical rows panel: a grey `groupBand` read as the silver
+        // header strip the owner asked to remove (CC-9).
+        .background(background.fill)
     }
 
     /// The row whose platform detail is open, if the owner clicked one.  `nil`

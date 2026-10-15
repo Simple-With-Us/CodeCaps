@@ -97,6 +97,30 @@ final class FleetOriginTests: XCTestCase {
         XCTAssertTrue(FleetOrigin.isOwnPush(appSourced, host: "unrelated-host"))
     }
 
+    func testTwoAgentBarMacsSplitByStableInstallationId() {
+        var macA = window(id: "a", source: "agent-bar", sourceApp: "agent-bar")
+        macA.producerInstanceId = "11111111-1111-1111-1111-111111111111"
+        macA.machine = "Mac mini"
+        var macB = window(id: "b", source: "agent-bar", sourceApp: "agent-bar")
+        macB.producerInstanceId = "22222222-2222-2222-2222-222222222222"
+        macB.machine = "Mac mini"
+        let split = FleetOrigin.split([macA, macB], host: "studio-host")
+        XCTAssertEqual(split.groups.count, 2)
+        XCTAssertEqual(Set(split.groups.map(\.id)), Set([
+            "11111111-1111-1111-1111-111111111111",
+            "22222222-2222-2222-2222-222222222222",
+        ]))
+        XCTAssertEqual(split.groups.map(\.title), ["Mac mini", "Mac mini"])
+    }
+
+    func testQuotaResponseBatchInstanceStampsWindows() throws {
+        let json = #"{"generatedAt":"2026-10-15T00:00:00Z","producerInstanceId":"batch-id","machine":"Kitchen Mac","windows":[{"id":"w","provider":"anthropic","source":"agent-bar","occurredAt":"2026-10-15T00:00:00Z"}]}"#
+        let response = try JSONDecoder().decode(QuotaResponse.self, from: Data(json.utf8))
+        XCTAssertEqual(response.windows.first?.producerInstanceId, "batch-id")
+        XCTAssertEqual(response.windows.first?.machine, "Kitchen Mac")
+        XCTAssertEqual(FleetOrigin.split(response.windows, host: "other").groups.map(\.id), ["batch-id"])
+    }
+
     func testMachineNormalizationRecognizesDottedHostAndLocalizedNames() {
         var win = window(id: "remote-pull-1", source: "codecaps", sourceApp: "codecaps")
         win.machine = "Mac.Jays.Services"

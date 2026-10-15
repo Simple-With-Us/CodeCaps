@@ -156,12 +156,18 @@ final class MonitorModel: ObservableObject {
         didSet { defaults.set(menuBarStyle.rawValue, forKey: "menuBarStyle") }
     }
     @Published var menuBarMarkStyle: MenuBarMarkStyle {
-        didSet { defaults.set(menuBarMarkStyle.rawValue, forKey: "menuBarMarkStyle") }
+        didSet {
+            defaults.set(menuBarMarkStyle.rawValue, forKey: "menuBarMarkStyle")
+            invalidateProviderMarkCaches()
+        }
     }
     /// The accent colour.  Stored through `AccentChoice` so the swatch, the
     /// default and the `Theme` lookup all read the same value.
     @Published var accent: AccentChoice {
-        didSet { AccentChoice.current = accent }
+        didSet {
+            AccentChoice.current = accent
+            invalidateProviderMarkCaches()
+        }
     }
 
     /// The accent as a drawable colour, resolved the same way `Theme.accent`
@@ -1466,13 +1472,21 @@ final class MonitorModel: ObservableObject {
     /// theme.  Offered as a switch because some people do want the popover to
     /// read as one piece.
     @Published var glanceLogosFollowAccent: Bool {
-        didSet { defaults.set(glanceLogosFollowAccent, forKey: "glanceLogosFollowAccent") }
+        didSet {
+            defaults.set(glanceLogosFollowAccent, forKey: "glanceLogosFollowAccent")
+            invalidateProviderMarkCaches()
+        }
+    }
+
+    private func invalidateProviderMarkCaches() {
+        PlatformLogoImage.invalidateCaches()
     }
 
     func setMarkStyle(_ style: MarkStyle, for providerKey: String) {
         let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard markStyles[key] != style else { return }
         markStyles[key] = style
+        invalidateProviderMarkCaches()
     }
 
     func customMarkMode(for providerKey: String) -> CustomMarkMode {
@@ -2147,7 +2161,8 @@ final class MonitorModel: ObservableObject {
                 } else if self.localEnabled && local != nil {
                     try LocalQuotaSnapshot.write(windows: self.localWindows, issues: self.issues,
                                                  customMarks: exportedCustomMarks(),
-                                                 alerts: exportedAlerts(now: self.now), now: self.now)
+                                                 alerts: exportedAlerts(now: self.now), now: self.now,
+                                                 stampInstallationProvenance: true)
                 }
                 else { try LocalQuotaSnapshot.remove() }
                 self.handoffError = nil
@@ -2345,7 +2360,8 @@ final class MonitorModel: ObservableObject {
                 if localEnabled {
                     try LocalQuotaSnapshot.write(windows: localWindows, issues: issues,
                                                  customMarks: exportedCustomMarks(),
-                                                 alerts: exportedAlerts(now: now), now: now)
+                                                 alerts: exportedAlerts(now: now), now: now,
+                                                 stampInstallationProvenance: true)
                 } else {
                     try LocalQuotaSnapshot.remove()
                 }

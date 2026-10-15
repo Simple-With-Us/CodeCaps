@@ -1,18 +1,23 @@
 name: Swift CI
 
-# Validates the SwiftPM Mac package (Sources/Tests at repo root).
-# The iOS companion job's SCHEME is a best guess: the checked-in
-# CodeCapsCompanion.xcodeproj has no shared schemes
-# (no xcshareddata/xcschemes), so verify the scheme name on first run.
+# Hosted macOS compile gate for CodeCaps (CC-19).  Validates the SwiftPM Mac
+# package at the repo root and the iOS companion Xcode project.  Job names
+# below are the GitHub status contexts Jay should require on ruleset 24433457;
+# see docs/rollouts/2026-10-15-cc19-compile-gate.md.
+#
+# The companion SCHEME is a best guess: the checked-in CodeCapsCompanion.xcodeproj
+# has no shared schemes (no xcshareddata/xcschemes), so verify the scheme name
+# on first run.
 
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: swift-ci-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -23,7 +28,9 @@ env:
 
 jobs:
   package:
+    name: Mac package build and test
     runs-on: macos-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
       - name: Swift build
@@ -32,6 +39,15 @@ jobs:
         env:
           CODECAPS_DOCS_RENDER_DIR: ${{ runner.temp }}/codecaps-native-ui
         run: swift test
+      - name: Assert settings-sources-fleet render is not console-light
+        run: |
+          dir="${{ runner.temp }}/codecaps-native-ui"
+          test -s "$dir/settings-sources-fleet.png"
+          test -s "$dir/console-light.png"
+          if cmp -s "$dir/settings-sources-fleet.png" "$dir/console-light.png"; then
+            echo "::error::settings-sources-fleet.png still matches console-light.png; reconcile Sources & Fleet before render"
+            exit 1
+          fi
       - name: Upload native UI screenshots
         if: always()
         uses: actions/upload-artifact@v7
@@ -41,7 +57,10 @@ jobs:
           if-no-files-found: warn
 
   companion:
+    name: iOS companion compile
+    needs: package
     runs-on: macos-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
       - name: Install XcodeGen and regenerate companion project
