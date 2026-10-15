@@ -116,7 +116,10 @@ jobs:
 
   release:
     needs: await-swift-ci
+    # always() is required so release still runs when await-swift-ci is skipped
+    # (pull_request / workflow_dispatch); without it GitHub treats skipped needs as failure.
     if: >-
+      always() &&
       github.event.repository.fork == false &&
       (needs.await-swift-ci.result == 'success' || needs.await-swift-ci.result == 'skipped')
     runs-on: macos-latest
