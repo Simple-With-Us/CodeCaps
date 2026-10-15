@@ -39,6 +39,15 @@ jobs:
         env:
           CODECAPS_DOCS_RENDER_DIR: ${{ runner.temp }}/codecaps-native-ui
         run: swift test
+      - name: Assert settings-sources-fleet render is not console-light
+        run: |
+          dir="${{ runner.temp }}/codecaps-native-ui"
+          test -s "$dir/settings-sources-fleet.png"
+          test -s "$dir/console-light.png"
+          if cmp -s "$dir/settings-sources-fleet.png" "$dir/console-light.png"; then
+            echo "::error::settings-sources-fleet.png still matches console-light.png; reconcile Sources & Fleet before render"
+            exit 1
+          fi
       - name: Upload native UI screenshots
         if: always()
         uses: actions/upload-artifact@v7
