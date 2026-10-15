@@ -138,7 +138,7 @@ public enum LocalQuotaSnapshot {
         let published = safeIssues(issues)
         let payload = Payload(format: "usage-monitor-local-quotas", version: 1, producer: producerName,
                               generatedAt: ISO8601DateFormatter().string(from: now),
-                              windows: windows.map { $0.normalizedForExport() },
+                              windows: windows.map { $0.normalizedForExport().filledInstallationProvenance() },
                               issues: published.isEmpty ? nil : published,
                               customMarks: customMarks,
                               alerts: (alerts?.isEmpty ?? true) ? nil : alerts)
