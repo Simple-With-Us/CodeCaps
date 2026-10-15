@@ -394,22 +394,24 @@ public struct QuotaResponse: Codable, Equatable, Sendable {
         var decodedWindows = try container.decode([QuotaWindow].self, forKey: .windows)
         skipModelTypes = try container.decodeIfPresent([SkipModelType].self, forKey: .skipModelTypes) ?? []
         providerGroups = try container.decodeIfPresent([QuotaProviderGroup].self, forKey: .providerGroups) ?? []
-        producerInstanceId = try container.decodeIfPresent(String.self, forKey: .producerInstanceId)
-        machine = try container.decodeIfPresent(String.self, forKey: .machine)
-        if producerInstanceId != nil || machine != nil {
+        let batchInstance = try container.decodeIfPresent(String.self, forKey: .producerInstanceId)
+        let batchMachine = try container.decodeIfPresent(String.self, forKey: .machine)
+        if batchInstance != nil || batchMachine != nil {
             decodedWindows = decodedWindows.map { window in
                 var copy = window
-                if let batch = producerInstanceId?.trimmingCharacters(in: .whitespacesAndNewlines), !batch.isEmpty,
+                if let batch = batchInstance?.trimmingCharacters(in: .whitespacesAndNewlines), !batch.isEmpty,
                    copy.producerInstanceId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true {
                     copy.producerInstanceId = batch
                 }
-                if let batch = machine?.trimmingCharacters(in: .whitespacesAndNewlines), !batch.isEmpty,
+                if let batch = batchMachine?.trimmingCharacters(in: .whitespacesAndNewlines), !batch.isEmpty,
                    copy.machine?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true {
                     copy.machine = batch
                 }
                 return copy
             }
         }
+        producerInstanceId = batchInstance
+        machine = batchMachine
         windows = decodedWindows
     }
 }
