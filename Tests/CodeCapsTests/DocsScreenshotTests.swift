@@ -128,4 +128,11 @@ final class DocsScreenshotTests: XCTestCase {
                   "settings-alerts-history.png", to: directory)
         try write(try console(page: .settingsSourcesFleet, dark: false), "settings-sources-fleet.png", to: directory)
     }
+
+    func testSettingsSourcesFleetRenderIsNotConsoleLightPage() throws {
+        let settings = try XCTUnwrap(try console(page: .settingsSourcesFleet, dark: false))
+        let consoleLight = try XCTUnwrap(try console(page: .platform("anthropic"), dark: false))
+        XCTAssertNotEqual(settings, consoleLight,
+                          "Sources & Fleet must not reuse the Claude platform Console frame")
+    }
 }
