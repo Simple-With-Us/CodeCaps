@@ -91,6 +91,10 @@ swift build
 swift test
 ```
 
+Hosted compile gate: `.github/workflows/swift-ci.yml` and
+`docs/rollouts/2026-10-15-cc19-compile-gate.md` (required check names for
+ruleset `default-main-protection`).
+
 The `script/build_and_run.sh` script is the canonical release pipeline — it
 bundles, codesigns, notarizes, staples, builds a DMG, and writes a ZIP + sha.
 Run it once to read the contract; it is also the only path that knows the
