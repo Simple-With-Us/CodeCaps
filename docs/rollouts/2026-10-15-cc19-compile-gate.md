@@ -11,10 +11,11 @@ document gives Jay the exact check names to add in GitHub (admin-only).
 
 ## What changed
 
-- **Swift CI** — pin `macos-14`, cancel stale pull-request runs, run
-  `companion` only after `package` (`needs:`) so a PR never holds two macOS
-  runners at once.  Explicit job `name:` values match the contexts GitHub
-  reports for required checks.
+- **Swift CI** — stay on `macos-latest` (Swift 6 toolchain required by
+  `sentry-cocoa` 9.30.x), cancel stale pull-request runs, run `companion`
+  only after `package` (`needs:`) so a PR never holds two macOS runners at
+  once.  Explicit job `name:` values match the contexts GitHub reports for
+  required checks.
 - **Mac Release (Sparkle)** — new `await-swift-ci` job on `ubuntu-latest`
   polls until `package` and `companion` succeed on the merge commit (or fails
   closed if either fails, is cancelled, or times out).  The release job

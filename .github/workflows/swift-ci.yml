@@ -29,7 +29,7 @@ env:
 jobs:
   package:
     name: Mac package build and test
-    runs-on: macos-14
+    runs-on: macos-latest
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
@@ -50,7 +50,7 @@ jobs:
   companion:
     name: iOS companion compile
     needs: package
-    runs-on: macos-14
+    runs-on: macos-latest
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
