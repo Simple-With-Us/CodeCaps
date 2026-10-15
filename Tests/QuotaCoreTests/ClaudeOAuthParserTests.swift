@@ -118,4 +118,17 @@ final class ClaudeOAuthParserTests: XCTestCase {
         XCTAssertFalse(ClaudeOAuthParser.isRenewable(
             in: oauthRoot(["refreshToken": "r", "expiresAt": 1_699_000_000_000.0]), now: now))
     }
+
+    func testUnexpiredLoginWithRefreshTokenMayRenewAfterUsageRejection() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let root = oauthRoot(["accessToken": "a", "refreshToken": "r", "expiresAt": 1_900_000_000_000.0])
+        XCTAssertFalse(ClaudeOAuthParser.isRenewable(in: root, now: now))
+        XCTAssertTrue(ClaudeOAuthParser.canRenewAfterUsageRejection(in: root, now: now))
+    }
+
+    func testUsageRejectionRenewalRequiresRefreshToken() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let root = oauthRoot(["accessToken": "a", "expiresAt": 1_900_000_000_000.0])
+        XCTAssertFalse(ClaudeOAuthParser.canRenewAfterUsageRejection(in: root, now: now))
+    }
 }

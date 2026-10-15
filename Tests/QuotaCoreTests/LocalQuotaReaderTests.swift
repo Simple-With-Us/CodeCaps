@@ -102,7 +102,8 @@ final class LocalQuotaReaderTests: XCTestCase {
         )
 
         let result = await reader.read()
-        XCTAssertEqual(result.issues["anthropic"], "This account needs you to sign in again.")
+        XCTAssertEqual(result.issues["anthropic"], ClaudeLoginState.signedOut.issue)
+        XCTAssertFalse(result.consentNeeded.contains("anthropic"))
         XCTAssertEqual(result.issues["openai"], "Codex is not signed in locally.")
         XCTAssertEqual(result.issues["xai"], "Grok is not signed in locally.")
         XCTAssertFalse(result.issues.values.joined(separator: " ").contains("super-secret"))
@@ -183,6 +184,63 @@ final class LocalQuotaReaderTests: XCTestCase {
         XCTAssertEqual(result.issues["anthropic"], ClaudeLoginState.signedOut.issue)
         XCTAssertEqual(result.consentNeeded, [])
         XCTAssertNil(ClaudeCredentialSource.rememberedCredential())
+    }
+
+    func testClaudeFileTokenUsageRejectionTriggersRenewalWhenRefreshTokenPresent() async throws {
+        let home = try makeFixtureHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        try writeJSON(
+            ["claudeAiOauth": ["accessToken": "revoked", "refreshToken": "r", "subscriptionType": "max",
+                               "expiresAt": observedAt.addingTimeInterval(3600).timeIntervalSince1970]],
+            to: home.appendingPathComponent(".claude/.credentials.json"))
+        let renewed = Data(#"{"claudeAiOauth":{"accessToken":"fresh","refreshToken":"r","expiresAt":4102444800000}}"#.utf8)
+        var renewalRan = 0
+        var usageCalls = 0
+        let reader = LocalQuotaReader(
+            homeDirectory: home,
+            now: { self.observedAt },
+            fetchJSON: { request in
+                usageCalls += 1
+                if usageCalls == 1 {
+                    return Self.httpResponse(#"{"error":"unauthorized"}"#, status: 401)
+                }
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer fresh")
+                return Self.httpResponse(#"{"five_hour":{"utilization":10}}"#)
+            },
+            runAntigravity: { Data("{}".utf8) },
+            renewClaudeLogin: {
+                renewalRan += 1
+                try writeJSON(
+                    ["claudeAiOauth": ["accessToken": "fresh", "refreshToken": "r",
+                                       "expiresAt": 4_102_444_800_000]],
+                    to: home.appendingPathComponent(".claude/.credentials.json"))
+            },
+            renewalThrottle: ClaudeRenewalThrottle(minimumInterval: 0))
+        let result = await reader.read()
+        XCTAssertEqual(renewalRan, 1)
+        XCTAssertNil(result.issues["anthropic"])
+        XCTAssertEqual(result.windows.first { $0.providerKey == "anthropic" }?.remainingPercent, 90)
+    }
+
+    func testClaudeFileTokenUsageRejectionDoesNotSaySignInAgain() async throws {
+        let home = try makeFixtureHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        try writeJSON(
+            ["claudeAiOauth": ["accessToken": "file-token", "subscriptionType": "max",
+                               "expiresAt": observedAt.addingTimeInterval(3600).timeIntervalSince1970]],
+            to: home.appendingPathComponent(".claude/.credentials.json"))
+        let reader = LocalQuotaReader(
+            homeDirectory: home,
+            now: { self.observedAt },
+            fetchJSON: { request in
+                XCTAssertEqual(request.url?.host, "api.anthropic.com")
+                return Self.httpResponse(#"{"error":"unauthorized"}"#, status: 401)
+            },
+            runAntigravity: { Data("{}".utf8) })
+        let result = await reader.read()
+        XCTAssertEqual(result.issues["anthropic"], ClaudeLoginState.signedOut.issue)
+        XCTAssertNotEqual(result.issues["anthropic"], "This account needs you to sign in again.")
+        XCTAssertFalse(result.consentNeeded.contains("anthropic"))
     }
 
     func testARenewalThatLandsIsActuallyUsedOnTheSameRefresh() async throws {
