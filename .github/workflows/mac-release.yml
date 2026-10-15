@@ -55,7 +55,17 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  compile:
+    name: compile (macOS)
+    if: github.event.repository.fork == false
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Swift compile gate
+        run: swift build
+
   release:
+    needs: compile
     if: github.event.repository.fork == false
     runs-on: macos-latest
     timeout-minutes: 60

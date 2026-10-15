@@ -22,7 +22,16 @@ env:
   SCHEME: CodeCapsCompanion
 
 jobs:
+  compile:
+    name: compile (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Swift compile gate
+        run: swift build
+
   package:
+    needs: compile
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
@@ -41,6 +50,7 @@ jobs:
           if-no-files-found: warn
 
   companion:
+    needs: compile
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
