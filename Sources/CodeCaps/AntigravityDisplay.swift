@@ -101,9 +101,12 @@ struct DisplaySection: Identifiable, Equatable {
     /// the rule; this only adds the mask filter, because a masked reading is a
     /// real number that must not be believed and only the pool knows it.
     var atCapWindow: QuotaWindowSnapshot? {
-        section.windows
+        let eligible = section.windows
             .filter { !$0.window.isSupplementaryVideoQuota && !isMasked($0) }
             .filter { $0.remainingPercent != nil }
+        let primary = eligible.filter { !$0.window.isSubModelLimit }
+        let pool = primary.isEmpty ? eligible : primary
+        return pool
             .filter(\.isAtCap)
             .max { ($0.resetAt ?? .distantPast) < ($1.resetAt ?? .distantPast) }
     }
@@ -132,7 +135,7 @@ struct DisplaySection: Identifiable, Equatable {
             // A pool whose windows are all stale still shows its last reading,
             // greyed, rather than dropping to a dash.
             let lastReported = scoped.windows
-                .filter { !pool.maskedWindowIds.contains($0.window.id) && $0.remainingPercent != nil }
+                .filter { !pool.maskedWindowIds.contains($0.window.id) && $0.remainingPercent != nil && !$0.window.isSubModelLimit }
                 .min { ($0.remainingPercent ?? 100) < ($1.remainingPercent ?? 100) }
             return DisplaySection(id: "\(section.providerKey):\(pool.key)",
                                   providerKey: section.providerKey,

@@ -98,12 +98,19 @@ public enum UsageMonitorPushMetadata {
 
     private static func anthropicRateLimitKey(from window: QuotaWindow) -> String? {
         if let suffix = localMacSuffix(window.id) { return suffix }
-        switch window.window?.lowercased() {
+        let model = window.modelId?.lowercased()
+        let cadence = normalizeQuotaWindowToken(window.window ?? "")
+        if let model, !model.isEmpty {
+            let prefix = cadence == "5h" ? "five_hour" : "seven_day"
+            return "\(prefix)_\(model)"
+        }
+        switch cadence {
         case "5h": return "five_hour"
         case "7d", "168h", "weekly", "1w": return "seven_day"
         default: break
         }
         let label = window.label.lowercased()
+        if label.contains("fable") { return (label.contains("5h") || label.contains("5-hour")) ? "five_hour_fable" : "seven_day_fable" }
         if label.contains("opus") { return "seven_day_opus" }
         if label.contains("sonnet") { return "seven_day_sonnet" }
         if label.contains("5h") || label.contains("5-hour") { return "five_hour" }

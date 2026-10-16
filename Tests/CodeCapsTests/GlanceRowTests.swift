@@ -311,6 +311,55 @@ final class GlanceExpandedLineTests: XCTestCase {
             poolKey: "gemini", remainingPercent: 0, resetAt: nil, maskedWindowIds: ["5h"])
         XCTAssertTrue(glanceExpandedLines(for: masked, now: now).isEmpty)
     }
+
+    func testAntigravityGeminiWithArgonPutsArgonInExpandedLinesAndKeepsPrimaryHeadlineMeters() {
+        let gemini5h = window("antigravity:gemini:5h", provider: "google-antigravity", label: "Gemini Models · 5-hour", token: "5h", remaining: 99, resetIn: 5 * 3_600)
+        let geminiWeekly = window("antigravity:gemini:weekly", provider: "google-antigravity", label: "Gemini Models · 7-day", token: "7d", remaining: 76, resetIn: 6 * 86_400)
+        var argonWindow = window("local-mac:antigravity-summary:gemini-argon-wtu-weekly", provider: "google-antigravity", label: "Gemini 4 Argon · 7-day", token: "7d", remaining: 0, resetIn: 6 * 86_400, model: "argon")
+        argonWindow.modelType = "argon"
+
+        let geminiRow = DisplaySection(
+            id: "google-antigravity:gemini", providerKey: "google-antigravity", title: "Antigravity · Gemini Models",
+            platformTitle: "Antigravity",
+            section: QuotaPlatformSection(providerKey: "google-antigravity", providerLabel: "Antigravity",
+                                          via: nil, expected: true, windows: [
+                                            QuotaWindowSnapshot(window: gemini5h, now: now),
+                                            QuotaWindowSnapshot(window: geminiWeekly, now: now),
+                                            QuotaWindowSnapshot(window: argonWindow, now: now),
+                                          ]),
+            poolKey: "gemini", remainingPercent: 76, resetAt: now.addingTimeInterval(6 * 86_400), maskedWindowIds: [])
+
+        XCTAssertFalse(geminiRow.isAtCap, "Gemini row must not be marked at cap because Argon is at 0%")
+        let pair = glanceMeterPair(for: geminiRow, now: now)
+        XCTAssertEqual(pair.short?.window.id, "antigravity:gemini:5h")
+        XCTAssertEqual(pair.short?.remainingPercent, 99)
+        XCTAssertEqual(pair.long?.window.id, "antigravity:gemini:weekly")
+        XCTAssertEqual(pair.long?.remainingPercent, 76)
+
+        let lines = glanceExpandedLines(for: geminiRow, now: now)
+        XCTAssertEqual(lines.count, 1)
+        XCTAssertEqual(lines.first?.long?.window.id, "local-mac:antigravity-summary:gemini-argon-wtu-weekly")
+        XCTAssertEqual(lines.first?.long?.remainingPercent, 0)
+    }
+
+    func testClaudeWithFableAtZeroKeepsPrimaryHeadlineMetersAndIsExpandable() {
+        let fiveHour = window("five_hour", provider: "anthropic", label: "5-hour window", token: "5h", remaining: 75, resetIn: 4 * 3_600)
+        let sevenDay = window("seven_day", provider: "anthropic", label: "7-day window", token: "7d", remaining: 60, resetIn: 5 * 86_400)
+        let fable = window("seven_day_fable", provider: "anthropic", label: "7-day window", token: "7d", remaining: 0, resetIn: 5 * 86_400, model: "fable")
+
+        let claudeRow = row([fiveHour, sevenDay, fable])
+        XCTAssertFalse(claudeRow.isAtCap, "Claude row must not be marked at cap because Fable is at 0%")
+        let pair = glanceMeterPair(for: claudeRow, now: now)
+        XCTAssertEqual(pair.short?.window.id, "five_hour")
+        XCTAssertEqual(pair.short?.remainingPercent, 75)
+        XCTAssertEqual(pair.long?.window.id, "seven_day")
+        XCTAssertEqual(pair.long?.remainingPercent, 60)
+
+        let lines = glanceExpandedLines(for: claudeRow, now: now)
+        XCTAssertEqual(lines.count, 1)
+        XCTAssertEqual(lines.first?.long?.window.id, "seven_day_fable")
+        XCTAssertEqual(lines.first?.long?.remainingPercent, 0)
+    }
 }
 
 // MARK: - The two meters a compact row carries

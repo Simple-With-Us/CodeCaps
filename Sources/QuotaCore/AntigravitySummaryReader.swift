@@ -29,16 +29,46 @@ public struct AntigravitySummaryReader: Sendable {
             for group in groups {
                 guard let displayName = group["displayName"] as? String else { continue }
                 let family: String?
-                if displayName.localizedCaseInsensitiveContains("gemini") { family = "Gemini Models" }
-                else if displayName.localizedCaseInsensitiveContains("claude") || displayName.localizedCaseInsensitiveContains("gpt") || displayName.localizedCaseInsensitiveContains("third") { family = "Third-Party Models" }
-                else { family = nil }
+                let modelId: String?
+                if displayName.localizedCaseInsensitiveContains("argon") {
+                    family = "Gemini Models"
+                    modelId = "argon"
+                } else if displayName.localizedCaseInsensitiveContains("gemini") {
+                    family = "Gemini Models"
+                    modelId = nil
+                } else if displayName.localizedCaseInsensitiveContains("claude") || displayName.localizedCaseInsensitiveContains("gpt") || displayName.localizedCaseInsensitiveContains("third") {
+                    family = "Third-Party Models"
+                    modelId = nil
+                } else {
+                    family = nil
+                    modelId = nil
+                }
                 guard let family else { continue }
                 for bucket in (group["buckets"] as? [[String: Any]]) ?? [] {
                     guard let bucketID = bucket["bucketId"] as? String, let period = period(bucket) else { continue }
                     let fraction = finiteNumber(bucket["remainingFraction"]).flatMap { $0 >= 0 && $0 <= 1 ? $0 : nil }
                     let reset = bucket["resetTime"] as? String
-                    let label = "\(family) · \(period == "5h" ? QuotaWindowVocabulary.fiveHour : QuotaWindowVocabulary.sevenDay)"
-                    windows.append(QuotaWindow(id: "local-mac:antigravity-summary:\(bucketID)", provider: "Antigravity", providerKey: "google-antigravity", providerLabel: "Antigravity", via: "antigravity", sourceApp: "local-mac", label: label, remainingPercent: fraction.map { $0 * 100 }, remainingUnknown: fraction == nil, resetAt: reset, window: period, occurredAt: iso8601(observed), source: "Antigravity quota summary"))
+                    let cadenceName = period == "5h" ? QuotaWindowVocabulary.fiveHour : QuotaWindowVocabulary.sevenDay
+                    let label = modelId == "argon"
+                        ? "Gemini 4 Argon · \(cadenceName)"
+                        : "\(family) · \(cadenceName)"
+                    windows.append(QuotaWindow(
+                        id: "local-mac:antigravity-summary:\(bucketID)",
+                        provider: "Antigravity",
+                        providerKey: "google-antigravity",
+                        providerLabel: "Antigravity",
+                        via: "antigravity",
+                        sourceApp: "local-mac",
+                        modelId: modelId,
+                        modelType: modelId,
+                        label: label,
+                        remainingPercent: fraction.map { $0 * 100 },
+                        remainingUnknown: fraction == nil,
+                        resetAt: reset,
+                        window: period,
+                        occurredAt: iso8601(observed),
+                        source: "Antigravity quota summary"
+                    ))
                 }
             }
             guard !windows.isEmpty else { throw SummaryError.malformed }

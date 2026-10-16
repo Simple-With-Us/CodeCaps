@@ -798,15 +798,20 @@ extension QuotaPlatformSection {
 
     /// The window a one-line row speaks for: whichever is closest to its cap.
     var drivingWindow: QuotaWindowSnapshot? {
-        let primary = windows.filter { !$0.window.isSupplementaryVideoQuota }
-        return primary.filter { $0.remainingPercent != nil }
+        let eligible = windows.filter { !$0.window.isSupplementaryVideoQuota }
+        let primary = eligible.filter { !$0.window.isSubModelLimit }
+        let pool = primary.isEmpty ? eligible : primary
+        return pool.filter { $0.remainingPercent != nil }
             .min { ($0.remainingPercent ?? 100) < ($1.remainingPercent ?? 100) }
-            ?? primary.first
+            ?? pool.first
     }
 
     /// The lowest remaining percentage across the windows a sidebar row summarises.
     var minimumRemainingPercent: Double? {
-        windows.filter { $0.isFresh && !$0.window.isSupplementaryVideoQuota }
+        let fresh = windows.filter { $0.isFresh && !$0.window.isSupplementaryVideoQuota }
+        let primary = fresh.filter { !$0.window.isSubModelLimit }
+        let pool = primary.isEmpty ? fresh : primary
+        return pool
             .compactMap(\.remainingPercent)
             .min()
     }
@@ -940,13 +945,16 @@ struct PlatformCard: View {
     private var section: QuotaPlatformSection { row.section }
 
     private var primaryWindows: [QuotaWindowSnapshot] {
-        section.windows.filter { !$0.window.isSupplementaryVideoQuota }
+        section.windows.filter { !$0.window.isSupplementaryVideoQuota && !$0.window.isSubModelLimit }
+    }
+    private var allNonVideoWindows: [QuotaWindowSnapshot] {
+        section.windows.filter { !$0.window.isSupplementaryVideoQuota && !$0.window.isExtraneousWeeklyVideoQuota }
     }
     private var videoWindows: [QuotaWindowSnapshot] {
         section.windows.filter { $0.window.isSupplementaryVideoQuota && !$0.window.isExtraneousWeeklyVideoQuota }
     }
     private var displayedWindows: [QuotaWindowSnapshot] {
-        expanded ? primaryWindows : Array(primaryWindows.prefix(4))
+        expanded ? allNonVideoWindows : Array(primaryWindows.prefix(4))
     }
     private var subtitleText: String? {
         if origin == .fleet {
@@ -1048,8 +1056,8 @@ struct PlatformCard: View {
                          masked: row.isMasked(snapshot))
             }
         }
-        if primaryWindows.count > 4 {
-            Button(expanded ? "Show less" : "Show all \(primaryWindows.count) windows") {
+        if allNonVideoWindows.count > primaryWindows.count || primaryWindows.count > 4 {
+            Button(expanded ? "Show less" : "Show all \(allNonVideoWindows.count) windows") {
                 expanded.toggle()
             }
             .buttonStyle(.plain)
