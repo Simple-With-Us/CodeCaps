@@ -493,7 +493,7 @@ private func unknownWindow(provider: Provider, label: String, observedAt: Date) 
 }
 
 private func parseClaude(_ root: [String: Any], planType: String?, observedAt: Date) -> [QuotaWindow] {
-    let suffixes = ["opus", "sonnet", "haiku"]
+    let suffixes = ["opus", "sonnet", "haiku", "fable"]
     var result: [QuotaWindow] = []
     for (key, raw) in root {
         let value = record(raw)
@@ -502,10 +502,16 @@ private func parseClaude(_ root: [String: Any], planType: String?, observedAt: D
         guard utilization != nil || direct != nil else { continue }
         var base = key
         var model: String?
-        for suffix in suffixes where key.hasSuffix("_\(suffix)") {
-            model = suffix
-            base = String(key.dropLast(suffix.count + 1))
-            break
+        for suffix in suffixes {
+            if key.hasSuffix("_\(suffix)") {
+                model = suffix
+                base = String(key.dropLast(suffix.count + 1))
+                break
+            } else if key.hasPrefix("\(suffix)_") {
+                model = suffix
+                base = String(key.dropFirst(suffix.count + 1))
+                break
+            }
         }
         let resetAt = firstTimestamp(value, ["resets_at", "resetsAt", "reset_at", "resetAt"])
         let resetDate = resetAt.flatMap(parseDate)

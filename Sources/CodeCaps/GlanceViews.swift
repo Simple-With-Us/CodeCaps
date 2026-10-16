@@ -223,7 +223,7 @@ struct GlancePopover: View {
                          markStyle: model.glanceMarkStyle(for: row.id),
                          showsAlarmToggle: !model.alarmsAll,
                          isAlarmEnabled: model.isProviderAlarmSelected(row.id),
-                         allowsExpansion: origin == .fleet && glanceRowAllowsExpansion(row, origin: origin),
+                         allowsExpansion: glanceRowAllowsExpansion(row, origin: origin),
                          isExpanded: expandedIds.contains(key),
                          hasAnomaly: hasAnomaly,
                          pacingHighlights: model.pacingColorHighlights,
@@ -1213,14 +1213,17 @@ func glanceMeterPair(for row: DisplaySection, now: Date) -> GlanceMeterPair {
         }
     }
 
-    let shortest = candidates.filter { glanceCadence($0, now: now) == .short }
-    let longest = candidates.filter { glanceCadence($0, now: now) == .long }
+    let primary = candidates.filter { !$0.window.isSubModelLimit }
+    let eligible = primary.isEmpty ? candidates : primary
+
+    let shortest = eligible.filter { glanceCadence($0, now: now) == .short }
+    let longest = eligible.filter { glanceCadence($0, now: now) == .long }
 
     // A provider that publishes only one cadence — Grok Bot's weekly meter, or
     // a plan-only subscription — still fills the first slot.  The second slot
     // then falls back to the next window closest to its cap, so a provider
     // with two unnamed windows still gets two meters.
-    let short = nearestToCap(shortest) ?? nearestToCap(candidates) ?? anchor
+    let short = nearestToCap(shortest) ?? nearestToCap(eligible) ?? anchor
     // Both fallbacks exclude the window the first slot already took, and any
     // copy of it.  A single-window provider that classifies as long — which
     // every weekly meter does — would otherwise resolve `longest` to the same
@@ -1236,7 +1239,7 @@ func glanceMeterPair(for row: DisplaySection, now: Date) -> GlanceMeterPair {
         snapshot.remainingPercent != nil || snapshot.resetAt != nil
     }
     let longCandidates = longest.filter(distinct).filter(hasInformation)
-    let fallbackCandidates = candidates.filter(distinct).filter(hasInformation)
+    let fallbackCandidates = eligible.filter(distinct).filter(hasInformation)
     let long = nearestToCap(longCandidates) ?? nearestToCap(fallbackCandidates)
     return GlanceMeterPair(short: short, long: long)
 }
@@ -2203,12 +2206,13 @@ struct GlanceRow: View {
                         Spacer().frame(width: Metrics.glanceAlarmBellWidth + Metrics.glanceLogoGap)
                     }
                     Spacer().frame(width: Metrics.glanceLogoWidth + Metrics.glanceLogoGap)
-                    Text(line.label)
+                    Text(lineTitle(line))
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
                         .frame(width: Metrics.glanceRowTitleWidth, alignment: .leading)
+                        .help(lineHelp(line))
                     Spacer().frame(width: Metrics.glanceColumnGap)
                     GlanceMeterColumns(short: line.short, long: line.long, now: now,
                                        pacingHighlights: pacingHighlights,
@@ -2221,13 +2225,42 @@ struct GlanceRow: View {
                 // An explicit value, as the row has: a label alone replaces
                 // the combined children's, which would drop the "1d" and "7d".
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel(line.label)
+                .accessibilityLabel(lineAccessibilityTitle(line))
                 .accessibilityValue(glanceMetersSpeech([line.short, line.long], now: now))
             }
         }
         .padding(.bottom, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.surface.opacity(0.55))
+    }
+
+    private func lineTitle(_ line: GlanceMeterLine) -> String {
+        let windows = [line.short, line.long].compactMap { $0 }
+        if let subModel = windows.first(where: { $0.window.isSubModelLimit }) {
+            if subModel.window.canonicalProviderKey == "google-antigravity" {
+                return "Gemini 4 Argon"
+            }
+            if let model = subModel.window.modelId, !model.isEmpty {
+                return model.capitalized
+            }
+            if subModel.window.label.localizedCaseInsensitiveContains("fable") {
+                return "Fable"
+            }
+        }
+        return line.label
+    }
+
+    private func lineHelp(_ line: GlanceMeterLine) -> String {
+        let windows = [line.short, line.long].compactMap { $0 }
+        if let first = windows.first {
+            return first.window.label
+        }
+        return line.label
+    }
+
+    private func lineAccessibilityTitle(_ line: GlanceMeterLine) -> String {
+        let title = lineTitle(line)
+        return title == line.label ? line.label : "\(title), \(line.label)"
     }
 
     /// Speaks both cadences, not just the row's headline number, because that

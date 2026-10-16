@@ -10,7 +10,7 @@ public enum AntigravityQuotaGroups {
         var result = other
         for family in ["gemini", "third-party"] {
             for period in ["5h", "weekly"] {
-                let candidates = reports.filter { pool($0) == family && cadence($0) == period }
+                let candidates = reports.filter { !$0.isSubModelLimit && pool($0) == family && cadence($0) == period }
                 // Prefer the latest observation.  Tied model observations of the same
                 // shared pool use the lower value; never average or add percentages.
                 let selected = candidates.sorted {
@@ -42,6 +42,10 @@ public enum AntigravityQuotaGroups {
                 // consumer would route to it.  Restate the derived fields.
                 result.append(value.normalizedForExport())
             }
+        }
+        let subModels = reports.filter { $0.isSubModelLimit }
+        for subModel in subModels {
+            result.append(subModel.normalizedForExport())
         }
         return result
     }
@@ -104,21 +108,26 @@ public enum AntigravityQuotaGroups {
             let owned = reports.filter { poolKey(for: $0) == key }
             guard !owned.isEmpty else { continue }
             let ordered = owned.sorted { left, right in
+                let leftSub = left.isSubModelLimit
+                let rightSub = right.isSubModelLimit
+                if leftSub != rightSub { return !leftSub }
                 let leftWeekly = cadence(left) == "weekly"
                 let rightWeekly = cadence(right) == "weekly"
                 if leftWeekly != rightWeekly { return !leftWeekly }
                 return left.id < right.id
             }
             let weeklyExhausted = ordered.contains {
-                cadence($0) == "weekly" && $0.boundedRemainingPercent == 0
+                !$0.isSubModelLimit && cadence($0) == "weekly" && $0.boundedRemainingPercent == 0
             }
             let masked: Set<String> = weeklyExhausted
-                ? Set(ordered.filter { cadence($0) == "5h" }.map(\.id))
+                ? Set(ordered.filter { !$0.isSubModelLimit && cadence($0) == "5h" }.map(\.id))
                 : []
             // A stale observation is still shown, but it never sets the pool's
-            // headline number while a fresh one exists.
+            // headline number while a fresh one exists.  Sub-models do not drive
+            // the pool headline.
             let counted = ordered.filter {
-                !masked.contains($0.id)
+                !$0.isSubModelLimit
+                    && !masked.contains($0.id)
                     && $0.boundedRemainingPercent != nil
                     && QuotaWindowSnapshot(window: $0, now: now).isFresh
             }
@@ -134,6 +143,11 @@ public enum AntigravityQuotaGroups {
                                maskedWindowIds: masked))
         }
         return result
+    }
+
+    /// Whether this window represents a sub-model limit rather than a primary pool window.
+    public static func isSubModel(_ value: QuotaWindow) -> Bool {
+        value.isSubModelLimit
     }
 
     /// The ids of windows whose percentage must not be shown or counted: a
@@ -154,7 +168,7 @@ public enum AntigravityQuotaGroups {
 
     private static func pool(_ value: QuotaWindow) -> String? {
         let identity = [value.modelId, value.modelType, value.label].compactMap { $0 }.joined(separator: " ").lowercased()
-        if identity.contains("gemini") { return "gemini" }
+        if identity.contains("gemini") || identity.contains("argon") { return "gemini" }
         if ["third-party", "third party", "third_party", "claude", "gpt", "openai", "anthropic"].contains(where: identity.contains) { return "third-party" }
         return nil
     }

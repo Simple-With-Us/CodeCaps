@@ -210,7 +210,7 @@ final class LocalQuotaReaderTests: XCTestCase {
             runAntigravity: { Data("{}".utf8) },
             renewClaudeLogin: {
                 renewalRan += 1
-                try writeJSON(
+                try? self.writeJSON(
                     ["claudeAiOauth": ["accessToken": "fresh", "refreshToken": "r",
                                        "expiresAt": 4_102_444_800_000]],
                     to: home.appendingPathComponent(".claude/.credentials.json"))
@@ -415,6 +415,31 @@ final class LocalQuotaReaderTests: XCTestCase {
         XCTAssertEqual(opus.window, "5h")
         // A key with no suffix covers the whole subscription; the family stays empty.
         XCTAssertNil(claude.first { $0.window == "7d" }?.modelType)
+    }
+
+    func testClaudeRateLimitKeyWithFableIsParsedAsSubModel() async throws {
+        let root = try makeFixtureHome()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try writeJSON(["claudeAiOauth": ["accessToken": "claude-secret", "subscriptionType": "max", "expiresAt": observedAt.addingTimeInterval(3600).timeIntervalSince1970]], to: root.appendingPathComponent(".claude/.credentials.json"))
+        let reader = LocalQuotaReader(homeDirectory: root, now: { self.observedAt }, fetchJSON: { _ in
+            Self.httpResponse(#"{"five_hour":{"utilization":25},"seven_day":{"utilization":40},"seven_day_fable":{"utilization":100}}"#)
+        }, runAntigravity: { Data("{}".utf8) })
+
+        let claude = await reader.read().windows.filter { $0.providerKey == "anthropic" }
+        XCTAssertEqual(claude.count, 3)
+        let primary5h = try XCTUnwrap(claude.first { $0.id.hasSuffix(":five_hour") })
+        XCTAssertEqual(primary5h.remainingPercent, 75)
+        XCTAssertFalse(primary5h.isSubModelLimit)
+
+        let primary7d = try XCTUnwrap(claude.first { $0.id.hasSuffix(":seven_day") })
+        XCTAssertEqual(primary7d.remainingPercent, 60)
+        XCTAssertFalse(primary7d.isSubModelLimit)
+
+        let fable = try XCTUnwrap(claude.first { $0.modelId == "fable" })
+        XCTAssertEqual(fable.id, "local-mac:anthropic:seven_day_fable")
+        XCTAssertEqual(fable.modelType, "fable")
+        XCTAssertEqual(fable.remainingPercent, 0)
+        XCTAssertTrue(fable.isSubModelLimit)
     }
 
     private func writeJSON(_ object: Any, to url: URL) throws {

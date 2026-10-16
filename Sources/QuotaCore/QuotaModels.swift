@@ -200,6 +200,23 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
             || absoluteLimit == 35
     }
 
+    /// Whether this window represents a model-specific sub-quota (e.g. Gemini 4 Argon or Claude Fable/Sonnet)
+    /// rather than the platform's primary shared account/pool quota.
+    public var isSubModelLimit: Bool {
+        if canonicalProviderKey == "google-antigravity" {
+            if let modelId = modelId?.lowercased(), modelId.contains("argon") { return true }
+            if let modelType = modelType?.lowercased(), modelType.contains("argon") { return true }
+            if label.localizedCaseInsensitiveContains("argon") { return true }
+            return false
+        }
+        if canonicalProviderKey == "anthropic" {
+            if let model = modelId?.lowercased(), !model.isEmpty { return true }
+            let lower = label.lowercased()
+            return lower.contains("fable") || lower.contains("sonnet") || lower.contains("opus") || lower.contains("haiku")
+        }
+        return false
+    }
+
     /// A bounded value suitable for display.  NaN and infinities are unknown.
     public var boundedRemainingPercent: Double? {
         guard !remainingUnknown, let value = remainingPercent, value.isFinite else { return nil }
@@ -533,8 +550,11 @@ public struct QuotaPlatformSection: Equatable, Sendable {
     /// Antigravity pool grouper knows about — are filtered by the caller, in
     /// `DisplaySection.atCapWindow()`.
     public func atCapWindow() -> QuotaWindowSnapshot? {
-        windows
+        let eligible = windows
             .filter { !$0.window.isSupplementaryVideoQuota && $0.remainingPercent != nil }
+        let primary = eligible.filter { !$0.window.isSubModelLimit }
+        let pool = primary.isEmpty ? eligible : primary
+        return pool
             .filter(\.isAtCap)
             .max { ($0.resetAt ?? .distantPast) < ($1.resetAt ?? .distantPast) }
     }

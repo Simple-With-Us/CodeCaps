@@ -848,9 +848,9 @@ final class MonitorModel: ObservableObject {
     var menuBarTargetSnapshots: [QuotaWindowSnapshot] {
         switch menuBarQuotaSelection {
         case "most_urgent_5h":
-            return [pickMenuBarTarget(from: freshWindows.filter(isFiveHourMenuBarWindow))].compactMap { $0 }
+            return [pickMenuBarTarget(from: freshWindows.filter { !$0.window.isSubModelLimit }.filter(isFiveHourMenuBarWindow))].compactMap { $0 }
         case "most_urgent_weekly":
-            return [pickMenuBarTarget(from: freshWindows.filter(isWeeklyMenuBarWindow))].compactMap { $0 }
+            return [pickMenuBarTarget(from: freshWindows.filter { !$0.window.isSubModelLimit }.filter(isWeeklyMenuBarWindow))].compactMap { $0 }
         case "smart_pair":
             return smartPairTargets
         case "auto_lowest_active":
@@ -858,11 +858,13 @@ final class MonitorModel: ObservableObject {
             // any non-zero quota; this is what "auto" means once the owner has
             // ranked sources.  The pre-rank behaviour (lowest % across all
             // windows) is preserved by the fallback when no rank is set.
-            let nonZero = freshWindows.filter { ($0.remainingPercent ?? 0) > 0 }
-            let pool = nonZero.isEmpty ? freshWindows : nonZero
+            let candidates = freshWindows.filter { !$0.window.isSubModelLimit }
+            let nonZero = candidates.filter { ($0.remainingPercent ?? 0) > 0 }
+            let pool = nonZero.isEmpty ? candidates : nonZero
             return [pickMenuBarTarget(from: pool)].compactMap { $0 }
         case "auto_lowest":
-            return [pickMenuBarTarget(from: freshWindows)].compactMap { $0 }
+            let candidates = freshWindows.filter { !$0.window.isSubModelLimit }
+            return [pickMenuBarTarget(from: candidates.isEmpty ? freshWindows : candidates)].compactMap { $0 }
         default:
             if menuBarQuotaSelection.hasPrefix("platform_pair:") {
                 let rowID = String(menuBarQuotaSelection.dropFirst("platform_pair:".count))
@@ -872,7 +874,7 @@ final class MonitorModel: ObservableObject {
                     return [short, weekly]
                 }
                 let valid = row.section.windows.filter {
-                    $0.isFresh && $0.remainingPercent != nil && !$0.window.isSupplementaryVideoQuota && !row.isMasked($0)
+                    $0.isFresh && $0.remainingPercent != nil && !$0.window.isSupplementaryVideoQuota && !$0.window.isSubModelLimit && !row.isMasked($0)
                 }
                 if valid.count >= 2 {
                     return [valid[0], valid[1]]
@@ -883,8 +885,8 @@ final class MonitorModel: ObservableObject {
                 let rowID = String(menuBarQuotaSelection.dropFirst("platform:".count))
                 guard let row = displaySections.first(where: { $0.id == rowID }) else { return [] }
                 let rowIDs = Set(row.section.windows.map { $0.window.id })
-                let targets = freshWindows.filter { rowIDs.contains($0.window.id) }
-                return [pickMenuBarTarget(from: targets)].compactMap { $0 }
+                let targets = freshWindows.filter { rowIDs.contains($0.window.id) && !$0.window.isSubModelLimit }
+                return [pickMenuBarTarget(from: targets.isEmpty ? freshWindows.filter { rowIDs.contains($0.window.id) } : targets)].compactMap { $0 }
             }
             // An explicit pin is honoured regardless of rank — the owner asked
             // for this specific window and we do not second-guess.
@@ -902,7 +904,7 @@ final class MonitorModel: ObservableObject {
                 currentIDs.contains("\($0.window.canonicalProviderKey):\($0.window.id)")
             }
             guard !windows.isEmpty else { return nil }
-            let pairWindows = windows.filter { isShortMenuBarWindow($0) || isWeeklyMenuBarWindow($0) }
+            let pairWindows = windows.filter { !$0.window.isSubModelLimit && (isShortMenuBarWindow($0) || isWeeklyMenuBarWindow($0)) }
             let scopedSection = QuotaPlatformSection(providerKey: row.section.providerKey,
                                                      providerLabel: row.section.providerLabel,
                                                      via: row.section.via,

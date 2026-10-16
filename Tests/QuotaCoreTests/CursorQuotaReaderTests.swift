@@ -11,11 +11,14 @@ final class CursorQuotaReaderTests: XCTestCase {
             now: { self.observedAt },
             accessToken: { token },
             fetch: { request in
-                XCTAssertEqual(request.value(forHTTPHeaderField: "Cookie"), "WorkosCursorSessionToken=cursor-user-1%3A%3A\(token)")
-                XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
-                return Self.response("""
-                {"billingCycleEnd":"2026-10-01T00:00:00Z","membershipType":"pro","individualUsage":{"plan":{"used":2500,"limit":10000,"remaining":7500,"totalPercentUsed":25},"onDemand":{"used":999,"limit":1000,"remaining":1}}}
-                """)
+                if request.url?.path.contains("usage-summary") == true {
+                    XCTAssertEqual(request.value(forHTTPHeaderField: "Cookie"), "WorkosCursorSessionToken=cursor-user-1%3A%3A\(token)")
+                    XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+                    return Self.response("""
+                    {"billingCycleEnd":"2026-10-01T00:00:00Z","membershipType":"pro","individualUsage":{"plan":{"used":2500,"limit":10000,"remaining":7500,"totalPercentUsed":25},"onDemand":{"used":999,"limit":1000,"remaining":1}}}
+                    """)
+                }
+                return Self.response("{}", status: 404)
             }
         )
 
@@ -166,8 +169,8 @@ final class CursorQuotaReaderTests: XCTestCase {
         XCTAssertNil(result.issues["cursor"])
         XCTAssertEqual(window.remainingPercent, 25)
         XCTAssertEqual(window.window, "weekly")
-        XCTAssertEqual(window.periodStart, cursorISOString(ms: weeklyStartMs))
-        XCTAssertEqual(window.resetAt, cursorISOString(ms: weeklyEndMs))
+        XCTAssertEqual(window.periodStart, Self.cursorISOString(ms: weeklyStartMs))
+        XCTAssertEqual(window.resetAt, Self.cursorISOString(ms: weeklyEndMs))
     }
 
     func testMidCycleVendorRestoreOnWeeklyPoolUpdatesRemainingPercent() async throws {
@@ -210,12 +213,14 @@ final class CursorQuotaReaderTests: XCTestCase {
                 return Self.response(#"{"membershipType":"ultra","individualUsage":{"plan":{"totalPercentUsed":40}}}"#)
             }
         )
-        let first = try XCTUnwrap((await reader.read()).windows.first)
-        XCTAssertEqual(first.periodStart, cursorISOString(ms: oldStartMs))
-        XCTAssertEqual(first.resetAt, cursorISOString(ms: oldEndMs))
-        let second = try XCTUnwrap((await reader.read()).windows.first)
-        XCTAssertEqual(second.periodStart, cursorISOString(ms: newStartMs))
-        XCTAssertEqual(second.resetAt, cursorISOString(ms: newEndMs))
+        let read1 = await reader.read()
+        let first = try XCTUnwrap(read1.windows.first)
+        XCTAssertEqual(first.periodStart, Self.cursorISOString(ms: oldStartMs))
+        XCTAssertEqual(first.resetAt, Self.cursorISOString(ms: oldEndMs))
+        let read2 = await reader.read()
+        let second = try XCTUnwrap(read2.windows.first)
+        XCTAssertEqual(second.periodStart, Self.cursorISOString(ms: newStartMs))
+        XCTAssertEqual(second.resetAt, Self.cursorISOString(ms: newEndMs))
     }
 
     func testPeriodUsageTransportFailureStillReturnsMonthlySummary() async throws {
