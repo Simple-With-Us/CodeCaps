@@ -29,6 +29,13 @@ final class PlatformLogoResourceTests: XCTestCase {
         "muse", "muse-assist", "muse-code", "cursor",
     ]
 
+    func testMissingAppearanceVariantFallsBackToTheColourMarkBeforePlaceholder() {
+        XCTAssertEqual(PlatformLogoImage.bundledFilenames(base: "claude", style: .template, isDark: true),
+                       ["claude-dark.png", "claude-color.png", "claude.png"])
+        XCTAssertEqual(PlatformLogoImage.bundledFilenames(base: "claude", style: .standard, isDark: false),
+                       ["claude-color.png", "claude.png"])
+    }
+
     func testEveryProviderKeyResolvesABundledMark() {
         for key in providerKeys {
             for style in [MarkStyle.standard, .template] {

@@ -1492,7 +1492,7 @@ public final class CompanionQuotaModel: ObservableObject {
             isAlarmEnabled: alarmProviderIds.contains(itemId),
             windows: childWindows,
             duplicateWindows: [],
-            iconHint: "gemini-color"
+            iconHint: poolKey == "third-party" ? "antigravity" : "gemini"
         )
     }
 

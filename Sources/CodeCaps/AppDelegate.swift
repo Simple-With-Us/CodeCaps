@@ -69,6 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         return image
     }()
     private let popover = NSPopover()
+    private var floatingGlance: NSWindow?
     private var outsideClickMonitor: Any?
     private var consoleWindow: NSWindow?
     /// Presents the "this platform is about to run out" window.  Nil until a
@@ -120,6 +121,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         // resign the console window's key status (right-click, Dock reopen,
         // notification tap, etc.).
         popover.delegate = self
+        model.$glanceAttachedToMenuBar.removeDuplicates().sink { [weak self] attached in
+            guard let self else { return }
+            if attached {
+                self.floatingGlance?.orderOut(nil)
+                self.floatingGlance = nil
+                self.applyActivationPolicy()
+            } else {
+                self.popover.performClose(nil)
+                self.showFloatingGlance()
+            }
+        }.store(in: &subscriptions)
         model.$displayMode.removeDuplicates().sink { [weak self] mode in
             self?.apply(mode)
         }.store(in: &subscriptions)
@@ -133,6 +145,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             // The popover keeps its own appearance and does not follow NSApp,
             // so Dark has to be handed to it directly.
             self?.popover.appearance = resolved
+            self?.floatingGlance?.appearance = resolved
         }.store(in: &subscriptions)
         // The owner asked (2026-10-02) for the console to dock and come to
         // the front like HogHunter's does, rather than carry a "Keep In
@@ -158,6 +171,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         model.objectWillChange.sink { [weak self] _ in
             DispatchQueue.main.async {
                 self?.updateStatus()
+                if let self, let window = self.floatingGlance, window.isVisible {
+                    let size = NSSize(width: Metrics.glanceWidth, height: QuotaGlanceMetrics.popoverHeight(for: self.model, on: window.screen))
+                    if abs(window.contentLayoutRect.height - size.height) > 1 { window.setContentSize(size) }
+                }
                 if let self, self.popover.isShown, let button = self.statusItem?.button {
                     // Once the console window owns the screen at the elevated
                     // level, every model tick (the 30s clock and the 300s
@@ -271,7 +288,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     func applicationWillTerminate(_ notification: Notification) { model.stop() }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        showConsole(page: nil)
+        if model.glanceAttachedToMenuBar { showConsole(page: nil) }
+        else { showFloatingGlance() }
         return true
     }
 
@@ -422,6 +440,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     @objc private func togglePopover() {
+        guard model.glanceAttachedToMenuBar else { showFloatingGlance(); return }
         guard let button = statusItem?.button else { showConsole(page: nil); return }
         if popover.isShown { popover.performClose(nil) }
         else {
@@ -436,6 +455,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             popover.contentViewController?.view.window?.makeKey()
         }
+    }
+
+    private func showFloatingGlance() {
+        if floatingGlance == nil {
+            let size = NSSize(width: Metrics.glanceWidth,
+                              height: QuotaGlanceMetrics.popoverHeight(for: model, on: NSScreen.main))
+            let window = NSWindow(contentRect: NSRect(origin: .zero, size: size),
+                                  styleMask: [.titled, .closable, .miniaturizable],
+                                 backing: .buffered, defer: false)
+            window.title = "CodeCaps"
+            window.delegate = self
+            window.isReleasedWhenClosed = false
+            window.isMovableByWindowBackground = true
+            switch model.appearance {
+            case .light: window.appearance = NSAppearance(named: .aqua)
+            case .dark: window.appearance = NSAppearance(named: .darkAqua)
+            case .system: window.appearance = nil
+            }
+            window.center()
+            window.setFrameAutosaveName("CodeCapsFloatingGlance")
+            let controller = NSHostingController(rootView: GlancePopover(
+                model: model,
+                openConsole: { [weak self] page in self?.showConsole(page: page) },
+                openSettings: { [weak self] in self?.showSettings() },
+                openAlert: { [weak self] provider, quota, time in
+                    self?.showAlert(providerKey: provider, windowId: quota, at: time)
+                },
+                occlusion: glanceOcclusion))
+            controller.sizingOptions = []
+            window.contentViewController = controller
+            floatingGlance = window
+        }
+        if floatingGlance?.isMiniaturized == true { floatingGlance?.deminiaturize(nil) }
+        floatingGlance?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        applyActivationPolicy()
     }
 
     // MARK: - Popover outside-click dismissal
@@ -518,6 +573,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     /// Kept so existing selectors and call sites keep working.
     @objc func showMonitor() {
+        guard model.glanceAttachedToMenuBar else { showFloatingGlance(); return }
         if case .platform(let key) = consoleState.page,
            model.displaySections.contains(where: { $0.id == key }) {
             consoleState.clearHistoryFocus()
@@ -563,7 +619,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// the app reverts to .accessory so no stray Dock icon remains.
     private func applyActivationPolicy() {
         let docked = model.displayMode != .menuBar
-        let hasWindow = consoleWindow?.isVisible ?? false
+        let hasWindow = (consoleWindow?.isVisible ?? false) || (floatingGlance?.isVisible ?? false)
         NSApp.setActivationPolicy((docked || hasWindow) ? .regular : .accessory)
     }
 
@@ -619,11 +675,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// Closing the console is what takes the Dock icon away in menu bar mode.
     /// In Dock mode, the icon is kept.
     func windowWillClose(_ notification: Notification) {
-        guard let window = notification.object as? NSWindow, window === consoleWindow else { return }
+        guard let window = notification.object as? NSWindow else { return }
+        if window === floatingGlance {
+            floatingGlance = nil
+            applyActivationPolicy()
+            return
+        }
+        guard window === consoleWindow else { return }
         popover.close()
         lowerConsole()
         let docked = model.displayMode != .menuBar
-        NSApp.setActivationPolicy(docked ? .regular : .accessory)
+        NSApp.setActivationPolicy((docked || (floatingGlance?.isVisible ?? false)) ? .regular : .accessory)
     }
 
     private func configureMenu() {

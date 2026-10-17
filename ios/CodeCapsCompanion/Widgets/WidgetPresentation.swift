@@ -535,7 +535,7 @@ public enum WidgetPresentation {
                 title: "3rd-Party",
                 windows: thirdPartyWindows,
                 now: now,
-                iconHint: "gemini-mono",
+                iconHint: "antigravity",
                 defaultLabel: defaultWindowLabel(for: "google-antigravity", in: manifest)
             ) {
                 platforms.append(item)

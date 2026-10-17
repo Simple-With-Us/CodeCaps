@@ -23,14 +23,14 @@ enum PipMetrics {
     static let rowSpacing: CGFloat = 4
     static let meterSpacing: CGFloat = 3
     static let providerLogoSize: CGFloat = 14
-    static let titleWidth: CGFloat = 60
+    static let titleWidth: CGFloat = 150
     static let cadenceWidth: CGFloat = 18
     static let cadenceExpandedWidth: CGFloat = 40
     /// Wide enough for "100%" in bold monospaced digits at 10pt, left-aligned so
     /// a long number never clips: the owner saw "100%" lose a couple of points
     /// at the narrow end when it was right-aligned into a tight frame.
     static let percentWidth: CGFloat = 30
-    static let countdownWidth: CGFloat = 30
+    static let countdownWidth: CGFloat = 42
     static let barMinWidth: CGFloat = 20
     static let barHeight: CGFloat = 4
 
@@ -52,7 +52,7 @@ enum PipMetrics {
 
     /// A window with no dual-meter row opens comfortably wide without being
     /// wider than it needs to look.
-    static let singleMeterDefaultWidth: CGFloat = 300
+    static let singleMeterDefaultWidth: CGFloat = 430
 
     // MARK: Derived widths
 
@@ -203,8 +203,13 @@ enum PipMetrics {
     /// that matters is the row's own width at the detail level in force, which
     /// moves when any bar metric changes.  The result lands in his range: the
     /// squeeze point is around 222pt, and this is roughly 90pt past it.
-    static func rowsScrollHorizontally(forWidth width: CGFloat, detail: Detail) -> Bool {
-        width >= padding * 2 + rowWidth(for: detail) + horizontalPeek
+    static func rowsScrollHorizontally(forWidth width: CGFloat) -> Bool {
+        // The threshold uses the richest row width so it is monotonic in panel
+        // width: deriving it from the detail level in force flipped the strip
+        // on and off as a resize crossed the detail ladder (owner 2026-10-16:
+        // "as you stretch it out it alternates between showing correctly or
+        // not").
+        width >= padding * 2 + rowWidth(for: .full) + horizontalPeek
     }
 
     /// How many rows fit in `height` without clipping, never fewer than one.
@@ -238,6 +243,7 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
 
     private var panel: NSPanel?
     private weak var currentModel: MonitorModel?
+    private var dragMonitor: PipDragMonitor?
 
     /// The pinned rows the panel was last sized for.  The panel is refitted only
     /// when this changes, so a size the owner chose by dragging is theirs to
@@ -275,6 +281,7 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
     }
 
     func close() {
+        dragMonitor = nil
         panel?.orderOut(nil)
         panel = nil
     }
@@ -327,8 +334,11 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
     }
 
     private func createPanel(model: MonitorModel) {
+        let rows = Self.targetRows(for: model)
+        let initialSize = PipMetrics.fitSize(rowCount: rows.count,
+            hasDualMeterRow: rows.contains { Self.meterCount(for: $0, now: model.now) > 1 })
         let p = NSPanel(
-            contentRect: NSRect(x: 120, y: 120, width: 300, height: 130),
+            contentRect: NSRect(origin: NSPoint(x: 120, y: 120), size: initialSize),
             styleMask: PipMetrics.panelStyleMask,
             backing: .buffered,
             defer: false
@@ -355,6 +365,7 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
         p.delegate = self
         p.contentView = NSHostingView(rootView: PipWidgetView(model: model))
         self.panel = p
+        dragMonitor = PipDragMonitor(window: p)
         applyLevel()
         // Seed the signature from the rows the window is being created for, so
         // a restored size survives a relaunch instead of being overridden by
@@ -375,7 +386,7 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
         let hasDualMeterRow = rows.contains { Self.meterCount(for: $0, now: model.now) > 1 }
         let fit = PipMetrics.fitSize(rowCount: rows.count, hasDualMeterRow: hasDualMeterRow)
         let clamped = NSSize(
-            width: min(max(fit.width, panel.minSize.width), panel.maxSize.width),
+            width: min(max(panel.frame.width, panel.minSize.width), panel.maxSize.width),
             height: min(max(fit.height, panel.minSize.height), panel.maxSize.height)
         )
         panel.setContentSize(clamped)
@@ -390,6 +401,7 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         currentModel?.isPipEnabled = false
+        dragMonitor = nil
         panel = nil
     }
 
@@ -523,7 +535,7 @@ struct PipWidgetView: View {
     /// the popover (the owner asked for that on 2026-10-10), then adapted to the
     /// fill so they read on it.
     private func markStyle(for row: DisplaySection) -> MarkStyle {
-        background.markStyle(for: model.glanceMarkStyle(for: row.providerKey))
+        background.markStyle(for: model.glanceMarkStyle(for: row.id))
     }
 
     /// The one row the detail view is showing, or nil.
@@ -578,6 +590,7 @@ struct PipWidgetView: View {
             RoundedRectangle(cornerRadius: PipMetrics.cornerRadius, style: .continuous)
                 .strokeBorder(model.accentColor.opacity(0.35), lineWidth: 1)
         }
+        .environment(\.colorScheme, background.isDark ? .dark : .light)
         .onHover { hovering in
             isHovering = hovering
         }
@@ -684,12 +697,14 @@ struct PipWidgetView: View {
         let visible = PipMetrics.visibleRowCount(total: targetRows.count, height: height)
         let overflows = visible < targetRows.count
 
-        // Wide enough for one full row and a peek of the next: the rows become
-        // a horizontal strip, each keeping its own logo at its left edge, which
-        // is what the owner asked for.  The detail level is computed from the
-        // panel width first, so the row width the strip needs is the width the
-        // row actually wants — the two cannot disagree.
-        if PipMetrics.rowsScrollHorizontally(forWidth: width, detail: detail) {
+        // Horizontal strips are for the squeezed-short case the owner asked
+        // for: the panel must be too short to stack every pinned row first.
+        // Without the height constraint a tall panel emptied its rows onto one
+        // sideways line (owner 2026-10-16: "at certain sizes it looks like
+        // that").  Wide enough for one full row and a peek of the next, the
+        // rows become a horizontal strip, each keeping its own logo at its
+        // left edge.
+        if overflows && PipMetrics.rowsScrollHorizontally(forWidth: width) {
             horizontalRows(detail: detail)
         } else {
             verticalRows(detail: detail, visible: visible, overflows: overflows)
@@ -732,13 +747,15 @@ struct PipWidgetView: View {
         // that could not be used at all drew a full 100% bar.  One line of
         // words is the honest thing in a strip this narrow.
         let atCap = row.atCapWindow
+        let extra = glanceUsableMuseExtra(row.section.windows)
 
         return HStack(spacing: PipMetrics.rowSpacing) {
             if detail.showsProviderLogo {
-                PlatformLogo(providerKey: row.providerKey,
+                PlatformLogo(providerKey: row.id,
                              size: PipMetrics.providerLogoSize,
                              style: markStyle(for: row),
-                             iconHint: row.poolKey == nil ? row.section.iconHint : nil)
+                             iconHint: row.poolKey == nil ? row.section.iconHint : nil,
+                             forceMonochrome: true)
                 // Owner 2026-10-10: "after the platform name (or logo if no
                 // name shown) there should be a little flame for usage spike".
                 // Beside the LOGO rather than after the name, because the name
@@ -758,13 +775,25 @@ struct PipWidgetView: View {
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(background.ink)
                     .lineLimit(1)
-                    .truncationMode(.tail)
+                    .fixedSize(horizontal: true, vertical: false)
                     .frame(width: PipMetrics.titleWidth, alignment: .leading)
             }
 
-            Spacer(minLength: 0)
+            if atCap == nil { Spacer(minLength: 0) }
 
-            if let atCap {
+            if atCap != nil, let extra {
+                HStack(spacing: PipMetrics.meterSpacing) {
+                    Text("Using extra balance")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(background.ink)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    pipMeter(extra, detail: detail)
+                        .frame(maxWidth: .infinity)
+                }
+                .frame(maxWidth: .infinity)
+            } else if let atCap {
                 pipAtCap(atCap, detail: detail)
             } else {
                 HStack(spacing: PipMetrics.meterSpacing) {
@@ -795,10 +824,11 @@ struct PipWidgetView: View {
         return ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
-                    PlatformLogo(providerKey: row.providerKey,
+                    PlatformLogo(providerKey: row.id,
                                  size: 16,
                                  style: markStyle(for: row),
-                                 iconHint: row.poolKey == nil ? row.section.iconHint : nil)
+                                 iconHint: row.poolKey == nil ? row.section.iconHint : nil,
+                                 forceMonochrome: true)
                     Text(row.title)
                         .font(.system(size: 12, weight: .bold))
                         .foregroundStyle(background.ink)
@@ -878,20 +908,13 @@ struct PipWidgetView: View {
     private func pipAtCap(_ snapshot: QuotaWindowSnapshot, detail: PipMetrics.Detail) -> some View {
         let cap = GlanceAtCap(snapshot: snapshot, now: model.now)
         let summary = glanceAtCapSummary(snapshot, now: model.now)
-        return VStack(alignment: .leading, spacing: 1) {
-            Text(summary)
-                .font(.system(size: 10, weight: .bold, design: .rounded))
-                .foregroundStyle(background.ink)
-                .lineLimit(2)
-                .minimumScaleFactor(0.8)
-            let exact = glanceResetExactTime(snapshot.resetAt, now: model.now)
-            if !exact.isEmpty {
-                Text(exact)
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(background.countdownInk)
-                    .lineLimit(1)
-            }
-        }
+        return Text(summary)
+            .font(.system(size: 10, weight: .bold, design: .rounded))
+            .foregroundStyle(background.ink)
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+            .frame(maxWidth: .infinity)
+            .multilineTextAlignment(.center)
         .help(snapshot.resetAt.map { glanceResetHelp($0, now: model.now) ?? "At cap" } ?? "At cap")
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(cap.spokenDescription)

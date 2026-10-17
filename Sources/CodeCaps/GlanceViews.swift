@@ -969,13 +969,17 @@ struct GlanceHeaderBar: View {
     }
 
     private var settingsButton: some View {
-        Button(action: openSettings) {
+        Menu {
+            QuickSettingsCommands(model: model, openSettings: openSettings)
+        } label: {
             Image(systemName: "gearshape")
                 .font(.system(size: 13, weight: .medium))
                 .frame(width: 22, height: Metrics.glanceHeaderControlHeight)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
         .foregroundStyle(.secondary)
         .help("Settings")
         .accessibilityLabel("Settings")
@@ -1177,6 +1181,12 @@ struct GlanceMeterPair: Equatable {
 enum GlanceCadence: Equatable {
     case short
     case long
+}
+
+/// A spent subscription does not spend Muse Assist's separate extra balance.
+func glanceUsableMuseExtra(_ windows: [QuotaWindowSnapshot]) -> QuotaWindowSnapshot? {
+    windows.first { isMuseAssistExtra($0) && !$0.isAtCap &&
+        (($0.remainingPercent ?? 0) > 0 || ($0.window.absoluteRemaining ?? 0) > 0) }
 }
 
 /// The two windows a one-line row meters, chosen the way the rest of the app
@@ -1547,9 +1557,9 @@ struct GlanceAtCap: View {
     static var label: String { "At Cap" }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 1) {
+        VStack(alignment: .center, spacing: 1) {
             Text(summary)
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: spansFullMeterRow ? 12 : 11, weight: .semibold))
                 .foregroundStyle(Theme.ink)
                 .lineLimit(2)
                 .minimumScaleFactor(0.8)
@@ -1563,7 +1573,8 @@ struct GlanceAtCap: View {
             }
         }
         .frame(width: spansFullMeterRow ? Metrics.glanceMetersWidth : Metrics.glanceMeterWidth,
-               alignment: .leading)
+               alignment: .center)
+        .multilineTextAlignment(.center)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(glanceAtCapCadenceLabel(snapshot) + " cap")
         .accessibilityValue(spokenValue)
@@ -1599,11 +1610,13 @@ struct GlanceMeter: View {
     /// what the meter is; the full explanation stays in the tooltip and the
     /// spoken value, so nothing is actually lost.
     private var countdown: String {
-        if !snapshot.isFresh, let observed = snapshot.observedAt {
-            return "Updated \(observed.formatted(date: .omitted, time: .shortened))"
-        }
+        // The "extra" label is never displaced by the stale caption (owner
+        // 2026-10-16): it names the meter, the staleness is secondary.
         if isMuseAssistExtra(snapshot) {
             return "extra"
+        }
+        if !snapshot.isFresh, let observed = snapshot.observedAt {
+            return "Updated \(observed.formatted(date: .omitted, time: .shortened))"
         }
         return glanceResetCountdown(snapshot.resetAt, now: now)
     }
@@ -1613,8 +1626,6 @@ struct GlanceMeter: View {
     /// the dimmed countdown grey.
     private var isExtraLabel: Bool { isMuseAssistExtra(snapshot) }
     private var metrics: QuotaBarMetrics { QuotaBarMetrics(snapshot: snapshot, now: now) }
-
-    private var stalePresentation: Bool { !snapshot.isFresh && snapshot.remainingPercent != nil }
 
     var body: some View {
         HStack(spacing: Metrics.glanceMeterGap) {
@@ -1675,8 +1686,6 @@ struct GlanceMeter: View {
                     .frame(width: Metrics.glanceMeterCountdownWidth, height: 1)
             }
         }
-        .saturation(stalePresentation ? 0.2 : 1)
-        .opacity(stalePresentation ? 0.78 : 1)
         .frame(width: Metrics.glanceMeterWidth, alignment: .leading)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(glanceMeterCaption(snapshot))
@@ -1688,10 +1697,12 @@ struct GlanceMeter: View {
         if isMuseAssistExtra(snapshot) {
             return "\(reading), extra usage"
         }
-        if stalePresentation, let observed = snapshot.observedAt {
+        // Speech keeps the stale wording: VoiceOver says "updated h:mm" for a
+        // last-reported reading even though the bar now keeps its colour.
+        if !snapshot.isFresh && snapshot.remainingPercent != nil, let observed = snapshot.observedAt {
             return "\(reading), updated \(observed.formatted(date: .omitted, time: .shortened))"
         }
-        if !countdown.isEmpty, !stalePresentation {
+        if !countdown.isEmpty, snapshot.isFresh || snapshot.remainingPercent == nil {
             return "\(reading), resets in \(glanceResetFullCountdown(snapshot.resetAt, now: now))"
         }
         return reading
@@ -1741,7 +1752,20 @@ struct GlanceMeterColumns: View {
 
     @ViewBuilder
     private var columns: some View {
-        if let atCap {
+        if let atCap, let extra = glanceUsableMuseExtra([short, long].compactMap { $0 }) {
+            HStack(spacing: Metrics.glanceMeterGroupGap) {
+                VStack(spacing: 1) {
+                    Text("Using extra balance")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text(glanceAtCapSummary(atCap, now: now))
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                }
+                .multilineTextAlignment(.center)
+                .frame(width: Metrics.glanceMeterWidth)
+                column(extra)
+            }
+        } else if let atCap {
             GlanceAtCap(snapshot: atCap, now: now, spansFullMeterRow: true)
         } else if short != nil || long != nil {
             HStack(spacing: 0) {

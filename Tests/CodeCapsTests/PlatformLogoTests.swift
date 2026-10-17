@@ -243,4 +243,16 @@ final class PlatformLogoTests: XCTestCase {
         XCTAssertNil(model.customMarkURL(for: key, isDarkMode: false))
         XCTAssertEqual(model.markStyle(for: key), .template)
     }
+
+
+    // MARK: - Missing-mark retry policy
+
+    /// A failed first draw re-probes quickly through the install/update window,
+    /// then settles to once a minute so a late-arriving mark still heals.
+    func testMissingMarkRetryDelayQuickThenSlow() {
+        XCTAssertEqual(PlatformLogoImage.missingMarkRetryDelay(forAttempt: 0), 5_000_000_000)
+        XCTAssertEqual(PlatformLogoImage.missingMarkRetryDelay(forAttempt: 11), 5_000_000_000)
+        XCTAssertEqual(PlatformLogoImage.missingMarkRetryDelay(forAttempt: 12), 60_000_000_000)
+        XCTAssertEqual(PlatformLogoImage.missingMarkRetryDelay(forAttempt: 500), 60_000_000_000)
+    }
 }
