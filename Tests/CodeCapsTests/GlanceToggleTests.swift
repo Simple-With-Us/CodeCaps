@@ -151,9 +151,12 @@ final class GlanceToggleTests: XCTestCase {
         XCTAssertEqual(gemini?.isTemplate, false, "the colour star keeps its gradient")
 
         let thirdParty = PlatformLogoImage.load(providerKey: "google-antigravity:third-party", style: .standard)
-        XCTAssertNotNil(thirdParty, "the Third-Party pool uses the one-colour star")
-        XCTAssertEqual(thirdParty?.isTemplate, true, "a one-colour mark follows Light and Dark")
-        XCTAssertTrue(PlatformLogoImage.isMonochromeMark("google-antigravity:third-party"))
+        XCTAssertNotNil(thirdParty, "the Third-Party pool uses the supplied Antigravity arch")
+        XCTAssertEqual(thirdParty?.isTemplate, false, "the standard arch keeps its supplied colors")
+        XCTAssertFalse(PlatformLogoImage.isMonochromeMark("google-antigravity:third-party"))
+        let monochrome = PlatformLogoImage.load(providerKey: "google-antigravity:third-party", style: .template)
+        XCTAssertNotNil(monochrome)
+        XCTAssertEqual(monochrome?.isTemplate, true, "the monochrome arch follows Light and Dark")
         XCTAssertFalse(PlatformLogoImage.isMonochromeMark("google-antigravity:gemini"))
         XCTAssertNotNil(PlatformLogoImage.load(providerKey: "google-antigravity:some-new-pool", style: .template),
                         "a pool with no mark of its own falls back to the platform's mark")
