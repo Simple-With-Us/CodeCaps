@@ -26,6 +26,16 @@ final class PipInteractionTests: XCTestCase {
         XCTAssertFalse(PipWidgetController.targetRows(for: model).contains { $0.id == "minimax" })
     }
 
+    func testMuseReadingsProducePipMeters() {
+        let (model, defaults, suite) = GlanceFixtures.makeModel(view: .fromMac, alarmsAll: false, fleet: false)
+        defer { defaults.removePersistentDomain(forName: suite) }
+        for key in ["muse-assist", "muse-code"] {
+            let row = model.displaySections.first { $0.id == key }
+            XCTAssertNotNil(row)
+            if let row { XCTAssertGreaterThan(PipWidgetController.meterCount(for: row, now: model.now), 0) }
+        }
+    }
+
     func testAttachmentPreferencePersistsAndDefaultsToAttached() {
         let suite = "com.jays.codecaps.attachment." + UUID().uuidString
         let defaults = UserDefaults(suiteName: suite)!

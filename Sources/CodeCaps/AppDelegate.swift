@@ -193,7 +193,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             }
         }.store(in: &subscriptions)
         exhaustionPopupController = ExhaustionPopupController(model: model)
-        if model.glanceAttachedToMenuBar && model.displayMode != .menuBar && !relaunchedForUpdate { showConsole(page: nil) }
+        if model.displayMode != .menuBar && !relaunchedForUpdate { showConsole(page: nil) }
         model.start()
         startInfisicalSync()
         NotificationCenter.default.addObserver(
@@ -481,7 +481,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                 openSettings: { [weak self] in self?.showSettings() },
                 openAlert: { [weak self] provider, quota, time in
                     self?.showAlert(providerKey: provider, windowId: quota, at: time)
-                }))
+                },
+                occlusion: glanceOcclusion))
             controller.sizingOptions = []
             window.contentViewController = controller
             floatingGlance = window
