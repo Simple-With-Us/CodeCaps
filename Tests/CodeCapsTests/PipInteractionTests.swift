@@ -26,6 +26,31 @@ final class PipInteractionTests: XCTestCase {
         XCTAssertFalse(PipWidgetController.targetRows(for: model).contains { $0.id == "minimax" })
     }
 
+    func testDragUsesScreenCoordinatesWithoutMovingItsOwnReferencePoint() {
+        let origin = PipDragMonitor.movedOrigin(start: NSPoint(x: 500, y: 300),
+                                               mouseStart: NSPoint(x: 600, y: 350), mouseNow: NSPoint(x: 680, y: 320))
+        XCTAssertEqual(origin, NSPoint(x: 580, y: 270))
+    }
+
+    func testBodyDragMovesARealPanelAndConsumesDragWithoutOpeningDetails() throws {
+        let panel = NSPanel(contentRect: NSRect(x: 400, y: 300, width: 430, height: 180),
+                            styleMask: PipMetrics.panelStyleMask, backing: .buffered, defer: false)
+        let monitor = PipDragMonitor(window: panel)
+        let start = panel.frame.origin
+        func event(_ type: NSEvent.EventType) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.mouseEvent(with: type, location: NSPoint(x: 80, y: 60),
+                modifierFlags: [], timestamp: 1, windowNumber: panel.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+        }
+        XCTAssertNotNil(monitor.handle(try event(.leftMouseDown), screenPoint: NSPoint(x: 480, y: 360)))
+        XCTAssertNotNil(monitor.handle(try event(.leftMouseDragged), screenPoint: NSPoint(x: 481, y: 361)))
+        XCTAssertEqual(panel.frame.origin, start)
+        XCTAssertNil(monitor.handle(try event(.leftMouseDragged), screenPoint: NSPoint(x: 560, y: 330)))
+        XCTAssertEqual(panel.frame.origin, NSPoint(x: start.x + 80, y: start.y - 30))
+        XCTAssertNil(monitor.handle(try event(.leftMouseUp), screenPoint: NSPoint(x: 560, y: 330)))
+        panel.close()
+    }
+
     func testMuseReadingsProducePipMeters() {
         let (model, defaults, suite) = GlanceFixtures.makeModel(view: .fromMac, alarmsAll: false, fleet: false)
         defer { defaults.removePersistentDomain(forName: suite) }

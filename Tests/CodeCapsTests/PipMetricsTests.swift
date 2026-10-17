@@ -92,12 +92,11 @@ final class PipMetricsTests: XCTestCase {
                        "one point short of a full row plus a peek stays vertical")
         XCTAssertTrue(PipMetrics.rowsScrollHorizontally(forWidth: threshold, detail: detail))
 
-        // The switch point must sit in the owner's stated band, or the feature
-        // is not the thing he asked for.
-        let squeezePoint = PipMetrics.padding * 2 + PipMetrics.logoOnlyMinWidth
-        let past = threshold - squeezePoint
-        XCTAssertGreaterThanOrEqual(past, 60, "switching at \(past)pt past the squeeze point is too eager")
-        XCTAssertLessThanOrEqual(past, 140, "…and \(past)pt is too late to feel responsive")
+        // The name column is now wide enough for full pool names. The peek
+        // beyond that complete row stays in the original comfortable range.
+        XCTAssertEqual(threshold - (PipMetrics.padding * 2 + rowWidth), PipMetrics.horizontalPeek)
+        XCTAssertGreaterThanOrEqual(PipMetrics.horizontalPeek, 60)
+        XCTAssertLessThanOrEqual(PipMetrics.horizontalPeek, 140)
 
         // Every detail level agrees with itself: the row always fits.
         for level in PipMetrics.Detail.allCases {
@@ -146,7 +145,18 @@ final class PipMetricsTests: XCTestCase {
     func testSingleMeterRowOpensAtAReadableWidth() {
         let fit = PipMetrics.fitSize(rowCount: 1, hasDualMeterRow: false)
         XCTAssertGreaterThanOrEqual(fit.width, PipMetrics.singleMeterDefaultWidth)
-        XCTAssertLessThanOrEqual(PipMetrics.detail(forWidth: fit.width), .noCountdown)
+        XCTAssertEqual(PipMetrics.detail(forWidth: fit.width), .full)
+    }
+
+    func testFullProviderNamesFitWithoutTruncation() {
+        let font = NSFont.systemFont(ofSize: 11, weight: .medium)
+        for title in ["Antigravity · Third-Party", "Antigravity · Gemini", "Muse Assist", "Muse Code", "MiniMax", "OpenCode"] {
+            XCTAssertLessThanOrEqual((title as NSString).size(withAttributes: [.font: font]).width, PipMetrics.titleWidth)
+        }
+        let boundary = PipMetrics.padding * 2 + PipMetrics.noCountdownMinWidth
+        XCTAssertTrue(PipMetrics.detail(forWidth: boundary).showsTitle)
+        XCTAssertFalse(PipMetrics.detail(forWidth: boundary - 1).showsTitle)
+        XCTAssertTrue(PipMetrics.detail(forWidth: boundary - 1).showsProviderLogo)
     }
 
     // MARK: Height ladder

@@ -435,6 +435,18 @@ final class GlanceMeterTests: XCTestCase {
             maskedWindowIds: [])
     }
 
+    func testMuseExtraBalanceRemainsUsableWhenWeeklyIsSpent() {
+        let weekly = makeWindow(id: "weekly", label: "7-day window", token: "168h", remaining: 0,
+                                resetIn: 86400, provider: "muse-assist")
+        let extra = makeWindow(id: "extra", label: "Extra tokens", token: nil, remaining: 72,
+                               resetIn: 0, provider: "muse-assist")
+        XCTAssertEqual(glanceUsableMuseExtra([weekly, extra])?.window.id, "extra")
+        XCTAssertNil(glanceUsableMuseExtra([weekly]))
+        let spent = makeWindow(id: "extra", label: "Extra tokens", token: nil, remaining: 0,
+                               resetIn: 0, provider: "muse-assist")
+        XCTAssertNil(glanceUsableMuseExtra([weekly, spent]))
+    }
+
     func testMuseAssistSanitizedLabelsStillPairWeeklyAndExtraMeters() {
         let pair = glanceMeterPair(for: museAssistRow(), now: now)
         XCTAssertEqual(pair.short?.window.id, "weekly")

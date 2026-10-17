@@ -23,14 +23,14 @@ enum PipMetrics {
     static let rowSpacing: CGFloat = 4
     static let meterSpacing: CGFloat = 3
     static let providerLogoSize: CGFloat = 14
-    static let titleWidth: CGFloat = 60
+    static let titleWidth: CGFloat = 150
     static let cadenceWidth: CGFloat = 18
     static let cadenceExpandedWidth: CGFloat = 40
     /// Wide enough for "100%" in bold monospaced digits at 10pt, left-aligned so
     /// a long number never clips: the owner saw "100%" lose a couple of points
     /// at the narrow end when it was right-aligned into a tight frame.
     static let percentWidth: CGFloat = 30
-    static let countdownWidth: CGFloat = 30
+    static let countdownWidth: CGFloat = 42
     static let barMinWidth: CGFloat = 20
     static let barHeight: CGFloat = 4
 
@@ -52,7 +52,7 @@ enum PipMetrics {
 
     /// A window with no dual-meter row opens comfortably wide without being
     /// wider than it needs to look.
-    static let singleMeterDefaultWidth: CGFloat = 300
+    static let singleMeterDefaultWidth: CGFloat = 430
 
     // MARK: Derived widths
 
@@ -329,8 +329,11 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
     }
 
     private func createPanel(model: MonitorModel) {
+        let rows = Self.targetRows(for: model)
+        let initialSize = PipMetrics.fitSize(rowCount: rows.count,
+            hasDualMeterRow: rows.contains { Self.meterCount(for: $0, now: model.now) > 1 })
         let p = NSPanel(
-            contentRect: NSRect(x: 120, y: 120, width: 300, height: 130),
+            contentRect: NSRect(origin: NSPoint(x: 120, y: 120), size: initialSize),
             styleMask: PipMetrics.panelStyleMask,
             backing: .buffered,
             defer: false
@@ -378,7 +381,7 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
         let hasDualMeterRow = rows.contains { Self.meterCount(for: $0, now: model.now) > 1 }
         let fit = PipMetrics.fitSize(rowCount: rows.count, hasDualMeterRow: hasDualMeterRow)
         let clamped = NSSize(
-            width: min(max(fit.width, panel.minSize.width), panel.maxSize.width),
+            width: min(max(panel.frame.width, panel.minSize.width), panel.maxSize.width),
             height: min(max(fit.height, panel.minSize.height), panel.maxSize.height)
         )
         panel.setContentSize(clamped)
@@ -527,7 +530,9 @@ struct PipWidgetView: View {
     /// the popover (the owner asked for that on 2026-10-10), then adapted to the
     /// fill so they read on it.
     private func markStyle(for row: DisplaySection) -> MarkStyle {
-        background.markStyle(for: model.glanceMarkStyle(for: row.id))
+        // Keep Gemini's color star distinct from the solid Third-Party star.
+        if row.poolKey == "gemini" { return .standard }
+        return background.markStyle(for: model.glanceMarkStyle(for: row.id))
     }
 
     /// The one row the detail view is showing, or nil.
@@ -737,6 +742,7 @@ struct PipWidgetView: View {
         // that could not be used at all drew a full 100% bar.  One line of
         // words is the honest thing in a strip this narrow.
         let atCap = row.atCapWindow
+        let extra = glanceUsableMuseExtra(row.section.windows)
 
         return HStack(spacing: PipMetrics.rowSpacing) {
             if detail.showsProviderLogo {
@@ -744,7 +750,7 @@ struct PipWidgetView: View {
                              size: PipMetrics.providerLogoSize,
                              style: markStyle(for: row),
                              iconHint: row.poolKey == nil ? row.section.iconHint : nil,
-                             forceMonochrome: true)
+                             forceMonochrome: row.poolKey != "gemini")
                 // Owner 2026-10-10: "after the platform name (or logo if no
                 // name shown) there should be a little flame for usage spike".
                 // Beside the LOGO rather than after the name, because the name
@@ -764,13 +770,25 @@ struct PipWidgetView: View {
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(background.ink)
                     .lineLimit(1)
-                    .truncationMode(.tail)
+                    .fixedSize(horizontal: true, vertical: false)
                     .frame(width: PipMetrics.titleWidth, alignment: .leading)
             }
 
-            Spacer(minLength: 0)
+            if atCap == nil { Spacer(minLength: 0) }
 
-            if let atCap {
+            if atCap != nil, let extra {
+                HStack(spacing: PipMetrics.meterSpacing) {
+                    Text("Using extra balance")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(background.ink)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    pipMeter(extra, detail: detail)
+                        .frame(maxWidth: .infinity)
+                }
+                .frame(maxWidth: .infinity)
+            } else if let atCap {
                 pipAtCap(atCap, detail: detail)
             } else {
                 HStack(spacing: PipMetrics.meterSpacing) {
@@ -805,7 +823,7 @@ struct PipWidgetView: View {
                                  size: 16,
                                  style: markStyle(for: row),
                                  iconHint: row.poolKey == nil ? row.section.iconHint : nil,
-                                 forceMonochrome: true)
+                                 forceMonochrome: row.poolKey != "gemini")
                     Text(row.title)
                         .font(.system(size: 12, weight: .bold))
                         .foregroundStyle(background.ink)
@@ -885,20 +903,13 @@ struct PipWidgetView: View {
     private func pipAtCap(_ snapshot: QuotaWindowSnapshot, detail: PipMetrics.Detail) -> some View {
         let cap = GlanceAtCap(snapshot: snapshot, now: model.now)
         let summary = glanceAtCapSummary(snapshot, now: model.now)
-        return VStack(alignment: .leading, spacing: 1) {
-            Text(summary)
-                .font(.system(size: 10, weight: .bold, design: .rounded))
-                .foregroundStyle(background.ink)
-                .lineLimit(2)
-                .minimumScaleFactor(0.8)
-            let exact = glanceResetExactTime(snapshot.resetAt, now: model.now)
-            if !exact.isEmpty {
-                Text(exact)
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(background.countdownInk)
-                    .lineLimit(1)
-            }
-        }
+        return Text(summary)
+            .font(.system(size: 10, weight: .bold, design: .rounded))
+            .foregroundStyle(background.ink)
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+            .frame(maxWidth: .infinity)
+            .multilineTextAlignment(.center)
         .help(snapshot.resetAt.map { glanceResetHelp($0, now: model.now) ?? "At cap" } ?? "At cap")
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(cap.spokenDescription)

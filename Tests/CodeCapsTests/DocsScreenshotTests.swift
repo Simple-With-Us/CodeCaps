@@ -143,7 +143,7 @@ final class DocsScreenshotTests: XCTestCase {
         for background in PipBackground.allCases {
             model.pipBackground = background
             let view = PipWidgetView(model: model)
-            try write(GlanceFixtures.png(of: view, size: CGSize(width: 360, height: 230), dark: background.isDark),
+            try write(GlanceFixtures.png(of: view, size: CGSize(width: PipMetrics.singleMeterDefaultWidth, height: 230), dark: background.isDark),
                       "pip-\(background.rawValue).png", to: directory)
         }
         try write(try console(page: .runawayAlerts, dark: false, settingsAlert: true),
@@ -152,6 +152,32 @@ final class DocsScreenshotTests: XCTestCase {
         try write(GlanceFixtures.png(of: pinnedOptions, size: CGSize(width: 360, height: 380), dark: false),
                   "settings-pip-logos.png", to: directory)
         try write(try console(page: .settingsMenuBar, dark: false), "settings-pip.png", to: directory)
+    }
+
+    func testRenderCappedRowsScreenshots() throws {
+        guard let path = ProcessInfo.processInfo.environment["CODECAPS_DOCS_RENDER_DIR"] else {
+            throw XCTSkip("Set CODECAPS_DOCS_RENDER_DIR to render capped rows")
+        }
+        let directory = URL(fileURLWithPath: path, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        XCTAssertNotNil(PlatformLogoImage.load(providerKey: "anthropic", style: .standard, isDarkMode: false),
+                        "Screenshot proof requires the real provider artwork")
+        let caps = ["cursor", "xai", "grok-bot"].map { key in
+            GlanceFixtures.window("\(key):proof-cap", provider: key, label: "7-day window", token: "7d",
+                                  remaining: 0, resetIn: 5 * GlanceFixtures.day + GlanceFixtures.hour)
+        }
+        let (model, defaults, suite) = GlanceFixtures.makeModel(view: .fromMac, alarmsAll: false, fleet: false,
+                                                               localReadersOn: true, extraWindows: caps)
+        defer { defaults.removePersistentDomain(forName: suite) }
+        model.pipPinnedRowIds = Set(model.displaySections.map(\.id))
+        model.pipBackground = .black
+        try write(GlanceFixtures.png(of: GlancePopover(model: model, openConsole: { _ in }, openSettings: {}),
+                                    size: CGSize(width: Metrics.glanceWidth, height: QuotaGlanceMetrics.popoverHeight(for: model)),
+                                    dark: false), "glance-capped.png", to: directory)
+        for width in [240.0, 280.0, 360.0, 430.0, 520.0] {
+            try write(GlanceFixtures.png(of: PipWidgetView(model: model), size: CGSize(width: width, height: 280), dark: true),
+                      "pip-capped-\(Int(width)).png", to: directory)
+        }
     }
 
     func testSettingsSourcesFleetRenderIsNotConsoleLightPage() throws {

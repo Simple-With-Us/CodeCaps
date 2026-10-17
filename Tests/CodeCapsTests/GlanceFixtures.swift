@@ -73,7 +73,9 @@ enum GlanceFixtures {
     static var museWindows: [QuotaWindow] {
         [
             window("muse-assist:weekly", provider: "muse-assist", label: "weekly", token: "7d",
-                   remaining: 23, resetIn: day + 2 * hour),
+                   remaining: 0, resetIn: day + 2 * hour),
+            window("muse-assist:extra", provider: "muse-assist", label: "Extra tokens", token: nil,
+                   remaining: 72, resetIn: nil),
             window("muse-code:5h", provider: "muse-code", label: "5-hour window", token: "5h",
                    remaining: 99, resetIn: 2 * hour + 27 * 60),
             window("muse-code:weekly", provider: "muse-code", label: "weekly", token: "7d",

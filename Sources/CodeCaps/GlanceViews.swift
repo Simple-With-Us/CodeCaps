@@ -1183,6 +1183,12 @@ enum GlanceCadence: Equatable {
     case long
 }
 
+/// A spent subscription does not spend Muse Assist's separate extra balance.
+func glanceUsableMuseExtra(_ windows: [QuotaWindowSnapshot]) -> QuotaWindowSnapshot? {
+    windows.first { isMuseAssistExtra($0) && !$0.isAtCap &&
+        (($0.remainingPercent ?? 0) > 0 || ($0.window.absoluteRemaining ?? 0) > 0) }
+}
+
 /// The two windows a one-line row meters, chosen the way the rest of the app
 /// picks the window a row "speaks for": the one closest to its cap within its
 /// own cadence.
@@ -1551,9 +1557,9 @@ struct GlanceAtCap: View {
     static var label: String { "At Cap" }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 1) {
+        VStack(alignment: .center, spacing: 1) {
             Text(summary)
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: spansFullMeterRow ? 12 : 11, weight: .semibold))
                 .foregroundStyle(Theme.ink)
                 .lineLimit(2)
                 .minimumScaleFactor(0.8)
@@ -1567,7 +1573,8 @@ struct GlanceAtCap: View {
             }
         }
         .frame(width: spansFullMeterRow ? Metrics.glanceMetersWidth : Metrics.glanceMeterWidth,
-               alignment: .leading)
+               alignment: .center)
+        .multilineTextAlignment(.center)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(glanceAtCapCadenceLabel(snapshot) + " cap")
         .accessibilityValue(spokenValue)
@@ -1745,7 +1752,20 @@ struct GlanceMeterColumns: View {
 
     @ViewBuilder
     private var columns: some View {
-        if let atCap {
+        if let atCap, let extra = glanceUsableMuseExtra([short, long].compactMap { $0 }) {
+            HStack(spacing: Metrics.glanceMeterGroupGap) {
+                VStack(spacing: 1) {
+                    Text("Using extra balance")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text(glanceAtCapSummary(atCap, now: now))
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                }
+                .multilineTextAlignment(.center)
+                .frame(width: Metrics.glanceMeterWidth)
+                column(extra)
+            }
+        } else if let atCap {
             GlanceAtCap(snapshot: atCap, now: now, spansFullMeterRow: true)
         } else if short != nil || long != nil {
             HStack(spacing: 0) {
