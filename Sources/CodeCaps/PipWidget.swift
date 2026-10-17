@@ -530,9 +530,7 @@ struct PipWidgetView: View {
     /// the popover (the owner asked for that on 2026-10-10), then adapted to the
     /// fill so they read on it.
     private func markStyle(for row: DisplaySection) -> MarkStyle {
-        // Keep Gemini's color star distinct from the solid Third-Party star.
-        if row.poolKey == "gemini" { return .standard }
-        return background.markStyle(for: model.glanceMarkStyle(for: row.id))
+        background.markStyle(for: model.glanceMarkStyle(for: row.id))
     }
 
     /// The one row the detail view is showing, or nil.
@@ -750,7 +748,7 @@ struct PipWidgetView: View {
                              size: PipMetrics.providerLogoSize,
                              style: markStyle(for: row),
                              iconHint: row.poolKey == nil ? row.section.iconHint : nil,
-                             forceMonochrome: row.poolKey != "gemini")
+                             forceMonochrome: true)
                 // Owner 2026-10-10: "after the platform name (or logo if no
                 // name shown) there should be a little flame for usage spike".
                 // Beside the LOGO rather than after the name, because the name
@@ -823,7 +821,7 @@ struct PipWidgetView: View {
                                  size: 16,
                                  style: markStyle(for: row),
                                  iconHint: row.poolKey == nil ? row.section.iconHint : nil,
-                                 forceMonochrome: row.poolKey != "gemini")
+                                 forceMonochrome: true)
                     Text(row.title)
                         .font(.system(size: 12, weight: .bold))
                         .foregroundStyle(background.ink)
