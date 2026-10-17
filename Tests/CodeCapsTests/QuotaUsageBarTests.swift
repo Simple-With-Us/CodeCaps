@@ -1,3 +1,4 @@
+import SwiftUI
 import XCTest
 @testable import CodeCaps
 import QuotaCore
@@ -79,11 +80,28 @@ final class QuotaUsageBarTests: XCTestCase {
         XCTAssertFalse(quotaBarIsDimmed(for: fresh, sourceFailed: false))
     }
 
-    func testAStaleReadingOrAFailedSourceIsDimmed() {
+    func testAFailedSourceIsDimmedButAStaleReadingKeepsItsColour() {
+        // Stale-data fixture (owner 2026-10-16): a last-reported bar keeps the
+        // bright status colour; only a failed source dims.
         let stale = makeWindow(label: "5h window", token: "5h", resetIn: 3_600, observedAgo: 3 * 3_600)
-        XCTAssertTrue(quotaBarIsDimmed(for: stale, sourceFailed: false))
+        XCTAssertFalse(quotaBarIsDimmed(for: stale, sourceFailed: false))
         let fresh = makeWindow(label: "5h window", token: "5h", resetIn: 3_600)
         XCTAssertTrue(quotaBarIsDimmed(for: fresh, sourceFailed: true))
+    }
+
+    func testAStaleReadingKeepsTheStatusTint() {
+        // Dynamic catalog colours never compare equal directly, so resolve
+        // both through NSColor and compare components.
+        let fresh = makeWindow(label: "5h window", token: "5h", remaining: 85, resetIn: 3_600)
+        let stale = makeWindow(label: "5h window", token: "5h", remaining: 85, resetIn: 3_600, observedAgo: 3 * 3_600)
+        func rgba(_ color: Color) -> [CGFloat] {
+            let c = NSColor(color).usingColorSpace(.deviceRGB)!
+            return [c.redComponent, c.greenComponent, c.blueComponent, c.alphaComponent]
+        }
+        XCTAssertEqual(rgba(quotaStatusColor(for: stale, sourceFailed: false)),
+                       rgba(quotaStatusColor(for: fresh, sourceFailed: false)))
+        XCTAssertNotEqual(rgba(quotaStatusColor(for: stale, sourceFailed: true)),
+                          rgba(quotaStatusColor(for: fresh, sourceFailed: false)))
     }
 
     // MARK: The bar view

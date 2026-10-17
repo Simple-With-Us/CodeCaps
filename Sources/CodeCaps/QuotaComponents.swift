@@ -538,17 +538,21 @@ enum Metrics {
 
 /// The 20% threshold lives here and nowhere else.
 func quotaStatusColor(for snapshot: QuotaWindowSnapshot, sourceFailed: Bool) -> Color {
-    if !snapshot.isFresh || sourceFailed || snapshot.remainingPercent == nil { return .secondary }
+    // Owner 2026-10-16: a stale reading keeps the bright status colour - his
+    // Muse rows read as a dull grey-green when stale, indistinguishable from a
+    // source problem.  Only a failed source or a missing reading greys out.
+    if sourceFailed || snapshot.remainingPercent == nil { return .secondary }
     if snapshot.status == .exhausted { return Theme.danger }
     if (snapshot.remainingPercent ?? 100) <= 20 { return Theme.warning }
     return Theme.accent
 }
 
-/// Whether a bar should be drawn dimmed: the reading is old, or its source
-/// failed.  These are the same cases that turn the "% remaining" text grey, so a
-/// last-reported bar never looks as live as a fresh one.
+/// Whether a bar should be drawn dimmed.  Only a failed source dims it:
+/// owner 2026-10-16 - a last-reported (stale) bar keeps the same bright green
+/// as a fresh one; the staleness is said in words (the "Updated h:mm" caption),
+/// not by washing the bar out.
 func quotaBarIsDimmed(for snapshot: QuotaWindowSnapshot, sourceFailed: Bool) -> Bool {
-    !snapshot.isFresh || sourceFailed
+    sourceFailed
 }
 
 /// Dynamic pacing tint behind the percentage pill.

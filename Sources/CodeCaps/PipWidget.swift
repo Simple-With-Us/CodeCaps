@@ -203,8 +203,13 @@ enum PipMetrics {
     /// that matters is the row's own width at the detail level in force, which
     /// moves when any bar metric changes.  The result lands in his range: the
     /// squeeze point is around 222pt, and this is roughly 90pt past it.
-    static func rowsScrollHorizontally(forWidth width: CGFloat, detail: Detail) -> Bool {
-        width >= padding * 2 + rowWidth(for: detail) + horizontalPeek
+    static func rowsScrollHorizontally(forWidth width: CGFloat) -> Bool {
+        // The threshold uses the richest row width so it is monotonic in panel
+        // width: deriving it from the detail level in force flipped the strip
+        // on and off as a resize crossed the detail ladder (owner 2026-10-16:
+        // "as you stretch it out it alternates between showing correctly or
+        // not").
+        width >= padding * 2 + rowWidth(for: .full) + horizontalPeek
     }
 
     /// How many rows fit in `height` without clipping, never fewer than one.
@@ -692,12 +697,14 @@ struct PipWidgetView: View {
         let visible = PipMetrics.visibleRowCount(total: targetRows.count, height: height)
         let overflows = visible < targetRows.count
 
-        // Wide enough for one full row and a peek of the next: the rows become
-        // a horizontal strip, each keeping its own logo at its left edge, which
-        // is what the owner asked for.  The detail level is computed from the
-        // panel width first, so the row width the strip needs is the width the
-        // row actually wants — the two cannot disagree.
-        if PipMetrics.rowsScrollHorizontally(forWidth: width, detail: detail) {
+        // Horizontal strips are for the squeezed-short case the owner asked
+        // for: the panel must be too short to stack every pinned row first.
+        // Without the height constraint a tall panel emptied its rows onto one
+        // sideways line (owner 2026-10-16: "at certain sizes it looks like
+        // that").  Wide enough for one full row and a peek of the next, the
+        // rows become a horizontal strip, each keeping its own logo at its
+        // left edge.
+        if overflows && PipMetrics.rowsScrollHorizontally(forWidth: width) {
             horizontalRows(detail: detail)
         } else {
             verticalRows(detail: detail, visible: visible, overflows: overflows)

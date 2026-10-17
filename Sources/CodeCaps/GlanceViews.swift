@@ -1610,11 +1610,13 @@ struct GlanceMeter: View {
     /// what the meter is; the full explanation stays in the tooltip and the
     /// spoken value, so nothing is actually lost.
     private var countdown: String {
-        if !snapshot.isFresh, let observed = snapshot.observedAt {
-            return "Updated \(observed.formatted(date: .omitted, time: .shortened))"
-        }
+        // The "extra" label is never displaced by the stale caption (owner
+        // 2026-10-16): it names the meter, the staleness is secondary.
         if isMuseAssistExtra(snapshot) {
             return "extra"
+        }
+        if !snapshot.isFresh, let observed = snapshot.observedAt {
+            return "Updated \(observed.formatted(date: .omitted, time: .shortened))"
         }
         return glanceResetCountdown(snapshot.resetAt, now: now)
     }
@@ -1624,8 +1626,6 @@ struct GlanceMeter: View {
     /// the dimmed countdown grey.
     private var isExtraLabel: Bool { isMuseAssistExtra(snapshot) }
     private var metrics: QuotaBarMetrics { QuotaBarMetrics(snapshot: snapshot, now: now) }
-
-    private var stalePresentation: Bool { !snapshot.isFresh && snapshot.remainingPercent != nil }
 
     var body: some View {
         HStack(spacing: Metrics.glanceMeterGap) {
@@ -1686,8 +1686,6 @@ struct GlanceMeter: View {
                     .frame(width: Metrics.glanceMeterCountdownWidth, height: 1)
             }
         }
-        .saturation(stalePresentation ? 0.2 : 1)
-        .opacity(stalePresentation ? 0.78 : 1)
         .frame(width: Metrics.glanceMeterWidth, alignment: .leading)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(glanceMeterCaption(snapshot))
@@ -1699,10 +1697,12 @@ struct GlanceMeter: View {
         if isMuseAssistExtra(snapshot) {
             return "\(reading), extra usage"
         }
-        if stalePresentation, let observed = snapshot.observedAt {
+        // Speech keeps the stale wording: VoiceOver says "updated h:mm" for a
+        // last-reported reading even though the bar now keeps its colour.
+        if !snapshot.isFresh && snapshot.remainingPercent != nil, let observed = snapshot.observedAt {
             return "\(reading), updated \(observed.formatted(date: .omitted, time: .shortened))"
         }
-        if !countdown.isEmpty, !stalePresentation {
+        if !countdown.isEmpty, snapshot.isFresh || snapshot.remainingPercent == nil {
             return "\(reading), resets in \(glanceResetFullCountdown(snapshot.resetAt, now: now))"
         }
         return reading

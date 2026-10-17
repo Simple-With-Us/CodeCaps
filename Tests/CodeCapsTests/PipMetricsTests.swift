@@ -84,27 +84,22 @@ final class PipMetricsTests: XCTestCase {
     /// lands in his range: the squeeze point is about 222pt, and this is
     /// roughly 90pt past it.
     func testRowsScrollSidewaysOnlyWhenOneFullRowAndAPeekFit() {
-        let detail = PipMetrics.Detail.noCountdown
-        let rowWidth = PipMetrics.rowWidth(for: detail)
-        let threshold = PipMetrics.padding * 2 + rowWidth + PipMetrics.horizontalPeek
+        // The threshold is derived from the richest row so it is monotonic in
+        // panel width: a per-detail threshold flipped the strip on and off as
+        // a resize crossed the detail ladder (owner 2026-10-16).
+        let threshold = PipMetrics.padding * 2 + PipMetrics.rowWidth(for: .full) + PipMetrics.horizontalPeek
 
-        XCTAssertFalse(PipMetrics.rowsScrollHorizontally(forWidth: threshold - 1, detail: detail),
+        XCTAssertFalse(PipMetrics.rowsScrollHorizontally(forWidth: threshold - 1),
                        "one point short of a full row plus a peek stays vertical")
-        XCTAssertTrue(PipMetrics.rowsScrollHorizontally(forWidth: threshold, detail: detail))
-
-        // The name column is now wide enough for full pool names. The peek
-        // beyond that complete row stays in the original comfortable range.
-        XCTAssertEqual(threshold - (PipMetrics.padding * 2 + rowWidth), PipMetrics.horizontalPeek)
+        XCTAssertTrue(PipMetrics.rowsScrollHorizontally(forWidth: threshold))
         XCTAssertGreaterThanOrEqual(PipMetrics.horizontalPeek, 60)
         XCTAssertLessThanOrEqual(PipMetrics.horizontalPeek, 140)
 
-        // Every detail level agrees with itself: the row always fits.
-        for level in PipMetrics.Detail.allCases {
-            let needed = PipMetrics.padding * 2 + PipMetrics.rowWidth(for: level) + PipMetrics.horizontalPeek
-            XCTAssertTrue(PipMetrics.rowsScrollHorizontally(forWidth: needed, detail: level),
-                          "\(level) must be able to reach its own horizontal layout")
-            XCTAssertFalse(PipMetrics.rowsScrollHorizontally(forWidth: needed - 1, detail: level),
-                           "\(level) must not switch before its own row fits")
+        // Monotonic across the whole resizable range: once wide enough it
+        // never flips back.
+        for w in stride(from: threshold, through: PipMetrics.maxWidth, by: 7) {
+            XCTAssertTrue(PipMetrics.rowsScrollHorizontally(forWidth: w),
+                          "width \(w) past the threshold must stay horizontal-capable")
         }
     }
 
