@@ -134,6 +134,14 @@ public enum CustomMarkMode: String, CaseIterable, Identifiable, Codable, Sendabl
 /// deliberately use a neutral SF Symbol instead of guessing at a brand.
 public struct PlatformLogo: View {
     @Environment(\.colorScheme) private var colorScheme
+    /// Re-probe count for a mark that failed to load.  A missing mark can be
+    /// transient -- the resource bundle can arrive after the first draw (an
+    /// install swap, an update relaunch, a custom mark the owner imports while
+    /// the panel is open) -- and SwiftUI will never re-run this body on its own
+    /// while every input stays equal, so a failed first draw used to stick for
+    /// the life of the view hierarchy.  Bumping this re-evaluates the body and
+    /// re-runs the load until the mark lands.
+    @State private var missingMarkRetry = 0
     public let providerKey: String
     /// Server-supplied mark asset hint (from the manifest's `iconHint`).  When
     /// non-nil, `PlatformLogoImage` looks it up first and only falls back to
@@ -207,6 +215,16 @@ public struct PlatformLogo: View {
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .foregroundStyle(.secondary)
+                    .task(id: missingMarkRetry) {
+                        // Quickly at first, then once a minute: the common case
+                        // is a bundle that lands seconds after the first draw.
+                        // A genuinely absent mark costs one cheap filesystem
+                        // probe per interval and the row is never disturbed.
+                        let delay = PlatformLogoImage.missingMarkRetryDelay(forAttempt: missingMarkRetry)
+                        try? await Task.sleep(nanoseconds: delay)
+                        guard !Task.isCancelled else { return }
+                        missingMarkRetry += 1
+                    }
             }
         }
         .frame(width: size, height: size)
@@ -676,6 +694,14 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
     /// Fleet-wide rule: never use lookalike SF symbols to disguise missing marks.
     public static func fallbackSymbolName(for providerKey: String) -> String {
         "questionmark.square.dashed"
+    }
+
+    /// Delay before re-probing a mark that failed to load, by attempt number:
+    /// five seconds for the first dozen attempts (covers install and update
+    /// windows), then once a minute so a mark that appears later -- a custom
+    /// import, a late-mounted bundle -- still heals without a relaunch.
+    public static func missingMarkRetryDelay(forAttempt attempt: Int) -> UInt64 {
+        attempt < 12 ? 5_000_000_000 : 60_000_000_000
     }
 }
 
