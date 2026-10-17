@@ -143,6 +143,7 @@ public struct PlatformLogo: View {
     public let style: MarkStyle
     public let customMode: CustomMarkMode?
     public let tint: Color?
+    public let forceMonochrome: Bool
 
     /// `style` deliberately has **no default**.  A call site that forgets it
     /// used to compile and silently draw a monochrome template — which is how
@@ -155,7 +156,9 @@ public struct PlatformLogo: View {
                 style: MarkStyle,
                 customMode: CustomMarkMode? = nil,
                 tint: Color? = nil,
-                iconHint: String? = nil) {
+                iconHint: String? = nil,
+                forceMonochrome: Bool = false) {
+        self.forceMonochrome = forceMonochrome
         self.providerKey = providerKey
         self.iconHint = iconHint
         self.size = size
@@ -172,6 +175,7 @@ public struct PlatformLogo: View {
     /// style, so it follows Light and Dark instead of drawing black on black.
     /// Custom marks honor the user's customMode preference (Color vs Template).
     private var rendersAsTemplate: Bool {
+        if forceMonochrome { return true }
         if style == .custom {
             return effectiveCustomMode == .template
         }
@@ -335,27 +339,34 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
         // Server-first: try the manifest-supplied hint name first; fall back to
         // the built-in map when the hint does not resolve to a file, so a bad
         // hint can never blank a mark the map would have found.
-        let hintResource: String? = hintName.flatMap { name in
+        let hintBase = hintName.flatMap { name -> String? in
             guard !name.isEmpty else { return nil }
-            // Known provider keys are base names ("claude"), not filenames.
-            // Route them through variantFile so we ask for claude-color.png
-            // (or -light/-dark) instead of looking up a file named "claude".
-            if let base = resourceNames[name] {
-                return variantFile(base: base, style: style, isDark: isDark)
-            }
-            return "\(name)-color.png"
+            return resourceNames[name] ?? name
         }
-        let mapResource: String? = {
-            let base = resourceNames[key as String] ?? resourceNames[platformKey(of: key as String)]
-            return base.flatMap { variantFile(base: $0, style: style, isDark: isDark) }
-        }()
-        for filename in [hintResource, mapResource].compactMap({ $0 }) {
+        let mappedBase = resourceNames[key as String] ?? resourceNames[platformKey(of: key as String)]
+        var filenames: [String] = []
+        for base in [hintBase, mappedBase].compactMap({ $0 }) {
+            for filename in bundledFilenames(base: base, style: style, isDark: isDark) where !filenames.contains(filename) {
+                filenames.append(filename)
+            }
+        }
+        for filename in filenames {
             if let image = imageFromBundle(filename: filename, key: key, cacheKey: cacheKey, cache: cache, style: style) {
                 return image
             }
         }
         return nil
     }
+    /// A missing appearance variant should not hide a usable brand mark.
+    /// Template rendering can tint the colour mark's alpha on either surface.
+    static func bundledFilenames(base: String, style: MarkStyle, isDark: Bool) -> [String] {
+        var names: [String] = []
+        for name in [variantFile(base: base, style: style, isDark: isDark), "\(base)-color.png", "\(base).png"].compactMap({ $0 }) where !names.contains(name) {
+            names.append(name)
+        }
+        return names
+    }
+
     private static func imageFromBundle(filename: String, key: NSString, cacheKey: NSString, cache: NSCache<NSString, NSImage>, style: MarkStyle) -> NSImage? {
         // Walk EVERY candidate, decoding as we go, and take the first that
         // yields pixels.

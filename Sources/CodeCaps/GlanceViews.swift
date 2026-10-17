@@ -969,13 +969,17 @@ struct GlanceHeaderBar: View {
     }
 
     private var settingsButton: some View {
-        Button(action: openSettings) {
+        Menu {
+            QuickSettingsCommands(model: model, openSettings: openSettings)
+        } label: {
             Image(systemName: "gearshape")
                 .font(.system(size: 13, weight: .medium))
                 .frame(width: 22, height: Metrics.glanceHeaderControlHeight)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
         .foregroundStyle(.secondary)
         .help("Settings")
         .accessibilityLabel("Settings")

@@ -238,6 +238,7 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
 
     private var panel: NSPanel?
     private weak var currentModel: MonitorModel?
+    private var dragMonitor: PipDragMonitor?
 
     /// The pinned rows the panel was last sized for.  The panel is refitted only
     /// when this changes, so a size the owner chose by dragging is theirs to
@@ -275,6 +276,7 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
     }
 
     func close() {
+        dragMonitor = nil
         panel?.orderOut(nil)
         panel = nil
     }
@@ -355,6 +357,7 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
         p.delegate = self
         p.contentView = NSHostingView(rootView: PipWidgetView(model: model))
         self.panel = p
+        dragMonitor = PipDragMonitor(window: p)
         applyLevel()
         // Seed the signature from the rows the window is being created for, so
         // a restored size survives a relaunch instead of being overridden by
@@ -390,6 +393,7 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         currentModel?.isPipEnabled = false
+        dragMonitor = nil
         panel = nil
     }
 
@@ -523,7 +527,7 @@ struct PipWidgetView: View {
     /// the popover (the owner asked for that on 2026-10-10), then adapted to the
     /// fill so they read on it.
     private func markStyle(for row: DisplaySection) -> MarkStyle {
-        background.markStyle(for: model.glanceMarkStyle(for: row.providerKey))
+        background.markStyle(for: model.glanceMarkStyle(for: row.id))
     }
 
     /// The one row the detail view is showing, or nil.
@@ -578,6 +582,7 @@ struct PipWidgetView: View {
             RoundedRectangle(cornerRadius: PipMetrics.cornerRadius, style: .continuous)
                 .strokeBorder(model.accentColor.opacity(0.35), lineWidth: 1)
         }
+        .environment(\.colorScheme, background.isDark ? .dark : .light)
         .onHover { hovering in
             isHovering = hovering
         }
@@ -735,10 +740,11 @@ struct PipWidgetView: View {
 
         return HStack(spacing: PipMetrics.rowSpacing) {
             if detail.showsProviderLogo {
-                PlatformLogo(providerKey: row.providerKey,
+                PlatformLogo(providerKey: row.id,
                              size: PipMetrics.providerLogoSize,
                              style: markStyle(for: row),
-                             iconHint: row.poolKey == nil ? row.section.iconHint : nil)
+                             iconHint: row.poolKey == nil ? row.section.iconHint : nil,
+                             forceMonochrome: true)
                 // Owner 2026-10-10: "after the platform name (or logo if no
                 // name shown) there should be a little flame for usage spike".
                 // Beside the LOGO rather than after the name, because the name
@@ -795,10 +801,11 @@ struct PipWidgetView: View {
         return ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
-                    PlatformLogo(providerKey: row.providerKey,
+                    PlatformLogo(providerKey: row.id,
                                  size: 16,
                                  style: markStyle(for: row),
-                                 iconHint: row.poolKey == nil ? row.section.iconHint : nil)
+                                 iconHint: row.poolKey == nil ? row.section.iconHint : nil,
+                                 forceMonochrome: true)
                     Text(row.title)
                         .font(.system(size: 12, weight: .bold))
                         .foregroundStyle(background.ink)

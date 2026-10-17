@@ -154,7 +154,7 @@ enum GlanceFixtures {
         if let data = try? JSONEncoder().encode(alertHistory) {
             defaults.set(data, forKey: "runawayAlertHistory")
         }
-        let model = MonitorModel(defaults: defaults, burnRateHistoryURL: historyURL)
+        let model = MonitorModel(defaults: defaults, burnRateHistoryURL: historyURL, presentsPipWindows: false)
         // A signed-out provider reports no windows and the issue its reader
         // gives, which is what the row turns into "not signed in".
         let windows = (localWindows + extraWindows).filter { !signedOut.contains($0.providerKey ?? $0.provider) }

@@ -94,6 +94,7 @@ final class DocsScreenshotTests: XCTestCase {
                                             "the alert window needs its own visible history")
             }
         }
+        if page == .settingsMenuBar { model.isPipEnabled = true }
         let state = ConsoleState(defaults: defaults)
         // Reconcile first: `.settingsSourcesFleet` is the init default, so an
         // eager `page =` is a no-op and `onAppear` reconcile would land on a
@@ -127,6 +128,30 @@ final class DocsScreenshotTests: XCTestCase {
         try write(try console(page: .settingsNotifications, dark: false, settingsAlert: true),
                   "settings-alerts-history.png", to: directory)
         try write(try console(page: .settingsSourcesFleet, dark: false), "settings-sources-fleet.png", to: directory)
+    }
+
+    func testRenderPipScreenshots() throws {
+        guard let path = ProcessInfo.processInfo.environment["CODECAPS_DOCS_RENDER_DIR"] else {
+            throw XCTSkip("Set CODECAPS_DOCS_RENDER_DIR to render PiP screenshots")
+        }
+        let directory = URL(fileURLWithPath: path, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let (model, defaults, suite) = GlanceFixtures.makeModel(view: .fromMac, alarmsAll: true, fleet: false, localReadersOn: true)
+        defer { defaults.removePersistentDomain(forName: suite) }
+        model.isPipEnabled = true
+        model.pipPinnedRowIds = Set(model.displaySections.map(\.id))
+        for background in PipBackground.allCases {
+            model.pipBackground = background
+            let view = PipWidgetView(model: model)
+            try write(GlanceFixtures.png(of: view, size: CGSize(width: 360, height: 230), dark: background.isDark),
+                      "pip-\(background.rawValue).png", to: directory)
+        }
+        try write(try console(page: .runawayAlerts, dark: false, settingsAlert: true),
+                  "runaway-alerts.png", to: directory)
+        let pinnedOptions = PipOptionsReorderList(model: model).padding(12).background(Color.white)
+        try write(GlanceFixtures.png(of: pinnedOptions, size: CGSize(width: 360, height: 380), dark: false),
+                  "settings-pip-logos.png", to: directory)
+        try write(try console(page: .settingsMenuBar, dark: false), "settings-pip.png", to: directory)
     }
 
     func testSettingsSourcesFleetRenderIsNotConsoleLightPage() throws {

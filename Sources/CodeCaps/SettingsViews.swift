@@ -24,6 +24,7 @@ struct SettingsMenuBarPage: View {
 
     var body: some View {
         SettingsPage {
+            Section { LaunchAtLoginToggle() }
             Section {
                 Picker("Show In", selection: $model.displayMode) {
                     ForEach(DisplayMode.allCases) { Text($0.title).tag($0) }
@@ -202,7 +203,7 @@ private struct PipRowDropDelegate: DropDelegate {
     }
 }
 
-private struct PipOptionsReorderList: View {
+struct PipOptionsReorderList: View {
     @ObservedObject var model: MonitorModel
     @State private var draggedRowId: String?
 
@@ -215,8 +216,9 @@ private struct PipOptionsReorderList: View {
                         .foregroundStyle(.tertiary)
                         .help("Drag to Reorder")
                         .accessibilityHidden(true)
-                    PlatformLogo(providerKey: row.providerKey, size: 14,
-                                 style: model.markStyle(for: row.id))
+                    PlatformLogo(providerKey: row.id, size: 14,
+                                 style: model.glanceMarkStyle(for: row.id),
+                                 iconHint: row.poolKey == nil ? row.section.iconHint : nil)
                     Toggle(row.title, isOn: Binding(
                         get: { model.pipPinnedRowIds.contains(row.id) },
                         set: { checked in

@@ -149,6 +149,10 @@ struct FleetGroup: Identifiable, Equatable {
 
 @MainActor
 final class MonitorModel: ObservableObject {
+    @Published var glanceAttachedToMenuBar: Bool {
+        didSet { defaults.set(glanceAttachedToMenuBar, forKey: "glanceAttachedToMenuBar") }
+    }
+
     @Published var displayMode: DisplayMode {
         didSet { defaults.set(displayMode.rawValue, forKey: "displayMode") }
     }
@@ -457,26 +461,26 @@ final class MonitorModel: ObservableObject {
             if oldValue && !isPipEnabled && pipOpenWhenLow {
                 PipLowQuota.noteUserClosedPip(session: &pipLowQuotaSession)
             }
-            PipWidgetController.shared.update(model: self)
+            if presentsPipWindows { PipWidgetController.shared.update(model: self) }
         }
     }
     @Published var pipPinnedRowIds: Set<String> {
         didSet {
             defaults.set(Array(pipPinnedRowIds), forKey: "pipPinnedRowIds")
-            PipWidgetController.shared.update(model: self)
+            if presentsPipWindows { PipWidgetController.shared.update(model: self) }
         }
     }
     @Published var pipRowOrder: [String] {
         didSet {
             defaults.set(pipRowOrder, forKey: "pipRowOrder")
-            PipWidgetController.shared.update(model: self)
+            if presentsPipWindows { PipWidgetController.shared.update(model: self) }
         }
     }
     /// Rows temporarily added because a quota crossed the low threshold.
     @Published var pipAutoAddedRowIds: Set<String> {
         didSet {
             defaults.set(Array(pipAutoAddedRowIds), forKey: "pipAutoAddedRowIds")
-            PipWidgetController.shared.update(model: self)
+            if presentsPipWindows { PipWidgetController.shared.update(model: self) }
         }
     }
     @Published var pipOpenWhenLow: Bool {
@@ -533,6 +537,7 @@ final class MonitorModel: ObservableObject {
 
     public let alarmManager: ResetAlarmManager
 
+    private let presentsPipWindows: Bool
     private let defaults: UserDefaults
     private let burnRateHistoryURL: URL
     /// Memoized historySamples(): the burn-rate file is parsed once per
@@ -591,10 +596,12 @@ final class MonitorModel: ObservableObject {
         case cancelled
     }
 
-    init(defaults: UserDefaults = .standard, burnRateHistoryURL: URL? = nil) {
+    init(defaults: UserDefaults = .standard, burnRateHistoryURL: URL? = nil, presentsPipWindows: Bool = true) {
+        self.presentsPipWindows = presentsPipWindows
         self.defaults = defaults
         self.burnRateHistoryURL = burnRateHistoryURL ?? BurnRateMonitor.historyURL
         self.lastRunawayAlertAt = defaults.dictionary(forKey: "runawayAlertLastSent") as? [String: Double] ?? [:]
+        glanceAttachedToMenuBar = defaults.object(forKey: "glanceAttachedToMenuBar") as? Bool ?? true
         displayMode = DisplayMode(rawValue: defaults.string(forKey: "displayMode") ?? "") ?? .both
         menuBarStyle = MenuBarStyle(rawValue: defaults.string(forKey: "menuBarStyle") ?? "") ?? .symbolAndPercent
         menuBarMarkStyle = MenuBarMarkStyle(rawValue: defaults.string(forKey: "menuBarMarkStyle") ?? "")
