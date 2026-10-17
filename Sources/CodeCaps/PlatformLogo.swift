@@ -254,13 +254,13 @@ private static let resourceNames: [String: String] = [
     "claude": "claude",
     "openai": "openai",
     "codex": "openai",
-    "google-antigravity": "gemini",
-    "antigravity": "gemini",
+    "google-antigravity": "antigravity",
+    "antigravity": "antigravity",
     // The two Antigravity pools are told apart by their mark as well as
-    // their name: the Gemini pool wears the colour Gemini star, and the
-    // Third-Party pool the same star as a solid one-colour glyph.
+    // their name: Gemini wears its star; Third-Party uses the supplied
+    // Antigravity arch, with color and light/dark versions.
     "google-antigravity:gemini": "gemini-color",
-    "google-antigravity:third-party": "gemini-mono",
+    "google-antigravity:third-party": "antigravity",
     "gemini": "gemini",
     "xai": "grok",
     "grok": "grok",
@@ -465,7 +465,7 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
     private static let solidToneKeys: Set<String> = ["google-antigravity:third-party"]
 
     private static let monochromeKeys: Set<String> = [
-        "grok-bot", "google-antigravity:third-party",
+        "grok-bot",
         "openai", "codex", "cursor", "xai", "grok", "grok-cli",
     ]
 
