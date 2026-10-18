@@ -1619,16 +1619,19 @@ struct GlanceMeter: View {
         return glanceResetCountdown(snapshot.resetAt, now: now)
     }
 
-    private var isMuseAssist: Bool { snapshot.window.canonicalProviderKey == "muse-assist" }
+    private var isMuseProvider: Bool {
+        let key = snapshot.window.canonicalProviderKey
+        return key == "muse-assist" || key == "muse-code"
+    }
 
     /// The tooltip for a stale meter that has no reset to count down to.
     ///
     /// The countdown slot is empty then, so its own tooltip (which carries the
     /// "updated h:mm" staleness) has nothing to hang on; the bar carries it
-    /// instead, and fresh meters keep an empty tooltip.  Muse Assist never
-    /// displays "Updated..." captions (owner 2026-10-17).
+    /// instead, and fresh meters keep an empty tooltip.  Muse Assist and Muse Code
+    /// never display "Updated..." captions (owner 2026-10-17, 2026-10-18).
     private var staleBarHelp: String {
-        guard countdown.isEmpty, !isMuseAssist else { return "" }
+        guard countdown.isEmpty, !isMuseProvider else { return "" }
         return glanceResetHelp(nil, now: now, observedAt: snapshot.observedAt, isFresh: snapshot.isFresh) ?? ""
     }
 
@@ -1692,7 +1695,7 @@ struct GlanceMeter: View {
                     // variable-width value cannot be centred in a trailing
                     // frame.
                     .frame(width: Metrics.glanceMeterCountdownWidth, alignment: .center)
-                    .help(isExtraLabel ? "Extra token usage" : (glanceResetHelp(snapshot.resetAt, now: now, observedAt: isMuseAssist ? nil : snapshot.observedAt, isFresh: snapshot.isFresh) ?? ""))
+                    .help(isExtraLabel ? "Extra token usage" : (glanceResetHelp(snapshot.resetAt, now: now, observedAt: isMuseProvider ? nil : snapshot.observedAt, isFresh: snapshot.isFresh) ?? ""))
             } else {
                 Color.clear
                     .frame(width: Metrics.glanceMeterCountdownWidth, height: 1)
@@ -1713,7 +1716,7 @@ struct GlanceMeter: View {
         if !countdown.isEmpty {
             parts.append("resets in \(glanceResetFullCountdown(snapshot.resetAt, now: now))")
         }
-        if !isMuseAssist, !snapshot.isFresh, let observed = snapshot.observedAt {
+        if !isMuseProvider, !snapshot.isFresh, let observed = snapshot.observedAt {
             parts.append("updated \(observed.formatted(date: .omitted, time: .shortened))")
         }
         return parts.joined(separator: ", ")
