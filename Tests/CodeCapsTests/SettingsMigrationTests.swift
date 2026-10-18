@@ -37,6 +37,13 @@ final class SettingsMigrationTests: XCTestCase {
         }
     }
 
+    func testGrokReaderStatusUsesTheLocalGrokProviderKey() throws {
+        let reader = try XCTUnwrap(ReaderStatus.all.first { $0.source == "Grok CLI credentials" })
+        XCTAssertEqual(reader.providerKey, "grok")
+        XCTAssertEqual(reader.label, "Grok")
+        XCTAssertFalse(ReaderStatus.all.contains { $0.providerKey == "xai" })
+    }
+
     func testFreshInstallPostsNowhere() {
         let model = MonitorModel(defaults: defaults)
         XCTAssertEqual(model.endpoint, "")
