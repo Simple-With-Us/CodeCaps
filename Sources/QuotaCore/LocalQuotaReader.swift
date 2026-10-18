@@ -542,6 +542,61 @@ private func parseClaude(_ root: [String: Any], planType: String?, observedAt: D
             observedAt: observedAt
         ))
     }
+
+    if let limitsArray = root["limits"] as? [[String: Any]] {
+        for item in limitsArray {
+            let utilization = firstNumber(item, ["percent", "utilization", "used_percent"])
+            guard let utilization else { continue }
+            let remaining = 100 - min(100, max(0, utilization))
+            let resetAt = firstTimestamp(item, ["resets_at", "resetsAt", "reset_at", "resetAt"])
+            let resetDate = resetAt.flatMap(parseDate)
+
+            var modelSlug: String?
+            if let scope = item["scope"] as? [String: Any],
+               let model = scope["model"] as? [String: Any] {
+                let name = (model["display_name"] as? String ?? model["id"] as? String)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if let name, !name.isEmpty {
+                    modelSlug = name.lowercased()
+                }
+            }
+
+            let group = ((item["group"] as? String) ?? (item["kind"] as? String) ?? "").lowercased()
+            let isShort = group.contains("session") || group.contains("five") || group.contains("5h")
+            let token = isShort ? "5h" : "7d"
+            let prefix = isShort ? "five_hour" : "seven_day"
+            let key = modelSlug.map { "\(prefix)_\($0)" } ?? prefix
+
+            // Only add if not already parsed from top-level keys
+            guard !result.contains(where: { $0.id.hasSuffix(":\(key)") || $0.id == key }) else { continue }
+
+            let cadence = QuotaWindowVocabulary.standardCadence(
+                windowToken: token,
+                label: key,
+                resetAt: resetDate,
+                periodStart: nil
+            )
+            let label = QuotaWindowVocabulary.windowLabel(
+                windowToken: token,
+                existingLabel: cadence,
+                resetAt: resetDate,
+                periodStart: nil
+            )
+            result.append(window(
+                provider: .claude,
+                id: key,
+                label: label,
+                remaining: remaining,
+                resetAt: resetAt,
+                windowToken: token,
+                modelId: modelSlug,
+                modelType: modelSlug,
+                planName: planType,
+                observedAt: observedAt
+            ))
+        }
+    }
+
     return result.sorted { $0.id < $1.id }
 }
 

@@ -1610,13 +1610,11 @@ struct GlanceMeter: View {
     /// what the meter is; the full explanation stays in the tooltip and the
     /// spoken value, so nothing is actually lost.
     private var countdown: String {
-        // The "extra" label is never displaced by the stale caption (owner
-        // 2026-10-16): it names the meter, the staleness is secondary.
+        // The "extra" label is never displaced by a countdown.  The slot
+        // displays the reset countdown rather than an "Updated h:mm" timestamp
+        // which truncates and obscures the reset time (owner 2026-10-17).
         if isMuseAssistExtra(snapshot) {
             return "extra"
-        }
-        if !snapshot.isFresh, let observed = snapshot.observedAt {
-            return "Updated \(observed.formatted(date: .omitted, time: .shortened))"
         }
         return glanceResetCountdown(snapshot.resetAt, now: now)
     }
@@ -1697,13 +1695,11 @@ struct GlanceMeter: View {
         if isMuseAssistExtra(snapshot) {
             return "\(reading), extra usage"
         }
-        // Speech keeps the stale wording: VoiceOver says "updated h:mm" for a
-        // last-reported reading even though the bar now keeps its colour.
-        if !snapshot.isFresh && snapshot.remainingPercent != nil, let observed = snapshot.observedAt {
-            return "\(reading), updated \(observed.formatted(date: .omitted, time: .shortened))"
-        }
-        if !countdown.isEmpty, snapshot.isFresh || snapshot.remainingPercent == nil {
+        if !countdown.isEmpty {
             return "\(reading), resets in \(glanceResetFullCountdown(snapshot.resetAt, now: now))"
+        }
+        if let observed = snapshot.observedAt {
+            return "\(reading), updated \(observed.formatted(date: .omitted, time: .shortened))"
         }
         return reading
     }
@@ -2017,7 +2013,14 @@ struct GlanceRow: View {
         return glanceExpandedLines(for: row, now: now)
     }
 
-    private var platformNameDimmed: Bool { isAtRisk || row.isAtCap }
+    private var platformNameDimmed: Bool {
+        // When Muse Assist (or any service) is using extra balance and has usable
+        // allowance, it is working fine and should not be greyed out or in italics (owner 2026-10-17).
+        if glanceUsableMuseExtra(row.section.windows) != nil {
+            return false
+        }
+        return isAtRisk || row.isAtCap
+    }
 
     private var canExpand: Bool {
         allowsExpansion && !extraLines.isEmpty
