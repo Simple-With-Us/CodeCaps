@@ -19,7 +19,12 @@ function step(s, name) {
 test('Sparkle uses the existing fleet ASC loader, never repository ASC secrets', () => {
   assert.doesNotMatch(code, /secrets\.ASC_/);
   const name = 'Load ASC credentials (Fleet-OPS prod /asc)';
-  assert.equal(step(workflow, name).replace("        if: github.event_name != 'pull_request'\n", ''), step(read('.github/workflows/ios-ship.yml'), name));
+  const normalize = s => s.replaceAll('verify the CI identity has read access to project ${ASC_INFISICAL_PROJECT_ID} path /asc.', 'verify the CI identity has read access to Fleet-OPS prod /asc.');
+  assert.equal(step(workflow, name).replace("        if: github.event_name != 'pull_request'\n", ''), normalize(step(read('.github/workflows/ios-ship.yml'), name)));
+  const loader = step(workflow, name);
+  assert.doesNotMatch(loader, /echo .*\$\{ASC_INFISICAL_PROJECT_ID\}/);
+  assert.match(loader, /Missing \$name in Fleet-OPS prod \/asc; verify the CI identity has read access to Fleet-OPS prod \/asc\./);
+  assert.match(loader, /Missing ASC key material in Fleet-OPS prod \/asc; verify the CI identity has read access to Fleet-OPS prod \/asc\./);
   assert.match(step(workflow, name), /if: github.event_name != 'pull_request'/);
   assert.match(code, /NOTARY_KEY_PATH: \$\{\{ env.ASC_KEY_PATH \}\}/);
   assert.match(code, /NOTARY_KEY_ID: \$\{\{ env.ASC_KEY_ID \}\}/);
