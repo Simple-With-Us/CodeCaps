@@ -91,6 +91,22 @@ final class GlanceRowTests: XCTestCase {
         XCTAssertNotNil(glanceResetHelp(now.addingTimeInterval(-60), now: now))
     }
 
+    func testTheTooltipCarriesTheStalenessOnlyWhenTheReadingIsNotFresh() {
+        let reset = now.addingTimeInterval(4 * hour)
+        let observed = now.addingTimeInterval(-45 * minute)
+        let updated = observed.formatted(date: .omitted, time: .shortened)
+        let when = reset.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().hour().minute())
+        XCTAssertEqual(glanceResetHelp(reset, now: now, observedAt: observed, isFresh: false),
+                       "Resets in 4h, on \(when) · updated \(updated)")
+        XCTAssertEqual(glanceResetHelp(reset, now: now, observedAt: observed, isFresh: true),
+                       "Resets in 4h, on \(when)", "a fresh reading never repeats its update time")
+        // No reset to count down to: a stale reading still says when it was
+        // taken, and a fresh one has nothing to say.
+        XCTAssertEqual(glanceResetHelp(nil, now: now, observedAt: observed, isFresh: false), "Updated \(updated)")
+        XCTAssertNil(glanceResetHelp(nil, now: now, observedAt: observed, isFresh: true))
+        XCTAssertNil(glanceResetHelp(nil, now: now, observedAt: nil, isFresh: false))
+    }
+
     func testTheTooltipNeverShowsAZeroUnit() {
         for interval in stride(from: 61.0, through: 40 * day, by: 5 * minute + 7) {
             let text = glanceResetFullCountdown(now.addingTimeInterval(interval), now: now)
@@ -856,6 +872,31 @@ final class GlanceMeterTests: XCTestCase {
                                                    provider: "muse-assist")))
         XCTAssertEqual(glanceMeterCaption(makeWindow(id: "e", label: "Other limit window", token: nil,
                                                      provider: "muse-assist")), "+")
+    }
+
+    func testMuseAssistUsingExtraBalanceHasUsableExtra() {
+        let weekly = makeWindow(id: "weekly", label: "weekly window", token: "weekly", remaining: 0, resetIn: 4 * 3600, provider: "muse-assist")
+        let extra = makeWindow(id: "extra", label: "Other limit window", token: nil, remaining: 90, provider: "muse-assist")
+        let usable = glanceUsableMuseExtra([weekly, extra])
+        XCTAssertNotNil(usable)
+        XCTAssertEqual(usable?.window.id, "extra")
+        XCTAssertEqual(usable?.remainingPercent, 90)
+    }
+
+    func testStaleSnapshotStillReturnsResetCountdown() {
+        let formatter = ISO8601DateFormatter()
+        let staleObserved = now.addingTimeInterval(-45 * 60)
+        let resetDate = now.addingTimeInterval(4 * 3600 + 32 * 60)
+        let w = QuotaWindow(
+            id: "5h", provider: "anthropic", label: "5-hour window",
+            remainingPercent: 92,
+            resetAt: formatter.string(from: resetDate),
+            window: "5h",
+            occurredAt: formatter.string(from: staleObserved)
+        )
+        let snapshot = QuotaWindowSnapshot(window: w, now: now)
+        XCTAssertFalse(snapshot.isFresh)
+        XCTAssertEqual(glanceResetCountdown(snapshot.resetAt, now: now), "4h 32m")
     }
 
     // MARK: Cadence

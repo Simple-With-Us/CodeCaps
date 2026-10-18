@@ -1044,8 +1044,25 @@ struct PlatformCard: View {
     @ViewBuilder
     private var windowsBody: some View {
         if let atCap = row.atCapWindow, row.isAtCap {
-            GlanceAtCap(snapshot: atCap, now: now, spansFullMeterRow: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            if let extra = glanceUsableMuseExtra(row.section.windows) {
+                HStack(alignment: .top, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Using extra balance")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Theme.ink)
+                        Text(glanceAtCapSummary(atCap, now: now))
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    QuotaRow(snapshot: extra, now: now, sourceFailed: issue != nil, compact: compact,
+                             masked: row.isMasked(extra))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            } else {
+                GlanceAtCap(snapshot: atCap, now: now, spansFullMeterRow: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         } else if displayedWindows.count > 1 {
             HStack(alignment: .top, spacing: 16) {
                 ForEach(displayedWindows, id: \.window.id) { snapshot in
