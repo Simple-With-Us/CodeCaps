@@ -28,6 +28,10 @@ test('Sparkle uses the existing fleet ASC loader, never repository ASC secrets',
   assert.match(code, /rm -f -- "\$ASC_KEY_PATH"/);
 });
 test('PRs cannot notarize or publish, and icon-only changes trigger releases', () => {
+  assert.match(step(workflow, 'Load the Developer ID certificate (Infisical, then repository secrets)'), /if: github.event_name != 'pull_request'/);
+  assert.match(code, /SPARKLE_ED_PRIVATE_KEY: \$\{\{ github.event_name != 'pull_request' && secrets.SPARKLE_ED_PRIVATE_KEY \|\| '' \}\}/);
+  assert.match(step(workflow, 'Remove the signing keychain and key'), /if: always\(\)/);
+  assert.match(step(workflow, 'Remove the signing keychain and key'), /rm -f -- "\$ASC_KEY_PATH"/);
   assert.match(step(workflow, 'Decide whether this run can publish'), /GITHUB_EVENT_NAME.*pull_request[\s\S]*publish=false[\s\S]*exit 0/);
   for (const name of ['Verify notarization access before building', 'Build, sign, notarize and staple', 'Write the signed appcast', 'Publish the GitHub release', 'Confirm the live feed serves this build']) {
     assert.match(step(workflow, name), /if: steps.gate.outputs.publish == 'true'/);
