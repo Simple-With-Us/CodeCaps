@@ -22,8 +22,8 @@
       "projectRel": "ios/CodeCapsCompanion/CodeCapsCompanion.xcodeproj",
       "xcodegenDir": "ios/CodeCapsCompanion",
       "worktreeHint": "~/Code/codecaps",
-      "marketingVersionDefault": "0.1.0",
-      "notes": "CodeCaps Companion for Mac. Bundle ID com.simplewithus.codecaps.macos. Team CC8UTF7ATG. AppleId 6814951477. ASC SKU codecaps-macos. Marketing train 0.1.N; build UTC YYYYMMDDHHMM."
+      "marketingVersionDefault": "1.0.0",
+      "notes": "CodeCaps Companion for Mac. Bundle ID com.simplewithus.codecaps.macos. Team CC8UTF7ATG. AppleId 6814951477. ASC SKU codecaps-macos. Marketing train 1.0.N (the retired 0.1.N builds stay in TestFlight; 1.0.1 is above every one of them); build UTC YYYYMMDDHHMM."
     }
   }
 }
