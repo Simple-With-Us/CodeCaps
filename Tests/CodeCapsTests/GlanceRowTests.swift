@@ -899,21 +899,25 @@ final class GlanceMeterTests: XCTestCase {
         XCTAssertEqual(glanceResetCountdown(snapshot.resetAt, now: now), "4h 32m")
     }
 
-    func testMuseAssistNeverSaysUpdatedInTooltipOrSpeech() {
+    func testMuseProvidersNeverSayUpdatedInTooltipOrSpeech() {
         let formatter = ISO8601DateFormatter()
         let staleObserved = now.addingTimeInterval(-45 * 60)
-        let w = QuotaWindow(
-            id: "weekly", provider: "muse-assist", label: "weekly window",
-            remainingPercent: 92,
-            resetAt: nil,
-            window: "weekly",
-            occurredAt: formatter.string(from: staleObserved)
-        )
-        let snapshot = QuotaWindowSnapshot(window: w, now: now)
-        XCTAssertFalse(snapshot.isFresh)
-        // Help tooltip for muse-assist must not say "Updated..."
-        let help = glanceResetHelp(snapshot.resetAt, now: now, observedAt: snapshot.window.canonicalProviderKey == "muse-assist" ? nil : snapshot.observedAt, isFresh: snapshot.isFresh)
-        XCTAssertNil(help)
+        for provider in ["muse-assist", "muse-code"] {
+            let w = QuotaWindow(
+                id: "\(provider):weekly", provider: provider, label: "weekly window",
+                remainingPercent: 92,
+                resetAt: nil,
+                window: "weekly",
+                occurredAt: formatter.string(from: staleObserved)
+            )
+            let snapshot = QuotaWindowSnapshot(window: w, now: now)
+            XCTAssertFalse(snapshot.isFresh)
+            let isMuse = snapshot.window.canonicalProviderKey == "muse-assist" || snapshot.window.canonicalProviderKey == "muse-code"
+            XCTAssertTrue(isMuse)
+            // Help tooltip for muse providers must not say "Updated..."
+            let help = glanceResetHelp(snapshot.resetAt, now: now, observedAt: isMuse ? nil : snapshot.observedAt, isFresh: snapshot.isFresh)
+            XCTAssertNil(help)
+        }
     }
 
     // MARK: Cadence
