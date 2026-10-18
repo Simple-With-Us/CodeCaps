@@ -67,10 +67,16 @@ A private repository cannot do this, because anonymous clients cannot download i
 | Name | Where | Status on Tue, Sep 29, 2026 |
 |---|---|---|
 | `MAC_CERT_P12_BASE64`, `MAC_CERT_PASSWORD` | Infisical (the way BotFleet's `release.yml` reads them), needing `INFISICAL_PROJECT_ID` and `INFISICAL_UNIVERSAL_AUTH_CLIENT_ID`/`_SECRET` (or `INFISICAL_CLIENT_ID`/`_SECRET`) repository secrets; or same-named repository secrets as the fallback | Missing.  Publishing is gated until they exist. |
-| `ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_P8` | Repository secrets.  `ios-ship.yml` no longer reads them (App Store Connect answers them with HTTP 401, CC-163) and takes the fleet key from Fleet-OPS Infisical prod `/asc`; see `docs/IOS-TESTFLIGHT.md` | Present, stale for App Store Connect. |
+| `ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_P8` | Fleet-OPS Infisical prod `/asc`, using the same loader as `ios-ship.yml`. The stale repository copies are never read. The PEM is staged by `scripts/ios-stage-asc-key.sh` to a mode-600 temporary file; only its path crosses steps. | Notarization access is verified with read-only `notarytool history` before building. Artifact acceptance is still required separately. |
 | `SPARKLE_ED_PRIVATE_KEY` | Repository secret | Present. |
 
 While any of them is missing, the release job still builds the bundle and verifies its signature ad hoc, then finishes green with a notice naming what is missing.  Nothing is published.
+
+### Diagnosing a stale Sparkle feed
+
+`mac-release.yml` must complete notarization, stapling, archive signing, release publication and live-feed verification. A successful TestFlight upload is a separate channel and does not prove Sparkle was updated. `scripts/check-notary-access.sh` performs a read-only authentication check before an expensive release build and reports only a fixed error category, never Apple's raw response or credential values. Access failure stops the release; do not bypass notarization or generate a new key as a workaround. Check the existing Fleet-OPS `/asc` key's permissions and account state. Contract tests run without credentials on pull requests.
+
+A repaired pipeline may initially publish a build below a locally installed feature-branch build. Keep the existing monotonic version scheme: an installed build updates only when the published build number is greater.
 
 ## Signing, Inside-Out
 
