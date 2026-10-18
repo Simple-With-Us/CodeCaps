@@ -172,7 +172,7 @@ jobs:
                 2>/dev/null || true
             )"
             if [ -z "$val" ]; then
-              echo "::error::Missing $name in Fleet-OPS prod /asc; verify the CI identity has read access to project ${ASC_INFISICAL_PROJECT_ID} path /asc." >&2
+              echo "::error::Missing $name in Fleet-OPS prod /asc; verify the CI identity has read access to Fleet-OPS prod /asc." >&2
               exit 1
             fi
             if [[ "$val" == *$'\n'* || "$val" == *$'\r'* ]]; then
@@ -192,7 +192,7 @@ jobs:
               2>/dev/null || true
           )"
           if [ -z "$key_material" ]; then
-            echo "::error::Missing ASC key material in Fleet-OPS prod /asc; verify the CI identity has read access to project ${ASC_INFISICAL_PROJECT_ID} path /asc." >&2
+            echo "::error::Missing ASC key material in Fleet-OPS prod /asc; verify the CI identity has read access to Fleet-OPS prod /asc." >&2
             exit 1
           fi
           printf '%s\n' "$key_material" | bash "$GITHUB_WORKSPACE/scripts/ios-stage-asc-key.sh"
