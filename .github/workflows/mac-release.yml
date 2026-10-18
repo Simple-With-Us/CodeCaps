@@ -16,8 +16,9 @@ name: Mac Release (Sparkle)
 #       ASC_* secrets. The private key stays in a mode-600 temporary file.
 #   SPARKLE_ED_PRIVATE_KEY  The EdDSA key that signs each update archive
 #       (Sparkle's generate_keys -x output).
-# With any of them missing the job still builds the bundle and verifies its
-# signature, then skips publishing with a notice that names what is missing.
+# Pull requests build without credentials and never publish. A main release
+# fails early if the fleet ASC loader or notarization preflight fails. Missing
+# certificate/Sparkle material is reported by the publication gate.
 
 on:
   push:
