@@ -91,6 +91,22 @@ final class GlanceRowTests: XCTestCase {
         XCTAssertNotNil(glanceResetHelp(now.addingTimeInterval(-60), now: now))
     }
 
+    func testTheTooltipCarriesTheStalenessOnlyWhenTheReadingIsNotFresh() {
+        let reset = now.addingTimeInterval(4 * hour)
+        let observed = now.addingTimeInterval(-45 * minute)
+        let updated = observed.formatted(date: .omitted, time: .shortened)
+        let when = reset.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().hour().minute())
+        XCTAssertEqual(glanceResetHelp(reset, now: now, observedAt: observed, isFresh: false),
+                       "Resets in 4h, on \(when) · updated \(updated)")
+        XCTAssertEqual(glanceResetHelp(reset, now: now, observedAt: observed, isFresh: true),
+                       "Resets in 4h, on \(when)", "a fresh reading never repeats its update time")
+        // No reset to count down to: a stale reading still says when it was
+        // taken, and a fresh one has nothing to say.
+        XCTAssertEqual(glanceResetHelp(nil, now: now, observedAt: observed, isFresh: false), "Updated \(updated)")
+        XCTAssertNil(glanceResetHelp(nil, now: now, observedAt: observed, isFresh: true))
+        XCTAssertNil(glanceResetHelp(nil, now: now, observedAt: nil, isFresh: false))
+    }
+
     func testTheTooltipNeverShowsAZeroUnit() {
         for interval in stride(from: 61.0, through: 40 * day, by: 5 * minute + 7) {
             let text = glanceResetFullCountdown(now.addingTimeInterval(interval), now: now)

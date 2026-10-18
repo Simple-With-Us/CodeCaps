@@ -1619,6 +1619,16 @@ struct GlanceMeter: View {
         return glanceResetCountdown(snapshot.resetAt, now: now)
     }
 
+    /// The tooltip for a stale meter that has no reset to count down to.
+    ///
+    /// The countdown slot is empty then, so its own tooltip (which carries the
+    /// "updated h:mm" staleness) has nothing to hang on; the bar carries it
+    /// instead, and fresh meters keep an empty tooltip.
+    private var staleBarHelp: String {
+        guard countdown.isEmpty else { return "" }
+        return glanceResetHelp(nil, now: now, observedAt: snapshot.observedAt, isFresh: snapshot.isFresh) ?? ""
+    }
+
     /// The extra meter is a bold lowercase word rather than a countdown, and it
     /// is a label rather than a time, so it takes the caption's ink rather than
     /// the dimmed countdown grey.
@@ -1645,6 +1655,7 @@ struct GlanceMeter: View {
                           dimmed: false,
                           markerHeight: Metrics.glanceMeterMarkerHeight)
                 .frame(width: Metrics.glanceMeterBarWidth, height: Metrics.glanceMeterBarHeight)
+                .help(staleBarHelp)
             Text(percent.map { "\(Int($0.rounded()))%" } ?? "—")
                 .font(.system(size: 11, weight: .medium).monospacedDigit())
                 .foregroundStyle(Theme.ink)
