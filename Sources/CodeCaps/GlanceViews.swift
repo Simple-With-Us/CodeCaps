@@ -1678,7 +1678,7 @@ struct GlanceMeter: View {
                     // variable-width value cannot be centred in a trailing
                     // frame.
                     .frame(width: Metrics.glanceMeterCountdownWidth, alignment: .center)
-                    .help(isExtraLabel ? "Extra token usage" : (glanceResetHelp(snapshot.resetAt, now: now) ?? ""))
+                    .help(isExtraLabel ? "Extra token usage" : (glanceResetHelp(snapshot.resetAt, now: now, observedAt: snapshot.observedAt, isFresh: snapshot.isFresh) ?? ""))
             } else {
                 Color.clear
                     .frame(width: Metrics.glanceMeterCountdownWidth, height: 1)
@@ -1695,13 +1695,14 @@ struct GlanceMeter: View {
         if isMuseAssistExtra(snapshot) {
             return "\(reading), extra usage"
         }
+        var parts: [String] = [reading]
         if !countdown.isEmpty {
-            return "\(reading), resets in \(glanceResetFullCountdown(snapshot.resetAt, now: now))"
+            parts.append("resets in \(glanceResetFullCountdown(snapshot.resetAt, now: now))")
         }
-        if let observed = snapshot.observedAt {
-            return "\(reading), updated \(observed.formatted(date: .omitted, time: .shortened))"
+        if !snapshot.isFresh, let observed = snapshot.observedAt {
+            parts.append("updated \(observed.formatted(date: .omitted, time: .shortened))")
         }
-        return reading
+        return parts.joined(separator: ", ")
     }
 }
 
@@ -2014,9 +2015,10 @@ struct GlanceRow: View {
     }
 
     private var platformNameDimmed: Bool {
-        // When Muse Assist (or any service) is using extra balance and has usable
-        // allowance, it is working fine and should not be greyed out or in italics (owner 2026-10-17).
-        if glanceUsableMuseExtra(row.section.windows) != nil {
+        // When Muse Assist (or any service) is at its subscription cap but is
+        // actively using extra balance, it is working fine and should not be
+        // greyed out or in italics (owner 2026-10-17).
+        if row.isAtCap && glanceUsableMuseExtra(row.section.windows) != nil {
             return false
         }
         return isAtRisk || row.isAtCap
@@ -2426,13 +2428,24 @@ func glanceResetFullCountdown(_ reset: Date?, now: Date) -> String {
     return glanceCountdownUnits(seconds: seconds).joined(separator: " ")
 }
 
-/// The countdown's tooltip: the full value and the reset's own date and time,
-/// "Resets in 4d 2h 42m, on Fri, Oct 3, 7:09 PM".  Nil when there is no reset.
-func glanceResetHelp(_ reset: Date?, now: Date) -> String? {
-    guard let reset else { return nil }
+/// The countdown's tooltip: the full value, the reset's own date and time, and
+/// optional staleness info when not fresh:
+/// "Resets in 4d 2h 42m, on Fri, Oct 3, 7:09 PM · updated 6:15 PM".  Nil when there is no reset or update.
+func glanceResetHelp(_ reset: Date?, now: Date, observedAt: Date? = nil, isFresh: Bool = true) -> String? {
+    guard let reset else {
+        if let observedAt, !isFresh {
+            return "Updated \(observedAt.formatted(date: .omitted, time: .shortened))"
+        }
+        return nil
+    }
     let when = reset.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().hour().minute())
-    guard reset > now else { return "Reset was due \(when)" }
-    return "Resets in \(glanceResetFullCountdown(reset, now: now)), on \(when)"
+    let prefix = reset > now
+        ? "Resets in \(glanceResetFullCountdown(reset, now: now)), on \(when)"
+        : "Reset was due \(when)"
+    if let observedAt, !isFresh {
+        return "\(prefix) · updated \(observedAt.formatted(date: .omitted, time: .shortened))"
+    }
+    return prefix
 }
 
 /// Dedicated prominent button style matching the runaway notice banner in height (28pt)

@@ -19,6 +19,7 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request_review' &&
        github.event.review.user.type == 'Bot' &&
+       github.event.review.user.login != 'sentry[bot]' &&
        github.event.pull_request.head.repo.full_name == github.repository)
     uses: Simple-With-Us/congress-trading-shared/.github/workflows/codex-autofix-reusable.yml@99d372dcd7f600611c7b2b83a6f8eb2d31d6ecad
     secrets:
