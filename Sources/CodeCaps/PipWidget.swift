@@ -31,6 +31,7 @@ enum PipMetrics {
     /// at the narrow end when it was right-aligned into a tight frame.
     static let percentWidth: CGFloat = 30
     static let countdownWidth: CGFloat = 42
+    static let countdownCompactWidth: CGFloat = 28
     static let barMinWidth: CGFloat = 20
     static let barHeight: CGFloat = 4
 
@@ -64,6 +65,10 @@ enum PipMetrics {
     static let meterMinWidthWithCountdown: CGFloat =
         meterMinWidth + meterSpacing + countdownWidth
 
+    /// The same meter plus its compact reset countdown.
+    static let meterMinWidthWithCompactCountdown: CGFloat =
+        meterMinWidth + meterSpacing + countdownCompactWidth
+
     /// Caption-less meter: bar and percent only.
     private static let bareMeterMinWidth: CGFloat =
         meterSpacing + barMinWidth + meterSpacing + percentWidth
@@ -73,14 +78,22 @@ enum PipMetrics {
         providerLogoSize + rowSpacing + titleWidth + rowSpacing
         + meterMinWidthWithCountdown + rowSpacing + meterMinWidthWithCountdown
 
-    /// Provider logo, title and two meters, countdowns dropped.
-    static let noCountdownMinWidth: CGFloat =
-        providerLogoSize + rowSpacing + titleWidth + rowSpacing
-        + meterMinWidth + rowSpacing + meterMinWidth
+    /// Provider logo and two meters with 2-unit countdowns; platform name dropped first.
+    static let logoWithCountdownMinWidth: CGFloat =
+        providerLogoSize + rowSpacing
+        + meterMinWidthWithCountdown + rowSpacing + meterMinWidthWithCountdown
 
-    /// Provider logo and two meters, no countdowns and no title (platform name dropped first).
+    /// Provider logo and two meters with 1-unit rounded countdowns; platform name dropped.
+    static let logoWithCompactCountdownMinWidth: CGFloat =
+        providerLogoSize + rowSpacing
+        + meterMinWidthWithCompactCountdown + rowSpacing + meterMinWidthWithCompactCountdown
+
+    /// Provider logo and two meters, countdowns and title dropped (platform name dropped first).
     static let logoOnlyMinWidth: CGFloat =
         providerLogoSize + rowSpacing + meterMinWidth + rowSpacing + meterMinWidth
+
+    /// Legacy alias so any existing reference compiles cleanly.
+    static let noCountdownMinWidth: CGFloat = logoOnlyMinWidth
 
     /// Two labelled meters, with no provider identity at all.
     static let minimalMinWidth: CGFloat = meterMinWidth + rowSpacing + meterMinWidth
@@ -100,14 +113,16 @@ enum PipMetrics {
 
     /// How much of a row survives at a given panel width, richest first.
     ///
-    /// The platform name is dropped before the second bar:
-    /// `full > noCountdown > logoOnly > minimal > singleMeter > barsOnly > singleBar`.
+    /// The platform name is dropped before the countdown disappears:
+    /// `full > logoWithFullCountdown > logoWithCompactCountdown > logoOnly > minimal > singleMeter > barsOnly > singleBar`.
     enum Detail: Int, CaseIterable, Comparable {
-        /// Bar, percent, reset countdown; provider logo and title.
+        /// Bar, percent, 2-unit reset countdown; provider logo and title.
         case full
-        /// Two meters, no countdowns.
-        case noCountdown
-        /// Two meters and the provider's logo, but platform name dropped.
+        /// Two meters with 2-unit countdowns; provider logo kept, platform name dropped.
+        case logoWithFullCountdown
+        /// Two meters with 1-unit rounded-up countdowns; provider logo kept, platform name dropped.
+        case logoWithCompactCountdown
+        /// Two meters, countdowns and platform name dropped; provider logo kept.
         case logoOnly
         /// Two labelled meters, provider identity dropped entirely.
         case minimal
@@ -118,17 +133,24 @@ enum PipMetrics {
         /// One bar and its percentage.
         case singleBar
 
+        /// Legacy alias for tests.
+        static let noCountdown = Detail.logoOnly
+
         static func < (lhs: Detail, rhs: Detail) -> Bool { lhs.rawValue > rhs.rawValue }
 
         var maxMeters: Int {
             switch self {
-            case .full, .noCountdown, .logoOnly, .minimal, .barsOnly: return 2
+            case .full, .logoWithFullCountdown, .logoWithCompactCountdown, .logoOnly, .minimal, .barsOnly: return 2
             case .singleMeter, .singleBar: return 1
             }
         }
 
         var showsCountdown: Bool {
-            self == .full || self == .singleMeter
+            self == .full || self == .logoWithFullCountdown || self == .logoWithCompactCountdown || self == .singleMeter
+        }
+
+        var usesCompactCountdown: Bool {
+            self == .logoWithCompactCountdown
         }
 
         var showsCadence: Bool {
@@ -136,12 +158,12 @@ enum PipMetrics {
         }
 
         var showsProviderLogo: Bool {
-            self == .full || self == .noCountdown || self == .logoOnly || self == .singleMeter
+            self == .full || self == .logoWithFullCountdown || self == .logoWithCompactCountdown || self == .logoOnly || self == .singleMeter
         }
 
-        /// The platform name drops before the second bar.
+        /// The platform name drops before the countdown: only `.full` keeps the title.
         var showsTitle: Bool {
-            self == .full || self == .noCountdown
+            self == .full
         }
     }
 
@@ -151,7 +173,8 @@ enum PipMetrics {
         let available = width - padding * 2
         switch available {
         case fullMinWidth...: return .full
-        case noCountdownMinWidth...: return .noCountdown
+        case logoWithCountdownMinWidth...: return .logoWithFullCountdown
+        case logoWithCompactCountdownMinWidth...: return .logoWithCompactCountdown
         case logoOnlyMinWidth...: return .logoOnly
         case minimalMinWidth...: return .minimal
         case singleMeterMinWidth...: return .singleMeter
@@ -178,10 +201,11 @@ enum PipMetrics {
         let base: CGFloat
         switch detail {
         case .full: base = fullMinWidth
-        case .noCountdown: base = noCountdownMinWidth
-        case .singleMeter: base = singleMeterMinWidth
+        case .logoWithFullCountdown: base = logoWithCountdownMinWidth
+        case .logoWithCompactCountdown: base = logoWithCompactCountdownMinWidth
         case .logoOnly: base = logoOnlyMinWidth
         case .minimal: base = minimalMinWidth
+        case .singleMeter: base = singleMeterMinWidth
         case .barsOnly: base = barsOnlyMinWidth
         case .singleBar: base = singleMeterMinWidth
         }
@@ -864,10 +888,12 @@ struct PipWidgetView: View {
     private func detailWindowRow(_ snapshot: QuotaWindowSnapshot, detail: PipMetrics.Detail) -> some View {
         let metrics = QuotaBarMetrics(snapshot: snapshot, now: model.now)
         let remaining = snapshot.remainingPercent
-        let cd = glanceResetCountdown(snapshot.resetAt, now: model.now)
+        let isExtra = isMuseAssistExtra(snapshot)
+        let cd = isExtra ? "extra" : (detail.usesCompactCountdown ? glanceResetCompactCountdown(snapshot.resetAt, now: model.now) : glanceResetCountdown(snapshot.resetAt, now: model.now))
         let showExpanded = detail == .full
         let cadenceCaption = showExpanded ? singleModelCadenceExpanded(snapshot) : glanceMeterCaption(snapshot)
         let cleanLabel = cleanWindowLabel(snapshot.window.label.isEmpty ? "Quota" : snapshot.window.label)
+        let countdownWidth = detail.usesCompactCountdown ? PipMetrics.countdownCompactWidth : PipMetrics.countdownWidth
 
         return VStack(alignment: .leading, spacing: 1) {
             HStack(spacing: 5) {
@@ -886,9 +912,11 @@ struct PipWidgetView: View {
                     .fixedSize()
                 if !cd.isEmpty {
                     Text(cd)
-                        .font(.system(size: 9).monospacedDigit())
-                        .foregroundStyle(background.countdownInk)
+                        .font(isExtra ? .system(size: 9, weight: .bold) : .system(size: 9).monospacedDigit())
+                        .foregroundStyle(isExtra ? background.ink : background.countdownInk)
                         .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                        .frame(width: countdownWidth, alignment: .trailing)
                 }
             }
             QuotaUsageBar(
@@ -899,7 +927,7 @@ struct PipWidgetView: View {
             )
             .frame(height: 5)
         }
-        .help(snapshot.resetAt.map { "Resets \(glanceResetCountdown($0, now: model.now))" } ?? "")
+        .help(isExtra ? "Extra token usage" : (snapshot.resetAt.map { "Resets \(glanceResetCountdown($0, now: model.now))" } ?? ""))
     }
 
     /// The HUD's capped state, in place of its bars: the words "At Cap" and
@@ -922,10 +950,19 @@ struct PipWidgetView: View {
 
     private func pipMeter(_ snapshot: QuotaWindowSnapshot, detail: PipMetrics.Detail) -> some View {
         let metrics = QuotaBarMetrics(snapshot: snapshot, now: model.now)
-        let cd = glanceResetCountdown(snapshot.resetAt, now: model.now)
+        let isExtra = isMuseAssistExtra(snapshot)
+        let cd: String
+        if isExtra {
+            cd = "extra"
+        } else if detail.usesCompactCountdown {
+            cd = glanceResetCompactCountdown(snapshot.resetAt, now: model.now)
+        } else {
+            cd = glanceResetCountdown(snapshot.resetAt, now: model.now)
+        }
         let remaining = snapshot.remainingPercent
         let showExpanded = isSingleModel && detail == .full
         let cadenceCaption = showExpanded ? singleModelCadenceExpanded(snapshot) : glanceMeterCaption(snapshot)
+        let countdownWidth = detail.usesCompactCountdown ? PipMetrics.countdownCompactWidth : PipMetrics.countdownWidth
 
         return HStack(spacing: PipMetrics.meterSpacing) {
             if detail.showsCadence {
@@ -953,11 +990,14 @@ struct PipWidgetView: View {
 
             if detail.showsCountdown, !cd.isEmpty {
                 Text(cd)
-                    .font(.system(size: 9, weight: .medium).monospacedDigit())
-                    .foregroundStyle(background.countdownInk)
+                    .font(isExtra
+                          ? .system(size: 9, weight: .bold)
+                          : .system(size: 9, weight: .medium).monospacedDigit())
+                    .foregroundStyle(isExtra ? background.ink : background.countdownInk)
                     .lineLimit(1)
+                    .minimumScaleFactor(0.75)
                     .fixedSize()
-                    .frame(width: PipMetrics.countdownWidth, alignment: .trailing)
+                    .frame(width: countdownWidth, alignment: .trailing)
             }
         }
         .fixedSize(horizontal: false, vertical: true)

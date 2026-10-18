@@ -899,6 +899,23 @@ final class GlanceMeterTests: XCTestCase {
         XCTAssertEqual(glanceResetCountdown(snapshot.resetAt, now: now), "4h 32m")
     }
 
+    func testMuseAssistNeverSaysUpdatedInTooltipOrSpeech() {
+        let formatter = ISO8601DateFormatter()
+        let staleObserved = now.addingTimeInterval(-45 * 60)
+        let w = QuotaWindow(
+            id: "weekly", provider: "muse-assist", label: "weekly window",
+            remainingPercent: 92,
+            resetAt: nil,
+            window: "weekly",
+            occurredAt: formatter.string(from: staleObserved)
+        )
+        let snapshot = QuotaWindowSnapshot(window: w, now: now)
+        XCTAssertFalse(snapshot.isFresh)
+        // Help tooltip for muse-assist must not say "Updated..."
+        let help = glanceResetHelp(snapshot.resetAt, now: now, observedAt: snapshot.window.canonicalProviderKey == "muse-assist" ? nil : snapshot.observedAt, isFresh: snapshot.isFresh)
+        XCTAssertNil(help)
+    }
+
     // MARK: Cadence
 
     func testCadenceReadsTheWindowTokenWhenPresent() {
