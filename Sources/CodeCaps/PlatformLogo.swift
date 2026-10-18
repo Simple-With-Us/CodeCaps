@@ -290,6 +290,7 @@ private static let resourceNames: [String: String] = [
     "muse-assist": "muse-assist",
     "muse-code": "muse-code",
     "cursor": "cursor",
+    "cursor-grok": "cursor",
 ]
 
 /// The file a style and appearance ask for, or `nil` when the mark is absent.
@@ -485,7 +486,7 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
 
     private static let monochromeKeys: Set<String> = [
         "grok-bot",
-        "openai", "codex", "cursor", "xai", "x-ai", "grok", "grok-cli",
+        "openai", "codex", "cursor", "cursor-grok", "xai", "x-ai", "grok", "grok-cli",
     ]
 
     /// Presentation mode for a user-supplied custom mark.  Defaults to `.color`
@@ -768,3 +769,4 @@ extension NSColor {
                   alpha: 1)
     }
 }
+

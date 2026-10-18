@@ -356,6 +356,8 @@ final class GlanceExpandedLineTests: XCTestCase {
         XCTAssertEqual(lines.count, 1)
         XCTAssertEqual(lines.first?.long?.window.id, "local-mac:antigravity-summary:gemini-argon-wtu-weekly")
         XCTAssertEqual(lines.first?.long?.remainingPercent, 0)
+        XCTAssertEqual(glanceVisibleExpandedLines(for: geminiRow, now: now, issue: nil).count, 1)
+        XCTAssertEqual(lines.first?.long.flatMap(glanceSubModelTitle), "Gemini 4 Argon")
     }
 
     func testClaudeWithFableAtZeroKeepsPrimaryHeadlineMetersAndIsExpandable() {
@@ -376,6 +378,74 @@ final class GlanceExpandedLineTests: XCTestCase {
         XCTAssertEqual(lines.first?.long?.window.id, "seven_day_fable")
         XCTAssertEqual(lines.first?.long?.remainingPercent, 0)
     }
+
+    func testCappedClaudeKeepsReportedFableDropdown() {
+        let claude = row([
+            window("five_hour", provider: "anthropic", label: "5-hour", token: "5h", remaining: 0),
+            window("seven_day", provider: "anthropic", label: "7-day", token: "7d", remaining: 60),
+            window("seven_day_fable", provider: "anthropic", label: "7-day", token: "7d", remaining: 0, model: "fable"),
+        ])
+        XCTAssertTrue(claude.isAtCap, "the primary capped headline remains unchanged")
+        let lines = glanceVisibleExpandedLines(for: claude, now: now, issue: nil)
+        XCTAssertEqual(lines.count, 1)
+        XCTAssertEqual(lines.first?.long?.window.modelId, "fable")
+        XCTAssertEqual(lines.first?.long?.remainingPercent, 0)
+        XCTAssertTrue(glanceRowAllowsExpansion(claude, origin: .local))
+        XCTAssertTrue(glanceRowAllowsExpansion(claude, origin: .fleet))
+        XCTAssertTrue(glanceVisibleExpandedLines(for: claude, now: now, issue: "unavailable").isEmpty)
+    }
+
+    func testFableAndSonnetWeeklyLimitsRemainSeparateLines() {
+        let claude = row([
+            window("five_hour", provider: "anthropic", label: "5-hour", token: "5h", remaining: 75),
+            window("seven_day", provider: "anthropic", label: "7-day", token: "7d", remaining: 60),
+            window("seven_day_fable", provider: "anthropic", label: "7-day", token: "7d", remaining: 0, model: "fable"),
+            window("seven_day_sonnet", provider: "anthropic", label: "7-day", token: "7d", remaining: 30, model: "sonnet"),
+        ])
+        let lines = glanceVisibleExpandedLines(for: claude, now: now, issue: nil)
+        XCTAssertEqual(lines.count, 2)
+        XCTAssertTrue(lines.allSatisfy { $0.short == nil })
+        XCTAssertEqual(Set(lines.compactMap { $0.long?.window.modelId }), Set(["fable", "sonnet"]))
+        XCTAssertEqual(Set(lines.compactMap { $0.long.flatMap(glanceSubModelTitle) }), Set(["Fable", "Sonnet"]))
+    }
+
+    func testMissingFableDoesNotInventDropdownOrLimit() {
+        for remaining in [0.0, 75.0] {
+            let claude = row([
+                window("five_hour", provider: "anthropic", label: "5-hour", token: "5h", remaining: remaining),
+                window("seven_day", provider: "anthropic", label: "7-day", token: "7d", remaining: 60),
+            ])
+            XCTAssertTrue(glanceVisibleExpandedLines(for: claude, now: now, issue: nil).isEmpty)
+        }
+    }
+
+    func testReportedUnknownFableStaysUnknownInDropdown() {
+        var fable = window("seven_day_fable", provider: "anthropic", label: "7-day", token: "7d", model: "fable")
+        fable.remainingPercent = nil
+        fable.remainingUnknown = true
+        let claude = row([
+            window("five_hour", provider: "anthropic", label: "5-hour", token: "5h", remaining: 0),
+            window("seven_day", provider: "anthropic", label: "7-day", token: "7d", remaining: 60),
+            fable,
+        ])
+        let lines = glanceVisibleExpandedLines(for: claude, now: now, issue: nil)
+        XCTAssertEqual(lines.count, 1)
+        XCTAssertEqual(lines.first?.long?.window.modelId, "fable")
+        XCTAssertNil(lines.first?.long?.remainingPercent)
+    }
+
+    func testLabelOnlyFableAndSonnetDoNotShareDetailLine() {
+        let claude = row([
+            window("five_hour", provider: "anthropic", label: "5-hour", token: "5h"),
+            window("seven_day", provider: "anthropic", label: "7-day", token: "7d"),
+            window("seven_day_fable", provider: "anthropic", label: "7-day (Fable)", token: "7d", remaining: 0),
+            window("seven_day_sonnet", provider: "anthropic", label: "7-day (Sonnet)", token: "7d", remaining: 30),
+        ])
+        let lines = glanceVisibleExpandedLines(for: claude, now: now, issue: nil)
+        XCTAssertEqual(lines.count, 2)
+        XCTAssertEqual(Set(lines.compactMap { $0.long.flatMap(glanceSubModelTitle) }), Set(["Fable", "Sonnet"]))
+    }
+
 }
 
 // MARK: - The two meters a compact row carries
@@ -1053,3 +1123,4 @@ final class GlanceMeterTests: XCTestCase {
             maskedWindowIds: masked)
     }
 }
+

@@ -411,3 +411,23 @@ tests, 0 failures.
 Open: the drag-the-edge resize affordance is enforced in code but the physical
 edge-drag is only visible on a real launch, and PR #163 (ag/settings-window-
 layering) also edits PipWidget.swift and is currently CONFLICTING with main.
+
+
+## 2026-10-18 — Shared xAI/Grok presentation and Claude sub-model details (Jet)
+
+- Owner-requested correction: xAI, Grok, Cursor-Grok and Grok Bot are optional
+  logos for one Grok allowance.  Settings → Logo Style stores the user's logo
+  choices; default is one Grok row, preserving explicit prior PiP choices.
+- Removed redundant Grok Bot DashboardService and gbu readers and the Cursor
+  current-period Grok lookup.  Independent Cursor usage-summary plan remains.
+- Display aliases retain source window IDs, observation times and provenance.
+  Raw readings, exports, history and reset observations are not multiplied.
+  Retired fleet alias readings cannot revive an unavailable Grok allowance.
+- Existing xAI light/dark resources are unchanged; added rendering/contrast
+  coverage and shared-logo visibility, freshness and count regressions.
+- Claude sub-model details remain expandable at the main cap; distinct Fable
+  and Sonnet detail readings remain distinct and show their own reported caps.
+- Source-only review in connector workspace; no local Swift/macOS runtime.
+  Draft PR requires macOS CI before review.  Installed-app version unverified.
+- Coordination: open PR list was empty at baseline 5343ee9.  Zulip/fleet-board
+  connector name mismatch blocked the announcement; Slack not used per owner.

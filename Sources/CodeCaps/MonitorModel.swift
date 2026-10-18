@@ -193,6 +193,11 @@ final class MonitorModel: ObservableObject {
         _ = accent
         return Theme.accent
     }
+    /// Per-user logo choices for the same xAI/Grok allowance; not extra quotas.
+    @Published var sharedGrokLogoIDs: Set<String> {
+        didSet { defaults.set(Array(sharedGrokLogoIDs).sorted(), forKey: "sharedGrokLogoIDs") }
+    }
+
     @Published var highContrast: Bool {
         didSet { defaults.set(highContrast, forKey: "highContrast") }
     }
@@ -623,6 +628,16 @@ final class MonitorModel: ObservableObject {
             ?? BurnRateMonitor.recommendedBaselineMultiplier
         anomalyPeakMultiplier = defaults.object(forKey: "anomalyPeakMultiplier") as? Double
             ?? BurnRateMonitor.recommendedPeakMultiplier
+        var existingSharedPins = Set(defaults.stringArray(forKey: "pipPinnedRowIds") ?? [])
+            .intersection(SharedGrokDisplay.ids)
+        if let menuPin = defaults.string(forKey: "menuBarQuotaSelection"),
+           let id = menuPin.split(separator: ":").last.map(String.init),
+           SharedGrokDisplay.ids.contains(id) {
+            existingSharedPins.insert(id)
+        }
+        sharedGrokLogoIDs = Set(defaults.stringArray(forKey: "sharedGrokLogoIDs")
+                               ?? (existingSharedPins.isEmpty ? ["grok"] : Array(existingSharedPins)))
+            .intersection(SharedGrokDisplay.ids)
         menuBarQuotaSelection = defaults.string(forKey: "menuBarQuotaSelection") ?? "smart_pair"
         if let alertData = defaults.data(forKey: "runawayAlertHistory"),
            let history = try? JSONDecoder().decode([RunawayAlertRecord].self, from: alertData) {
@@ -705,7 +720,10 @@ final class MonitorModel: ObservableObject {
     }
 
     var sections: [QuotaPlatformSection] {
-        let base = response.platformSections(now: now)
+        var canonical = response
+        canonical.windows = SharedGrokDisplay.authoritativeWindows(response.windows)
+        let base = canonical.platformSections(now: now)
+            .filter { !SharedGrokDisplay.ids.contains($0.providerKey) || $0.providerKey == "grok" }
         if platformOrder.isEmpty { return base }
         var orderMap: [String: Int] = [:]
         for (idx, key) in platformOrder.enumerated() {
@@ -720,8 +738,12 @@ final class MonitorModel: ObservableObject {
     }
     /// One row per platform, except Antigravity, which is one row per pool.
     /// Every surface that lists platforms reads this rather than `sections`.
+    var allDisplaySections: [DisplaySection] {
+        SharedGrokDisplay.rows(sections: sections, now: now)
+    }
+
     var displaySections: [DisplaySection] {
-        sections.flatMap { DisplaySection.rows(for: $0, now: now) }
+        SharedGrokDisplay.visible(allDisplaySections, selected: sharedGrokLogoIDs)
     }
 
     func historySamples() -> [AnomalyDetector.Sample] {
@@ -820,6 +842,7 @@ final class MonitorModel: ObservableObject {
                 $0.isFresh && $0.remainingPercent != nil && !$0.window.isSupplementaryVideoQuota && !row.isMasked($0)
             }
             for snapshot in windows {
+                guard !result.contains(where: { $0.id == snapshot.window.id }) else { continue }
                 let label = "\(row.title) · \(AntigravityDisplay.windowLabel(snapshot.window.label))"
                 result.append((id: snapshot.window.id, label: label))
             }
@@ -843,7 +866,14 @@ final class MonitorModel: ObservableObject {
     /// The row a window belongs to, so the menu bar and the Next Reset tile can
     /// name the Antigravity pool rather than the platform.
     func displayRow(for window: QuotaWindow) -> DisplaySection? {
-        displaySections.first { $0.section.windows.contains { $0.window.id == window.id } }
+        let prefix = menuBarQuotaSelection.hasPrefix("platform_pair:") ? "platform_pair:" : "platform:"
+        if menuBarQuotaSelection.hasPrefix(prefix) {
+            let id = String(menuBarQuotaSelection.dropFirst(prefix.count))
+            if let selected = displaySections.first(where: { $0.id == id && $0.section.windows.contains { $0.window.id == window.id } }) {
+                return selected
+            }
+        }
+        return displaySections.first { $0.section.windows.contains { $0.window.id == window.id } }
     }
 
     /// The window that should drive the menu bar display.
@@ -1243,25 +1273,33 @@ final class MonitorModel: ObservableObject {
 
     /// Whether `rowId`'s reset alarm will ring: under All, always.
     func isAlarmEnabled(for rowId: String) -> Bool {
-        alarmManager.isAlarmEnabled(for: rowId)
+        alarmManager.isAlarmEnabled(for: SharedGrokDisplay.quotaKey(for: rowId))
     }
 
     /// The owner's own pick for `rowId`, which the per-row bell shows.
     func isProviderAlarmSelected(_ rowId: String) -> Bool {
-        alarmManager.isProviderSelected(rowId)
+        alarmManager.isProviderSelected(SharedGrokDisplay.quotaKey(for: rowId))
     }
 
     func toggleAlarm(for rowId: String) {
-        alarmManager.toggleProviderAlarm(for: rowId)
+        alarmManager.toggleProviderAlarm(for: SharedGrokDisplay.quotaKey(for: rowId))
     }
 
     /// Every reading the reset alarm watches: this Mac's rows, and each fleet
     /// machine's rows in a scope of their own.  Keyed by row, so a provider's
     /// bell covers it in both views.
     func resetAlarmObservationsForCurrentReadings() -> [ResetAlarmObservation] {
-        var observations = displaySections.flatMap { resetAlarmObservations(for: $0, scope: "local") }
-        for group in fleetGroups {
-            observations += group.rows.flatMap { resetAlarmObservations(for: $0, scope: "fleet:\(group.id)") }
+        // Aliases share the canonical bell and observation.  Choosing two
+        // logos must not send two reset notifications for the same allowance.
+        let canonicalRows = sections.filter { !SharedGrokDisplay.ids.contains($0.providerKey) || $0.providerKey == "grok" }
+            .flatMap { DisplaySection.rows(for: $0, now: now) }
+        var observations = canonicalRows.flatMap { resetAlarmObservations(for: $0, scope: "local") }
+        for group in fleetWindowGroups {
+            let scoped = QuotaResponse(generatedAt: "", windows: SharedGrokDisplay.authoritativeWindows(group.windows))
+                .platformSections(now: now)
+                .filter { !SharedGrokDisplay.ids.contains($0.providerKey) || $0.providerKey == "grok" }
+            observations += scoped.flatMap { DisplaySection.rows(for: $0, now: now) }
+                .flatMap { resetAlarmObservations(for: $0, scope: "fleet:\(group.id)") }
         }
         return observations
     }
@@ -1664,20 +1702,20 @@ final class MonitorModel: ObservableObject {
     /// The distinct origin labels carried by fleet windows, sorted.
     var fleetSourceLabels: [String] { fleetWindowGroups.map(\.title) }
 
-    var fleetWindowCount: Int { fleetWindowGroups.reduce(0) { $0 + $1.windows.count } }
+    var fleetWindowCount: Int { fleetWindowGroups.reduce(0) { $0 + SharedGrokDisplay.authoritativeWindows($1.windows).count } }
 
     /// Every pulled window, rendered.  The rows are grouped by the origin the
     /// payload carries, and a group's rows are built exactly like local ones —
     /// including the Antigravity pool split.
     var fleetGroups: [FleetGroup] {
         fleetWindowGroups.map { group in
-            let sections = QuotaResponse(generatedAt: "", windows: group.windows)
+            let sections = QuotaResponse(generatedAt: "", windows: SharedGrokDisplay.authoritativeWindows(group.windows))
                 .platformSections(now: now)
                 .filter { !$0.windows.isEmpty }
             return FleetGroup(id: group.id,
                               title: group.title,
-                              windowCount: group.windows.count,
-                              rows: sections.flatMap { DisplaySection.rows(for: $0, now: now) })
+                              windowCount: SharedGrokDisplay.authoritativeWindows(group.windows).count,
+                              rows: SharedGrokDisplay.visible(SharedGrokDisplay.rows(sections: sections, now: now), selected: sharedGrokLogoIDs))
         }
     }
 
@@ -2192,9 +2230,9 @@ final class MonitorModel: ObservableObject {
                 // into four windows and keeps only one observation's origin, so
                 // a second producer's readings vanished before they could be
                 // grouped.  Each origin group is sectioned on its own below.
-                self.serverWindows = newServer.windows.isEmpty
+                self.serverWindows = SharedGrokDisplay.authoritativeWindows(newServer.windows.isEmpty
                     ? newServer.providerGroups.flatMap(\.windows)
-                    : newServer.windows
+                    : newServer.windows)
             }
             if !useServer { self.serverWindows = [] }
             self.serverError = failure
@@ -2654,12 +2692,8 @@ final class MonitorModel: ObservableObject {
     private nonisolated static func readLocalSources() async -> LocalQuotaResult {
         async let primary = LocalQuotaReader().read()
         async let cursor = CursorQuotaReader().read()
-        async let grokBot = GrokBotQuotaReader().read()
-        // EXTRA Grok Bot source beside Cursor DashboardService; `source: "gbu"`
-        // so Settings can rank/disable it without replacing the Cursor reader.
-        async let gbu = GbuQuotaReader().read()
         async let antigravity = AntigravitySummaryReader().read()
-        let results = await [primary, cursor, grokBot, gbu]
+        let results = await [primary, cursor]
         let summary = await antigravity
         var windows = results.flatMap(\.windows)
         var issues = results.reduce(into: [String: String]()) { $0.merge($1.issues) { _, next in next } }
@@ -2738,3 +2772,4 @@ extension MonitorModel {
         return out
     }
 }
+

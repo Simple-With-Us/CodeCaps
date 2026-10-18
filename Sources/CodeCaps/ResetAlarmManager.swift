@@ -255,7 +255,9 @@ public final class ResetAlarmManager: ObservableObject {
             providers = Set(defaults.stringArray(forKey: Keys.legacyArmedSectionIds) ?? [])
             defaults.set(providers.sorted(), forKey: Keys.providers)
         }
-        self.enabledProviderIds = providers
+        let sharedProviders = Set(providers.map { SharedGrokDisplay.quotaKey(for: $0) })
+        if sharedProviders != providers { defaults.set(sharedProviders.sorted(), forKey: Keys.providers) }
+        self.enabledProviderIds = sharedProviders
 
         // One-time migration from the legacy sound boolean: an owner who
         // previously had `soundOnReset = true` lands on `.systemDefault`;
@@ -703,8 +705,8 @@ func resetAlarmObservations(for row: DisplaySection, scope: String) -> [ResetAla
         .map { snapshot in
             ResetAlarmObservation(
                 scope: scope,
-                providerId: row.id,
-                providerTitle: row.title,
+                providerId: SharedGrokDisplay.quotaKey(for: row.id),
+                providerTitle: SharedGrokDisplay.ids.contains(row.id) ? "xAI / Grok" : row.title,
                 windowId: snapshot.window.id,
                 windowLabel: glanceMeterCaption(snapshot),
                 periodSeconds: quotaWindowPeriodSeconds(snapshot),
@@ -714,3 +716,4 @@ func resetAlarmObservations(for row: DisplaySection, scope: String) -> [ResetAla
                 identity: snapshot.window.accountKey)
         }
 }
+

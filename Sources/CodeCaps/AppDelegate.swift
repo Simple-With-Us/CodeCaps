@@ -331,7 +331,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             button.image = nil
             button.imagePosition = .noImage
         } else {
-            let providerKey = target?.window.canonicalProviderKey ?? "auto"
+            let providerKey = target.flatMap { model.displayRow(for: $0.window)?.id }
+                ?? target?.window.canonicalProviderKey ?? "auto"
             // The status item's mark can be forced independent of the popover's
             // per-provider Logo Style; `matchProvider` is today's behaviour.
             let markStyle = target != nil
@@ -753,3 +754,4 @@ extension AppDelegate {
         }
     }
 }
+

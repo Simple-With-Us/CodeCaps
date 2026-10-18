@@ -1868,17 +1868,50 @@ func glanceExpandedLines(for row: DisplaySection, now: Date) -> [GlanceMeterLine
     var grouped: [String: [QuotaWindowSnapshot]] = [:]
     for snapshot in rest {
         let label = glanceLineLabel(snapshot)
-        if grouped[label] == nil { order.append(label) }
-        grouped[label, default: []].append(snapshot)
+        // Cadence alone cannot identify a sub-model allowance: Fable and
+        // Sonnet weekly limits must never become one line titled "Fable".
+        let model = glanceSubModelTitle(snapshot)?.lowercased() ?? ""
+        let key = label + "|" + model
+        if grouped[key] == nil { order.append(key) }
+        grouped[key, default: []].append(snapshot)
     }
 
-    return order.flatMap { label -> [GlanceMeterLine] in
-        let windows = (grouped[label] ?? []).enumerated().sorted { lhs, rhs in
+    return order.flatMap { key -> [GlanceMeterLine] in
+        let windows = (grouped[key] ?? []).enumerated().sorted { lhs, rhs in
             let left = glanceWindowLength(lhs.element, now: now)
             let right = glanceWindowLength(rhs.element, now: now)
             return left == right ? lhs.offset < rhs.offset : left < right
         }.map(\.element)
-        return glanceMeterLines(label: label, windows: windows, now: now)
+        guard let first = windows.first else { return [] }
+        return glanceMeterLines(label: glanceLineLabel(first), windows: windows, now: now)
+    }
+}
+
+/// A reported model identity, shared by grouping and the visible detail title.
+/// Missing model quotas are never synthesized merely to make a row expandable.
+func glanceSubModelTitle(_ snapshot: QuotaWindowSnapshot) -> String? {
+    let window = snapshot.window
+    guard window.isSubModelLimit else { return nil }
+    if window.canonicalProviderKey == "google-antigravity" { return "Gemini 4 Argon" }
+    for candidate in [window.modelId, window.modelType] {
+        if let name = candidate?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+            return glanceModelName(name)
+        }
+    }
+    for model in ["fable", "sonnet", "opus", "haiku"] {
+        if window.label.localizedCaseInsensitiveContains(model) { return glanceModelName(model) }
+    }
+    return nil
+}
+
+/// Preserve the simplified capped headline while letting the owner inspect
+/// reported sub-model limits. Reader failures still suppress potentially stale detail.
+func glanceVisibleExpandedLines(for row: DisplaySection, now: Date, issue: String?) -> [GlanceMeterLine] {
+    guard issue == nil else { return [] }
+    let lines = glanceExpandedLines(for: row, now: now)
+    guard row.isAtCap else { return lines }
+    return lines.filter { line in
+        [line.short, line.long].compactMap { $0 }.contains { $0.window.isSubModelLimit }
     }
 }
 
@@ -2024,8 +2057,7 @@ struct GlanceRow: View {
     /// The windows the row's own meters leave out, as extra lines of meters.
     /// A row showing an issue instead of meters has nothing to open.
     private var extraLines: [GlanceMeterLine] {
-        guard issue == nil, !row.isAtCap else { return [] }
-        return glanceExpandedLines(for: row, now: now)
+        glanceVisibleExpandedLines(for: row, now: now, issue: issue)
     }
 
     private var platformNameDimmed: Bool {
@@ -2257,9 +2289,10 @@ struct GlanceRow: View {
                         .frame(width: Metrics.glanceRowTitleWidth, alignment: .leading)
                         .help(lineHelp(line))
                     Spacer().frame(width: Metrics.glanceColumnGap)
+                    // Detail meters describe their own reported allowance;
+                    // the parent's cap remains on the headline, not each model.
                     GlanceMeterColumns(short: line.short, long: line.long, now: now,
-                                       pacingHighlights: pacingHighlights,
-                                       atCap: row.atCapWindow)
+                                       pacingHighlights: pacingHighlights)
                     Spacer(minLength: 0)
                 }
                 .padding(.horizontal, Metrics.glanceGutter)
@@ -2279,17 +2312,7 @@ struct GlanceRow: View {
 
     private func lineTitle(_ line: GlanceMeterLine) -> String {
         let windows = [line.short, line.long].compactMap { $0 }
-        if let subModel = windows.first(where: { $0.window.isSubModelLimit }) {
-            if subModel.window.canonicalProviderKey == "google-antigravity" {
-                return "Gemini 4 Argon"
-            }
-            if let model = subModel.window.modelId, !model.isEmpty {
-                return model.capitalized
-            }
-            if subModel.window.label.localizedCaseInsensitiveContains("fable") {
-                return "Fable"
-            }
-        }
+        if let title = windows.compactMap(glanceSubModelTitle).first { return title }
         return line.label
     }
 
@@ -2524,3 +2547,4 @@ struct GlanceFooterProminentButtonStyle: ButtonStyle {
             .shadow(color: Color.black.opacity(configuration.isPressed ? 0.02 : 0.12), radius: 1, y: 1)
     }
 }
+

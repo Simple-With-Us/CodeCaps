@@ -2,91 +2,47 @@ import Foundation
 import XCTest
 @testable import QuotaCore
 
-/// Grok Bot's stray extra, empty "7d" bar (owner delta, 2026-09-30).
-///
-/// Two readers speak for the one Grok Bot weekly allowance: Cursor's
-/// DashboardService and the `gbu` CLI.  Each emits a no-reading placeholder
-/// window when it cannot read, and the Glance row used to draw any second
-/// window as a second bar, so a placeholder beside the other reader's real
-/// reading was an empty "7d" meter.  These tests build the windows with the
-/// real readers rather than by hand.
+/// Placeholder reconciliation remains wire-compatible with readings from older
+/// fleet clients, even though the redundant Grok Bot readers are retired.
 final class PlaceholderWindowsTests: XCTestCase {
     private let observedAt = Date(timeIntervalSince1970: 1_789_000_000)
 
-    private func dashboardReading() async -> LocalQuotaResult {
-        await GrokBotQuotaReader(
-            now: { self.observedAt },
-            accessToken: { "test-session" },
-            fetch: { request in
-                let body = """
-                {"usagePercent":19.4,"nextResetTimestampUtc":"2026-10-05T18:35:19.304Z","hasNonZeroIncludedLimit":true,"usesPooledEnterpriseAllowance":false,"grokPlanLabel":"Grok Bot Plan"}
-                """
-                let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
-                return (Data(body.utf8), response)
-            }).read()
+    private func legacyReading(id: String, source: String) -> LocalQuotaResult {
+        LocalQuotaResult(windows: [QuotaWindow(
+            id: id, provider: "Grok Bot", providerKey: "grok-bot",
+            label: "Grok Bot weekly", remainingPercent: 80.6,
+            resetAt: "2026-10-05T18:35:19.304Z", window: "weekly",
+            occurredAt: ISO8601DateFormatter().string(from: observedAt), source: source
+        )])
     }
 
-    private func dashboardUnreadable() async -> LocalQuotaResult {
-        await GrokBotQuotaReader(
-            now: { self.observedAt },
-            accessToken: { "test-session" },
-            fetch: { request in
-                let body = #"{"usagePercent":0,"hasNonZeroIncludedLimit":false}"#
-                let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
-                return (Data(body.utf8), response)
-            }).read()
+    private func dashboardReading() async -> LocalQuotaResult {
+        legacyReading(id: "local-mac:grok-bot:weekly", source: "Cursor DashboardService")
     }
 
     private func gbuReading() async -> LocalQuotaResult {
-        let json = """
-        {"active":"a@example.com","accounts":[{"account":"a@example.com","active":true,"weeklyUsagePercent":19.41,"available":true,"resetsAt":"2026-10-05T18:35:19.304Z","planLabel":"Grok Bot Plan"}]}
-        """
-        return await GbuQuotaReader(now: { self.observedAt }, runGbu: { Data(json.utf8) }).read()
+        legacyReading(id: "local-mac:grok-bot:gbu-weekly", source: "gbu")
+    }
+
+    private func legacyPlaceholder(id: String, source: String, issueKey: String) -> LocalQuotaResult {
+        LocalQuotaResult(windows: [QuotaWindow(
+            id: id, provider: "Grok Bot", providerKey: "grok-bot", label: "Grok Bot weekly",
+            remainingUnknown: true, occurredAt: ISO8601DateFormatter().string(from: observedAt), source: source
+        )], issues: [issueKey: "Legacy source unavailable."])
+    }
+
+    private func dashboardUnreadable() async -> LocalQuotaResult {
+        legacyPlaceholder(id: "local-mac:grok-bot:unknown", source: "Cursor DashboardService", issueKey: "grok-bot")
     }
 
     private func gbuUnreadable() async -> LocalQuotaResult {
-        // A signed-out account: gbu runs, reports an error, and no window is
-        // readable, so the reader falls back to its placeholder.
-        let json = #"{"active":"a@example.com","accounts":[{"account":"a@example.com","error":"signed out"}]}"#
-        return await GbuQuotaReader(now: { self.observedAt }, runGbu: { Data(json.utf8) }).read()
+        legacyPlaceholder(id: "local-mac:grok-bot:gbu-unknown", source: "gbu", issueKey: "gbu")
     }
 
     private func merged(_ results: [LocalQuotaResult]) -> LocalQuotaResult {
         LocalQuotaResult(windows: results.flatMap(\.windows),
                          issues: results.reduce(into: [:]) { $0.merge($1.issues) { _, next in next } },
                          consentNeeded: [])
-    }
-
-    // MARK: - What the readers emit
-
-    func testBothGrokBotReadersEmitAWeeklyWindowForTheSameAllowance() async {
-        let dashboard = await dashboardReading()
-        let gbu = await gbuReading()
-        XCTAssertEqual(dashboard.windows.map(\.id), ["local-mac:grok-bot:weekly"])
-        XCTAssertEqual(gbu.windows.map(\.id), ["local-mac:grok-bot:gbu-weekly"])
-        XCTAssertEqual(dashboard.windows.first?.label, gbu.windows.first?.label, "the same \"Grok Bot weekly\"")
-        XCTAssertEqual(dashboard.windows.first?.window, gbu.windows.first?.window)
-        XCTAssertEqual(dashboard.windows.first?.resetAt, gbu.windows.first?.resetAt)
-    }
-
-    func testAnUnreadableGbuLeavesAPlaceholderWithNoReadingAndNoCadence() async throws {
-        let gbu = await gbuUnreadable()
-        let placeholder = try XCTUnwrap(gbu.windows.first)
-        XCTAssertEqual(gbu.windows.count, 1)
-        XCTAssertEqual(placeholder.id, "local-mac:grok-bot:gbu-unknown")
-        XCTAssertNil(placeholder.boundedRemainingPercent)
-        XCTAssertNil(placeholder.window)
-        XCTAssertTrue(placeholder.isPlaceholder)
-        XCTAssertEqual(gbu.issues["gbu"], "gbu returned no readable Grok Bot weekly quota.",
-                       "gbu's issue is under its own key, so the Grok Bot row does not show it")
-        XCTAssertNil(gbu.issues["grok-bot"])
-    }
-
-    func testAnUnreadableDashboardLeavesAPlaceholderAndAnIssueUnderGrokBot() async throws {
-        let dashboard = await dashboardUnreadable()
-        XCTAssertEqual(dashboard.windows.map(\.id), ["local-mac:grok-bot:unknown"])
-        XCTAssertTrue(try XCTUnwrap(dashboard.windows.first).isPlaceholder)
-        XCTAssertNotNil(dashboard.issues["grok-bot"])
     }
 
     func testAReadingAndAWindowThatNamesACadenceAreNeverPlaceholders() async throws {
@@ -204,3 +160,4 @@ final class PlaceholderWindowsTests: XCTestCase {
         XCTAssertEqual(once.droppingSupersededPlaceholders(), once)
     }
 }
+

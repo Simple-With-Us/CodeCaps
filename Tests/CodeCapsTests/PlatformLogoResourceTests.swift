@@ -26,8 +26,42 @@ final class PlatformLogoResourceTests: XCTestCase {
         "google-antigravity", "antigravity",
         "google-antigravity:gemini", "google-antigravity:third-party",
         "gemini", "xai", "grok", "grok-cli", "grok-bot", "minimax",
-        "muse", "muse-assist", "muse-code", "cursor",
+        "muse", "muse-assist", "muse-code", "cursor", "cursor-grok",
     ]
+
+    func testCursorGrokAliasKeepsCursorMonochromeAppearance() throws {
+        XCTAssertTrue(PlatformLogoImage.isMonochromeMark("cursor-grok"))
+        for isDark in [false, true] {
+            let image = try XCTUnwrap(PlatformLogoImage.menuBarImage(providerKey: "cursor-grok", style: .standard, isDarkMode: isDark))
+            XCTAssertTrue(image.isTemplate)
+        }
+    }
+
+    func testXAIHasRenderableLightAndDarkVariants() throws {
+        let bundle = try XCTUnwrap(ResourceBundle.resolved)
+        for (isDark, suffix) in [(false, "light"), (true, "dark")] {
+            let url = try XCTUnwrap(bundle.url(forResource: "xai-\(suffix)", withExtension: "png"))
+            let data = try Data(contentsOf: url)
+            let bitmap = try XCTUnwrap(NSBitmapImageRep(data: data))
+            XCTAssertGreaterThan(bitmap.pixelsWide, 0)
+            XCTAssertGreaterThan(bitmap.pixelsHigh, 0)
+            var visiblePixels = 0
+            for y in stride(from: 0, to: bitmap.pixelsHigh, by: 4) {
+                for x in stride(from: 0, to: bitmap.pixelsWide, by: 4) {
+                    if let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB), color.alphaComponent > 0.5 {
+                        visiblePixels += 1
+                        let luminance = (color.redComponent + color.greenComponent + color.blueComponent) / 3
+                        if isDark { XCTAssertGreaterThan(luminance, 0.5) }
+                        else { XCTAssertLessThan(luminance, 0.5) }
+                    }
+                }
+            }
+            XCTAssertGreaterThan(visiblePixels, 0, "xAI artwork must not be transparent")
+            XCTAssertNotNil(PlatformLogoImage.load(providerKey: "xai", style: .template, isDarkMode: isDark))
+            XCTAssertEqual(PlatformLogoImage.bundledFilenames(base: "xai", style: .template, isDark: isDark).first,
+                           "xai-\(suffix).png")
+        }
+    }
 
     func testMissingAppearanceVariantFallsBackToTheColourMarkBeforePlaceholder() {
         XCTAssertEqual(PlatformLogoImage.bundledFilenames(base: "claude", style: .template, isDark: true),
@@ -145,3 +179,4 @@ final class PlatformLogoResourceTests: XCTestCase {
         XCTAssertTrue(template.isTemplate)
     }
 }
+

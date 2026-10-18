@@ -341,6 +341,28 @@ final class LocalQuotaReaderTests: XCTestCase {
         XCTAssertNil(result.issues["anthropic"])
     }
 
+    private actor GrokRequestCounter {
+        var count = 0
+        func record() { count += 1 }
+    }
+
+    func testOneGrokBillingRequestProvidesTheSharedAllowance() async throws {
+        let home = try makeFixtureHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        try writeJSON(["token": "fixture"], to: home.appendingPathComponent(".grok/auth.json"))
+        let requests = GrokRequestCounter()
+        let reader = LocalQuotaReader(homeDirectory: home, fetchJSON: { request in
+            XCTAssertEqual(request.url?.host, "cli-chat-proxy.grok.com")
+            await requests.record()
+            return Self.httpResponse(#"{"config":{"creditUsagePercent":58}}"#)
+        }, runAntigravity: { Data("{}".utf8) }, readClaudeCredential: { .missing })
+        let result = await reader.read()
+        let count = await requests.count
+        XCTAssertEqual(count, 1)
+        XCTAssertEqual(result.windows.filter { $0.canonicalProviderKey == "grok" }.count, 1)
+        XCTAssertFalse(result.windows.contains { ["xai", "grok-bot", "cursor-grok"].contains($0.canonicalProviderKey) })
+    }
+
     func testGrokSubscriptionConfigExcludesOnDemandAndPrepaidCaps() async throws {
         let home = try makeFixtureHome()
         defer { try? FileManager.default.removeItem(at: home) }
@@ -517,3 +539,4 @@ private final class ClaudeRenewalGate: @unchecked Sendable {
         set { lock.lock(); renewed = newValue; lock.unlock() }
     }
 }
+

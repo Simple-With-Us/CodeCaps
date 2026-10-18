@@ -943,7 +943,6 @@ struct ReaderStatus {
         ReaderStatus(providerKey: "google-antigravity", label: "Antigravity", source: "Antigravity app or CLI"),
         ReaderStatus(providerKey: "cursor", label: "Cursor", source: "Cursor app session"),
         ReaderStatus(providerKey: "grok", label: "Grok", source: "Grok CLI credentials"),
-        ReaderStatus(providerKey: "grok-bot", label: "Grok Bot", source: "Cursor app session"),
         ReaderStatus(providerKey: "minimax", label: "MiniMax", source: "MiniMax CLI credentials"),
     ]
 }
@@ -1040,13 +1039,13 @@ struct SettingsLogoStylePage: View {
     @ObservedObject var model: MonitorModel
 
     private var orderedKeys: [String] {
-        if model.displaySections.isEmpty {
+        if model.allDisplaySections.isEmpty {
             return ["claude", "cursor", "codex", "gemini", "antigravity", "grok", "grok-bot", "minimax"]
         }
-        let live = Set(model.displaySections.map(\.id))
+        let live = Set(model.allDisplaySections.map(\.id))
         let stored = model.platformOrder.filter(live.contains)
         let unsorted = live.filter { !stored.contains($0) }.sorted()
-        let canonical = model.displaySections.map(\.id)
+        let canonical = model.allDisplaySections.map(\.id)
         let orderedUnsorted = unsorted.sorted {
             let left = canonical.firstIndex(of: $0) ?? 0
             let right = canonical.firstIndex(of: $1) ?? 0
@@ -1056,12 +1055,13 @@ struct SettingsLogoStylePage: View {
     }
 
     private func label(for rowId: String) -> String {
-        if let match = model.displaySections.first(where: { $0.id == rowId }) {
+        if let match = model.allDisplaySections.first(where: { $0.id == rowId }) {
             return match.title
         }
         switch rowId {
         case "claude", "anthropic": return "Claude Code"
         case "cursor": return "Cursor"
+        case "cursor-grok": return "Cursor-Grok"
         case "codex", "openai": return "Codex"
         case "gemini": return "Gemini"
         case "antigravity", "google-antigravity": return "Antigravity"
@@ -1075,6 +1075,23 @@ struct SettingsLogoStylePage: View {
 
     var body: some View {
         SettingsPage {
+            Section {
+                ForEach(SharedGrokDisplay.options, id: \.id) { option in
+                    Toggle(option.title, isOn: Binding(
+                        get: { model.sharedGrokLogoIDs.contains(option.id) },
+                        set: { enabled in
+                            if enabled { model.sharedGrokLogoIDs.insert(option.id) }
+                            else { model.sharedGrokLogoIDs.remove(option.id) }
+                        }
+                    ))
+                }
+            } header: {
+                Eyebrow("SHARED xAI / GROK LOGOS")
+            } footer: {
+                Text("Choose the logos you use." + sentenceGap
+                     + "Each shows the same xAI/Grok quota from one lookup; Cursor's own plan is separate." + sentenceGap
+                     + "Your choices appear in Glance, PiP options and menu bar pinning.")
+            }
             Section {
                 ForEach(orderedKeys, id: \.self) { providerKey in
                     row(for: providerKey)
@@ -1998,3 +2015,4 @@ private func pipSlider(value: Binding<Double>,
     .tint(Theme.accent)
     .background(Theme.sliderTrack, in: Capsule())
 }
+
