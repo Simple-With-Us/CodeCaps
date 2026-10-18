@@ -1,0 +1,45 @@
+name: iOS ship contract
+
+# Pins the iOS auto-ship wiring (owner 2026-10-17): a merge to main that
+# touches the iOS native tree, including the shared Sources/QuotaCore files its
+# targets compile, uploads a TestFlight build with no human step.  Offline and
+# credential-free: it reads the workflow text and project.yml, and runs the
+# scheduled-gate and key-handoff shell tests.  See
+# scripts/ios-ship-workflow.test.mjs.
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/ios-ship*.yml'
+      - '.github/workflows/macos-ship.yml'
+      - 'ios/CodeCapsCompanion/project.yml'
+      - 'scripts/ios-*'
+      - 'scripts/ios-fleet/**'
+      - 'scripts/test-ios-stage-asc-key.sh'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/ios-ship*.yml'
+      - '.github/workflows/macos-ship.yml'
+      - 'ios/CodeCapsCompanion/project.yml'
+      - 'scripts/ios-*'
+      - 'scripts/ios-fleet/**'
+      - 'scripts/test-ios-stage-asc-key.sh'
+  workflow_dispatch:
+
+concurrency:
+  group: ios-ship-contract-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    name: iOS ship contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Pin the auto-ship wiring
+        run: node --test scripts/ios-ship-workflow.test.mjs

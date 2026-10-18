@@ -22,7 +22,11 @@
 #
 # Options:
 #   --path-prefix P   Repo-relative path prefix that counts as app source
-#                     (required; e.g. clients/ios/ or ios/)
+#                     (required; e.g. clients/ios/ or ios/).  Repeat the flag
+#                     when the app also compiles files from outside its own
+#                     tree (CodeCaps compiles shared Sources/QuotaCore files);
+#                     a change under ANY prefix counts.  A prefix may also be
+#                     one exact file.
 #   --event NAME      GitHub event name (default: $GITHUB_EVENT_NAME).
 #                     Anything other than "schedule" votes ship=1 for every
 #                     app: a push already passed the workflow's paths filter,
@@ -43,7 +47,7 @@
 
 set -uo pipefail
 
-PATH_PREFIX=""
+PATH_PREFIXES=()
 EVENT="${GITHUB_EVENT_NAME:-}"
 REPO_ROOT=""
 STATE_DIR="${IOS_FLEET_STATE_DIR:-${HOME}/.cache/ios-fleet}"
@@ -54,7 +58,7 @@ log() { echo "[ship-gate] $*"; }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --path-prefix) PATH_PREFIX="${2:-}"; shift 2 ;;
+    --path-prefix) PATH_PREFIXES+=("${2:-}"); shift 2 ;;
     --event) EVENT="${2:-}"; shift 2 ;;
     --repo-root) REPO_ROOT="${2:-}"; shift 2 ;;
     --state-dir) STATE_DIR="${2:-}"; shift 2 ;;
@@ -64,7 +68,16 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-[[ -n "$PATH_PREFIX" ]] || die "--path-prefix is required"
+[[ -n "${PATH_PREFIXES[0]:-}" ]] || die "--path-prefix is required"
+# Every prefix must be non-empty: an empty pathspec would match the whole repo.
+for _p in "${PATH_PREFIXES[@]}"; do
+  [[ -n "$_p" ]] || die "--path-prefix must not be empty"
+done
+# One printable list for the log lines (comma-separated).
+PATHS_DESC=""
+for _p in "${PATH_PREFIXES[@]}"; do
+  PATHS_DESC="${PATHS_DESC:+${PATHS_DESC}, }${_p}"
+done
 [[ -n "${APPS// /}" ]] || die "at least one app key is required"
 
 if [[ -z "$REPO_ROOT" ]]; then REPO_ROOT="$(pwd)"; fi
@@ -134,9 +147,9 @@ for app in $APPS; do
         log "[${app}] last shipped sha ${last_sha} is unreachable from HEAD (shipped from another worktree/branch, or history was rewritten)."
         last_ts="$(awk 'NR==1{print $1}' "$state" 2>/dev/null || true)"
         if [[ "${last_ts:-}" =~ ^[0-9]+$ ]]; then
-          since_changed="$(git -C "$REPO_ROOT" log --since="@${last_ts}" --format= --name-only -- "$PATH_PREFIX" 2>/dev/null | sed '/^$/d' | sort -u | head -20)"
+          since_changed="$(git -C "$REPO_ROOT" log --since="@${last_ts}" --format= --name-only -- "${PATH_PREFIXES[@]}" 2>/dev/null | sed '/^$/d' | sort -u | head -20)"
           if [[ -n "$since_changed" ]]; then
-            log "[${app}] falling back to time: ${PATH_PREFIX} changed after the last ship:"
+            log "[${app}] falling back to time: ${PATHS_DESC} changed after the last ship:"
             # Line-by-line, NOT `printf ... $var`: Socratic.Trade's iOS path is
             # "ios/Socratic Trade.xcodeproj/...", and unquoted word-splitting
             # printed that one file as two bogus lines. Decision logic is
@@ -144,7 +157,7 @@ for app in $APPS; do
             printf '%s\n' "$since_changed" | while IFS= read -r f; do echo "  $f"; done
             decision=1
           else
-            log "[${app}] falling back to time: no ${PATH_PREFIX} commits since the last ship; skip."
+            log "[${app}] falling back to time: no ${PATHS_DESC} commits since the last ship; skip."
           fi
         else
           log "[${app}] state has no usable timestamp either; letting ship-testflight.sh decide."
@@ -160,13 +173,13 @@ for app in $APPS; do
       # Captured into a variable, not piped into `grep -q`: under pipefail an
       # early-exiting grep SIGPIPEs git and the pipeline reports failure even
       # though it matched.
-      changed="$(git -C "$REPO_ROOT" diff --name-only "$last_sha" HEAD -- "$PATH_PREFIX" 2>/dev/null | head -20)"
+      changed="$(git -C "$REPO_ROOT" diff --name-only "$last_sha" HEAD -- "${PATH_PREFIXES[@]}" 2>/dev/null | head -20)"
       if [[ -n "$changed" ]]; then
-        log "[${app}] ${PATH_PREFIX} changed since ${last_sha}:"
+        log "[${app}] ${PATHS_DESC} changed since ${last_sha}:"
         printf '%s\n' "$changed" | while IFS= read -r f; do echo "  $f"; done
         decision=1
       else
-        log "[${app}] no ${PATH_PREFIX} changes since ${last_sha}; skip (TestFlight is not a commit log)."
+        log "[${app}] no ${PATHS_DESC} changes since ${last_sha}; skip (TestFlight is not a commit log)."
         decision=0
       fi
     fi
