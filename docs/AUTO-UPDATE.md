@@ -70,7 +70,7 @@ A private repository cannot do this, because anonymous clients cannot download i
 | `ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_P8` | Fleet-OPS Infisical prod `/asc`, using the same loader as `ios-ship.yml`. The stale repository copies are never read. The PEM is staged by `scripts/ios-stage-asc-key.sh` to a mode-600 temporary file; only its path crosses steps. | Notarization access is verified with read-only `notarytool history` before building. Artifact acceptance is still required separately. |
 | `SPARKLE_ED_PRIVATE_KEY` | Repository secret | Present. |
 
-While any of them is missing, the release job still builds the bundle and verifies its signature ad hoc, then finishes green with a notice naming what is missing.  Nothing is published.
+Pull requests skip credential loading, perform ad-hoc structural validation and never publish. On main, a missing Infisical identity, missing fleet ASC material, or failed notarization preflight fails the job before publication. If fleet ASC loading succeeds but certificate or Sparkle signing material is missing, the publication gate reports the missing names and runs the existing ad-hoc build-only validation. None of these non-publishing paths updates the feed.
 
 ### Diagnosing a stale Sparkle feed
 
