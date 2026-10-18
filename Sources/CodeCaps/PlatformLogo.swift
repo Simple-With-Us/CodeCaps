@@ -280,7 +280,8 @@ private static let resourceNames: [String: String] = [
     "google-antigravity:gemini": "gemini-color",
     "google-antigravity:third-party": "antigravity",
     "gemini": "gemini",
-    "xai": "grok",
+    "xai": "xai",
+    "x-ai": "xai",
     "grok": "grok",
     "grok-cli": "grok",
     "grok-bot": "grok-bot",
@@ -484,7 +485,7 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
 
     private static let monochromeKeys: Set<String> = [
         "grok-bot",
-        "openai", "codex", "cursor", "xai", "grok", "grok-cli",
+        "openai", "codex", "cursor", "xai", "x-ai", "grok", "grok-cli",
     ]
 
     /// Presentation mode for a user-supplied custom mark.  Defaults to `.color`

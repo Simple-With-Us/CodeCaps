@@ -1619,13 +1619,16 @@ struct GlanceMeter: View {
         return glanceResetCountdown(snapshot.resetAt, now: now)
     }
 
+    private var isMuseAssist: Bool { snapshot.window.canonicalProviderKey == "muse-assist" }
+
     /// The tooltip for a stale meter that has no reset to count down to.
     ///
     /// The countdown slot is empty then, so its own tooltip (which carries the
     /// "updated h:mm" staleness) has nothing to hang on; the bar carries it
-    /// instead, and fresh meters keep an empty tooltip.
+    /// instead, and fresh meters keep an empty tooltip.  Muse Assist never
+    /// displays "Updated..." captions (owner 2026-10-17).
     private var staleBarHelp: String {
-        guard countdown.isEmpty else { return "" }
+        guard countdown.isEmpty, !isMuseAssist else { return "" }
         return glanceResetHelp(nil, now: now, observedAt: snapshot.observedAt, isFresh: snapshot.isFresh) ?? ""
     }
 
@@ -1689,7 +1692,7 @@ struct GlanceMeter: View {
                     // variable-width value cannot be centred in a trailing
                     // frame.
                     .frame(width: Metrics.glanceMeterCountdownWidth, alignment: .center)
-                    .help(isExtraLabel ? "Extra token usage" : (glanceResetHelp(snapshot.resetAt, now: now, observedAt: snapshot.observedAt, isFresh: snapshot.isFresh) ?? ""))
+                    .help(isExtraLabel ? "Extra token usage" : (glanceResetHelp(snapshot.resetAt, now: now, observedAt: isMuseAssist ? nil : snapshot.observedAt, isFresh: snapshot.isFresh) ?? ""))
             } else {
                 Color.clear
                     .frame(width: Metrics.glanceMeterCountdownWidth, height: 1)
@@ -1710,7 +1713,7 @@ struct GlanceMeter: View {
         if !countdown.isEmpty {
             parts.append("resets in \(glanceResetFullCountdown(snapshot.resetAt, now: now))")
         }
-        if !snapshot.isFresh, let observed = snapshot.observedAt {
+        if !isMuseAssist, !snapshot.isFresh, let observed = snapshot.observedAt {
             parts.append("updated \(observed.formatted(date: .omitted, time: .shortened))")
         }
         return parts.joined(separator: ", ")
@@ -2427,6 +2430,28 @@ func glanceResetCountdown(_ reset: Date?, now: Date) -> String {
     guard seconds > 0 else { return "due" }
     guard seconds >= 60 else { return "<1m" }
     return glanceCountdownUnits(seconds: seconds).prefix(2).joined(separator: " ")
+}
+
+/// Reset countdown in a single unit rounded up: "2h", "59m", "3d", "<1m", "due".
+///
+/// When the PiP HUD narrows to where two time units cannot fit, it degrades to
+/// one unit rounded up rather than dropping the countdown entirely:
+/// 1.2h (1h 12m) -> 2h, 59m -> 59m, 2d 2h -> 3d.
+func glanceResetCompactCountdown(_ reset: Date?, now: Date) -> String {
+    guard let reset else { return "" }
+    let seconds = Int(reset.timeIntervalSince(now).rounded())
+    guard seconds > 0 else { return "due" }
+    guard seconds >= 60 else { return "<1m" }
+    let minutes = seconds / 60
+    if minutes < 60 {
+        return "\(minutes)m"
+    } else if minutes < 1_440 {
+        let hours = (minutes + 59) / 60
+        return "\(hours)h"
+    } else {
+        let days = (minutes + 1_439) / 1_440
+        return "\(days)d"
+    }
 }
 
 /// The whole countdown, down to the minute, with zero units skipped the same

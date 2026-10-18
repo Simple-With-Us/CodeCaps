@@ -942,7 +942,7 @@ struct ReaderStatus {
         ReaderStatus(providerKey: "openai", label: "Codex", source: "Codex CLI credentials"),
         ReaderStatus(providerKey: "google-antigravity", label: "Antigravity", source: "Antigravity app or CLI"),
         ReaderStatus(providerKey: "cursor", label: "Cursor", source: "Cursor app session"),
-        ReaderStatus(providerKey: "xai", label: "Grok", source: "Grok CLI credentials"),
+        ReaderStatus(providerKey: "grok", label: "Grok", source: "Grok CLI credentials"),
         ReaderStatus(providerKey: "grok-bot", label: "Grok Bot", source: "Cursor app session"),
         ReaderStatus(providerKey: "minimax", label: "MiniMax", source: "MiniMax CLI credentials"),
     ]
@@ -1065,7 +1065,8 @@ struct SettingsLogoStylePage: View {
         case "codex", "openai": return "Codex"
         case "gemini": return "Gemini"
         case "antigravity", "google-antigravity": return "Antigravity"
-        case "grok", "xai": return "Grok"
+        case "grok": return "Grok"
+        case "xai", "x-ai": return "xAI"
         case "grok-bot": return "Grok Bot"
         case "minimax": return "MiniMax"
         default: return rowId.capitalized

@@ -65,12 +65,85 @@ final class PipMetricsTests: XCTestCase {
         XCTAssertFalse(PipMetrics.Detail.minimal.showsProviderLogo,
                        "the logo goes only after the name, at the identity-free end")
 
-        // Nothing above logoOnly may lose the name while keeping two meters.
-        for level in [PipMetrics.Detail.full, .noCountdown, .logoOnly] {
+        // Nothing above logoOnly may lose the logo while keeping two meters.
+        for level in [PipMetrics.Detail.full, .logoWithFullCountdown, .logoWithCompactCountdown, .logoOnly] {
             if level.maxMeters > 1 || level == .logoOnly {
                 XCTAssertTrue(level.showsProviderLogo, "\(level) must keep the logo")
             }
         }
+    }
+
+    /// Owner 2026-10-17: On the PiP window make the platform name disappear and
+    /// go to just the logos when it gets smaller instead of having the remaining
+    /// time disappear first.  Then degrade the remaining time to a single rounded-up
+    /// unit before dropping countdowns entirely.
+    func testPlatformNameDropsBeforeCountdownAndDegradesToCompactUnit() {
+        let fullWidth = PipMetrics.padding * 2 + PipMetrics.fullMinWidth
+        XCTAssertEqual(PipMetrics.detail(forWidth: fullWidth), .full)
+        XCTAssertTrue(PipMetrics.detail(forWidth: fullWidth).showsTitle)
+        XCTAssertTrue(PipMetrics.detail(forWidth: fullWidth).showsCountdown)
+        XCTAssertFalse(PipMetrics.detail(forWidth: fullWidth).usesCompactCountdown)
+
+        // Below full width: platform name disappears to logos only, but countdown remains!
+        let fullCountdownWidth = PipMetrics.padding * 2 + PipMetrics.logoWithCountdownMinWidth
+        let belowFull = PipMetrics.detail(forWidth: fullWidth - 1)
+        XCTAssertEqual(belowFull, .logoWithFullCountdown)
+        XCTAssertFalse(belowFull.showsTitle, "platform name must drop first")
+        XCTAssertTrue(belowFull.showsProviderLogo, "logos must stay")
+        XCTAssertTrue(belowFull.showsCountdown, "countdown must not disappear first")
+        XCTAssertFalse(belowFull.usesCompactCountdown)
+
+        // Narrower still: countdown degrades to 1-unit rounded up.
+        let compactWidth = PipMetrics.padding * 2 + PipMetrics.logoWithCompactCountdownMinWidth
+        let compactDetail = PipMetrics.detail(forWidth: fullCountdownWidth - 1)
+        XCTAssertEqual(compactDetail, .logoWithCompactCountdown)
+        XCTAssertFalse(compactDetail.showsTitle)
+        XCTAssertTrue(compactDetail.showsProviderLogo)
+        XCTAssertTrue(compactDetail.showsCountdown)
+        XCTAssertTrue(compactDetail.usesCompactCountdown, "must use compact single-unit countdown")
+
+        // Narrower still: countdowns drop, logo remains.
+        let logoOnlyDetail = PipMetrics.detail(forWidth: compactWidth - 1)
+        XCTAssertEqual(logoOnlyDetail, .logoOnly)
+        XCTAssertFalse(logoOnlyDetail.showsTitle)
+        XCTAssertTrue(logoOnlyDetail.showsProviderLogo)
+        XCTAssertFalse(logoOnlyDetail.showsCountdown, "countdowns drop after compact countdown")
+    }
+
+    /// Owner 2026-10-17: "when it gets small enough that it can't have the time
+    /// remaining with 2 types of time (days hours or hours minutes) then lets first
+    /// go down to just one type of time rounded up so 1.2 hours (1hr 12min) would
+    /// say 2h and 59min would say 59min and 2d 2h would say 3d".
+    func testCompactCountdownRoundsUpToSingleUnit() {
+        let now = Date()
+
+        // 1.2 hours (1hr 12min = 72m) -> 2h
+        let onePointTwoHours = now.addingTimeInterval(72 * 60)
+        XCTAssertEqual(glanceResetCompactCountdown(onePointTwoHours, now: now), "2h")
+
+        // 59 minutes -> 59m
+        let fiftyNineMins = now.addingTimeInterval(59 * 60)
+        XCTAssertEqual(glanceResetCompactCountdown(fiftyNineMins, now: now), "59m")
+
+        // 2d 2h (3000 mins) -> 3d
+        let twoDaysTwoHours = now.addingTimeInterval((2 * 1440 + 2 * 60) * 60)
+        XCTAssertEqual(glanceResetCompactCountdown(twoDaysTwoHours, now: now), "3d")
+
+        // Exactly 1 hour -> 1h
+        let oneHour = now.addingTimeInterval(60 * 60)
+        XCTAssertEqual(glanceResetCompactCountdown(oneHour, now: now), "1h")
+
+        // Exactly 2 days -> 2d
+        let twoDays = now.addingTimeInterval(2 * 86_400)
+        XCTAssertEqual(glanceResetCompactCountdown(twoDays, now: now), "2d")
+
+        // Sub-minute -> <1m
+        let subMinute = now.addingTimeInterval(45)
+        XCTAssertEqual(glanceResetCompactCountdown(subMinute, now: now), "<1m")
+
+        // Expired -> due
+        let expired = now.addingTimeInterval(-10)
+        XCTAssertEqual(glanceResetCompactCountdown(expired, now: now), "due")
     }
 
     /// Owner 2026-10-10: "once it gets to where it is in the screenshot or
@@ -148,7 +221,7 @@ final class PipMetricsTests: XCTestCase {
         for title in ["Antigravity · Third-Party", "Antigravity · Gemini", "Muse Assist", "Muse Code", "MiniMax", "OpenCode"] {
             XCTAssertLessThanOrEqual((title as NSString).size(withAttributes: [.font: font]).width, PipMetrics.titleWidth)
         }
-        let boundary = PipMetrics.padding * 2 + PipMetrics.noCountdownMinWidth
+        let boundary = PipMetrics.padding * 2 + PipMetrics.fullMinWidth
         XCTAssertTrue(PipMetrics.detail(forWidth: boundary).showsTitle)
         XCTAssertFalse(PipMetrics.detail(forWidth: boundary - 1).showsTitle)
         XCTAssertTrue(PipMetrics.detail(forWidth: boundary - 1).showsProviderLogo)

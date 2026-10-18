@@ -29,7 +29,7 @@ public struct LocalQuotaResult: Equatable, Sendable {
 /// only the four documented CLI files below and the single Antigravity helper
 /// path.  Network requests use an ephemeral session and refuse redirects.
 public struct LocalQuotaReader: Sendable {
-    public static let providerKeys = ["anthropic", "openai", "xai", "minimax", "google-antigravity"]
+    public static let providerKeys = ["anthropic", "openai", "grok", "minimax", "google-antigravity"]
 
     private let homeDirectory: URL
     private let now: @Sendable () -> Date
@@ -377,7 +377,7 @@ public struct LocalQuotaReader: Sendable {
 private enum Provider: String, CaseIterable, Sendable {
     case claude, codex, grok, minimax, antigravity
     var key: String {
-        switch self { case .claude: return "anthropic"; case .codex: return "openai"; case .grok: return "xai"; case .minimax: return "minimax"; case .antigravity: return "google-antigravity" }
+        switch self { case .claude: return "anthropic"; case .codex: return "openai"; case .grok: return "grok"; case .minimax: return "minimax"; case .antigravity: return "google-antigravity" }
     }
     var label: String {
         switch self { case .claude: return "Claude Code"; case .codex: return "Codex"; case .grok: return "Grok"; case .minimax: return "MiniMax"; case .antigravity: return "Antigravity" }
