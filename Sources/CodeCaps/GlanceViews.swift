@@ -233,12 +233,13 @@ struct GlancePopover: View {
                          onToggleAlarm: { model.toggleAlarm(for: row.id) })
     }
 
-    /// "REPORTED 9:12 AM": the source's latest reading, on the right of its
-    /// heading band.  The time lives here rather than under every row, where
+    /// "REPORTED 9:12 AM", or "REPORTED OCT 18, 9:12 AM" once the reading is
+    /// no longer from today: the source's latest reading, on the right of its
+    /// heading band.  The stamp lives here rather than under every row, where
     /// it truncated.
     private func fleetGroupReported(_ group: FleetGroup) -> String? {
         let latest = group.rows.flatMap(\.section.windows).compactMap(\.observedAt).max()
-        return latest.map { "REPORTED \($0.formatted(date: .omitted, time: .shortened).uppercased())" }
+        return latest.map { "REPORTED \(glanceReportedStamp($0, now: model.now).uppercased())" }
     }
 
     /// The short issue text for a reader whose saved login is on this Mac but
@@ -815,6 +816,24 @@ func glanceFleetGroupHeading(_ title: String) -> String {
     // separate itself from the rows below.
     if name.contains(".") || name.contains(":") { return name }
     return name.uppercased()
+}
+
+/// When a source last reported, for the band above its rows.  A reading from
+/// today is stamped with its time alone, but anything older carries its date as
+/// well.  A bare time is not merely terse there, it is wrong to read: beside a
+/// clock showing 3:40 AM, a fleet band stamped "4:49 AM" looks like a reading
+/// that has not happened yet today when it is really yesterday's (owner report
+/// 2026-10-18).  The year is only added when it is not the current one, so the
+/// common case stays inside the band.
+func glanceReportedStamp(_ observedAt: Date, now: Date) -> String {
+    let time = observedAt.formatted(date: .omitted, time: .shortened)
+    let calendar = Calendar.current
+    guard !calendar.isDate(observedAt, inSameDayAs: now) else { return time }
+    let sameYear = calendar.component(.year, from: observedAt) == calendar.component(.year, from: now)
+    let date = sameYear
+        ? observedAt.formatted(.dateTime.month(.abbreviated).day())
+        : observedAt.formatted(date: .abbreviated, time: .omitted)
+    return "\(date), \(time)"
 }
 
 /// A source's own name, in words a stranger can act on.  The reader labels
