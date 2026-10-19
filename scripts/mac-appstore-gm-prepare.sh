@@ -28,32 +28,29 @@ fi
 : "${MAC_INSTALLER_P12_BASE64:?MAC_INSTALLER_P12_BASE64 required}"
 : "${MAC_INSTALLER_P12_PASSWORD:?MAC_INSTALLER_P12_PASSWORD required}"
 
-SECRETS_DIR="${HOME}/.secrets"
-mkdir -p "$SECRETS_DIR"
-chmod 700 "$SECRETS_DIR"
+# AFC-359: nothing is written under the old secrets folder.  Scratch files live in a
+# private temp dir that is removed on exit.  The ship step reads ASC_KEY_ID /
+# ASC_ISSUER_ID / ASC_KEY_PATH from the job environment (GITHUB_ENV), not from a file.
+KC_DIR="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
+WORK_DIR="$(mktemp -d "${KC_DIR%/}/gm-prepare.XXXXXX")"
+chmod 700 "$WORK_DIR"
+trap 'rm -rf "$WORK_DIR"' EXIT
 
-KEY_PATH="${ASC_KEY_PATH:-${SECRETS_DIR}/AuthKey.p8}"
+KEY_PATH="${ASC_KEY_PATH:-${KC_DIR%/}/asc-gm-AuthKey.p8}"
 if [[ -n "${ASC_KEY_PATH:-}" ]]; then
   [[ -s "$KEY_PATH" ]] || die "ASC_KEY_PATH has no key file"
 else
   # Legacy local path:  the caller passed the key itself, not a staged file.
   printf '%s\n' "$ASC_KEY_P8" > "$KEY_PATH"
+  [[ -z "${GITHUB_ENV:-}" ]] || printf 'ASC_KEY_PATH=%s\n' "$KEY_PATH" >> "$GITHUB_ENV"
 fi
 chmod 600 "$KEY_PATH"
 
-ENV_PATH="${SECRETS_DIR}/appstore-connect.env"
-{
-  printf 'ASC_KEY_ID=%s\n' "$ASC_KEY_ID"
-  printf 'ASC_ISSUER_ID=%s\n' "$ASC_ISSUER_ID"
-  printf 'ASC_KEY_PATH=%s\n' "$KEY_PATH"
-} > "$ENV_PATH"
-chmod 600 "$ENV_PATH"
-
-DIST_P12="${SECRETS_DIR}/ios-distribution.p12"
+DIST_P12="${WORK_DIR}/ios-distribution.p12"
 printf '%s' "$IOS_DIST_P12_BASE64" | base64 --decode > "$DIST_P12"
 chmod 600 "$DIST_P12"
 
-INST_P12="${SECRETS_DIR}/mac-installer.p12"
+INST_P12="${WORK_DIR}/mac-installer.p12"
 printf '%s' "$MAC_INSTALLER_P12_BASE64" | base64 --decode > "$INST_P12"
 chmod 600 "$INST_P12"
 
@@ -91,4 +88,4 @@ if ! security find-identity -v "$KC_PATH" | grep -q '3rd Party Mac Developer Ins
   die "imported keychain has no 3rd Party Mac Developer Installer identity"
 fi
 log "Apple Distribution + Mac Installer identities imported"
-log "ASC env written (key id length ${#ASC_KEY_ID})"
+log "ASC credentials come from the job environment (key id length ${#ASC_KEY_ID})"
