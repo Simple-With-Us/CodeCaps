@@ -12,18 +12,6 @@
       "worktreeHint": "~/Code/codecaps",
       "marketingVersionDefault": "1.0.0",
       "notes": "CodeCaps Companion \u2014 iOS companion for CodeCaps AI subscription monitor. Apple ID 6814623846 registered on ASC. ASC SKU codecaps-companion-ios. Marketing train 1.0.N (the retired 0.1.N builds stay in TestFlight; 1.0.1 is above every one of them); build UTC YYYYMMDDHHMM."
-    },
-    "codecaps-mac": {
-      "displayName": "CodeCaps for Mac",
-      "bundleId": "com.simplewithus.codecaps.macos",
-      "appleId": 6814951477,
-      "platform": "macOS",
-      "scheme": "CodeCapsCompanionMac",
-      "projectRel": "ios/CodeCapsCompanion/CodeCapsCompanion.xcodeproj",
-      "xcodegenDir": "ios/CodeCapsCompanion",
-      "worktreeHint": "~/Code/codecaps",
-      "marketingVersionDefault": "1.0.0",
-      "notes": "CodeCaps Companion for Mac. Bundle ID com.simplewithus.codecaps.macos. Team CC8UTF7ATG. AppleId 6814951477. ASC SKU codecaps-macos. Marketing train 1.0.N (the retired 0.1.N builds stay in TestFlight; 1.0.1 is above every one of them); build UTC YYYYMMDDHHMM."
     }
   }
 }
