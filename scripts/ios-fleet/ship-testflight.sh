@@ -490,10 +490,16 @@ next_build_seq() {
   printf '%s' "$n"
 }
 
+# The major.minor train a marketing version belongs to: "2.0.123" -> "2.0",
+# "3" -> "3.0".  The floor is per-train, so the train has to come from the
+# version actually being shipped rather than always from the default.
+version_prefix() {
+  printf '%s' "${1:-1.0}" | awk -F. '{ if (NF >= 2) print $1"."$2; else print $1".0" }'
+}
+
 marketing_prefix() {
   # "1.0" from marketingVersionDefault (1.0 or 1.0.x both yield 1.0).
-  local d="${DEFAULT_MARKETING:-1.0}"
-  printf '%s' "$d" | awk -F. '{ if (NF >= 2) print $1"."$2; else print $1".0" }'
+  version_prefix "${DEFAULT_MARKETING:-1.0}"
 }
 
 ship_state_path() {
@@ -801,7 +807,12 @@ elif [[ -n "$FORCE_BUILD" || -n "$FORCE_VERSION" ]]; then
   # floor: --version against an already-shipped HEAD would otherwise ship a
   # build at or below what App Store Connect already holds for that train.
   if [[ -z "$FORCE_BUILD" ]]; then
-    _of_floor="$(resolve_seq_floor "$MARKETING_PREFIX" "$PBXPROJ" "$PLATFORM" 2>/dev/null || echo 0)"
+    # The floor is per-train, so it has to be read from the train this override
+    # is actually shipping to.  MARKETING_PREFIX is the *default* train and is
+    # wrong here whenever --version named another one: reading 1.0's floor for a
+    # 2.0 ship is what produced stale builds like "2.0 (build 202510190002)".
+    _override_prefix="$(version_prefix "$MARKETING")"
+    _of_floor="$(resolve_seq_floor "$_override_prefix" "$PBXPROJ" "$PLATFORM" 2>/dev/null || echo 0)"
     [[ "$_of_floor" =~ ^[0-9]+$ ]] || _of_floor=0
     if [[ "$_of_floor" -ge "$BUILD_NUM" ]]; then
       BUILD_NUM="$((_of_floor + 1))"
