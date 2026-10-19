@@ -48,4 +48,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Pin the auto-ship wiring
-        run: node --test scripts/ios-ship-workflow.test.mjs scripts/macos-ship-workflow.test.mjs
+        run: |
+          node --test scripts/ios-ship-workflow.test.mjs scripts/macos-ship-workflow.test.mjs
+          bash scripts/ios-fleet/test-asc-credentials.sh
+          node --test scripts/ios-fleet/test-asc-credentials.mjs
