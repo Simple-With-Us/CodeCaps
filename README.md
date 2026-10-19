@@ -18,7 +18,7 @@ Engineered with the proactive safeguards you'll come to rely on:
 - **Visual Usage History & Trend Graphs**: Dive into rich local usage history graphs.  Inspect how your quota drains over time, evaluate burn pacing, and see anomaly alert markers directly on your timeline.
 - **Low-Quota Picture-in-Picture (PiP)**: Keep high-priority quotas visible in an on-top floating micro-HUD.  Set PiP to open automatically whenever any provider's quota runs low, so you're never caught off-guard mid-prompt.
 - **Dual-Window Cadence & Smart Reset Alarms**: Monitor 5-hour rapid windows alongside weekly/monthly plan allowances.  Reset alarms alert you on major period rollovers, and notify on short windows only when you're actually near the cap.
-- **Zero API Keys**: Reads local CLI and application sessions directly on your Mac.  Your private API keys and tokens never enter CodeCaps.
+- **Zero API Keys**: Reads local CLI and application sessions directly on your Mac.  No provider API key is required, and CodeCaps never exports provider sign-in tokens.
 
 ## What It Shows
 
