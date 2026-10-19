@@ -28,7 +28,9 @@ on:
 
 concurrency:
   group: ios-appstore-screenshots-${{ github.ref }}
-  cancel-in-progress: true
+  # Only supersede a run for the same pull request.  Cancelling on a push to
+  # main would report cancelled checks for a commit that nothing replaced.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read

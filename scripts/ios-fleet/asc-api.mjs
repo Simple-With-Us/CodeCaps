@@ -397,11 +397,42 @@ async function main() {
   // set and APP_IPAD_PRO_129 for the 13-inch iPad set.
   if (method === "upload-screenshots") {
     const localizationId = path;
-    const displayType = body;
+    let displayType = body;
     const files = process.argv.slice(5);
     if (!localizationId || !displayType || files.length === 0) {
-      console.error("Usage: node asc-api.mjs upload-screenshots <localizationId> <displayType> <file...>");
+      console.error("Usage: node asc-api.mjs upload-screenshots <localizationId> <displayType|auto> <file...>");
       process.exit(2);
+    }
+
+    // "auto" reads the pixel size out of the PNG and picks the screenshot set
+    // that size belongs to, so the display type cannot be mis-specified.
+    // App Store Connect has no APP_IPHONE_69 or APP_IPAD_PRO_13: the 6.9-inch
+    // iPhone size lives in APP_IPHONE_67 and the 13-inch iPad size in
+    // APP_IPAD_PRO_129.
+    const sizeToDisplayType = {
+      "1320x2868": "APP_IPHONE_67",
+      "1290x2796": "APP_IPHONE_67",
+      "1284x2778": "APP_IPHONE_65",
+      "1242x2688": "APP_IPHONE_65",
+      "2064x2752": "APP_IPAD_PRO_129",
+      "2048x2732": "APP_IPAD_PRO_3GEN_129",
+      "2000x2664": "APP_IPAD_PRO_3GEN_129"
+    };
+    if (displayType === "auto") {
+      if (!existsSync(files[0])) {
+        console.error(`upload-screenshots: no such file: ${files[0]}`);
+        process.exit(2);
+      }
+      const header = readFileSync(files[0]).subarray(0, 24);
+      const width = header.readUInt32BE(16);
+      const height = header.readUInt32BE(20);
+      const size = `${width}x${height}`;
+      displayType = sizeToDisplayType[size];
+      if (!displayType) {
+        console.error(`upload-screenshots: ${size} is not a size App Store Connect accepts`);
+        process.exit(2);
+      }
+      console.error(`upload-screenshots: ${size} -> ${displayType}`);
     }
 
     const sets = await api("GET", `/v1/appStoreVersionLocalizations/${localizationId}/appScreenshotSets`);
