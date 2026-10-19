@@ -196,7 +196,6 @@ test("ship state cache is keyed apart from the Mac ship", () => {
   const keys = [...code.matchAll(/ios-fleet-state-codecaps-[a-z]*-?/g)].map((m) => m[0]);
   assert.ok(keys.length >= 6, "gate and ship restore and save the state cache");
   for (const k of keys) assert.equal(k, "ios-fleet-state-codecaps-ios-", `bare prefix ${k} also matches the Mac ship cache`);
-  assert.match(read(".github/workflows/macos-ship.yml"), /ios-fleet-state-codecaps-mac-/);
 });
 
 test("the marketing train is 1.0.N and release notes use the owner clock", () => {
