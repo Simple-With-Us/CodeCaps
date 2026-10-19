@@ -39,8 +39,8 @@ name: Mac TestFlight ship (GitHub-hosted macOS)
 #   Values are never printed.
 #
 # Bundle `com.simplewithus.codecaps.macos`, Apple ID 6814951477, team CC8UTF7ATG.
-# Marketing train is 1.0.N (AGENT-SYNC:  0.x.x is banned);  build is UTC
-# YYYYMMDDHHMM.
+# Versioning is 1.0.<commit count>, and CFBundleVersion is that same integer
+# (owner 2026-10-18); UTC timestamps are retired.
 #
 # WHY THERE IS A `schedule:` TRIGGER
 # A PR merged by github-actions[bot] (auto-merge armed with GITHUB_TOKEN) lands
