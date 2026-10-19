@@ -45,3 +45,4 @@ jobs:
           node --test scripts/ios-ship-workflow.test.mjs
           bash scripts/ios-fleet/test-asc-credentials.sh
           node --test scripts/ios-fleet/test-asc-credentials.mjs
+          python3 scripts/ios-fleet/test_pick_simulator.py

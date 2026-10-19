@@ -21,6 +21,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$REPO_ROOT/ios/CodeCapsCompanion"
 SCHEME="CodeCapsCompanion"
 OUT_DIR="${1:-${REPO_ROOT}/.build/appstore-screenshots}"
@@ -52,29 +53,13 @@ fail() { echo "::error::capture: $*" >&2; exit 1; }
 
 # Print the UDID of the first available simulator whose display name matches
 # one of the pipe-separated preferred names, in order.
+#
+# The picker matches on a prefix, because Xcode names some iPads with their
+# storage variant ("iPad Pro 13-inch (M5) (16GB)"), and an exact match would
+# find no iPad at all on a current runner.  Its tests live next to it in
+# scripts/ios-fleet/test_pick_simulator.py.
 pick_simulator() {
-  python3 - "$1" <<'PY'
-import json, subprocess, sys
-
-preferred = sys.argv[1].split("|")
-raw = subprocess.run(
-    ["xcrun", "simctl", "list", "devices", "available", "-j"],
-    capture_output=True, text=True, check=True,
-).stdout
-data = json.loads(raw)
-devices = [
-    d
-    for group in data.get("devices", {}).values()
-    for d in group
-    if d.get("isAvailable")
-]
-for want in preferred:
-    for device in devices:
-        if device.get("name") == want:
-            print(device["udid"])
-            sys.exit(0)
-sys.exit(1)
-PY
+  python3 "$SCRIPT_DIR/pick_simulator.py" "$1"
 }
 
 # Print "<width>x<height>" for a PNG, or nothing if it cannot be read.
