@@ -10,6 +10,16 @@ CodeCaps reads available usage and quota windows from supported AI apps and CLIs
 
 CodeCaps keeps local readings visible in the menu bar.  If you run a collector, it can also bring multiple Macs into one view.
 
+## What Sets CodeCaps Apart
+
+Engineered with the proactive safeguards you'll come to rely on:
+
+- **Runaway Usage & Anomaly Detection**: CodeCaps continuously evaluates real-time token burn against your personal 7-day rolling baseline and peak-hour history.  If a runaway agent loop or background task spikes your burn rate, CodeCaps catches the anomaly before your daily or weekly quota is wiped out.
+- **Visual Usage History & Trend Graphs**: Dive into rich local usage history graphs.  Inspect how your quota drains over time, evaluate burn pacing, and see anomaly alert markers directly on your timeline.
+- **Low-Quota Picture-in-Picture (PiP)**: Keep high-priority quotas visible in an on-top floating micro-HUD.  Set PiP to open automatically whenever any provider's quota runs low, so you're never caught off-guard mid-prompt.
+- **Dual-Window Cadence & Smart Reset Alarms**: Monitor 5-hour rapid windows alongside weekly/monthly plan allowances.  Reset alarms alert you on major period rollovers, and notify on short windows only when you're actually near the cap.
+- **Zero API Keys**: Reads local CLI and application sessions directly on your Mac.  Your private API keys and tokens never enter CodeCaps.
+
 ## What It Shows
 
 CodeCaps has two surfaces.  Nothing renders in both.
@@ -230,3 +240,10 @@ Apache License 2.0.
 ## Trademarks
 
 Provider names and marks belong to their owners and are used only to identify the services.
+
+## Feedback & Support
+
+Always interested in hearing about any unmet needs, feature requests, and app issues.  Please feel free to contact us regarding such concerns or for any other reason!
+
+- **Support**: [support@simplewithus.com](mailto:support@simplewithus.com) · [Product Support Page](https://simplewithus.com/codecaps/support.html)
+- **GitHub**: [Issues & Feature Requests](https://github.com/Simple-With-Us/CodeCaps/issues)
