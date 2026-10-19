@@ -17,6 +17,11 @@
 # A simulator whose native size Apple does not accept fails the run here
 # instead of producing a file that is rejected at upload time.
 #
+# The app needs several seconds to draw its first frame on a cold simulator,
+# so the script polls the screen and keeps the first frame that holds more
+# than the status bar.  A fixed sleep captured a blank window, and a blank
+# window is a screenshot of nothing at all.
+#
 # Usage: scripts/ios-fleet/capture-appstore-screenshots.sh [OUTPUT_DIR]
 set -euo pipefail
 
@@ -27,17 +32,33 @@ SCHEME="CodeCapsCompanion"
 OUT_DIR="${1:-${REPO_ROOT}/.build/appstore-screenshots}"
 DERIVED_ROOT="${DERIVED_ROOT:-${RUNNER_TEMP:-/tmp}/codecaps-appstore-derived}"
 
+# How long to wait for the app to draw a screen, and how often to look.  A
+# cold simulator took about eighteen seconds to show its first frame and a
+# warm one about nine, so the budget is generous on purpose: a slow frame is
+# cheap, a blank one is a wasted run.
+RENDER_TIMEOUT_SEC="${RENDER_TIMEOUT_SEC:-180}"
+RENDER_POLL_SEC="${RENDER_POLL_SEC:-2}"
+# The share of non-background pixels a frame has to hold before it counts as
+# a drawn screen.  A window that has drawn nothing but its status bar measures
+# about 0.3 percent, a frame that has drawn the navigation bar and no content
+# about 4, and a finished screen between 40 and 55.  Ten percent is clear of
+# both ends: a half-drawn screen is never mistaken for a finished one.
+RENDER_MIN_PERCENT="${RENDER_MIN_PERCENT:-10.0}"
+
 mkdir -p "$OUT_DIR"
 
-# App Store Connect accepts these display sizes:
+# App Store Connect accepts these display sizes.  The list is Apple's own:
+# developer.apple.com/help/app-store-connect/reference/screenshot-specifications
 #
 #   iPhone 6.9"    1320 x 2868   (iPhone 16 Pro Max and friends)
 #   iPhone 6.7"    1290 x 2796   (iPhone 16 Plus and friends)
 #   iPhone 6.5"    1284 x 2778   (iPhone 13 Pro Max and friends)
 #   iPhone 6.5"    1242 x 2688   (iPhone 12 Pro Max and friends)
-#   iPad    13"    2064 x 2752   (iPad Pro 13-inch)
+#   iPad    13"    2064 x 2752   (iPad Pro 13-inch, M4 and M5)
 #   iPad    12.9"  2048 x 2732   (iPad Pro 12.9-inch, 6th generation)
-#   iPad    12.9"  2000 x 2664   (iPad Pro 12.9-inch, 2nd generation)
+#
+# The iPad Pro 12.9-inch of the 2nd generation captures at 2048 x 2732 like
+# the other 12.9-inch Pro generations.  There is no 2000 x 2664 device.
 #
 # The first entry for each display class is the one the App Store Connect
 # screenshot set expects, and the upload step maps a captured file to its set
@@ -45,9 +66,9 @@ mkdir -p "$OUT_DIR"
 IPHONE_PREFERRED="iPhone 17 Pro Max|iPhone 16 Pro Max|iPhone 15 Pro Max|iPhone 14 Pro Max|iPhone 17 Plus|iPhone 16 Plus|iPhone 15 Plus|iPhone 14 Plus|iPhone 13 Pro Max|iPhone 12 Pro Max"
 IPAD_PREFERRED="iPad Pro 13-inch (M5)|iPad Pro 13-inch (M4)|iPad Pro 12.9-inch (6th generation)|iPad Pro 12.9-inch (5th generation)|iPad Pro 12.9-inch (3rd generation)"
 
-# log() writes to stderr on purpose: its output is captured by command
-# substitution in assert_screenshot, and anything on stdout would be read
-# back as part of the returned file path.
+# log() writes to stderr on purpose: it is called from inside command
+# substitution in some places, and anything on stdout would be read back as
+# part of a captured value.
 log() { echo "capture: $*" >&2; }
 fail() { echo "::error::capture: $*" >&2; exit 1; }
 
@@ -62,28 +83,37 @@ pick_simulator() {
   python3 "$SCRIPT_DIR/pick_simulator.py" "$1"
 }
 
-# Print "<width>x<height>" for a PNG, or nothing if it cannot be read.
-png_size() {
+# Print "<width>x<height>" for an image, or nothing if it cannot be read.
+image_size() {
   sips -g pixelWidth -g pixelHeight "$1" 2>/dev/null \
     | awk '/pixelWidth/ {w = $2} /pixelHeight/ {h = $2} END {if (w && h) print w "x" h}'
 }
 
-# Print the App Store Connect display class for a pixel size, or nothing.
-display_class_for_size() {
+# Print the App Store Connect display class and the device family for a pixel
+# size, separated by a pipe, or nothing if the size is not one Apple accepts.
+#
+#   1320x2868 -> APP_IPHONE_67|iphone
+#   2064x2752 -> APP_IPAD_PRO_129|ipad
+#
+# App Store Connect has no APP_IPHONE_69 and no APP_IPAD_PRO_13: the
+# 6.9-inch iPhone size lives in APP_IPHONE_67 and the 13-inch iPad size in
+# APP_IPAD_PRO_129.
+class_for_size() {
   case "$1" in
-    1320x2868|1290x2796|1284x2778|1242x2688) echo "iphone" ;;
-    2064x2752|2048x2732|2000x2664) echo "ipad" ;;
+    1320x2868|1290x2796) echo "APP_IPHONE_67|iphone" ;;
+    1284x2778|1242x2688) echo "APP_IPHONE_65|iphone" ;;
+    2064x2752) echo "APP_IPAD_PRO_129|ipad" ;;
+    2048x2732) echo "APP_IPAD_PRO_3GEN_129|ipad" ;;
   esac
 }
 
-# Write a realistic quota snapshot into the simulator's app container.
+# Write a realistic quota snapshot to the file named by the first argument.
 seed_snapshot() {
-  local container="$1"
-  python3 - "$container" <<'PY'
+  local target="$1"
+  python3 - "$target" <<'PY'
 import datetime, json, os, sys
 
-container = sys.argv[1]
-target = os.path.join(container, "Library", "Application Support", "CodeCaps", "quota-windows.json")
+target = sys.argv[1]
 os.makedirs(os.path.dirname(target), exist_ok=True)
 
 now = datetime.datetime.now(datetime.timezone.utc)
@@ -147,34 +177,57 @@ print(f"seeded {len(windows)} windows across {len(groups)} platforms -> {target}
 PY
 }
 
-# Check a captured PNG against the size App Store Connect accepts for its
-# display class, and flatten it if it carries an alpha channel, which Apple
-# rejects.  The accepted file path is printed on stdout; every log line goes
-# to stderr so the caller can capture the path cleanly.
-assert_screenshot() {
+# Wait until the app has drawn its first frame, then leave that frame at the
+# path given by the second argument.
+#
+# The companion takes seconds to render on a cold simulator, and a fixed sleep
+# captured a blank window more than once.  This polls instead: take a frame,
+# measure how much of it is not background, and stop as soon as the screen
+# holds more than the status bar.
+wait_for_render() {
+  local udid="$1" frame="$2"
+  local deadline=$((SECONDS + RENDER_TIMEOUT_SEC))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    xcrun simctl io "$udid" screenshot --type=jpeg "$frame" >/dev/null 2>&1 || true
+    if [ -s "$frame" ]; then
+      local status=0
+      python3 "$SCRIPT_DIR/screenshot_ink.py" "$frame" \
+        --min-percent "$RENDER_MIN_PERCENT" || status=$?
+      if [ "$status" -eq 0 ]; then
+        return 0
+      fi
+      if [ "$status" -ne 1 ]; then
+        fail "could not measure the screen on $udid"
+      fi
+    fi
+    sleep "$RENDER_POLL_SEC"
+  done
+  fail "the app drew no screen within ${RENDER_TIMEOUT_SEC}s on $udid"
+}
+
+# Check a captured file against the size App Store Connect accepts and
+# against the size the other captures on this device have.  The file to keep
+# is left in CHECKED_FILE: the check must not delete anything, because a
+# command substitution would swallow whatever the delete printed.
+CHECKED_FILE=""
+check_capture() {
   local file="$1" want="$2"
-  local size alpha flattened
-  size="$(png_size "$file")"
+  local size alpha
+  size="$(image_size "$file")"
   if [ -z "$size" ]; then
     fail "$(basename "$file") could not be read"
   fi
   if [ "$size" != "$want" ]; then
     fail "$(basename "$file") is $size, but the other captures are $want"
   fi
-  if [ -z "$(display_class_for_size "$size")" ]; then
+  if [ -z "$(class_for_size "$size")" ]; then
     fail "$(basename "$file") is $size, which App Store Connect does not accept for any display class"
   fi
   alpha="$(sips -g hasAlpha "$file" 2>/dev/null | awk '/hasAlpha/ {print $2}')"
   if [ "$alpha" = "yes" ]; then
-    # Flatten to JPEG, which cannot carry an alpha channel, and use that file.
-    flattened="${file%.png}.jpg"
-    sips -s format jpeg -s formatOptions 92 "$file" --out "$flattened" >/dev/null
-    rm -f "$file"
-    log "flattened $(basename "$flattened") (the PNG carried an alpha channel)"
-    echo "$flattened"
-    return
+    fail "$(basename "$file") still has an alpha channel, which App Store Connect rejects"
   fi
-  echo "$file"
+  CHECKED_FILE="$file"
 }
 
 # Build, install, seed, launch and capture on one simulator.
@@ -182,7 +235,7 @@ capture_on() {
   local udid="$1" label="$2" kind="$3"
   local derived="$DERIVED_ROOT/$label"
   local app="$derived/Build/Products/Debug-iphonesimulator/CodeCapsCompanion.app"
-  local container bundle_id
+  local container group_container bundle_id
 
   log "booting $label ($udid)"
   xcrun simctl boot "$udid" 2>/dev/null || true
@@ -202,48 +255,60 @@ capture_on() {
   xcrun simctl install "$udid" "$app"
 
   container="$(xcrun simctl get_app_container "$udid" "$bundle_id" data)"
-  seed_snapshot "$container"
+  # The companion reads the App Group container when the build is signed and
+  # its own sandbox when it is not, so seed whichever ones exist.
+  group_container="$(xcrun simctl get_app_container "$udid" "$bundle_id" groups 2>/dev/null | head -1)"
 
-  # Three screens per device: the quota list, the settings sheet, and the
-  # platform-order editor.  The settings sheet and the editor are opened with
-  # the launch arguments the app itself understands.  The app is launched
-  # before every capture, so no shot is ever the home screen.
+  # Three screens per device: the quota list, the platform-order editor, and
+  # the reset-alarm settings.  The last two are tabs of the settings sheet, so
+  # each one needs the sheet opened as well as its own argument.  The app is
+  # launched before every capture, so no shot is ever the home screen.
   local name
-  for name in fleet-status settings platform-order; do
+  for name in fleet-status platform-order alarms; do
     local args=()
     case "$name" in
-      settings) args=(-openSettings) ;;
-      platform-order) args=(-reorderPlatforms) ;;
+      platform-order) args=(-openSettings -reorderPlatforms) ;;
+      alarms) args=(-openSettings -openAlarms) ;;
     esac
     xcrun simctl terminate "$udid" "$bundle_id" 2>/dev/null || true
+    # Re-seed before each launch so the "Updated" time on the cards is the
+    # time of the shot rather than the time the run started.
+    seed_snapshot "$container/Library/Application Support/CodeCaps/quota-windows.json" >/dev/null
+    if [ -n "$group_container" ]; then
+      seed_snapshot "$group_container/quota-windows.json" >/dev/null
+    fi
     xcrun simctl launch --terminate-running-process "$udid" "$bundle_id" "${args[@]}" >/dev/null
-    sleep 4
-    xcrun simctl io "$udid" screenshot "$OUT_DIR/$label-$name.png" >/dev/null 2>&1 || true
-    [ -s "$OUT_DIR/$label-$name.png" ] || fail "no screenshot for $label $name"
+
+    # The simulator writes JPEG, which cannot carry an alpha channel, and
+    # App Store Connect rejects a screenshot that has one.  It is converted
+    # back to PNG so the upload step can read the size out of the header.
+    local raw="$derived/$label-$name.jpg"
+    wait_for_render "$udid" "$raw"
+    sips -s format png "$raw" --out "$OUT_DIR/$label-$name.png" >/dev/null
+    log "captured $label $name"
   done
   xcrun simctl terminate "$udid" "$bundle_id" 2>/dev/null || true
 
   # The captured size decides the display class and the file name, so the
   # output says what the pixels actually are.
-  local size class_name
-  size="$(png_size "$OUT_DIR/$label-fleet-status.png")"
-  class_name="$(display_class_for_size "$size")"
+  local size class_name family
+  size="$(image_size "$OUT_DIR/$label-fleet-status.png")"
+  class_name="$(class_for_size "$size")"
   [ -n "$class_name" ] || fail "$label rendered at $size, which App Store Connect does not accept"
+  IFS='|' read -r display_type family <<<"$class_name"
   # The family we booted has to be the family the pixels are, or the two
   # captures would be uploaded into the wrong screenshot sets.
-  [ "$class_name" = "$kind" ] \
-    || fail "$label rendered at $size, which is a $class_name capture, not a $kind one"
+  [ "$family" = "$kind" ] \
+    || fail "$label rendered at $size, which is a $family capture, not a $kind one"
 
-  local checked
-  for name in fleet-status settings platform-order; do
-    checked="$(assert_screenshot "$OUT_DIR/$label-$name.png" "$size")"
-    if [ "$checked" != "$OUT_DIR/$label-$name.png" ]; then
-      mv "$checked" "$OUT_DIR/$class_name-$name.jpg"
-      rm -f "$OUT_DIR/$label-$name.png"
-    else
-      mv "$checked" "$OUT_DIR/$class_name-$name.png"
-    fi
-    log "$class_name $name ($size)"
+  # The file is named after the display set it belongs to, so the two
+  # families cannot be mixed up when the files are handed to the upload.
+  local stem
+  stem="$(echo "$display_type" | tr '[:upper:]' '[:lower:]')"
+  for name in fleet-status platform-order alarms; do
+    check_capture "$OUT_DIR/$label-$name.png" "$size"
+    mv "$CHECKED_FILE" "$OUT_DIR/$stem-$name.png"
+    log "$display_type $name ($size)"
   done
 }
 

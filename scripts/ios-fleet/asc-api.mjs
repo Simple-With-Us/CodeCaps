@@ -404,19 +404,19 @@ async function main() {
       process.exit(2);
     }
 
-    // "auto" reads the pixel size out of the PNG and picks the screenshot set
+    // "auto" reads the pixel size out of the file and picks the screenshot set
     // that size belongs to, so the display type cannot be mis-specified.
     // App Store Connect has no APP_IPHONE_69 or APP_IPAD_PRO_13: the 6.9-inch
     // iPhone size lives in APP_IPHONE_67 and the 13-inch iPad size in
-    // APP_IPAD_PRO_129.
+    // APP_IPAD_PRO_129.  The sizes are Apple's own list, at
+    // developer.apple.com/help/app-store-connect/reference/screenshot-specifications
     const sizeToDisplayType = {
       "1320x2868": "APP_IPHONE_67",
       "1290x2796": "APP_IPHONE_67",
       "1284x2778": "APP_IPHONE_65",
       "1242x2688": "APP_IPHONE_65",
       "2064x2752": "APP_IPAD_PRO_129",
-      "2048x2732": "APP_IPAD_PRO_3GEN_129",
-      "2000x2664": "APP_IPAD_PRO_3GEN_129"
+      "2048x2732": "APP_IPAD_PRO_3GEN_129"
     };
     // Every file has to belong to the same screenshot set.  A capture run
     // produces iPhone and iPad files together and they belong in different

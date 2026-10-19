@@ -8,11 +8,17 @@ name: iOS App Store Screenshots
 # screen at the exact pixel size App Store Connect accepts, asserting the size
 # before the file is handed on.
 #
+# The app needs seconds to draw its first frame, so the script polls the screen
+# and keeps the first frame that holds more than the status bar.  A fixed
+# sleep captured a blank window, and a blank window is a picture of nothing.
+#
 # The upload to App Store Connect is deliberately NOT done here.  It is a
 # separate, explicit step run from a machine with the App Store Connect key:
 #
 #   node scripts/ios-fleet/asc-api.mjs upload-screenshots \
-#     <localizationId> auto iphone-fleet-status.png ipad-fleet-status.png
+#     <localizationId> auto app_iphone_67-fleet-status.png
+#   node scripts/ios-fleet/asc-api.mjs upload-screenshots \
+#     <localizationId> auto app_ipad_pro_129-fleet-status.png
 #
 # so a re-run of this workflow can never quietly add duplicate screenshots to
 # a live version.
