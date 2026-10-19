@@ -111,6 +111,13 @@ cleanup_asc_tmp() {
   fi
   ASC_TMP_DIR=""
 }
+# Expand only a leading "~/" (not "~user/") so a typo is never merged with $HOME.
+expand_tilde() {
+  case "$1" in
+    "~/"*) printf '%s' "${HOME}/${1#\~/}" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
 trap cleanup_asc_tmp EXIT
 # 1 hour — owner 2026-08-14: ship unbuilt iOS updates as often as once per hour.
 # Not Apple compute; local/process hygiene. Cron ticks twice an hour so a
@@ -197,7 +204,7 @@ fs_get() {
 load_secrets() {
   AUTH_MODE="none"
   if [[ -n "${ASC_KEY_ID:-}" && -n "${ASC_ISSUER_ID:-}" && -n "${ASC_KEY_PATH:-}" ]]; then
-    if [[ -f "${ASC_KEY_PATH/#\~/$HOME}" ]]; then
+    if [[ -f "$(expand_tilde "$ASC_KEY_PATH")" ]]; then
       AUTH_MODE="api_key"
       return 0
     fi
@@ -536,7 +543,8 @@ next_build_seq() {
   n=$((n + 1))
   printf '%s' "$n" > "$seq_file"
   rmdir "$lock_dir" 2>/dev/null || true
-  trap - EXIT
+  # Restore the script-level cleanup (a bare `trap - EXIT` would drop the temp-key removal).
+  trap cleanup_asc_tmp EXIT
   printf '%s' "$n"
 }
 
@@ -980,7 +988,7 @@ log "project=${PROJECT_PATH}"
 # cover two bundles; the XcodeGen Release configs carry each profile.
 ASC_AUTH_FLAGS=()
 if [[ -n "${ASC_KEY_PATH:-}" && -n "${ASC_KEY_ID:-}" && -n "${ASC_ISSUER_ID:-}" ]]; then
-  _asc_key_expanded="${ASC_KEY_PATH/#\~/$HOME}"
+  _asc_key_expanded="$(expand_tilde "$ASC_KEY_PATH")"
   if [[ -f "$_asc_key_expanded" ]]; then
     ASC_AUTH_FLAGS=(-authenticationKeyPath "$_asc_key_expanded" \
       -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID")

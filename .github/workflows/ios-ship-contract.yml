@@ -51,3 +51,4 @@ jobs:
         run: |
           node --test scripts/ios-ship-workflow.test.mjs scripts/macos-ship-workflow.test.mjs
           bash scripts/ios-fleet/test-asc-credentials.sh
+          node --test scripts/ios-fleet/test-asc-credentials.mjs
