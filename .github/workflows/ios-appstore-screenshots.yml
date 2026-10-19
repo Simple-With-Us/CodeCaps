@@ -12,7 +12,7 @@ name: iOS App Store Screenshots
 # separate, explicit step run from a machine with the App Store Connect key:
 #
 #   node scripts/ios-fleet/asc-api.mjs upload-screenshots \
-#     <localizationId> APP_IPHONE_67 iphone-6.9-fleet-status.png
+#     <localizationId> auto iphone-fleet-status.png ipad-fleet-status.png
 #
 # so a re-run of this workflow can never quietly add duplicate screenshots to
 # a live version.

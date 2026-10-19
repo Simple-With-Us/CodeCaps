@@ -244,6 +244,10 @@ capture_on() {
   size="$(png_size "$OUT_DIR/$label-fleet-status.png")"
   class_name="$(display_class_for_size "$size")"
   [ -n "$class_name" ] || fail "$label rendered at $size, which App Store Connect does not accept"
+  # The family we booted has to be the family the pixels are, or the two
+  # captures would be uploaded into the wrong screenshot sets.
+  [ "$class_name" = "$kind" ] \
+    || fail "$label rendered at $size, which is a $class_name capture, not a $kind one"
 
   local checked
   for name in fleet-status settings platform-order; do
