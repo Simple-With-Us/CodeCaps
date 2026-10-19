@@ -87,15 +87,21 @@ def reset_in(hours, minutes=0):
 
 
 # (id, provider, providerKey, providerLabel, label, window token, percent, reset offset)
+#
+# The window tokens are the ones QuotaWindowVocabulary.cadenceFromToken
+# recognises ("5h", "7d", "1d", "1m"), so each card shows a clean cadence
+# caption.  Two windows of the same provider must have different cadences:
+# a second window of the same cadence is folded in as a duplicate source
+# rather than shown as its own row.  Antigravity is left out on purpose, as
+# the app pools its windows into per-model sections and it would not read as
+# one platform card.
 providers = [
     ("anthropic-5h", "anthropic", "anthropic", "Claude Code", "5-hour window", "5h", 72.0, (3, 40)),
-    ("anthropic-7d", "anthropic", "anthropic", "Claude Code", "7-day window", "7d", 44.0, (86, 0)),
+    ("anthropic-7d", "anthropic", "anthropic", "Claude Code", "7-day window", "7d", 78.0, (86, 0)),
     ("openai-weekly", "openai", "openai", "Codex", "7-day window", "7d", 61.0, (41, 15)),
-    ("cursor-fast", "cursor", "cursor", "Cursor", "Fast Requests window", "fast", 28.0, (1, 12)),
-    ("cursor-total", "cursor", "cursor", "Cursor", "Total Requests window", "total", 83.0, (13, 5)),
+    ("cursor-monthly", "cursor", "cursor", "Cursor", "1-month window", "1m", 34.0, (313, 0)),
     ("xai-monthly", "xai", "xai", "xAI", "1-month window", "1m", 55.0, (212, 0)),
-    ("minimax-5h", "minimax", "minimax", "minimax", "5-hour window", "5h", 38.0, (2, 20)),
-    ("antigravity-daily", "google-antigravity", "google-antigravity", "Antigravity", "1-day window", "1d", 91.0, (9, 45)),
+    ("minimax-5h", "minimax", "minimax", "MiniMax", "5-hour window", "5h", 38.0, (2, 20)),
 ]
 
 windows = []
