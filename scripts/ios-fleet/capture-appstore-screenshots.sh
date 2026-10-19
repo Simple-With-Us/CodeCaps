@@ -249,11 +249,12 @@ capture_on() {
 
 main() {
   command -v xcodegen >/dev/null 2>&1 || fail "xcodegen is not installed"
-  if [ ! -f "$PROJECT_DIR/CodeCapsCompanion.xcodeproj/project.pbxproj" ] \
-     || [ "$PROJECT_DIR/project.yml" -nt "$PROJECT_DIR/CodeCapsCompanion.xcodeproj/project.pbxproj" ]; then
-    log "regenerating the companion project"
-    ( cd "$PROJECT_DIR" && xcodegen generate )
-  fi
+  # Always regenerate.  The checked-in project is stale: it is missing shared
+  # QuotaCore files the companion compiles against, and a checkout gives
+  # project.yml and the project file the same mtime, so comparing them would
+  # skip the regeneration and build a project that does not compile.
+  log "regenerating the companion project"
+  ( cd "$PROJECT_DIR" && xcodegen generate )
 
   local iphone_udid ipad_udid
   if ! iphone_udid="$(pick_simulator "$IPHONE_PREFERRED")"; then
