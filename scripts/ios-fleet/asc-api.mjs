@@ -83,9 +83,10 @@ function materializeP8(pem) {
 }
 
 // Infisical Fleet-OPS through `fleet-secrets get` (AFC-359).  "" when absent.
-// FLEET_SECRETS_BIN overrides the binary (tests).  Values stay in memory.
+// FLEET_SECRETS_BIN, then FLEET_SECRETS (what ship-testflight.sh reads and what
+// the test suites set), override the default binary.  Values stay in memory.
 function fleetSecretsGet(name, folder) {
-  const bin = process.env.FLEET_SECRETS_BIN || join(homedir(), ".local", "bin", "fleet-secrets");
+  const bin = process.env.FLEET_SECRETS_BIN || process.env.FLEET_SECRETS || join(homedir(), ".local", "bin", "fleet-secrets");
   try {
     return execFileSync(bin, ["get", name, "--path", folder], {
       encoding: "utf8",
@@ -95,6 +96,14 @@ function fleetSecretsGet(name, folder) {
   } catch {
     return "";
   }
+}
+
+// Expands only a leading "~/" (never "~user/"), so a typo is never merged with
+// $HOME — the same rule ship-testflight.sh's expand_tilde applies.
+function expandTilde(p) {
+  if (!p) return "";
+  if (p === "~") return homedir();
+  return p.startsWith("~/") ? join(homedir(), p.slice(2)) : p;
 }
 
 function fromFile(keyId, issuerId, keyPath, source) {
@@ -110,7 +119,7 @@ function resolveCredential() {
   // 1) Already-exported ASC_* (DealDex's workflow does this).
   const envKeyId = String(process.env.ASC_KEY_ID || "").trim();
   const envIssuer = String(process.env.ASC_ISSUER_ID || "").trim();
-  const envKeyPath = String(process.env.ASC_KEY_PATH || "").trim();
+  const envKeyPath = expandTilde(String(process.env.ASC_KEY_PATH || "").trim());
   if (envKeyId && envIssuer && envKeyPath && existsSync(envKeyPath)) {
     const got = fromFile(envKeyId, envIssuer, envKeyPath, "ASC_KEY_* environment");
     if (got) return got;
@@ -137,7 +146,10 @@ function resolveCredential() {
   //    key id falls back to AUTHKEY_<KEY_ID> in /authkey-<key id lower case>-p8.
   //    Kept in memory, never written to disk.
   const infKeyId = envKeyId || fleetSecretsGet("ASC_KEY_ID", "/asc").trim();
-  const infIssuer = envIssuer || fleetSecretsGet("ASC_ISSUER_ID", "/asc").trim();
+  // The /asc issuer belongs to the /asc key.  Pairing it with another key's .p8
+  // would sign a token for one key against another's issuer, so a non-/asc key
+  // id fails closed unless the environment supplies its own issuer.
+  const infIssuer = envIssuer || (infKeyId === fleetSecretsGet("ASC_KEY_ID", "/asc").trim() ? fleetSecretsGet("ASC_ISSUER_ID", "/asc").trim() : "");
   if (/^[A-Za-z0-9]+$/.test(infKeyId) && infIssuer) {
     let pem = "";
     if (infKeyId === fleetSecretsGet("ASC_KEY_ID", "/asc").trim()) pem = fleetSecretsGet("ASC_KEY_P8", "/asc");
