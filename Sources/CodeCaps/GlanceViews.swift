@@ -825,14 +825,46 @@ func glanceFleetGroupHeading(_ title: String) -> String {
 /// that has not happened yet today when it is really yesterday's (owner report
 /// 2026-10-18).  The year is only added when it is not the current one, so the
 /// common case stays inside the band.
-func glanceReportedStamp(_ observedAt: Date, now: Date) -> String {
-    let time = observedAt.formatted(date: .omitted, time: .shortened)
-    let calendar = Calendar.current
+/// `locale` and `calendar` default to the reader's own, so the band is
+/// localized for whoever is looking at it.  They are parameters rather than a
+/// direct read of `.current` so a test can pin both and assert the same string
+/// on any machine: `Locale.current` in a de-DE or ja-JP runner abbreviates the
+/// month differently and renders a 24-hour clock, and `Calendar.current` on a
+/// Buddhist-locale Mac is not the Gregorian calendar the fixtures are written in.
+func glanceReportedStamp(
+    _ observedAt: Date,
+    now: Date,
+    locale: Locale = .current,
+    calendar: Calendar = .current
+) -> String {
+    func formatter(
+        template: String? = nil,
+        date dateStyle: DateFormatter.Style = .none,
+        time timeStyle: DateFormatter.Style = .none
+    ) -> DateFormatter {
+        let formatter = DateFormatter()
+        formatter.locale = locale
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        // A localized template lets the reader's own locale order the parts,
+        // which a hardcoded "MMM d" would not.
+        if let template {
+            formatter.setLocalizedDateFormatFromTemplate(template)
+        } else {
+            formatter.dateStyle = dateStyle
+            formatter.timeStyle = timeStyle
+        }
+        return formatter
+    }
+
+    let time = formatter(time: .short).string(from: observedAt)
     guard !calendar.isDate(observedAt, inSameDayAs: now) else { return time }
     let sameYear = calendar.component(.year, from: observedAt) == calendar.component(.year, from: now)
     let date = sameYear
-        ? observedAt.formatted(.dateTime.month(.abbreviated).day())
-        : observedAt.formatted(date: .abbreviated, time: .omitted)
+        ? formatter(template: "MMM d").string(from: observedAt)
+        // FormatStyle's `.abbreviated` is DateFormatter's `.medium`: "Oct 18,
+        // 2025".  `.short` here would silently become the numeric "10/18/25".
+        : formatter(date: .medium).string(from: observedAt)
     return "\(date), \(time)"
 }
 
