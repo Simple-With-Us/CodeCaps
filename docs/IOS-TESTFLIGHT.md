@@ -23,7 +23,7 @@ The ship script keeps its own rate gate and the same-HEAD skip.  Never set `IOS_
 
 ## Versions And Notes
 
-The marketing version train is `1.0.N` (`marketingVersionDefault` in `scripts/ios-fleet/apps.json`); the older `0.1.N` builds stay in TestFlight and `1.0.1` is above every one of them.  The build number is the UTC `YYYYMMDDHHMM` stamp.  Every upload publishes What to Test from the commit subjects since the last ship, with agent names removed.
+Marketing and build both come from the repo's commit count: `1.0.<commit_count>` and `<commit_count>`, so the pair always describes one commit (the older `0.1.N` builds stay in TestFlight and `1.0.1` is above every one of them).  UTC `YYYYMMDDHHMM` stamps are retired.  Every upload publishes What to Test from the commit subjects since the last ship, with agent names removed.
 
 ## When A Build Is Missing
 
