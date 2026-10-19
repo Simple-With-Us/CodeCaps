@@ -241,9 +241,9 @@ Apache License 2.0.
 
 Provider names and marks belong to their owners and are used only to identify the services.
 
-## Feedback & Support
+## Contact & Feedback
 
 Always interested in hearing about any unmet needs, feature requests, and app issues.  Please feel free to contact us regarding such concerns or for any other reason!
 
-- **Support**: [support@simplewithus.com](mailto:support@simplewithus.com) · [Product Support Page](https://simplewithus.com/codecaps/support.html)
+- **Contact**: [contact@simplewithus.com](mailto:contact@simplewithus.com) · [Contact Page](https://simplewithus.com/codecaps/support.html)
 - **GitHub**: [Issues & Feature Requests](https://github.com/Simple-With-Us/CodeCaps/issues)
