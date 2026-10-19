@@ -1,0 +1,68 @@
+name: iOS App Store Screenshots
+
+# Captures the App Store screenshots for the CodeCaps iOS companion.
+#
+# There is no iOS simulator runtime on Jay's Mac, so the captures have to come
+# from a runner.  The script builds the companion for one iPhone and one iPad
+# simulator, seeds each with a realistic quota snapshot and writes one PNG per
+# screen at the exact pixel size App Store Connect accepts, asserting the size
+# before the file is handed on.
+#
+# The upload to App Store Connect is deliberately NOT done here.  It is a
+# separate, explicit step run from a machine with the App Store Connect key:
+#
+#   node scripts/ios-fleet/asc-api.mjs upload-screenshots \
+#     <localizationId> APP_IPHONE_67 iphone-6.9-fleet-status.png
+#
+# so a re-run of this workflow can never quietly add duplicate screenshots to
+# a live version.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "ios/CodeCapsCompanion/**"
+      - "scripts/ios-fleet/capture-appstore-screenshots.sh"
+      - ".github/workflows/ios-appstore-screenshots.yml"
+
+concurrency:
+  group: ios-appstore-screenshots-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  screenshots:
+    name: Capture iPhone and iPad screenshots
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install XcodeGen
+        run: |
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          fi
+
+      - name: Capture App Store screenshots
+        run: |
+          chmod +x scripts/ios-fleet/capture-appstore-screenshots.sh
+          scripts/ios-fleet/capture-appstore-screenshots.sh "$RUNNER_TEMP/appstore-screenshots"
+
+      - name: Report the captured sizes
+        run: |
+          for shot in "$RUNNER_TEMP"/appstore-screenshots/*; do
+            echo "::group::$(basename "$shot")"
+            sips -g pixelWidth -g pixelHeight -g hasAlpha "$shot" | grep -E "pixel|/sips" || true
+            echo "::endgroup::"
+          done
+
+      - name: Upload the captured screenshots
+        uses: actions/upload-artifact@v7
+        with:
+          name: appstore-screenshots
+          path: ${{ runner.temp }}/appstore-screenshots/*
+          if-no-files-found: error

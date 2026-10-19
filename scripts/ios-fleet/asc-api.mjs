@@ -357,6 +357,7 @@ async function main() {
     console.error("Usage: node asc-api.mjs <METHOD> <PATH> [JSON_BODY]");
     console.error("       node asc-api.mjs ensure-tf-ready <bundleId> <buildVersion> [marketingVersion]");
     console.error("       node asc-api.mjs latest-build-seq <bundleId> <prefix>");
+    console.error("       node asc-api.mjs upload-screenshots <localizationId> <displayType> <file...>");
     process.exit(1);
   }
 
@@ -374,6 +375,133 @@ async function main() {
     let parsed;
     try { parsed = JSON.parse(text); } catch { parsed = { raw: text }; }
     return { status: res.status, ok: res.ok, parsed, text };
+  }
+
+  // -------------------------------------------------------------------------
+  // App Store screenshot upload
+  // -------------------------------------------------------------------------
+  // Usage: node asc-api.mjs upload-screenshots <localizationId> <displayType> <file...>
+  //
+  // App Store Connect has no single-call screenshot upload.  The bytes go to
+  // a pre-signed URL Apple hands out with the reservation, and the reservation
+  // is only committed once the bytes are in, so it takes three calls:
+  //
+  //   1. POST  /v1/appScreenshots        reserve, get the upload operations
+  //   2. PUT   <uploadOperation.url>     send the bytes
+  //   3. PATCH /v1/appScreenshots/<id>   uploaded=true, then read
+  //                                       assetDeliveryState
+  //
+  // The screenshot set (one per display size) is created on demand and reused,
+  // so running this twice does not create a second set.  The display type is
+  // the App Store Connect enum, e.g. APP_IPHONE_67 for the 6.9-inch iPhone
+  // set and APP_IPAD_PRO_129 for the 13-inch iPad set.
+  if (method === "upload-screenshots") {
+    const localizationId = path;
+    const displayType = body;
+    const files = process.argv.slice(5);
+    if (!localizationId || !displayType || files.length === 0) {
+      console.error("Usage: node asc-api.mjs upload-screenshots <localizationId> <displayType> <file...>");
+      process.exit(2);
+    }
+
+    const sets = await api("GET", `/v1/appStoreVersionLocalizations/${localizationId}/appScreenshotSets`);
+    if (!sets.ok) {
+      console.error(`upload-screenshots: could not list screenshot sets (HTTP ${sets.status})`);
+      process.exit(2);
+    }
+    let set = (sets.parsed.data || []).find(
+      (entry) => entry.attributes?.screenshotDisplayType === displayType
+    );
+    if (!set) {
+      const created = await api("POST", "/v1/appScreenshotSets", JSON.stringify({
+        data: {
+          type: "appScreenshotSets",
+          attributes: { screenshotDisplayType: displayType },
+          relationships: {
+            appStoreVersionLocalization: {
+              data: { type: "appStoreVersionLocalizations", id: localizationId }
+            }
+          }
+        }
+      }));
+      if (!created.ok) {
+        console.error(`upload-screenshots: could not create the ${displayType} set (HTTP ${created.status})`);
+        console.error(created.text);
+        process.exit(2);
+      }
+      set = created.parsed.data;
+      console.error(`upload-screenshots: created the ${displayType} set ${set.id}`);
+    } else {
+      console.error(`upload-screenshots: reusing the ${displayType} set ${set.id}`);
+    }
+
+    for (const file of files) {
+      if (!existsSync(file)) {
+        console.error(`upload-screenshots: no such file: ${file}`);
+        process.exit(2);
+      }
+      const bytes = readFileSync(file);
+      const fileName = file.split("/").pop();
+
+      const reserved = await api("POST", "/v1/appScreenshots", JSON.stringify({
+        data: {
+          type: "appScreenshots",
+          attributes: { fileName, fileSize: bytes.length },
+          relationships: {
+            appScreenshotSet: { data: { type: "appScreenshotSets", id: set.id } }
+          }
+        }
+      }));
+      if (!reserved.ok) {
+        console.error(`upload-screenshots: could not reserve ${fileName} (HTTP ${reserved.status})`);
+        console.error(reserved.text);
+        process.exit(2);
+      }
+      const screenshot = reserved.parsed.data;
+      const operations = screenshot.attributes?.uploadOperations || [];
+      if (operations.length === 0) {
+        console.error(`upload-screenshots: Apple returned no upload operation for ${fileName}`);
+        process.exit(2);
+      }
+
+      for (const operation of operations) {
+        const headers = {};
+        for (const header of operation.requestHeaders || []) headers[header.name] = header.value;
+        const offset = operation.offset || 0;
+        const length = operation.length || bytes.length;
+        const chunk = bytes.subarray(offset, offset + length);
+        const put = await fetch(operation.url, {
+          method: operation.method || "PUT",
+          headers,
+          body: chunk
+        });
+        if (!put.ok) {
+          console.error(`upload-screenshots: upload of ${fileName} failed (HTTP ${put.status})`);
+          process.exit(2);
+        }
+      }
+
+      const committed = await api("PATCH", `/v1/appScreenshots/${screenshot.id}`, JSON.stringify({
+        data: { type: "appScreenshots", id: screenshot.id, attributes: { uploaded: true } }
+      }));
+      if (!committed.ok) {
+        console.error(`upload-screenshots: could not commit ${fileName} (HTTP ${committed.status})`);
+        console.error(committed.text);
+        process.exit(2);
+      }
+      const state = committed.parsed.data?.attributes?.assetDeliveryState;
+      const stateName = state?.state || "UNKNOWN";
+      console.error(`upload-screenshots: ${fileName} -> ${screenshot.id} (${stateName})`);
+      if (state?.errors?.length) {
+        console.error(`upload-screenshots: Apple rejected ${fileName}:`);
+        for (const problem of state.errors) {
+          console.error(`  ${problem.code}: ${problem.title} ${problem.detail || ""}`);
+        }
+        process.exit(3);
+      }
+    }
+    console.log(JSON.stringify({ ok: true, setId: set.id, displayType, files }));
+    process.exit(0);
   }
 
   // Highest N already used by the "<prefix>.N" MARKETING version train
