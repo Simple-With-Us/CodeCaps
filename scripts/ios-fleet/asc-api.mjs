@@ -418,22 +418,37 @@ async function main() {
       "2048x2732": "APP_IPAD_PRO_3GEN_129",
       "2000x2664": "APP_IPAD_PRO_3GEN_129"
     };
-    if (displayType === "auto") {
-      if (!existsSync(files[0])) {
-        console.error(`upload-screenshots: no such file: ${files[0]}`);
+    // Every file has to belong to the same screenshot set.  A capture run
+    // produces iPhone and iPad files together and they belong in different
+    // sets, so a mixed list is refused here rather than sending the second
+    // family's files to the first family's set.
+    const fileSizes = new Map();
+    for (const file of files) {
+      if (!existsSync(file)) {
+        console.error(`upload-screenshots: no such file: ${file}`);
         process.exit(2);
       }
-      const header = readFileSync(files[0]).subarray(0, 24);
-      const width = header.readUInt32BE(16);
-      const height = header.readUInt32BE(20);
-      const size = `${width}x${height}`;
-      displayType = sizeToDisplayType[size];
-      if (!displayType) {
+      const header = readFileSync(file).subarray(0, 24);
+      const size = `${header.readUInt32BE(16)}x${header.readUInt32BE(20)}`;
+      const type = sizeToDisplayType[size];
+      if (!type) {
         console.error(`upload-screenshots: ${size} is not a size App Store Connect accepts`);
         process.exit(2);
       }
-      console.error(`upload-screenshots: ${size} -> ${displayType}`);
+      fileSizes.set(file, { size, type });
     }
+    if (displayType === "auto") {
+      displayType = fileSizes.get(files[0]).type;
+    }
+    for (const file of files) {
+      const { size, type } = fileSizes.get(file);
+      if (type !== displayType) {
+        console.error(`upload-screenshots: ${file} is ${size}, which belongs to ${type}, not ${displayType}`);
+        console.error(`upload-screenshots: run the ${type} files on their own`);
+        process.exit(2);
+      }
+    }
+    console.error(`upload-screenshots: ${fileSizes.get(files[0]).size} -> ${displayType}`);
 
     const sets = await api("GET", `/v1/appStoreVersionLocalizations/${localizationId}/appScreenshotSets`);
     if (!sets.ok) {
