@@ -36,8 +36,8 @@ name: iOS TestFlight ship (GitHub-hosted macOS)
 # installed App Store profiles.  Xcode's provisioning service rejects this API
 # key, so the job must not ask it to create or update profiles.
 #
-# Marketing train is 1.0.N (AGENT-SYNC: 0.x.x is banned); build is UTC
-# YYYYMMDDHHMM.  Bundle `com.simplewithus.codecaps.ios`, team `CC8UTF7ATG`.
+# Versioning is 1.0.<commit count>, and CFBundleVersion is that same integer
+# (owner 2026-10-18); UTC timestamps are retired.  Bundle `com.simplewithus.codecaps.ios`, team `CC8UTF7ATG`.
 #
 # WHY THERE IS A `schedule:` TRIGGER
 # A PR merged by github-actions[bot] (auto-merge armed with GITHUB_TOKEN) lands
