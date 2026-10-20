@@ -163,13 +163,22 @@ test("ASC credentials come from Fleet-OPS /asc, never the stale repository secre
   assert.doesNotMatch(code, /secrets\.ASC_KEY_P8/);
   assert.doesNotMatch(code, /ASC_KEY_(ID|P8):\s*\$\{\{/);
 
-  assert.match(code, /ASC_INFISICAL_PROJECT_ID:\s*8dae6d03-8f12-48b2-adf3-e5c1b881c8c5/);
-  assert.match(code, /--path=\/asc/);
-  assert.match(code, /infisical login --method=universal-auth/);
+  // The project id is a secret, never a literal in this public file, and the
+  // bare Infisical CLI is not used: it prints the value to stdout.
+  assert.doesNotMatch(code, /8dae6d03/);
+  assert.doesNotMatch(code, /ASC_INFISICAL_PROJECT_ID/);
+  assert.match(code, /project-id: \$\{\{ secrets\.INFISICAL_FLEET_OPS_PROJECT_ID \}\}/);
+  assert.match(code, /secret-path: \/asc/);
+  assert.match(code, /uses: \.\/\.github\/actions\/infisical-secrets/);
   assert.match(code, /secrets\.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID/);
+  assert.doesNotMatch(code, /infisical secrets get/);
+  assert.doesNotMatch(code, /infisical\/get-cli/);
 
-  // The multiline key goes to a mode-600 file, never GITHUB_ENV.
-  assert.match(code, /scripts\/ios-stage-asc-key\.sh/);
+  // The multiline key goes to a mode-600 file, never GITHUB_ENV.  The
+  // protected handoff lives in the fetch script, which hands the key to
+  // scripts/ios-stage-asc-key.sh over a pipe.
+  assert.match(code, /scripts\/infisical-fetch-asc-key\.mjs/);
+  assert.match(readFileSync(join(ROOT, "scripts/infisical-fetch-asc-key.mjs"), "utf8"), /ios-stage-asc-key\.sh/);
   assert.doesNotMatch(code, /for name in .*ASC_KEY_P8/);
   assert.doesNotMatch(code, /printf '%s=%s\\n' "ASC_KEY_P8"/);
 

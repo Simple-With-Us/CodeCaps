@@ -51,6 +51,7 @@ on:
       - '.github/workflows/mac-release.yml'
       - '.github/actions/infisical-secrets/**'
       - 'scripts/infisical-fetch.mjs'
+      - 'scripts/infisical-fetch-asc-key.mjs'
   workflow_dispatch:
 
 permissions:
@@ -77,7 +78,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Test Sparkle release contract without credentials
-        run: node --test scripts/mac-release-workflow.test.mjs
+        run: node --test scripts/mac-release-workflow.test.mjs scripts/infisical-fetch-asc-key.node-test.mjs
 
       - name: Wait for Swift CI compile checks on this commit
         env:
@@ -118,86 +119,40 @@ jobs:
 
       - name: Load ASC credentials (Fleet-OPS prod /asc)
         if: github.event_name != 'pull_request'
+        uses: ./.github/actions/infisical-secrets
+        with:
+          names: ASC_KEY_ID ASC_ISSUER_ID
+          project-id: ${{ secrets.INFISICAL_FLEET_OPS_PROJECT_ID }}
+          environment: prod
+          secret-path: /asc
+          client-id: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID || secrets.INFISICAL_CLIENT_ID }}
+          client-secret: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET || secrets.INFISICAL_CLIENT_SECRET }}
+
+      - name: Stage the ASC private key (Fleet-OPS prod /asc)
+        if: github.event_name != 'pull_request'
         env:
-          ASC_INFISICAL_PROJECT_ID: 8dae6d03-8f12-48b2-adf3-e5c1b881c8c5
-          INFISICAL_UNIVERSAL_AUTH_CLIENT_ID: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID }}
-          INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET }}
-          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
-          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          INFISICAL_PROJECT_ID: ${{ secrets.INFISICAL_FLEET_OPS_PROJECT_ID }}
+          INFISICAL_ENVIRONMENT: prod
+          INFISICAL_SECRET_PATH: /asc
+          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID || secrets.INFISICAL_CLIENT_ID }}
+          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET || secrets.INFISICAL_CLIENT_SECRET }}
+        run: node scripts/infisical-fetch-asc-key.mjs
+
+      - name: Check the ASC credentials arrived
+        if: github.event_name != 'pull_request'
         run: |
           set +o xtrace
           set -euo pipefail
-          export INFISICAL_DISABLE_UPDATE_CHECK=true
-
-          if ! command -v infisical >/dev/null 2>&1; then
-            NONINTERACTIVE=1 HOMEBREW_NO_AUTO_UPDATE=1 brew install infisical/get-cli/infisical
-          fi
-          command -v infisical >/dev/null 2>&1 || {
-            echo "::error::Infisical CLI is not installed."
-            exit 1
-          }
-
-          CLIENT_ID="${INFISICAL_UNIVERSAL_AUTH_CLIENT_ID}"
-          CLIENT_SECRET="${INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET}"
-          if [ -z "$CLIENT_ID" ] || [ -z "$CLIENT_SECRET" ]; then
-            CLIENT_ID="${INFISICAL_CLIENT_ID}"
-            CLIENT_SECRET="${INFISICAL_CLIENT_SECRET}"
-          fi
-          if [ -z "$CLIENT_ID" ] || [ -z "$CLIENT_SECRET" ]; then
-            echo "::error::Missing Infisical machine identity.  Set INFISICAL_UNIVERSAL_AUTH_CLIENT_ID/SECRET (fallback INFISICAL_CLIENT_ID/SECRET) on the org or repo."
-            exit 1
-          fi
-
-          TOKEN="$(
-            env -u INFISICAL_CLIENT_ID -u INFISICAL_CLIENT_SECRET -u INFISICAL_TOKEN \
-              INFISICAL_UNIVERSAL_AUTH_CLIENT_ID="$CLIENT_ID" \
-              INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET="$CLIENT_SECRET" \
-              infisical login --method=universal-auth --silent --plain --telemetry=false 2>/dev/null || true
-          )"
-          if [ -z "$TOKEN" ]; then
-            echo "::error::Infisical universal-auth login failed."
-            exit 1
-          fi
-          if [[ "$TOKEN" == *$'\n'* || "$TOKEN" == *$'\r'* ]]; then
-            echo '::error::Infisical returned a multiline token.' >&2
-            exit 1
-          fi
-          printf '::add-mask::%s\n' "${TOKEN//'%'/'%25'}"
-
           for name in ASC_KEY_ID ASC_ISSUER_ID; do
-            val="$(
-              INFISICAL_TOKEN="$TOKEN" infisical secrets get "$name" \
-                --plain --silent --telemetry=false --expand=false \
-                --projectId="$ASC_INFISICAL_PROJECT_ID" --env=prod --path=/asc \
-                2>/dev/null || true
-            )"
-            if [ -z "$val" ]; then
+            if [ -z "${!name:-}" ]; then
               echo "::error::Missing $name in Fleet-OPS prod /asc; verify the CI identity has read access to Fleet-OPS prod /asc." >&2
               exit 1
             fi
-            if [[ "$val" == *$'\n'* || "$val" == *$'\r'* ]]; then
-              echo "::error::Signing field $name must be single-line; correct Infisical formatting." >&2
-              exit 1
-            fi
-            printf '::add-mask::%s\n' "${val//'%'/'%25'}"
-            printf '%s=%s\n' "$name" "$val" >> "$GITHUB_ENV"
           done
-
-          # Keep the multiline PEM out of GITHUB_ENV and every later step
-          # environment.  Only its mode-600 file path crosses the step boundary.
-          key_material="$(
-            INFISICAL_TOKEN="$TOKEN" infisical secrets get ASC_KEY_P8 \
-              --plain --silent --telemetry=false --expand=false \
-              --projectId="$ASC_INFISICAL_PROJECT_ID" --env=prod --path=/asc \
-              2>/dev/null || true
-          )"
-          if [ -z "$key_material" ]; then
-            echo "::error::Missing ASC key material in Fleet-OPS prod /asc; verify the CI identity has read access to Fleet-OPS prod /asc." >&2
+          if [ -z "${ASC_KEY_PATH:-}" ] || [ ! -s "${ASC_KEY_PATH:-}" ]; then
+            echo '::error::Missing ASC key material in Fleet-OPS prod /asc; verify the CI identity has read access to Fleet-OPS prod /asc.' >&2
             exit 1
           fi
-          printf '%s\n' "$key_material" | bash "$GITHUB_WORKSPACE/scripts/ios-stage-asc-key.sh"
-          unset key_material TOKEN CLIENT_ID CLIENT_SECRET val
-
       - name: Decide whether this run can publish
         id: gate
         run: |
@@ -367,4 +322,63 @@ jobs:
         if: always()
         run: |
           security delete-keychain "$RUNNER_TEMP/codecaps-signing.keychain-db" >/dev/null 2>&1 || true
+          if [ -n "${ASC_KEY_PATH:-}" ]; then rm -f -- "$ASC_KEY_PATH"; fi
+
+  # A manual check that the release credentials still load and that Apple's
+  # notarization service still accepts them.  It publishes nothing and builds
+  # nothing, so it can be run against a branch before a merge.  It exists
+  # because a green pull-request check proves the workflow's own contract,
+  # not that a credential can be fetched: the Mac release was broken for nine
+  # days by a credential that no check looked at.
+  #
+  # Manual only, on purpose.  A pull request must never see the signing key,
+  # and a scheduled run would fetch it for nothing.
+  verify-release-credentials:
+    name: Verify the release credentials load
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Load ASC credentials (Fleet-OPS prod /asc)
+        uses: ./.github/actions/infisical-secrets
+        with:
+          names: ASC_KEY_ID ASC_ISSUER_ID
+          project-id: ${{ secrets.INFISICAL_FLEET_OPS_PROJECT_ID }}
+          environment: prod
+          secret-path: /asc
+          client-id: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID || secrets.INFISICAL_CLIENT_ID }}
+          client-secret: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET || secrets.INFISICAL_CLIENT_SECRET }}
+
+      - name: Stage the ASC private key (Fleet-OPS prod /asc)
+        env:
+          INFISICAL_PROJECT_ID: ${{ secrets.INFISICAL_FLEET_OPS_PROJECT_ID }}
+          INFISICAL_ENVIRONMENT: prod
+          INFISICAL_SECRET_PATH: /asc
+          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID || secrets.INFISICAL_CLIENT_ID }}
+          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET || secrets.INFISICAL_CLIENT_SECRET }}
+        run: node scripts/infisical-fetch-asc-key.mjs
+
+      - name: Check the ASC credentials arrived
+        run: |
+          set +o xtrace
+          set -euo pipefail
+          for name in ASC_KEY_ID ASC_ISSUER_ID; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::Missing $name in Fleet-OPS prod /asc; verify the CI identity has read access to Fleet-OPS prod /asc." >&2
+              exit 1
+            fi
+          done
+          if [ -z "${ASC_KEY_PATH:-}" ] || [ ! -s "${ASC_KEY_PATH:-}" ]; then
+            echo '::error::Missing ASC key material in Fleet-OPS prod /asc; verify the CI identity has read access to Fleet-OPS prod /asc.' >&2
+            exit 1
+          fi
+
+      - name: Verify notarization access before building
+        run: bash scripts/check-notary-access.sh
+
+      - name: Remove the signing key
+        if: always()
+        run: |
           if [ -n "${ASC_KEY_PATH:-}" ]; then rm -f -- "$ASC_KEY_PATH"; fi

@@ -16,16 +16,57 @@ function step(s, name) {
   const end = s.indexOf('\n      - ', start + 1);
   return s.slice(start, end < 0 ? undefined : end).trim();
 }
+const LOADERS = [
+  'Load ASC credentials (Fleet-OPS prod /asc)',
+  'Stage the ASC private key (Fleet-OPS prod /asc)',
+  'Check the ASC credentials arrived',
+];
+const stripGuard = s => s.replaceAll("        if: github.event_name != 'pull_request'\n", '');
+function allSteps(s, name) {
+  const out = [];
+  const marker = `      - name: ${name}\n`;
+  let at = s.indexOf(marker);
+  while (at >= 0) {
+    const end = s.indexOf('\n      - ', at + 1);
+    out.push(s.slice(at, end < 0 ? undefined : end).trim());
+    at = s.indexOf(marker, at + 1);
+  }
+  return out;
+}
+const iosShip = read('.github/workflows/ios-ship.yml');
 test('Sparkle uses the existing fleet ASC loader, never repository ASC secrets', () => {
   assert.doesNotMatch(code, /secrets\.ASC_/);
-  const name = 'Load ASC credentials (Fleet-OPS prod /asc)';
-  const normalize = s => s.replaceAll('verify the CI identity has read access to project ${ASC_INFISICAL_PROJECT_ID} path /asc.', 'verify the CI identity has read access to Fleet-OPS prod /asc.');
-  assert.equal(step(workflow, name).replace("        if: github.event_name != 'pull_request'\n", ''), normalize(step(read('.github/workflows/ios-ship.yml'), name)));
-  const loader = step(workflow, name);
+  // One loader, two workflows.  The release path and the iOS ship path must
+  // carry the same text, so a fix to one is a fix to the other.
+  for (const name of LOADERS) {
+    assert.equal(stripGuard(step(workflow, name)), step(iosShip, name), `mac-release and ios-ship disagree on "${name}"`);
+    assert.match(step(workflow, name), /if: github.event_name != 'pull_request'/);
+  }
+  // The credential check job runs the same loader as the release job, so a
+  // change to one cannot leave the other proving nothing.
+  for (const name of LOADERS) {
+    const copies = allSteps(workflow, name);
+    assert.equal(copies.length, 2, `"${name}" must exist in the release job and in the credential check`);
+    assert.equal(stripGuard(copies[0]), copies[1], `the credential check's "${name}" drifted from the release job's`);
+  }
+  const loader = LOADERS.map(name => step(workflow, name)).join('\n');
+  // The project id is a secret.  A literal in a public workflow is both a
+  // leak of an internal identifier and a second copy to keep in step.
+  for (const file of [workflow, iosShip]) {
+    assert.doesNotMatch(file, /8dae6d03/);
+    assert.doesNotMatch(file, /ASC_INFISICAL_PROJECT_ID/);
+  }
+  assert.match(loader, /project-id: \$\{\{ secrets\.INFISICAL_FLEET_OPS_PROJECT_ID \}\}/);
   assert.doesNotMatch(loader, /echo .*\$\{ASC_INFISICAL_PROJECT_ID\}/);
+  // The bare Infisical CLI is gone: it prints the value to stdout, and its
+  // only install path is macOS-only.
+  for (const file of [workflow, iosShip]) {
+    assert.doesNotMatch(file, /infisical secrets get/);
+    assert.doesNotMatch(file, /infisical\/get-cli/);
+  }
+  assert.match(loader, /run: node scripts\/infisical-fetch-asc-key\.mjs/);
   assert.match(loader, /Missing \$name in Fleet-OPS prod \/asc; verify the CI identity has read access to Fleet-OPS prod \/asc\./);
   assert.match(loader, /Missing ASC key material in Fleet-OPS prod \/asc; verify the CI identity has read access to Fleet-OPS prod \/asc\./);
-  assert.match(step(workflow, name), /if: github.event_name != 'pull_request'/);
   assert.match(code, /NOTARY_KEY_PATH: \$\{\{ env.ASC_KEY_PATH \}\}/);
   assert.match(code, /NOTARY_KEY_ID: \$\{\{ env.ASC_KEY_ID \}\}/);
   assert.match(code, /NOTARY_ISSUER_ID: \$\{\{ env.ASC_ISSUER_ID \}\}/);
