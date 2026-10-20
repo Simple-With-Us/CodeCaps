@@ -8,10 +8,12 @@
 //
 // Run: node --test scripts/stage-asc-key.node-test.mjs
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import { run } from './stage-asc-key.mjs';
 
@@ -71,18 +73,19 @@ test("the key is taken back out of the environment for later steps", async () =>
   }
 });
 
-test("a missing key fails the step and names Fleet-OPS prod /asc", async () => {
+test("a missing key fails the step and names the secret and its path", async () => {
   const dir = mkdtempSync(join(tmpdir(), "asc-stage-"));
   try {
     const lines = [];
     await assert.rejects(
       run({ env: baseEnv(dir, { ASC_KEY_P8: "" }), log: (l) => lines.push(l) }),
       (err) => {
-        assert.match(err.message, /Missing ASC key material in Fleet-OPS prod \/asc/);
+        assert.match(err.message, /Missing ASC_KEY_P8 in Fleet-OPS prod \/asc/);
         return true;
       },
     );
     assert.ok(lines.some((l) => l.includes("Fleet-OPS prod /asc")), "the error names the path");
+    assert.ok(lines.some((l) => l.includes("ASC_KEY_P8")), "the error names the secret");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -97,6 +100,40 @@ test("the key never reaches a command line", async () => {
     // and the published file holds the key, not an argument.
     const keyPath = readFileSync(env.GITHUB_ENV, "utf8").match(/^ASC_KEY_PATH=(.*)$/m)[1].trim();
     assert.ok(readFileSync(keyPath, "utf8").includes("SYNTHETIC-MULTILINE-FIXTURE"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// CI only ever runs `node scripts/stage-asc-key.mjs`, so the CLI entry point
+// -- the invokedDirectly guard and the process.env lookup -- is the path that
+// ships.  The tests above import run(), which cannot reach it.
+test("the CLI entry point stages the key, publishes the path and blanks the environment", () => {
+  const dir = mkdtempSync(join(tmpdir(), "asc-stage-cli-"));
+  try {
+    const env = baseEnv(dir);
+    const script = fileURLToPath(new URL("./stage-asc-key.mjs", import.meta.url));
+    const result = spawnSync(process.execPath, [script], {
+      env: { ...process.env, ...env },
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, `the CLI must succeed: ${result.stderr}`);
+
+    const written = readFileSync(env.GITHUB_ENV, "utf8");
+    const match = written.match(/^ASC_KEY_PATH=(.*)$/m);
+    assert.ok(match, "the CLI must publish ASC_KEY_PATH");
+    const keyPath = match[1].trim();
+    assert.equal(mode(keyPath), 0o600, "the key file must be mode 600");
+    assert.ok(readFileSync(keyPath, "utf8").includes("SYNTHETIC-MULTILINE-FIXTURE"));
+
+    assert.ok(written.includes("ASC_KEY_P8=\n"), "the CLI must blank the environment entry");
+    assert.ok(written.indexOf("ASC_KEY_P8=\n") > written.indexOf("ASC_KEY_PATH="),
+      "the blanking must come after the path so that it wins");
+
+    for (const stream of ["stdout", "stderr"]) {
+      assert.ok(!result[stream].includes("SYNTHETIC-MULTILINE-FIXTURE"),
+        `the key must never reach ${stream}`);
+    }
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

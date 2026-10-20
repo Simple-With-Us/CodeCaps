@@ -36,7 +36,7 @@ function fail(log, message) {
 export async function run({ env = process.env, log = (line) => console.log(line) } = {}) {
   const value = env[SECRET_NAME];
   if (value === undefined || value === null || String(value).trim() === '') {
-    fail(log, `Missing ASC key material in Fleet-OPS prod /asc; verify the CI identity has read access to Fleet-OPS prod /asc.`);
+    fail(log, `Missing ${SECRET_NAME} in Fleet-OPS prod /asc; verify the CI identity has read access to Fleet-OPS prod /asc.`);
   }
 
   await new Promise((resolve, reject) => {
