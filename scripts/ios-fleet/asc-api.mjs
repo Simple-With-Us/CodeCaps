@@ -22,6 +22,69 @@ import { createSign } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+// A failure that already knows what to say.
+//
+// A guard deep in the call stack cannot return from main(), so it throws this
+// instead.  The handler at the bottom of the file prints the message on its
+// own, without a stack trace, and keeps the exit code the failure set.
+class NamedFailure extends Error {}
+
+// The fleet's masked key preview:  the first eight and the last four
+// characters, so a key can be identified without any of it being published.
+//
+// This is the owner's rule of 2026-07-16 and the same shape the other fleet
+// apps use (maskApiKeyPreview, buildKeyPreview).  It exists because there is
+// otherwise no way to tell which of several keys is the one in play, and
+// pasting a value to find out is never the answer.
+//
+// The preview is taken from the key material rather than from the PEM
+// envelope:  every .p8 opens "-----BEGIN" and ends "-----END PRIVATE KEY-----\n",
+// so previewing the envelope prints the same eight and four characters for
+// every key and identifies none of them.  The text is trimmed first, because
+// the key as stored ends with a newline and a preview carrying one splits the
+// diagnostic into two lines, of which ship-testflight.sh keeps only the first.
+function maskKeyPreview(value) {
+  if (typeof value !== "string") {
+    return "(too short to preview)";
+  }
+  const material = value.replace(/-----[^-]+-----/g, "").trim();
+  if (material.length < 12) {
+    return "(too short to preview)";
+  }
+  return `${material.slice(0, 8)}…${material.slice(-4)}`;
+}
+
+// The App Store Connect host.
+const PRODUCTION_API_BASE = "https://api.appstoreconnect.apple.com";
+
+// Resolve the host every call is made against.
+//
+// A test points this at a local server so the failure paths can be exercised
+// without touching the real service.  Only a loopback override is honoured:
+// every call carries an Authorization header holding a JWT signed with the
+// real ASC private key, so a stray environment variable must not be able to
+// redirect that token to another host.
+//
+// The production host is accepted explicitly, because a job that pins the host
+// it would otherwise use is not a redirect anywhere new.  The value is used as
+// a prefix for paths that already begin with "/", so a trailing slash is
+// stripped to keep the separator from doubling.
+//
+// The check runs inside main(), which has a catch handler, so a bad value is
+// reported as a named failure instead of an uncaught exception at module
+// scope.
+function resolveApiBase() {
+  const override = process.env.ASC_API_BASE;
+  if (!override) return PRODUCTION_API_BASE;
+  const trimmed = override.replace(/\/+$/, "");
+  if (trimmed === PRODUCTION_API_BASE) return PRODUCTION_API_BASE;
+  if (!/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(\/|$)/.test(override)) {
+    console.error("asc-api: ASC_API_BASE must be the production host or a loopback address");
+    return null;
+  }
+  return trimmed;
+}
+
 // AFC-359: credentials come from the environment (CI sets ASC_KEY_ID / ASC_ISSUER_ID /
 // ASC_KEY_PATH), else Infisical Fleet-OPS /asc through fleet-secrets: ASC_KEY_ID, ASC_ISSUER_ID and
 // ASC_KEY_P8 (the .p8 contents).  The key is used in memory only; nothing is written to disk or printed.
@@ -59,14 +122,16 @@ function resolveAscCredentials() {
   }
   if (!keyId || !issuerId) {
     console.error("Missing ASC_KEY_ID / ASC_ISSUER_ID: set them in the environment or add ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_P8 to Infisical /asc");
-    process.exit(1);
+    process.exitCode = 1;
+    return null;
   }
   const privateKeyPem = keyId === ascKeyId
     ? fleetSecretsGet("ASC_KEY_P8", "/asc")
     : fleetSecretsGet(`AUTHKEY_${keyId}`, `/authkey-${keyId.toLowerCase()}-p8`);
   if (!privateKeyPem) {
     console.error(`Missing the .p8 for key ${keyId}: Infisical /asc ASC_KEY_P8 (the /asc key) or /authkey-<id>-p8 AUTHKEY_<id>`);
-    process.exit(1);
+    process.exitCode = 1;
+    return null;
   }
   return { keyId, issuerId, privateKeyPem: privateKeyPem + "\n" };
 }
@@ -349,7 +414,17 @@ async function setWhatToTest({ api, buildId, appId, marketing }) {
 }
 
 async function main() {
-  const { keyId, issuerId, privateKeyPem } = resolveAscCredentials();
+  const apiBase = resolveApiBase();
+  if (!apiBase) {
+    process.exitCode = 2;
+    return;
+  }
+  const credentials = resolveAscCredentials();
+  if (!credentials) {
+    // The helper already named what is missing and set the exit code.
+    return;
+  }
+  const { keyId, issuerId, privateKeyPem } = credentials;
   const token = signJwt({ keyId, issuerId, privateKeyPem });
 
   const [method, path, body, arg4] = process.argv.slice(2);
@@ -357,23 +432,560 @@ async function main() {
     console.error("Usage: node asc-api.mjs <METHOD> <PATH> [JSON_BODY]");
     console.error("       node asc-api.mjs ensure-tf-ready <bundleId> <buildVersion> [marketingVersion]");
     console.error("       node asc-api.mjs latest-build-seq <bundleId> <prefix>");
-    process.exit(1);
+    console.error("       node asc-api.mjs upload-screenshots <localizationId> <displayType|auto> <file...>");
+    console.error("       node asc-api.mjs submit-review <versionId> [reviewSubmissionId]");
+    process.exitCode = 1;
+    return;
   }
 
+  // How long a single App Store Connect call may take.  Node's fetch has no
+  // default timeout, so a call that never answers would hang the script with
+  // the reservation still pending in App Store Connect.
+  //
+  // The value is overridable so a test can drive a real timeout without
+  // waiting two minutes for one.
+  const REQUEST_TIMEOUT_MS = (() => {
+    const raw = process.env.ASC_REQUEST_TIMEOUT_MS;
+    const n = raw ? Number.parseInt(raw, 10) : Number.NaN;
+    if (!Number.isFinite(n) || n <= 0) return 120_000;
+    // AbortSignal.timeout does not accept a delay above 2^31-1: it either
+    // throws a RangeError or silently rounds the delay down, so an
+    // unclamped override would abort every request immediately.
+    return Math.min(n, 2_147_483_647);
+  })();
+
+  // Describe a failed response without ever printing what it holds.
+  //
+  // The raw body of an App Store Connect error is not printed: it is
+  // whatever the service chose to say, and it may echo a header or a token.
+  // Only the titles and details of the JSON API errors are used, and a run of
+  // token-like characters in one of those is redacted.  A rejected key is
+  // named, never previewed: a masked preview of a private key is still a
+  // piece of the key.
+  function describeError(res) {
+    if (res.networkError) {
+      // A timeout and a transport failure have different causes, and the
+      // operator needs the one that is true:  one means App Store Connect was
+      // slow, the other that the request never got there.
+      return res.timedOut
+        ? "the request timed out before App Store Connect answered"
+        : "the request never reached App Store Connect";
+    }
+    if (res.status === 401 || res.status === 403) {
+      // The key id is a public identifier:  it travels in the header of every
+      // request to App Store Connect.  Together with the fleet's masked
+      // preview of the key in play it says which credential was rejected,
+      // which is the question an operator actually has, without publishing
+      // any of the key.
+      return `App Store Connect rejected the key: check ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_P8 in Fleet-OPS prod /asc (key id ${keyId}, key in play ${maskKeyPreview(privateKeyPem)})`;
+    }
+    const parts = [];
+    const errors = res.parsed && Array.isArray(res.parsed.errors) ? res.parsed.errors : [];
+    for (const problem of errors.slice(0, 3)) {
+      // The errors array comes from the service, so an element may be null or
+      // a bare string.  Reading .title off one of those throws, which would
+      // replace the safe message this function exists to produce with a stack
+      // trace, so the shape is checked before anything is read.
+      const title = isPlainObject(problem) && typeof problem.title === "string" ? problem.title : "unknown error";
+      const detail = isPlainObject(problem) && typeof problem.detail === "string" ? problem.detail : "";
+      parts.push(detail ? `${title}: ${detail}` : title);
+    }
+    if (parts.length === 0) {
+      parts.push("no JSON API error detail was returned");
+    }
+    return parts
+      .map((part) => part.replace(/[A-Za-z0-9._~+/=-]{24,}/g, "[redacted]"))
+      .join("; ");
+  }
+
+  // Guard the shape of a response before any of it is read.
+  //
+  // The scripts in this directory are dependency-free, so the guard is
+  // written out by hand rather than pulled in as a schema library.
+  //
+  // A guard cannot return from main() on its own, so it throws a named
+  // failure instead: the caller unwinds to main()'s handler, which prints the
+  // message and keeps the exit code the guard set.
+  function isPlainObject(value) {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+  }
+
+  function requireObject(value, what) {
+    if (!isPlainObject(value)) {
+      process.exitCode = 2;
+      throw new NamedFailure(`upload-screenshots: invalid ${what} response`);
+    }
+    return value;
+  }
+
+  function requireArray(value, what) {
+    if (!Array.isArray(value)) {
+      process.exitCode = 2;
+      throw new NamedFailure(`upload-screenshots: invalid ${what} response`);
+    }
+    return value;
+  }
+
+  // Every call is aborted after REQUEST_TIMEOUT_MS, so a call that never
+  // answers rejects with a TimeoutError rather than hanging.  That rejection
+  // is turned into an ordinary non-ok response here rather than at each call
+  // site: the commit path in particular has to reach its discardReservation()
+  // on a timeout, and an escaping exception would skip it and leave the
+  // reservation open in a ten-entry set.
   async function api(methodName, apiPath, jsonBody) {
-    const url = apiPath.startsWith("http") ? apiPath : `https://api.appstoreconnect.apple.com${apiPath}`;
-    const res = await fetch(url, {
-      method: methodName,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json"
-      },
-      body: jsonBody ? jsonBody : undefined
-    });
+    const url = apiPath.startsWith("http") ? apiPath : `${apiBase}${apiPath}`;
+    let res;
+    try {
+      res = await fetch(url, {
+        method: methodName,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json"
+        },
+        body: jsonBody ? jsonBody : undefined,
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+      });
+    } catch (error) {
+      const timedOut = error && error.name === "TimeoutError";
+      return {
+        status: 0,
+        ok: false,
+        // The request never reached App Store Connect.  A caller that only
+        // looks at the status would read this as a server verdict, so the
+        // transport failure is marked and reported as one.
+        networkError: true,
+        // A timeout and a refused connection are different causes, and the
+        // message has to name the one that happened.
+        timedOut: Boolean(timedOut),
+        text: "",
+        parsed: {
+          errors: [{
+            title: timedOut ? "the request timed out" : "the request failed",
+            detail: error && error.message ? error.message : "unknown error"
+          }]
+        }
+      };
+    }
     const text = await res.text();
     let parsed;
     try { parsed = JSON.parse(text); } catch { parsed = { raw: text }; }
     return { status: res.status, ok: res.ok, parsed, text };
+  }
+
+  // Drop a reservation that will never be committed.
+  //
+  // A screenshot set holds ten entries, so a reservation that is left open
+  // after a failed upload sits in the set forever and pushes the real
+  // screenshots out of it.  The delete is best effort: the script still
+  // reports the original failure, but it says whether the entry went away
+  // so a later run knows to look for it.
+  //
+  // Every caller has to await this before it exits the process: a pending
+  // fetch is cancelled by the exit, and the reservation would survive.
+  async function discardReservation(screenshotId) {
+    try {
+      const dropped = await api("DELETE", `/v1/appScreenshots/${screenshotId}`);
+      if (dropped.ok) {
+        console.error(`upload-screenshots: dropped the reservation ${screenshotId}`);
+        return true;
+      }
+      console.error(`upload-screenshots: the reservation ${screenshotId} is still open (HTTP ${dropped.status}): ${describeError(dropped)}`);
+      return false;
+    } catch (error) {
+      const reason = error && error.name === "TimeoutError"
+        ? "the delete timed out"
+        : `the delete failed (${error && error.message ? error.message : "unknown error"})`;
+      console.error(`upload-screenshots: the reservation ${screenshotId} is still open: ${reason}`);
+      return false;
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Submit an app store version for review
+  // -------------------------------------------------------------------------
+  // Usage: node asc-api.mjs submit-review <versionId> [reviewSubmissionId]
+  //
+  // Submitting is the one call that cannot be undone, so the things that
+  // have to be true first are checked here rather than discovered from
+  // Apple's refusal:
+  //
+  //   1. the version's screenshots are uploaded (a version with no
+  //      screenshots is not submittable, and the review submission's items
+  //      stay empty while that is true)
+  //   2. a build is attached to the version
+  //   3. the version's versionString matches that build's marketing version
+  //
+  // The review submission's items cannot be set:  the relationship allows
+  // GET_RELATED and GET_RELATIONSHIP only, and a review submission is
+  // created with the app relationship, so the version is bound by App Store
+  // Connect itself when the version becomes submittable.
+  if (method === "submit-review") {
+    const versionId = path;
+    const submissionId = body;
+    if (!versionId) {
+      console.error("Usage: node asc-api.mjs submit-review <versionId> [reviewSubmissionId]");
+      process.exitCode = 2;
+      return;
+    }
+
+    // 1. The screenshots.
+    const localizations = await api("GET", `/v1/appStoreVersions/${versionId}/appStoreVersionLocalizations`);
+    if (!localizations.ok) {
+      console.error(`submit-review: ${describeError(localizations)}`);
+      process.exitCode = 2;
+      return;
+    }
+    const locs = requireArray(localizations.parsed?.data, "version localization list");
+    let shots = 0;
+    for (const loc of locs) {
+      if (!isPlainObject(loc) || typeof loc.id !== "string") continue;
+      const sets = await api("GET", `/v1/appStoreVersionLocalizations/${loc.id}/appScreenshotSets`);
+      if (!sets.ok) continue;
+      for (const set of requireArray(sets.parsed?.data, "screenshot set list")) {
+        shots += (set?.attributes?.screenshotCount) || 0;
+      }
+    }
+    console.log(`submit-review: the version carries ${shots} screenshot(s)`);
+    if (shots < 6) {
+      console.error("submit-review: not submitting, the version needs at least six screenshots");
+      process.exitCode = 2;
+      return;
+    }
+
+    // 2. The build.
+    const attached = await api("GET", `/v1/appStoreVersions/${versionId}/build`);
+    const build = attached.ok ? attached.parsed?.data : null;
+    if (!isPlainObject(build) || typeof build.id !== "string") {
+      console.error("submit-review: not submitting, no build is attached to the version");
+      process.exitCode = 2;
+      return;
+    }
+
+    // 3. The version string, and the build's own marketing version.
+    //
+    // App Store Connect pairs a build with a version by their marketing
+    // version, so a version whose versionString is still the one from the
+    // previous build is refused.  That is a cheap mistake to make and an
+    // expensive one to find out about from Apple, so it is checked here.
+    const version = await api("GET", `/v1/appStoreVersions/${versionId}`);
+    const versionString = version.ok ? version.parsed?.data?.attributes?.versionString : null;
+    const appId = version.ok
+      ? (version.parsed?.data?.relationships?.app?.data?.id)
+      : null;
+    const buildVersion = build.attributes?.version;
+    console.log(`submit-review: version ${versionString} | build ${buildVersion} (${build.id})`);
+    if (typeof versionString !== "string" || versionString.length === 0) {
+      console.error("submit-review: not submitting, the version has no versionString");
+      process.exitCode = 2;
+      return;
+    }
+
+    const withPreRelease = await api("GET", `/v1/builds/${build.id}?include=preReleaseVersion`);
+    const included = withPreRelease.ok ? requireArray(withPreRelease.parsed?.included, "build include") : [];
+    const preReleaseId = withPreRelease.ok
+      ? (withPreRelease.parsed?.data?.relationships?.preReleaseVersion?.data?.id)
+      : null;
+    const preRelease = included.find((item) => isPlainObject(item) && item.id === preReleaseId);
+    const marketing = preRelease && isPlainObject(preRelease.attributes)
+      ? preRelease.attributes.versionString
+      : null;
+    if (typeof marketing === "string" && marketing.length > 0 && marketing !== versionString) {
+      console.error(
+        `submit-review: not submitting, the version says ${versionString} and the build says ${marketing}. ` +
+        "Set the version's versionString to the build's marketing version first."
+      );
+      process.exitCode = 2;
+      return;
+    }
+
+    // The review submission.  When none is named, the app's own are listed
+    // and each is tried:  reviewSubmissions does not allow DELETE, so more
+    // than one can exist and the wrong one refuses.
+    let candidates = [];
+    if (submissionId) {
+      candidates = [submissionId];
+    } else {
+      if (typeof appId !== "string" || appId.length === 0) {
+        console.error("submit-review: not submitting, the version names no app");
+        process.exitCode = 2;
+        return;
+      }
+      const listed = await api("GET", `/v1/apps/${appId}/reviewSubmissions`);
+      if (!listed.ok) {
+        console.error(`submit-review: ${describeError(listed)}`);
+        process.exitCode = 2;
+        return;
+      }
+      candidates = requireArray(listed.parsed?.data, "review submission list").map((s) => s?.id).filter(Boolean);
+    }
+    if (candidates.length === 0) {
+      console.error("submit-review: not submitting, the app has no review submission");
+      process.exitCode = 2;
+      return;
+    }
+
+    let submitted = null;
+    for (const candidate of candidates) {
+      const result = await api("PATCH", `/v1/reviewSubmissions/${candidate}`, JSON.stringify({
+        data: {
+          type: "reviewSubmissions",
+          id: candidate,
+          attributes: { submitted: true, platform: "IOS" }
+        }
+      }));
+      if (!result.ok) {
+        console.error(`submit-review: ${candidate} refused: ${describeError(result)}`);
+        continue;
+      }
+      submitted = candidate;
+      break;
+    }
+    if (!submitted) {
+      console.error("submit-review: not submitting, every review submission refused");
+      process.exitCode = 2;
+      return;
+    }
+    const after = await api("GET", `/v1/reviewSubmissions/${submitted}`);
+    console.log(JSON.stringify({
+      ok: true,
+      reviewSubmission: submitted,
+      state: after.ok ? after.parsed?.data?.attributes?.state : null,
+      submittedDate: after.ok ? after.parsed?.data?.attributes?.submittedDate : null,
+      versionString,
+      build: build.id
+    }));
+    return;
+  }
+
+  // -------------------------------------------------------------------------
+  // App Store screenshot upload
+  // -------------------------------------------------------------------------
+  // Usage: node asc-api.mjs upload-screenshots <localizationId> <displayType> <file...>
+  //
+  // App Store Connect has no single-call screenshot upload.  The bytes go to
+  // a pre-signed URL Apple hands out with the reservation, and the reservation
+  // is only committed once the bytes are in, so it takes three calls:
+  //
+  //   1. POST  /v1/appScreenshots        reserve, get the upload operations
+  //   2. PUT   <uploadOperation.url>     send the bytes
+  //   3. PATCH /v1/appScreenshots/<id>   uploaded=true, then read
+  //                                       assetDeliveryState
+  //
+  // The screenshot set (one per display size) is created on demand and reused,
+  // so running this twice does not create a second set.  The display type is
+  // the App Store Connect enum, e.g. APP_IPHONE_67 for the 6.9-inch iPhone
+  // set and APP_IPAD_PRO_129 for the 13-inch iPad set.
+  if (method === "upload-screenshots") {
+    const localizationId = path;
+    let displayType = body;
+    const files = process.argv.slice(5);
+    if (!localizationId || !displayType || files.length === 0) {
+      console.error("Usage: node asc-api.mjs upload-screenshots <localizationId> <displayType|auto> <file...>");
+      process.exitCode = 2;
+      return;
+    }
+
+    // "auto" reads the pixel size out of the file and picks the screenshot set
+    // that size belongs to, so the display type cannot be mis-specified.
+    // App Store Connect has no APP_IPHONE_69 or APP_IPAD_PRO_13: the 6.9-inch
+    // iPhone size lives in APP_IPHONE_67 and the 13-inch iPad size in
+    // APP_IPAD_PRO_129.  The sizes are Apple's own list, at
+    // developer.apple.com/help/app-store-connect/reference/screenshot-specifications
+    const sizeToDisplayType = {
+      "1320x2868": "APP_IPHONE_67",
+      "1290x2796": "APP_IPHONE_67",
+      "1284x2778": "APP_IPHONE_65",
+      "1242x2688": "APP_IPHONE_65",
+      "2064x2752": "APP_IPAD_PRO_129",
+      "2048x2732": "APP_IPAD_PRO_3GEN_129"
+    };
+    // Every file has to belong to the same screenshot set.  A capture run
+    // produces iPhone and iPad files together and they belong in different
+    // sets, so a mixed list is refused here rather than sending the second
+    // family's files to the first family's set.
+    const fileSizes = new Map();
+    for (const file of files) {
+      if (!existsSync(file)) {
+        console.error(`upload-screenshots: no such file: ${file}`);
+        process.exitCode = 2;
+        return;
+      }
+      // The width and height sit at offsets 16 and 20, so anything shorter
+      // than a signature plus an IHDR header cannot be measured.  Reading
+      // them anyway raises a RangeError with a stack trace instead of the
+      // named failure every other bad input gets here.
+      const bytes = readFileSync(file);
+      if (bytes.length < 24) {
+        console.error(`upload-screenshots: ${file} is ${bytes.length} bytes, too small to be a PNG`);
+        process.exitCode = 2;
+        return;
+      }
+      const header = bytes.subarray(0, 24);
+      const size = `${header.readUInt32BE(16)}x${header.readUInt32BE(20)}`;
+      const type = sizeToDisplayType[size];
+      if (!type) {
+        console.error(`upload-screenshots: ${size} is not a size App Store Connect accepts`);
+        process.exitCode = 2;
+        return;
+      }
+      fileSizes.set(file, { size, type });
+    }
+    if (displayType === "auto") {
+      displayType = fileSizes.get(files[0]).type;
+    }
+    for (const file of files) {
+      const { size, type } = fileSizes.get(file);
+      if (type !== displayType) {
+        console.error(`upload-screenshots: ${file} is ${size}, which belongs to ${type}, not ${displayType}`);
+        console.error(`upload-screenshots: run the ${type} files on their own`);
+        process.exitCode = 2;
+        return;
+      }
+    }
+    console.error(`upload-screenshots: ${fileSizes.get(files[0]).size} -> ${displayType}`);
+
+    const sets = await api("GET", `/v1/appStoreVersionLocalizations/${localizationId}/appScreenshotSets`);
+    if (!sets.ok) {
+      console.error(`upload-screenshots: could not list screenshot sets (HTTP ${sets.status}): ${describeError(sets)}`);
+      process.exitCode = 2;
+      return;
+    }
+    const setList = requireArray(sets.parsed?.data, "screenshot-set list");
+    let set = setList.find(
+      (entry) => isPlainObject(entry) && typeof entry.id === "string"
+        && entry.attributes?.screenshotDisplayType === displayType
+    );
+    if (!set) {
+      const created = await api("POST", "/v1/appScreenshotSets", JSON.stringify({
+        data: {
+          type: "appScreenshotSets",
+          attributes: { screenshotDisplayType: displayType },
+          relationships: {
+            appStoreVersionLocalization: {
+              data: { type: "appStoreVersionLocalizations", id: localizationId }
+            }
+          }
+        }
+      }));
+      if (!created.ok) {
+        console.error(`upload-screenshots: could not create the ${displayType} set (HTTP ${created.status}): ${describeError(created)}`);
+        process.exitCode = 2;
+        return;
+      }
+      set = requireObject(created.parsed?.data, "screenshot set");
+      console.error(`upload-screenshots: created the ${displayType} set ${set.id}`);
+    } else {
+      console.error(`upload-screenshots: reusing the ${displayType} set ${set.id}`);
+    }
+
+    for (const file of files) {
+      if (!existsSync(file)) {
+        console.error(`upload-screenshots: no such file: ${file}`);
+        process.exitCode = 2;
+        return;
+      }
+      const bytes = readFileSync(file);
+      const fileName = file.split("/").pop();
+
+      const reserved = await api("POST", "/v1/appScreenshots", JSON.stringify({
+        data: {
+          type: "appScreenshots",
+          attributes: { fileName, fileSize: bytes.length },
+          relationships: {
+            appScreenshotSet: { data: { type: "appScreenshotSets", id: set.id } }
+          }
+        }
+      }));
+      if (!reserved.ok) {
+        console.error(`upload-screenshots: could not reserve ${fileName} (HTTP ${reserved.status}): ${describeError(reserved)}`);
+        process.exitCode = 2;
+        return;
+      }
+      // The reservation now exists in a set that holds ten entries, so it has
+      // to be dropped on every path that stops here.  When the response shape
+      // gives back no usable id there is nothing to delete by, and the message
+      // says so rather than letting the run end quietly with a slot consumed.
+      const reservation = reserved.parsed?.data;
+      if (!isPlainObject(reservation)) {
+        console.error(`upload-screenshots: invalid screenshot reservation for ${fileName}; a reservation may be open in set ${set.id}`);
+        process.exitCode = 2;
+        return;
+      }
+      const screenshot = reservation;
+      if (typeof screenshot.id !== "string" || screenshot.id.length === 0) {
+        console.error(`upload-screenshots: invalid screenshot reservation for ${fileName}; a reservation may be open in set ${set.id}`);
+        if (screenshot.id) await discardReservation(screenshot.id);
+        process.exitCode = 2;
+        return;
+      }
+      const operations = Array.isArray(screenshot.attributes?.uploadOperations)
+        ? screenshot.attributes.uploadOperations
+        : [];
+      if (operations.length === 0) {
+        console.error(`upload-screenshots: Apple returned no upload operation for ${fileName}`);
+        await discardReservation(screenshot.id);
+        process.exitCode = 2;
+        return;
+      }
+
+      for (const operation of operations) {
+        const headers = {};
+        for (const header of operation.requestHeaders || []) headers[header.name] = header.value;
+        const offset = operation.offset || 0;
+        const length = operation.length || bytes.length;
+        const chunk = bytes.subarray(offset, offset + length);
+        let put;
+        try {
+          put = await fetch(operation.url, {
+            method: operation.method || "PUT",
+            headers,
+            body: chunk,
+            signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+          });
+        } catch (error) {
+          // The reservation is still open in App Store Connect, and a set
+          // holds ten entries, so it is dropped before the script leaves.
+          await discardReservation(screenshot.id);
+          const reason = error && error.name === "TimeoutError"
+            ? "the upload timed out"
+            : `the upload failed (${error && error.message ? error.message : "unknown error"})`;
+          console.error(`upload-screenshots: upload of ${fileName} failed: ${reason}`);
+          process.exitCode = 2;
+          return;
+        }
+        if (!put.ok) {
+          console.error(`upload-screenshots: upload of ${fileName} failed (HTTP ${put.status})`);
+          await discardReservation(screenshot.id);
+          process.exitCode = 2;
+          return;
+        }
+      }
+
+      const committed = await api("PATCH", `/v1/appScreenshots/${screenshot.id}`, JSON.stringify({
+        data: { type: "appScreenshots", id: screenshot.id, attributes: { uploaded: true } }
+      }));
+      if (!committed.ok) {
+        console.error(`upload-screenshots: could not commit ${fileName} (HTTP ${committed.status}): ${describeError(committed)}`);
+        await discardReservation(screenshot.id);
+        process.exitCode = 2;
+        return;
+      }
+      const committedScreenshot = requireObject(committed.parsed?.data, "screenshot commit");
+      const state = committedScreenshot.attributes?.assetDeliveryState;
+      const stateName = state?.state || "UNKNOWN";
+      console.error(`upload-screenshots: ${fileName} -> ${screenshot.id} (${stateName})`);
+      if (state?.errors?.length) {
+        console.error(`upload-screenshots: Apple rejected ${fileName}:`);
+        for (const problem of state.errors) {
+          console.error(`  ${problem.code}: ${problem.title} ${problem.detail || ""}`);
+        }
+        process.exitCode = 3;
+        return;
+      }
+    }
+    console.log(JSON.stringify({ ok: true, setId: set.id, displayType, files }));
+    process.exitCode = 0;
+    return;
   }
 
   // Highest N already used by the "<prefix>.N" MARKETING version train
@@ -407,14 +1019,35 @@ async function main() {
     const prefix = body;
     if (!bundleId || !prefix) {
       console.error("Usage: node asc-api.mjs latest-build-seq <bundleId> <prefix>");
-      process.exit(2);
+      process.exitCode = 2;
+      return;
     }
     const apps = await api("GET", `/v1/apps?filter[bundleId]=${encodeURIComponent(bundleId)}&limit=1`);
-    if (!apps.ok || !apps.parsed.data?.[0]) {
-      console.error(`latest-build-seq: app not found for bundle (HTTP ${apps.status})`);
-      process.exit(2);
+    if (!apps.ok) {
+      // Every failure the service reports goes through describeError, so a
+      // rejected key is never read as a bundle id that does not exist.  The
+      // status stays in the message: ship-testflight.sh logs these lines
+      // because the status is the only thing that explains a failed lookup,
+      // and describeError alone cannot tell a rate limit from a bad request.
+      const status = apps.networkError ? "" : ` (HTTP ${apps.status})`;
+      console.error(`latest-build-seq: ${describeError(apps)}${status}`);
+      process.exitCode = 2;
+      return;
+    }
+    if (!isPlainObject(apps.parsed?.data?.[0])) {
+      console.error(`latest-build-seq: no app in App Store Connect has the bundle id ${bundleId}`);
+      process.exitCode = 2;
+      return;
     }
     const appId = apps.parsed.data[0].id;
+    // The id is what every query below filters on, so an app record without
+    // one would send filter[app]=undefined and produce an HTTP 400 that reads
+    // as a query the client built wrong.
+    if (typeof appId !== "string" || appId.length === 0) {
+      console.error(`latest-build-seq: the app record for ${bundleId} has no usable id`);
+      process.exitCode = 2;
+      return;
+    }
 
     // Escape the prefix so "1.0" cannot match "120" via the regex dot.
     const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -438,7 +1071,8 @@ async function main() {
       const res = await api("GET", url);
       if (!res.ok) {
         console.error(`latest-build-seq: preReleaseVersions query failed (HTTP ${res.status})`);
-        process.exit(2);
+        process.exitCode = 2;
+        return;
       }
       for (const v of res.parsed.data || []) {
         // If a specific platform is requested, filter by it. Default to IOS if unspecified.
@@ -458,7 +1092,8 @@ async function main() {
       const res = await api("GET", url);
       if (!res.ok) {
         console.error(`latest-build-seq: builds query failed (HTTP ${res.status})`);
-        process.exit(2);
+        process.exitCode = 2;
+        return;
       }
       for (const b of res.parsed.data || []) {
         seenBuilds++;
@@ -471,7 +1106,8 @@ async function main() {
       `latest-build-seq: ${seenVersions} marketing version(s) + ${seenBuilds} build(s) inspected; highest ${prefix}.N is N=${best}`
     );
     console.log(String(best));
-    process.exit(0);
+    process.exitCode = 0;
+    return;
   }
 
   // After upload: find THE BUILD THIS RUN JUST UPLOADED, declare export
@@ -513,7 +1149,8 @@ async function main() {
       console.error("  this run uploaded. It is required: without it there is no way to tell the");
       console.error("  new build from the previous ship, and ASC has no record of the new build");
       console.error("  for the first minutes after upload.");
-      process.exit(2);
+      process.exitCode = 2;
+      return;
     }
 
     const totalTimeoutSec = (() => {
@@ -526,11 +1163,29 @@ async function main() {
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
     const apps = await api("GET", `/v1/apps?filter[bundleId]=${encodeURIComponent(bundleId)}&limit=1`);
-    if (!apps.ok || !apps.parsed.data?.[0]) {
-      console.error(`ensure-tf-ready: app not found for bundle (HTTP ${apps.status})`);
-      process.exit(2);
+    if (!apps.ok) {
+      // Every failure the service reports goes through describeError, so a
+      // rejected key is never read as a bundle id that does not exist.  The
+      // status stays in the message for the same reason as latest-build-seq.
+      const status = apps.networkError ? "" : ` (HTTP ${apps.status})`;
+      console.error(`ensure-tf-ready: ${describeError(apps)}${status}`);
+      process.exitCode = 2;
+      return;
+    }
+    if (!isPlainObject(apps.parsed?.data?.[0])) {
+      console.error(`ensure-tf-ready: no app in App Store Connect has the bundle id ${bundleId}`);
+      process.exitCode = 2;
+      return;
     }
     const appId = apps.parsed.data[0].id;
+    // The id is what every query below filters on, so an app record without
+    // one would send filter[app]=undefined and produce an HTTP 400 that reads
+    // as a query the client built wrong.
+    if (typeof appId !== "string" || appId.length === 0) {
+      console.error(`ensure-tf-ready: the app record for ${bundleId} has no usable id`);
+      process.exitCode = 2;
+      return;
+    }
 
     // ---- Phase A: discovery. Poll until the uploaded build has an ASC record.
     let query = `/v1/builds?filter[app]=${appId}&filter[version]=${encodeURIComponent(wantBuildVersion)}`;
@@ -557,12 +1212,14 @@ async function main() {
           continue;
         }
         console.error(`ensure-tf-ready: discovery query failed (HTTP ${res.status})`);
-        process.exit(2);
+        process.exitCode = 2;
+        return;
       }
       const rows = res.parsed.data || [];
       if (rows.length > 1) {
         console.error(`ensure-tf-ready: ${rows.length} builds match version ${wantBuildVersion} -- ambiguous, refusing to guess`);
-        process.exit(2);
+        process.exitCode = 2;
+        return;
       }
       if (rows.length === 1) {
         build = rows[0];
@@ -579,7 +1236,30 @@ async function main() {
       let newest = "unknown";
       try {
         const probe = await api("GET", `/v1/builds?filter[app]=${appId}&sort=-uploadedDate&limit=1`);
-        newest = probe.parsed?.data?.[0]?.attributes?.version || "none";
+        if (probe.ok) {
+          // The response is the service's, so its shape is checked before any
+          // of it is read.  Three states stay distinct: a version is the
+          // actual newest build, "none" is the service saying there is no
+          // build at all, and "unknown" is an answer that could not be read.
+          // A malformed body must not fold into "none".
+          const rows = Array.isArray(probe.parsed?.data) ? probe.parsed.data : null;
+          if (rows === null) {
+            newest = "unknown";
+          } else if (rows.length === 0) {
+            newest = "none";
+          } else {
+            const first = rows[0];
+            newest = isPlainObject(first) && isPlainObject(first.attributes)
+              && typeof first.attributes.version === "string"
+              ? first.attributes.version
+              : "unknown";
+          }
+        } else {
+          // The probe did not answer, so what is present is not known.  Saying
+          // "none" would assert that the app has no builds at all, which is a
+          // different and wrong claim.
+          console.error(`ensure-tf-ready: the newest-build probe failed: ${describeError(probe)}`);
+        }
       } catch { /* diagnostic only */ }
       console.error(
         `ensure-tf-ready: build version ${wantBuildVersion} never appeared for ${bundleId} within ${totalTimeoutSec}s; ` +
@@ -590,7 +1270,8 @@ async function main() {
         ok: false, wanted: wantBuildVersion, newestPresent: newest,
         discoveryTimedOut: true, transientErrors
       }));
-      process.exit(4);
+      process.exitCode = 4;
+      return;
     }
 
     const buildId = build.id;
@@ -606,7 +1287,8 @@ async function main() {
       }));
       if (!patch.ok) {
         console.error(`ensure-tf-ready: compliance patch failed HTTP ${patch.status}`);
-        process.exit(2);
+        process.exitCode = 2;
+        return;
       }
       console.error("ensure-tf-ready: declared usesNonExemptEncryption=false");
     }
@@ -639,31 +1321,41 @@ async function main() {
           internalBuildState: state,
           usesNonExemptEncryption: attrs.usesNonExemptEncryption
         }));
-        process.exit(0);
+        process.exitCode = 0;
+        return;
       }
       await sleep(POLL_MS);
     }
     console.error("ensure-tf-ready: timed out waiting for IN_BETA_TESTING (upload may still be processing)");
     console.log(JSON.stringify({ ok: false, buildId, version, timedOut: true }));
-    process.exit(3);
+    process.exitCode = 3;
+    return;
   }
 
-  const url = path.startsWith("http") ? path : `https://api.appstoreconnect.apple.com${path}`;
+  const url = path.startsWith("http") ? path : `${apiBase}${path}`;
   const res = await fetch(url, {
     method,
     headers: {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json"
     },
-    body: body ? body : undefined
+    body: body ? body : undefined,
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
   });
   const text = await res.text();
   console.error(`HTTP ${res.status}`);
   console.log(text);
-  if (!res.ok) process.exit(2);
+  if (!res.ok) { process.exitCode = 2; return; }
 }
 
 main().catch((err) => {
-  console.error(String(err && err.stack ? err.stack : err));
-  process.exit(1);
+  if (err instanceof NamedFailure) {
+    // The failure named itself, so a stack trace would only be noise.
+    console.error(err.message);
+  } else {
+    console.error(String(err && err.stack ? err.stack : err));
+  }
+  // A failure that already chose its exit code keeps it.
+  if (!process.exitCode) process.exitCode = 1;
+  return;
 });
