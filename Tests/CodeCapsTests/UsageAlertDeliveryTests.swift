@@ -4,6 +4,41 @@ import QuotaCore
 
 @MainActor
 final class UsageAlertDeliveryTests: XCTestCase {
+    func testExplicitDefaultCategorySoundSurvivesGlobalPickerAndRelaunch() {
+        let name = "UsageAlertExplicitSoundTests." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: name)!
+        defer { defaults.removePersistentDomain(forName: name) }
+        let manager = ResetAlarmManager(defaults: defaults)
+        manager.preferences[.runaway].sound = .systemDefault
+        manager.alarmSound = .frog
+        XCTAssertEqual(manager.preferences[.runaway].sound, .systemDefault)
+        let relaunched = ResetAlarmManager(defaults: defaults)
+        relaunched.alarmSound = .submarine
+        XCTAssertEqual(relaunched.preferences[.runaway].sound, .systemDefault)
+    }
+
+    func testDisabledResetDetectionExportsWithoutLocalHistory() {
+        let name = "UsageAlertResetHistoryTests." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: name)!
+        defer { defaults.removePersistentDomain(forName: name) }
+        let manager = ResetAlarmManager(defaults: defaults)
+        manager.allProvidersEnabled = false
+        let now = Date()
+        let reset = now.addingTimeInterval(3_600)
+        func observation(at date: Date, resetAt: Date, remaining: Double) -> ResetAlarmObservation {
+            .init(scope: "local", providerId: "anthropic", providerTitle: "Claude",
+                  windowId: "anthropic:7d", windowLabel: "7d", periodSeconds: 7 * 86_400,
+                  resetAt: resetAt, remainingPercent: remaining, observedAt: date)
+        }
+        manager.evaluate(observations: [observation(at: now, resetAt: reset, remaining: 40)], now: now)
+        manager.evaluate(observations: [observation(at: reset.addingTimeInterval(600),
+                                                   resetAt: reset.addingTimeInterval(7 * 86_400), remaining: 100)],
+                         now: reset.addingTimeInterval(600))
+        XCTAssertTrue(manager.alertHistory.isEmpty)
+        XCTAssertEqual(manager.detectedResetHistory.count, 1)
+        XCTAssertEqual(ResetAlarmManager(defaults: defaults).detectedResetHistory, manager.detectedResetHistory)
+    }
+
     func testCategoryChoicesPersistAndDisabledCategoryDoesNotDeliver() {
         let name = "UsageAlertDeliveryTests." + UUID().uuidString
         let defaults = UserDefaults(suiteName: name)!
