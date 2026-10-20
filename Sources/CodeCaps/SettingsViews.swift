@@ -1371,7 +1371,9 @@ struct SettingsNotificationsPage: View {
                             .frame(width: 200, alignment: .leading)
                         Toggle("Notification", isOn: alertBinding(kind, \.notification))
                         Toggle("Popup", isOn: alertBinding(kind, \.popup))
-                        Picker("Sound", selection: alertBinding(kind, \.sound)) {
+                        Picker("Sound", selection: Binding(
+                            get: { model.alarmManager.preferences[kind].sound },
+                            set: { model.alarmManager.setSound($0, for: kind) })) {
                             ForEach(ResetAlarmSound.defaultPickerOrder, id: \.self) { sound in
                                 Text(sound.displayName).tag(sound)
                             }
