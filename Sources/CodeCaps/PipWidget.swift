@@ -466,7 +466,8 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
                 && !$0.window.remainingUnknown
                 && !disabledSources.contains($0.window.source ?? "") }
             .map { QuotaWindowSnapshot(window: $0.window, now: now) }
-            .filter { $0.isFresh && $0.remainingPercent != nil }
+            .filter { $0.isFresh && $0.remainingPercent != nil
+                && (!$0.window.skip || $0.remainingPercent == 0) }
     }
 
     static func readingStatus(for row: DisplaySection, now: Date, issue: String? = nil,

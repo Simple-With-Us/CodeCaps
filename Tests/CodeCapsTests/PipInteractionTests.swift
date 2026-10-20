@@ -5,6 +5,24 @@ import XCTest
 
 @MainActor
 final class PipInteractionTests: XCTestCase {
+    func testExplicitSkippedNonzeroReadingIsUnavailableButZeroRemainsVisible() throws {
+        let (model, defaults, suite) = GlanceFixtures.makeModel(view: .fromMac, alarmsAll: false, fleet: false)
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var skipped = GlanceFixtures.window("anthropic:5h", provider: "anthropic",
+            label: "5h", token: "5h", remaining: 54, resetIn: 18_000)
+        skipped.skip = true
+        for percent in [54.0, 0.0] {
+            skipped.remainingPercent = percent
+            model.injectForTests(sections: QuotaResponse(generatedAt: "", windows: [skipped])
+                .platformSections(now: GlanceFixtures.now), now: GlanceFixtures.now)
+            let row = try XCTUnwrap(model.displaySections.first { $0.id == "anthropic" })
+            let current = PipWidgetController.currentWindows(for: row, now: model.now)
+            XCTAssertEqual(current.count, percent == 0 ? 1 : 0)
+            XCTAssertEqual(PipWidgetController.readingStatus(for: row, now: model.now),
+                           percent == 0 ? nil : "unavailable")
+        }
+    }
+
     func testBodyDragIncludesLogosBarsAndTextButNotResizeEdgesOrControls() {
         let size = NSSize(width: 400, height: 180)
         for point in [NSPoint(x: 18, y: 70), NSPoint(x: 160, y: 110), NSPoint(x: 310, y: 40)] {

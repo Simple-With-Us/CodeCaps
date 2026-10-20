@@ -28,6 +28,7 @@ enum PipLowQuota {
             guard snapshot.isFresh, !snapshot.window.remainingUnknown,
                   !disabledSources.contains(snapshot.window.source ?? "") else { return false }
             guard let remaining = snapshot.remainingPercent else { return false }
+            guard !snapshot.window.skip || remaining == 0 else { return false }
             return remaining <= limit
         }
     }
@@ -62,6 +63,7 @@ enum PipLowQuota {
             let usable = relevant.filter {
                 $0.isFresh && !$0.window.remainingUnknown
                     && $0.remainingPercent != nil
+                    && (!$0.window.skip || $0.remainingPercent == 0)
                     && !disabledSources.contains($0.window.source ?? "")
             }
             let previousDate = session.lastObservedAtByRow[row.id]

@@ -6,12 +6,12 @@ final class PipLowQuotaTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_700_000_000)
 
     private func row(remaining: Double?, seconds: Double = 0, stale: Bool = false,
-                     unknown: Bool = false, masked: Bool = false) -> DisplaySection {
+                     unknown: Bool = false, masked: Bool = false, skip: Bool = false) -> DisplaySection {
         let observedAt = now.addingTimeInterval(seconds - (stale ? 3_600 : 0))
         let snapshot = QuotaWindowSnapshot(window: QuotaWindow(
             id: "w", provider: "anthropic", providerKey: "anthropic", label: "5h window",
             remainingPercent: remaining, remainingUnknown: unknown || remaining == nil,
-            window: "5h", occurredAt: ISO8601DateFormatter().string(from: observedAt),
+            window: "5h", skip: skip, occurredAt: ISO8601DateFormatter().string(from: observedAt),
             source: "local-test"), now: now.addingTimeInterval(seconds))
         return DisplaySection(id: "anthropic", providerKey: "anthropic", title: "Claude",
             platformTitle: "Claude",
@@ -33,6 +33,17 @@ final class PipLowQuotaTests: XCTestCase {
         XCTAssertFalse(evaluate(row(remaining: 5, seconds: 1), session: &session))
         XCTAssertEqual(session.rowsBelowThreshold, ["anthropic"])
         XCTAssertTrue(session.autoAddedRowIds.isEmpty)
+    }
+
+    func testExplicitNonzeroSkipCannotTriggerOrRecoverButZeroStillCrosses() {
+        var session = PipLowQuotaSession()
+        _ = evaluate(row(remaining: 50), session: &session)
+        let skippedLow = row(remaining: 5, seconds: 1, skip: true)
+        XCTAssertFalse(PipLowQuota.rowIsLow(skippedLow, thresholdPercent: 15))
+        XCTAssertFalse(evaluate(skippedLow, session: &session))
+        XCTAssertTrue(evaluate(row(remaining: 0, seconds: 2, skip: true), session: &session))
+        XCTAssertFalse(evaluate(row(remaining: 50, seconds: 3, skip: true), session: &session))
+        XCTAssertEqual(session.rowsBelowThreshold, ["anthropic"])
     }
 
     func testHealthyThenLowCrossingOpensAndRecoveryRemoves() {
