@@ -22,8 +22,11 @@ name: iOS TestFlight ship (GitHub-hosted macOS)
 #     Usage-Monitor read it.  The same-named repository secrets are a stale
 #     copy that App Store Connect answers with HTTP 401 (CC-163), so they are
 #     deliberately not read here and there is no fallback to them.
-#   * The multiline key never enters GITHUB_ENV: scripts/ios-stage-asc-key.sh
-#     writes it to a mode-600 file and only the path crosses steps.
+#   * The multiline key arrives in the step environment from the
+#     infisical-secrets action, is streamed over stdin into a mode-600 file by
+#     scripts/stage-asc-key.mjs, and the ASC_KEY_P8 environment entry is
+#     blanked in the same step, so only that file's path crosses into the
+#     later steps.
 #   * IOS_DIST_P12_BASE64 / IOS_DIST_P12_PASSWORD (Apple Distribution identity)
 #     stay repository secrets.
 #   * SENTRY_DSN and SENTRY_AUTH_TOKEN are best-effort: an inert Sentry beats a

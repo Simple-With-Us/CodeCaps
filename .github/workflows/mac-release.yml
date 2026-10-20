@@ -187,6 +187,7 @@ jobs:
         run: bash scripts/check-notary-access.sh
 
       - name: Install XcodeGen
+        if: steps.gate.outputs.publish == 'true' || steps.gate.outputs.verify_only != 'true'
         run: |
           if ! command -v xcodegen >/dev/null 2>&1; then
             brew install xcodegen

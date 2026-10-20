@@ -751,6 +751,20 @@ repo: CodeCaps; pre-work claim: posted to #agent-sync after reading AGENT-SYNC.m
   environment to `scripts/ios-stage-asc-key.sh` over a pipe, writes the
   mode-600 file, and blanks the environment variable so no later step
   carries the key.
+- The second review round found four more, all fixed.  A verify-only run
+  still installed XcodeGen after the notary preflight had already answered
+  the question, which burns a macOS runner for a toolchain it never uses; the
+  installer is gated with the build now.  The documentation claimed that
+  only the key's path crosses the step boundary, and that was no longer
+  true: the composite action puts the key in the step environment, and the
+  staging script streams it into the mode-600 file and blanks the
+  environment entry in the same step, so only the path crosses into the
+  later steps.  The wording was corrected in the release documentation, in
+  the iOS workflow and in its contract test.  The missing-key error did not
+  name the secret it was missing, which a reviewer caught against the
+  fleet's rule that an error has to name the unresolved secret variable; it
+  names `ASC_KEY_P8` now.  And nothing exercised the command-line entry
+  point the workflow actually calls, so a test now spawns it the way CI does.
 - Three more findings, all fixed.  A verify-only run skipped the notarization
   preflight and still spent minutes building a bundle it would never publish,
   so the gate now has a `verify_only` output: the preflight runs, the build

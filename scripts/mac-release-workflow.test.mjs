@@ -92,6 +92,8 @@ test('PRs cannot notarize or publish, and icon-only changes trigger releases', (
   assert.match(step(workflow, 'Decide whether this run can publish'), /verify-only[\s\S]*verify_only=true/);
   assert.match(step(workflow, 'Verify notarization access before building'), /publish == 'true' \|\| steps\.gate\.outputs\.verify_only == 'true'/);
   assert.match(code, /steps\.gate\.outputs\.publish != 'true' && steps\.gate\.outputs\.verify_only != 'true'/);
+  // A verify-only run must not install a toolchain it will not use.
+  assert.match(step(workflow, 'Install XcodeGen'), /publish == 'true' \|\| steps\.gate\.outputs\.verify_only != 'true'/);
   // The credential check job holds the signing key, so it must not be able
   // to push commits, tags or releases.
   assert.match(code, /verify-release-credentials:[\s\S]*permissions:\s*\n\s*contents: read/);

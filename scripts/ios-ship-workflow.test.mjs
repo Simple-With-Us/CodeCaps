@@ -176,9 +176,10 @@ test("ASC credentials come from Fleet-OPS /asc, never the stale repository secre
   // No new code may talk to the vault directly.
   assert.doesNotMatch(code, /listSecretsRaw|loginUniversalAuth/);
 
-  // The multiline key goes to a mode-600 file, never GITHUB_ENV.  The
-  // protected handoff lives in the fetch script, which hands the key to
-  // scripts/ios-stage-asc-key.sh over a pipe.
+  // The multiline key arrives in the step environment from the
+  // infisical-secrets action and is streamed over stdin into a mode-600 file
+  // by scripts/stage-asc-key.mjs, which then blanks the environment entry,
+  // so only the path crosses into the later steps.
   assert.match(code, /scripts\/stage-asc-key\.mjs/);
   assert.match(readFileSync(join(ROOT, "scripts/stage-asc-key.mjs"), "utf8"), /ios-stage-asc-key\.sh/);
   assert.doesNotMatch(code, /for name in .*ASC_KEY_P8/);
