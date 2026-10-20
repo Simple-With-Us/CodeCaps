@@ -760,6 +760,9 @@ private func parseCodex(_ root: [String: Any], planType: String?, accountKey: St
             }
         }
         if result.count == initialWindowCount {
+            append(identity, pool, modelId: modelId, poolLabel: label)
+        }
+        if result.count == initialWindowCount, !nested.isEmpty {
             append(identity, entry, modelId: modelId, poolLabel: label)
         }
     }
