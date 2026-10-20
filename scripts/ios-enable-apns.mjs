@@ -52,6 +52,9 @@ function capabilityResources(response) {
 }
 
 function profileResources(response) {
+  if (response?.links?.next != null) {
+    throw new Error('Apple returned a paginated profile list; verify all pages before provisioning.');
+  }
   return collection(response, 'provisioning profile', attributes => {
     requiredString(attributes.name, 'provisioning profile name');
     requiredString(attributes.profileType, 'provisioning profile type');
