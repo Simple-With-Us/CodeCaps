@@ -1877,7 +1877,7 @@ public final class CompanionQuotaModel: ObservableObject {
         let before = alarmTracker.state
         let events = alarmTracker.process(Self.resetAlarmObservations(for: newItems).filter {
             guard let observedAt = $0.observedAt else { return false }
-            return observedAt <= now && now.timeIntervalSince(observedAt) <= Self.sourceDiscrepancyFreshnessWindow
+            return observedAt <= now && now.timeIntervalSince(observedAt) <= FleetSourceDisagreement.alertFreshnessWindow
         }, now: now)
         if alarmTracker.state != before, let data = alarmTracker.state.encoded() {
             sharedDefaults.set(data, forKey: AlarmKeys.trackerState)
