@@ -23,7 +23,7 @@ enum PipLowQuota {
         return row.section.windows.contains { snapshot in
             guard !snapshot.window.isSupplementaryVideoQuota else { return false }
             guard !row.isMasked(snapshot) else { return false }
-            guard snapshot.isFresh, !snapshot.window.remainingUnknown, !snapshot.window.skip,
+            guard snapshot.isFresh, !snapshot.window.remainingUnknown,
                   !disabledSources.contains(snapshot.window.source ?? "") else { return false }
             guard let remaining = snapshot.remainingPercent else { return false }
             return remaining <= limit
@@ -56,7 +56,7 @@ enum PipLowQuota {
                 !$0.window.isSupplementaryVideoQuota && !row.isMasked($0)
             }
             let usable = relevant.filter {
-                $0.isFresh && !$0.window.remainingUnknown && !$0.window.skip
+                $0.isFresh && !$0.window.remainingUnknown
                     && $0.remainingPercent != nil
                     && !disabledSources.contains($0.window.source ?? "")
             }
