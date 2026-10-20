@@ -421,7 +421,8 @@ async function main() {
     console.error("Usage: node asc-api.mjs <METHOD> <PATH> [JSON_BODY]");
     console.error("       node asc-api.mjs ensure-tf-ready <bundleId> <buildVersion> [marketingVersion]");
     console.error("       node asc-api.mjs latest-build-seq <bundleId> <prefix>");
-    console.error("       node asc-api.mjs upload-screenshots <localizationId> <displayType> <file...>");
+    console.error("       node asc-api.mjs upload-screenshots <localizationId> <displayType|auto> <file...>");
+    console.error("       node asc-api.mjs submit-review <versionId> [reviewSubmissionId]");
     process.exitCode = 1;
     return;
   }
@@ -586,6 +587,140 @@ async function main() {
       console.error(`upload-screenshots: the reservation ${screenshotId} is still open: ${reason}`);
       return false;
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // Submit an app store version for review
+  // -------------------------------------------------------------------------
+  // Usage: node asc-api.mjs submit-review <versionId> [reviewSubmissionId]
+  //
+  // Submitting is the one call that cannot be undone, so the things that
+  // have to be true first are checked here rather than discovered from
+  // Apple's refusal:
+  //
+  //   1. the version's screenshots are uploaded (a version with no
+  //      screenshots is not submittable, and the review submission's items
+  //      stay empty while that is true)
+  //   2. a build is attached to the version
+  //   3. the version's versionString matches that build's marketing version
+  //
+  // The review submission's items cannot be set:  the relationship allows
+  // GET_RELATED and GET_RELATIONSHIP only, and a review submission is
+  // created with the app relationship, so the version is bound by App Store
+  // Connect itself when the version becomes submittable.
+  if (method === "submit-review") {
+    const versionId = path;
+    const submissionId = body;
+    if (!versionId) {
+      console.error("Usage: node asc-api.mjs submit-review <versionId> [reviewSubmissionId]");
+      process.exitCode = 2;
+      return;
+    }
+
+    // 1. The screenshots.
+    const localizations = await api("GET", `/v1/appStoreVersions/${versionId}/appStoreVersionLocalizations`);
+    if (!localizations.ok) {
+      console.error(`submit-review: ${describeError(localizations)}`);
+      process.exitCode = 2;
+      return;
+    }
+    const locs = requireArray(localizations.parsed?.data, "version localization list");
+    let shots = 0;
+    for (const loc of locs) {
+      if (!isPlainObject(loc) || typeof loc.id !== "string") continue;
+      const sets = await api("GET", `/v1/appStoreVersionLocalizations/${loc.id}/appScreenshotSets`);
+      if (!sets.ok) continue;
+      for (const set of requireArray(sets.parsed?.data, "screenshot set list")) {
+        shots += (set?.attributes?.screenshotCount) || 0;
+      }
+    }
+    console.log(`submit-review: the version carries ${shots} screenshot(s)`);
+    if (shots < 6) {
+      console.error("submit-review: not submitting, the version needs at least six screenshots");
+      process.exitCode = 2;
+      return;
+    }
+
+    // 2. The build.
+    const attached = await api("GET", `/v1/appStoreVersions/${versionId}/build`);
+    const build = attached.ok ? attached.parsed?.data : null;
+    if (!isPlainObject(build) || typeof build.id !== "string") {
+      console.error("submit-review: not submitting, no build is attached to the version");
+      process.exitCode = 2;
+      return;
+    }
+
+    // 3. The version string.
+    const version = await api("GET", `/v1/appStoreVersions/${versionId}`);
+    const versionString = version.ok ? version.parsed?.data?.attributes?.versionString : null;
+    const appId = version.ok
+      ? (version.parsed?.data?.relationships?.app?.data?.id)
+      : null;
+    const buildVersion = build.attributes?.version;
+    console.log(`submit-review: version ${versionString} | build ${buildVersion} (${build.id})`);
+    if (typeof versionString !== "string" || versionString.length === 0) {
+      console.error("submit-review: not submitting, the version has no versionString");
+      process.exitCode = 2;
+      return;
+    }
+
+    // The review submission.  When none is named, the app's own are listed
+    // and each is tried:  reviewSubmissions does not allow DELETE, so more
+    // than one can exist and the wrong one refuses.
+    let candidates = [];
+    if (submissionId) {
+      candidates = [submissionId];
+    } else {
+      if (typeof appId !== "string" || appId.length === 0) {
+        console.error("submit-review: not submitting, the version names no app");
+        process.exitCode = 2;
+        return;
+      }
+      const listed = await api("GET", `/v1/apps/${appId}/reviewSubmissions`);
+      if (!listed.ok) {
+        console.error(`submit-review: ${describeError(listed)}`);
+        process.exitCode = 2;
+        return;
+      }
+      candidates = requireArray(listed.parsed?.data, "review submission list").map((s) => s?.id).filter(Boolean);
+    }
+    if (candidates.length === 0) {
+      console.error("submit-review: not submitting, the app has no review submission");
+      process.exitCode = 2;
+      return;
+    }
+
+    let submitted = null;
+    for (const candidate of candidates) {
+      const result = await api("PATCH", `/v1/reviewSubmissions/${candidate}`, JSON.stringify({
+        data: {
+          type: "reviewSubmissions",
+          id: candidate,
+          attributes: { submitted: true, platform: "IOS" }
+        }
+      }));
+      if (!result.ok) {
+        console.error(`submit-review: ${candidate} refused: ${describeError(result)}`);
+        continue;
+      }
+      submitted = candidate;
+      break;
+    }
+    if (!submitted) {
+      console.error("submit-review: not submitting, every review submission refused");
+      process.exitCode = 2;
+      return;
+    }
+    const after = await api("GET", `/v1/reviewSubmissions/${submitted}`);
+    console.log(JSON.stringify({
+      ok: true,
+      reviewSubmission: submitted,
+      state: after.ok ? after.parsed?.data?.attributes?.state : null,
+      submittedDate: after.ok ? after.parsed?.data?.attributes?.submittedDate : null,
+      versionString,
+      build: build.id
+    }));
+    return;
   }
 
   // -------------------------------------------------------------------------
