@@ -1024,15 +1024,22 @@ async function main() {
         const probe = await api("GET", `/v1/builds?filter[app]=${appId}&sort=-uploadedDate&limit=1`);
         if (probe.ok) {
           // The response is the service's, so its shape is checked before any
-          // of it is read.  A malformed answer has to leave the reading
-          // unknown, not become a build version.
-          const rows = Array.isArray(probe.parsed?.data) ? probe.parsed.data : [];
-          const first = rows[0];
-          const version = isPlainObject(first) && isPlainObject(first.attributes)
-            && typeof first.attributes.version === "string"
-            ? first.attributes.version
-            : "";
-          newest = version || "none";
+          // of it is read.  Three states stay distinct: a version is the
+          // actual newest build, "none" is the service saying there is no
+          // build at all, and "unknown" is an answer that could not be read.
+          // A malformed body must not fold into "none".
+          const rows = Array.isArray(probe.parsed?.data) ? probe.parsed.data : null;
+          if (rows === null) {
+            newest = "unknown";
+          } else if (rows.length === 0) {
+            newest = "none";
+          } else {
+            const first = rows[0];
+            newest = isPlainObject(first) && isPlainObject(first.attributes)
+              && typeof first.attributes.version === "string"
+              ? first.attributes.version
+              : "unknown";
+          }
         } else {
           // The probe did not answer, so what is present is not known.  Saying
           // "none" would assert that the app has no builds at all, which is a
