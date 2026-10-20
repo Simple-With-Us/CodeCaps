@@ -61,6 +61,9 @@ public struct UsageAlertOption: Codable, Equatable, Sendable {
     public var notification: Bool
     public var popup: Bool
     public var sound: ResetAlarmSound
+    public var wantsSystemNotification: Bool { enabled && notification }
+    public var wantsInAppMessage: Bool { enabled && popup }
+    public var hasDelivery: Bool { wantsSystemNotification || wantsInAppMessage }
 
     public init(enabled: Bool = false, notification: Bool = true,
                 popup: Bool = false, sound: ResetAlarmSound = .systemDefault) {
@@ -73,9 +76,14 @@ public struct UsageAlertOption: Codable, Equatable, Sendable {
 
 public struct UsageAlertPreferences: Codable, Equatable, Sendable {
     public var options: [String: UsageAlertOption]
+    /// Remote reset controls name whole providers; pool subsets remain local choices.
+    public var resetProviders: CompanionResetProviderPreferences?
+    public var sourceInstanceId: String?
 
     public init(options: [String: UsageAlertOption] = [:]) {
         self.options = options
+        self.resetProviders = nil
+        self.sourceInstanceId = nil
     }
 
     public subscript(kind: UsageAlertKind) -> UsageAlertOption {
@@ -107,5 +115,72 @@ public struct UsageAlertPreferences: Codable, Equatable, Sendable {
     public func save(to defaults: UserDefaults, key: String) {
         guard let data = try? JSONEncoder().encode(self) else { return }
         defaults.set(data, forKey: key)
+    }
+}
+
+public struct CompanionResetProviderPreferences: Codable, Equatable, Sendable {
+    public var all: Bool
+    public var providerIDs: [String]
+
+    public init(all: Bool, providerIDs: [String]) {
+        self.all = all
+        self.providerIDs = providerIDs.sorted()
+    }
+}
+
+public enum CompanionAlertSourcePolicy {
+    public static func canonicalInstanceId(_ value: String?) -> String? {
+        value.flatMap(UUID.init(uuidString:))?.uuidString.lowercased()
+    }
+
+    public static func observationScope(reportedInstanceId: String?) -> String {
+        "companion:" + (canonicalInstanceId(reportedInstanceId) ?? "unknown")
+    }
+
+    public static func instanceId(observationScope: String) -> String? {
+        guard observationScope.hasPrefix("companion:") else { return nil }
+        return canonicalInstanceId(String(observationScope.dropFirst("companion:".count)))
+    }
+
+    public static func observationIdentity(provider: String, window: String, reportedInstanceId: String?) -> String {
+        observationScope(reportedInstanceId: reportedInstanceId) + "|" + provider + "|" + window
+    }
+
+    public static func canonicalResetProvider(_ provider: String) -> String {
+        switch provider.lowercased() {
+        case "google-antigravity:gemini", "google-antigravity:third-party": return "google-antigravity"
+        default: return provider
+        }
+    }
+    /// Only the explicit producer UUID in the wire identity establishes a device.
+    public static func sourceInstanceId(alertID: String) -> String? {
+        let parts = alertID.split(separator: "|", omittingEmptySubsequences: false)
+        guard parts.count == 2, parts[1].count == 64,
+              parts[1].allSatisfy({ "0123456789abcdefABCDEF".contains($0) }),
+              let uuid = UUID(uuidString: String(parts[0])) else { return nil }
+        return uuid.uuidString.lowercased()
+    }
+
+    public static func matches(selected: String?, reported: String?) -> Bool {
+        guard let selected else { return true }
+        guard let selectedID = UUID(uuidString: selected), let reported,
+              let reportedID = UUID(uuidString: reported) else { return false }
+        return selectedID == reportedID
+    }
+
+    public static func remoteResetProviders(all: Bool, selected: Set<String>,
+                                             ownerIDsByProvider: [String: [String]]) -> CompanionResetProviderPreferences {
+        let providers = ownerIDsByProvider.compactMap { provider, owners in
+            !owners.isEmpty && (selected.contains(provider) || owners.allSatisfy(selected.contains)) ? provider : nil
+        }
+        return CompanionResetProviderPreferences(all: all, providerIDs: providers)
+    }
+}
+
+public enum CompanionInAppAlertPolicy {
+    public static func canPresent(option: UsageAlertOption, selectedSource: String?, reportedSource: String?,
+                                  scheduledGeneration: UInt64, currentGeneration: UInt64) -> Bool {
+        scheduledGeneration == currentGeneration && option.wantsInAppMessage
+            && CompanionAlertSourcePolicy.matches(selected: selectedSource, reported: reportedSource)
     }
 }
