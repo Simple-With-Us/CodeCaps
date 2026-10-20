@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 import Security
 import SwiftUI
 import UserNotifications
@@ -143,22 +144,74 @@ final class RemotePushRegistration: NSObject, ObservableObject, URLSessionTaskDe
         return parts.url
     }
 
-    private var installationId: String {
-        if let id = defaults.string(forKey: "remotePushInstallationId"), UUID(uuidString: id) != nil { return id }
-        let id = UUID().uuidString.lowercased()
+    private func installationId() -> String? {
+        let stored = persistentValue(account: "installationId")
+        guard stored.status == errSecSuccess || stored.status == errSecItemNotFound else {
+            fail("Keychain could not read the push installation identity; server enrollment was not changed.")
+            return nil
+        }
+        if let id = stored.value {
+            guard UUID(uuidString: id) != nil else {
+                fail("The saved push installation identity is invalid; server enrollment was not changed.")
+                return nil
+            }
+            return id
+        }
+        let legacy = defaults.string(forKey: "remotePushInstallationId").flatMap(UUID.init(uuidString:))
+        let id = (legacy ?? UUID()).uuidString.lowercased()
+        guard save(id, account: "installationId") == errSecSuccess else {
+            fail("Keychain could not save the push installation identity; server enrollment was not changed.")
+            return nil
+        }
         defaults.set(id, forKey: "remotePushInstallationId")
         return id
     }
 
+    private func persistedGeneration() -> Int? {
+        let stored = persistentValue(account: "generation")
+        guard stored.status == errSecSuccess || stored.status == errSecItemNotFound else {
+            fail("Keychain could not read the push generation; server enrollment was not changed.")
+            return nil
+        }
+        let saved = stored.value.flatMap(Int.init)
+        guard stored.value == nil || saved != nil else {
+            fail("The saved push generation is invalid; server enrollment was not changed.")
+            return nil
+        }
+        let legacy = defaults.integer(forKey: "remotePushGeneration")
+        let current = saved ?? 0
+        guard legacy >= 0, current >= 0,
+              max(legacy, current) <= 9_000_000_000_000_000 else {
+            fail("The push registration generation is invalid; server enrollment was not changed.")
+            return nil
+        }
+        return max(legacy, current)
+    }
+
+    private func saveGeneration(_ generation: Int) -> Bool {
+        guard save(String(generation), account: "generation") == errSecSuccess else {
+            fail("Keychain could not save the push generation." + sentenceGap + "Remote push registration is not confirmed.")
+            return false
+        }
+        defaults.set(generation, forKey: "remotePushGeneration")
+        return true
+    }
+
+    private func adoptServerGeneration(_ generation: Int) -> Bool {
+        guard generation >= 0, generation <= 9_000_000_000_000_000,
+              let current = persistedGeneration() else { return false }
+        return generation <= current || saveGeneration(generation)
+    }
+
     /// Persist before dispatch so a later opt-out supersedes any in-flight enrollment.
     private func nextGeneration() -> Int? {
-        let current = defaults.integer(forKey: "remotePushGeneration")
-        guard current >= 0, current < 9_000_000_000_000_000 else {
+        guard let current = persistedGeneration() else { return nil }
+        guard current < 9_000_000_000_000_000 else {
             fail("The push registration generation is invalid; server enrollment was not changed.")
             return nil
         }
         let next = current + 1
-        defaults.set(next, forKey: "remotePushGeneration")
+        guard saveGeneration(next) else { return nil }
         return next
     }
 
@@ -169,7 +222,7 @@ final class RemotePushRegistration: NSObject, ObservableObject, URLSessionTaskDe
         guard let url = registrationURL(), let credential = credential() else {
             fail("Remote push needs an HTTPS sync endpoint and a separate registration credential."); return
         }
-        guard let payloadGeneration = nextGeneration() else { return }
+        guard let installationId = installationId(), let payloadGeneration = nextGeneration() else { return }
         let generation = revision
         status = "Saving remote push choices."
         hasError = false
@@ -208,6 +261,17 @@ final class RemotePushRegistration: NSObject, ObservableObject, URLSessionTaskDe
                       let result = try JSONSerialization.jsonObject(with: data) as? [String: Any], result["ok"] as? Bool == true else {
                     fail("The server did not accept push registration." + sentenceGap + "Check its setup and registration credential."); return
                 }
+                guard let device = result["device"] as? [String: Any],
+                      let serverGeneration = Self.responseGeneration(device["generation"]) else {
+                    fail("The server returned an invalid push enrollment acknowledgment.")
+                    return
+                }
+                guard adoptServerGeneration(serverGeneration) else { return }
+                guard result["applied"] as? Bool == true, device["isActive"] as? Bool == true,
+                      serverGeneration == payloadGeneration else {
+                    fail("The server did not apply these push choices." + sentenceGap + "Retry registration to supersede its saved generation.")
+                    return
+                }
                 defaults.set(url.absoluteString, forKey: "remotePushEnrolledURL")
                 status = "Remote push registered."
                 hasError = false
@@ -228,7 +292,7 @@ final class RemotePushRegistration: NSObject, ObservableObject, URLSessionTaskDe
             fail("Push is off on this device; save the server credential and retry server removal.")
             return
         }
-        guard let payloadGeneration = nextGeneration() else { return }
+        guard let installationId = installationId(), let payloadGeneration = nextGeneration() else { return }
         do {
             var request = URLRequest(url: url, timeoutInterval: 15)
             request.httpMethod = "DELETE"
@@ -241,6 +305,16 @@ final class RemotePushRegistration: NSObject, ObservableObject, URLSessionTaskDe
                   let result = try JSONSerialization.jsonObject(with: data) as? [String: Any], result["ok"] as? Bool == true else {
                 fail("Push is off on this device; server removal failed." + sentenceGap + "Retry to remove its enrollment."); return
             }
+            guard let serverGeneration = Self.responseGeneration(result["generation"]) else {
+                fail("The server returned an invalid push removal acknowledgment." + sentenceGap + "Retry Server Removal.")
+                return
+            }
+            guard adoptServerGeneration(serverGeneration) else { return }
+            guard result["applied"] as? Bool == true, result["removed"] is Bool,
+                  serverGeneration == payloadGeneration else {
+                fail("A newer server enrollment superseded this removal." + sentenceGap + "Retry Server Removal.")
+                return
+            }
             defaults.removeObject(forKey: "remotePushEnrolledURL")
             status = "Remote push is off."
             hasError = false
@@ -248,6 +322,27 @@ final class RemotePushRegistration: NSObject, ObservableObject, URLSessionTaskDe
     }
 
     private func fail(_ message: String) { status = message; hasError = true }
+
+    private static func responseGeneration(_ value: Any?) -> Int? {
+        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+              number.doubleValue.isFinite, number.doubleValue >= 0,
+              number.doubleValue <= 9_000_000_000_000_000,
+              number.doubleValue.rounded(.towardZero) == number.doubleValue else { return nil }
+        return Int(number.int64Value)
+    }
+
+    private func persistentValue(account: String) -> (value: String?, status: OSStatus) {
+        var q = query(account: account)
+        q[kSecReturnData as String] = true
+        q[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(q as CFDictionary, &result)
+        guard status == errSecSuccess else { return (nil, status) }
+        guard let data = result as? Data, let value = String(data: data, encoding: .utf8) else {
+            return (nil, errSecDecode)
+        }
+        return (value, status)
+    }
 
     private func query(account: String) -> [String: Any] {
         [kSecClass as String: kSecClassGenericPassword,
