@@ -44,6 +44,15 @@ final class PipLowQuotaTests: XCTestCase {
         XCTAssertTrue(session.autoAddedRowIds.isEmpty)
     }
 
+    func testExhaustedRoutingSkipStillCountsAsFreshLowQuota() {
+        var session = PipLowQuotaSession()
+        XCTAssertFalse(evaluate(row(remaining: 50), session: &session))
+        let exhausted = row(remaining: 0, seconds: 1)
+        XCTAssertTrue(exhausted.section.windows[0].window.skip)
+        XCTAssertTrue(PipLowQuota.rowIsLow(exhausted, thresholdPercent: 15))
+        XCTAssertTrue(evaluate(exhausted, session: &session))
+    }
+
     func testUnavailableAndMissingReadingsCannotRearmClosedLowRow() {
         var session = PipLowQuotaSession()
         _ = evaluate(row(remaining: 50), session: &session)
