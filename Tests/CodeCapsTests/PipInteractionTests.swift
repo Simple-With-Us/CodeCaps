@@ -100,6 +100,22 @@ final class PipInteractionTests: XCTestCase {
             disabledSources: ["anthropic"]), 0)
     }
 
+    func testAllUnavailableFallbackStillShowsStatusRows() {
+        let (model, defaults, suite) = GlanceFixtures.makeModel(view: .fromMac, alarmsAll: false, fleet: false)
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let windows = GlanceFixtures.localWindows
+        let issues = Dictionary(uniqueKeysWithValues: Set(windows.map(\.canonicalProviderKey)).map { ($0, "Unavailable") })
+        model.injectForTests(sections: QuotaResponse(generatedAt: "", windows: windows)
+            .platformSections(now: GlanceFixtures.now), now: GlanceFixtures.now, issues: issues)
+        model.pipPinnedRowIds = []
+        model.pipAutoAddedRowIds = []
+        let rows = PipWidgetController.targetRows(for: model)
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertTrue(rows.allSatisfy {
+            PipWidgetController.readingStatus(for: $0, now: model.now, issue: model.issues[$0.providerKey]) != nil
+        })
+    }
+
     func testFreshWeeklyCapRemainsVisibleBesideFullShortWindow() throws {
         let (model, defaults, suite) = GlanceFixtures.makeModel(view: .fromMac, alarmsAll: false, fleet: false)
         defer { defaults.removePersistentDomain(forName: suite) }
