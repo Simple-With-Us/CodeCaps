@@ -24,12 +24,19 @@ import { join } from "node:path";
 
 // The App Store Connect host.  A test points this at a local server so the
 // failure paths can be exercised without touching the real service.
-const API_BASE = process.env.ASC_API_BASE || "https://api.appstoreconnect.apple.com";
-
-// How long a single App Store Connect call may take.  Node's fetch has no
-// default timeout, so a call that never answers would hang the script with a
-// reservation still pending in App Store Connect.
-const REQUEST_TIMEOUT_MS = 120_000;
+//
+// Only a loopback override is honoured: every call carries an Authorization
+// header holding a JWT signed with the real ASC private key, so a stray
+// environment variable must not be able to redirect that token to another
+// host.  The production host is used for anything that is not loopback.
+const API_BASE = (() => {
+  const override = process.env.ASC_API_BASE;
+  if (!override) return "https://api.appstoreconnect.apple.com";
+  if (!/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(\/|$)/.test(override)) {
+    throw new Error("ASC_API_BASE must be a loopback address");
+  }
+  return override;
+})();
 
 // AFC-359: credentials come from the environment (CI sets ASC_KEY_ID / ASC_ISSUER_ID /
 // ASC_KEY_PATH), else Infisical Fleet-OPS /asc through fleet-secrets: ASC_KEY_ID, ASC_ISSUER_ID and
@@ -390,8 +397,12 @@ async function main() {
     const parts = [];
     const errors = res.parsed && Array.isArray(res.parsed.errors) ? res.parsed.errors : [];
     for (const problem of errors.slice(0, 3)) {
-      const title = typeof problem.title === "string" ? problem.title : "unknown error";
-      const detail = typeof problem.detail === "string" ? problem.detail : "";
+      // The errors array comes from the service, so an element may be null or
+      // a bare string.  Reading .title off one of those throws, which would
+      // replace the safe message this function exists to produce with a stack
+      // trace, so the shape is checked before anything is read.
+      const title = isPlainObject(problem) && typeof problem.title === "string" ? problem.title : "unknown error";
+      const detail = isPlainObject(problem) && typeof problem.detail === "string" ? problem.detail : "";
       parts.push(detail ? `${title}: ${detail}` : title);
     }
     if (parts.length === 0) {
@@ -426,17 +437,39 @@ async function main() {
     return value;
   }
 
+  // Every call is aborted after REQUEST_TIMEOUT_MS, so a call that never
+  // answers rejects with a TimeoutError rather than hanging.  That rejection
+  // is turned into an ordinary non-ok response here rather than at each call
+  // site: the commit path in particular has to reach its discardReservation()
+  // on a timeout, and an escaping exception would skip it and leave the
+  // reservation open in a ten-entry set.
   async function api(methodName, apiPath, jsonBody) {
     const url = apiPath.startsWith("http") ? apiPath : `${API_BASE}${apiPath}`;
-    const res = await fetch(url, {
-      method: methodName,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json"
-      },
-      body: jsonBody ? jsonBody : undefined,
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
-    });
+    let res;
+    try {
+      res = await fetch(url, {
+        method: methodName,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json"
+        },
+        body: jsonBody ? jsonBody : undefined,
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+      });
+    } catch (error) {
+      const timedOut = error && error.name === "TimeoutError";
+      return {
+        status: 0,
+        ok: false,
+        text: "",
+        parsed: {
+          errors: [{
+            title: timedOut ? "the request timed out" : "the request failed",
+            detail: error && error.message ? error.message : "unknown error"
+          }]
+        }
+      };
+    }
     const text = await res.text();
     let parsed;
     try { parsed = JSON.parse(text); } catch { parsed = { raw: text }; }
@@ -606,9 +639,19 @@ async function main() {
         console.error(`upload-screenshots: could not reserve ${fileName} (HTTP ${reserved.status}): ${describeError(reserved)}`);
         process.exit(2);
       }
-      const screenshot = requireObject(reserved.parsed?.data, "screenshot reservation");
+      // The reservation now exists in a set that holds ten entries, so it has
+      // to be dropped on every path that stops here.  When the response shape
+      // gives back no usable id there is nothing to delete by, and the message
+      // says so rather than letting the run end quietly with a slot consumed.
+      const reservation = reserved.parsed?.data;
+      if (!isPlainObject(reservation)) {
+        console.error(`upload-screenshots: invalid screenshot reservation for ${fileName}; a reservation may be open in set ${set.id}`);
+        process.exit(2);
+      }
+      const screenshot = reservation;
       if (typeof screenshot.id !== "string" || screenshot.id.length === 0) {
-        console.error(`upload-screenshots: invalid screenshot reservation for ${fileName}`);
+        console.error(`upload-screenshots: invalid screenshot reservation for ${fileName}; a reservation may be open in set ${set.id}`);
+        if (screenshot.id) await discardReservation(screenshot.id);
         process.exit(2);
       }
       const operations = Array.isArray(screenshot.attributes?.uploadOperations)

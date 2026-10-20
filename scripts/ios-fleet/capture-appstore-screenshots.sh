@@ -208,7 +208,12 @@ PY
 # one, so it is worth the seconds it costs, and it is why the background is
 # found from a strided sample rather than from every byte of the frame.
 measure_ink() {
-  python3 "$SCRIPT_DIR/screenshot_ink.py" "$1" 2>/dev/null
+  # screenshot_ink.py exits 1 when the frame holds less than its own default
+  # minimum, which is exactly the blank-frame case the poll loop below has to
+  # survive.  Under `set -e` an assignment whose command substitution fails
+  # aborts the whole capture, so the status is swallowed here; an empty
+  # reading is already handled by the caller's `[ -n "$percent" ]` test.
+  python3 "$SCRIPT_DIR/screenshot_ink.py" "$1" 2>/dev/null || true
 }
 
 wait_for_render() {
