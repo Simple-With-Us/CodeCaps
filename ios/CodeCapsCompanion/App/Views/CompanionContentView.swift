@@ -6,7 +6,7 @@ public struct CompanionContentView: View {
     @StateObject private var soundPlayer = AlarmSoundPlayer()
     @State private var showingSettings: Bool
     @State private var expandedIds: Set<String> = []
-    @State private var settingsTab: CompanionSettingsTab = .display
+    @State private var settingsTab: CompanionSettingsTab
     #if os(iOS)
     @State private var platformOrderEditMode: EditMode = .inactive
     #endif
@@ -22,6 +22,11 @@ public struct CompanionContentView: View {
     public init(model: CompanionQuotaModel, showingSettings: Bool = ProcessInfo.processInfo.arguments.contains("-openSettings")) {
         self.model = model
         self._showingSettings = State(initialValue: showingSettings)
+        // A launch argument picks the tab the settings sheet opens on, so the
+        // screenshot capture can reach a tab without a tap.
+        self._settingsTab = State(
+            initialValue: ProcessInfo.processInfo.arguments.contains("-openAlarms") ? .alarms : .display
+        )
         #if os(iOS)
         self._platformOrderEditMode = State(
             initialValue: ProcessInfo.processInfo.arguments.contains("-reorderPlatforms") ? .active : .inactive
@@ -160,7 +165,7 @@ public struct CompanionContentView: View {
     private var headerCard: some View {
         Picker("Source scope", selection: $model.sourceScope) {
             ForEach(CompanionSourceScope.allCases) { scope in
-                Text(scope.rawValue).tag(scope)
+                Text(scope.displayTitle).tag(scope)
             }
         }
         .pickerStyle(.segmented)
