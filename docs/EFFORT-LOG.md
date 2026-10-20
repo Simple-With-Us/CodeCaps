@@ -735,3 +735,26 @@ repo: CodeCaps; pre-work claim: posted to #agent-sync after reading AGENT-SYNC.m
   new offline test that drives the real fetch script and the real staging
   script against a stubbed Infisical and checks that the key reaches a
   mode-600 file and never the environment or the log.
+
+- Reviewer findings, and what they changed.  The first version of this work
+  added a script that called the Infisical API itself.  Two reviewers found
+  real problems with it, and both were right.  `loginUniversalAuth` returns
+  the token as a bare string, and the script destructured it as an object, so
+  the vault read would have sent `Authorization: Bearer undefined` and failed
+  with HTTP 401; the test missed it because its stub ignored the
+  Authorization header, and that test now asserts the header.  More
+  importantly, a script that reads the vault directly is outside the
+  approved secret controls, so that script is gone.  The values now come from
+  the `infisical-secrets` composite action, which is the repository's
+  approved way to read a value, and the only thing a script does is stage one
+  of them to a file: `scripts/stage-asc-key.mjs` hands the key in the
+  environment to `scripts/ios-stage-asc-key.sh` over a pipe, writes the
+  mode-600 file, and blanks the environment variable so no later step
+  carries the key.
+- Three more findings, all fixed.  A verify-only run skipped the notarization
+  preflight and still spent minutes building a bundle it would never publish,
+  so the gate now has a `verify_only` output: the preflight runs, the build
+  does not.  The credential check job inherited `contents: write` from the
+  workflow while holding the signing key, so it is now read-only.  The new
+  contract test file was missing from the workflow path filters, so a change
+  to it would not have triggered the checks that run it.

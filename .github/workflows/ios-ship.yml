@@ -73,8 +73,7 @@ on:
       - '.github/workflows/ios-ship.yml'
       - '.github/actions/infisical-secrets/**'
       - 'scripts/infisical-fetch.mjs'
-      - 'scripts/infisical-fetch-asc-key.mjs'
-      - 'scripts/infisical-fetch-asc-key.mjs'
+      - 'scripts/stage-asc-key*'
       - 'scripts/ios-fleet/**'
       - '!scripts/ios-fleet/test-*.sh'
       - 'scripts/ios-ship-testflight.sh'
@@ -215,7 +214,7 @@ jobs:
       - name: Load ASC credentials (Fleet-OPS prod /asc)
         uses: ./.github/actions/infisical-secrets
         with:
-          names: ASC_KEY_ID ASC_ISSUER_ID
+          names: ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8
           project-id: ${{ secrets.INFISICAL_FLEET_OPS_PROJECT_ID }}
           environment: prod
           secret-path: /asc
@@ -223,13 +222,7 @@ jobs:
           client-secret: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET || secrets.INFISICAL_CLIENT_SECRET }}
 
       - name: Stage the ASC private key (Fleet-OPS prod /asc)
-        env:
-          INFISICAL_PROJECT_ID: ${{ secrets.INFISICAL_FLEET_OPS_PROJECT_ID }}
-          INFISICAL_ENVIRONMENT: prod
-          INFISICAL_SECRET_PATH: /asc
-          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID || secrets.INFISICAL_CLIENT_ID }}
-          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET || secrets.INFISICAL_CLIENT_SECRET }}
-        run: node scripts/infisical-fetch-asc-key.mjs
+        run: node scripts/stage-asc-key.mjs
 
       - name: Check the ASC credentials arrived
         run: |

@@ -72,7 +72,7 @@ if grep -Eq 'for name in .*ASC_KEY_P8' "$workflow"; then
   echo 'workflow still propagates the multiline key through an environment mask' >&2
   exit 1
 fi
-if ! grep -Fq 'scripts/infisical-fetch-asc-key.mjs' "$workflow"; then
+if ! grep -Fq 'scripts/stage-asc-key.mjs' "$workflow"; then
   echo 'workflow does not use the protected key-file handoff' >&2
   exit 1
 fi
@@ -84,8 +84,14 @@ if grep -Fq '8dae6d03' "$workflow"; then
   echo 'workflow hard-codes the Infisical project id' >&2
   exit 1
 fi
-# The fetch script is what hands the key to the protected handoff.
-if ! grep -Fq 'ios-stage-asc-key.sh' "$repo_root/scripts/infisical-fetch-asc-key.mjs"; then
+# No new code may talk to the vault directly: the values come from the
+# approved composite action.
+if grep -Eq 'listSecretsRaw|loginUniversalAuth' "$workflow"; then
+  echo 'workflow reads the vault directly instead of through the approved action' >&2
+  exit 1
+fi
+# The staging script is what hands the key to the protected handoff.
+if ! grep -Fq 'ios-stage-asc-key.sh' "$repo_root/scripts/stage-asc-key.mjs"; then
   echo 'the fetch script does not hand the key to the staging script' >&2
   exit 1
 fi
@@ -93,6 +99,6 @@ fi
 # The end-to-end handoff: a stubbed Infisical, the real fetch script and the
 # real staging script.  The key is staged to a mode-600 file, only its path
 # is published, and the value never reaches the environment or the log.
-node --test "$repo_root/scripts/infisical-fetch-asc-key.node-test.mjs" > /dev/null
+node --test "$repo_root/scripts/stage-asc-key.node-test.mjs" > /dev/null
 
 echo 'ios-stage-asc-key: all tests passed'

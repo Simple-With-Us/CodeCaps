@@ -54,6 +54,10 @@ The EdDSA key pair is per app, so one app's key cannot sign another app's update
 - Stored as the repository secret `SPARKLE_ED_PRIVATE_KEY` by piping the file into `gh secret set`.  It reaches `generate_appcast` on standard input, never as an argument.
 - The public key is `Ou2J0syHZawPSY3JLTLVyhbOylmtyr0QnZPbq7acETQ=`, in `script/build_and_run.sh`.
 
+The App Store Connect signing key is a separate key, and CI reads it from Fleet-OPS prod `/asc` rather than from a repository secret.  The repository copy of that key was revoked (HTTP 401, CC-163), which is what kept the Mac release from publishing for nine days.  In CI the values come from the `infisical-secrets` composite action, which masks every line of every value and never prints one; the project id comes from the `INFISICAL_FLEET_OPS_PROJECT_ID` secret rather than from a literal in a public workflow.  The multiline private key is staged by `scripts/stage-asc-key.mjs` into a mode-600 file, and only that file's path crosses the step boundary.  The same loader is used by `mac-release.yml` and `ios-ship.yml`, and `scripts/mac-release-workflow.test.mjs` pins the two to the same text.
+
+To check that the release credentials still work without publishing anything, run the "Mac Release (Sparkle)" workflow by hand with the `verify-only` input set.  It fetches the key, asks Apple's notarization service whether it still accepts it, and stops.
+
 If the private key is lost, installed copies can no longer be updated by Sparkle; they need one manual install of a build carrying a new public key.  If it leaks, rotate: generate a new pair, ship one release signed with the **old** key that carries the **new** public key, then switch the secret.
 
 ## Hosting

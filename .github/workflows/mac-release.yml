@@ -51,7 +51,7 @@ on:
       - '.github/workflows/mac-release.yml'
       - '.github/actions/infisical-secrets/**'
       - 'scripts/infisical-fetch.mjs'
-      - 'scripts/infisical-fetch-asc-key.mjs'
+      - 'scripts/stage-asc-key*'
   workflow_dispatch:
     inputs:
       verify-only:
@@ -85,7 +85,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Test Sparkle release contract without credentials
-        run: node --test scripts/mac-release-workflow.test.mjs scripts/infisical-fetch-asc-key.node-test.mjs
+        run: node --test scripts/mac-release-workflow.test.mjs scripts/stage-asc-key.node-test.mjs
 
       - name: Wait for Swift CI compile checks on this commit
         env:
@@ -128,7 +128,7 @@ jobs:
         if: github.event_name != 'pull_request'
         uses: ./.github/actions/infisical-secrets
         with:
-          names: ASC_KEY_ID ASC_ISSUER_ID
+          names: ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8
           project-id: ${{ secrets.INFISICAL_FLEET_OPS_PROJECT_ID }}
           environment: prod
           secret-path: /asc
@@ -137,13 +137,7 @@ jobs:
 
       - name: Stage the ASC private key (Fleet-OPS prod /asc)
         if: github.event_name != 'pull_request'
-        env:
-          INFISICAL_PROJECT_ID: ${{ secrets.INFISICAL_FLEET_OPS_PROJECT_ID }}
-          INFISICAL_ENVIRONMENT: prod
-          INFISICAL_SECRET_PATH: /asc
-          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID || secrets.INFISICAL_CLIENT_ID }}
-          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET || secrets.INFISICAL_CLIENT_SECRET }}
-        run: node scripts/infisical-fetch-asc-key.mjs
+        run: node scripts/stage-asc-key.mjs
 
       - name: Check the ASC credentials arrived
         if: github.event_name != 'pull_request'
@@ -165,7 +159,8 @@ jobs:
         run: |
           if [ "${{ inputs.verify-only }}" = "true" ]; then
             echo "publish=false" >> "$GITHUB_OUTPUT"
-            echo "::notice title=Verify only::The credentials were fetched and checked.  Nothing was published."
+            echo "verify_only=true" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Verify only::The credentials were fetched and the notarization service was asked whether it accepts them.  Nothing was published."
             exit 0
           fi
           if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
@@ -188,7 +183,7 @@ jobs:
           fi
 
       - name: Verify notarization access before building
-        if: steps.gate.outputs.publish == 'true'
+        if: steps.gate.outputs.publish == 'true' || steps.gate.outputs.verify_only == 'true'
         run: bash scripts/check-notary-access.sh
 
       - name: Install XcodeGen
@@ -203,7 +198,7 @@ jobs:
       # the whole nesting passing codesign --verify --deep --strict.  The
       # ad-hoc signature does not prove App Group access.
       - name: Build and verify the bundle (not publishing)
-        if: steps.gate.outputs.publish != 'true'
+        if: steps.gate.outputs.publish != 'true' && steps.gate.outputs.verify_only != 'true'
         run: CODECAPS_ALLOW_ADHOC_VALIDATION=1 script/build_and_run.sh --build-only
 
       - name: Import the Developer ID certificate into a throwaway keychain
@@ -350,13 +345,17 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     runs-on: macos-latest
     timeout-minutes: 10
+    # Read-only.  This job holds the signing key, so a compromised checkout
+    # must not also be able to push commits, tags or releases.
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Load ASC credentials (Fleet-OPS prod /asc)
         uses: ./.github/actions/infisical-secrets
         with:
-          names: ASC_KEY_ID ASC_ISSUER_ID
+          names: ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8
           project-id: ${{ secrets.INFISICAL_FLEET_OPS_PROJECT_ID }}
           environment: prod
           secret-path: /asc
@@ -364,13 +363,7 @@ jobs:
           client-secret: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET || secrets.INFISICAL_CLIENT_SECRET }}
 
       - name: Stage the ASC private key (Fleet-OPS prod /asc)
-        env:
-          INFISICAL_PROJECT_ID: ${{ secrets.INFISICAL_FLEET_OPS_PROJECT_ID }}
-          INFISICAL_ENVIRONMENT: prod
-          INFISICAL_SECRET_PATH: /asc
-          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID || secrets.INFISICAL_CLIENT_ID }}
-          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET || secrets.INFISICAL_CLIENT_SECRET }}
-        run: node scripts/infisical-fetch-asc-key.mjs
+        run: node scripts/stage-asc-key.mjs
 
       - name: Check the ASC credentials arrived
         run: |
@@ -386,7 +379,6 @@ jobs:
             echo '::error::Missing ASC key material in Fleet-OPS prod /asc; verify the CI identity has read access to Fleet-OPS prod /asc.' >&2
             exit 1
           fi
-
       - name: Verify notarization access before building
         run: bash scripts/check-notary-access.sh
 

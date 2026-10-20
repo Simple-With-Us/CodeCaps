@@ -64,7 +64,7 @@ test('Sparkle uses the existing fleet ASC loader, never repository ASC secrets',
     assert.doesNotMatch(file, /infisical secrets get/);
     assert.doesNotMatch(file, /infisical\/get-cli/);
   }
-  assert.match(loader, /run: node scripts\/infisical-fetch-asc-key\.mjs/);
+  assert.match(loader, /run: node scripts\/stage-asc-key\.mjs/);
   assert.match(loader, /Missing \$name in Fleet-OPS prod \/asc; verify the CI identity has read access to Fleet-OPS prod \/asc\./);
   assert.match(loader, /Missing ASC key material in Fleet-OPS prod \/asc; verify the CI identity has read access to Fleet-OPS prod \/asc\./);
   assert.match(code, /NOTARY_KEY_PATH: \$\{\{ env.ASC_KEY_PATH \}\}/);
@@ -83,10 +83,24 @@ test('PRs cannot notarize or publish, and icon-only changes trigger releases', (
     assert.match(step(workflow, name), /if: steps.gate.outputs.publish == 'true'/);
   }
   assert.match(code, /'assets\/AppIcon.icns'/);
-  assert.match(code, /run: node --test scripts\/mac-release-workflow.test.mjs scripts\/infisical-fetch-asc-key.node-test.mjs/);
+  assert.match(code, /run: node --test scripts\/mac-release-workflow.test.mjs scripts\/stage-asc-key.node-test.mjs/);
   // A manual run can be asked to prove the credentials without publishing.
   assert.match(code, /verify-only:/);
   assert.match(step(workflow, 'Decide whether this run can publish'), /inputs\.verify-only[\s\S]*publish=false/);
+  // A verify-only run still asks Apple's notary whether it accepts the key,
+  // and it does not spend minutes building a bundle it will never publish.
+  assert.match(step(workflow, 'Decide whether this run can publish'), /verify-only[\s\S]*verify_only=true/);
+  assert.match(step(workflow, 'Verify notarization access before building'), /publish == 'true' \|\| steps\.gate\.outputs\.verify_only == 'true'/);
+  assert.match(code, /steps\.gate\.outputs\.publish != 'true' && steps\.gate\.outputs\.verify_only != 'true'/);
+  // The credential check job holds the signing key, so it must not be able
+  // to push commits, tags or releases.
+  assert.match(code, /verify-release-credentials:[\s\S]*permissions:\s*\n\s*contents: read/);
+  // No new code may talk to the vault directly: the values come from the
+  // approved composite action, and the only thing a script does is stage
+  // one of them to a file.
+  for (const file of [workflow, iosShip]) {
+    assert.doesNotMatch(file, /listSecretsRaw|loginUniversalAuth/);
+  }
   assert.match(code, /needs.await-swift-ci.result == 'success'/);
   assert.match(code, /run: script\/build_and_run.sh --release/);
   assert.ok(code.indexOf('Verify notarization access') < code.indexOf('Build, sign, notarize'));

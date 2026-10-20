@@ -173,12 +173,14 @@ test("ASC credentials come from Fleet-OPS /asc, never the stale repository secre
   assert.match(code, /secrets\.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID/);
   assert.doesNotMatch(code, /infisical secrets get/);
   assert.doesNotMatch(code, /infisical\/get-cli/);
+  // No new code may talk to the vault directly.
+  assert.doesNotMatch(code, /listSecretsRaw|loginUniversalAuth/);
 
   // The multiline key goes to a mode-600 file, never GITHUB_ENV.  The
   // protected handoff lives in the fetch script, which hands the key to
   // scripts/ios-stage-asc-key.sh over a pipe.
-  assert.match(code, /scripts\/infisical-fetch-asc-key\.mjs/);
-  assert.match(readFileSync(join(ROOT, "scripts/infisical-fetch-asc-key.mjs"), "utf8"), /ios-stage-asc-key\.sh/);
+  assert.match(code, /scripts\/stage-asc-key\.mjs/);
+  assert.match(readFileSync(join(ROOT, "scripts/stage-asc-key.mjs"), "utf8"), /ios-stage-asc-key\.sh/);
   assert.doesNotMatch(code, /for name in .*ASC_KEY_P8/);
   assert.doesNotMatch(code, /printf '%s=%s\\n' "ASC_KEY_P8"/);
 
