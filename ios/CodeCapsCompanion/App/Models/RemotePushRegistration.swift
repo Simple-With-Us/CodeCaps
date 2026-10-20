@@ -305,14 +305,14 @@ final class RemotePushRegistration: NSObject, ObservableObject, URLSessionTaskDe
                   let result = try JSONSerialization.jsonObject(with: data) as? [String: Any], result["ok"] as? Bool == true else {
                 fail("Push is off on this device; server removal failed." + sentenceGap + "Retry to remove its enrollment."); return
             }
-            guard let serverGeneration = Self.responseGeneration(result["generation"]) else {
+            guard let acknowledgment = try? JSONDecoder().decode(CompanionPushRemovalAcknowledgment.self, from: data),
+                  let serverGeneration = Self.responseGeneration(result["generation"]) else {
                 fail("The server returned an invalid push removal acknowledgment." + sentenceGap + "Retry Server Removal.")
                 return
             }
             guard adoptServerGeneration(serverGeneration) else { return }
-            guard result["applied"] as? Bool == true, result["removed"] is Bool,
-                  serverGeneration == payloadGeneration else {
-                fail("A newer server enrollment superseded this removal." + sentenceGap + "Retry Server Removal.")
+            guard acknowledgment.confirmsRemoval(requestedGeneration: payloadGeneration) else {
+                fail("Server removal was not confirmed." + sentenceGap + "Retry Server Removal.")
                 return
             }
             defaults.removeObject(forKey: "remotePushEnrolledURL")
