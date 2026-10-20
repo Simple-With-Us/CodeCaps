@@ -365,7 +365,9 @@ struct UsageHistoryView: View {
                     Text("One reading so far.  The trend will appear after another reading.")
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                 }
-                Text("Each line is one quota window.  Gaps separate unobserved time, account changes, and new quota periods.  Diamonds mark scheduled resets; green squares mark mid-cycle vendor resets; amber squares mark likely plan changes; orange lines mark runaway alerts.")
+                Text("Each line is one quota window." + sentenceGap
+                    + "Gaps separate unobserved time, account changes, and new quota periods." + sentenceGap
+                    + "Diamonds mark scheduled resets; green squares mark mid-cycle vendor resets; amber squares mark likely plan changes; orange lines mark runaway alerts.")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
                 Text("Burn stats are based on % of quota over time, unless absolute token data is available for the platform — in which case the detector prefers the absolute figures.")
                     .font(.system(size: 10)).foregroundStyle(.tertiary)
