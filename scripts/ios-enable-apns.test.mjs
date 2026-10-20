@@ -51,6 +51,18 @@ test('verified capability and profile are idempotent', async () => {
   assert.equal(f.writes.length, 0);
 });
 
+test('a paginated profile list cannot create a duplicate profile', async () => {
+  const f = fixture();
+  const request = async (method, path, body) => {
+    const response = await f.request(method, path, body);
+    return path.endsWith('/profiles')
+      ? { ...response, links: { next: 'https://api.appstoreconnect.apple.com/v1/next-page' } }
+      : response;
+  };
+  await assert.rejects(provisionPush(request, () => false), /paginated profile list/);
+  assert.equal(f.writes.length, 0);
+});
+
 test('rejects an active existing profile without production push rather than creating a shadow', async () => {
   const f = fixture({ enabled: true, ready: true });
   await assert.rejects(provisionPush(f.request, () => false), /lacks required entitlements/);
