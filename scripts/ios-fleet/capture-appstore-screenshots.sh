@@ -277,7 +277,11 @@ capture_on() {
     if [ -n "$group_container" ]; then
       seed_snapshot "$group_container/quota-windows.json" >/dev/null
     fi
-    xcrun simctl launch --terminate-running-process "$udid" "$bundle_id" "${args[@]}" >/dev/null
+    # ${args[@]:+...} rather than "${args[@]}": the first capture passes no
+    # arguments, and Bash 3.2 (the runner's system Bash) reads an empty array
+    # under `set -u` as an unbound variable and exits.
+    xcrun simctl launch --terminate-running-process "$udid" "$bundle_id" \
+      ${args[@]:+"${args[@]}"} >/dev/null
 
     # The simulator writes JPEG, which cannot carry an alpha channel, and
     # App Store Connect rejects a screenshot that has one.  It is converted
