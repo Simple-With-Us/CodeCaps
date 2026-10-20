@@ -155,7 +155,7 @@ struct UsageHistoryView: View {
         let kind: Kind
     }
 
-    private var allRecentAlerts: [HistoryAlertItem] {
+    private func allRecentAlerts(points: [HistoryPoint]) -> [HistoryAlertItem] {
         let runawayItems: [HistoryAlertItem] = alerts.map { alert in
             HistoryAlertItem(
                 id: "runaway:\(alert.id)",
@@ -231,14 +231,14 @@ struct UsageHistoryView: View {
                 && abs(alert.timestamp.timeIntervalSince(selected)) < 120
         }
     }
-    private var selectedVendorResetPoint: HistoryPoint? {
+    private func selectedVendorResetPoint(points: [HistoryPoint]) -> HistoryPoint? {
         guard let selected = state.selectedTimestamp else { return nil }
         return points.first { point in
             point.isVendorReset && abs(point.observedAt.timeIntervalSince(selected)) < 120
         }
     }
 
-    private var selectedPlanChangePoint: HistoryPoint? {
+    private func selectedPlanChangePoint(points: [HistoryPoint]) -> HistoryPoint? {
         guard let selected = state.selectedTimestamp else { return nil }
         return points.first { point in
             point.isPlanChange && abs(point.observedAt.timeIntervalSince(selected)) < 120
@@ -246,7 +246,14 @@ struct UsageHistoryView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        // The chart's points are the expensive part of this panel: the samples
+        // are filtered, grouped by window and run through the anomaly detector
+        // every time the property is read.  They are built once here and handed
+        // to everything that needs them, so one body pass does that work once
+        // instead of once per consumer.
+        let points = self.points
+        let recentAlerts = allRecentAlerts(points: points)
+        return VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Usage History")
@@ -367,7 +374,7 @@ struct UsageHistoryView: View {
                 }
                 Text("Each line is one quota window." + sentenceGap
                     + "Gaps separate unobserved time, account changes, and new quota periods." + sentenceGap
-                    + "Diamonds mark scheduled resets; green squares mark mid-cycle vendor resets; amber squares mark likely plan changes; orange lines mark runaway alerts.")
+                    + "Diamonds mark scheduled resets; green squares mark mid-cycle vendor resets; amber squares mark likely plan changes; amber dashed lines mark runaway alerts.")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
                 Text("Burn stats are based on % of quota over time, unless absolute token data is available for the platform — in which case the detector prefers the absolute figures.")
                     .font(.system(size: 10)).foregroundStyle(.tertiary)
@@ -433,7 +440,7 @@ struct UsageHistoryView: View {
                         Text(resetAlert.title).font(.system(size: 11, weight: .medium))
                         Text(resetAlert.body).font(.system(size: 11)).foregroundStyle(.secondary)
                         Text(resetAlert.isPlanChange
-                            ? "\(resetAlert.windowLabel) quota rose to \(resetAlert.remainingPercent)% remaining."
+                            ? "\(resetAlert.planChangeWindowLabel ?? resetAlert.windowLabel) quota rose to \(resetAlert.planChangeRemainingPercent ?? resetAlert.remainingPercent)% remaining."
                             : "\(resetAlert.windowLabel) restored to \(resetAlert.remainingPercent)% quota remaining.")
                             .font(.system(size: 11)).foregroundStyle(.secondary)
                     }
@@ -441,7 +448,7 @@ struct UsageHistoryView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(accent.opacity(0.1), in: RoundedRectangle(cornerRadius: 7))
                     .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(accent.opacity(0.3), lineWidth: 1))
-                } else if let point = selectedVendorResetPoint {
+                } else if let point = selectedVendorResetPoint(points: points) {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack(spacing: 6) {
                             Text("Vendor Reset · \(point.observedAt.formatted(date: .abbreviated, time: .shortened))")
@@ -462,7 +469,7 @@ struct UsageHistoryView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Color.green.opacity(0.1), in: RoundedRectangle(cornerRadius: 7))
                     .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Color.green.opacity(0.3), lineWidth: 1))
-                } else if let point = selectedPlanChangePoint {
+                } else if let point = selectedPlanChangePoint(points: points) {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack(spacing: 6) {
                             Text("Likely Plan Change · \(point.observedAt.formatted(date: .abbreviated, time: .shortened))")
@@ -492,10 +499,10 @@ struct UsageHistoryView: View {
                         .font(.system(size: 11)).foregroundStyle(Theme.warning)
                 }
             }
-            if !allRecentAlerts.isEmpty {
+            if !recentAlerts.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Recent Alerts").font(.system(size: 11, weight: .semibold))
-                    ForEach(allRecentAlerts.prefix(5)) { item in
+                    ForEach(recentAlerts.prefix(5)) { item in
                         Button(item.label) {
                             state.select(providerKey: row.id, windowId: item.windowId,
                                          at: item.timestamp, in: model.displaySections)

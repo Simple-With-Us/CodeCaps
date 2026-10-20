@@ -19,10 +19,7 @@ public enum ResetAlarmMessage {
             : (isPlanChange ? "Likely Plan Change: \(provider)" : "Quota Reset: \(provider)")
         var labels: [String] = []
         for event in events {
-            var label = event.windowLabel
-            if (label == "4h" || label == "4-hour") && event.providerTitle.lowercased().contains("minimax") {
-                label = "5h"
-            }
+            let label = normalizedWindowLabel(for: event)
             if !labels.contains(label) {
                 labels.append(label)
             }
@@ -62,6 +59,20 @@ public enum ResetAlarmMessage {
             return (title, "The \(joined) window reset \(reached)." + sentenceGap + "Ready to use again.", labels)
         }
         return (title, "The \(joined) windows reset." + sentenceGap + "Ready to use again.", labels)
+    }
+
+    /// The label the owner reads for one event's window, with the one
+    /// provider-specific correction the fleet applies.
+    ///
+    /// MiniMax reports a four-hour window that it calls five hours, so the
+    /// label is corrected once and everywhere: in the notification, in the
+    /// window list and in the Usage History card.
+    public static func normalizedWindowLabel(for event: ResetAlarmEvent) -> String {
+        let label = event.windowLabel
+        if (label == "4h" || label == "4-hour") && event.providerTitle.lowercased().contains("minimax") {
+            return "5h"
+        }
+        return label
     }
 
     /// "A new week of quota is available." and friends, by period length.

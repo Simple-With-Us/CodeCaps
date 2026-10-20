@@ -26,6 +26,12 @@ public struct ResetAlarmNotification: Equatable, Sendable {
     /// The quota rose mid-cycle without reaching the level a vendor reset has
     /// to reach, so a change of plan is the likelier reason.
     public let isPlanChange: Bool
+    /// The window the plan change happened on, when the notification carries
+    /// one.  A group can hold a scheduled rollover and a plan change at once,
+    /// and the owner's own window is the one that changed.
+    public let planChangeWindowLabel: String?
+    /// The level the plan change landed on, when the notification carries one.
+    public let planChangeRemainingPercent: Int?
 
     public init(
         id: String,
@@ -39,7 +45,9 @@ public struct ResetAlarmNotification: Equatable, Sendable {
         windowId: String?,
         timestamp: Date,
         isVendorReset: Bool = false,
-        isPlanChange: Bool = false
+        isPlanChange: Bool = false,
+        planChangeWindowLabel: String? = nil,
+        planChangeRemainingPercent: Int? = nil
     ) {
         self.id = id
         self.providerId = providerId
@@ -53,6 +61,8 @@ public struct ResetAlarmNotification: Equatable, Sendable {
         self.timestamp = timestamp
         self.isVendorReset = isVendorReset
         self.isPlanChange = isPlanChange
+        self.planChangeWindowLabel = planChangeWindowLabel
+        self.planChangeRemainingPercent = planChangeRemainingPercent
     }
 }
 
@@ -71,6 +81,11 @@ public struct ResetAlertRecord: Codable, Identifiable, Equatable, Sendable {
     /// The quota rose mid-cycle without reaching the level a vendor reset has
     /// to reach, so a change of plan is the likelier reason.
     public let isPlanChange: Bool
+    /// The window the plan change happened on.  The alert's own window is the
+    /// group's first one, which is not always the window that changed.
+    public let planChangeWindowLabel: String?
+    /// The level the plan change landed on.
+    public let planChangeRemainingPercent: Int?
     public let title: String
     public let body: String
 
@@ -84,7 +99,9 @@ public struct ResetAlertRecord: Codable, Identifiable, Equatable, Sendable {
                 isVendorReset: Bool,
                 title: String,
                 body: String,
-                isPlanChange: Bool = false) {
+                isPlanChange: Bool = false,
+                planChangeWindowLabel: String? = nil,
+                planChangeRemainingPercent: Int? = nil) {
         self.id = id
         self.timestamp = timestamp
         self.providerKey = providerKey
@@ -96,6 +113,8 @@ public struct ResetAlertRecord: Codable, Identifiable, Equatable, Sendable {
         self.title = title
         self.body = body
         self.isPlanChange = isPlanChange
+        self.planChangeWindowLabel = planChangeWindowLabel
+        self.planChangeRemainingPercent = planChangeRemainingPercent
     }
 
     /// Records written before the plan-change flag existed have no such key,
@@ -114,6 +133,8 @@ public struct ResetAlertRecord: Codable, Identifiable, Equatable, Sendable {
         title = try container.decode(String.self, forKey: .title)
         body = try container.decode(String.self, forKey: .body)
         isPlanChange = try container.decodeIfPresent(Bool.self, forKey: .isPlanChange) ?? false
+        planChangeWindowLabel = try container.decodeIfPresent(String.self, forKey: .planChangeWindowLabel)
+        planChangeRemainingPercent = try container.decodeIfPresent(Int.self, forKey: .planChangeRemainingPercent)
     }
 }
 
@@ -435,7 +456,16 @@ public final class ResetAlarmManager: ObservableObject {
             guard let group = byProvider[providerId], !group.isEmpty else { return nil }
             let content = Self.notificationContent(for: group)
             let isVendorReset = group.contains { $0.isVendorReset }
-            let isPlanChange = group.contains { $0.isPlanChange }
+            // The two names are mutually exclusive, and the notification body
+            // already resolves them in favour of the vendor reset.  The record
+            // has to agree with the banner, or the same alarm is labelled two
+            // different ways in two places.
+            let isPlanChange = !isVendorReset && group.contains { $0.isPlanChange }
+            // The plan change's own window and level, not the group's first
+            // one: a group can hold a scheduled rollover and a plan change at
+            // once, and the card has to describe the change the owner is being
+            // asked to act on.
+            let planChangeEvent = group.first(where: { $0.isPlanChange })
             let first = group.first
             let providerTitle = first?.providerTitle ?? providerId.capitalized
             let payload = ResetAlarmNotification(
@@ -450,7 +480,9 @@ public final class ResetAlarmManager: ObservableObject {
                 windowId: first?.windowId,
                 timestamp: now,
                 isVendorReset: isVendorReset,
-                isPlanChange: isPlanChange)
+                isPlanChange: isPlanChange,
+                planChangeWindowLabel: planChangeEvent.map { ResetAlarmMessage.normalizedWindowLabel(for: $0) },
+                planChangeRemainingPercent: planChangeEvent?.remainingPercent.map { Int($0.rounded()) })
             deliver(payload)
             return payload
         }
@@ -535,7 +567,9 @@ public final class ResetAlarmManager: ObservableObject {
             isVendorReset: payload.isVendorReset,
             title: payload.title,
             body: payload.body,
-            isPlanChange: payload.isPlanChange
+            isPlanChange: payload.isPlanChange,
+            planChangeWindowLabel: payload.planChangeWindowLabel,
+            planChangeRemainingPercent: payload.planChangeRemainingPercent
         )
         appendAlertRecord(record)
     }

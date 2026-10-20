@@ -148,9 +148,63 @@ final class ResetAlarmPlanChangeTests: XCTestCase {
                     observedAt: later, provider: provider),
         ], now: later)
 
+        XCTAssertTrue(events.isEmpty,
+                      "a window whose number must not be believed raises no alarm at all")
         XCTAssertTrue(events.allSatisfy { !$0.isVendorReset },
                       "a window with no readable percentage cannot claim a vendor reset")
         XCTAssertTrue(events.allSatisfy { !$0.isPlanChange })
+    }
+
+    /// The same window, but it had a readable percentage before it was masked
+    /// and that percentage was near its cap.  The ordinary rollover path would
+    /// otherwise claim it and report a reset that nobody can confirm, while the
+    /// weekly underneath it is still spent.
+    func testAMaskedWindowWithAReadablePastRaisesNoAlarmEvenNearItsCap() {
+        var tracker = ResetAlarmTracker()
+        let provider = "google-antigravity:gemini"
+        let fiveEnd = t0 + 5 * self.hour
+        let weekEnd = t0 + 7 * self.day
+
+        // The five-hour window is readable at first, and nearly spent.
+        _ = tracker.process([
+            reading("5h", period: 5 * self.hour, resetAt: fiveEnd, remaining: 2,
+                    observedAt: t0, provider: provider),
+            reading("weekly", period: 7 * self.day, resetAt: weekEnd, remaining: 0,
+                    observedAt: t0, provider: provider),
+        ], now: t0)
+
+        // The weekly is spent, so the five-hour window now reports nothing.
+        // Its own end still moves.
+        let later = t0 + self.hour
+        let events = tracker.process([
+            reading("5h", period: 5 * self.hour, resetAt: t0 + 10 * self.hour, remaining: nil,
+                    observedAt: later, provider: provider),
+            reading("weekly", period: 7 * self.day, resetAt: weekEnd, remaining: 0,
+                    observedAt: later, provider: provider),
+        ], now: later)
+
+        XCTAssertTrue(events.isEmpty,
+                      "a masked window raises no alarm even when its last readable reading was near the cap")
+    }
+
+    /// A mid-cycle event needs evidence that the quota rose.  A window whose
+    /// reported end jumped early can also be a window whose quota went down,
+    /// and calling that a plan change would tell the owner the quota rose when
+    /// the opposite happened.
+    func testAMidCycleEventThatFellIsNeitherARefillNorAPlanChange() {
+        var tracker = ResetAlarmTracker()
+        let weekEnd = t0 + 7 * self.day
+        _ = tracker.process(weekly(at: t0, resetAt: weekEnd, remaining: 90), now: t0)
+
+        // The reported end jumps forward by more than half the period, which is
+        // how the tracker sees a period that ended early, and the quota falls.
+        let later = t0 + 2 * self.hour
+        let events = tracker.process(weekly(at: later, resetAt: t0 + 11 * self.day, remaining: 40), now: later)
+
+        XCTAssertEqual(events.count, 1, "the early period end still has to be reported")
+        XCTAssertFalse(events[0].isVendorReset, "a quota that fell is not a refill")
+        XCTAssertFalse(events[0].isPlanChange, "a quota that fell is not a plan change")
+        XCTAssertNotEqual(events[0].reason, .planChange, "no event may claim the quota rose")
     }
 
     // MARK: The words

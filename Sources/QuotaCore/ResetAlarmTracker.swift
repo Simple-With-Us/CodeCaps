@@ -347,6 +347,11 @@ public struct ResetAlarmTracker: Sendable {
         /// The mid-cycle rise landed below `vendorRestoreLevel`, so a change of
         /// plan is the likelier reason and the vendor did not reset it.
         let isPlanChange: Bool
+        /// The quota came back to at least `vendorRestoreLevel`, so the vendor
+        /// refilled it.  Kept apart from `isMidWindow` on purpose: a mid-cycle
+        /// event that fell instead of rising is neither a refill nor a plan
+        /// change, and saying so is the whole point of the split.
+        let isVendorReset: Bool
     }
 
     private mutating func processGroup(
@@ -410,7 +415,7 @@ public struct ResetAlarmTracker: Sendable {
                 endedPeriodResetAt: ended,
                 remainingPercent: observation.remainingPercent,
                 reason: reason,
-                isVendorReset: transition.isMidWindow && !transition.isPlanChange,
+                isVendorReset: transition.isVendorReset,
                 isPlanChange: transition.isPlanChange))
         }
         // Largest first, so a combined notification leads with the new week.
@@ -469,6 +474,8 @@ public struct ResetAlarmTracker: Sendable {
         var isReset = false
         var isMidWindow = false
         var isPlanChange = false
+        var isVendorReset = false
+        var suppressAlarm = false
         var nextResetAt = window.periodResetAt
 
         if let previousReset = window.periodResetAt {
@@ -659,17 +666,41 @@ public struct ResetAlarmTracker: Sendable {
         // tell a refill from an upgrade.
         if isMidWindow {
             if let reading {
-                isPlanChange = reading < ResetAlarmPolicy.vendorRestoreLevel
+                // A rise is the only evidence that quota was handed back at
+                // all.  A window whose reported reset time jumped early can
+                // also be a window whose quota went down, and calling that a
+                // plan change would tell the owner the quota rose when the
+                // opposite happened.
+                let rose = window.lastRemaining.map {
+                    reading > $0 + ResetAlarmPolicy.riseEpsilon
+                } ?? false
+                if reading >= ResetAlarmPolicy.vendorRestoreLevel {
+                    // It came back to near full: the vendor refilled it.
+                    isVendorReset = true
+                } else if rose {
+                    // It rose, but not to near full.  The allowance is bigger
+                    // than it was, so a change of plan is the likelier reason.
+                    isPlanChange = true
+                }
+                // Below the floor with no rise at all: the quota fell or held
+                // still.  That is neither a refill nor an upgrade, so it is
+                // left as an ordinary period reading and named as one.
             } else {
                 // No readable percentage, so the quota cannot be seen to come
                 // back and this cannot be called a vendor reset.  An Antigravity
                 // five-hour window under a spent weekly cap reports no
                 // percentage on purpose, and its own reset time still moves, so
                 // without this a window whose number is known to be a lie can
-                // still raise a vendor-reset alarm.  Owner 2026-10-19:
+                // still raise a reset alarm.  Owner 2026-10-19:
                 // "Antigravity is saying vendor reset 5h quota early while the
                 // 7d is still at cap and unchanged".
+                //
+                // A window whose number must not be believed raises no alarm at
+                // all.  Clearing the mid-cycle flag alone would let the
+                // ordinary rollover path claim it and report a reset nobody can
+                // confirm while the weekly underneath it is still spent.
                 isMidWindow = false
+                suppressAlarm = true
             }
         }
 
@@ -692,7 +723,16 @@ public struct ResetAlarmTracker: Sendable {
         // measure the gap below in spans longer than a single interval.
         window.lastObservedAt = observedAt
         state.windows[key] = window
-        return isReset ? Transition(observation: observation, previous: previous, isMidWindow: isMidWindow, isPlanChange: isPlanChange) : nil
+        // The window's own state is remembered either way: the reset time
+        // moved, and the next reading must not rediscover the same reset.
+        // What is withheld is the alarm.
+        if suppressAlarm { return nil }
+        guard isReset else { return nil }
+        return Transition(observation: observation,
+                          previous: previous,
+                          isMidWindow: isMidWindow,
+                          isPlanChange: isPlanChange,
+                          isVendorReset: isVendorReset)
     }
 
     // MARK: Largest window
