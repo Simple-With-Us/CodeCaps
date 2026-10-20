@@ -28,7 +28,7 @@ const SUBMISSION_ID = "sub-1";
 
 // A server that answers the endpoints the command walks, with whatever
 // number of screenshots the test wants to claim the version carries.
-function serve(screenshots) {
+function serve(screenshots, marketing) {
   const patched = [];
   const server = createServer((req, res) => {
     let raw = "";
@@ -61,6 +61,17 @@ function serve(screenshots) {
       }
       if (url === `/v1/appStoreVersions/${VERSION_ID}/build`) {
         return json(200, { data: { type: "builds", id: "build-1", attributes: { version: "241" } } });
+      }
+      if (url === `/v1/builds/build-1`) {
+        return json(200, {
+          data: {
+            type: "builds",
+            id: "build-1",
+            attributes: { version: "241" },
+            relationships: { preReleaseVersion: { data: { type: "preReleaseVersions", id: "pre-1" } } }
+          },
+          included: [{ type: "preReleaseVersions", id: "pre-1", attributes: { versionString: marketing } }]
+        });
       }
       if (url === `/v1/appStoreVersions/${VERSION_ID}`) {
         return json(200, { data: {
@@ -103,8 +114,8 @@ function submit(base) {
   });
 }
 
-async function withServer(screenshots, fn) {
-  const { server, patched } = serve(screenshots);
+async function withServer(screenshots, fn, marketing = "1.0.241") {
+  const { server, patched } = serve(screenshots, marketing);
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
   try {
@@ -124,6 +135,21 @@ test("a version with no screenshots is not submitted", async () => {
     );
     assert.equal(patched.length, 0, "the submission was patched even though the version was not ready");
   });
+});
+
+test("a version whose version string does not match the build is not submitted", async () => {
+  //  App Store Connect pairs a build with a version by their marketing
+  //  version, so a version still carrying the previous build's string is
+  //  refused.  The command has to say which value is right.
+  await withServer(6, async (base, patched) => {
+    const { code, stderr } = await submit(base);
+    assert.equal(code, 2, `expected a refusal, got ${code}: ${stderr}`);
+    assert.ok(
+      /the version says 1\.0\.241 and the build says 1\.0\.240/.test(stderr),
+      `the refusal did not name both versions:\n${stderr}`
+    );
+    assert.equal(patched.length, 0, "the submission was patched even though the version did not match");
+  }, "1.0.240");
 });
 
 test("a version that is ready is submitted", async () => {

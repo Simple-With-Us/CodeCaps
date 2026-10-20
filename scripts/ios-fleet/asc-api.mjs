@@ -661,7 +661,12 @@ async function main() {
       return;
     }
 
-    // 3. The version string.
+    // 3. The version string, and the build's own marketing version.
+    //
+    // App Store Connect pairs a build with a version by their marketing
+    // version, so a version whose versionString is still the one from the
+    // previous build is refused.  That is a cheap mistake to make and an
+    // expensive one to find out about from Apple, so it is checked here.
     const version = await api("GET", `/v1/appStoreVersions/${versionId}`);
     const versionString = version.ok ? version.parsed?.data?.attributes?.versionString : null;
     const appId = version.ok
@@ -671,6 +676,24 @@ async function main() {
     console.log(`submit-review: version ${versionString} | build ${buildVersion} (${build.id})`);
     if (typeof versionString !== "string" || versionString.length === 0) {
       console.error("submit-review: not submitting, the version has no versionString");
+      process.exitCode = 2;
+      return;
+    }
+
+    const withPreRelease = await api("GET", `/v1/builds/${build.id}?include=preReleaseVersion`);
+    const included = withPreRelease.ok ? requireArray(withPreRelease.parsed?.included, "build include") : [];
+    const preReleaseId = withPreRelease.ok
+      ? (withPreRelease.parsed?.data?.relationships?.preReleaseVersion?.data?.id)
+      : null;
+    const preRelease = included.find((item) => isPlainObject(item) && item.id === preReleaseId);
+    const marketing = preRelease && isPlainObject(preRelease.attributes)
+      ? preRelease.attributes.versionString
+      : null;
+    if (typeof marketing === "string" && marketing.length > 0 && marketing !== versionString) {
+      console.error(
+        `submit-review: not submitting, the version says ${versionString} and the build says ${marketing}. ` +
+        "Set the version's versionString to the build's marketing version first."
+      );
       process.exitCode = 2;
       return;
     }
