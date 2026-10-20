@@ -23,6 +23,9 @@ public struct ResetAlarmNotification: Equatable, Sendable {
     public let windowId: String?
     public let timestamp: Date
     public let isVendorReset: Bool
+    /// The quota rose mid-cycle without reaching the level a vendor reset has
+    /// to reach, so a change of plan is the likelier reason.
+    public let isPlanChange: Bool
 
     public init(
         id: String,
@@ -35,7 +38,8 @@ public struct ResetAlarmNotification: Equatable, Sendable {
         windowLabels: [String],
         windowId: String?,
         timestamp: Date,
-        isVendorReset: Bool = false
+        isVendorReset: Bool = false,
+        isPlanChange: Bool = false
     ) {
         self.id = id
         self.providerId = providerId
@@ -48,6 +52,7 @@ public struct ResetAlarmNotification: Equatable, Sendable {
         self.windowId = windowId
         self.timestamp = timestamp
         self.isVendorReset = isVendorReset
+        self.isPlanChange = isPlanChange
     }
 }
 
@@ -63,6 +68,9 @@ public struct ResetAlertRecord: Codable, Identifiable, Equatable, Sendable {
     public let windowLabel: String
     public let remainingPercent: Int
     public let isVendorReset: Bool
+    /// The quota rose mid-cycle without reaching the level a vendor reset has
+    /// to reach, so a change of plan is the likelier reason.
+    public let isPlanChange: Bool
     public let title: String
     public let body: String
 
@@ -75,7 +83,8 @@ public struct ResetAlertRecord: Codable, Identifiable, Equatable, Sendable {
                 remainingPercent: Int,
                 isVendorReset: Bool,
                 title: String,
-                body: String) {
+                body: String,
+                isPlanChange: Bool = false) {
         self.id = id
         self.timestamp = timestamp
         self.providerKey = providerKey
@@ -86,6 +95,25 @@ public struct ResetAlertRecord: Codable, Identifiable, Equatable, Sendable {
         self.isVendorReset = isVendorReset
         self.title = title
         self.body = body
+        self.isPlanChange = isPlanChange
+    }
+
+    /// Records written before the plan-change flag existed have no such key,
+    /// and they must still load: the owner's reset history is worth more than
+    /// the field that would have to be invented for them.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        timestamp = try container.decode(Date.self, forKey: .timestamp)
+        providerKey = try container.decode(String.self, forKey: .providerKey)
+        providerTitle = try container.decode(String.self, forKey: .providerTitle)
+        windowId = try container.decodeIfPresent(String.self, forKey: .windowId)
+        windowLabel = try container.decode(String.self, forKey: .windowLabel)
+        remainingPercent = try container.decode(Int.self, forKey: .remainingPercent)
+        isVendorReset = try container.decode(Bool.self, forKey: .isVendorReset)
+        title = try container.decode(String.self, forKey: .title)
+        body = try container.decode(String.self, forKey: .body)
+        isPlanChange = try container.decodeIfPresent(Bool.self, forKey: .isPlanChange) ?? false
     }
 }
 
@@ -407,6 +435,7 @@ public final class ResetAlarmManager: ObservableObject {
             guard let group = byProvider[providerId], !group.isEmpty else { return nil }
             let content = Self.notificationContent(for: group)
             let isVendorReset = group.contains { $0.isVendorReset }
+            let isPlanChange = group.contains { $0.isPlanChange }
             let first = group.first
             let providerTitle = first?.providerTitle ?? providerId.capitalized
             let payload = ResetAlarmNotification(
@@ -420,7 +449,8 @@ public final class ResetAlarmManager: ObservableObject {
                 windowLabels: content.windowLabels,
                 windowId: first?.windowId,
                 timestamp: now,
-                isVendorReset: isVendorReset)
+                isVendorReset: isVendorReset,
+                isPlanChange: isPlanChange)
             deliver(payload)
             return payload
         }
@@ -504,7 +534,8 @@ public final class ResetAlarmManager: ObservableObject {
             remainingPercent: payload.remainingPercent,
             isVendorReset: payload.isVendorReset,
             title: payload.title,
-            body: payload.body
+            body: payload.body,
+            isPlanChange: payload.isPlanChange
         )
         appendAlertRecord(record)
     }

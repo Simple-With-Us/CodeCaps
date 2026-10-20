@@ -12,9 +12,11 @@ public enum ResetAlarmMessage {
     /// first.
     public static func content(for events: [ResetAlarmEvent]) -> (title: String, body: String, windowLabels: [String]) {
         let isVendorReset = events.contains { $0.isVendorReset }
+        let isPlanChange = !isVendorReset && events.contains { $0.isPlanChange }
+        let provider = events.first?.providerTitle ?? "Quota"
         let title = isVendorReset
-            ? "Vendor Reset: \(events.first?.providerTitle ?? "Quota")"
-            : "Quota Reset: \(events.first?.providerTitle ?? "Quota")"
+            ? "Vendor Reset: \(provider)"
+            : (isPlanChange ? "Likely Plan Change: \(provider)" : "Quota Reset: \(provider)")
         var labels: [String] = []
         for event in events {
             var label = event.windowLabel
@@ -30,6 +32,18 @@ public enum ResetAlarmMessage {
         case 0, 1: joined = labels.first ?? "quota"
         case 2: joined = "\(labels[0]) and \(labels[1])"
         default: joined = labels.dropLast().joined(separator: ", ") + " and " + (labels.last ?? "")
+        }
+
+        if isPlanChange {
+            // The level it came back to is the whole point, so it is in the
+            // sentence: a plan change and a vendor reset look the same until
+            // you see how much of the allowance is back.
+            let level = events.first(where: { $0.isPlanChange })?.remainingPercent
+            let rose = level.map { " to \(Int($0.rounded()))%" } ?? ""
+            let change = labels.count > 1
+                ? "The \(joined) windows' quota rose\(rose) mid-cycle."
+                : "The \(joined) window's quota rose\(rose) mid-cycle."
+            return (title, change + sentenceGap + "More likely a plan change than a vendor reset.", labels)
         }
 
         if isVendorReset {
