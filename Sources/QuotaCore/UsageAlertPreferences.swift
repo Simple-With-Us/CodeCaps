@@ -1,5 +1,35 @@
 import Foundation
 
+/// Provider bells are evaluated against the current snapshot, never a previous account's rows.
+public enum CompanionResetAlertPolicy {
+    public static func allProviders(saved: Bool?, legacy: Bool?) -> Bool {
+        saved ?? legacy ?? false
+    }
+
+    /// Nil means the snapshot cannot identify an unambiguous provider choice yet.
+    public static func selection(all: Bool, selected: Set<String>, provider: String,
+                                 currentOwnerIDs: [String]) -> Bool? {
+        if all { return true }
+        guard !currentOwnerIDs.isEmpty else { return nil }
+        if selected.contains(provider) { return true }
+        let choices = Set(currentOwnerIDs.map { selected.contains($0) })
+        return choices.count == 1 ? choices.first : nil
+    }
+}
+
+/// Decode the complete removal acknowledgment before retiring local cleanup state.
+public struct CompanionPushRemovalAcknowledgment: Decodable {
+    public let ok: Bool
+    public let applied: Bool
+    public let removed: Bool
+    public let generation: Int
+
+    public func confirmsRemoval(requestedGeneration: Int) -> Bool {
+        ok && applied && removed && generation == requestedGeneration
+            && generation >= 0 && generation <= 9_000_000_000_000_000
+    }
+}
+
 /// Stable categories shared by Mac, companion, and remote notification payloads.
 public enum UsageAlertKind: String, CaseIterable, Codable, Sendable, Identifiable {
     case anomaly, runaway, vendorReset, quotaReset, quotaExhaustion
