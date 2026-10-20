@@ -45,6 +45,23 @@ final class AntigravityPoolsTests: XCTestCase {
                        ["antigravity:third-party:5h"])
     }
 
+    /// The provider reports a fractional remaining, and the interface rounds
+    /// that to 0%, so a weekly that reads "at cap" on screen can carry a number
+    /// that is not exactly zero.  An exact-zero test let those through, and the
+    /// five-hour window under them was then believed when its percentage must
+    /// not be believed.  Owner 2026-10-19: "Antigravity is saying vendor
+    /// reset 5h quota early while the 7d is still at cap and unchanged".
+    func testAWeeklyThatRoundsToZeroStillMasksItsFiveHourWindow() throws {
+        let windows = AntigravityQuotaGroups.normalize(
+            [report("gemini-pro", 89), report("gemini-pro", 0.4, period: "weekly")],
+            includeMissing: true)
+        let pools = AntigravityQuotaGroups.pools(from: windows, now: now)
+        let gemini = try XCTUnwrap(pools.first { $0.key == "gemini" })
+
+        XCTAssertTrue(gemini.weeklyExhausted, "a weekly that reads 0% on screen is spent")
+        XCTAssertEqual(gemini.maskedWindowIds, ["antigravity:gemini:5h"])
+    }
+
     func testAStaleObservationNeverSetsTheHeadlineNumber() {
         let windows = AntigravityQuotaGroups.normalize([report("gemini-pro", 89)], includeMissing: true)
         let stale = ISO8601DateFormatter().date(from: "2026-09-13T18:00:00Z")!

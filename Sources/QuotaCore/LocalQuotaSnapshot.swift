@@ -82,9 +82,10 @@ public enum LocalQuotaSnapshot {
         /// Stable identity, so the companion can raise each alert once rather
         /// than once per poll: the Mac rewrites this file every refresh.
         public let id: String
-        /// `runaway`, `reset`, or `vendorReset`.  A raw string rather than an
-        /// enum so a newer Mac writing an unknown kind degrades to "something
-        /// happened" on an older companion instead of failing to decode.
+        /// `runaway`, `reset`, `vendorReset`, or `planChange`.  A raw string
+        /// rather than an enum so a newer Mac writing an unknown kind degrades
+        /// to "something happened" on an older companion instead of failing to
+        /// decode.
         public let kind: String
         public let providerKey: String
         public let providerTitle: String
