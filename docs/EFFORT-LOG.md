@@ -751,6 +751,10 @@ repo: CodeCaps; pre-work claim: posted to #agent-sync after reading AGENT-SYNC.m
   environment to `scripts/ios-stage-asc-key.sh` over a pipe, writes the
   mode-600 file, and blanks the environment variable so no later step
   carries the key.
+- One more finding from the second round, also fixed: the shared fetch
+  script's own test file ran in no workflow at all, so the new bearer-token
+  assertion would have been decoration.  It is now run by both workflows that
+  use the script.
 - The second review round found four more, all fixed.  A verify-only run
   still installed XcodeGen after the notary preflight had already answered
   the question, which burns a macOS runner for a toolchain it never uses; the

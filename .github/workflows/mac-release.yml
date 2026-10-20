@@ -50,7 +50,7 @@ on:
       - 'scripts/ios-stage-asc-key.sh'
       - '.github/workflows/mac-release.yml'
       - '.github/actions/infisical-secrets/**'
-      - 'scripts/infisical-fetch.mjs'
+      - 'scripts/infisical-fetch*.mjs'
       - 'scripts/stage-asc-key*'
   workflow_dispatch:
     inputs:
@@ -85,7 +85,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Test Sparkle release contract without credentials
-        run: node --test scripts/mac-release-workflow.test.mjs scripts/stage-asc-key.node-test.mjs
+        run: node --test scripts/mac-release-workflow.test.mjs scripts/stage-asc-key.node-test.mjs scripts/infisical-fetch-expand.node-test.mjs
 
       - name: Wait for Swift CI compile checks on this commit
         env:
