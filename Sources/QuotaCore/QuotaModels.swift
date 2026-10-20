@@ -225,6 +225,17 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
         return false
     }
 
+    /// Whether this window is a scoped allowance that sits beside the
+    /// subscription rather than inside it — Codex Code Review and additional
+    /// rate-limit pools.  Like MiniMax's supplementary video quota, spending one
+    /// of these is not the subscription hitting its cap, so it never stands in
+    /// for a missing primary window.  A Claude or Gemini sub-model quota still
+    /// does: that fallback exists so a plan whose windows are all sub-model
+    /// quotas is not silently reported as never capped.
+    public var isScopedPoolAllowance: Bool {
+        canonicalProviderKey == "openai" && isSubModelLimit
+    }
+
     /// A bounded value suitable for display.  NaN and infinities are unknown.
     public var boundedRemainingPercent: Double? {
         guard !remainingUnknown, let value = remainingPercent, value.isFinite else { return nil }
@@ -547,7 +558,8 @@ public struct QuotaPlatformSection: Equatable, Sendable {
     /// that could not be used at all.
     ///
     /// Windows that cannot vouch for themselves are skipped: MiniMax's
-    /// supplementary video quota is a bonus allowance rather than the
+    /// supplementary video quota and Codex's scoped Code Review and additional
+    /// pools are allowances beside the subscription rather than the
     /// subscription, and a window with no reading reports no cap at all.  A
     /// plan whose only windows are skipped is not treated as capped.
     ///
@@ -559,7 +571,7 @@ public struct QuotaPlatformSection: Equatable, Sendable {
     /// `DisplaySection.atCapWindow()`.
     public func atCapWindow() -> QuotaWindowSnapshot? {
         let eligible = windows
-            .filter { !$0.window.isSupplementaryVideoQuota && $0.remainingPercent != nil }
+            .filter { !$0.window.isSupplementaryVideoQuota && !$0.window.isScopedPoolAllowance && $0.remainingPercent != nil }
         let primary = eligible.filter { !$0.window.isSubModelLimit }
         let pool = primary.isEmpty ? eligible : primary
         return pool
