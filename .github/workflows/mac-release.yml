@@ -96,9 +96,13 @@ jobs:
 
   release:
     needs: await-swift-ci
+    # A verify-only dispatch has its own job below.  The release job must not
+    # run for one: it would load the Developer ID, Sentry and Sparkle material
+    # and build the whole bundle for a check that publishes nothing.
     if: >-
       github.event.repository.fork == false &&
-      needs.await-swift-ci.result == 'success'
+      needs.await-swift-ci.result == 'success' &&
+      inputs.verify-only != true
     runs-on: macos-latest
     timeout-minutes: 60
     env:
@@ -166,6 +170,11 @@ jobs:
           if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
             echo "publish=false" >> "$GITHUB_OUTPUT"
             echo "::notice title=Pull request::Built and verified only.  Releases are published from main."
+            exit 0
+          fi
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Mac release not published::Only a run on main publishes a release.  This run was on ${GITHUB_REF}."
             exit 0
           fi
           missing=()
@@ -343,7 +352,9 @@ jobs:
   # and a scheduled run would fetch it for nothing.
   verify-release-credentials:
     name: Verify the release credentials load
-    if: github.event_name == 'workflow_dispatch'
+    # Only for a verify-only dispatch.  A dispatch that is going to publish
+    # must not run this job, and an ordinary push never may.
+    if: github.event_name == 'workflow_dispatch' && inputs.verify-only == true
     runs-on: macos-latest
     timeout-minutes: 10
     # Read-only.  This job holds the signing key, so a compromised checkout

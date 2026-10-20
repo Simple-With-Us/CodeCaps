@@ -107,6 +107,20 @@ test('PRs cannot notarize or publish, and icon-only changes trigger releases', (
   assert.match(code, /run: script\/build_and_run.sh --release/);
   assert.ok(code.indexOf('Verify notarization access') < code.indexOf('Build, sign, notarize'));
 });
+
+test('a verify-only dispatch is isolated from the release job, and only main publishes', () => {
+  // A verify-only dispatch has its own job.  The release job must not run for
+  // one: it would load the Developer ID, Sentry and Sparkle material and
+  // build the whole bundle for a check that publishes nothing.
+  assert.match(code, /needs\.await-swift-ci\.result == 'success' &&\s*inputs\.verify-only != true/);
+  // And the credential check must not run for a dispatch that is going to
+  // publish, or for an ordinary push.
+  assert.match(code, /if: github\.event_name == 'workflow_dispatch' && inputs\.verify-only == true/);
+  // Only a run on main may publish.  A dispatch from a branch must build and
+  // verify, and stop there.
+  assert.match(step(workflow, 'Decide whether this run can publish'), /GITHUB_REF" != "refs\/heads\/main[\s\S]*publish=false[\s\S]*exit 0/);
+  assert.match(step(workflow, 'Decide whether this run can publish'), /Only a run on main publishes a release\./);
+});
 function preflight(exitCode, error, missing = false) {
   const dir = mkdtempSync(join(tmpdir(), 'notary-test-'));
   try {
