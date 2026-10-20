@@ -88,6 +88,7 @@ final class UsageAlertDeliveryTests: XCTestCase {
         model.injectRunawayAnomaliesForTests([anomaly(at: now)])
         let first = model.exportedAlerts(now: now).first
         XCTAssertEqual(first?.kind, "anomaly")
+        XCTAssertTrue(first?.id.hasPrefix(QuotaPublisher.producerInstanceId + "|") == true)
         model.injectRunawayAnomaliesForTests([anomaly(at: now.addingTimeInterval(60))])
         XCTAssertEqual(first?.id, model.exportedAlerts(now: now).first?.id)
         model.injectRunawayAnomaliesForTests([])
