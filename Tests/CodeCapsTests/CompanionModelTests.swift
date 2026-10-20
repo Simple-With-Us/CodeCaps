@@ -454,4 +454,56 @@ final class CompanionModelTests: XCTestCase {
             "Reset alarm bell button must meet the 44x44 minimum touch target standard"
         )
     }
+
+    // MARK: - Source scope label names the device the reader is holding
+
+    func testSourceScopeLabelNamesTheDeviceFamily() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains(#"case thisIPhone = "This iPhone""#),
+            "The scope's stored raw value must stay \"This iPhone\" so a saved preference is not lost"
+        )
+        XCTAssertTrue(
+            source.contains(#"case .thisIPhone: return "This \(family)""#),
+            "The this-device scope must be labelled with the device the reader is holding"
+        )
+        XCTAssertTrue(
+            source.contains("case .allSources: return rawValue"),
+            "The all-sources scope must keep its own label"
+        )
+        XCTAssertTrue(
+            source.contains(#"UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone""#),
+            "The device family must follow the interface idiom, so an iPad never says This iPhone"
+        )
+        XCTAssertTrue(
+            source.contains(#"return "Mac""#),
+            "The Mac build of the companion must name the Mac"
+        )
+    }
+
+    func testSourceScopePickerShowsTheDeviceAwareLabel() throws {
+        let view = try readCompanionContentViewSource()
+        XCTAssertTrue(
+            view.contains("Text(scope.displayTitle).tag(scope)"),
+            "The source-scope picker must show the device-aware label"
+        )
+        XCTAssertFalse(
+            view.contains("Text(scope.rawValue).tag(scope)"),
+            "The source-scope picker must not show the stored raw value, which always says This iPhone"
+        )
+    }
+
+    // MARK: - A launch argument opens the alarms tab
+
+    func testAlarmsLaunchArgumentOpensTheAlarmsTab() throws {
+        let view = try readCompanionContentViewSource()
+        XCTAssertTrue(
+            view.contains(#"ProcessInfo.processInfo.arguments.contains("-openAlarms") ? .alarms : .display"#),
+            "A launch argument must open the Alarms tab, so the screenshot capture can reach it without a tap"
+        )
+        XCTAssertTrue(
+            view.contains(#"case alarms = "Alarms""#),
+            "The Alarms tab must still exist as a tab of the settings sheet"
+        )
+    }
 }
