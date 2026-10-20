@@ -235,5 +235,32 @@ class InkSharesTests(unittest.TestCase):
         self.assertEqual(len(channels[0]), 7 * 11)
 
 
+class MainExitCodeTests(unittest.TestCase):
+    def test_a_bmp_with_a_short_header_is_rejected_by_name(self):
+        #  A short header cannot carry the fields the reader needs.  It has
+        #  to be a ValueError with a message, not a struct.error, because
+        #  struct.error is not a ValueError and used to escape the handler
+        #  and land on exit 1, which the capture reads as a blank frame.
+        with tempfile.TemporaryDirectory() as work:
+            path = os.path.join(work, "frame.bmp")
+            with open(path, "wb") as handle:
+                handle.write(b"BM" + b"\x00" * 8)
+            with self.assertRaises(ValueError) as caught:
+                read_bmp_channels(path)
+        self.assertIn("too short", str(caught.exception))
+
+    def test_a_file_that_cannot_be_measured_is_a_failed_measurement(self):
+        import screenshot_ink
+
+        with tempfile.TemporaryDirectory() as work:
+            path = os.path.join(work, "frame.bmp")
+            with open(path, "wb") as handle:
+                handle.write(b"not a bitmap at all")
+            #  Exit 2 is "the measurement failed".  Exit 1 would be read as
+            #  "the frame is blank", and the capture would then spend its
+            #  whole render budget on a frame it could never measure.
+            self.assertEqual(screenshot_ink.main(["screenshot_ink", path]), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

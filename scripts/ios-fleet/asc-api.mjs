@@ -415,7 +415,14 @@ async function main() {
   // How long a single App Store Connect call may take.  Node's fetch has no
   // default timeout, so a call that never answers would hang the script with
   // the reservation still pending in App Store Connect.
-  const REQUEST_TIMEOUT_MS = 120_000;
+  //
+  // The value is overridable so a test can drive a real timeout without
+  // waiting two minutes for one.
+  const REQUEST_TIMEOUT_MS = (() => {
+    const raw = process.env.ASC_REQUEST_TIMEOUT_MS;
+    const n = raw ? Number.parseInt(raw, 10) : Number.NaN;
+    return Number.isFinite(n) && n > 0 ? n : 120_000;
+  })();
 
   // Describe a failed response without ever printing what it holds.
   //
@@ -427,7 +434,12 @@ async function main() {
   // piece of the key.
   function describeError(res) {
     if (res.networkError) {
-      return "the request never reached App Store Connect";
+      // A timeout and a transport failure have different causes, and the
+      // operator needs the one that is true:  one means App Store Connect was
+      // slow, the other that the request never got there.
+      return res.timedOut
+        ? "the request timed out before App Store Connect answered"
+        : "the request never reached App Store Connect";
     }
     if (res.status === 401 || res.status === 403) {
       return "App Store Connect rejected the key: check ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_P8 in Fleet-OPS prod /asc";
@@ -507,6 +519,9 @@ async function main() {
         // looks at the status would read this as a server verdict, so the
         // transport failure is marked and reported as one.
         networkError: true,
+        // A timeout and a refused connection are different causes, and the
+        // message has to name the one that happened.
+        timedOut: Boolean(timedOut),
         text: "",
         parsed: {
           errors: [{
@@ -816,12 +831,15 @@ async function main() {
       return;
     }
     const apps = await api("GET", `/v1/apps?filter[bundleId]=${encodeURIComponent(bundleId)}&limit=1`);
-    if (!apps.ok || !apps.parsed.data?.[0]) {
-      // A request that never reached App Store Connect is not a verdict about
-      // the app, so it is not reported as "not found".
-      console.error(apps.networkError
-        ? `latest-build-seq: ${describeError(apps)}`
-        : `latest-build-seq: app not found for bundle (HTTP ${apps.status})`);
+    if (!apps.ok) {
+      // Every failure the service reports goes through describeError, so a
+      // rejected key is never read as a bundle id that does not exist.
+      console.error(`latest-build-seq: ${describeError(apps)}`);
+      process.exitCode = 2;
+      return;
+    }
+    if (!isPlainObject(apps.parsed?.data?.[0])) {
+      console.error(`latest-build-seq: no app in App Store Connect has the bundle id ${bundleId}`);
       process.exitCode = 2;
       return;
     }
@@ -941,12 +959,15 @@ async function main() {
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
     const apps = await api("GET", `/v1/apps?filter[bundleId]=${encodeURIComponent(bundleId)}&limit=1`);
-    if (!apps.ok || !apps.parsed.data?.[0]) {
-      // A request that never reached App Store Connect is not a verdict about
-      // the app, so it is not reported as "not found".
-      console.error(apps.networkError
-        ? `ensure-tf-ready: ${describeError(apps)}`
-        : `ensure-tf-ready: app not found for bundle (HTTP ${apps.status})`);
+    if (!apps.ok) {
+      // Every failure the service reports goes through describeError, so a
+      // rejected key is never read as a bundle id that does not exist.
+      console.error(`ensure-tf-ready: ${describeError(apps)}`);
+      process.exitCode = 2;
+      return;
+    }
+    if (!isPlainObject(apps.parsed?.data?.[0])) {
+      console.error(`ensure-tf-ready: no app in App Store Connect has the bundle id ${bundleId}`);
       process.exitCode = 2;
       return;
     }
@@ -1002,7 +1023,16 @@ async function main() {
       try {
         const probe = await api("GET", `/v1/builds?filter[app]=${appId}&sort=-uploadedDate&limit=1`);
         if (probe.ok) {
-          newest = probe.parsed?.data?.[0]?.attributes?.version || "none";
+          // The response is the service's, so its shape is checked before any
+          // of it is read.  A malformed answer has to leave the reading
+          // unknown, not become a build version.
+          const rows = Array.isArray(probe.parsed?.data) ? probe.parsed.data : [];
+          const first = rows[0];
+          const version = isPlainObject(first) && isPlainObject(first.attributes)
+            && typeof first.attributes.version === "string"
+            ? first.attributes.version
+            : "";
+          newest = version || "none";
         } else {
           // The probe did not answer, so what is present is not known.  Saying
           // "none" would assert that the app has no builds at all, which is a

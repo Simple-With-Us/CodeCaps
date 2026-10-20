@@ -91,6 +91,10 @@ pass "a failed measurement stops the capture instead of timing out"
 # The decisions the capture makes are exercised against the real numbers, not
 # only checked for their presence in the source.  The script is sourced with
 # the run guarded off, so the functions can be called directly.
+#
+# The gate values travel in the environment, not as positional arguments:  the
+# script reads its output directory from "$1", so passing the numbers that way
+# would set OUT_DIR to a number and leave stray directories behind.
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 gate() {
@@ -98,8 +102,8 @@ gate() {
   (
     cd "$work"
     OUT_DIR="$work/out" DERIVED_ROOT="$work/derived" CAPTURE_SOURCE_ONLY=1 \
-      bash -c ". '$CAPTURE'; frame_clears_thresholds \"\$1\" \"\$2\" \"\$3\" \"\$4\"" \
-      _ "$1" "$2" "$3" "$4"
+      GATE_OVERALL="$1" GATE_CONTENT="$2" GATE_MIN_OVERALL="$3" GATE_MIN_CONTENT="$4" \
+      bash -c ". '$CAPTURE'; frame_clears_thresholds \"\$GATE_OVERALL\" \"\$GATE_CONTENT\" \"\$GATE_MIN_OVERALL\" \"\$GATE_MIN_CONTENT\""
   ) >/dev/null 2>&1
 }
 
@@ -123,6 +127,14 @@ gate 6.2 1.1 5.0 0.5 || fail "the finished settings sheet did not pass the gate"
 gate 10.0 0.5 10.0 0.5 || fail "a frame exactly on the bar did not pass the gate"
 pass "a finished screen passes the gate"
 
+# Sourcing the capture must not write outside the directory the test set up.
+# The script reads its output directory from "$1", so a helper that passes its
+# own values positionally would silently send the output somewhere else.
+stray="$(find "$work" -mindepth 1 -maxdepth 1 -not -name out -not -name derived -not -name 'ink-error.txt' 2>/dev/null)"
+[[ -z "$stray" ]] || fail "sourcing the capture left directories behind:
+$stray"
+pass "sourcing the capture writes only inside the directory it was given"
+
 # Both simulators run the same runtime and the same product, so the app is
 # built once and installed on both.  A second build compiles the companion and
 # the shared QuotaCore files from scratch again, for nothing.
@@ -132,4 +144,4 @@ $builds"
 grep -q 'APP_PATH=' "$CAPTURE" || fail "the capture script has no shared app path"
 pass "the app is built once and installed on both simulators"
 
-echo "capture script contract: 12 checks passed"
+echo "capture script contract: 13 checks passed"

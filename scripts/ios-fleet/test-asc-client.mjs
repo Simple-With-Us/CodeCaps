@@ -127,6 +127,65 @@ test("the message that explains a failure is not lost on the way out", async () 
   );
 });
 
+test("a call that never answers is reported as a timeout", async () => {
+  //  The server accepts the connection and then says nothing, so the call
+  //  has to be aborted.  A timeout and a transport failure have different
+  //  causes:  one means App Store Connect was slow, the other that the
+  //  request never got there, and the operator needs the one that is true.
+  const sockets = [];
+  const server = createServer((req, res) => {
+    //  Never answer.
+  });
+  server.on("connection", (socket) => sockets.push(socket));
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  let result;
+  try {
+    result = await run(["latest-build-seq", "com.example.nothing", "1.0"], {
+      ASC_API_BASE: base,
+      ASC_REQUEST_TIMEOUT_MS: "400"
+    });
+  } finally {
+    for (const socket of sockets) socket.destroy();
+    server.close();
+  }
+  assert.equal(result.code, 2, `expected a failed lookup, got ${result.code}: ${result.stderr}`);
+  assert.ok(
+    /timed out/.test(result.stderr),
+    `a timeout was not reported as one:\n${result.stderr}`
+  );
+  assert.ok(
+    !/never reached App Store Connect/.test(result.stderr),
+    `a timeout was reported as a transport failure:\n${result.stderr}`
+  );
+});
+
+test("a rejected key is reported as a rejected key, not as a missing app", async () => {
+  //  The credential is what failed, so saying the bundle id is unknown sends
+  //  the operator after the wrong thing entirely.
+  const server = createServer((req, res) => {
+    res.writeHead(401, { "Content-Type": "text/plain" });
+    res.end("unauthorized");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  let result;
+  try {
+    result = await run(["latest-build-seq", "com.example.nothing", "1.0"], { ASC_API_BASE: base });
+  } finally {
+    server.close();
+  }
+  assert.equal(result.code, 2, `expected a failed lookup, got ${result.code}: ${result.stderr}`);
+  assert.ok(
+    /rejected the key/.test(result.stderr),
+    `a rejected key was not named:\n${result.stderr}`
+  );
+  assert.ok(
+    !/app not found/.test(result.stderr),
+    `a rejected key was reported as a missing app:\n${result.stderr}`
+  );
+});
+
 test("a large payload is not truncated on the way out", async () => {
   //  The failure body is deliberately bigger than a pipe buffer, so a write
   //  that is still queued when the process ends is visibly cut short.  This

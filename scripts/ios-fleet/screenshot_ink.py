@@ -101,6 +101,11 @@ def read_bmp_frame(path):
         data = handle.read()
     if data[:2] != b"BM":
         raise ValueError(f"{path} is not a BMP file")
+    # The header fields read below end at byte 30.  A file shorter than that
+    # cannot carry them, and unpacking them anyway raises struct.error, which
+    # is not a ValueError and used to escape as an unhandled traceback.
+    if len(data) < 30:
+        raise ValueError(f"{path} is {len(data)} bytes, too short to be a BMP header")
     offset = struct.unpack_from("<I", data, 10)[0]
     width = struct.unpack_from("<i", data, 18)[0]
     height = struct.unpack_from("<i", data, 22)[0]
@@ -193,7 +198,18 @@ def main(argv):
     args = parser.parse_args(argv[1:])
     try:
         overall, content = measure(args.image)
-    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+    except (
+        OSError,
+        ValueError,
+        IndexError,
+        struct.error,
+        subprocess.CalledProcessError,
+    ) as error:
+        # Every way the measurement can fail has to land on exit 2.  The
+        # capture script reads exit 1 as "the frame is blank" and would spend
+        # its whole render budget on a frame it could never measure, and a
+        # struct.error is not a ValueError, so it used to escape as an
+        # unhandled traceback and land on exit 1.
         print(f"screenshot_ink: {error}", file=sys.stderr)
         return 2
     print(

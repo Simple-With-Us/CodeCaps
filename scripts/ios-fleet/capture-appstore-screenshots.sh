@@ -29,7 +29,11 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$REPO_ROOT/ios/CodeCapsCompanion"
 SCHEME="CodeCapsCompanion"
-OUT_DIR="${1:-${REPO_ROOT}/.build/appstore-screenshots}"
+# Where the PNGs are written.  The argument wins, then the environment, then
+# the default.  The environment comes second so a caller with nowhere else to
+# write can say so, and so a script that sources this one to reuse its
+# functions does not scribble into the repository.
+OUT_DIR="${1:-${OUT_DIR:-${REPO_ROOT}/.build/appstore-screenshots}}"
 DERIVED_ROOT="${DERIVED_ROOT:-${RUNNER_TEMP:-/tmp}/codecaps-appstore-derived}"
 # Where the ink measurement writes its error, so a failure can be reported
 # instead of being swallowed by the poll loop.
