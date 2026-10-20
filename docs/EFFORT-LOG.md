@@ -693,3 +693,63 @@ repo: CodeCaps; pre-work claim: posted to #agent-sync after reading AGENT-SYNC.m
   `>= 98.0` vendor-reset annotation for the Glance history chart, so that chart
   will not mark these points either.  Left untouched: it is claimed by CODEX in
   PR #142, and flagged to them on `#codecaps` instead.
+
+## 2026-10-19 — Provider Marks Raised To Their Same-Art Sources [MINIMAX, in progress]
+
+- Board: `7ac0039c` (CC-171).  Branch: `minimax/provider-mark-resolution`.
+  Lane: `/Users/jay/apps/lanes/CodeCaps/minimax-provider-mark-resolution`.
+- Owner reported that several of the bundled logos were visibly low resolution.
+  The cause was measured rather than assumed, and it was not what the word
+  "low resolution" suggests.  The marks were not small-canvas rasters: the
+  canvases were 256px and 512px.  They were *blurry upscales*, carrying a wide
+  anti-aliased edge band inside a canvas that claimed to be larger than the
+  artwork.  At 28pt on a 2x display that band is several device pixels of
+  blur.  The shipped Cursor, Gemini, Grok and Claude marks measured 1.70 to
+  2.07 device pixels of edge at draw size; the marks that were already right
+  sat at 0.27 to 0.47.
+- Three measurement methods were tried and two were discarded before the right
+  one was kept, and the discarded ones are worth recording because they look
+  reasonable.  A canvas-based round trip (the smallest resolution that
+  reproduces the file) is diluted by transparent padding and reported a
+  16px mark as "16px".  An art-crop round trip is meaningful for before/after
+  on the same shape but has a systematic bias for small art.  The metric kept
+  is the width of the anti-aliased transition at the mark's silhouette, in the
+  pixels the mark is actually drawn at, counting only partial-alpha pixels
+  close to the visible boundary so that artwork which is genuinely soft
+  inside (the Gemini star is built from blurred shapes under a mask) is not
+  mistaken for a blurry outline.
+- 20 Mac `ProviderMarks` and the 3 companion MiniMax files were rebuilt from a
+  same-art source: this repository's own vectors, or a file from the owner's
+  icon library.  The geometry is unchanged, because the artwork's bounding box
+  inside the canvas is taken from the file being replaced and reproduced in
+  the new file, so nothing moves on screen.  A `-light` or `-dark` mark keeps
+  the ink it already had, read from the file rather than hard-coded.  Claude's
+  colour mark is rebuilt from `claude.svg` rather than from the owner's 1517px
+  raster of the same mark, because the vector measures sharper at draw size
+  even though the owner's file is larger.
+- `scripts/regenerate-provider-marks.py` does the rebuilding and holds itself
+  to five rules: never invent artwork, never guess (the rebuilt mark has to
+  match the file it replaces at draw size, which covers silhouette and palette
+  in one measurement), never move the artwork, keep the ink, and never make a
+  mark worse.  It reports by default and writes only with `--write`.  A
+  rebuild that softens the silhouette is refused, and so is one that does not
+  sharpen anything.  54 candidate files were considered; 4 were rejected as
+  different artwork and 50 were skipped with no gain, so the shipped set only
+  ever moves in one direction.
+- One regression was caught by the new edge rule and reverted rather than
+  shipped: rebuilding the Antigravity colour star from the owner's copy would
+  have widened its edge from 0.89 to 5.43 device pixels, because the shipped
+  file was re-masked with a hard star path and the owner's copy is softer.
+- `ProviderMarkDetailTests` holds the same rule as a test, so a blurry
+  upscale cannot come back unnoticed.  It reads the committed assets and
+  asserts the edge width, with an explicit allowlist for the two families
+  that are soft-edged by their own artwork.
+- Reported rather than changed, because there is no same-art
+  higher-resolution copy of them to raise: `openai-*` and `grok-bot-*` (this
+  repository ships `openai.svg` and `grok-bot.svg`, but they are *different
+  renderings* of those marks -- the OpenAI vector draws a solid knot where
+  the shipped raster draws a hollow one, and the Grok bot vector changes the
+  eye cutouts), and the companion's `provider-muse`, `provider-muse-assist` and
+  `provider-muse-code` image sets, which do not match the owner's Muse
+  artwork at draw size.  These need the owner to supply a copy of the mark
+  that is actually shipped.
