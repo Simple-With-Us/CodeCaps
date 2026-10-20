@@ -9,7 +9,7 @@ final class UsageAlertDeliveryTests: XCTestCase {
         let defaults = UserDefaults(suiteName: name)!
         defer { defaults.removePersistentDomain(forName: name) }
         let manager = ResetAlarmManager(defaults: defaults)
-        manager.preferences[.runaway].sound = .systemDefault
+        manager.setSound(.systemDefault, for: .runaway)
         manager.alarmSound = .frog
         XCTAssertEqual(manager.preferences[.runaway].sound, .systemDefault)
         let relaunched = ResetAlarmManager(defaults: defaults)
@@ -37,6 +37,54 @@ final class UsageAlertDeliveryTests: XCTestCase {
         XCTAssertTrue(manager.alertHistory.isEmpty)
         XCTAssertEqual(manager.detectedResetHistory.count, 1)
         XCTAssertEqual(ResetAlarmManager(defaults: defaults).detectedResetHistory, manager.detectedResetHistory)
+        manager.clearAlertHistory()
+        XCTAssertTrue(manager.detectedResetHistory.isEmpty)
+        XCTAssertTrue(ResetAlarmManager(defaults: defaults).detectedResetHistory.isEmpty)
+    }
+
+    func testNoOpAndDeliveryOnlyChangesKeepInheritedSounds() {
+        let name = "UsageAlertInheritedSoundTests." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: name)!
+        defer { defaults.removePersistentDomain(forName: name) }
+        let manager = ResetAlarmManager(defaults: defaults)
+        let same = manager.preferences
+        manager.preferences = same
+        manager.preferences[.runaway].enabled = true
+        manager.preferences[.anomaly].popup = true
+        manager.alarmSound = .frog
+        for kind in UsageAlertKind.allCases {
+            XCTAssertEqual(manager.preferences[kind].sound, .frog)
+        }
+    }
+
+    func testHealthyIdentityPruningRetainsExhaustionAcrossRelaunch() {
+        let name = "UsageAlertRetentionTests." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: name)!
+        defer { defaults.removePersistentDomain(forName: name) }
+        let now = Date()
+        func window(_ id: String, remaining: Double, date: Date) -> QuotaWindow {
+            .init(id: id, provider: "Claude", providerKey: "anthropic", label: "Quota",
+                  remainingPercent: remaining, window: "5h",
+                  occurredAt: ISO8601DateFormatter().string(from: date))
+        }
+        let model = MonitorModel(defaults: defaults)
+        model.skipsSnapshotIOForTesting = true
+        let spent = window("spent", remaining: 0, date: now).normalizedForExport()
+        XCTAssertTrue(spent.skip, "exhausted export windows deliberately carry skip")
+        model.refreshActualExhaustion(windows: [spent], now: now)
+        let original = model.exportedAlerts(now: now).first
+        XCTAssertNotNil(original)
+        let later = now.addingTimeInterval(1)
+        let healthy = (0..<1_030).map { window("healthy-\($0)", remaining: 80, date: later) }
+        model.refreshActualExhaustion(windows: healthy, now: later)
+        XCTAssertEqual(model.exportedAlerts(now: later).first, original)
+        let relaunched = MonitorModel(defaults: defaults)
+        relaunched.skipsSnapshotIOForTesting = true
+        relaunched.alarmManager.preferences[.quotaExhaustion].enabled = true
+        relaunched.alarmManager.onUsageDelivery = { _, _, _, _ in XCTFail("existing depletion cannot repeat") }
+        relaunched.refreshActualExhaustion(windows: [window("spent", remaining: 0,
+            date: now.addingTimeInterval(2))], now: now.addingTimeInterval(2))
+        XCTAssertEqual(relaunched.exportedAlerts(now: later).first, original)
     }
 
     func testCategoryChoicesPersistAndDisabledCategoryDoesNotDeliver() {
