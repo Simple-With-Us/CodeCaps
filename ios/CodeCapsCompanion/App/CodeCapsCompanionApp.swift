@@ -2,33 +2,20 @@ import SwiftUI
 import UserNotifications
 
 #if os(iOS)
-final class CodeCapsNotificationDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+final class CodeCapsNotificationDelegate: NSObject, UIApplicationDelegate {
     func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil
     ) -> Bool {
-        UNUserNotificationCenter.current().delegate = self
         return true
     }
 
-    func userNotificationCenter(
-        _ center: UNUserNotificationCenter,
-        willPresent notification: UNNotification,
-        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
-    ) {
-        if #available(iOS 14.0, *) {
-            completionHandler([.banner, .sound, .badge, .list])
-        } else {
-            completionHandler([.alert, .sound, .badge])
-        }
+    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        RemotePushRegistration.shared.receivedDeviceToken(deviceToken)
     }
 
-    func userNotificationCenter(
-        _ center: UNUserNotificationCenter,
-        didReceive response: UNNotificationResponse,
-        withCompletionHandler completionHandler: @escaping () -> Void
-    ) {
-        completionHandler()
+    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        RemotePushRegistration.shared.registrationFailed()
     }
 }
 #endif
@@ -41,6 +28,7 @@ struct CodeCapsCompanionApp: App {
     #endif
 
     @StateObject private var model = CompanionQuotaModel()
+    @Environment(\.scenePhase) private var scenePhase
 
     init() {
         SentryTelemetry.start()
@@ -49,6 +37,23 @@ struct CodeCapsCompanionApp: App {
     var body: some Scene {
         WindowGroup {
             CompanionContentView(model: model)
+                #if os(iOS)
+                .task {
+                    RemotePushRegistration.shared.configure(endpoint: model.syncEndpoint, preferences: model.alertPreferences)
+                    let delivered = await UNUserNotificationCenter.current().deliveredNotifications()
+                    for notification in delivered { RemotePushRegistration.shared.recordReceived(notification: notification) }
+                    RemotePushRegistration.shared.registerWithApple()
+                }
+                .onChange(of: model.syncEndpoint) { _, endpoint in
+                    RemotePushRegistration.shared.configure(endpoint: endpoint, preferences: model.alertPreferences)
+                }
+                .onChange(of: model.alertPreferences) { _, preferences in
+                    RemotePushRegistration.shared.configure(endpoint: model.syncEndpoint, preferences: preferences)
+                }
+                .onChange(of: scenePhase) { _, phase in
+                    if phase == .active { RemotePushRegistration.shared.registerWithApple() }
+                }
+                #endif
         }
     }
 }
