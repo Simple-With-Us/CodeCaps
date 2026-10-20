@@ -360,7 +360,8 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
     private func createPanel(model: MonitorModel) {
         let rows = Self.targetRows(for: model)
         let initialSize = PipMetrics.fitSize(rowCount: rows.count,
-            hasDualMeterRow: rows.contains { Self.meterCount(for: $0, now: model.now) > 1 })
+            hasDualMeterRow: rows.contains { Self.meterCount(for: $0, now: model.now,
+                issue: model.issues[$0.providerKey], disabledSources: model.disabledSources) > 1 })
         let p = NSPanel(
             contentRect: NSRect(origin: NSPoint(x: 120, y: 120), size: initialSize),
             styleMask: PipMetrics.panelStyleMask,
@@ -407,7 +408,8 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
         guard signature != fittedRowSignature else { return }
         fittedRowSignature = signature
 
-        let hasDualMeterRow = rows.contains { Self.meterCount(for: $0, now: model.now) > 1 }
+        let hasDualMeterRow = rows.contains { Self.meterCount(for: $0, now: model.now,
+            issue: model.issues[$0.providerKey], disabledSources: model.disabledSources) > 1 }
         let fit = PipMetrics.fitSize(rowCount: rows.count, hasDualMeterRow: hasDualMeterRow)
         let clamped = NSSize(
             width: min(max(panel.frame.width, panel.minSize.width), panel.maxSize.width),
@@ -485,8 +487,9 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
 
     /// The snapshots one row draws as meters, de-duplicated the same way Glance
     /// de-duplicates them so the HUD never renders one window twice.
-    static func meterCount(for row: DisplaySection, now: Date) -> Int {
-        meterSnapshots(for: row, now: now).count
+    static func meterCount(for row: DisplaySection, now: Date, issue: String? = nil,
+                           disabledSources: Set<String> = []) -> Int {
+        meterSnapshots(for: row, now: now, issue: issue, disabledSources: disabledSources).count
     }
 
     static func meterSnapshots(for row: DisplaySection, now: Date, issue: String? = nil,
@@ -914,7 +917,7 @@ struct PipWidgetView: View {
                         .foregroundStyle(background.ink)
                         .lineLimit(1)
                     Spacer(minLength: 0)
-                    if row.section.expected, windows.isEmpty {
+                    if row.section.expected, row.section.windows.isEmpty {
                         Text("No readings published")
                             .font(.system(size: 9, weight: .semibold))
                             .foregroundStyle(Theme.warning)
