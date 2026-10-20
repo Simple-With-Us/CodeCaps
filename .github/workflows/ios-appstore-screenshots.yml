@@ -29,7 +29,24 @@ on:
     branches: [main]
     paths:
       - "ios/CodeCapsCompanion/**"
+      # The exact shared files the companion compiles, and not the whole of
+      # Sources/QuotaCore: most QuotaCore edits are Mac-only, and a capture
+      # that shows more than the shipped build would be worse than a stale
+      # one.  This list mirrors ios-ship.yml, so the screenshots and the
+      # TestFlight build change together.
+      - "Sources/QuotaCore/CompanionReadTokenStore.swift"
+      - "Sources/QuotaCore/FleetSourceDisagreement.swift"
+      - "Sources/QuotaCore/QuotaWindowVocabulary.swift"
+      - "Sources/QuotaCore/ResetAlarmCadence.swift"
+      - "Sources/QuotaCore/ResetAlarmMessage.swift"
+      - "Sources/QuotaCore/ResetAlarmTracker.swift"
+      - "Sources/QuotaCore/WidgetPlatformDisplay.swift"
+      - "Sources/QuotaCore/WidgetSnapshotFetcher.swift"
+      # The helpers the capture calls.  A change to either of them changes
+      # what the capture keeps, so it has to bring a new capture with it.
       - "scripts/ios-fleet/capture-appstore-screenshots.sh"
+      - "scripts/ios-fleet/pick_simulator.py"
+      - "scripts/ios-fleet/screenshot_ink.py"
       - ".github/workflows/ios-appstore-screenshots.yml"
 
 concurrency:

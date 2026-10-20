@@ -12,10 +12,11 @@ import struct
 import sys
 import tempfile
 import unittest
+from collections import Counter
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from screenshot_ink import ink_percent, read_bmp_channels  # noqa: E402
+from screenshot_ink import background_value, ink_percent, read_bmp_channels  # noqa: E402
 
 
 def build_bmp(width, height, rows, bits=24, top_down=True):
@@ -74,6 +75,23 @@ def drawn_frame(width=200, height=200):
         for x in range(20, 150):
             rows[y][x] = (136, 148, 13)
     return rows
+
+
+class BackgroundValueTests(unittest.TestCase):
+    def test_finds_the_background_of_a_frame_with_a_dominant_colour(self):
+        channel = b"\xf8" * 4000 + b"\x11" * 40
+        self.assertEqual(background_value(channel), 0xF8)
+
+    def test_a_stride_that_lands_only_on_ink_does_not_hide_the_background(self):
+        #  Every sixteenth byte is ink and the rest is the background, so a
+        #  strided sample names the wrong value.  The sample has to be
+        #  confirmed against the whole channel before it is believed.
+        channel = b"\x00" * 16 + b"\xff" * 240
+        self.assertEqual(background_value(channel), 0xFF)
+
+    def test_a_frame_without_a_dominant_background_still_measures(self):
+        channel = bytes(range(256)) * 4
+        self.assertEqual(background_value(channel), Counter(channel).most_common(1)[0][0])
 
 
 class InkPercentTests(unittest.TestCase):

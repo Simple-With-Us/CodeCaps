@@ -22,6 +22,15 @@ import { createSign } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+// The App Store Connect host.  A test points this at a local server so the
+// failure paths can be exercised without touching the real service.
+const API_BASE = process.env.ASC_API_BASE || "https://api.appstoreconnect.apple.com";
+
+// How long a single App Store Connect call may take.  Node's fetch has no
+// default timeout, so a call that never answers would hang the script with a
+// reservation still pending in App Store Connect.
+const REQUEST_TIMEOUT_MS = 120_000;
+
 // AFC-359: credentials come from the environment (CI sets ASC_KEY_ID / ASC_ISSUER_ID /
 // ASC_KEY_PATH), else Infisical Fleet-OPS /asc through fleet-secrets: ASC_KEY_ID, ASC_ISSUER_ID and
 // ASC_KEY_P8 (the .p8 contents).  The key is used in memory only; nothing is written to disk or printed.
@@ -361,20 +370,105 @@ async function main() {
     process.exit(1);
   }
 
+  // How long a single App Store Connect call may take.  Node's fetch has no
+  // default timeout, so a call that never answers would hang the script with
+  // the reservation still pending in App Store Connect.
+  const REQUEST_TIMEOUT_MS = 120_000;
+
+  // Describe a failed response without ever printing what it holds.
+  //
+  // The raw body of an App Store Connect error is not printed: it is
+  // whatever the service chose to say, and it may echo a header or a token.
+  // Only the titles and details of the JSON API errors are used, and a run of
+  // token-like characters in one of those is redacted.  A rejected key is
+  // named, never previewed: a masked preview of a private key is still a
+  // piece of the key.
+  function describeError(res) {
+    if (res.status === 401 || res.status === 403) {
+      return "App Store Connect rejected the key: check ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_P8 in Fleet-OPS prod /asc";
+    }
+    const parts = [];
+    const errors = res.parsed && Array.isArray(res.parsed.errors) ? res.parsed.errors : [];
+    for (const problem of errors.slice(0, 3)) {
+      const title = typeof problem.title === "string" ? problem.title : "unknown error";
+      const detail = typeof problem.detail === "string" ? problem.detail : "";
+      parts.push(detail ? `${title}: ${detail}` : title);
+    }
+    if (parts.length === 0) {
+      parts.push("no JSON API error detail was returned");
+    }
+    return parts
+      .map((part) => part.replace(/[A-Za-z0-9._~+/=-]{24,}/g, "[redacted]"))
+      .join("; ");
+  }
+
+  // Guard the shape of a response before any of it is read.
+  //
+  // The scripts in this directory are dependency-free, so the guard is
+  // written out by hand rather than pulled in as a schema library.
+  function isPlainObject(value) {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+  }
+
+  function requireObject(value, what) {
+    if (!isPlainObject(value)) {
+      console.error(`upload-screenshots: invalid ${what} response`);
+      process.exit(2);
+    }
+    return value;
+  }
+
+  function requireArray(value, what) {
+    if (!Array.isArray(value)) {
+      console.error(`upload-screenshots: invalid ${what} response`);
+      process.exit(2);
+    }
+    return value;
+  }
+
   async function api(methodName, apiPath, jsonBody) {
-    const url = apiPath.startsWith("http") ? apiPath : `https://api.appstoreconnect.apple.com${apiPath}`;
+    const url = apiPath.startsWith("http") ? apiPath : `${API_BASE}${apiPath}`;
     const res = await fetch(url, {
       method: methodName,
       headers: {
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json"
       },
-      body: jsonBody ? jsonBody : undefined
+      body: jsonBody ? jsonBody : undefined,
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
     });
     const text = await res.text();
     let parsed;
     try { parsed = JSON.parse(text); } catch { parsed = { raw: text }; }
     return { status: res.status, ok: res.ok, parsed, text };
+  }
+
+  // Drop a reservation that will never be committed.
+  //
+  // A screenshot set holds ten entries, so a reservation that is left open
+  // after a failed upload sits in the set forever and pushes the real
+  // screenshots out of it.  The delete is best effort: the script still
+  // reports the original failure, but it says whether the entry went away
+  // so a later run knows to look for it.
+  //
+  // Every caller has to await this before it exits the process: a pending
+  // fetch is cancelled by the exit, and the reservation would survive.
+  async function discardReservation(screenshotId) {
+    try {
+      const dropped = await api("DELETE", `/v1/appScreenshots/${screenshotId}`);
+      if (dropped.ok) {
+        console.error(`upload-screenshots: dropped the reservation ${screenshotId}`);
+        return true;
+      }
+      console.error(`upload-screenshots: the reservation ${screenshotId} is still open (HTTP ${dropped.status}): ${describeError(dropped)}`);
+      return false;
+    } catch (error) {
+      const reason = error && error.name === "TimeoutError"
+        ? "the delete timed out"
+        : `the delete failed (${error && error.message ? error.message : "unknown error"})`;
+      console.error(`upload-screenshots: the reservation ${screenshotId} is still open: ${reason}`);
+      return false;
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -452,11 +546,13 @@ async function main() {
 
     const sets = await api("GET", `/v1/appStoreVersionLocalizations/${localizationId}/appScreenshotSets`);
     if (!sets.ok) {
-      console.error(`upload-screenshots: could not list screenshot sets (HTTP ${sets.status})`);
+      console.error(`upload-screenshots: could not list screenshot sets (HTTP ${sets.status}): ${describeError(sets)}`);
       process.exit(2);
     }
-    let set = (sets.parsed.data || []).find(
-      (entry) => entry.attributes?.screenshotDisplayType === displayType
+    const setList = requireArray(sets.parsed?.data, "screenshot-set list");
+    let set = setList.find(
+      (entry) => isPlainObject(entry) && typeof entry.id === "string"
+        && entry.attributes?.screenshotDisplayType === displayType
     );
     if (!set) {
       const created = await api("POST", "/v1/appScreenshotSets", JSON.stringify({
@@ -471,11 +567,10 @@ async function main() {
         }
       }));
       if (!created.ok) {
-        console.error(`upload-screenshots: could not create the ${displayType} set (HTTP ${created.status})`);
-        console.error(created.text);
+        console.error(`upload-screenshots: could not create the ${displayType} set (HTTP ${created.status}): ${describeError(created)}`);
         process.exit(2);
       }
-      set = created.parsed.data;
+      set = requireObject(created.parsed?.data, "screenshot set");
       console.error(`upload-screenshots: created the ${displayType} set ${set.id}`);
     } else {
       console.error(`upload-screenshots: reusing the ${displayType} set ${set.id}`);
@@ -499,14 +594,20 @@ async function main() {
         }
       }));
       if (!reserved.ok) {
-        console.error(`upload-screenshots: could not reserve ${fileName} (HTTP ${reserved.status})`);
-        console.error(reserved.text);
+        console.error(`upload-screenshots: could not reserve ${fileName} (HTTP ${reserved.status}): ${describeError(reserved)}`);
         process.exit(2);
       }
-      const screenshot = reserved.parsed.data;
-      const operations = screenshot.attributes?.uploadOperations || [];
+      const screenshot = requireObject(reserved.parsed?.data, "screenshot reservation");
+      if (typeof screenshot.id !== "string" || screenshot.id.length === 0) {
+        console.error(`upload-screenshots: invalid screenshot reservation for ${fileName}`);
+        process.exit(2);
+      }
+      const operations = Array.isArray(screenshot.attributes?.uploadOperations)
+        ? screenshot.attributes.uploadOperations
+        : [];
       if (operations.length === 0) {
         console.error(`upload-screenshots: Apple returned no upload operation for ${fileName}`);
+        await discardReservation(screenshot.id);
         process.exit(2);
       }
 
@@ -516,13 +617,27 @@ async function main() {
         const offset = operation.offset || 0;
         const length = operation.length || bytes.length;
         const chunk = bytes.subarray(offset, offset + length);
-        const put = await fetch(operation.url, {
-          method: operation.method || "PUT",
-          headers,
-          body: chunk
-        });
+        let put;
+        try {
+          put = await fetch(operation.url, {
+            method: operation.method || "PUT",
+            headers,
+            body: chunk,
+            signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+          });
+        } catch (error) {
+          // The reservation is still open in App Store Connect, and a set
+          // holds ten entries, so it is dropped before the script leaves.
+          await discardReservation(screenshot.id);
+          const reason = error && error.name === "TimeoutError"
+            ? "the upload timed out"
+            : `the upload failed (${error && error.message ? error.message : "unknown error"})`;
+          console.error(`upload-screenshots: upload of ${fileName} failed: ${reason}`);
+          process.exit(2);
+        }
         if (!put.ok) {
           console.error(`upload-screenshots: upload of ${fileName} failed (HTTP ${put.status})`);
+          await discardReservation(screenshot.id);
           process.exit(2);
         }
       }
@@ -531,11 +646,12 @@ async function main() {
         data: { type: "appScreenshots", id: screenshot.id, attributes: { uploaded: true } }
       }));
       if (!committed.ok) {
-        console.error(`upload-screenshots: could not commit ${fileName} (HTTP ${committed.status})`);
-        console.error(committed.text);
+        console.error(`upload-screenshots: could not commit ${fileName} (HTTP ${committed.status}): ${describeError(committed)}`);
+        await discardReservation(screenshot.id);
         process.exit(2);
       }
-      const state = committed.parsed.data?.attributes?.assetDeliveryState;
+      const committedScreenshot = requireObject(committed.parsed?.data, "screenshot commit");
+      const state = committedScreenshot.attributes?.assetDeliveryState;
       const stateName = state?.state || "UNKNOWN";
       console.error(`upload-screenshots: ${fileName} -> ${screenshot.id} (${stateName})`);
       if (state?.errors?.length) {
@@ -822,14 +938,15 @@ async function main() {
     process.exit(3);
   }
 
-  const url = path.startsWith("http") ? path : `https://api.appstoreconnect.apple.com${path}`;
+  const url = path.startsWith("http") ? path : `${API_BASE}${path}`;
   const res = await fetch(url, {
     method,
     headers: {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json"
     },
-    body: body ? body : undefined
+    body: body ? body : undefined,
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
   });
   const text = await res.text();
   console.error(`HTTP ${res.status}`);

@@ -48,4 +48,30 @@ grep -q 'wait_for_render' "$CAPTURE" || fail "the capture script no longer waits
 grep -q 'screenshot_ink.py' "$CAPTURE" || fail "the capture script no longer measures the frame before keeping it"
 pass "the capture waits for a drawn frame"
 
-echo "capture script contract: 4 checks passed"
+# The quota list fills the screen and the settings sheets do not, so one
+# threshold for all three screens either fails the two settings captures or
+# lets a half-drawn frame through.  The settings screens need their own bar.
+grep -q 'RENDER_MIN_PERCENT_SETTINGS' "$CAPTURE" \
+  || fail "the capture script has no separate minimum for the settings screens"
+grep -q 'wait_for_render "$udid" "$raw" "$min"' "$CAPTURE" \
+  || fail "the capture script does not give each screen its own minimum"
+pass "each screen is measured against a minimum that fits it"
+
+# A screen that is sparse but finished never reaches the high bar, so the
+# wait has to be able to keep a frame that has stopped changing.
+grep -q 'RENDER_STABLE_FLOOR' "$CAPTURE" \
+  || fail "the capture script cannot keep a sparse screen that has settled"
+grep -q 'RENDER_STABLE_POLLS' "$CAPTURE" \
+  || fail "the capture script does not require the frame to hold still"
+pass "a sparse screen that has settled is kept"
+
+# Both simulators run the same runtime and the same product, so the app is
+# built once and installed on both.  A second build compiles the companion and
+# the shared QuotaCore files from scratch again, for nothing.
+builds="$(grep -c 'xcodebuild' "$CAPTURE" || true)"
+[[ "$builds" -eq 1 ]] || fail "the capture script runs $builds xcodebuild calls; it has to build the app once:
+$builds"
+grep -q 'APP_PATH=' "$CAPTURE" || fail "the capture script has no shared app path"
+pass "the app is built once and installed on both simulators"
+
+echo "capture script contract: 8 checks passed"

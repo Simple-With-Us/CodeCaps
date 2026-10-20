@@ -41,9 +41,24 @@ RENDER_POLL_SEC="${RENDER_POLL_SEC:-2}"
 # The share of non-background pixels a frame has to hold before it counts as
 # a drawn screen.  A window that has drawn nothing but its status bar measures
 # about 0.3 percent, a frame that has drawn the navigation bar and no content
-# about 4, and a finished screen between 40 and 55.  Ten percent is clear of
-# both ends: a half-drawn screen is never mistaken for a finished one.
+# about 4, and the finished quota list between 40 and 55.  Ten percent is
+# clear of both ends: a half-drawn screen is never mistaken for a finished one.
 RENDER_MIN_PERCENT="${RENDER_MIN_PERCENT:-10.0}"
+# The two settings screens are not the quota list.  They are a navigation bar
+# and a short form, so they cover far less of the screen than the quota cards
+# do, and the same ten percent would be the wrong bar for them.  On an iPad
+# the same content covers a smaller share of a bigger screen, so the settings
+# bar is lower than the quota bar.
+RENDER_MIN_PERCENT_SETTINGS="${RENDER_MIN_PERCENT_SETTINGS:-6.0}"
+# A screen that is sparse but finished is still a finished screen.  A frame
+# that has stopped changing is one, whatever it covers, so a frame above this
+# floor is kept once two polls in a row measure the same value.  The floor
+# sits above the bare navigation bar so a half-drawn frame cannot reach it.
+RENDER_STABLE_FLOOR="${RENDER_STABLE_FLOOR:-4.5}"
+# How close two consecutive measurements have to be to count as unchanged,
+# and how many polls have to agree before the frame is kept.
+RENDER_STABLE_DELTA="${RENDER_STABLE_DELTA:-0.2}"
+RENDER_STABLE_POLLS="${RENDER_STABLE_POLLS:-2}"
 
 mkdir -p "$OUT_DIR"
 
@@ -178,31 +193,58 @@ PY
 }
 
 # Wait until the app has drawn its first frame, then leave that frame at the
-# path given by the second argument.
+# path given by the second argument.  The third argument is the share of the
+# frame the screen has to hold before it counts as drawn.
 #
 # The companion takes seconds to render on a cold simulator, and a fixed sleep
 # captured a blank window more than once.  This polls instead: take a frame,
 # measure how much of it is not background, and stop as soon as the screen
-# holds more than the status bar.
+# holds enough of it.  A sparse screen is also kept once two polls in a row
+# measure the same value, because a screen that has stopped changing is a
+# screen that has finished drawing.
+# Print the share of the frame that is not background, as a bare number.
+#
+# The measurement is the only thing that tells a drawn screen from a blank
+# one, so it is worth the seconds it costs, and it is why the background is
+# found from a strided sample rather than from every byte of the frame.
+measure_ink() {
+  python3 "$SCRIPT_DIR/screenshot_ink.py" "$1" 2>/dev/null
+}
+
 wait_for_render() {
-  local udid="$1" frame="$2"
+  local udid="$1" frame="$2" min_percent="$3"
   local deadline=$((SECONDS + RENDER_TIMEOUT_SEC))
+  local previous="" stable=0 percent=""
   while [ "$SECONDS" -lt "$deadline" ]; do
     xcrun simctl io "$udid" screenshot --type=jpeg "$frame" >/dev/null 2>&1 || true
     if [ -s "$frame" ]; then
-      local status=0
-      python3 "$SCRIPT_DIR/screenshot_ink.py" "$frame" \
-        --min-percent "$RENDER_MIN_PERCENT" || status=$?
-      if [ "$status" -eq 0 ]; then
-        return 0
-      fi
-      if [ "$status" -ne 1 ]; then
-        fail "could not measure the screen on $udid"
+      percent="$(measure_ink "$frame")"
+      if [ -n "$percent" ]; then
+        if awk -v p="$percent" -v m="$min_percent" 'BEGIN { exit !(p >= m) }'; then
+          log "screen holds ${percent}% non-background pixels, at or above ${min_percent}%"
+          return 0
+        fi
+        # A sparse screen settles instead of filling the frame.  Two polls
+        # that measure the same value mean the drawing stopped, and a frame
+        # above the floor holds more than a bare navigation bar.
+        if [ -n "$previous" ] \
+          && awk -v p="$percent" -v q="$previous" -v d="$RENDER_STABLE_DELTA" \
+            'BEGIN { exit !((p - q < 0 ? q - p : p - q) <= d) }' \
+          && awk -v p="$percent" -v f="$RENDER_STABLE_FLOOR" 'BEGIN { exit !(p >= f) }'; then
+          stable=$((stable + 1))
+          if [ "$stable" -ge "$RENDER_STABLE_POLLS" ]; then
+            log "screen settled at ${percent}% non-background pixels"
+            return 0
+          fi
+        else
+          stable=0
+        fi
+        previous="$percent"
       fi
     fi
     sleep "$RENDER_POLL_SEC"
   done
-  fail "the app drew no screen within ${RENDER_TIMEOUT_SEC}s on $udid"
+  fail "the app drew no screen within ${RENDER_TIMEOUT_SEC}s on $udid (last reading ${percent:-none}%)"
 }
 
 # Check a captured file against the size App Store Connect accepts and
@@ -230,29 +272,40 @@ check_capture() {
   CHECKED_FILE="$file"
 }
 
-# Build, install, seed, launch and capture on one simulator.
+# The app bundle the capture installs on both simulators.
+#
+# Both simulators run the same iOS runtime and the same Debug-iphonesimulator
+# product, so one build serves both.  Building per device compiled the
+# companion and the shared QuotaCore files from scratch a second time, which
+# added minutes to the job and reported any compile failure twice.
+APP_PATH="$DERIVED_ROOT/app/Build/Products/Debug-iphonesimulator/CodeCapsCompanion.app"
+
+# Build the companion once, against the first simulator.
+build_app() {
+  local udid="$1"
+  log "building the companion"
+  ( cd "$PROJECT_DIR" && xcodebuild -project CodeCapsCompanion.xcodeproj \
+      -scheme "$SCHEME" \
+      -destination "platform=iOS Simulator,id=$udid" \
+      -derivedDataPath "$DERIVED_ROOT/app" \
+      CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="" \
+      build >/dev/null )
+  [ -d "$APP_PATH" ] || fail "no app built at $APP_PATH"
+}
+
+# Install, seed, launch and capture on one simulator.
 capture_on() {
   local udid="$1" label="$2" kind="$3"
   local derived="$DERIVED_ROOT/$label"
-  local app="$derived/Build/Products/Debug-iphonesimulator/CodeCapsCompanion.app"
   local container group_container bundle_id
 
   log "booting $label ($udid)"
   xcrun simctl boot "$udid" 2>/dev/null || true
   xcrun simctl bootstatus "$udid" -b >/dev/null
 
-  log "building $label"
-  ( cd "$PROJECT_DIR" && xcodebuild -project CodeCapsCompanion.xcodeproj \
-      -scheme "$SCHEME" \
-      -destination "platform=iOS Simulator,id=$udid" \
-      -derivedDataPath "$derived" \
-      CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="" \
-      build >/dev/null )
-  [ -d "$app" ] || fail "no app built at $app"
-
-  bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Info.plist")"
+  bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist")"
   log "installing $bundle_id"
-  xcrun simctl install "$udid" "$app"
+  xcrun simctl install "$udid" "$APP_PATH"
 
   container="$(xcrun simctl get_app_container "$udid" "$bundle_id" data)"
   # The companion reads the App Group container when the build is signed and
@@ -266,9 +319,18 @@ capture_on() {
   local name
   for name in fleet-status platform-order alarms; do
     local args=()
+    # The quota list fills the screen and the settings sheets do not, so each
+    # one is measured against a bar that fits the screen it shows.
+    local min="$RENDER_MIN_PERCENT"
     case "$name" in
-      platform-order) args=(-openSettings -reorderPlatforms) ;;
-      alarms) args=(-openSettings -openAlarms) ;;
+      platform-order)
+        args=(-openSettings -reorderPlatforms)
+        min="$RENDER_MIN_PERCENT_SETTINGS"
+        ;;
+      alarms)
+        args=(-openSettings -openAlarms)
+        min="$RENDER_MIN_PERCENT_SETTINGS"
+        ;;
     esac
     xcrun simctl terminate "$udid" "$bundle_id" 2>/dev/null || true
     # Re-seed before each launch so the "Updated" time on the cards is the
@@ -287,7 +349,7 @@ capture_on() {
     # App Store Connect rejects a screenshot that has one.  It is converted
     # back to PNG so the upload step can read the size out of the header.
     local raw="$derived/$label-$name.jpg"
-    wait_for_render "$udid" "$raw"
+    wait_for_render "$udid" "$raw" "$min"
     sips -s format png "$raw" --out "$OUT_DIR/$label-$name.png" >/dev/null
     log "captured $label $name"
   done
@@ -335,6 +397,8 @@ main() {
 
   log "iPhone simulator $iphone_udid"
   log "iPad simulator $ipad_udid"
+
+  build_app "$iphone_udid"
 
   capture_on "$iphone_udid" "iphone" "iphone"
   capture_on "$ipad_udid" "ipad" "ipad"
