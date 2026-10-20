@@ -2055,12 +2055,7 @@ final class MonitorModel: ObservableObject {
                 if self.remoteAlertRelayEnabled, targetFormat == .usageMonitorV2,
                    self.pushForTesting == nil, !self.skipsSnapshotIOForTesting,
                    let token, !token.isEmpty {
-                    let alerts = self.exportedAlerts(now: self.now).map { alert in
-                        LocalQuotaSnapshot.AlertPayload(
-                            id: QuotaPublisher.producerInstanceId + "|" + alert.id,
-                            kind: alert.kind, providerKey: alert.providerKey, providerTitle: alert.providerTitle,
-                            windowLabel: alert.windowLabel, summary: alert.summary, occurredAt: alert.occurredAt)
-                    }
+                    let alerts = self.exportedAlerts(now: self.now)
                     do {
                         try await self.usageAlertPublisher.publish(alerts, quotaEndpoint: url, token: token)
                         guard !Task.isCancelled, self.isCurrentPushSettings(generation, endpoint: targetEndpoint, format: targetFormat) else { return .cancelled }
@@ -2817,6 +2812,11 @@ extension MonitorModel {
                 windowLabel: record.windowLabel, summary: record.body,
                 occurredAt: formatter.string(from: record.timestamp)))
         }
-        return out
+        return out.map { alert in
+            LocalQuotaSnapshot.AlertPayload(
+                id: QuotaPublisher.producerInstanceId + "|" + alert.id,
+                kind: alert.kind, providerKey: alert.providerKey, providerTitle: alert.providerTitle,
+                windowLabel: alert.windowLabel, summary: alert.summary, occurredAt: alert.occurredAt)
+        }
     }
 }
