@@ -44,10 +44,10 @@ final class UsageAlertDeliveryTests: XCTestCase {
             count += 1
         }
         let now = Date()
-        func window(_ remaining: Double) -> QuotaWindow {
+        func window(_ remaining: Double, at date: Date? = nil) -> QuotaWindow {
             QuotaWindow(id: "anthropic:5h", provider: "Claude", providerKey: "anthropic",
                         label: "5-hour window", remainingPercent: remaining, window: "5h",
-                        occurredAt: ISO8601DateFormatter().string(from: now))
+                        occurredAt: ISO8601DateFormatter().string(from: date ?? now))
         }
         model.refreshExhaustionWarningsForTesting(windows: [window(0)], now: now)
         model.refreshExhaustionWarningsForTesting(windows: [window(0)], now: now)
@@ -56,8 +56,8 @@ final class UsageAlertDeliveryTests: XCTestCase {
         model.refreshExhaustionWarningsForTesting(windows: [], now: now)
         model.refreshExhaustionWarningsForTesting(windows: [window(0)], now: now)
         XCTAssertEqual(count, 1)
-        model.refreshExhaustionWarningsForTesting(windows: [window(10)], now: now)
-        model.refreshExhaustionWarningsForTesting(windows: [window(0)], now: now.addingTimeInterval(1))
+        model.refreshExhaustionWarningsForTesting(windows: [window(10, at: now.addingTimeInterval(1))], now: now.addingTimeInterval(1))
+        model.refreshExhaustionWarningsForTesting(windows: [window(0, at: now.addingTimeInterval(2))], now: now.addingTimeInterval(2))
         XCTAssertEqual(count, 2)
         XCTAssertNotEqual(firstID, model.exportedAlerts(now: now).first { $0.kind == "quotaExhaustion" }?.id)
     }
@@ -91,8 +91,83 @@ final class UsageAlertDeliveryTests: XCTestCase {
         XCTAssertTrue(first?.id.hasPrefix(QuotaPublisher.producerInstanceId + "|") == true)
         model.injectRunawayAnomaliesForTests([anomaly(at: now.addingTimeInterval(60))])
         XCTAssertEqual(first?.id, model.exportedAlerts(now: now).first?.id)
+        XCTAssertEqual(first, model.exportedAlerts(now: now).first)
         model.injectRunawayAnomaliesForTests([])
         model.injectRunawayAnomaliesForTests([anomaly(at: now.addingTimeInterval(120))])
         XCTAssertNotEqual(first?.id, model.exportedAlerts(now: now).first?.id)
+    }
+
+    func testRestartAndOlderRecoveryDoNotRepeatExhaustion() {
+        let name = "UsageAlertRestartTests." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: name)!
+        defer { defaults.removePersistentDomain(forName: name) }
+        let now = Date()
+        func window(_ remaining: Double, at date: Date) -> QuotaWindow {
+            QuotaWindow(id: "anthropic:5h", provider: "Claude", providerKey: "anthropic",
+                        label: "5-hour window", remainingPercent: remaining, window: "5h",
+                        occurredAt: ISO8601DateFormatter().string(from: date))
+        }
+        let first = MonitorModel(defaults: defaults)
+        first.skipsSnapshotIOForTesting = true
+        first.alarmManager.preferences[.quotaExhaustion] = UsageAlertOption(enabled: true)
+        first.alarmManager.onUsageDelivery = { _, _, _, _ in }
+        first.refreshActualExhaustion(windows: [window(0, at: now)], now: now)
+        let firstID = first.exportedAlerts(now: now).first?.id
+        XCTAssertNotNil(firstID)
+        let relaunched = MonitorModel(defaults: defaults)
+        relaunched.skipsSnapshotIOForTesting = true
+        var deliveries = 0
+        relaunched.alarmManager.onUsageDelivery = { _, _, _, _ in deliveries += 1 }
+        relaunched.refreshActualExhaustion(windows: [window(10, at: now.addingTimeInterval(-1))], now: now)
+        relaunched.refreshActualExhaustion(windows: [window(10, at: now)], now: now)
+        relaunched.refreshActualExhaustion(windows: [window(0, at: now.addingTimeInterval(1))], now: now.addingTimeInterval(1))
+        XCTAssertEqual(deliveries, 0)
+        XCTAssertEqual(firstID, relaunched.exportedAlerts(now: now).first?.id)
+        relaunched.refreshActualExhaustion(windows: [window(10, at: now.addingTimeInterval(2))], now: now.addingTimeInterval(2))
+        relaunched.refreshActualExhaustion(windows: [window(0, at: now.addingTimeInterval(3))], now: now.addingTimeInterval(3))
+        XCTAssertEqual(deliveries, 1)
+        XCTAssertNotEqual(firstID, relaunched.exportedAlerts(now: now).first?.id)
+    }
+
+    func testAnomalyOccurrenceSurvivesRestart() {
+        let name = "UsageAlertAnomalyRestartTests." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: name)!
+        defer { defaults.removePersistentDomain(forName: name) }
+        let now = Date()
+        func anomaly(at date: Date) -> AnomalyDetector.Anomaly {
+            .init(providerKey: "anthropic", windowId: "anthropic:5h", kind: .vsPeak,
+                  multiplier: 6, summary: "Usage exceeds peak.", observedAt: date)
+        }
+        let first = MonitorModel(defaults: defaults)
+        first.skipsSnapshotIOForTesting = true
+        first.injectRunawayAnomaliesForTests([anomaly(at: now)])
+        let id = first.exportedAlerts(now: now).first?.id
+        let relaunched = MonitorModel(defaults: defaults)
+        relaunched.skipsSnapshotIOForTesting = true
+        relaunched.injectRunawayAnomaliesForTests([anomaly(at: now.addingTimeInterval(60))])
+        XCTAssertEqual(id, relaunched.exportedAlerts(now: now).first?.id)
+        XCTAssertEqual(first.exportedAlerts(now: now), relaunched.exportedAlerts(now: now))
+    }
+
+    func testLongWindowIdentityProducesBoundedStableExportIDAndImmutablePayload() {
+        let name = "UsageAlertLongIDTests." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: name)!
+        defer { defaults.removePersistentDomain(forName: name) }
+        let model = MonitorModel(defaults: defaults)
+        model.skipsSnapshotIOForTesting = true
+        let now = Date()
+        let windowID = String(repeating: "long-window-", count: 60)
+        model.injectRunawayAnomaliesForTests([
+            .init(providerKey: "anthropic", windowId: windowID, kind: .vsPeak,
+                  multiplier: 6, summary: "Initial peak.", observedAt: now)
+        ])
+        let initial = model.exportedAlerts(now: now).first
+        XCTAssertNotNil(initial)
+        XCTAssertLessThanOrEqual(initial?.id.count ?? 1_000, 200)
+        model.injectRunawayAnomaliesForTests([
+            .init(providerKey: "anthropic", windowId: windowID, kind: .vsPeak,
+                  multiplier: 9, summary: "A higher peak.", observedAt: now.addingTimeInterval(60))
+        ])
+        XCTAssertEqual(initial, model.exportedAlerts(now: now).first)
     }
 }
