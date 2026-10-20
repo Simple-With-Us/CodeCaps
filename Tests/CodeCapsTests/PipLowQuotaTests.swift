@@ -104,4 +104,31 @@ final class PipLowQuotaTests: XCTestCase {
         XCTAssertTrue(model.pipOpenWhenLow)
         XCTAssertEqual(model.pipLowThresholdPercent, 20)
     }
+
+    func testDecisiveWindowRecoversDespiteUnknownAndOlderSibling() {
+        var session = PipLowQuotaSession()
+        func combined(_ remaining: Double, seconds: Double, omitPrimary: Bool = false) -> DisplaySection {
+            var windows = omitPrimary ? [] : row(remaining: remaining, seconds: seconds).section.windows
+            var sibling = row(remaining: 50).section.windows[0].window
+            sibling.id = "older-sibling"
+            windows.append(QuotaWindowSnapshot(window: sibling, now: now.addingTimeInterval(seconds)))
+            var placeholder = sibling
+            placeholder.id = "unknown-placeholder"
+            placeholder.remainingPercent = nil
+            placeholder.remainingUnknown = true
+            windows.append(QuotaWindowSnapshot(window: placeholder, now: now.addingTimeInterval(seconds)))
+            return DisplaySection(id: "anthropic", providerKey: "anthropic", title: "Claude",
+                platformTitle: "Claude", section: QuotaPlatformSection(providerKey: "anthropic",
+                    providerLabel: "Claude", expected: true, windows: windows),
+                poolKey: nil, remainingPercent: remaining, resetAt: nil, maskedWindowIds: [])
+        }
+        XCTAssertFalse(evaluate(combined(50, seconds: 0), session: &session))
+        XCTAssertTrue(evaluate(combined(5, seconds: 10), session: &session))
+        XCTAssertFalse(evaluate(combined(50, seconds: 11, omitPrimary: true), session: &session))
+        XCTAssertEqual(session.rowsBelowThreshold, ["anthropic"], "missing decisive evidence cannot rearm")
+        XCTAssertFalse(evaluate(combined(50, seconds: 12), session: &session))
+        XCTAssertTrue(session.rowsBelowThreshold.isEmpty)
+        XCTAssertTrue(session.autoAddedRowIds.isEmpty)
+        XCTAssertTrue(evaluate(combined(5, seconds: 13), session: &session))
+    }
 }
