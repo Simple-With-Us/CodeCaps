@@ -77,6 +77,8 @@ final class PipInteractionTests: XCTestCase {
             issue: model.issues[row.providerKey]), "unavailable")
         XCTAssertTrue(PipWidgetController.meterSnapshots(for: row, now: model.now,
             issue: model.issues[row.providerKey]).isEmpty)
+        XCTAssertEqual(PipWidgetController.meterCount(for: row, now: model.now,
+            issue: model.issues[row.providerKey]), 0)
         model.pipPinnedRowIds = []
         XCTAssertFalse(PipWidgetController.targetRows(for: model).contains { $0.id == row.id })
     }
@@ -94,6 +96,8 @@ final class PipInteractionTests: XCTestCase {
             disabledSources: ["anthropic"]), "source disabled")
         XCTAssertTrue(PipWidgetController.meterSnapshots(for: row, now: model.now,
             disabledSources: ["anthropic"]).isEmpty)
+        XCTAssertEqual(PipWidgetController.meterCount(for: row, now: model.now,
+            disabledSources: ["anthropic"]), 0)
     }
 
     func testFreshWeeklyCapRemainsVisibleBesideFullShortWindow() throws {
