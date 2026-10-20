@@ -522,7 +522,16 @@ async function main() {
         console.error(`upload-screenshots: no such file: ${file}`);
         process.exit(2);
       }
-      const header = readFileSync(file).subarray(0, 24);
+      // The width and height sit at offsets 16 and 20, so anything shorter
+      // than a signature plus an IHDR header cannot be measured.  Reading
+      // them anyway raises a RangeError with a stack trace instead of the
+      // named failure every other bad input gets here.
+      const bytes = readFileSync(file);
+      if (bytes.length < 24) {
+        console.error(`upload-screenshots: ${file} is ${bytes.length} bytes, too small to be a PNG`);
+        process.exit(2);
+      }
+      const header = bytes.subarray(0, 24);
       const size = `${header.readUInt32BE(16)}x${header.readUInt32BE(20)}`;
       const type = sizeToDisplayType[size];
       if (!type) {
