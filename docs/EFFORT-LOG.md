@@ -714,10 +714,12 @@ repo: CodeCaps; pre-work claim: posted to #agent-sync after reading AGENT-SYNC.m
   16px mark as "16px".  An art-crop round trip is meaningful for before/after
   on the same shape but has a systematic bias for small art.  The metric kept
   is the width of the anti-aliased transition at the mark's silhouette, in the
-  pixels the mark is actually drawn at, counting only partial-alpha pixels
-  close to the visible boundary so that artwork which is genuinely soft
-  inside (the Gemini star is built from blurred shapes under a mask) is not
-  mistaken for a blurry outline.
+  pixels the mark is actually drawn at: every partial-alpha pixel in the
+  artwork, counted over the silhouette's perimeter of visible pixels.
+  Interior translucency counts towards the total as well, so artwork that is
+  genuinely soft inside (the Gemini star is built from blurred shapes under a
+  mask) reads as soft here; that errs towards flagging a mark rather than
+  hiding one.
 - 20 Mac `ProviderMarks` and the 3 companion MiniMax files were rebuilt from a
   same-art source: this repository's own vectors, or a file from the owner's
   icon library.  The geometry is unchanged, because the artwork's bounding box

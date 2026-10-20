@@ -24,10 +24,10 @@ The sources were the vectors this repository already ships, or a file from the o
 
 | Mark | Source |
 | --- | --- |
-| Claude, Cursor, Grok, xAI, Gemini, Muse Code | this repository's own SVG |
+| Claude, Cursor, Grok, Gemini | this repository's own SVG |
 | Muse, Muse Assist | `Muse_BlueM_TransparentBG.png`, owner library |
 | Antigravity | `google-antigravity-icon.svg`, owner library |
-| MiniMax (Mac and companion) | `minimax-color.png`, owner library |
+| MiniMax (companion) | `minimax-color.png`, owner library |
 
 Claude's colour mark is rebuilt from `claude.svg` rather than from the owner's 1517px raster of the same mark, because the vector measures sharper at draw size even though the owner's file is larger.
 
