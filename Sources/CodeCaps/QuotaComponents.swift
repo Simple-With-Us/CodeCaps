@@ -769,7 +769,47 @@ struct Eyebrow: View {
     }
 }
 
+struct ProviderDetailRow: Identifiable, Equatable {
+    let label: String
+    let value: String
+    var id: String { label }
+}
+
+struct ProviderDetailsView: View {
+    let rows: [ProviderDetailRow]
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(rows) { row in
+                HStack(alignment: .firstTextBaseline) {
+                    Text(row.label).foregroundStyle(.secondary)
+                    Spacer(minLength: 8)
+                    Text(row.value).textSelection(.enabled)
+                }
+                .font(.system(size: 11))
+            }
+        }
+    }
+}
+
 extension QuotaPlatformSection {
+    var automaticPlanName: String? {
+        windows.compactMap(\.window.planName).first { !$0.isEmpty }
+    }
+
+    /// Details are textual so a credit balance cannot become a quota meter.
+    var providerDetailRows: [ProviderDetailRow] {
+        guard let details = windows.compactMap(\.window.usageDetails).first else { return [] }
+        var rows: [ProviderDetailRow] = []
+        if let email = details.accountEmail { rows.append(.init(label: "Account", value: email)) }
+        if let balance = details.creditBalance {
+            rows.append(.init(label: "Credits", value: "\(balance.formatted(.number.precision(.fractionLength(0...2)))) left"))
+        }
+        if let enabled = details.extraUsageEnabled {
+            rows.append(.init(label: "Extra Usage", value: enabled ? "enabled" : "disabled"))
+        }
+        return rows
+    }
+
     /// The single subtitle rule, replacing three near-identical copies that
     /// disagreed about the Antigravity fallback.
     func displaySubtitle(customInfo: PlatformCustomInfo?) -> String? {
@@ -780,7 +820,7 @@ extension QuotaPlatformSection {
             return detail
         }
         if via == "antigravity" { return "Antigravity subscription" }
-        if let plan = windows.compactMap(\.window.planName).first, !plan.isEmpty { return plan }
+        if let plan = automaticPlanName { return plan }
         return nil
     }
 
@@ -793,7 +833,7 @@ extension QuotaPlatformSection {
         let renewal = custom.renewalDateText.isEmpty
             ? (BillingRenewal.text(for: windows.map(\.window)) ?? "")
             : custom.renewalDateText
-        let parts = [custom.planName,
+        let parts = [custom.planName.isEmpty ? (automaticPlanName ?? "") : custom.planName,
                      custom.costUsd,
                      renewal.isEmpty ? "" : "Renews \(renewal)"]
             .filter { !$0.isEmpty }
@@ -988,6 +1028,9 @@ struct PlatformCard: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 windowsBody
+                if origin == .local && !section.providerDetailRows.isEmpty {
+                    ProviderDetailsView(rows: section.providerDetailRows)
+                }
             }
         }
         .padding(compact ? 12 : 16)

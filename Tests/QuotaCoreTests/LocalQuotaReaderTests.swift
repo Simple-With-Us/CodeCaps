@@ -203,6 +203,7 @@ final class LocalQuotaReaderTests: XCTestCase {
             homeDirectory: home,
             now: { self.observedAt },
             fetchJSON: { request in
+                if request.url?.path.hasSuffix("/profile") == true { return Self.httpResponse(#"{"account":{"email":"renewed@example.test"}}"#) }
                 usageCalls += 1
                 if usageCalls == 1 {
                     return Self.httpResponse(#"{"error":"unauthorized"}"#, status: 401)
@@ -214,13 +215,15 @@ final class LocalQuotaReaderTests: XCTestCase {
             renewClaudeLogin: {
                 renewalRan += 1
                 try? self.writeJSON(
-                    ["claudeAiOauth": ["accessToken": "fresh", "refreshToken": "r",
+                    ["claudeAiOauth": ["accessToken": "fresh", "refreshToken": "r", "subscriptionType": "max", "rateLimitTier": "default_claude_max_20x",
                                        "expiresAt": 4_102_444_800_000]],
                     to: home.appendingPathComponent(".claude/.credentials.json"))
             },
             renewalThrottle: ClaudeRenewalThrottle(minimumInterval: 0))
         let result = await reader.read()
         XCTAssertEqual(renewalRan, 1)
+        XCTAssertEqual(result.windows.first { $0.providerKey == "anthropic" }?.usageDetails?.accountEmail, "renewed@example.test")
+        XCTAssertEqual(result.windows.first { $0.providerKey == "anthropic" }?.planName, "Max 20x")
         XCTAssertNil(result.issues["anthropic"])
         XCTAssertEqual(result.windows.first { $0.providerKey == "anthropic" }?.remainingPercent, 90)
     }
@@ -491,6 +494,45 @@ final class LocalQuotaReaderTests: XCTestCase {
         XCTAssertEqual(fable.modelType, "fable")
         XCTAssertEqual(fable.remainingPercent, 100)
         XCTAssertTrue(fable.isSubModelLimit)
+    }
+
+    func testClaudeAutomaticPlanNames() async throws {
+        for (subscription, tier, expected) in [("max", "default_claude_max_20x", "Max 20x"), ("max", "default_claude_max_5x", "Max 5x"), ("max", "", "Max"), ("pro", "default_claude_pro", "Pro"), ("research_team", "default_special_internal", "Research Team")] {
+            let home = try makeFixtureHome()
+            defer { try? FileManager.default.removeItem(at: home) }
+            try writeJSON(["claudeAiOauth": ["accessToken": "fixture", "subscriptionType": subscription, "rateLimitTier": tier, "expiresAt": 4_102_444_800_000]], to: home.appendingPathComponent(".claude/.credentials.json"))
+            let reader = LocalQuotaReader(homeDirectory: home, fetchJSON: { request in
+                if request.url?.path.hasSuffix("/profile") == true { return Self.httpResponse("{}", status: 500) }
+                return Self.httpResponse(#"{"five_hour":{"utilization":20}}"#)
+            }, runAntigravity: { Data("{}".utf8) }, readClaudeCredential: { .missing })
+            let result = await reader.read()
+            XCTAssertEqual(result.windows.first { $0.providerKey == "anthropic" }?.planName, expected)
+            XCTAssertNil(result.issues["anthropic"])
+        }
+    }
+
+    func testCodexAPIPlanPrecedenceAndNestedPools() async throws {
+        let home = try makeFixtureHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        try writeJSON(["plan_type": "stale", "tokens": ["access_token": "fixture"]], to: home.appendingPathComponent(".codex/auth.json"))
+        for field in ["plan_type", "planType", "plan"] {
+            let payload: [String: Any] = [field: "pro", "rate_limit": ["primary_window": ["used_percent": 10]],
+                "additional_rate_limits": [["limit_name": "Spark", "metered_feature": "spark", "rate_limit": [
+                    "primary_window": ["used_percent": 20, "limit_window_seconds": 3600],
+                    "secondary_window": ["used_percent": 30, "limit_window_seconds": 604800]]]],
+                "code_review_rate_limit": ["primary_window": ["used_percent": 40, "limit_window_seconds": 604800]]]
+            let data = try JSONSerialization.data(withJSONObject: payload)
+            let reader = LocalQuotaReader(homeDirectory: home, fetchJSON: { _ in
+                (data, Self.httpResponse("{}").1)
+            }, runAntigravity: { Data("{}".utf8) }, readClaudeCredential: { .missing })
+            let windows = await reader.read().windows.filter { $0.providerKey == "openai" }
+            XCTAssertEqual(windows.count, 4)
+            XCTAssertEqual(Set(windows.map(\.id)).count, 4)
+            XCTAssertTrue(windows.allSatisfy { $0.planName == "pro" })
+            XCTAssertEqual(windows.first { $0.id == "local-mac:openai:primary" }?.remainingPercent, 90)
+            XCTAssertEqual(windows.first { $0.modelId == "spark" && $0.window == "1h" }?.remainingPercent, 80)
+            XCTAssertEqual(windows.first { $0.modelId == "code-review" }?.window, "1w")
+        }
     }
 
     private func writeJSON(_ object: Any, to url: URL) throws {

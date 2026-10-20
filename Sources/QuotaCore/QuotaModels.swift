@@ -53,6 +53,8 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
     public var absoluteLimit: Double?
     public var quotaUnit: String?
     public var planName: String?
+    /// Local display details; never encoded into fleet or handoff payloads.
+    public var usageDetails: ProviderUsageDetails? = nil
     public var remainingUnknown: Bool
     public var isExhausted: Bool
     public var resetAt: String?
@@ -203,6 +205,11 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
     /// Whether this window represents a model-specific sub-quota (e.g. Gemini 4 Argon or Claude Fable/Sonnet)
     /// rather than the platform's primary shared account/pool quota.
     public var isSubModelLimit: Bool {
+        if canonicalProviderKey == "openai" {
+            return id.hasPrefix("local-mac:openai:additional:") || id.hasPrefix("local-mac:openai:code-review:")
+                || id.hasPrefix("openai:additional:") || id.hasPrefix("openai:code-review:")
+                || id.hasPrefix("additional:") || id.hasPrefix("code-review:")
+        }
         if canonicalProviderKey == "google-antigravity" {
             if let modelId = modelId?.lowercased(), modelId.contains("argon") { return true }
             if let modelType = modelType?.lowercased(), modelType.contains("argon") { return true }
