@@ -435,7 +435,11 @@ async function main() {
   const REQUEST_TIMEOUT_MS = (() => {
     const raw = process.env.ASC_REQUEST_TIMEOUT_MS;
     const n = raw ? Number.parseInt(raw, 10) : Number.NaN;
-    return Number.isFinite(n) && n > 0 ? n : 120_000;
+    if (!Number.isFinite(n) || n <= 0) return 120_000;
+    // AbortSignal.timeout does not accept a delay above 2^31-1: it either
+    // throws a RangeError or silently rounds the delay down, so an
+    // unclamped override would abort every request immediately.
+    return Math.min(n, 2_147_483_647);
   })();
 
   // Describe a failed response without ever printing what it holds.
@@ -852,8 +856,12 @@ async function main() {
     const apps = await api("GET", `/v1/apps?filter[bundleId]=${encodeURIComponent(bundleId)}&limit=1`);
     if (!apps.ok) {
       // Every failure the service reports goes through describeError, so a
-      // rejected key is never read as a bundle id that does not exist.
-      console.error(`latest-build-seq: ${describeError(apps)}`);
+      // rejected key is never read as a bundle id that does not exist.  The
+      // status stays in the message: ship-testflight.sh logs these lines
+      // because the status is the only thing that explains a failed lookup,
+      // and describeError alone cannot tell a rate limit from a bad request.
+      const status = apps.networkError ? "" : ` (HTTP ${apps.status})`;
+      console.error(`latest-build-seq: ${describeError(apps)}${status}`);
       process.exitCode = 2;
       return;
     }
@@ -863,6 +871,14 @@ async function main() {
       return;
     }
     const appId = apps.parsed.data[0].id;
+    // The id is what every query below filters on, so an app record without
+    // one would send filter[app]=undefined and produce an HTTP 400 that reads
+    // as a query the client built wrong.
+    if (typeof appId !== "string" || appId.length === 0) {
+      console.error(`latest-build-seq: the app record for ${bundleId} has no usable id`);
+      process.exitCode = 2;
+      return;
+    }
 
     // Escape the prefix so "1.0" cannot match "120" via the regex dot.
     const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -980,8 +996,10 @@ async function main() {
     const apps = await api("GET", `/v1/apps?filter[bundleId]=${encodeURIComponent(bundleId)}&limit=1`);
     if (!apps.ok) {
       // Every failure the service reports goes through describeError, so a
-      // rejected key is never read as a bundle id that does not exist.
-      console.error(`ensure-tf-ready: ${describeError(apps)}`);
+      // rejected key is never read as a bundle id that does not exist.  The
+      // status stays in the message for the same reason as latest-build-seq.
+      const status = apps.networkError ? "" : ` (HTTP ${apps.status})`;
+      console.error(`ensure-tf-ready: ${describeError(apps)}${status}`);
       process.exitCode = 2;
       return;
     }
@@ -991,6 +1009,14 @@ async function main() {
       return;
     }
     const appId = apps.parsed.data[0].id;
+    // The id is what every query below filters on, so an app record without
+    // one would send filter[app]=undefined and produce an HTTP 400 that reads
+    // as a query the client built wrong.
+    if (typeof appId !== "string" || appId.length === 0) {
+      console.error(`ensure-tf-ready: the app record for ${bundleId} has no usable id`);
+      process.exitCode = 2;
+      return;
+    }
 
     // ---- Phase A: discovery. Poll until the uploaded build has an ASC record.
     let query = `/v1/builds?filter[app]=${appId}&filter[version]=${encodeURIComponent(wantBuildVersion)}`;
