@@ -1343,8 +1343,51 @@ struct SettingsNotificationsPage: View {
     @ObservedObject var model: MonitorModel
     @ObservedObject var state: ConsoleState
 
+    private func alertBinding<Value>(_ kind: UsageAlertKind,
+                                     _ path: WritableKeyPath<UsageAlertOption, Value>) -> Binding<Value> {
+        Binding(get: { model.alarmManager.preferences[kind][keyPath: path] },
+                set: { value in
+                    var option = model.alarmManager.preferences[kind]
+                    option[keyPath: path] = value
+                    model.alarmManager.preferences[kind] = option
+                })
+    }
+
     var body: some View {
         SettingsPage {
+            Section {
+                Toggle("Send Alerts To iPhone", isOn: $model.remoteAlertRelayEnabled)
+                if let error = model.remoteAlertRelayError {
+                    Text(error).foregroundStyle(.orange).font(.caption)
+                }
+            } footer: {
+                Text("Requires quota push to Usage Monitor and remote push enrollment on your iPhone." + sentenceGap
+                     + "The iPhone chooses its own alert categories and sounds.")
+            }
+            Section {
+                ForEach(UsageAlertKind.allCases) { kind in
+                    HStack {
+                        Toggle(kind.title, isOn: alertBinding(kind, \.enabled))
+                            .frame(width: 200, alignment: .leading)
+                        Toggle("Notification", isOn: alertBinding(kind, \.notification))
+                        Toggle("Popup", isOn: alertBinding(kind, \.popup))
+                        Picker("Sound", selection: alertBinding(kind, \.sound)) {
+                            ForEach(ResetAlarmSound.defaultPickerOrder, id: \.self) { sound in
+                                Text(sound.displayName).tag(sound)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 110)
+                    }
+                    .toggleStyle(.checkbox)
+                }
+            } header: {
+                Eyebrow("ALERT DELIVERY")
+            } footer: {
+                Text("Anomalies compare usage with your average; runaway usage compares it with your peak." + sentenceGap
+                     + "Quota Exhausted fires at zero remaining." + sentenceGap
+                     + "Provider bells choose which scheduled and vendor resets alert on this Mac.")
+            }
             if let row = model.displaySections.first(where: {
                 $0.providerKey == model.runawayAlertHistory.first?.providerKey
             }) ?? model.displaySections.first {
@@ -1372,40 +1415,6 @@ struct SettingsNotificationsPage: View {
                             .font(.system(size: 10, weight: .semibold))
                             .foregroundStyle(.secondary)
                             .frame(width: 300, alignment: .leading)
-                    }
-
-                    GridRow {
-                        Text("Reset Alerts")
-                            .font(.system(size: 11, weight: .medium))
-                            .help("Alert when a quota window resets, so you know a new week or month began.")
-                            .frame(width: 130, alignment: .leading)
-                        Toggle("", isOn: $model.alarmsAll)
-                            .labelsHidden()
-                            .toggleStyle(.switch)
-                            .help("The same switch as the All bell at the top of the Docked Bar.")
-                            .accessibilityLabel("Reset Alarms For All Providers")
-                        Picker("", selection: $model.alarmSound) {
-                            ForEach(ResetAlarmSound.defaultPickerOrder, id: \.self) { sound in
-                                Text(sound.displayName).tag(sound)
-                            }
-                        }
-                        .labelsHidden()
-                        .pickerStyle(.menu)
-                        .help("The sound played when a quota window resets. \"Silent\" keeps the banner and drops the sound.")
-                        .accessibilityLabel("Reset alert sound")
-                        .frame(width: 300, alignment: .leading)
-                    }
-
-                    GridRow {
-                        Text("Runaway Usage")
-                            .font(.system(size: 11, weight: .medium))
-                            .help("Alert when quota is being spent far faster than your own recent pattern.")
-                            .frame(width: 130, alignment: .leading)
-                        Toggle("", isOn: $model.burnRateAlertsEnabled)
-                            .labelsHidden()
-                            .toggleStyle(.switch)
-                            .accessibilityLabel("Alert on runaway usage")
-                        exhaustionThresholdCell
                     }
 
                     GridRow {
@@ -1485,11 +1494,10 @@ struct SettingsNotificationsPage: View {
             }
 
             Section {
-                Toggle("Alert on Runaway Usage", isOn: $model.burnRateAlertsEnabled)
-                    .help("Alert when quota is being spent far faster than your own recent pattern.")
-                    .accessibilityLabel("Alert on runaway usage")
+                Text("Usage Alert Thresholds")
+                    .font(.headline)
 
-                if model.burnRateAlertsEnabled {
+                if model.alarmManager.preferences[.anomaly].enabled || model.alarmManager.preferences[.runaway].enabled {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
                             Text("Versus Your Recent Average")
