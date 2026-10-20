@@ -180,8 +180,18 @@ public final class ResetAlarmManager: ObservableObject {
     }
 
     @Published public var preferences: UsageAlertPreferences {
-        didSet { preferences.save(to: defaults, key: Keys.preferences) }
+        didSet {
+            if !updatingLegacySound {
+                let changed = UsageAlertKind.allCases.filter { preferences[$0] != oldValue[$0] }
+                customizedSoundKinds.formUnion((changed.isEmpty ? UsageAlertKind.allCases : changed).map(\.rawValue))
+                defaults.set(customizedSoundKinds.sorted(), forKey: "usageAlertCustomizedSounds")
+            }
+            preferences.save(to: defaults, key: Keys.preferences)
+        }
     }
+    private var customizedSoundKinds: Set<String> = []
+    private var updatingLegacySound = false
+    private(set) var detectedResetHistory: [ResetAlertRecord] = []
     var onUsageDelivery: ((UsageAlertKind, String, String, UsageAlertOption) -> Void)?
     private var popupWindows: [NSWindow] = []
     private let defaults: UserDefaults
@@ -213,7 +223,9 @@ public final class ResetAlarmManager: ObservableObject {
     @Published public var alarmSound: ResetAlarmSound {
         didSet {
             defaults.set(alarmSound.rawValue, forKey: Keys.sound)
-            for kind in UsageAlertKind.allCases where preferences[kind].sound == oldValue {
+            updatingLegacySound = true
+            defer { updatingLegacySound = false }
+            for kind in UsageAlertKind.allCases where !customizedSoundKinds.contains(kind.rawValue) {
                 var option = preferences[kind]
                 option.sound = alarmSound
                 preferences[kind] = option
@@ -288,6 +300,11 @@ public final class ResetAlarmManager: ObservableObject {
         self.preferences = UsageAlertPreferences.load(
             from: defaults, key: Keys.preferences, resetEnabled: true, resetSound: resolved,
             runawayEnabled: defaults.object(forKey: "burnRateAlertsEnabled") as? Bool ?? false)
+        customizedSoundKinds = Set(defaults.stringArray(forKey: "usageAlertCustomizedSounds") ?? [])
+        if let data = defaults.data(forKey: "detectedResetHistory"),
+           let saved = try? JSONDecoder().decode([ResetAlertRecord].self, from: data) {
+            detectedResetHistory = saved
+        }
 
         if let data = defaults.data(forKey: Keys.alertHistory),
            let history = try? JSONDecoder().decode([ResetAlertRecord].self, from: data) {
@@ -470,10 +487,16 @@ public final class ResetAlarmManager: ObservableObject {
     }
 
     private func deliver(_ payload: ResetAlarmNotification) {
-        appendAlertRecord(for: payload)
+        detectedResetHistory.insert(Self.record(for: payload), at: 0)
+        detectedResetHistory = Array(detectedResetHistory.prefix(50))
+        if let data = try? JSONEncoder().encode(detectedResetHistory) {
+            defaults.set(data, forKey: "detectedResetHistory")
+        }
         guard isAlarmEnabled(for: payload.providerId) else { return }
         let kind: UsageAlertKind = payload.isVendorReset ? .vendorReset : .quotaReset
         guard preferences[kind].enabled else { return }
+        guard preferences[kind].notification || preferences[kind].popup else { return }
+        appendAlertRecord(for: payload)
         if let onNotification {
             onNotification(payload)
             return
@@ -538,7 +561,11 @@ public final class ResetAlarmManager: ObservableObject {
     }
 
     public func appendAlertRecord(for payload: ResetAlarmNotification) {
-        let record = ResetAlertRecord(
+        appendAlertRecord(Self.record(for: payload))
+    }
+
+    private static func record(for payload: ResetAlarmNotification) -> ResetAlertRecord {
+        ResetAlertRecord(
             id: payload.id,
             timestamp: payload.timestamp,
             providerKey: payload.providerId,
@@ -550,7 +577,6 @@ public final class ResetAlarmManager: ObservableObject {
             title: payload.title,
             body: payload.body
         )
-        appendAlertRecord(record)
     }
 
     public func appendAlertRecord(_ record: ResetAlertRecord) {
