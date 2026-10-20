@@ -47,3 +47,4 @@ jobs:
           node --test scripts/ios-fleet/test-asc-credentials.mjs
           python3 scripts/ios-fleet/test_pick_simulator.py
           python3 scripts/ios-fleet/test_screenshot_ink.py
+          bash scripts/ios-fleet/test-capture-script.sh
