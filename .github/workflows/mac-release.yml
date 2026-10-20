@@ -53,6 +53,13 @@ on:
       - 'scripts/infisical-fetch.mjs'
       - 'scripts/infisical-fetch-asc-key.mjs'
   workflow_dispatch:
+    inputs:
+      verify-only:
+        description: >-
+          Fetch the release credentials and check that Apple's notarization
+          service still accepts them, then stop.  Publishes nothing.
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -156,6 +163,11 @@ jobs:
       - name: Decide whether this run can publish
         id: gate
         run: |
+          if [ "${{ inputs.verify-only }}" = "true" ]; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Verify only::The credentials were fetched and checked.  Nothing was published."
+            exit 0
+          fi
           if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
             echo "publish=false" >> "$GITHUB_OUTPUT"
             echo "::notice title=Pull request::Built and verified only.  Releases are published from main."
