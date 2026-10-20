@@ -800,14 +800,14 @@ public final class CompanionQuotaModel: ObservableObject {
         // One-time migration of the two old mechanisms: a global "notify on
         // quota reset" switch, and one-shot bells armed per row.  The switch
         // meant "every provider", which is All; the bells meant "this row",
-        // which is a per-provider pick.  A fresh install lands on All, like the
-        // old switch's default.
+        // which is a per-provider pick.  Fresh installs require explicit opt-in.
         let legacyGlobal = defaults.object(forKey: AlarmKeys.legacyNotifyOnReset) as? Bool
             ?? UserDefaults.standard.object(forKey: AlarmKeys.legacyNotifyOnReset) as? Bool
         let hadResetPreferences = defaults.object(forKey: AlarmKeys.all) != nil
             || defaults.object(forKey: AlarmKeys.providers) != nil || legacyGlobal != nil
             || defaults.object(forKey: AlarmKeys.legacyArmedIds) != nil
-        let all = defaults.object(forKey: AlarmKeys.all) as? Bool ?? legacyGlobal ?? true
+        let all = CompanionResetAlertPolicy.allProviders(
+            saved: defaults.object(forKey: AlarmKeys.all) as? Bool, legacy: legacyGlobal)
         let providers = Set(defaults.stringArray(forKey: AlarmKeys.providers)
                             ?? defaults.stringArray(forKey: AlarmKeys.legacyArmedIds) ?? [])
         defaults.set(all, forKey: AlarmKeys.all)
@@ -1167,9 +1167,15 @@ public final class CompanionQuotaModel: ObservableObject {
             let provider = Self.canonicalManifestKey(provider: alert.providerKey, via: nil)
             let eventKey = Self.quotaEventKey(kind: kind, provider: provider, label: alert.windowLabel)
             remoteQuotaEvents.insert(eventKey)
-            if kind == .quotaReset || kind == .vendorReset {
-                let owners = items.filter { $0.providerKey == provider }.map(\.id)
-                guard alarmsAll || alarmProviderIds.contains(provider) || owners.contains(where: { isAlarmOn(for: $0) }) else {
+            if (kind == .quotaReset || kind == .vendorReset),
+               alertPreferences[kind].enabled && alertPreferences[kind].notification {
+                guard let selected = resetSelection(for: provider) else {
+                    retryAlerts[alert.id] = RetryAlert(kind: kind, title: "\(kind.title): \(alert.providerTitle)",
+                        body: alert.summary, eventKey: eventKey, createdAt: occurred)
+                    persistRetryAlerts()
+                    continue
+                }
+                guard selected else {
                     announcedAlertIds.insert(alert.id)
                     continue
                 }
@@ -1177,6 +1183,34 @@ public final class CompanionQuotaModel: ObservableObject {
             let quotaEvent = kind == .quotaReset || kind == .vendorReset || kind == .quotaExhaustion
             deliverAlert(id: alert.id, kind: kind, title: "\(kind.title): \(alert.providerTitle)", body: alert.summary,
                          eventKey: quotaEvent ? eventKey : nil)
+        }
+    }
+
+    private func resetSelection(for provider: String) -> Bool? {
+        CompanionResetAlertPolicy.selection(all: alarmsAll, selected: alarmProviderIds,
+            provider: provider, currentOwnerIDs: items.filter { $0.providerKey == provider }.map(\.id))
+    }
+
+    private func retryPendingAlerts() {
+        for (id, alert) in retryAlerts {
+            guard Date().timeIntervalSince(alert.createdAt) <= 15 * 60 else {
+                announcedAlertIds.insert(id)
+                retryAlerts.removeValue(forKey: id)
+                persistRetryAlerts()
+                continue
+            }
+            if (alert.kind == .quotaReset || alert.kind == .vendorReset),
+               alertPreferences[alert.kind].enabled && alertPreferences[alert.kind].notification {
+                guard let provider = alert.eventKey?.split(separator: "|").dropFirst().first,
+                      let selected = resetSelection(for: String(provider)) else { continue }
+                guard selected else {
+                    announcedAlertIds.insert(id)
+                    retryAlerts.removeValue(forKey: id)
+                    persistRetryAlerts()
+                    continue
+                }
+            }
+            deliverAlert(id: id, kind: alert.kind, title: alert.title, body: alert.body, eventKey: alert.eventKey)
         }
     }
 
@@ -1231,6 +1265,17 @@ public final class CompanionQuotaModel: ObservableObject {
                     return
                 }
                 #endif
+                if (kind == .quotaReset || kind == .vendorReset),
+                   alertPreferences[kind].enabled && alertPreferences[kind].notification {
+                    guard let provider = eventKey?.split(separator: "|").dropFirst().first,
+                          let selected = resetSelection(for: String(provider)) else { return }
+                    guard selected else {
+                        announcedAlertIds.insert(id)
+                        retryAlerts.removeValue(forKey: id)
+                        persistRetryAlerts()
+                        return
+                    }
+                }
                 guard alertPreferences[kind].enabled && alertPreferences[kind].notification else {
                     announcedAlertIds.insert(id)
                     retryAlerts.removeValue(forKey: id)
@@ -1258,23 +1303,10 @@ public final class CompanionQuotaModel: ObservableObject {
     private func parseSnapshot(data: Data) -> Bool {
         guard let envelope = try? JSONDecoder().decode(WireEnvelope.self, from: data),
               let rawWindows = envelope.windows else { return false }
-        for (id, alert) in retryAlerts {
-            guard Date().timeIntervalSince(alert.createdAt) <= 15 * 60 else {
-                announcedAlertIds.insert(id)
-                retryAlerts.removeValue(forKey: id)
-                persistRetryAlerts()
-                continue
-            }
-            deliverAlert(id: id, kind: alert.kind, title: alert.title, body: alert.body, eventKey: alert.eventKey)
-        }
-
-        // Raise anything the Mac decided to raise that this phone has not
-        // announced yet.  Done before the windows are built so a decode
-        // failure further down cannot leave an alert half-processed.
-        raisePendingAlerts(envelope.alerts ?? [])
-
         guard !rawWindows.isEmpty else {
             items = []
+            retryPendingAlerts()
+            raisePendingAlerts(envelope.alerts ?? [])
             hasDataSource = false
             lastUpdated = nil
             evaluateResets(newItems: [])
@@ -1418,9 +1450,11 @@ public final class CompanionQuotaModel: ObservableObject {
         }
 
         let sortedItems = sortPlatforms(newItems)
+        self.items = sortedItems
+        retryPendingAlerts()
+        raisePendingAlerts(envelope.alerts ?? [])
         evaluateResets(newItems: sortedItems)
         evaluateExhaustion(newItems: sortedItems)
-        self.items = sortedItems
         return true
     }
 
