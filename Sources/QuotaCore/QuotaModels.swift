@@ -206,7 +206,8 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
     /// rather than the platform's primary shared account/pool quota.
     public var isSubModelLimit: Bool {
         if canonicalProviderKey == "openai" {
-            return id.hasPrefix("local-mac:openai:additional:") || id.hasPrefix("local-mac:openai:code-review:")
+            return ["local-mac:openai:code-review", "openai:code-review", "code-review"].contains(id)
+                || id.hasPrefix("local-mac:openai:additional:") || id.hasPrefix("local-mac:openai:code-review:")
                 || id.hasPrefix("openai:additional:") || id.hasPrefix("openai:code-review:")
                 || id.hasPrefix("additional:") || id.hasPrefix("code-review:")
         }

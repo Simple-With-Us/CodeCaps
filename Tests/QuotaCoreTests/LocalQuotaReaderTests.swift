@@ -414,7 +414,7 @@ final class LocalQuotaReaderTests: XCTestCase {
         XCTAssertEqual(codex.count, 1)
         // A tokenless slot with no cadence of its own must not reach the UI as
         // the raw model name "Gpt-4 window".
-        XCTAssertEqual(codex.first?.label, "Other limit window")
+        XCTAssertEqual(codex.first?.label, "gpt-4 · Other limit window")
     }
 
     func testClaudeRateLimitKeySuffixIsPublishedAsTheModelFamily() async throws {
@@ -535,6 +535,130 @@ final class LocalQuotaReaderTests: XCTestCase {
         }
     }
 
+    func testCodexPoolShapesKeepNamesCadencesAndStableIDs() async throws {
+        let home = try makeFixtureHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        try writeJSON(["tokens": ["access_token": "fixture"]], to: home.appendingPathComponent(".codex/auth.json"))
+        let slots: [String: Any] = [
+            "primary_window": ["used_percent": 20, "limit_window_seconds": 3600],
+            "secondary_window": ["used_percent": 30, "limit_window_seconds": 604800]
+        ]
+        for shape in ["nested", "direct", "flat"] {
+            var pool: [String: Any] = ["limit_name": "Spark", "metered_feature": "spark"]
+            var review: [String: Any]
+            if shape == "nested" {
+                pool["rate_limit"] = slots
+                review = ["rate_limit": slots]
+            } else if shape == "direct" {
+                pool.merge(slots) { _, value in value }
+                review = slots
+            } else {
+                pool["used_percent"] = 20
+                pool["limit_window_seconds"] = 3600
+                review = ["used_percent": 100, "limit_window_seconds": 3600]
+            }
+            let payload: [String: Any] = [
+                "rate_limit": ["primary_window": ["used_percent": 10]],
+                "additional_rate_limits": [pool], "code_review_rate_limit": review
+            ]
+            let data = try JSONSerialization.data(withJSONObject: payload)
+            let reader = LocalQuotaReader(homeDirectory: home, fetchJSON: { _ in
+                (data, Self.httpResponse("{}").1)
+            }, runAntigravity: { Data("{}".utf8) }, readClaudeCredential: { .missing })
+            let windows = await reader.read().windows.filter { $0.providerKey == "openai" }
+            let suffix = shape == "flat" ? "" : ":primary"
+            let spark = windows.first { $0.id == "local-mac:openai:additional:Spark:spark" + suffix }
+            let codeReview = windows.first { $0.id == "local-mac:openai:code-review" + suffix }
+            XCTAssertEqual(windows.count, shape == "flat" ? 3 : 5, shape)
+            XCTAssertEqual(Set(windows.map(\.id)).count, windows.count, shape)
+            XCTAssertEqual(spark?.remainingPercent, 80, shape)
+            XCTAssertEqual(spark?.label, "Spark · Other limit window", shape)
+            XCTAssertEqual(spark?.window, "1h", shape)
+            XCTAssertEqual(codeReview?.label, "Code Review · Other limit window", shape)
+            XCTAssertEqual(codeReview?.remainingPercent, shape == "flat" ? 0 : 80, shape)
+            XCTAssertEqual(codeReview?.isSubModelLimit, true, shape)
+            let section = QuotaPlatformSection(providerKey: "openai", providerLabel: "Codex", expected: true,
+                                               windows: windows.map { QuotaWindowSnapshot(window: $0, now: Date()) })
+            XCTAssertFalse(section.isAtCap, shape)
+            XCTAssertEqual(windows.first { $0.id == "local-mac:openai:primary" }?.remainingPercent, 90, shape)
+            if shape != "flat" {
+                XCTAssertEqual(windows.first { $0.id == "local-mac:openai:additional:Spark:spark:secondary" }?.label,
+                               "Spark · 7-day window", shape)
+                XCTAssertEqual(windows.first { $0.id == "local-mac:openai:code-review:secondary" }?.window, "1w", shape)
+            }
+        }
+    }
+
+    func testCodexMissingAPIPlanIgnoresStaleAuthPlan() async throws {
+        let home = try makeFixtureHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        try writeJSON(["plan_type": "stale", "tokens": ["access_token": "fixture"]],
+                      to: home.appendingPathComponent(".codex/auth.json"))
+        let reader = LocalQuotaReader(homeDirectory: home, fetchJSON: { _ in
+            Self.httpResponse(#"{"rate_limit":{"primary_window":{"used_percent":20}}}"#)
+        }, runAntigravity: { Data("{}".utf8) }, readClaudeCredential: { .missing })
+        let result = await reader.read()
+        let window = try XCTUnwrap(result.windows.first { $0.providerKey == "openai" })
+        XCTAssertNil(window.planName)
+        XCTAssertEqual(window.remainingPercent, 80)
+    }
+
+    func testClaudeProfileDeadlineDoesNotWaitForUncooperativeTransport() async throws {
+        let home = try makeFixtureHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        try writeJSON(["claudeAiOauth": ["accessToken": "fixture", "subscriptionType": "max", "expiresAt": 4_102_444_800_000]],
+                      to: home.appendingPathComponent(".claude/.credentials.json"))
+        let suspension = ClaudeProfileSuspension()
+        let profileStarted = expectation(description: "profile started")
+        let profileFinished = expectation(description: "late profile finished")
+        let readFinished = expectation(description: "quota read finished before profile release")
+        let reader = LocalQuotaReader(homeDirectory: home, fetchJSON: { request in
+            if request.url?.path.hasSuffix("/profile") == true {
+                XCTAssertEqual(request.timeoutInterval, 1)
+                profileStarted.fulfill()
+                await suspension.wait()
+                profileFinished.fulfill()
+                return Self.httpResponse(#"{"account":{"email":"late@example.test"}}"#)
+            }
+            return Self.httpResponse(#"{"five_hour":{"utilization":20},"extra_usage":{"is_enabled":true}}"#)
+        }, runAntigravity: { Data("{}".utf8) }, readClaudeCredential: { .missing }, claudeProfileTimeout: 0.02)
+        let task = Task {
+            let result = await reader.read()
+            readFinished.fulfill()
+            return result
+        }
+        await fulfillment(of: [profileStarted, readFinished], timeout: 1)
+        await suspension.release()
+        let result = await task.value
+        await fulfillment(of: [profileFinished], timeout: 1)
+        let window = try XCTUnwrap(result.windows.first { $0.providerKey == "anthropic" })
+        XCTAssertEqual(window.remainingPercent, 80)
+        XCTAssertEqual(window.usageDetails?.extraUsageEnabled, true)
+        XCTAssertNil(window.usageDetails?.accountEmail)
+        XCTAssertNil(result.issues["anthropic"])
+    }
+
+    func testClaudeProfileRejectionNeverRenewsOrDiscardsQuota() async throws {
+        let home = try makeFixtureHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        try writeJSON(["claudeAiOauth": ["accessToken": "fixture", "refreshToken": "fixture-refresh", "expiresAt": 4_102_444_800_000]],
+                      to: home.appendingPathComponent(".claude/.credentials.json"))
+        for status in [401, 403] {
+            let reader = LocalQuotaReader(homeDirectory: home, fetchJSON: { request in
+                if request.url?.path.hasSuffix("/profile") == true { return Self.httpResponse("{}", status: status) }
+                return Self.httpResponse(#"{"five_hour":{"utilization":20},"extra_usage":{"is_enabled":false}}"#)
+            }, runAntigravity: { Data("{}".utf8) }, readClaudeCredential: { .missing }, renewClaudeLogin: {
+                XCTFail("optional profile rejection must never renew the login")
+            })
+            let result = await reader.read()
+            let window = try XCTUnwrap(result.windows.first { $0.providerKey == "anthropic" })
+            XCTAssertEqual(window.remainingPercent, 80)
+            XCTAssertEqual(window.usageDetails?.extraUsageEnabled, false)
+            XCTAssertNil(result.issues["anthropic"])
+            XCTAssertFalse(result.consentNeeded.contains("anthropic"))
+        }
+    }
+
     private func writeJSON(_ object: Any, to url: URL) throws {
         let data = try JSONSerialization.data(withJSONObject: object)
         try data.write(to: url, options: .atomic)
@@ -544,6 +668,23 @@ final class LocalQuotaReaderTests: XCTestCase {
         let url = URL(string: "https://fixture.invalid/quota")!
         let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
         return (Data(text.utf8), response)
+    }
+}
+
+/// Intentionally ignores cancellation until the test releases the transport.
+private actor ClaudeProfileSuspension {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var released = false
+
+    func wait() async {
+        guard !released else { return }
+        await withCheckedContinuation { continuation = $0 }
+    }
+
+    func release() {
+        released = true
+        continuation?.resume()
+        continuation = nil
     }
 }
 

@@ -39,6 +39,7 @@ public struct LocalQuotaReader: Sendable {
     private let renewClaudeLogin: @Sendable () async -> Void
     private let renewalThrottle: ClaudeRenewalThrottle
     private let claudeKeychainTimeout: TimeInterval
+    private let claudeProfileTimeout: TimeInterval
 
     private static let maxCredentialBytes = 1_048_576
     private static let maxResponseBytes = 1_048_576
@@ -58,7 +59,8 @@ public struct LocalQuotaReader: Sendable {
         readClaudeCredential: (@Sendable () async -> ClaudeCredentialAccess)? = nil,
         renewClaudeLogin: (@Sendable () async -> Void)? = nil,
         renewalThrottle: ClaudeRenewalThrottle = .shared,
-        claudeKeychainTimeout: TimeInterval = ClaudeCredentialSource.boundedAccessTimeout
+        claudeKeychainTimeout: TimeInterval = ClaudeCredentialSource.boundedAccessTimeout,
+        claudeProfileTimeout: TimeInterval = 1
     ) {
         self.homeDirectory = homeDirectory.standardizedFileURL
         self.now = now
@@ -74,6 +76,7 @@ public struct LocalQuotaReader: Sendable {
         } else { self.renewClaudeLogin = {} }
         self.renewalThrottle = renewalThrottle
         self.claudeKeychainTimeout = claudeKeychainTimeout
+        self.claudeProfileTimeout = claudeProfileTimeout.isFinite ? min(1, max(0.001, claudeProfileTimeout)) : 1
     }
 
     /// Reads all configured local sources concurrently.  This method never
@@ -229,8 +232,24 @@ public struct LocalQuotaReader: Sendable {
     private func claudeUsageDetails(payload: [String: Any], usageRequest: URLRequest) async -> ProviderUsageDetails {
         var profileRequest = usageRequest
         profileRequest.url = URL(string: "https://api.anthropic.com/api/oauth/profile")!
-        let profile = (try? await requestJSON(profileRequest)) ?? [:]
-        return .claude(payload: payload, profile: profile)
+        profileRequest.timeoutInterval = 1
+        let request = profileRequest
+        let fallback = ProviderUsageDetails.claude(payload: payload, profile: [:])
+        // A transport may ignore cancellation, so a task-group race would
+        // still wait for it.  Resume independently and ignore late results.
+        return await withCheckedContinuation { continuation in
+            let gate = ClaudeProfileCompletion(continuation)
+            let task = Task.detached {
+                let profile = (try? await self.requestJSON(request)) ?? [:]
+                var details = ProviderUsageDetails.claude(payload: [:], profile: profile)
+                details.extraUsageEnabled = fallback.extraUsageEnabled
+                gate.finish(details)
+            }
+            gate.install(task)
+            DispatchQueue.global().asyncAfter(deadline: .now() + claudeProfileTimeout) {
+                gate.finish(fallback)
+            }
+        }
     }
 
     /// The decoded Keychain record, or an empty dictionary when it is absent,
@@ -257,7 +276,7 @@ public struct LocalQuotaReader: Sendable {
         if let accountID = firstString(tokens, ["account_id", "accountId"]) { request.setValue(accountID, forHTTPHeaderField: "chatgpt-account-id") }
         let payload = try await requestJSON(request)
         let accountID = firstString(tokens, ["account_id", "accountId"]).flatMap { $0.utf8.count <= 256 ? $0 : nil }
-        let windows = parseCodex(payload, planType: firstString(payload, ["plan_type", "planType", "plan"]) ?? firstString(root, ["plan_type", "planType", "plan"]),
+        let windows = parseCodex(payload, planType: firstString(payload, ["plan_type", "planType", "plan"]),
                                  accountKey: accountID, observedAt: now()).map { value in
             var value = value
             value.usageDetails = .codex(payload: payload, tokens: tokens)
@@ -479,6 +498,39 @@ private func windowToken(seconds: Double?) -> String? {
     return nil
 }
 
+/// A single winner resumes the reader without waiting for a cancelled transport.
+private final class ClaudeProfileCompletion: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<ProviderUsageDetails, Never>?
+    private var task: Task<Void, Never>?
+
+    init(_ continuation: CheckedContinuation<ProviderUsageDetails, Never>) {
+        self.continuation = continuation
+    }
+
+    func install(_ task: Task<Void, Never>) {
+        lock.lock()
+        if continuation == nil {
+            lock.unlock()
+            task.cancel()
+        } else {
+            self.task = task
+            lock.unlock()
+        }
+    }
+
+    func finish(_ details: ProviderUsageDetails) {
+        lock.lock()
+        guard let continuation else { lock.unlock(); return }
+        self.continuation = nil
+        let task = self.task
+        self.task = nil
+        lock.unlock()
+        task?.cancel()
+        continuation.resume(returning: details)
+    }
+}
+
 private func window(
     provider: Provider,
     id: String,
@@ -694,15 +746,17 @@ private func parseCodex(_ root: [String: Any], planType: String?, accountKey: St
     let additional = limits["additional_rate_limits"] ?? limits["additionalRateLimits"] ?? root["additional_rate_limits"] ?? root["additionalRateLimits"]
     func appendPool(_ entry: [String: Any], identity: String, label: String, modelId: String?) {
         let nested = record(entry["rate_limit"] ?? entry["rateLimit"])
-        if nested.isEmpty {
-            append(identity, entry, modelId: modelId)
-        } else {
-            for (slot, keys) in [("primary", ["primary_window", "primaryWindow", "primary"]), ("secondary", ["secondary_window", "secondaryWindow", "secondary"])] {
-                for key in keys where nested[key] != nil {
-                    append("\(identity):\(slot)", record(nested[key]), modelId: modelId, cadenceSlot: slot, poolLabel: label)
-                    break
-                }
+        let pool = nested.isEmpty ? entry : nested
+        var hasSlots = false
+        for (slot, keys) in [("primary", ["primary_window", "primaryWindow", "primary"]), ("secondary", ["secondary_window", "secondaryWindow", "secondary"])] {
+            for key in keys where pool[key] != nil {
+                hasSlots = true
+                append("\(identity):\(slot)", record(pool[key]), modelId: modelId, cadenceSlot: slot, poolLabel: label)
+                break
             }
+        }
+        if !hasSlots {
+            append(identity, pool, modelId: modelId, poolLabel: label)
         }
     }
     if let records = additional as? [[String: Any]] {
@@ -723,7 +777,7 @@ private func parseCodex(_ root: [String: Any], planType: String?, accountKey: St
     }
     let review = record(root["code_review_rate_limit"] ?? root["codeReviewRateLimit"] ?? limits["code_review_rate_limit"])
     if !review.isEmpty {
-        appendPool(["rate_limit": review], identity: "code-review", label: "Code Review", modelId: "code-review")
+        appendPool(review, identity: "code-review", label: "Code Review", modelId: "code-review")
     }
     return result
 }

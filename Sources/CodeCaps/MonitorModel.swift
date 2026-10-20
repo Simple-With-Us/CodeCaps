@@ -2320,7 +2320,14 @@ final class MonitorModel: ObservableObject {
                 guard current.boundedRemainingPercent == nil
                         || (fileWindow.occurredDate ?? .distantPast) > (current.occurredDate ?? .distantPast)
                 else { continue }
-                resolved[index] = fileWindow
+                var replacement = fileWindow
+                // A session event updates quota observations, not the provider's
+                // account metadata.  Never carry details across account switches.
+                if let account = current.accountKey, account == fileWindow.accountKey {
+                    replacement.planName = current.planName ?? fileWindow.planName
+                    replacement.usageDetails = current.usageDetails ?? fileWindow.usageDetails
+                }
+                resolved[index] = replacement
             } else {
                 resolved.append(fileWindow)
             }

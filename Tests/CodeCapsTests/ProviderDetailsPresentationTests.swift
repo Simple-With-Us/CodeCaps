@@ -13,6 +13,7 @@ final class ProviderDetailsPresentationTests: XCTestCase {
                                            windows: [QuotaWindowSnapshot(window: window, now: now)])
         XCTAssertEqual(section.displaySubtitle(customInfo: nil), "Max 20x")
         XCTAssertEqual(section.providerDetailRows, [
+            .init(label: "Detected Plan", value: "Max 20x"),
             .init(label: "Account", value: "account@example.test"),
             .init(label: "Credits", value: "0 left"),
             .init(label: "Extra Usage", value: "disabled")])
@@ -25,7 +26,7 @@ final class ProviderDetailsPresentationTests: XCTestCase {
         let stamp = ISO8601DateFormatter().string(from: now)
         let base = QuotaWindow(id: "openai:primary", provider: "Codex", providerKey: "openai",
                                label: "5h", remainingPercent: 90, occurredAt: stamp)
-        let scoped = QuotaWindow(id: "local-mac:openai:code-review:primary", provider: "Codex", providerKey: "openai",
+        let scoped = QuotaWindow(id: "local-mac:openai:code-review", provider: "Codex", providerKey: "openai",
                                  label: "Code Review · 5h", remainingPercent: 0,
                                  isExhausted: true, occurredAt: stamp)
         let section = QuotaPlatformSection(providerKey: "openai", providerLabel: "Codex", expected: true,
@@ -60,6 +61,18 @@ final class ProviderDetailsPresentationTests: XCTestCase {
         XCTAssertEqual(lines.first { $0.label == "Spark" }?.short?.window.window, "5h")
         XCTAssertEqual(lines.first { $0.label == "Spark" }?.long?.window.window, "1w")
         XCTAssertNil(lines.first { $0.label == "Code Review" }?.short)
+    }
+
+    func testDetectedPlanRemainsVisibleBesideSavedManualSubtitle() {
+        let now = Date()
+        let window = QuotaWindow(id: "primary", provider: "Codex", providerKey: "openai", label: "5h",
+                                 remainingPercent: 50, planName: "prolite",
+                                 occurredAt: ISO8601DateFormatter().string(from: now))
+        let section = QuotaPlatformSection(providerKey: "openai", providerLabel: "Codex", expected: true,
+                                           windows: [QuotaWindowSnapshot(window: window, now: now)])
+        let custom = PlatformCustomInfo(customSubtitle: "Saved Manual Text")
+        XCTAssertEqual(section.displaySubtitle(customInfo: custom), "Saved Manual Text")
+        XCTAssertEqual(section.providerDetailRows, [.init(label: "Detected Plan", value: "prolite")])
     }
 
     func testAbsentDetailsDoNotInventZeroBalanceOrAccount() {

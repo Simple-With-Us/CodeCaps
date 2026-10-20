@@ -798,8 +798,9 @@ extension QuotaPlatformSection {
 
     /// Details are textual so a credit balance cannot become a quota meter.
     var providerDetailRows: [ProviderDetailRow] {
-        guard let details = windows.compactMap(\.window.usageDetails).first else { return [] }
         var rows: [ProviderDetailRow] = []
+        if let plan = automaticPlanName { rows.append(.init(label: "Detected Plan", value: plan)) }
+        guard let details = windows.compactMap(\.window.usageDetails).first else { return rows }
         if let email = details.accountEmail { rows.append(.init(label: "Account", value: email)) }
         if let balance = details.creditBalance {
             rows.append(.init(label: "Credits", value: "\(balance.formatted(.number.precision(.fractionLength(0...2)))) left"))
