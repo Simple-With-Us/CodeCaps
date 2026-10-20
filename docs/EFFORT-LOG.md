@@ -746,6 +746,22 @@ repo: CodeCaps; pre-work claim: posted to #agent-sync after reading AGENT-SYNC.m
   upscale cannot come back unnoticed.  It reads the committed assets and
   asserts the edge width, with an explicit allowlist for the two families
   that are soft-edged by their own artwork.
+- Reviewer findings, and what they changed.  Three of them were right and
+  changed the work.  The companion's edge was being divided by the file's
+  density, which made a 2x or 3x mark look two or three times sharper than
+  it is, so a soft upscale could have slipped past the guard; the file's own
+  pixels are already the device pixels on the screen that serves it, and the
+  limit is now 1.65 device pixels, which still catches the 1.72 of the
+  MiniMax file that shipped blurry.  A mark that could not be decoded was
+  being skipped, which let the guard pass on a corrupt file; it now fails the
+  test.  And the generator's gate was entirely relative, so it could have
+  written a mark that the new test rejects; it now refuses anything over the
+  absolute limit, and it reads the two limits from the same place the test
+  does, so the two cannot drift apart.  The generator also refuses a source
+  whose artwork cannot fill the exact box the artwork it replaces occupied,
+  because letterboxing it would shrink and shift the mark -- the one thing
+  the script must never do -- and one unreadable file no longer aborts the
+  whole run.
 - Reported rather than changed, because there is no same-art
   higher-resolution copy of them to raise: `openai-*` and `grok-bot-*` (this
   repository ships `openai.svg` and `grok-bot.svg`, but they are *different

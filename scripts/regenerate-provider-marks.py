@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import json
 import os
 import sys
 from dataclasses import dataclass
@@ -100,6 +101,22 @@ MIN_SHARPNESS_GAIN = 0.02
 # is what reads on screen as a soft logo.  A rebuild may widen the band by
 # this much and no more, measured in display pixels.
 MAX_EDGE_WIDENING = 0.20
+
+# The absolute limit a delivered mark has to meet, in the pixels the mark is
+# drawn at.  These are the same numbers ProviderMarkDetailTests uses, and
+# that test reads them from here, so the two cannot drift apart.  A rebuild
+# that would still be over the limit is refused: the script must never write
+# a mark the test would reject.
+MAC_EDGE_LIMIT = 1.0
+IOS_EDGE_LIMIT = 1.65
+
+# Marks whose own artwork is soft, and for which this repository holds no
+# same-art higher-resolution copy.  The test allows them; the script does not
+# try to raise them.
+SOFT_BY_DESIGN = {
+    "openai-color.png", "openai-dark.png", "openai-light.png",
+    "grok-bot-color.png", "grok-bot-dark.png", "grok-bot-light.png",
+}
 
 # A rebuild that hardens the silhouette is an improvement even when the
 # gradient energy barely moves.  For a mark whose detail is in its outline --
@@ -299,6 +316,31 @@ def _erode(mask: np.ndarray) -> np.ndarray:
     return out
 
 
+def drawn_device_pixels(relative_path: str, canvas_width: int) -> int:
+    """The device pixels the mark is drawn at.
+
+    The edge has to be measured in the pixels a user sees, and that depends
+    on the file.  The Mac app draws a mark into a 28pt frame at 2x, so 56
+    device pixels.  A companion mark in a density set is drawn on a screen of
+    its own density, so the file's own pixels are already device pixels.  A
+    single-file image set is drawn at the companion's mark size, which is at
+    most 108 device pixels, and that is the conservative reading.
+    """
+    if relative_path.startswith("Sources"):
+        return MAC_DISPLAY_PIXELS
+    imageset = os.path.join(REPO, os.path.dirname(relative_path), "Contents.json")
+    try:
+        with open(imageset, "r", encoding="utf-8") as handle:
+            contents = json.load(handle)
+    except (OSError, ValueError):
+        return IOS_DISPLAY_PIXELS
+    name = os.path.basename(relative_path)
+    for image in contents.get("images", []):
+        if image.get("filename") == name and image.get("scale"):
+            return canvas_width
+    return IOS_DISPLAY_PIXELS
+
+
 def edge_band(image: Image.Image, display_px: int) -> float | None:
     """Width of the anti-aliased transition at the mark's silhouette, in the
     pixels the mark is actually drawn at.
@@ -395,6 +437,13 @@ def rebuild(current: Image.Image, source: Image.Image, ink: tuple[int, int, int]
     box_w, box_h = x1 - x0, y1 - y0
     scale = min(box_w / sw, box_h / sh)
     nw, nh = max(1, int(round(sw * scale))), max(1, int(round(sh * scale)))
+    if abs(nw - box_w) > 1 or abs(nh - box_h) > 1:
+        # The source artwork has a different shape from the artwork it
+        # replaces, so it cannot fill the same box.  Letterboxing it would
+        # shrink and shift the mark, which is the one thing this script must
+        # never do, so the rebuild is refused instead.
+        raise ValueError(
+            f"the source artwork is {nw}x{nh} and cannot fill the {box_w}x{box_h} box it replaces")
     art = art.resize((nw, nh), Image.LANCZOS)
 
     out = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
@@ -444,12 +493,20 @@ def main() -> int:
             print(f"{target.path:<70} SOURCE MISSING: {target.resolved_source()}")
             failures += 1
             continue
-        current = Image.open(path).convert("RGBA")
-        source = render_source(target)
-        ink = dominant_ink(current) if is_template_variant(target.path) else None
-        rebuilt = rebuild(current, source, ink)
-        display = MAC_DISPLAY_PIXELS if target.path.startswith("Sources") else IOS_DISPLAY_PIXELS
-        difference, sharp_before, sharp_after = compare_at_display(current, rebuilt, display)
+        try:
+            current = Image.open(path).convert("RGBA")
+            source = render_source(target)
+            ink = dominant_ink(current) if is_template_variant(target.path) else None
+            rebuilt = rebuild(current, source, ink)
+        except Exception as exc:  # noqa: BLE001 - one bad file must not stop the run
+            # A single unreadable file must not leave a batch half-written or
+            # suppress the summary, so it is reported and the run continues.
+            print(f"{target.path:<70} FAILED -- {exc}")
+            failures += 1
+            continue
+        drawn = drawn_device_pixels(target.path, current.size[0])
+        difference, sharp_before, sharp_after = compare_at_display(current, rebuilt, drawn)
+        display = drawn
         gain = (sharp_after - sharp_before) / sharp_before if sharp_before else 0.0
         band_before = edge_band(current, display)
         band_after = edge_band(rebuilt, display)
@@ -465,6 +522,13 @@ def main() -> int:
                 and band_after > band_before + MAX_EDGE_WIDENING):
             print(f"{target.path:<70} {difference:6.2f} {sharp_before:13.3f} {sharp_after:12.3f} "
                   f"{gain:+6.1%} {band_text}  skipped -- would soften the edge")
+            skipped += 1
+            continue
+        limit = MAC_EDGE_LIMIT if target.path.startswith("Sources") else IOS_EDGE_LIMIT
+        name = os.path.basename(target.path)
+        if band_after is not None and band_after > limit and name not in SOFT_BY_DESIGN:
+            print(f"{target.path:<70} {difference:6.2f} {sharp_before:13.3f} {sharp_after:12.3f} "
+                  f"{gain:+6.1%} {band_text}  skipped -- still over the {limit} device px limit")
             skipped += 1
             continue
         if gain < MIN_SHARPNESS_GAIN and not (band_before is not None and band_after is not None

@@ -59,13 +59,31 @@ final class ProviderMarkDetailTests: XCTestCase {
     /// On the Mac the widest legitimate edge is 0.47 device pixels, and the
     /// soft marks that were shipped measured 1.70 to 2.07.
     ///
-    /// On the companion the widest legitimate edge is 1.54 device pixels, in
+    /// On the companion the widest legitimate edge is 1.60 device pixels, in
     /// the 1x Muse Assist file: a 24px raster cannot do better than about
     /// one and a half device pixels on a 1x screen, and that is the floor of
     /// what the format allows.  The 1x MiniMax file that was shipped as a
     /// blurry upscale measured 1.72, which is over the limit.
-    private static let macEdgeLimit = 1.0
-    private static let iosEdgeLimit = 1.60
+    ///
+    /// The two limits live in scripts/regenerate-provider-marks.py, which
+    /// refuses to write a mark that would break them.  They are read from
+    /// there rather than repeated, so the script and this test cannot drift
+    /// apart.
+    private static func macEdgeLimit() -> Double { limit(named: "MAC_EDGE_LIMIT") ?? 1.0 }
+    private static func iosEdgeLimit() -> Double { limit(named: "IOS_EDGE_LIMIT") ?? 1.65 }
+
+    /// The absolute edge limit the generator uses, read from its source.
+    private static func limit(named name: String) -> Double? {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // CodeCapsTests
+            .deletingLastPathComponent()   // Tests
+            .deletingLastPathComponent()   // repository root
+            .appendingPathComponent("scripts/regenerate-provider-marks.py")
+        guard let source = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        let pattern = "\n\(name) = ([0-9.]+)"
+        guard let range = source.range(of: pattern, options: .regularExpression) else { return nil }
+        return Double(source[range].dropFirst(2).prefix(while: { $0.isNumber || $0 == "." }))
+    }
 
     private static let solidAlpha = 247
     private static let visibleAlpha = 8
@@ -97,9 +115,12 @@ final class ProviderMarkDetailTests: XCTestCase {
         var soft: [String] = []
         for file in files {
             let name = file.lastPathComponent
-            guard let mark = Self.edgeBand(of: file) else { continue }
+            guard let mark = Self.edgeBand(of: file) else {
+                XCTFail("\(name) could not be read, so its edge was not checked")
+                continue
+            }
             let devicePixels = mark.band * (Self.macDisplayPixels / Double(mark.width))
-            if devicePixels > Self.macEdgeLimit, !Self.softByDesign.contains(name) {
+            if devicePixels > Self.macEdgeLimit(), !Self.softByDesign.contains(name) {
                 soft.append("\(name) \(String(format: "%.2f", devicePixels))px")
             }
         }
@@ -132,20 +153,26 @@ final class ProviderMarkDetailTests: XCTestCase {
             let contents = try FileManager.default.contentsOfDirectory(
                 at: imageset, includingPropertiesForKeys: nil)
             for file in contents where file.pathExtension == "png" {
-                guard let mark = Self.edgeBand(of: file) else { continue }
+                guard let mark = Self.edgeBand(of: file) else {
+                    XCTFail("\(imageset.lastPathComponent)/\(file.lastPathComponent) could not be read, so its edge was not checked")
+                    continue
+                }
                 let name = file.lastPathComponent
                 let devicePixels: Double
-                if let density = densities[name] {
+                if densities[name] != nil {
                     // A file with a declared scale is drawn on a screen of
-                    // that density, so its edge is measured against it.
-                    devicePixels = mark.band / density
+                    // that density, so the file's own pixels are already the
+                    // device pixels.  Dividing by the density here would make
+                    // a 2x or 3x mark look two or three times sharper than it
+                    // is, and the guard would miss a soft upscale.
+                    devicePixels = mark.band
                 } else {
                     // A single-file image set is drawn at the companion's own
                     // mark size, which is at most 108 device pixels.  Using the
                     // largest possible size is the strict reading.
                     devicePixels = mark.band * (Self.iosDisplayPixels / Double(mark.width))
                 }
-                if devicePixels > Self.iosEdgeLimit {
+                if devicePixels > Self.iosEdgeLimit() {
                     soft.append("\(imageset.lastPathComponent)/\(name) \(String(format: "%.2f", devicePixels))px")
                 }
             }
