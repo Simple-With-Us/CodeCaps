@@ -443,11 +443,13 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
             let rows = all.filter { selected.contains($0.id) }
             if !rows.isEmpty { return rows }
         }
-        let sorted = all.filter {
-            readingStatus(for: $0, now: model.now, issue: model.issues[$0.providerKey],
-                          disabledSources: model.disabledSources) == nil
-        }.sorted { a, b in
-            (currentWindows(for: a, now: model.now, disabledSources: model.disabledSources)
+        let sorted = all.sorted { a, b in
+            let aAvailable = readingStatus(for: a, now: model.now, issue: model.issues[a.providerKey],
+                                          disabledSources: model.disabledSources) == nil
+            let bAvailable = readingStatus(for: b, now: model.now, issue: model.issues[b.providerKey],
+                                          disabledSources: model.disabledSources) == nil
+            if aAvailable != bAvailable { return aAvailable }
+            return (currentWindows(for: a, now: model.now, disabledSources: model.disabledSources)
                 .compactMap(\.remainingPercent).min() ?? 100)
                 < (currentWindows(for: b, now: model.now, disabledSources: model.disabledSources)
                     .compactMap(\.remainingPercent).min() ?? 100)
