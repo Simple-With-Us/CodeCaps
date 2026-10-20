@@ -233,12 +233,13 @@ struct GlancePopover: View {
                          onToggleAlarm: { model.toggleAlarm(for: row.id) })
     }
 
-    /// "REPORTED 9:12 AM": the source's latest reading, on the right of its
-    /// heading band.  The time lives here rather than under every row, where
+    /// "REPORTED 9:12 AM", or "REPORTED OCT 18, 9:12 AM" once the reading is
+    /// no longer from today: the source's latest reading, on the right of its
+    /// heading band.  The stamp lives here rather than under every row, where
     /// it truncated.
     private func fleetGroupReported(_ group: FleetGroup) -> String? {
         let latest = group.rows.flatMap(\.section.windows).compactMap(\.observedAt).max()
-        return latest.map { "REPORTED \($0.formatted(date: .omitted, time: .shortened).uppercased())" }
+        return latest.map { "REPORTED \(glanceReportedStamp($0, now: model.now).uppercased())" }
     }
 
     /// The short issue text for a reader whose saved login is on this Mac but
@@ -815,6 +816,56 @@ func glanceFleetGroupHeading(_ title: String) -> String {
     // separate itself from the rows below.
     if name.contains(".") || name.contains(":") { return name }
     return name.uppercased()
+}
+
+/// When a source last reported, for the band above its rows.  A reading from
+/// today is stamped with its time alone, but anything older carries its date as
+/// well.  A bare time is not merely terse there, it is wrong to read: beside a
+/// clock showing 3:40 AM, a fleet band stamped "4:49 AM" looks like a reading
+/// that has not happened yet today when it is really yesterday's (owner report
+/// 2026-10-18).  The year is only added when it is not the current one, so the
+/// common case stays inside the band.
+/// `locale` and `calendar` default to the reader's own, so the band is
+/// localized for whoever is looking at it.  They are parameters rather than a
+/// direct read of `.current` so a test can pin both and assert the same string
+/// on any machine: `Locale.current` in a de-DE or ja-JP runner abbreviates the
+/// month differently and renders a 24-hour clock, and `Calendar.current` on a
+/// Buddhist-locale Mac is not the Gregorian calendar the fixtures are written in.
+func glanceReportedStamp(
+    _ observedAt: Date,
+    now: Date,
+    locale: Locale = .current,
+    calendar: Calendar = .current
+) -> String {
+    func formatter(
+        template: String? = nil,
+        date dateStyle: DateFormatter.Style = .none,
+        time timeStyle: DateFormatter.Style = .none
+    ) -> DateFormatter {
+        let formatter = DateFormatter()
+        formatter.locale = locale
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        // A localized template lets the reader's own locale order the parts,
+        // which a hardcoded "MMM d" would not.
+        if let template {
+            formatter.setLocalizedDateFormatFromTemplate(template)
+        } else {
+            formatter.dateStyle = dateStyle
+            formatter.timeStyle = timeStyle
+        }
+        return formatter
+    }
+
+    let time = formatter(time: .short).string(from: observedAt)
+    guard !calendar.isDate(observedAt, inSameDayAs: now) else { return time }
+    let sameYear = calendar.component(.year, from: observedAt) == calendar.component(.year, from: now)
+    let date = sameYear
+        ? formatter(template: "MMM d").string(from: observedAt)
+        // FormatStyle's `.abbreviated` is DateFormatter's `.medium`: "Oct 18,
+        // 2025".  `.short` here would silently become the numeric "10/18/25".
+        : formatter(date: .medium).string(from: observedAt)
+    return "\(date), \(time)"
 }
 
 /// A source's own name, in words a stranger can act on.  The reader labels
@@ -1619,16 +1670,19 @@ struct GlanceMeter: View {
         return glanceResetCountdown(snapshot.resetAt, now: now)
     }
 
-    private var isMuseAssist: Bool { snapshot.window.canonicalProviderKey == "muse-assist" }
+    private var isMuseProvider: Bool {
+        let key = snapshot.window.canonicalProviderKey
+        return key == "muse-assist" || key == "muse-code"
+    }
 
     /// The tooltip for a stale meter that has no reset to count down to.
     ///
     /// The countdown slot is empty then, so its own tooltip (which carries the
     /// "updated h:mm" staleness) has nothing to hang on; the bar carries it
-    /// instead, and fresh meters keep an empty tooltip.  Muse Assist never
-    /// displays "Updated..." captions (owner 2026-10-17).
+    /// instead, and fresh meters keep an empty tooltip.  Muse Assist and Muse Code
+    /// never display "Updated..." captions (owner 2026-10-17, 2026-10-18).
     private var staleBarHelp: String {
-        guard countdown.isEmpty, !isMuseAssist else { return "" }
+        guard countdown.isEmpty, !isMuseProvider else { return "" }
         return glanceResetHelp(nil, now: now, observedAt: snapshot.observedAt, isFresh: snapshot.isFresh) ?? ""
     }
 
@@ -1692,7 +1746,7 @@ struct GlanceMeter: View {
                     // variable-width value cannot be centred in a trailing
                     // frame.
                     .frame(width: Metrics.glanceMeterCountdownWidth, alignment: .center)
-                    .help(isExtraLabel ? "Extra token usage" : (glanceResetHelp(snapshot.resetAt, now: now, observedAt: isMuseAssist ? nil : snapshot.observedAt, isFresh: snapshot.isFresh) ?? ""))
+                    .help(isExtraLabel ? "Extra token usage" : (glanceResetHelp(snapshot.resetAt, now: now, observedAt: isMuseProvider ? nil : snapshot.observedAt, isFresh: snapshot.isFresh) ?? ""))
             } else {
                 Color.clear
                     .frame(width: Metrics.glanceMeterCountdownWidth, height: 1)
@@ -1713,7 +1767,7 @@ struct GlanceMeter: View {
         if !countdown.isEmpty {
             parts.append("resets in \(glanceResetFullCountdown(snapshot.resetAt, now: now))")
         }
-        if !isMuseAssist, !snapshot.isFresh, let observed = snapshot.observedAt {
+        if !isMuseProvider, !snapshot.isFresh, let observed = snapshot.observedAt {
             parts.append("updated \(observed.formatted(date: .omitted, time: .shortened))")
         }
         return parts.joined(separator: ", ")

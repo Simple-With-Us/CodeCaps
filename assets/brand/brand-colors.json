@@ -1,0 +1,59 @@
+{
+  "$comment": "CodeCaps logo palette.  Extracted as exact flat colours from the owner-supplied dark logo artwork.  These are brand-fixed and do not follow a light or dark theme.  Mirrored as --codecaps-* tokens in Simple-With-Us assets/site.css.",
+  "source": "CodeCaps_RedGreen_DarkLogo.png (1024x1024)",
+  "canvas": "1024x1024",
+  "colors": {
+    "background": {
+      "hex": "#222325",
+      "rgb": [
+        34,
+        35,
+        37
+      ],
+      "role": "logo ground"
+    },
+    "teal": {
+      "hex": "#4FD1C5",
+      "rgb": [
+        79,
+        209,
+        197
+      ],
+      "role": "outer open ring"
+    },
+    "red": {
+      "hex": "#FF6B6B",
+      "rgb": [
+        255,
+        107,
+        107
+      ],
+      "role": "inner open ring"
+    },
+    "white": {
+      "hex": "#FFFFFF",
+      "rgb": [
+        255,
+        255,
+        255
+      ],
+      "role": "needle and six dots"
+    }
+  },
+  "fidelity": {
+    "method": "two-colour alpha unmix -> marching squares at 0.5 coverage -> Douglas-Peucker",
+    "iou_total": 0.9959,
+    "iou_per_colour": {
+      "teal": 0.9965,
+      "red": 0.9964,
+      "white": 0.9909
+    },
+    "pixel_diff_mean_255": 0.244
+  },
+  "vector": {
+    "file": "codecaps-logo-dark.svg",
+    "bytes": 13518,
+    "path_points": 869,
+    "dots": 6
+  }
+}
