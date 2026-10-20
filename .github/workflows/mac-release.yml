@@ -11,12 +11,14 @@ name: Mac Release (Sparkle)
 #       BotFleet's release.yml does (INFISICAL_PROJECT_ID plus
 #       INFISICAL_UNIVERSAL_AUTH_CLIENT_ID/_SECRET, or INFISICAL_CLIENT_ID/
 #       _SECRET), with same-named repository secrets as the fallback.
-#   ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8  The App Store Connect API key that
-#       ios-ship.yml already uses; notarytool signs in with it.
+#   ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8 come from Fleet-OPS Infisical prod
+#       /asc, matching ios-ship.yml. Never fall back to the stale repository
+#       ASC_* secrets. The private key stays in a mode-600 temporary file.
 #   SPARKLE_ED_PRIVATE_KEY  The EdDSA key that signs each update archive
 #       (Sparkle's generate_keys -x output).
-# With any of them missing the job still builds the bundle and verifies its
-# signature, then skips publishing with a notice that names what is missing.
+# Pull requests build without credentials and never publish. A main release
+# fails early if the fleet ASC loader or notarization preflight fails. Missing
+# certificate/Sparkle material is reported by the publication gate.
 
 on:
   push:
@@ -27,8 +29,12 @@ on:
       - 'Package.resolved'
       - 'VERSION'
       - 'assets/icon-*.png'
+      - 'assets/AppIcon.icns'
       - 'script/build_and_run.sh'
       - 'script/make_appcast.sh'
+      - 'scripts/check-notary-access.sh'
+      - 'scripts/mac-release-workflow.test.mjs'
+      - 'scripts/ios-stage-asc-key.sh'
       - 'script/make_icon.swift'
       - '.github/workflows/mac-release.yml'
   # A pull request that touches the bundle is built and verified the same
@@ -39,10 +45,21 @@ on:
       - 'Package.resolved'
       - 'script/build_and_run.sh'
       - 'script/make_appcast.sh'
+      - 'scripts/check-notary-access.sh'
+      - 'scripts/mac-release-workflow.test.mjs'
+      - 'scripts/ios-stage-asc-key.sh'
       - '.github/workflows/mac-release.yml'
       - '.github/actions/infisical-secrets/**'
       - 'scripts/infisical-fetch.mjs'
+      - 'scripts/infisical-fetch-asc-key.mjs'
   workflow_dispatch:
+    inputs:
+      verify-only:
+        description: >-
+          Fetch the release credentials and check that Apple's notarization
+          service still accepts them, then stop.  Publishes nothing.
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -67,6 +84,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      - name: Test Sparkle release contract without credentials
+        run: node --test scripts/mac-release-workflow.test.mjs scripts/infisical-fetch-asc-key.node-test.mjs
+
       - name: Wait for Swift CI compile checks on this commit
         env:
           GH_TOKEN: ${{ github.token }}
@@ -82,10 +102,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 60
     env:
-      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
-      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
-      ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
-      SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+      SPARKLE_ED_PRIVATE_KEY: ${{ github.event_name != 'pull_request' && secrets.SPARKLE_ED_PRIVATE_KEY || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -107,24 +124,72 @@ jobs:
           GH_FALLBACK_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           GH_FALLBACK_SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
 
+      - name: Load ASC credentials (Fleet-OPS prod /asc)
+        if: github.event_name != 'pull_request'
+        uses: ./.github/actions/infisical-secrets
+        with:
+          names: ASC_KEY_ID ASC_ISSUER_ID
+          project-id: ${{ secrets.INFISICAL_FLEET_OPS_PROJECT_ID }}
+          environment: prod
+          secret-path: /asc
+          client-id: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID || secrets.INFISICAL_CLIENT_ID }}
+          client-secret: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET || secrets.INFISICAL_CLIENT_SECRET }}
+
+      - name: Stage the ASC private key (Fleet-OPS prod /asc)
+        if: github.event_name != 'pull_request'
+        env:
+          INFISICAL_PROJECT_ID: ${{ secrets.INFISICAL_FLEET_OPS_PROJECT_ID }}
+          INFISICAL_ENVIRONMENT: prod
+          INFISICAL_SECRET_PATH: /asc
+          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID || secrets.INFISICAL_CLIENT_ID }}
+          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET || secrets.INFISICAL_CLIENT_SECRET }}
+        run: node scripts/infisical-fetch-asc-key.mjs
+
+      - name: Check the ASC credentials arrived
+        if: github.event_name != 'pull_request'
+        run: |
+          set +o xtrace
+          set -euo pipefail
+          for name in ASC_KEY_ID ASC_ISSUER_ID; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::Missing $name in Fleet-OPS prod /asc; verify the CI identity has read access to Fleet-OPS prod /asc." >&2
+              exit 1
+            fi
+          done
+          if [ -z "${ASC_KEY_PATH:-}" ] || [ ! -s "${ASC_KEY_PATH:-}" ]; then
+            echo '::error::Missing ASC key material in Fleet-OPS prod /asc; verify the CI identity has read access to Fleet-OPS prod /asc.' >&2
+            exit 1
+          fi
       - name: Decide whether this run can publish
         id: gate
         run: |
+          if [ "${{ inputs.verify-only }}" = "true" ]; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Verify only::The credentials were fetched and checked.  Nothing was published."
+            exit 0
+          fi
           if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
             echo "publish=false" >> "$GITHUB_OUTPUT"
             echo "::notice title=Pull request::Built and verified only.  Releases are published from main."
             exit 0
           fi
           missing=()
-          for name in MAC_CERT_P12_BASE64 MAC_CERT_PASSWORD ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8 SPARKLE_ED_PRIVATE_KEY; do
+          for name in MAC_CERT_P12_BASE64 MAC_CERT_PASSWORD ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_PATH SPARKLE_ED_PRIVATE_KEY; do
             [ -n "${!name:-}" ] || missing+=("$name")
           done
+          if [ -n "${ASC_KEY_PATH:-}" ] && [ ! -s "$ASC_KEY_PATH" ]; then
+            missing+=("ASC_KEY_PATH file")
+          fi
           if [ "${#missing[@]}" -eq 0 ]; then
             echo "publish=true" >> "$GITHUB_OUTPUT"
           else
             echo "publish=false" >> "$GITHUB_OUTPUT"
             echo "::notice title=Mac release not published::Missing: ${missing[*]}.  The bundle is still built and its signature verified.  See docs/AUTO-UPDATE.md, Secrets."
           fi
+
+      - name: Verify notarization access before building
+        if: steps.gate.outputs.publish == 'true'
+        run: bash scripts/check-notary-access.sh
 
       - name: Install XcodeGen
         run: |
@@ -169,18 +234,12 @@ jobs:
           echo "CODECAPS_CODESIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
           echo "imported: $identity"
 
-      - name: Write the notarization key
-        if: steps.gate.outputs.publish == 'true'
-        run: |
-          umask 077
-          printf '%s\n' "$ASC_KEY_P8" > "$RUNNER_TEMP/AuthKey.p8"
-
       - name: Build, sign, notarize and staple
         if: steps.gate.outputs.publish == 'true'
         env:
-          NOTARY_KEY_PATH: ${{ runner.temp }}/AuthKey.p8
-          NOTARY_KEY_ID: ${{ secrets.ASC_KEY_ID }}
-          NOTARY_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          NOTARY_KEY_PATH: ${{ env.ASC_KEY_PATH }}
+          NOTARY_KEY_ID: ${{ env.ASC_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ env.ASC_ISSUER_ID }}
         run: script/build_and_run.sh --release
 
       - name: Upload Sentry debug files
@@ -275,4 +334,63 @@ jobs:
         if: always()
         run: |
           security delete-keychain "$RUNNER_TEMP/codecaps-signing.keychain-db" >/dev/null 2>&1 || true
-          rm -f "$RUNNER_TEMP/AuthKey.p8"
+          if [ -n "${ASC_KEY_PATH:-}" ]; then rm -f -- "$ASC_KEY_PATH"; fi
+
+  # A manual check that the release credentials still load and that Apple's
+  # notarization service still accepts them.  It publishes nothing and builds
+  # nothing, so it can be run against a branch before a merge.  It exists
+  # because a green pull-request check proves the workflow's own contract,
+  # not that a credential can be fetched: the Mac release was broken for nine
+  # days by a credential that no check looked at.
+  #
+  # Manual only, on purpose.  A pull request must never see the signing key,
+  # and a scheduled run would fetch it for nothing.
+  verify-release-credentials:
+    name: Verify the release credentials load
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Load ASC credentials (Fleet-OPS prod /asc)
+        uses: ./.github/actions/infisical-secrets
+        with:
+          names: ASC_KEY_ID ASC_ISSUER_ID
+          project-id: ${{ secrets.INFISICAL_FLEET_OPS_PROJECT_ID }}
+          environment: prod
+          secret-path: /asc
+          client-id: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID || secrets.INFISICAL_CLIENT_ID }}
+          client-secret: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET || secrets.INFISICAL_CLIENT_SECRET }}
+
+      - name: Stage the ASC private key (Fleet-OPS prod /asc)
+        env:
+          INFISICAL_PROJECT_ID: ${{ secrets.INFISICAL_FLEET_OPS_PROJECT_ID }}
+          INFISICAL_ENVIRONMENT: prod
+          INFISICAL_SECRET_PATH: /asc
+          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID || secrets.INFISICAL_CLIENT_ID }}
+          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET || secrets.INFISICAL_CLIENT_SECRET }}
+        run: node scripts/infisical-fetch-asc-key.mjs
+
+      - name: Check the ASC credentials arrived
+        run: |
+          set +o xtrace
+          set -euo pipefail
+          for name in ASC_KEY_ID ASC_ISSUER_ID; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::Missing $name in Fleet-OPS prod /asc; verify the CI identity has read access to Fleet-OPS prod /asc." >&2
+              exit 1
+            fi
+          done
+          if [ -z "${ASC_KEY_PATH:-}" ] || [ ! -s "${ASC_KEY_PATH:-}" ]; then
+            echo '::error::Missing ASC key material in Fleet-OPS prod /asc; verify the CI identity has read access to Fleet-OPS prod /asc.' >&2
+            exit 1
+          fi
+
+      - name: Verify notarization access before building
+        run: bash scripts/check-notary-access.sh
+
+      - name: Remove the signing key
+        if: always()
+        run: |
+          if [ -n "${ASC_KEY_PATH:-}" ]; then rm -f -- "$ASC_KEY_PATH"; fi

@@ -693,3 +693,45 @@ repo: CodeCaps; pre-work claim: posted to #agent-sync after reading AGENT-SYNC.m
   `>= 98.0` vendor-reset annotation for the Glance history chart, so that chart
   will not mark these points either.  Left untouched: it is claimed by CODEX in
   PR #142, and flagged to them on `#codecaps` instead.
+
+## 2026-10-20 — The Mac Release Signing Key Loads From Fleet-OPS, Not A Literal [MINIMAX, in progress]
+
+- Board: `d09b44db` (CC-177).  Pull request: #257 (`jet/fix-sparkle-infisical`,
+  the seat's own diagnosis of the same outage; this change answers its two
+  gates and its two open review findings rather than opening a second pull
+  request for the same fault).
+- The Mac Release (Sparkle) workflow failed on every push to main from
+  2026-10-11 to 2026-10-20, nine days, with the last published release still
+  `v1.1.0-build.183` from 2026-10-10.  The cause was the credential source and
+  not the release script: the workflow read the App Store Connect key from
+  repository secrets that are a revoked copy (HTTP 401, CC-163), while the
+  working key lives in Fleet-OPS prod `/asc`.  That was proven read-only, by
+  authenticating the fleet key against `xcrun notarytool history`.
+- The two open review findings on that pull request were both about how the
+  credential is read.  The Infisical project id was written into a public
+  workflow and interpolated into the job log on every failed notarization, and
+  the bare `infisical secrets get` CLI bypassed the repository's safe fetch.
+- Both are fixed.  `ASC_KEY_ID` and `ASC_ISSUER_ID` come from the
+  `infisical-secrets` composite action, which masks every line of every value
+  and never prints one.  `ASC_KEY_P8` is fetched by
+  `scripts/infisical-fetch-asc-key.mjs` and streamed into
+  `scripts/ios-stage-asc-key.sh` over a pipe, so the private key still never
+  becomes an environment variable and only its mode-600 file path crosses the
+  step boundary.  The project id comes from the `INFISICAL_FLEET_OPS_PROJECT_ID`
+  secret.
+- The gate that could not be answered from the workflow is now answered: that
+  name is an organisation **secret**, not a variable.  The repository has no
+  Actions variables at all and the organisation has exactly one, which is
+  unrelated.  A variable reference would have resolved to nothing.
+- Two workflows read the key — `mac-release.yml` and `ios-ship.yml` — and both
+  carry the same text, so the fix lands in both.  `macos-ship.yml` was
+  deleted from main by #272 and needed no change.
+- A dispatch-only job, "Verify the release credentials load", fetches the key
+  and checks that Apple's notarization service still accepts it, and publishes
+  nothing.  It exists because a green pull-request check proves the workflow's
+  own contract, not that a credential can be fetched, which is exactly why this
+  outage ran for nine days without a check noticing.
+- Gates: 32 contract tests and the key-handoff shell test pass, including a
+  new offline test that drives the real fetch script and the real staging
+  script against a stubbed Infisical and checks that the key reaches a
+  mode-600 file and never the environment or the log.
