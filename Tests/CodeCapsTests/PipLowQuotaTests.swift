@@ -46,6 +46,34 @@ final class PipLowQuotaTests: XCTestCase {
         XCTAssertEqual(session.rowsBelowThreshold, ["anthropic"])
     }
 
+    func testNewWindowAlreadyLowSeedsDespiteHealthySiblingThenCanCrossAfterRecovery() {
+        var session = PipLowQuotaSession()
+        func combined(newRemaining: Double?, seconds: Double) -> DisplaySection {
+            let healthy = row(remaining: 70, seconds: seconds)
+            var windows = healthy.section.windows
+            if let newRemaining {
+                var newWindow = row(remaining: newRemaining, seconds: seconds).section.windows[0].window
+                newWindow.id = "new-account-window"
+                newWindow.accountKey = "new-account"
+                windows.append(QuotaWindowSnapshot(window: newWindow, now: now.addingTimeInterval(seconds)))
+            }
+            return DisplaySection(id: healthy.id, providerKey: healthy.providerKey, title: healthy.title,
+                platformTitle: healthy.platformTitle,
+                section: QuotaPlatformSection(providerKey: healthy.providerKey,
+                    providerLabel: healthy.section.providerLabel, expected: true, windows: windows),
+                poolKey: nil, remainingPercent: newRemaining ?? 70, resetAt: nil, maskedWindowIds: [])
+        }
+        XCTAssertFalse(evaluate(combined(newRemaining: nil, seconds: 0), session: &session))
+        XCTAssertFalse(evaluate(combined(newRemaining: 5, seconds: 1), session: &session),
+                       "an unrelated healthy sibling cannot establish the new window's prior allowance")
+        XCTAssertFalse(evaluate(combined(newRemaining: 4, seconds: 2), session: &session))
+        XCTAssertTrue(session.autoAddedRowIds.isEmpty)
+        XCTAssertFalse(evaluate(combined(newRemaining: 60, seconds: 3), session: &session))
+        XCTAssertTrue(evaluate(combined(newRemaining: 5, seconds: 4), session: &session),
+                      "the same window now has its own measured healthy-to-low transition")
+        XCTAssertEqual(session.autoAddedRowIds, ["anthropic"])
+    }
+
     func testHealthyThenLowCrossingOpensAndRecoveryRemoves() {
         var session = PipLowQuotaSession()
         XCTAssertFalse(evaluate(row(remaining: 50), session: &session))
