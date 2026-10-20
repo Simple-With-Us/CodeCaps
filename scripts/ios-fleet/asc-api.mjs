@@ -22,21 +22,43 @@ import { createSign } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-// The App Store Connect host.  A test points this at a local server so the
-// failure paths can be exercised without touching the real service.
+// A failure that already knows what to say.
 //
-// Only a loopback override is honoured: every call carries an Authorization
-// header holding a JWT signed with the real ASC private key, so a stray
-// environment variable must not be able to redirect that token to another
-// host.  The production host is used for anything that is not loopback.
-const API_BASE = (() => {
+// A guard deep in the call stack cannot return from main(), so it throws this
+// instead.  The handler at the bottom of the file prints the message on its
+// own, without a stack trace, and keeps the exit code the failure set.
+class NamedFailure extends Error {}
+
+// The App Store Connect host.
+const PRODUCTION_API_BASE = "https://api.appstoreconnect.apple.com";
+
+// Resolve the host every call is made against.
+//
+// A test points this at a local server so the failure paths can be exercised
+// without touching the real service.  Only a loopback override is honoured:
+// every call carries an Authorization header holding a JWT signed with the
+// real ASC private key, so a stray environment variable must not be able to
+// redirect that token to another host.
+//
+// The production host is accepted explicitly, because a job that pins the host
+// it would otherwise use is not a redirect anywhere new.  The value is used as
+// a prefix for paths that already begin with "/", so a trailing slash is
+// stripped to keep the separator from doubling.
+//
+// The check runs inside main(), which has a catch handler, so a bad value is
+// reported as a named failure instead of an uncaught exception at module
+// scope.
+function resolveApiBase() {
   const override = process.env.ASC_API_BASE;
-  if (!override) return "https://api.appstoreconnect.apple.com";
+  if (!override) return PRODUCTION_API_BASE;
+  const trimmed = override.replace(/\/+$/, "");
+  if (trimmed === PRODUCTION_API_BASE) return PRODUCTION_API_BASE;
   if (!/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(\/|$)/.test(override)) {
-    throw new Error("ASC_API_BASE must be a loopback address");
+    console.error("asc-api: ASC_API_BASE must be the production host or a loopback address");
+    return null;
   }
-  return override;
-})();
+  return trimmed;
+}
 
 // AFC-359: credentials come from the environment (CI sets ASC_KEY_ID / ASC_ISSUER_ID /
 // ASC_KEY_PATH), else Infisical Fleet-OPS /asc through fleet-secrets: ASC_KEY_ID, ASC_ISSUER_ID and
@@ -75,14 +97,16 @@ function resolveAscCredentials() {
   }
   if (!keyId || !issuerId) {
     console.error("Missing ASC_KEY_ID / ASC_ISSUER_ID: set them in the environment or add ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_P8 to Infisical /asc");
-    process.exit(1);
+    process.exitCode = 1;
+    return null;
   }
   const privateKeyPem = keyId === ascKeyId
     ? fleetSecretsGet("ASC_KEY_P8", "/asc")
     : fleetSecretsGet(`AUTHKEY_${keyId}`, `/authkey-${keyId.toLowerCase()}-p8`);
   if (!privateKeyPem) {
     console.error(`Missing the .p8 for key ${keyId}: Infisical /asc ASC_KEY_P8 (the /asc key) or /authkey-<id>-p8 AUTHKEY_<id>`);
-    process.exit(1);
+    process.exitCode = 1;
+    return null;
   }
   return { keyId, issuerId, privateKeyPem: privateKeyPem + "\n" };
 }
@@ -365,7 +389,17 @@ async function setWhatToTest({ api, buildId, appId, marketing }) {
 }
 
 async function main() {
-  const { keyId, issuerId, privateKeyPem } = resolveAscCredentials();
+  const apiBase = resolveApiBase();
+  if (!apiBase) {
+    process.exitCode = 2;
+    return;
+  }
+  const credentials = resolveAscCredentials();
+  if (!credentials) {
+    // The helper already named what is missing and set the exit code.
+    return;
+  }
+  const { keyId, issuerId, privateKeyPem } = credentials;
   const token = signJwt({ keyId, issuerId, privateKeyPem });
 
   const [method, path, body, arg4] = process.argv.slice(2);
@@ -374,7 +408,8 @@ async function main() {
     console.error("       node asc-api.mjs ensure-tf-ready <bundleId> <buildVersion> [marketingVersion]");
     console.error("       node asc-api.mjs latest-build-seq <bundleId> <prefix>");
     console.error("       node asc-api.mjs upload-screenshots <localizationId> <displayType> <file...>");
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
 
   // How long a single App Store Connect call may take.  Node's fetch has no
@@ -391,6 +426,9 @@ async function main() {
   // named, never previewed: a masked preview of a private key is still a
   // piece of the key.
   function describeError(res) {
+    if (res.networkError) {
+      return "the request never reached App Store Connect";
+    }
     if (res.status === 401 || res.status === 403) {
       return "App Store Connect rejected the key: check ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_P8 in Fleet-OPS prod /asc";
     }
@@ -417,22 +455,26 @@ async function main() {
   //
   // The scripts in this directory are dependency-free, so the guard is
   // written out by hand rather than pulled in as a schema library.
+  //
+  // A guard cannot return from main() on its own, so it throws a named
+  // failure instead: the caller unwinds to main()'s handler, which prints the
+  // message and keeps the exit code the guard set.
   function isPlainObject(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
   }
 
   function requireObject(value, what) {
     if (!isPlainObject(value)) {
-      console.error(`upload-screenshots: invalid ${what} response`);
-      process.exit(2);
+      process.exitCode = 2;
+      throw new NamedFailure(`upload-screenshots: invalid ${what} response`);
     }
     return value;
   }
 
   function requireArray(value, what) {
     if (!Array.isArray(value)) {
-      console.error(`upload-screenshots: invalid ${what} response`);
-      process.exit(2);
+      process.exitCode = 2;
+      throw new NamedFailure(`upload-screenshots: invalid ${what} response`);
     }
     return value;
   }
@@ -444,7 +486,7 @@ async function main() {
   // on a timeout, and an escaping exception would skip it and leave the
   // reservation open in a ten-entry set.
   async function api(methodName, apiPath, jsonBody) {
-    const url = apiPath.startsWith("http") ? apiPath : `${API_BASE}${apiPath}`;
+    const url = apiPath.startsWith("http") ? apiPath : `${apiBase}${apiPath}`;
     let res;
     try {
       res = await fetch(url, {
@@ -461,6 +503,10 @@ async function main() {
       return {
         status: 0,
         ok: false,
+        // The request never reached App Store Connect.  A caller that only
+        // looks at the status would read this as a server verdict, so the
+        // transport failure is marked and reported as one.
+        networkError: true,
         text: "",
         parsed: {
           errors: [{
@@ -528,7 +574,8 @@ async function main() {
     const files = process.argv.slice(5);
     if (!localizationId || !displayType || files.length === 0) {
       console.error("Usage: node asc-api.mjs upload-screenshots <localizationId> <displayType|auto> <file...>");
-      process.exit(2);
+      process.exitCode = 2;
+      return;
     }
 
     // "auto" reads the pixel size out of the file and picks the screenshot set
@@ -553,7 +600,8 @@ async function main() {
     for (const file of files) {
       if (!existsSync(file)) {
         console.error(`upload-screenshots: no such file: ${file}`);
-        process.exit(2);
+        process.exitCode = 2;
+        return;
       }
       // The width and height sit at offsets 16 and 20, so anything shorter
       // than a signature plus an IHDR header cannot be measured.  Reading
@@ -562,14 +610,16 @@ async function main() {
       const bytes = readFileSync(file);
       if (bytes.length < 24) {
         console.error(`upload-screenshots: ${file} is ${bytes.length} bytes, too small to be a PNG`);
-        process.exit(2);
+        process.exitCode = 2;
+        return;
       }
       const header = bytes.subarray(0, 24);
       const size = `${header.readUInt32BE(16)}x${header.readUInt32BE(20)}`;
       const type = sizeToDisplayType[size];
       if (!type) {
         console.error(`upload-screenshots: ${size} is not a size App Store Connect accepts`);
-        process.exit(2);
+        process.exitCode = 2;
+        return;
       }
       fileSizes.set(file, { size, type });
     }
@@ -581,7 +631,8 @@ async function main() {
       if (type !== displayType) {
         console.error(`upload-screenshots: ${file} is ${size}, which belongs to ${type}, not ${displayType}`);
         console.error(`upload-screenshots: run the ${type} files on their own`);
-        process.exit(2);
+        process.exitCode = 2;
+        return;
       }
     }
     console.error(`upload-screenshots: ${fileSizes.get(files[0]).size} -> ${displayType}`);
@@ -589,7 +640,8 @@ async function main() {
     const sets = await api("GET", `/v1/appStoreVersionLocalizations/${localizationId}/appScreenshotSets`);
     if (!sets.ok) {
       console.error(`upload-screenshots: could not list screenshot sets (HTTP ${sets.status}): ${describeError(sets)}`);
-      process.exit(2);
+      process.exitCode = 2;
+      return;
     }
     const setList = requireArray(sets.parsed?.data, "screenshot-set list");
     let set = setList.find(
@@ -610,7 +662,8 @@ async function main() {
       }));
       if (!created.ok) {
         console.error(`upload-screenshots: could not create the ${displayType} set (HTTP ${created.status}): ${describeError(created)}`);
-        process.exit(2);
+        process.exitCode = 2;
+        return;
       }
       set = requireObject(created.parsed?.data, "screenshot set");
       console.error(`upload-screenshots: created the ${displayType} set ${set.id}`);
@@ -621,7 +674,8 @@ async function main() {
     for (const file of files) {
       if (!existsSync(file)) {
         console.error(`upload-screenshots: no such file: ${file}`);
-        process.exit(2);
+        process.exitCode = 2;
+        return;
       }
       const bytes = readFileSync(file);
       const fileName = file.split("/").pop();
@@ -637,7 +691,8 @@ async function main() {
       }));
       if (!reserved.ok) {
         console.error(`upload-screenshots: could not reserve ${fileName} (HTTP ${reserved.status}): ${describeError(reserved)}`);
-        process.exit(2);
+        process.exitCode = 2;
+        return;
       }
       // The reservation now exists in a set that holds ten entries, so it has
       // to be dropped on every path that stops here.  When the response shape
@@ -646,13 +701,15 @@ async function main() {
       const reservation = reserved.parsed?.data;
       if (!isPlainObject(reservation)) {
         console.error(`upload-screenshots: invalid screenshot reservation for ${fileName}; a reservation may be open in set ${set.id}`);
-        process.exit(2);
+        process.exitCode = 2;
+        return;
       }
       const screenshot = reservation;
       if (typeof screenshot.id !== "string" || screenshot.id.length === 0) {
         console.error(`upload-screenshots: invalid screenshot reservation for ${fileName}; a reservation may be open in set ${set.id}`);
         if (screenshot.id) await discardReservation(screenshot.id);
-        process.exit(2);
+        process.exitCode = 2;
+        return;
       }
       const operations = Array.isArray(screenshot.attributes?.uploadOperations)
         ? screenshot.attributes.uploadOperations
@@ -660,7 +717,8 @@ async function main() {
       if (operations.length === 0) {
         console.error(`upload-screenshots: Apple returned no upload operation for ${fileName}`);
         await discardReservation(screenshot.id);
-        process.exit(2);
+        process.exitCode = 2;
+        return;
       }
 
       for (const operation of operations) {
@@ -685,12 +743,14 @@ async function main() {
             ? "the upload timed out"
             : `the upload failed (${error && error.message ? error.message : "unknown error"})`;
           console.error(`upload-screenshots: upload of ${fileName} failed: ${reason}`);
-          process.exit(2);
+          process.exitCode = 2;
+          return;
         }
         if (!put.ok) {
           console.error(`upload-screenshots: upload of ${fileName} failed (HTTP ${put.status})`);
           await discardReservation(screenshot.id);
-          process.exit(2);
+          process.exitCode = 2;
+          return;
         }
       }
 
@@ -700,7 +760,8 @@ async function main() {
       if (!committed.ok) {
         console.error(`upload-screenshots: could not commit ${fileName} (HTTP ${committed.status}): ${describeError(committed)}`);
         await discardReservation(screenshot.id);
-        process.exit(2);
+        process.exitCode = 2;
+        return;
       }
       const committedScreenshot = requireObject(committed.parsed?.data, "screenshot commit");
       const state = committedScreenshot.attributes?.assetDeliveryState;
@@ -711,11 +772,13 @@ async function main() {
         for (const problem of state.errors) {
           console.error(`  ${problem.code}: ${problem.title} ${problem.detail || ""}`);
         }
-        process.exit(3);
+        process.exitCode = 3;
+        return;
       }
     }
     console.log(JSON.stringify({ ok: true, setId: set.id, displayType, files }));
-    process.exit(0);
+    process.exitCode = 0;
+    return;
   }
 
   // Highest N already used by the "<prefix>.N" MARKETING version train
@@ -749,12 +812,18 @@ async function main() {
     const prefix = body;
     if (!bundleId || !prefix) {
       console.error("Usage: node asc-api.mjs latest-build-seq <bundleId> <prefix>");
-      process.exit(2);
+      process.exitCode = 2;
+      return;
     }
     const apps = await api("GET", `/v1/apps?filter[bundleId]=${encodeURIComponent(bundleId)}&limit=1`);
     if (!apps.ok || !apps.parsed.data?.[0]) {
-      console.error(`latest-build-seq: app not found for bundle (HTTP ${apps.status})`);
-      process.exit(2);
+      // A request that never reached App Store Connect is not a verdict about
+      // the app, so it is not reported as "not found".
+      console.error(apps.networkError
+        ? `latest-build-seq: ${describeError(apps)}`
+        : `latest-build-seq: app not found for bundle (HTTP ${apps.status})`);
+      process.exitCode = 2;
+      return;
     }
     const appId = apps.parsed.data[0].id;
 
@@ -780,7 +849,8 @@ async function main() {
       const res = await api("GET", url);
       if (!res.ok) {
         console.error(`latest-build-seq: preReleaseVersions query failed (HTTP ${res.status})`);
-        process.exit(2);
+        process.exitCode = 2;
+        return;
       }
       for (const v of res.parsed.data || []) {
         // If a specific platform is requested, filter by it. Default to IOS if unspecified.
@@ -800,7 +870,8 @@ async function main() {
       const res = await api("GET", url);
       if (!res.ok) {
         console.error(`latest-build-seq: builds query failed (HTTP ${res.status})`);
-        process.exit(2);
+        process.exitCode = 2;
+        return;
       }
       for (const b of res.parsed.data || []) {
         seenBuilds++;
@@ -813,7 +884,8 @@ async function main() {
       `latest-build-seq: ${seenVersions} marketing version(s) + ${seenBuilds} build(s) inspected; highest ${prefix}.N is N=${best}`
     );
     console.log(String(best));
-    process.exit(0);
+    process.exitCode = 0;
+    return;
   }
 
   // After upload: find THE BUILD THIS RUN JUST UPLOADED, declare export
@@ -855,7 +927,8 @@ async function main() {
       console.error("  this run uploaded. It is required: without it there is no way to tell the");
       console.error("  new build from the previous ship, and ASC has no record of the new build");
       console.error("  for the first minutes after upload.");
-      process.exit(2);
+      process.exitCode = 2;
+      return;
     }
 
     const totalTimeoutSec = (() => {
@@ -869,8 +942,13 @@ async function main() {
 
     const apps = await api("GET", `/v1/apps?filter[bundleId]=${encodeURIComponent(bundleId)}&limit=1`);
     if (!apps.ok || !apps.parsed.data?.[0]) {
-      console.error(`ensure-tf-ready: app not found for bundle (HTTP ${apps.status})`);
-      process.exit(2);
+      // A request that never reached App Store Connect is not a verdict about
+      // the app, so it is not reported as "not found".
+      console.error(apps.networkError
+        ? `ensure-tf-ready: ${describeError(apps)}`
+        : `ensure-tf-ready: app not found for bundle (HTTP ${apps.status})`);
+      process.exitCode = 2;
+      return;
     }
     const appId = apps.parsed.data[0].id;
 
@@ -899,12 +977,14 @@ async function main() {
           continue;
         }
         console.error(`ensure-tf-ready: discovery query failed (HTTP ${res.status})`);
-        process.exit(2);
+        process.exitCode = 2;
+        return;
       }
       const rows = res.parsed.data || [];
       if (rows.length > 1) {
         console.error(`ensure-tf-ready: ${rows.length} builds match version ${wantBuildVersion} -- ambiguous, refusing to guess`);
-        process.exit(2);
+        process.exitCode = 2;
+        return;
       }
       if (rows.length === 1) {
         build = rows[0];
@@ -921,7 +1001,14 @@ async function main() {
       let newest = "unknown";
       try {
         const probe = await api("GET", `/v1/builds?filter[app]=${appId}&sort=-uploadedDate&limit=1`);
-        newest = probe.parsed?.data?.[0]?.attributes?.version || "none";
+        if (probe.ok) {
+          newest = probe.parsed?.data?.[0]?.attributes?.version || "none";
+        } else {
+          // The probe did not answer, so what is present is not known.  Saying
+          // "none" would assert that the app has no builds at all, which is a
+          // different and wrong claim.
+          console.error(`ensure-tf-ready: the newest-build probe failed: ${describeError(probe)}`);
+        }
       } catch { /* diagnostic only */ }
       console.error(
         `ensure-tf-ready: build version ${wantBuildVersion} never appeared for ${bundleId} within ${totalTimeoutSec}s; ` +
@@ -932,7 +1019,8 @@ async function main() {
         ok: false, wanted: wantBuildVersion, newestPresent: newest,
         discoveryTimedOut: true, transientErrors
       }));
-      process.exit(4);
+      process.exitCode = 4;
+      return;
     }
 
     const buildId = build.id;
@@ -948,7 +1036,8 @@ async function main() {
       }));
       if (!patch.ok) {
         console.error(`ensure-tf-ready: compliance patch failed HTTP ${patch.status}`);
-        process.exit(2);
+        process.exitCode = 2;
+        return;
       }
       console.error("ensure-tf-ready: declared usesNonExemptEncryption=false");
     }
@@ -981,16 +1070,18 @@ async function main() {
           internalBuildState: state,
           usesNonExemptEncryption: attrs.usesNonExemptEncryption
         }));
-        process.exit(0);
+        process.exitCode = 0;
+        return;
       }
       await sleep(POLL_MS);
     }
     console.error("ensure-tf-ready: timed out waiting for IN_BETA_TESTING (upload may still be processing)");
     console.log(JSON.stringify({ ok: false, buildId, version, timedOut: true }));
-    process.exit(3);
+    process.exitCode = 3;
+    return;
   }
 
-  const url = path.startsWith("http") ? path : `${API_BASE}${path}`;
+  const url = path.startsWith("http") ? path : `${apiBase}${path}`;
   const res = await fetch(url, {
     method,
     headers: {
@@ -1003,10 +1094,17 @@ async function main() {
   const text = await res.text();
   console.error(`HTTP ${res.status}`);
   console.log(text);
-  if (!res.ok) process.exit(2);
+  if (!res.ok) { process.exitCode = 2; return; }
 }
 
 main().catch((err) => {
-  console.error(String(err && err.stack ? err.stack : err));
-  process.exit(1);
+  if (err instanceof NamedFailure) {
+    // The failure named itself, so a stack trace would only be noise.
+    console.error(err.message);
+  } else {
+    console.error(String(err && err.stack ? err.stack : err));
+  }
+  // A failure that already chose its exit code keeps it.
+  if (!process.exitCode) process.exitCode = 1;
+  return;
 });

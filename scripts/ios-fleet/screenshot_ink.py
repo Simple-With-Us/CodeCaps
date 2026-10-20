@@ -42,6 +42,14 @@ MODE_SAMPLE_STRIDE = 16
 # background and never reaches this, so the slow path is the exception.
 DOMINANT_BACKGROUND_MINIMUM = 0.10
 
+# The share of the frame's height that is header: the status bar and the
+# navigation bar.  Both are drawn before the content, so a frame that has drawn
+# only its header has no ink at all below this line.  The content region is
+# what tells a finished screen from a half-drawn one, because a threshold on
+# the whole frame cannot separate "a navigation bar and nothing else" from "a
+# screen with a little on it".
+HEADER_SHARE = 0.15
+
 
 def background_value(channel):
     """Return the most common byte value in `channel`.
@@ -78,13 +86,16 @@ def ink_percent(channels):
     return worst * 100.0 / len(channels[0])
 
 
-def read_bmp_channels(path):
-    """Return the colour channels of a BMP file, one byte per pixel each.
+def read_bmp_frame(path):
+    """Return the colour channels of a BMP file, with its size.
 
     Both 24-bit and 32-bit BMPs are read, in either row order, because that is
     what `sips` writes depending on whether the source had an alpha channel.
     The channel order inside a pixel does not matter: the measurement only
     compares each channel against its own background.
+
+    The rows come back in image order, so the first row of a channel is the
+    top of the frame and the last is the bottom.
     """
     with open(path, "rb") as handle:
         data = handle.read()
@@ -110,11 +121,55 @@ def read_bmp_channels(path):
         rows.append((line[0::bytes_per_pixel], line[1::bytes_per_pixel], line[2::bytes_per_pixel]))
     if not top_down:
         rows.reverse()
-    return tuple(b"".join(row[index] for row in rows) for index in range(3))
+    channels = tuple(b"".join(row[index] for row in rows) for index in range(3))
+    return channels, width, height
+
+
+def read_bmp_channels(path):
+    """Return the colour channels of a BMP file, one byte per pixel each."""
+    channels, _width, _height = read_bmp_frame(path)
+    return channels
+
+
+def ink_shares(channels, width, height):
+    """Return the share of the frame, and of its content region, that is ink.
+
+    The overall share counts every pixel.  The content share counts only the
+    pixels below the header, which is where a screen's content lives.
+
+    The two answers together are what tell a finished screen from a half-drawn
+    one.  A frame that has drawn its navigation bar and none of its content
+    has ink in the header and none at all below it, so a threshold on the
+    content share rejects it even when the overall share is high enough to
+    have cleared a threshold on the whole frame.
+
+    As in `ink_percent`, the largest per-channel count wins: it over-counts a
+    pixel that differs in more than one channel and never under-counts one
+    that differs in any.
+    """
+    if not channels or width <= 0 or height <= 0:
+        return 0.0, 0.0
+    total = len(channels[0])
+    if total <= 0:
+        return 0.0, 0.0
+    start = min(int(height * HEADER_SHARE), max(height - 1, 0))
+    region = total - start * width
+    if region <= 0:
+        region = 1
+    worst_total = 0
+    worst_region = 0
+    for channel in channels:
+        if not channel:
+            continue
+        background = background_value(channel)
+        worst_total = max(worst_total, total - channel.count(background))
+        segment = channel[start * width:]
+        worst_region = max(worst_region, len(segment) - segment.count(background))
+    return worst_total * 100.0 / total, worst_region * 100.0 / region
 
 
 def measure(path):
-    """Return the percentage of the frame at `path` that is not background."""
+    """Return the overall and content ink percentages of the frame at `path`."""
     with tempfile.TemporaryDirectory() as work:
         converted = os.path.join(work, "frame.bmp")
         subprocess.run(
@@ -122,8 +177,8 @@ def measure(path):
             check=True,
             capture_output=True,
         )
-        channels = read_bmp_channels(converted)
-    return ink_percent(channels)
+        channels, width, height = read_bmp_frame(converted)
+    return ink_shares(channels, width, height)
 
 
 def main(argv):
@@ -137,19 +192,20 @@ def main(argv):
     )
     args = parser.parse_args(argv[1:])
     try:
-        percent = measure(args.image)
+        overall, content = measure(args.image)
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         print(f"screenshot_ink: {error}", file=sys.stderr)
         return 2
     print(
-        f"screenshot_ink: {os.path.basename(args.image)} holds {percent:.2f}% non-background pixels",
+        f"screenshot_ink: {os.path.basename(args.image)} holds {overall:.2f}% ink overall "
+        f"and {content:.2f}% below the header",
         file=sys.stderr,
     )
-    # The bare number goes to stdout so the capture script can read it and
+    # The two numbers go to stdout so the capture script can read them and
     # compare two polls.  The human line stays on stderr, so it never becomes
     # part of a captured value.
-    print(f"{percent:.4f}")
-    return 0 if percent >= args.min_percent else 1
+    print(f"{overall:.4f} {content:.4f}")
+    return 0 if overall >= args.min_percent else 1
 
 
 if __name__ == "__main__":

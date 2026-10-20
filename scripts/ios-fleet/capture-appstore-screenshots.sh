@@ -31,6 +31,9 @@ PROJECT_DIR="$REPO_ROOT/ios/CodeCapsCompanion"
 SCHEME="CodeCapsCompanion"
 OUT_DIR="${1:-${REPO_ROOT}/.build/appstore-screenshots}"
 DERIVED_ROOT="${DERIVED_ROOT:-${RUNNER_TEMP:-/tmp}/codecaps-appstore-derived}"
+# Where the ink measurement writes its error, so a failure can be reported
+# instead of being swallowed by the poll loop.
+INK_ERROR_FILE="$DERIVED_ROOT/ink-error.txt"
 
 # How long to wait for the app to draw a screen, and how often to look.  A
 # cold simulator took about eighteen seconds to show its first frame and a
@@ -49,18 +52,23 @@ RENDER_MIN_PERCENT="${RENDER_MIN_PERCENT:-10.0}"
 # do, and the same ten percent would be the wrong bar for them.  On an iPad
 # the same content covers a smaller share of a bigger screen, so the settings
 # bar is lower than the quota bar.
-RENDER_MIN_PERCENT_SETTINGS="${RENDER_MIN_PERCENT_SETTINGS:-6.0}"
-# A screen that is sparse but finished is still a finished screen.  A frame
-# that has stopped changing is one, whatever it covers, so a frame above this
-# floor is kept once two polls in a row measure the same value.  The floor
-# sits above the bare navigation bar so a half-drawn frame cannot reach it.
-RENDER_STABLE_FLOOR="${RENDER_STABLE_FLOOR:-4.5}"
+RENDER_MIN_PERCENT_SETTINGS="${RENDER_MIN_PERCENT_SETTINGS:-5.0}"
+# The share of the content region that has to hold ink.  The content region is
+# everything below the status bar and the navigation bar, so a frame that has
+# drawn only its navigation bar measures zero here however much of the frame
+# it covers.  This is the measurement that tells a finished screen from a
+# half-drawn one, and it is the same bar for every screen.
+RENDER_MIN_CONTENT_PERCENT="${RENDER_MIN_CONTENT_PERCENT:-0.5}"
 # How close two consecutive measurements have to be to count as unchanged,
-# and how many polls have to agree before the frame is kept.
+# and how many polls have to agree before the frame is kept.  Holding still is
+# an extra condition on top of the thresholds, never a way around them.
 RENDER_STABLE_DELTA="${RENDER_STABLE_DELTA:-0.2}"
 RENDER_STABLE_POLLS="${RENDER_STABLE_POLLS:-2}"
 
 mkdir -p "$OUT_DIR"
+# The ink measurement writes its error here, so the directory has to exist
+# before the first frame is measured.
+mkdir -p "$DERIVED_ROOT"
 
 # App Store Connect accepts these display sizes.  The list is Apple's own:
 # developer.apple.com/help/app-store-connect/reference/screenshot-specifications
@@ -199,10 +207,12 @@ PY
 # The companion takes seconds to render on a cold simulator, and a fixed sleep
 # captured a blank window more than once.  This polls instead: take a frame,
 # measure how much of it is not background, and stop as soon as the screen
-# holds enough of it.  A sparse screen is also kept once two polls in a row
-# measure the same value, because a screen that has stopped changing is a
-# screen that has finished drawing.
-# Print the share of the frame that is not background, as a bare number.
+# holds enough of it.  The frame has to hold its content and to hold still:
+# a screen that is still filling in has not finished drawing even when it has
+# already cleared the thresholds.
+#
+# Print the share of the whole frame that is not background, and the share of
+# the part below the header, as two bare numbers.
 #
 # The measurement is the only thing that tells a drawn screen from a blank
 # one, so it is worth the seconds it costs, and it is why the background is
@@ -210,46 +220,79 @@ PY
 measure_ink() {
   # screenshot_ink.py exits 1 when the frame holds less than its own default
   # minimum, which is exactly the blank-frame case the poll loop below has to
-  # survive.  Under `set -e` an assignment whose command substitution fails
-  # aborts the whole capture, so the status is swallowed here; an empty
-  # reading is already handled by the caller's `[ -n "$percent" ]` test.
-  python3 "$SCRIPT_DIR/screenshot_ink.py" "$1" 2>/dev/null || true
+  # survive.  It exits 2 when the measurement itself failed, which is not a
+  # blank frame: swallowing that would spend the whole render budget on every
+  # screen and then report the wrong reason, so it is reported and the run
+  # stops there.
+  local status=0
+  python3 "$SCRIPT_DIR/screenshot_ink.py" "$1" 2>"$INK_ERROR_FILE" || status=$?
+  if [ "$status" -ge 2 ]; then
+    cat "$INK_ERROR_FILE" >&2
+    return "$status"
+  fi
+  return 0
+}
+
+# Decide whether a frame holds enough to be a finished screen.
+#
+# It has to hold its content, and the content has to be below the header: a
+# frame that has drawn only its navigation bar covers a few percent of the
+# frame, so the whole-frame share on its own cannot tell it from a finished
+# screen.  The content share can, and it is the same bar for every screen.
+frame_clears_thresholds() {
+  local overall="$1" content="$2" min_overall="$3" min_content="$4"
+  awk -v p="$overall" -v m="$min_overall" -v c="$content" -v k="$min_content" \
+    'BEGIN { exit !(p >= m && c >= k) }'
+}
+
+# Decide whether two readings are the same, within the allowed difference.
+readings_match() {
+  local a="$1" b="$2"
+  awk -v p="$a" -v q="$b" -v d="$RENDER_STABLE_DELTA" \
+    'BEGIN { exit !((p - q < 0 ? q - p : p - q) <= d) }'
 }
 
 wait_for_render() {
-  local udid="$1" frame="$2" min_percent="$3"
+  local udid="$1" frame="$2" min_overall="$3" min_content="$4"
   local deadline=$((SECONDS + RENDER_TIMEOUT_SEC))
-  local previous="" stable=0 percent=""
+  local previous_overall="" previous_content="" stable=0
+  local overall="" content=""
   while [ "$SECONDS" -lt "$deadline" ]; do
     xcrun simctl io "$udid" screenshot --type=jpeg "$frame" >/dev/null 2>&1 || true
     if [ -s "$frame" ]; then
-      percent="$(measure_ink "$frame")"
-      if [ -n "$percent" ]; then
-        if awk -v p="$percent" -v m="$min_percent" 'BEGIN { exit !(p >= m) }'; then
-          log "screen holds ${percent}% non-background pixels, at or above ${min_percent}%"
-          return 0
-        fi
-        # A sparse screen settles instead of filling the frame.  Two polls
-        # that measure the same value mean the drawing stopped, and a frame
-        # above the floor holds more than a bare navigation bar.
-        if [ -n "$previous" ] \
-          && awk -v p="$percent" -v q="$previous" -v d="$RENDER_STABLE_DELTA" \
-            'BEGIN { exit !((p - q < 0 ? q - p : p - q) <= d) }' \
-          && awk -v p="$percent" -v f="$RENDER_STABLE_FLOOR" 'BEGIN { exit !(p >= f) }'; then
-          stable=$((stable + 1))
-          if [ "$stable" -ge "$RENDER_STABLE_POLLS" ]; then
-            log "screen settled at ${percent}% non-background pixels"
-            return 0
+      local status=0 reading=""
+      reading="$(measure_ink "$frame")" || status=$?
+      if [ "$status" -ge 2 ]; then
+        fail "could not measure the screen on $udid"
+      fi
+      if [ -n "$reading" ]; then
+        overall="${reading%% *}"
+        content="${reading##* }"
+        #  Holding still is a second condition on top of the thresholds, never
+        #  a way around them: a frame that is still filling in has not
+        #  finished drawing even when it has already cleared them.
+        if frame_clears_thresholds "$overall" "$content" "$min_overall" "$min_content"; then
+          if [ -n "$previous_overall" ] \
+            && readings_match "$overall" "$previous_overall" \
+            && readings_match "$content" "$previous_content"; then
+            stable=$((stable + 1))
+            if [ "$stable" -ge "$RENDER_STABLE_POLLS" ]; then
+              log "screen settled at ${overall}% overall and ${content}% below the header"
+              return 0
+            fi
+          else
+            stable=0
           fi
         else
           stable=0
         fi
-        previous="$percent"
+        previous_overall="$overall"
+        previous_content="$content"
       fi
     fi
     sleep "$RENDER_POLL_SEC"
   done
-  fail "the app drew no screen within ${RENDER_TIMEOUT_SEC}s on $udid (last reading ${percent:-none}%)"
+  fail "the app drew no screen within ${RENDER_TIMEOUT_SEC}s on $udid (last reading ${overall:-none}% overall, ${content:-none}% below the header)"
 }
 
 # Check a captured file against the size App Store Connect accepts and
@@ -359,7 +402,7 @@ capture_on() {
     # App Store Connect rejects a screenshot that has one.  It is converted
     # back to PNG so the upload step can read the size out of the header.
     local raw="$derived/$label-$name.jpg"
-    wait_for_render "$udid" "$raw" "$min"
+    wait_for_render "$udid" "$raw" "$min" "$RENDER_MIN_CONTENT_PERCENT"
     sips -s format png "$raw" --out "$OUT_DIR/$label-$name.png" >/dev/null
     log "captured $label $name"
   done
@@ -417,4 +460,9 @@ main() {
   ls -1 "$OUT_DIR"
 }
 
-main "$@"
+# The capture is run as a script, and its decisions are also exercised by the
+# contract test, which sources it.  The guard is what makes the second
+# possible.
+if [ "${CAPTURE_SOURCE_ONLY:-}" != "1" ]; then
+  main "$@"
+fi

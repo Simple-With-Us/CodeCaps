@@ -16,7 +16,28 @@ from collections import Counter
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from screenshot_ink import background_value, ink_percent, read_bmp_channels  # noqa: E402
+from screenshot_ink import (  # noqa: E402
+    background_value,
+    ink_percent,
+    ink_shares,
+    read_bmp_channels,
+    read_bmp_frame,
+)
+
+
+def header_only_frame(width=200, height=200, header_rows=20):
+    """A frame with a navigation bar and nothing below it.
+
+    This is the shape of a screen that has drawn its header and is still
+    waiting for its content, and it is the case the whole-frame threshold
+    cannot see: it covers a few percent of the frame, but none of the content
+    region.
+    """
+    rows = [[(255, 255, 255) for _ in range(width)] for _ in range(height)]
+    for y in range(header_rows):
+        for x in range(width):
+            rows[y][x] = (136, 148, 13)
+    return rows
 
 
 def build_bmp(width, height, rows, bits=24, top_down=True):
@@ -161,6 +182,57 @@ class BlankVersusDrawnTests(unittest.TestCase):
                 handle.write(build_bmp(200, 200, drawn_frame()))
             channels = read_bmp_channels(path)
         self.assertGreater(ink_percent(channels), 1.0)
+
+
+class InkSharesTests(unittest.TestCase):
+    def test_a_header_only_frame_has_ink_but_no_content(self):
+        #  The whole-frame share sees the navigation bar.  The content share
+        #  does not, because the bar is above the content region.  That is the
+        #  difference the capture gate depends on.
+        with tempfile.TemporaryDirectory() as work:
+            path = os.path.join(work, "frame.bmp")
+            with open(path, "wb") as handle:
+                handle.write(build_bmp(200, 200, header_only_frame()))
+            channels, width, height = read_bmp_frame(path)
+        overall, content = ink_shares(channels, width, height)
+        self.assertGreater(overall, 0.0)
+        self.assertEqual(content, 0.0)
+
+    def test_a_drawn_screen_holds_content_below_the_header(self):
+        with tempfile.TemporaryDirectory() as work:
+            path = os.path.join(work, "frame.bmp")
+            with open(path, "wb") as handle:
+                handle.write(build_bmp(200, 200, drawn_frame()))
+            channels, width, height = read_bmp_frame(path)
+        overall, content = ink_shares(channels, width, height)
+        self.assertGreater(overall, 0.0)
+        self.assertGreater(content, 0.0)
+
+    def test_the_content_share_is_a_share_of_the_content_region(self):
+        #  The content region is the part below the header, so it excludes the
+        #  ink in the header and is a share of a smaller area.  The card fills
+        #  most of the content region, so the two numbers stay close.
+        with tempfile.TemporaryDirectory() as work:
+            path = os.path.join(work, "frame.bmp")
+            with open(path, "wb") as handle:
+                handle.write(build_bmp(200, 200, drawn_frame()))
+            channels, width, height = read_bmp_frame(path)
+        overall, content = ink_shares(channels, width, height)
+        self.assertLess(content, overall, "the header region holds ink, so it is excluded")
+        self.assertGreater(content, overall * 0.7, "the card fills most of the content region")
+
+    def test_no_channels_measures_nothing(self):
+        self.assertEqual(ink_shares([], 100, 100), (0.0, 0.0))
+
+    def test_read_bmp_frame_reports_the_size(self):
+        with tempfile.TemporaryDirectory() as work:
+            path = os.path.join(work, "frame.bmp")
+            with open(path, "wb") as handle:
+                handle.write(build_bmp(7, 11, blank_frame(width=7, height=11, status_bar_pixels=2)))
+            channels, width, height = read_bmp_frame(path)
+        self.assertEqual(width, 7)
+        self.assertEqual(height, 11)
+        self.assertEqual(len(channels[0]), 7 * 11)
 
 
 if __name__ == "__main__":

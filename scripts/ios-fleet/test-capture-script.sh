@@ -53,17 +53,75 @@ pass "the capture waits for a drawn frame"
 # lets a half-drawn frame through.  The settings screens need their own bar.
 grep -q 'RENDER_MIN_PERCENT_SETTINGS' "$CAPTURE" \
   || fail "the capture script has no separate minimum for the settings screens"
-grep -q 'wait_for_render "$udid" "$raw" "$min"' "$CAPTURE" \
-  || fail "the capture script does not give each screen its own minimum"
+# shellcheck disable=SC2016  # the pattern is matched literally, not expanded
+grep -q 'wait_for_render "$udid" "$raw" "$min" "$RENDER_MIN_CONTENT_PERCENT"' "$CAPTURE" \
+  || fail "the capture script does not give each screen its own minimum and the content bar"
 pass "each screen is measured against a minimum that fits it"
 
-# A screen that is sparse but finished never reaches the high bar, so the
-# wait has to be able to keep a frame that has stopped changing.
-grep -q 'RENDER_STABLE_FLOOR' "$CAPTURE" \
-  || fail "the capture script cannot keep a sparse screen that has settled"
+# A frame that has drawn only its navigation bar covers a few percent of the
+# frame, so a threshold on the whole frame alone cannot tell it from a
+# finished screen.  The content region below the header is what can, and it
+# has to be part of the gate rather than a separate check.
+grep -q 'RENDER_MIN_CONTENT_PERCENT' "$CAPTURE" \
+  || fail "the capture script does not measure the content region"
+grep -q 'p >= m && c >= k' "$CAPTURE" \
+  || fail "the capture script does not require the content region to hold ink"
+pass "the content region below the header is part of the gate"
+
+# Holding still is a second condition on top of the thresholds, never a way
+# around them: a frame that is still filling in has not finished drawing even
+# when it has already cleared them.
+if grep -q 'RENDER_STABLE_FLOOR' "$CAPTURE"; then
+  fail "the capture script has a stable-frame floor that can bypass the minimum"
+fi
+grep -q 'RENDER_STABLE_DELTA' "$CAPTURE" \
+  || fail "the capture script does not require the frame to hold still"
 grep -q 'RENDER_STABLE_POLLS' "$CAPTURE" \
   || fail "the capture script does not require the frame to hold still"
-pass "a sparse screen that has settled is kept"
+pass "the settled path cannot bypass the minimum"
+
+# A measurement that failed is not a blank frame.  Swallowing it would spend
+# the whole render budget on every screen and then report the wrong reason.
+grep -q 'INK_ERROR_FILE' "$CAPTURE" \
+  || fail "the capture script discards the ink measurement error"
+grep -q 'status" -ge 2' "$CAPTURE" \
+  || fail "the capture script does not fail fast on a failed measurement"
+pass "a failed measurement stops the capture instead of timing out"
+
+# The decisions the capture makes are exercised against the real numbers, not
+# only checked for their presence in the source.  The script is sourced with
+# the run guarded off, so the functions can be called directly.
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+gate() {
+  # gate <overall> <content> <min_overall> <min_content> -> exit 0 when drawn
+  (
+    cd "$work"
+    OUT_DIR="$work/out" DERIVED_ROOT="$work/derived" CAPTURE_SOURCE_ONLY=1 \
+      bash -c ". '$CAPTURE'; frame_clears_thresholds \"\$1\" \"\$2\" \"\$3\" \"\$4\"" \
+      _ "$1" "$2" "$3" "$4"
+  ) >/dev/null 2>&1
+}
+
+# A navigation bar and no content: about four percent of the frame, and none
+# of it below the header.  It has to be rejected for every screen, which is
+# the case a threshold on the whole frame alone got wrong.
+gate 4.6 0.0 10.0 0.5 && fail "a navigation bar with no content passed the quota-list gate"
+gate 4.6 0.0 5.0 0.5 && fail "a navigation bar with no content passed the settings gate"
+gate 4.6 0.0 4.5 0.4 && fail "a navigation bar with no content passed a low gate"
+pass "a navigation bar with no content never passes the gate"
+
+# A half-drawn screen: some content, but the content share is under the bar.
+gate 12.0 0.2 10.0 0.5 && fail "a half-drawn screen passed the quota-list gate"
+gate 12.0 0.2 5.0 0.5 && fail "a half-drawn screen passed the settings gate"
+pass "a half-drawn screen never passes the gate"
+
+# The finished quota list and the finished settings sheet both pass.
+gate 43.0 12.0 10.0 0.5 || fail "the finished quota list did not pass the gate"
+gate 6.2 1.1 5.0 0.5 || fail "the finished settings sheet did not pass the gate"
+# Exactly on the bar still passes.
+gate 10.0 0.5 10.0 0.5 || fail "a frame exactly on the bar did not pass the gate"
+pass "a finished screen passes the gate"
 
 # Both simulators run the same runtime and the same product, so the app is
 # built once and installed on both.  A second build compiles the companion and
@@ -74,4 +132,4 @@ $builds"
 grep -q 'APP_PATH=' "$CAPTURE" || fail "the capture script has no shared app path"
 pass "the app is built once and installed on both simulators"
 
-echo "capture script contract: 7 checks passed"
+echo "capture script contract: 12 checks passed"
