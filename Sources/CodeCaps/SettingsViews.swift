@@ -1233,25 +1233,31 @@ struct SettingsAboutPage: View {
         let size: CGFloat
         @Environment(\.colorScheme) private var colorScheme
 
-        /// The owner's cropped black-on-transparent artwork, resolved through
-        /// the same bundle the menu bar and PiP use.  Loaded once; it is drawn
-        /// as a template, which is what makes one asset correct in both
-        /// appearances.
-        static let asset: NSImage? = {
-            guard let url = ResourceBundle.resolved?.url(forResource: "CodeCapsMenuBarIcon", withExtension: "png"),
-                  let image = NSImage(contentsOf: url) else { return nil }
-            image.isTemplate = true
-            return image
-        }()
+        /// The owner's mark in colour on a transparent background, resolved
+        /// through the same bundle the menu bar and PiP use.  The menu bar
+        /// keeps the owner's own black template icon; this is the version that
+        /// belongs inside the app.  Owner 2026-10-20: "transparent background
+        /// when it is shown on the app like on the About page or settings.  For
+        /// those versions the time dots and hand are dark."
+        static let asset: NSImage? = BrandMarkImage.asset
 
         var body: some View {
             Group {
                 if let image = AboutBrandMark.asset {
                     Image(nsImage: image)
                         .resizable()
-                        .renderingMode(.template)
+                        .renderingMode(.original)
                         .interpolation(.high)
-                        .foregroundStyle(colorScheme == .dark ? Color.white : Theme.ink)
+                        .padding(size * 0.06)
+                        .background {
+                            // The needle and the dots are dark, so dark
+                            // appearance needs a light ground for them or the
+                            // mark reads as two empty rings.
+                            if colorScheme == .dark {
+                                RoundedRectangle(cornerRadius: size * 0.22, style: .continuous)
+                                    .fill(BrandMarkImage.lightGround)
+                            }
+                        }
                 } else {
                     // Only if the owner's artwork is ever missing from the
                     // bundle: keep a mark on screen rather than an empty gap.
