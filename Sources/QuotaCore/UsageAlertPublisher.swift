@@ -37,19 +37,23 @@ public actor UsageAlertPublisher {
                   let date = formatter.date(from: $0.occurredAt) else { return false }
             let age = now.timeIntervalSince(date)
             return age >= -60 && age <= 15 * 60
-        }.prefix(100)
+        }
         guard !fresh.isEmpty else { return }
         struct Envelope: Encodable { let alerts: [LocalQuotaSnapshot.AlertPayload] }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(Envelope(alerts: Array(fresh)))
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else { throw QuotaPublisherError.transport("Invalid response.") }
-        guard (200..<300).contains(http.statusCode) else { throw QuotaPublisherError.httpStatus(http.statusCode, nil) }
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any], json["ok"] as? Bool == true else {
-            throw QuotaPublisherError.serverError("Push alerts were not acknowledged.")
+        for offset in stride(from: 0, to: fresh.count, by: 50) {
+            try Task.checkCancellation()
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONEncoder().encode(Envelope(alerts: Array(fresh[offset..<min(offset + 50, fresh.count)])))
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else { throw QuotaPublisherError.transport("Invalid response.") }
+            guard (200..<300).contains(http.statusCode) else { throw QuotaPublisherError.httpStatus(http.statusCode, nil) }
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any], json["ok"] as? Bool == true,
+                  (json["failed"] as? Int ?? 0) == 0 else {
+                throw QuotaPublisherError.serverError("Push alerts were not acknowledged.")
+            }
         }
     }
 }
