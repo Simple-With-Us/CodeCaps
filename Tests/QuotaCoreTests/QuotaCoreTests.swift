@@ -153,7 +153,7 @@ final class QuotaCoreTests: XCTestCase {
     }
 
     func testUnusedPlatformsStayHiddenEvenWhenServerReportsThem() {
-        let hidden = ["kimi", "github-copilot", "windsurf", "deepseek", "gemini-cli"]
+        let hidden = ["kimi", "windsurf", "deepseek", "gemini-cli"]
         let windows = hidden.map { key in
             QuotaWindow(id: key, provider: key, label: "Quota", remainingPercent: 30, occurredAt: "2023-11-14T22:13:20Z")
         }
