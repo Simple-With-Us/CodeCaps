@@ -7,7 +7,7 @@ The Mac computes anomaly decisions using its measured history and can relay all 
 ## Remote Push Setup
 
 1. Deploy the matching Usage Monitor CodeCaps push endpoints and database migration from `codex/codecaps-push`.  Its server needs its existing APNs provider key and the separate `CODECAPS_PUSH_REGISTRATION_TOKEN` through Infisical.
-2. Enable Push Notifications for `com.simplewithus.codecaps.ios` and create the production profile with `node scripts/ios-enable-apns.mjs`.  The helper uses existing ASC credentials, preserves old profiles, verifies production push plus the App Group, and reuses a valid replacement profile.  The existing iOS ship workflow invokes it before installing profiles.
+2. Verify Push Notifications for `com.simplewithus.codecaps.ios` and its production profile with `node scripts/ios-enable-apns.mjs`.  The helper uses existing ASC credentials, verifies production push plus the App Group, and reuses the valid `CodeCaps Companion AppStore` profile.  The existing iOS ship workflow invokes it before installing profiles.
 3. Enable quota push on the Mac, then enable Send Alerts To iPhone under Notifications & Alarms.  The existing Push Token authenticates alert signals separately from quota telemetry.
 4. On iPhone, configure the quota endpoint, save the server's separate push registration credential in Remote Push, enable remote push, and choose each desired category.  The credential and device token remain in the device Keychain.  The read token never grants enrollment authority.
 
@@ -18,8 +18,8 @@ Development builds register with sandbox APNs; TestFlight and App Store builds r
 - Local checks: Node provisioning and release-workflow tests; Git whitespace validation.
 - Added Swift tests cover preference migration, persistence, delivery gating, occurrence identity, endpoint safety, and exhaustion recovery.
 - This Linux host has no Swift, Xcode, or Simulator.  Native build, Swift test execution, and screenshots require the existing hosted Swift CI workflow.
-- The local ASC client could not resolve `ASC_KEY_ID` and `ASC_ISSUER_ID`.  Live Apple capability/profile registration was not performed here.  The script is prepared for the already configured CI signing environment.
-- The local board and Zulip CLIs have no CODEX credentials.  The hosted coordination connector offers only JET; no JET identity was borrowed.  `docs/EFFORT-LOG.md` is explicitly archived and was preserved.
+- Access was initially unavailable and then restored by the owner.  Live verification confirms the CodeCaps iOS App ID has Push Notifications enabled and the active `CodeCaps Companion AppStore` profile contains production APNs and the required App Group.  No replacement signing profile is needed.
+- Linear and Zulip now verify CODEX's own identity; CC-140 is claimed for this rollout.  `docs/EFFORT-LOG.md` is explicitly archived and was preserved.
 - End-to-end APNs delivery requires a signed physical-device install, server deployment/configuration, and an enrolled device.  A successful local registration callback alone is insufficient evidence of delivery.
 
 ## Parity Boundaries
