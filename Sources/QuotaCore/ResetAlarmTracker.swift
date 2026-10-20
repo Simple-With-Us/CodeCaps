@@ -76,6 +76,9 @@ public struct ResetAlarmEvent: Equatable, Sendable {
         /// of its cap during the period that just ended.  Carries the lowest
         /// percentage remaining that was observed in that period.
         case nearCap(minimumRemaining: Double)
+        /// The quota came back mid-cycle without reaching the level a vendor
+        /// reset has to reach, so a change of plan is the likelier reason.
+        case planChange
     }
 
     public var scope: String
@@ -89,7 +92,13 @@ public struct ResetAlarmEvent: Equatable, Sendable {
     /// The reading that revealed the reset.
     public var remainingPercent: Double?
     public var reason: Reason
+    /// True when the quota was handed back mid-cycle and landed at or above
+    /// `ResetAlarmPolicy.vendorRestoreLevel`, so the vendor reset it.
     public var isVendorReset: Bool
+    /// True when the quota rose mid-cycle but landed below the level a vendor
+    /// reset has to reach.  A change of plan is the likelier reason: the
+    /// allowance is bigger, but the vendor did not refill it.
+    public var isPlanChange: Bool
 
     public init(
         scope: String,
@@ -101,7 +110,8 @@ public struct ResetAlarmEvent: Equatable, Sendable {
         endedPeriodResetAt: Date?,
         remainingPercent: Double?,
         reason: Reason,
-        isVendorReset: Bool = false
+        isVendorReset: Bool = false,
+        isPlanChange: Bool = false
     ) {
         self.scope = scope
         self.providerId = providerId
@@ -113,6 +123,7 @@ public struct ResetAlarmEvent: Equatable, Sendable {
         self.remainingPercent = remainingPercent
         self.reason = reason
         self.isVendorReset = isVendorReset
+        self.isPlanChange = isPlanChange
     }
 }
 
@@ -230,12 +241,31 @@ public enum ResetAlarmPolicy {
     /// A mid-cycle rise of at least this many points, with the period end left
     /// where it was, is the provider handing quota back.
     ///
-    /// The level the quota lands at says nothing: on 2026-10-04 Cursor's
-    /// included plan came back at 89% and Grok Bot's week at 92%, and a rule
-    /// that only fired at 95% or above missed both.  A fixed-period window
-    /// cannot regain quota inside its own period, so the size of the rise is
-    /// the evidence and 30 points is far beyond rounding or a stale reading.
+    /// The size of the rise is the evidence that something happened: a
+    /// fixed-period window cannot regain quota inside its own period, and 30
+    /// points is far beyond rounding or a stale reading.  How high it came
+    /// back to is a separate question, answered by `vendorRestoreLevel`.
     public static let vendorRestoreRise: Double = 30
+
+    /// The level a mid-cycle restore has to reach before it is called a vendor
+    /// reset rather than a plan change.
+    ///
+    /// Owner ruling 2026-10-20: "we shouldn't consider it vendor reset unless
+    /// it jumps up a large amount and we see it actually at 97-100% or
+    /// something (just random guess, maybe 95-100 or maybe 99-100 is better,
+    /// but the point is that we may not notice the first initial usage after a
+    /// reset so we can consider that a vendor reset)".
+    ///
+    /// The floor is 95 rather than 99 because the first reading after a reset
+    /// may already carry a little usage: the owner may not have looked at the
+    /// app between the reset and the first call, so a real reset can be seen
+    /// at 96% and still be a reset.  The level that must *not* pass is the one
+    /// a plan change produces: on 2026-10-19 Muse Code went from 0% to 75%
+    /// when the owner upgraded the plan, and that was reported as a vendor
+    /// reset.  A vendor reset refills the allowance; an upgrade changes how
+    /// much the allowance is, and the difference is visible in the number the
+    /// quota lands on.
+    public static let vendorRestoreLevel: Double = 95
 
     /// A courtesy reset can land on any level, so "what did it come back to" is
     /// the wrong question.  What is reliable is the shape: between two
@@ -278,6 +308,11 @@ public enum ResetAlarmPolicy {
 /// model-only caps (Claude's Sonnet and Opus weeklies, one MiniMax weekly per
 /// model) that say nothing about whether the provider is usable.
 ///
+/// A mid-cycle restore is named by how high the quota came back to, not only
+/// by the shape of the rise.  Landed at or above `vendorRestoreLevel` it is a
+/// vendor reset; landed below it, it is a likely plan change, and it is
+/// reported under that name so the owner can tell a refill from an upgrade.
+///
 /// A window's very first reading never fires, readings with no reset time or
 /// no percentage are tolerated, and each reset fires at most once.
 public struct ResetAlarmTracker: Sendable {
@@ -309,6 +344,14 @@ public struct ResetAlarmTracker: Sendable {
         let observation: ResetAlarmObservation
         let previous: ResetAlarmTrackerState.Window
         let isMidWindow: Bool
+        /// The mid-cycle rise landed below `vendorRestoreLevel`, so a change of
+        /// plan is the likelier reason and the vendor did not reset it.
+        let isPlanChange: Bool
+        /// The quota came back to at least `vendorRestoreLevel`, so the vendor
+        /// refilled it.  Kept apart from `isMidWindow` on purpose: a mid-cycle
+        /// event that fell instead of rising is neither a refill nor a plan
+        /// change, and saying so is the whole point of the split.
+        let isVendorReset: Bool
     }
 
     private mutating func processGroup(
@@ -340,7 +383,12 @@ public struct ResetAlarmTracker: Sendable {
             let observation = transition.observation
             let isLargest = Self.isLargest(observation.periodSeconds, largestPeriod: largestPeriod)
             let reason: ResetAlarmEvent.Reason
-            if isLargest {
+            if transition.isPlanChange {
+                // A change of plan outranks the ordinary new-period reading: the
+                // owner asked to hear about it by name, and on the largest
+                // window it would otherwise be filed as a routine rollover.
+                reason = .planChange
+            } else if isLargest {
                 reason = .newPeriod
             } else if let minimum = transition.previous.minimumRemaining,
                       minimum <= ResetAlarmPolicy.nearCapThreshold {
@@ -367,7 +415,8 @@ public struct ResetAlarmTracker: Sendable {
                 endedPeriodResetAt: ended,
                 remainingPercent: observation.remainingPercent,
                 reason: reason,
-                isVendorReset: transition.isMidWindow))
+                isVendorReset: transition.isVendorReset,
+                isPlanChange: transition.isPlanChange))
         }
         // Largest first, so a combined notification leads with the new week.
         return events.sorted { lhs, rhs in
@@ -424,6 +473,9 @@ public struct ResetAlarmTracker: Sendable {
         let readAt = observedAt ?? now
         var isReset = false
         var isMidWindow = false
+        var isPlanChange = false
+        var isVendorReset = false
+        var suppressAlarm = false
         var nextResetAt = window.periodResetAt
 
         if let previousReset = window.periodResetAt {
@@ -601,6 +653,57 @@ public struct ResetAlarmTracker: Sendable {
             }
         }
 
+        // A mid-cycle rise is a vendor reset only when the quota actually came
+        // back to near full.  Owner ruling 2026-10-20: "we shouldn't consider
+        // it vendor reset unless it jumps up a large amount and we see it
+        // actually at 97-100% or something".
+        //
+        // A rise that lands below the floor is not a refill.  A plan change
+        // moves the allowance up without the vendor resetting anything, and
+        // the owner was told "vendor reset" about one of those (Muse Code, 0%
+        // to 75% the day the plan was upgraded).  The alarm still fires: what
+        // changes is the name it is given, because the owner has to be able to
+        // tell a refill from an upgrade.
+        if isMidWindow {
+            if let reading {
+                // A rise is the only evidence that quota was handed back at
+                // all.  A window whose reported reset time jumped early can
+                // also be a window whose quota went down, and calling that a
+                // plan change would tell the owner the quota rose when the
+                // opposite happened.
+                let rose = window.lastRemaining.map {
+                    reading > $0 + ResetAlarmPolicy.riseEpsilon
+                } ?? false
+                if reading >= ResetAlarmPolicy.vendorRestoreLevel {
+                    // It came back to near full: the vendor refilled it.
+                    isVendorReset = true
+                } else if rose {
+                    // It rose, but not to near full.  The allowance is bigger
+                    // than it was, so a change of plan is the likelier reason.
+                    isPlanChange = true
+                }
+                // Below the floor with no rise at all: the quota fell or held
+                // still.  That is neither a refill nor an upgrade, so it is
+                // left as an ordinary period reading and named as one.
+            } else {
+                // No readable percentage, so the quota cannot be seen to come
+                // back and this cannot be called a vendor reset.  An Antigravity
+                // five-hour window under a spent weekly cap reports no
+                // percentage on purpose, and its own reset time still moves, so
+                // without this a window whose number is known to be a lie can
+                // still raise a reset alarm.  Owner 2026-10-19:
+                // "Antigravity is saying vendor reset 5h quota early while the
+                // 7d is still at cap and unchanged".
+                //
+                // A window whose number must not be believed raises no alarm at
+                // all.  Clearing the mid-cycle flag alone would let the
+                // ordinary rollover path claim it and report a reset nobody can
+                // confirm while the weekly underneath it is still spent.
+                isMidWindow = false
+                suppressAlarm = true
+            }
+        }
+
         let previous = window
         if isReset {
             window.periodResetAt = nextResetAt
@@ -620,7 +723,16 @@ public struct ResetAlarmTracker: Sendable {
         // measure the gap below in spans longer than a single interval.
         window.lastObservedAt = observedAt
         state.windows[key] = window
-        return isReset ? Transition(observation: observation, previous: previous, isMidWindow: isMidWindow) : nil
+        // The window's own state is remembered either way: the reset time
+        // moved, and the next reading must not rediscover the same reset.
+        // What is withheld is the alarm.
+        if suppressAlarm { return nil }
+        guard isReset else { return nil }
+        return Transition(observation: observation,
+                          previous: previous,
+                          isMidWindow: isMidWindow,
+                          isPlanChange: isPlanChange,
+                          isVendorReset: isVendorReset)
     }
 
     // MARK: Largest window

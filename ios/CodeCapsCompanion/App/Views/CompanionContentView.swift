@@ -4,6 +4,8 @@ import SwiftUI
 public struct CompanionContentView: View {
     @ObservedObject public var model: CompanionQuotaModel
     @StateObject private var soundPlayer = AlarmSoundPlayer()
+    @State private var previewingKind: UsageAlertKind?
+    @Environment(\.scenePhase) private var scenePhase
     @State private var showingSettings: Bool
     @State private var expandedIds: Set<String> = []
     @State private var settingsTab: CompanionSettingsTab
@@ -23,10 +25,12 @@ public struct CompanionContentView: View {
         self.model = model
         self._showingSettings = State(initialValue: showingSettings)
         // A launch argument picks the tab the settings sheet opens on, so the
-        // screenshot capture can reach a tab without a tap.
-        self._settingsTab = State(
-            initialValue: ProcessInfo.processInfo.arguments.contains("-openAlarms") ? .alarms : .display
-        )
+        // screenshot capture can reach a tab without a tap.  Both spellings
+        // are accepted:  -openAlarms is the capture's, and -openAlerts is
+        // the one the alert work introduced for the same tab.
+        let opensAlarms = ProcessInfo.processInfo.arguments.contains("-openAlarms")
+            || ProcessInfo.processInfo.arguments.contains("-openAlerts")
+        self._settingsTab = State(initialValue: opensAlarms ? .alarms : .display)
         #if os(iOS)
         self._platformOrderEditMode = State(
             initialValue: ProcessInfo.processInfo.arguments.contains("-reorderPlatforms") ? .active : .inactive
@@ -82,6 +86,32 @@ public struct CompanionContentView: View {
                 if model.items.isEmpty || !model.syncEndpoint.isEmpty {
                     await model.refresh()
                 }
+            }
+            .task(id: "\(scenePhase)-\(model.foregroundRefreshSeconds)") {
+                guard scenePhase == .active, model.foregroundRefreshSeconds > 0 else { return }
+                await model.refreshNotificationAuthorization()
+                while !Task.isCancelled {
+                    do { try await Task.sleep(nanoseconds: UInt64(model.foregroundRefreshSeconds) * 1_000_000_000) }
+                    catch { return }
+                    guard !Task.isCancelled, scenePhase == .active else { return }
+                    await model.refresh()
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("CodeCapsInAppAlert"))) { event in
+                guard let values = event.userInfo, let id = values["id"] as? String,
+                      let raw = values["kind"] as? String, let kind = UsageAlertKind(rawValue: raw),
+                      let title = values["title"] as? String, let body = values["body"] as? String else { return }
+                model.presentInAppAlert(id: id, kind: kind, title: title, body: body,
+                                       sourceInstanceId: values["sourceInstanceId"] as? String)
+            }
+            .onChange(of: model.inAppAlert?.id) { _, _ in
+                guard let alert = model.inAppAlert, !model.alertPreferences[alert.kind].notification else { return }
+                let sound = model.alertPreferences[alert.kind].sound
+                // In-app messages stay independent of system notification permission.
+                soundPlayer.playInApp(sound)
+            }
+            .alert(item: Binding(get: { model.inAppAlert }, set: { if $0 == nil { model.dismissInAppAlert() } })) { alert in
+                Alert(title: Text(alert.title), message: Text(alert.body), dismissButton: .default(Text("Done")))
             }
             #if os(iOS)
             .fullScreenCover(isPresented: $showingSettings) {
@@ -488,6 +518,11 @@ public struct CompanionContentView: View {
                         }
                     }
                     .onAppear {
+                        if ProcessInfo.processInfo.arguments.contains("-showAlertCategories") {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                                proxy.scrollTo(UsageAlertKind.anomaly.rawValue, anchor: .top)
+                            }
+                        }
                         if ProcessInfo.processInfo.arguments.contains("-scrollToRefresh") {
                             settingsTab = .sources
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
@@ -732,14 +767,104 @@ public struct CompanionContentView: View {
 
     @ViewBuilder
     private var settingsAlarmsSections: some View {
+        Section("Alert Delivery") {
+            Text(model.notificationStatus).font(.caption).foregroundStyle(.secondary)
+            Button("Allow System Notifications") { Task { await model.requestNotificationPermission() } }
+            #if os(iOS)
+            Button("Open Notification Settings") {
+                if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+            }
+            #endif
+            Picker("Refresh While Open", selection: $model.foregroundRefreshSeconds) {
+                Text("Manual").tag(0)
+                Text("Every 30 seconds").tag(30)
+                Text("Every minute").tag(60)
+                Text("Every 5 minutes").tag(300)
+            }
+            Text("In-app messages and foreground refresh stop when CodeCaps closes." + sentenceGap
+                 + "Remote push is optional and is required for system notifications while the app is closed.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        Section("Alert Devices") {
+            Picker("Receive Alerts From", selection: Binding(
+                get: { model.alertPreferences.sourceInstanceId ?? "" },
+                set: { model.alertPreferences.sourceInstanceId = $0.isEmpty ? nil : $0 })) {
+                Text("All reporting devices").tag("")
+                ForEach(model.alertSourceDevices.keys.sorted(), id: \.self) { id in
+                    Text(model.alertSourceDevices[id] ?? "Mac").tag(id)
+                }
+                if let selected = model.alertPreferences.sourceInstanceId, model.alertSourceDevices[selected] == nil {
+                    Text("Selected device unavailable").tag(selected)
+                }
+            }
+            Text("Device choices use the identity reported by the collector." + sentenceGap
+                 + "A selected device excludes reports with no matching device identity; display source choices remain separate.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        #if os(iOS)
+        RemotePushSettingsView()
+        #endif
+        ForEach(UsageAlertKind.allCases) { kind in
+            Section(kind.title) {
+                Toggle("Enable Alerts", isOn: Binding(
+                    get: { model.alertPreferences[kind].enabled },
+                    set: { model.alertPreferences[kind].enabled = $0 }))
+                Text(kind.detail).font(.caption2).foregroundStyle(.secondary)
+                if model.alertPreferences[kind].enabled {
+                    Toggle("System Notifications", isOn: Binding(
+                        get: { model.alertPreferences[kind].notification },
+                        set: { model.alertPreferences[kind].notification = $0 }))
+                    Toggle("In-App Messages", isOn: Binding(
+                        get: { model.alertPreferences[kind].popup },
+                        set: { model.alertPreferences[kind].popup = $0 }))
+                    Picker("Sound", selection: Binding(
+                        get: { model.alertPreferences[kind].sound },
+                        set: { model.alertPreferences[kind].sound = $0 })) {
+                        ForEach(ResetAlarmSound.defaultPickerOrder, id: \.self) { sound in
+                            Text(sound.displayName).tag(sound)
+                        }
+                    }
+                    Text(model.alertPreferences[kind].sound.pickerDetail)
+                        .font(.caption2).foregroundStyle(.secondary)
+                    if model.alertPreferences[kind].sound == .systemDefault {
+                        Text("The default chime plays only through system notifications; in-app messages stay silent.")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                    Button(model.alertPreferences[kind].sound == .systemDefault ? "Preview System Chime" : "Preview Sound") {
+                        previewingKind = kind
+                        soundPlayer.preview(model.alertPreferences[kind].sound)
+                    }
+                        .disabled(model.alertPreferences[kind].sound == .silent)
+                    if previewingKind == kind, let result = soundPlayer.lastPreview {
+                        Text(result.message).font(.caption2)
+                            .foregroundStyle(result.isFailure ? Color.orange : Color.secondary)
+                    }
+                }
+            }
+            .id(kind.rawValue)
+        }
         Section("Reset Alarms") {
             Toggle("Reset Alarms For All Providers", isOn: $model.alarmsAll)
+            if !model.alarmsAll {
+                ForEach(Array(Set(model.items.map(\.providerKey))).sorted(), id: \.self) { provider in
+                    Toggle((model.items.first(where: { $0.providerKey == provider })?.title ?? provider)
+                            .components(separatedBy: " · ").first ?? provider,
+                           isOn: Binding(get: { model.remoteResetProviderIsSelected(provider) },
+                                         set: { model.setRemoteResetProvider(provider, enabled: $0) }))
+                }
+            }
+            Text("These provider choices apply to remote resets too." + sentenceGap
+                 + "Remote resets cover whole providers; a partial model-pool selection on cards stays local and excludes that provider from remote resets.")
+                .font(.caption2).foregroundStyle(.secondary)
+            Text("Anomalies and runaway usage use measurements from the Mac collector." + sentenceGap
+                 + "Quota Exhaustion means zero quota remaining; the Mac's forecast Running Out warning is not supplied by this feed.")
+                .font(.caption2).foregroundStyle(.secondary)
             Text("A provider's longest window alarms every time it resets." + sentenceGap
                  + "A shorter window alarms only if it came within 20% of its cap first."
                  + sentenceGap + "Turn this off to pick providers one by one with the bell on each card.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
-            Picker("Reset Alert Sound", selection: $model.alarmSound) {
+            Picker("Test Notification Sound", selection: $model.alarmSound) {
                 ForEach(ResetAlarmSound.defaultPickerOrder, id: \.self) { sound in
                     Text(sound.displayName).tag(sound)
                 }

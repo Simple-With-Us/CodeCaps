@@ -86,7 +86,7 @@ final class CompanionModelTests: XCTestCase {
     func testSentenceGapInOutcomeMessages() throws {
         let source = try readSentenceGapSource()
         XCTAssertTrue(
-            source.contains(#"Test notification sent." + sentenceGap + "Banner and sound delivered."#),
+            source.contains(#"Test notification accepted." + sentenceGap + "System settings control banners and sound."#),
             "Test notification success message must use sentenceGap"
         )
         XCTAssertTrue(
@@ -497,9 +497,20 @@ final class CompanionModelTests: XCTestCase {
 
     func testAlarmsLaunchArgumentOpensTheAlarmsTab() throws {
         let view = try readCompanionContentViewSource()
+        //  Both spellings are accepted:  -openAlarms is the screenshot
+        //  capture's, and -openAlerts is the one the alert work introduced
+        //  for the same tab.  Either one has to open it.
         XCTAssertTrue(
-            view.contains(#"ProcessInfo.processInfo.arguments.contains("-openAlarms") ? .alarms : .display"#),
+            view.contains(#"contains("-openAlarms")"#),
             "A launch argument must open the Alarms tab, so the screenshot capture can reach it without a tap"
+        )
+        XCTAssertTrue(
+            view.contains(#"contains("-openAlerts")"#),
+            "The alert work's launch argument must open the same tab"
+        )
+        XCTAssertTrue(
+            view.contains(#"initialValue: opensAlarms ? .alarms : .display"#),
+            "Either launch argument must select the Alarms tab"
         )
         XCTAssertTrue(
             view.contains(#"case alarms = "Alarms""#),
