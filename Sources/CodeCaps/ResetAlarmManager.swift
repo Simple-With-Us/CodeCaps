@@ -182,8 +182,8 @@ public final class ResetAlarmManager: ObservableObject {
     @Published public var preferences: UsageAlertPreferences {
         didSet {
             if !updatingLegacySound {
-                let changed = UsageAlertKind.allCases.filter { preferences[$0] != oldValue[$0] }
-                customizedSoundKinds.formUnion((changed.isEmpty ? UsageAlertKind.allCases : changed).map(\.rawValue))
+                let changed = UsageAlertKind.allCases.filter { preferences[$0].sound != oldValue[$0].sound }
+                customizedSoundKinds.formUnion(changed.map(\.rawValue))
                 defaults.set(customizedSoundKinds.sorted(), forKey: "usageAlertCustomizedSounds")
             }
             preferences.save(to: defaults, key: Keys.preferences)
@@ -319,6 +319,13 @@ public final class ResetAlarmManager: ObservableObject {
     }
 
     // MARK: - Choices
+
+    /// Explicit picker intent matters even when the selected sound equals the default.
+    public func setSound(_ sound: ResetAlarmSound, for kind: UsageAlertKind) {
+        customizedSoundKinds.insert(kind.rawValue)
+        defaults.set(customizedSoundKinds.sorted(), forKey: "usageAlertCustomizedSounds")
+        preferences[kind].sound = sound
+    }
 
     /// Whether `providerId`'s reset alarm is on: every provider under All,
     /// otherwise only the ones picked.
@@ -595,7 +602,9 @@ public final class ResetAlarmManager: ObservableObject {
 
     public func clearAlertHistory() {
         alertHistory.removeAll()
+        detectedResetHistory.removeAll()
         defaults.removeObject(forKey: Keys.alertHistory)
+        defaults.removeObject(forKey: "detectedResetHistory")
     }
 
     /// Delivers an opt-in runaway-usage alert through the same notification
