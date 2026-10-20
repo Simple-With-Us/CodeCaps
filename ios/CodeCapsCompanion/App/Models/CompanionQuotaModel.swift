@@ -3,12 +3,46 @@ import Security
 import SwiftUI
 import UserNotifications
 
+#if os(iOS)
+import UIKit
+#endif
+
 /// Whether the companion shows only this device's readings or every synced source.
 public enum CompanionSourceScope: String, CaseIterable, Identifiable, Sendable {
     case thisIPhone = "This iPhone"
     case allSources = "All Sources"
 
     public var id: String { rawValue }
+
+    /// The label the source-scope picker shows.
+    ///
+    /// The stored raw value still says "This iPhone" because that is what it
+    /// always was and it is what a saved preference is keyed on.  The app
+    /// ships for iPhone and iPad, and the label on screen has to name the
+    /// device the reader is actually holding.
+    public var displayTitle: String {
+        title(for: Self.currentDeviceFamily)
+    }
+
+    /// The device word the picker label uses: "iPhone", "iPad" or "Mac".
+    public static var currentDeviceFamily: String {
+        #if os(iOS)
+        return UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone"
+        #else
+        return "Mac"
+        #endif
+    }
+
+    /// The label for a given device family.
+    ///
+    /// It is separate from the idiom lookup so the wording can be checked
+    /// without a device.
+    public func title(for family: String) -> String {
+        switch self {
+        case .thisIPhone: return "This \(family)"
+        case .allSources: return rawValue
+        }
+    }
 }
 #if canImport(WidgetKit)
 import WidgetKit
