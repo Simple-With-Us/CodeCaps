@@ -1484,6 +1484,8 @@ final class MonitorModel: ObservableObject {
             rows: displaySections,
             thresholdPercent: pipLowThresholdPercent,
             enabled: pipOpenWhenLow,
+            issues: issues,
+            disabledSources: disabledSources,
             session: &pipLowQuotaSession
         )
         let auto = pipLowQuotaSession.autoAddedRowIds
