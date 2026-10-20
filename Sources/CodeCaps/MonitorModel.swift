@@ -228,6 +228,7 @@ final class MonitorModel: ObservableObject {
     private var detectedUsageAnomalies: [AnomalyDetector.Anomaly] = []
     private var anomalyOccurrences: [String: Date] = [:]
     private var anomalyOccurrencePayloads: [String: LocalQuotaSnapshot.AlertPayload] = [:]
+    private var anomalyLocalEligibility: [String: Bool] = [:]
     private struct ExhaustionObservationState: Codable {
         var observedAt: Date
         var alert: LocalQuotaSnapshot.AlertPayload?
@@ -623,6 +624,7 @@ final class MonitorModel: ObservableObject {
            let saved = try? JSONDecoder().decode([String: LocalQuotaSnapshot.AlertPayload].self, from: data) {
             self.anomalyOccurrencePayloads = saved
         }
+        self.anomalyLocalEligibility = defaults.dictionary(forKey: "anomalyLocalEligibility") as? [String: Bool] ?? [:]
         if let data = defaults.data(forKey: Self.exhaustionObservationKey),
            let saved = try? JSONDecoder().decode([String: ExhaustionObservationState].self, from: data) {
             self.exhaustionObservationState = saved
@@ -1159,10 +1161,12 @@ final class MonitorModel: ObservableObject {
         }
         let previousPayloads = anomalyOccurrencePayloads
         anomalyOccurrencePayloads = anomalyOccurrencePayloads.filter { anomalyOccurrences[$0.key] != nil }
+        anomalyLocalEligibility = anomalyLocalEligibility.filter { anomalyOccurrences[$0.key] != nil }
         let formatter = ISO8601DateFormatter()
         for anomaly in anomalies {
             let key = Self.runawayKey(anomaly.providerKey, anomaly.windowId) + "|" + anomaly.kind.rawValue
             guard anomalyOccurrencePayloads[key] == nil else { continue }
+            anomalyLocalEligibility[key] = alarmManager.preferences[anomaly.kind == .vsPeak ? .runaway : .anomaly].enabled
             let occurredAt = anomalyOccurrences[key] ?? anomaly.observedAt ?? now
             let kind = anomaly.kind == .vsPeak ? "runaway" : "anomaly"
             anomalyOccurrencePayloads[key] = LocalQuotaSnapshot.AlertPayload(
@@ -1175,6 +1179,7 @@ final class MonitorModel: ObservableObject {
         if previousPayloads != anomalyOccurrencePayloads,
            let data = try? JSONEncoder().encode(anomalyOccurrencePayloads) {
             defaults.set(data, forKey: Self.anomalyPayloadsKey)
+            defaults.set(anomalyLocalEligibility, forKey: "anomalyLocalEligibility")
         }
     }
 
@@ -2531,6 +2536,10 @@ final class MonitorModel: ObservableObject {
 
     /// A missing or stale reading cannot rearm an exhausted window.
     func refreshActualExhaustion(windows: [QuotaWindow], now: Date) {
+        var changed = false
+        defer {
+            if changed { persistExhaustionObservations() }
+        }
         let formatter = ISO8601DateFormatter()
         let masked = AntigravityQuotaGroups.maskedWindowIds(in: windows, now: now)
         for window in windows {
@@ -2543,15 +2552,14 @@ final class MonitorModel: ObservableObject {
             let key = window.canonicalProviderKey + "|" + window.id + "|" + (window.accountKey ?? "")
             let previous = exhaustionObservationState[key]
             guard previous == nil || observedAt > previous!.observedAt else { continue }
+            changed = true
             if remaining > 0 {
                 exhaustionObservationState[key] = ExhaustionObservationState(observedAt: observedAt, alert: nil)
                 activeExhaustionAlerts.removeValue(forKey: key)
-                persistExhaustionObservations()
                 continue
             }
             if let previousAlert = previous?.alert {
                 exhaustionObservationState[key] = ExhaustionObservationState(observedAt: observedAt, alert: previousAlert)
-                persistExhaustionObservations()
                 continue
             }
             let title = "Quota Exhausted: " + window.provider
@@ -2563,7 +2571,6 @@ final class MonitorModel: ObservableObject {
                 occurredAt: formatter.string(from: observedAt))
             activeExhaustionAlerts[key] = payload
             exhaustionObservationState[key] = ExhaustionObservationState(observedAt: observedAt, alert: payload)
-            persistExhaustionObservations()
             alarmManager.deliverUsageAlert(kind: .quotaExhaustion, title: title, body: body,
                                           identifier: payload.id,
                                           navigation: AlertNavigation(providerKey: window.canonicalProviderKey,
@@ -2572,6 +2579,14 @@ final class MonitorModel: ObservableObject {
     }
 
     private func persistExhaustionObservations() {
+        // Keep a bounded set of the most recently measured identities.  Their
+        // exhausted tombstones preserve deduplication through gaps and relaunches.
+        if exhaustionObservationState.count > 1_024 {
+            let retained = Set(exhaustionObservationState.sorted { $0.value.observedAt > $1.value.observedAt }
+                .prefix(1_024).map(\.key))
+            exhaustionObservationState = exhaustionObservationState.filter { retained.contains($0.key) }
+            activeExhaustionAlerts = activeExhaustionAlerts.filter { retained.contains($0.key) }
+        }
         if let data = try? JSONEncoder().encode(exhaustionObservationState) {
             defaults.set(data, forKey: Self.exhaustionObservationKey)
         }
@@ -2695,6 +2710,7 @@ final class MonitorModel: ObservableObject {
             guard let group = groups[key] else { continue }
             let kind: UsageAlertKind = group[0].kind == .vsPeak ? .runaway : .anomaly
             guard alarmManager.preferences[kind].enabled else { continue }
+            guard anomalyLocalEligibility[key] != false else { continue }
             let lastSent = lastRunawayAlertAt[key] ?? -.infinity
             guard now.timeIntervalSince1970 - lastSent >= BurnRateMonitor.alertCooldown else { continue }
             let matchingDisplayRow = self.displaySections.first { row in
@@ -2861,7 +2877,7 @@ extension MonitorModel {
             if let payload = anomalyOccurrencePayloads[key] { out.append(payload) }
         }
         out.append(contentsOf: activeExhaustionAlerts.values)
-        for record in alarmManager.alertHistory where now.timeIntervalSince(record.timestamp) < 24 * 3_600 {
+        for record in alarmManager.detectedResetHistory where now.timeIntervalSince(record.timestamp) < 24 * 3_600 {
             out.append(LocalQuotaSnapshot.AlertPayload(
                 id: record.id, kind: record.isVendorReset ? "vendorReset" : "quotaReset",
                 providerKey: record.providerKey, providerTitle: record.providerTitle,
