@@ -727,6 +727,33 @@ public struct CompanionContentView: View {
 
     @ViewBuilder
     private var settingsAlarmsSections: some View {
+        #if os(iOS)
+        RemotePushSettingsView()
+        #endif
+        ForEach(UsageAlertKind.allCases) { kind in
+            Section(kind.title) {
+                Toggle("Enable Alerts", isOn: Binding(
+                    get: { model.alertPreferences[kind].enabled },
+                    set: { model.alertPreferences[kind].enabled = $0 }))
+                Text(kind.detail).font(.caption2).foregroundStyle(.secondary)
+                if model.alertPreferences[kind].enabled {
+                    Toggle("Deliver Notifications", isOn: Binding(
+                        get: { model.alertPreferences[kind].notification },
+                        set: { model.alertPreferences[kind].notification = $0 }))
+                    Picker("Sound", selection: Binding(
+                        get: { model.alertPreferences[kind].sound },
+                        set: { model.alertPreferences[kind].sound = $0 })) {
+                        ForEach(ResetAlarmSound.defaultPickerOrder, id: \.self) { sound in
+                            Text(sound.displayName).tag(sound)
+                        }
+                    }
+                    Text(model.alertPreferences[kind].sound.pickerDetail)
+                        .font(.caption2).foregroundStyle(.secondary)
+                    Button("Preview Sound") { soundPlayer.preview(model.alertPreferences[kind].sound) }
+                        .disabled(model.alertPreferences[kind].sound == .silent)
+                }
+            }
+        }
         Section("Reset Alarms") {
             Toggle("Reset Alarms For All Providers", isOn: $model.alarmsAll)
             Text("A provider's longest window alarms every time it resets." + sentenceGap
@@ -734,7 +761,7 @@ public struct CompanionContentView: View {
                  + sentenceGap + "Turn this off to pick providers one by one with the bell on each card.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
-            Picker("Reset Alert Sound", selection: $model.alarmSound) {
+            Picker("Test Notification Sound", selection: $model.alarmSound) {
                 ForEach(ResetAlarmSound.defaultPickerOrder, id: \.self) { sound in
                     Text(sound.displayName).tag(sound)
                 }
