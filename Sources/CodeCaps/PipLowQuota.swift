@@ -9,6 +9,8 @@ struct PipLowQuotaSession: Equatable {
     var autoOpenSuppressed: Bool = false
     var seeded: Bool = false
     var lastObservedAtByRow: [String: Date] = [:]
+    var observedWindowsByRow: [String: [String: Date]] = [:]
+    var lowWindowsByRow: [String: Set<String>] = [:]
 }
 
 enum PipLowQuota {
@@ -46,6 +48,8 @@ enum PipLowQuota {
         guard enabled else {
             session.seeded = false
             session.lastObservedAtByRow = [:]
+            session.observedWindowsByRow = [:]
+            session.lowWindowsByRow = [:]
             return false
         }
 
@@ -60,21 +64,38 @@ enum PipLowQuota {
                     && $0.remainingPercent != nil
                     && !disabledSources.contains($0.window.source ?? "")
             }
-            let low = usable.filter { ($0.remainingPercent ?? 100) <= Double(thresholdPercent) }
-            // Partial data can prove a low allowance, but cannot prove recovery.
-            guard !usable.isEmpty, !low.isEmpty || usable.count == relevant.count else { continue }
-            let observedAt = low.isEmpty ? usable.compactMap(\.observedAt).min() : low.compactMap(\.observedAt).max()
-            guard let observedAt else { continue }
             let previousDate = session.lastObservedAtByRow[row.id]
-            guard previousDate == nil || observedAt > previousDate! else { continue }
-            session.lastObservedAtByRow[row.id] = observedAt
-            if low.isEmpty {
+            var observed = session.observedWindowsByRow[row.id] ?? [:]
+            var lowIDs = session.lowWindowsByRow[row.id] ?? []
+            var changed = false
+            var measuredCrossing = false
+            for snapshot in usable {
+                guard let date = snapshot.observedAt else { continue }
+                let id = snapshot.window.id
+                let previous = observed[id]
+                if let previous, date <= previous { continue }
+                observed[id] = date
+                changed = true
+                if (snapshot.remainingPercent ?? 100) <= Double(thresholdPercent) {
+                    if previous != nil && !lowIDs.contains(id) { measuredCrossing = true }
+                    lowIDs.insert(id)
+                } else {
+                    lowIDs.remove(id)
+                }
+            }
+            guard changed else { continue }
+            session.observedWindowsByRow[row.id] = observed
+            session.lowWindowsByRow[row.id] = lowIDs
+            session.lastObservedAtByRow[row.id] = observed.values.max()
+            // Only a newer healthy reading of the window that was low can
+            // clear its evidence.  Missing low windows remain unresolved.
+            if lowIDs.isEmpty {
                 session.rowsBelowThreshold.remove(row.id)
                 session.autoAddedRowIds.remove(row.id)
             } else {
                 let crossed = !session.rowsBelowThreshold.contains(row.id)
                 session.rowsBelowThreshold.insert(row.id)
-                if previousDate != nil && crossed {
+                if previousDate != nil && crossed && measuredCrossing {
                     session.autoAddedRowIds.insert(row.id)
                     shouldOpen = true
                 }
