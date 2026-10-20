@@ -114,8 +114,27 @@ final class RemotePushRegistration: NSObject, ObservableObject, URLSessionTaskDe
         guard notification.request.trigger is UNPushNotificationTrigger,
               let id = notification.request.content.userInfo["alertId"] as? String else { return }
         var ids = defaults.stringArray(forKey: "announcedAlertIds") ?? []
-        if !ids.contains(id) { ids.append(id) }
+        if !ids.contains(id) {
+            ids.append(id)
+            if let eventKey = semanticEventKey(notification) {
+                let shared = UserDefaults(suiteName: CompanionQuotaModel.appGroupId) ?? .standard
+                var events = shared.dictionary(forKey: "companionDeliveredQuotaEvents") as? [String: Date] ?? [:]
+                events[eventKey] = notification.date
+                events = events.filter { Date().timeIntervalSince($0.value) < 90 }
+                shared.set(events, forKey: "companionDeliveredQuotaEvents")
+            }
+        }
         defaults.set(Array(ids.suffix(200)), forKey: "announcedAlertIds")
+    }
+
+    private func semanticEventKey(_ notification: UNNotification) -> String? {
+        let values = notification.request.content.userInfo
+        guard let raw = values["kind"] as? String, let kind = UsageAlertKind(rawValue: raw),
+              kind == .quotaReset || kind == .vendorReset || kind == .quotaExhaustion,
+              let provider = values["providerKey"] as? String, let label = values["windowLabel"] as? String,
+              let id = values["alertId"] as? String else { return nil }
+        return CompanionQuotaModel.quotaEventKey(kind: kind, provider: CompanionAlertSourcePolicy.canonicalResetProvider(provider), label: label,
+            sourceInstanceId: CompanionAlertSourcePolicy.sourceInstanceId(alertID: id))
     }
 
     func presentationOptions(for notification: UNNotification) -> UNNotificationPresentationOptions {
@@ -124,12 +143,31 @@ final class RemotePushRegistration: NSObject, ObservableObject, URLSessionTaskDe
         }
         let id = notification.request.content.userInfo["alertId"] as? String
         let alreadyAnnounced = id.map { (defaults.stringArray(forKey: "announcedAlertIds") ?? []).contains($0) } ?? false
+        let shared = UserDefaults(suiteName: CompanionQuotaModel.appGroupId) ?? .standard
+        let events = shared.dictionary(forKey: "companionDeliveredQuotaEvents") as? [String: Date] ?? [:]
+        let matchingEvent = semanticEventKey(notification).flatMap { events[$0] }
+        let recentlyAnnounced = matchingEvent.map { Date().timeIntervalSince($0) < 90 } ?? false
         recordReceived(notification: notification)
-        guard !alreadyAnnounced, enabled,
+        guard !alreadyAnnounced, !recentlyAnnounced, enabled,
               let raw = notification.request.content.userInfo["kind"] as? String,
               let kind = UsageAlertKind(rawValue: raw) else { return [] }
         let option = preferences[kind]
-        guard option.enabled && option.notification else { return [] }
+        guard option.hasDelivery else { return [] }
+        let source = id.flatMap { CompanionAlertSourcePolicy.sourceInstanceId(alertID: $0) }
+        guard CompanionAlertSourcePolicy.matches(selected: preferences.sourceInstanceId, reported: source) else { return [] }
+        if kind == .quotaReset || kind == .vendorReset,
+           let providers = preferences.resetProviders, !providers.all {
+            guard let provider = notification.request.content.userInfo["providerKey"] as? String,
+                  providers.providerIDs.contains(CompanionAlertSourcePolicy.canonicalResetProvider(provider)) else { return [] }
+        }
+        if option.popup, let id {
+            var values: [String: Any] = ["id": id, "kind": kind.rawValue, "title": notification.request.content.title,
+                                         "body": notification.request.content.body]
+            if let source { values["sourceInstanceId"] = source }
+            NotificationCenter.default.post(name: Notification.Name("CodeCapsInAppAlert"), object: nil,
+                userInfo: values)
+        }
+        guard option.notification else { return [] }
         var result: UNNotificationPresentationOptions = [.banner, .list]
         if option.sound.isAudible { result.insert(.sound) }
         return result
@@ -380,6 +418,8 @@ struct RemotePushSettingsView: View {
                 .textInputAutocapitalization(.never)
             Button("Save Push Credential") { push.saveCredential(credential); credential = "" }
                 .disabled(credential.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            Text(push.hasCredential ? "Registration credential saved in Keychain." : "No push registration credential saved.")
+                .font(.caption).foregroundStyle(.secondary)
             Toggle("Enable Remote Push", isOn: Binding(get: { push.enabled }, set: { push.setEnabled($0) }))
             Button(push.enabled ? "Retry Push Registration" : "Retry Server Removal") {
                 if push.enabled { push.registerWithApple() } else { push.setEnabled(false) }
@@ -388,7 +428,8 @@ struct RemotePushSettingsView: View {
         } header: {
             Text("Remote Push")
         } footer: {
-            Text("Receive selected alerts while CodeCaps is closed." + sentenceGap + "The sync server needs CodeCaps push support and its separate registration credential.")
+            Text("System notifications while CodeCaps is closed require remote push, a running Mac collector, and the configured sync server." + sentenceGap
+                 + "In-app alerts appear only while CodeCaps is open; server registration does not verify end-to-end delivery.")
         }
     }
 }
