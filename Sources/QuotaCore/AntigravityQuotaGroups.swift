@@ -100,7 +100,7 @@ public enum AntigravityQuotaGroups {
 
     /// The level a weekly cap has to reach before the pool counts as spent.
     ///
-    /// The provider reports a fractional remaining — 0.4% is ordinary — and the
+    /// The provider reports a fractional remaining, 0.4% is ordinary, and the
     /// interface rounds that to 0%, so a cap that reads "at cap" on screen can
     /// carry a number that is not exactly zero.  An exact-zero test let those
     /// through, and the five-hour window under them was then believed when its
