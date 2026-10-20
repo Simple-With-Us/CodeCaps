@@ -36,11 +36,22 @@ class NamedFailure extends Error {}
 // apps use (maskApiKeyPreview, buildKeyPreview).  It exists because there is
 // otherwise no way to tell which of several keys is the one in play, and
 // pasting a value to find out is never the answer.
+//
+// The preview is taken from the key material rather than from the PEM
+// envelope:  every .p8 opens "-----BEGIN" and ends "-----END PRIVATE KEY-----\n",
+// so previewing the envelope prints the same eight and four characters for
+// every key and identifies none of them.  The text is trimmed first, because
+// the key as stored ends with a newline and a preview carrying one splits the
+// diagnostic into two lines, of which ship-testflight.sh keeps only the first.
 function maskKeyPreview(value) {
-  if (typeof value !== "string" || value.length < 12) {
+  if (typeof value !== "string") {
     return "(too short to preview)";
   }
-  return `${value.slice(0, 8)}…${value.slice(-4)}`;
+  const material = value.replace(/-----[^-]+-----/g, "").trim();
+  if (material.length < 12) {
+    return "(too short to preview)";
+  }
+  return `${material.slice(0, 8)}…${material.slice(-4)}`;
 }
 
 // The App Store Connect host.

@@ -185,18 +185,67 @@ test("a rejected key is reported as a rejected key, not as a missing app", async
     `a rejected key was reported as a missing app:\n${result.stderr}`
   );
   //  The fleet's masked preview, so the key in play can be identified without
-  //  any of it being published.
+  //  any of it being published.  It is taken from the key material rather
+  //  than from the PEM envelope:  the envelope is the same for every key, so
+  //  a preview of it names none of them.
   const pem = readFileSync(keyPath, "utf8");
-  const expectedPreview = `${pem.slice(0, 8)}…${pem.slice(-4)}`;
+  const material = pem.replace(/-----[^-]+-----/g, "").trim();
+  const expectedPreview = `${material.slice(0, 8)}…${material.slice(-4)}`;
   assert.ok(
     result.stderr.includes(expectedPreview),
     `the failure did not carry the masked key preview ${expectedPreview}:\n${result.stderr}`
+  );
+  //  A preview with a newline in it splits the diagnostic into two lines, and
+  //  ship-testflight.sh forwards only the lines starting with "latest-build-seq:",
+  //  so the second half — which is where the HTTP status is — is lost.
+  const diagnostic = result.stderr.split("\n").find((line) => line.startsWith("latest-build-seq:"));
+  assert.ok(diagnostic, `no forwarded diagnostic line:\n${result.stderr}`);
+  assert.ok(
+    /HTTP 401/.test(diagnostic),
+    `the HTTP status was split off the forwarded line:\n${result.stderr}`
   );
   //  The key id is public:  it travels in every request to App Store
   //  Connect, and it is the part that says which credential was refused.
   assert.ok(
     result.stderr.includes("SYNTHETICKEYID1"),
     `the failure did not name the key id:\n${result.stderr}`
+  );
+});
+
+test("two different keys do not get the same masked preview", async () => {
+  //  The preview exists to say which credential was rejected.  Recomputing it
+  //  from the same file in the test above cannot catch a preview that is
+  //  identical for every key, so the two keys have to be compared with each
+  //  other.
+  const otherKeyPath = join(root, "other-synthetic.p8");
+  writeFileSync(otherKeyPath, generateKeyPairSync("ec", { namedCurve: "prime256v1" }).privateKey
+    .export({ type: "pkcs8", format: "pem" }));
+
+  const server = createServer((req, res) => {
+    res.writeHead(401, { "Content-Type": "text/plain" });
+    res.end("unauthorized");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const previews = [];
+  try {
+    for (const path of [keyPath, otherKeyPath]) {
+      const result = await run(["latest-build-seq", "com.example.nothing", "1.0"], {
+        ASC_API_BASE: base,
+        ASC_KEY_PATH: path
+      });
+      const diagnostic = result.stderr.split("\n").find((line) => line.startsWith("latest-build-seq:"));
+      const preview = diagnostic && diagnostic.match(/key in play (\S+)/);
+      assert.ok(preview, `no key preview in the diagnostic:\n${result.stderr}`);
+      previews.push(preview[1]);
+    }
+  } finally {
+    server.close();
+  }
+  assert.notEqual(
+    previews[0],
+    previews[1],
+    "two different keys produced the same masked preview, so it identifies neither"
   );
 });
 
