@@ -54,6 +54,24 @@ function maskKeyPreview(value) {
   return `${material.slice(0, 8)}…${material.slice(-4)}`;
 }
 
+// The device families a version has to carry a screenshot in.
+//
+// App Store Connect wants a screenshot for every device family the app runs
+// on, and the iOS app runs on iPhone and iPad.  The requirement is counted
+// per family rather than per display type because either iPhone size and
+// either iPad size satisfies it, and a total across both is not enough:  three
+// iPhone images and an empty iPad set would pass a total of six and still be
+// refused.
+const REQUIRED_SCREENSHOT_FAMILIES = ["iphone", "ipad"];
+
+// Which device family a screenshot display type belongs to.
+const DISPLAY_TYPE_FAMILY = {
+  APP_IPHONE_67: "iphone",
+  APP_IPHONE_65: "iphone",
+  APP_IPAD_PRO_129: "ipad",
+  APP_IPAD_PRO_3GEN_129: "ipad"
+};
+
 // The App Store Connect host.
 const PRODUCTION_API_BASE = "https://api.appstoreconnect.apple.com";
 
@@ -622,13 +640,26 @@ async function main() {
   if (method === "submit-review") {
     const versionId = path;
     const submissionId = body;
+    const platform = arg4 || "IOS";
     if (!versionId) {
-      console.error("Usage: node asc-api.mjs submit-review <versionId> [reviewSubmissionId]");
+      console.error("Usage: node asc-api.mjs submit-review <versionId> [reviewSubmissionId] [platform]");
+      process.exitCode = 2;
+      return;
+    }
+    if (!/^(IOS|MAC_OS)$/.test(platform)) {
+      console.error(`submit-review: ${platform} is not a review platform; use IOS or MAC_OS`);
       process.exitCode = 2;
       return;
     }
 
     // 1. The screenshots.
+    //
+    //  The counts are kept per display type, not pooled:  App Store Connect
+    //  wants a screenshot for every device family the app runs on, so three
+    //  iPhone images and an empty iPad set would pass a total of six and
+    //  still be refused.  A set that could not be read is a failure, not an
+    //  absent set:  treating it as absent would let an irreversible
+    //  submission go out on a read that never happened.
     const localizations = await api("GET", `/v1/appStoreVersions/${versionId}/appStoreVersionLocalizations`);
     if (!localizations.ok) {
       console.error(`submit-review: ${describeError(localizations)}`);
@@ -636,25 +667,55 @@ async function main() {
       return;
     }
     const locs = requireArray(localizations.parsed?.data, "version localization list");
-    let shots = 0;
+    const byDisplayType = new Map();
     for (const loc of locs) {
       if (!isPlainObject(loc) || typeof loc.id !== "string") continue;
       const sets = await api("GET", `/v1/appStoreVersionLocalizations/${loc.id}/appScreenshotSets`);
-      if (!sets.ok) continue;
+      if (!sets.ok) {
+        console.error(`submit-review: ${describeError(sets)}`);
+        process.exitCode = 2;
+        return;
+      }
       for (const set of requireArray(sets.parsed?.data, "screenshot set list")) {
-        shots += (set?.attributes?.screenshotCount) || 0;
+        const displayType = isPlainObject(set) ? set.attributes?.screenshotDisplayType : null;
+        const count = isPlainObject(set) ? set.attributes?.screenshotCount : null;
+        if (typeof displayType !== "string" || typeof count !== "number") continue;
+        byDisplayType.set(displayType, (byDisplayType.get(displayType) || 0) + count);
       }
     }
-    console.log(`submit-review: the version carries ${shots} screenshot(s)`);
-    if (shots < 6) {
-      console.error("submit-review: not submitting, the version needs at least six screenshots");
+    const breakdown = [...byDisplayType.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([type, count]) => `${type} ${count}`)
+      .join(", ");
+    console.error(`submit-review: screenshots by display type: ${breakdown || "none"}`);
+    //  The requirement is counted per device family, and a set that exists
+    //  but holds nothing does not count:  an empty iPad set is the case a
+    //  pooled total lets through.
+    const familyCounts = new Map();
+    for (const [type, count] of byDisplayType) {
+      const family = DISPLAY_TYPE_FAMILY[type];
+      if (!family) continue;
+      familyCounts.set(family, (familyCounts.get(family) || 0) + count);
+    }
+    const missing = REQUIRED_SCREENSHOT_FAMILIES.filter(
+      (family) => (familyCounts.get(family) || 0) < 1
+    );
+    if (missing.length > 0) {
+      console.error(
+        `submit-review: not submitting, the version has no screenshot for ${missing.join(" and ")}`
+      );
       process.exitCode = 2;
       return;
     }
 
     // 2. The build.
     const attached = await api("GET", `/v1/appStoreVersions/${versionId}/build`);
-    const build = attached.ok ? attached.parsed?.data : null;
+    if (!attached.ok) {
+      console.error(`submit-review: ${describeError(attached)}`);
+      process.exitCode = 2;
+      return;
+    }
+    const build = attached.parsed?.data;
     if (!isPlainObject(build) || typeof build.id !== "string") {
       console.error("submit-review: not submitting, no build is attached to the version");
       process.exitCode = 2;
@@ -668,12 +729,15 @@ async function main() {
     // previous build is refused.  That is a cheap mistake to make and an
     // expensive one to find out about from Apple, so it is checked here.
     const version = await api("GET", `/v1/appStoreVersions/${versionId}`);
-    const versionString = version.ok ? version.parsed?.data?.attributes?.versionString : null;
-    const appId = version.ok
-      ? (version.parsed?.data?.relationships?.app?.data?.id)
-      : null;
+    if (!version.ok) {
+      console.error(`submit-review: ${describeError(version)}`);
+      process.exitCode = 2;
+      return;
+    }
+    const versionString = version.parsed?.data?.attributes?.versionString;
+    const appId = version.parsed?.data?.relationships?.app?.data?.id;
     const buildVersion = build.attributes?.version;
-    console.log(`submit-review: version ${versionString} | build ${buildVersion} (${build.id})`);
+    console.error(`submit-review: version ${versionString} | build ${buildVersion} (${build.id})`);
     if (typeof versionString !== "string" || versionString.length === 0) {
       console.error("submit-review: not submitting, the version has no versionString");
       process.exitCode = 2;
@@ -698,9 +762,10 @@ async function main() {
       return;
     }
 
-    // The review submission.  When none is named, the app's own are listed
-    // and each is tried:  reviewSubmissions does not allow DELETE, so more
-    // than one can exist and the wrong one refuses.
+    // The review submission.  When none is named, the app's own are listed.
+    // Each candidate is checked to be bound to THIS version before it is
+    // submitted:  a submission can be bound to another version, and
+    // submitting that one would send the wrong build to review.
     let candidates = [];
     if (submissionId) {
       candidates = [submissionId];
@@ -716,7 +781,9 @@ async function main() {
         process.exitCode = 2;
         return;
       }
-      candidates = requireArray(listed.parsed?.data, "review submission list").map((s) => s?.id).filter(Boolean);
+      candidates = requireArray(listed.parsed?.data, "review submission list")
+        .map((s) => (isPlainObject(s) && typeof s.id === "string" ? s.id : null))
+        .filter(Boolean);
     }
     if (candidates.length === 0) {
       console.error("submit-review: not submitting, the app has no review submission");
@@ -726,11 +793,22 @@ async function main() {
 
     let submitted = null;
     for (const candidate of candidates) {
+      const items = await api("GET", `/v1/reviewSubmissions/${candidate}/items`);
+      if (!items.ok) {
+        console.error(`submit-review: ${candidate}: ${describeError(items)}`);
+        continue;
+      }
+      const bound = requireArray(items.parsed?.data, "review submission item list")
+        .some((item) => isPlainObject(item) && item.id === versionId);
+      if (!bound) {
+        console.error(`submit-review: ${candidate} is not bound to ${versionId}; skipping it`);
+        continue;
+      }
       const result = await api("PATCH", `/v1/reviewSubmissions/${candidate}`, JSON.stringify({
         data: {
           type: "reviewSubmissions",
           id: candidate,
-          attributes: { submitted: true, platform: "IOS" }
+          attributes: { submitted: true, platform }
         }
       }));
       if (!result.ok) {
@@ -741,18 +819,39 @@ async function main() {
       break;
     }
     if (!submitted) {
-      console.error("submit-review: not submitting, every review submission refused");
+      console.error("submit-review: not submitting, no review submission is bound to this version");
       process.exitCode = 2;
       return;
     }
     const after = await api("GET", `/v1/reviewSubmissions/${submitted}`);
+    if (!after.ok) {
+      console.error(`submit-review: ${describeError(after)}`);
+      process.exitCode = 2;
+      return;
+    }
+    const attributes = after.parsed?.data?.attributes;
+    const state = isPlainObject(attributes) ? attributes.state : null;
+    const submittedDate = isPlainObject(attributes) ? attributes.submittedDate : null;
+    if (state !== null && typeof state !== "string") {
+      console.error("submit-review: the review submission came back with an unreadable state");
+      process.exitCode = 2;
+      return;
+    }
+    if (submittedDate !== null && typeof submittedDate !== "string") {
+      console.error("submit-review: the review submission came back with an unreadable submittedDate");
+      process.exitCode = 2;
+      return;
+    }
+    // Only the report goes to stdout, so a wrapper that parses it as JSON
+    // cannot be broken by a progress line.
     console.log(JSON.stringify({
       ok: true,
       reviewSubmission: submitted,
-      state: after.ok ? after.parsed?.data?.attributes?.state : null,
-      submittedDate: after.ok ? after.parsed?.data?.attributes?.submittedDate : null,
+      state,
+      submittedDate,
       versionString,
-      build: build.id
+      build: build.id,
+      platform
     }));
     return;
   }
