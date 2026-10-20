@@ -86,7 +86,7 @@ final class CompanionModelTests: XCTestCase {
     func testSentenceGapInOutcomeMessages() throws {
         let source = try readSentenceGapSource()
         XCTAssertTrue(
-            source.contains(#"Test notification sent." + sentenceGap + "Banner and sound delivered."#),
+            source.contains(#"Test notification accepted." + sentenceGap + "System settings control banners and sound."#),
             "Test notification success message must use sentenceGap"
         )
         XCTAssertTrue(
