@@ -15,9 +15,9 @@ const KEY = "-----BEGIN PRIVATE KEY-----\nSYNTHETIC-MULTILINE-FIXTURE-DO-NOT-USE
 
 /** Stub Infisical: the login succeeds and the list returns the fixture. */
 function stubFetch(vaultSecrets, calls = []) {
-  return async (url) => {
+  return async (url, init = {}) => {
     const u = String(url);
-    calls.push(u);
+    calls.push({ url: u, headers: init.headers || {} });
     if (u.includes("/api/v1/auth/universal-auth/login")) {
       return { ok: true, json: async () => ({ accessToken: "test-token", expiresIn: 3600 }) };
     }
@@ -85,12 +85,15 @@ test("the key is read from prod /asc of the given project, and nowhere else", as
   try {
     const calls = [];
     await run({ env: baseEnv(dir), fetchImpl: stubFetch({ ASC_KEY_P8: KEY }, calls), log: () => {} });
-    const list = calls.filter((c) => c.includes("/api/v3/secrets/raw"));
+    const list = calls.filter((c) => c.url.includes("/api/v3/secrets/raw"));
     assert.equal(list.length, 1, "one list call for the whole path");
-    const url = new URL(list[0]);
+    const url = new URL(list[0].url);
     assert.equal(url.searchParams.get("workspaceId"), "synthetic-fleet-project");
     assert.equal(url.searchParams.get("environment"), "prod");
     assert.equal(url.searchParams.get("secretPath"), "/asc");
+    // The login helper returns the token string itself, so a destructured
+    // read would silently send "Bearer undefined".
+    assert.equal(list[0].headers.authorization, "Bearer test-token");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

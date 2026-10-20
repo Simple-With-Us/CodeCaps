@@ -48,7 +48,7 @@ export async function run({ env = process.env, fetchImpl = fetch, log = (line) =
     fail(log, 'Missing Infisical machine identity.  Set INFISICAL_UNIVERSAL_AUTH_CLIENT_ID/SECRET (fallback INFISICAL_CLIENT_ID/SECRET) on the org or repo.');
   }
 
-  const { token } = await loginUniversalAuth({ siteUrl, clientId, clientSecret, fetchImpl });
+  const token = await loginUniversalAuth({ siteUrl, clientId, clientSecret, fetchImpl });
   maskValue(token, log);
 
   const values = await listSecretsRaw({ siteUrl, token, projectId, environment, secretPath, fetchImpl });
