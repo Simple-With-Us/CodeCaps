@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import CryptoKit
 import QuotaCore
 import SwiftUI
 #if canImport(WidgetKit)
@@ -215,16 +216,27 @@ final class MonitorModel: ObservableObject {
     @Published var burnRateAlertsEnabled: Bool {
         didSet {
             defaults.set(burnRateAlertsEnabled, forKey: "burnRateAlertsEnabled")
-            if burnRateAlertsEnabled {
-                Task { await alarmManager.requestNotificationPermission() }
-                refreshRunawayUsageState(recordSamples: false)
-            } else {
-                activeRunawayAnomalies = []
-                activePlanChanges = []
+            for kind: UsageAlertKind in [.anomaly, .runaway] {
+                var option = alarmManager.preferences[kind]
+                option.enabled = burnRateAlertsEnabled
+                alarmManager.preferences[kind] = option
             }
+            refreshRunawayUsageState(recordSamples: false)
         }
     }
     @Published private(set) var activeRunawayAnomalies: [AnomalyDetector.Anomaly] = []
+    private var detectedUsageAnomalies: [AnomalyDetector.Anomaly] = []
+    private var anomalyOccurrences: [String: Date] = [:]
+    private var anomalyOccurrencePayloads: [String: LocalQuotaSnapshot.AlertPayload] = [:]
+    private var anomalyLocalEligibility: [String: Bool] = [:]
+    private struct ExhaustionObservationState: Codable {
+        var observedAt: Date
+        var alert: LocalQuotaSnapshot.AlertPayload?
+    }
+    private var exhaustionObservationState: [String: ExhaustionObservationState] = [:]
+    private static let anomalyOccurrencesKey = "usageAlertAnomalyOccurrences"
+    private static let anomalyPayloadsKey = "usageAlertAnomalyPayloads"
+    private static let exhaustionObservationKey = "usageAlertExhaustionObservations"
 
     // MARK: - Running-out warnings
 
@@ -582,6 +594,11 @@ final class MonitorModel: ObservableObject {
     private var pushRevision = 0
     private var pushTask: Task<PushOutcome, Never>?
     private let publisher = QuotaPublisher()
+    private let usageAlertPublisher = UsageAlertPublisher()
+    @Published var remoteAlertRelayEnabled: Bool {
+        didSet { defaults.set(remoteAlertRelayEnabled, forKey: "remoteAlertRelayEnabled") }
+    }
+    @Published private(set) var remoteAlertRelayError: String?
     /// Re-publishes the alarm manager's changes, so a view that observes this
     /// model redraws when All or a provider's bell flips.
     private var alarmChanges: AnyCancellable?
@@ -599,6 +616,20 @@ final class MonitorModel: ObservableObject {
     init(defaults: UserDefaults = .standard, burnRateHistoryURL: URL? = nil, presentsPipWindows: Bool = true) {
         self.presentsPipWindows = presentsPipWindows
         self.defaults = defaults
+        if let data = defaults.data(forKey: Self.anomalyOccurrencesKey),
+           let saved = try? JSONDecoder().decode([String: Date].self, from: data) {
+            self.anomalyOccurrences = saved
+        }
+        if let data = defaults.data(forKey: Self.anomalyPayloadsKey),
+           let saved = try? JSONDecoder().decode([String: LocalQuotaSnapshot.AlertPayload].self, from: data) {
+            self.anomalyOccurrencePayloads = saved
+        }
+        self.anomalyLocalEligibility = defaults.dictionary(forKey: "anomalyLocalEligibility") as? [String: Bool] ?? [:]
+        if let data = defaults.data(forKey: Self.exhaustionObservationKey),
+           let saved = try? JSONDecoder().decode([String: ExhaustionObservationState].self, from: data) {
+            self.exhaustionObservationState = saved
+            self.activeExhaustionAlerts = saved.compactMapValues(\.alert)
+        }
         self.burnRateHistoryURL = burnRateHistoryURL ?? BurnRateMonitor.historyURL
         self.lastRunawayAlertAt = defaults.dictionary(forKey: "runawayAlertLastSent") as? [String: Double] ?? [:]
         glanceAttachedToMenuBar = defaults.object(forKey: "glanceAttachedToMenuBar") as? Bool ?? true
@@ -677,6 +708,7 @@ final class MonitorModel: ObservableObject {
         endpoint = defaults.string(forKey: "endpoint") ?? ""
         syncEndpoint = defaults.string(forKey: "syncEndpoint") ?? ""
         syncFormat = QuotaSyncFormat(rawValue: defaults.string(forKey: "syncFormat") ?? "") ?? .usageMonitorV2
+        remoteAlertRelayEnabled = defaults.bool(forKey: "remoteAlertRelayEnabled")
 
         alarmManager = ResetAlarmManager(defaults: defaults)
 
@@ -1103,7 +1135,52 @@ final class MonitorModel: ObservableObject {
     }
 
     func injectRunawayAnomaliesForTests(_ anomalies: [AnomalyDetector.Anomaly]) {
+        let measured = Set(anomalyOccurrences.keys.map { String($0.split(separator: "|").dropLast().joined(separator: "|")) })
+        updateActiveAnomalies(anomalies, measuredWindowKeys: measured)
         activeRunawayAnomalies = anomalies
+    }
+
+    private func updateActiveAnomalies(_ anomalies: [AnomalyDetector.Anomaly], measuredWindowKeys: Set<String> = []) {
+        detectedUsageAnomalies = anomalies
+        activeRunawayAnomalies = anomalies.filter {
+            alarmManager.preferences[$0.kind == .vsPeak ? .runaway : .anomaly].enabled
+        }
+        let liveAnomalyKeys = Set(anomalies.map { Self.runawayKey($0.providerKey, $0.windowId) + "|" + $0.kind.rawValue })
+        let before = anomalyOccurrences
+        anomalyOccurrences = anomalyOccurrences.filter { entry in
+            liveAnomalyKeys.contains(entry.key)
+                || !measuredWindowKeys.contains(where: { entry.key.hasPrefix($0 + "|") })
+        }
+        for anomaly in anomalies {
+            let key = Self.runawayKey(anomaly.providerKey, anomaly.windowId) + "|" + anomaly.kind.rawValue
+            if anomalyOccurrences[key] == nil { anomalyOccurrences[key] = anomaly.observedAt ?? now }
+        }
+        if before != anomalyOccurrences,
+           let data = try? JSONEncoder().encode(anomalyOccurrences) {
+            defaults.set(data, forKey: Self.anomalyOccurrencesKey)
+        }
+        let previousPayloads = anomalyOccurrencePayloads
+        anomalyOccurrencePayloads = anomalyOccurrencePayloads.filter { anomalyOccurrences[$0.key] != nil }
+        anomalyLocalEligibility = anomalyLocalEligibility.filter { anomalyOccurrences[$0.key] != nil }
+        let formatter = ISO8601DateFormatter()
+        for anomaly in anomalies {
+            let key = Self.runawayKey(anomaly.providerKey, anomaly.windowId) + "|" + anomaly.kind.rawValue
+            guard anomalyOccurrencePayloads[key] == nil else { continue }
+            anomalyLocalEligibility[key] = alarmManager.preferences[anomaly.kind == .vsPeak ? .runaway : .anomaly].enabled
+            let occurredAt = anomalyOccurrences[key] ?? anomaly.observedAt ?? now
+            let kind = anomaly.kind == .vsPeak ? "runaway" : "anomaly"
+            anomalyOccurrencePayloads[key] = LocalQuotaSnapshot.AlertPayload(
+                id: "\(kind)|\(anomaly.providerKey)|\(anomaly.windowId)|\(occurredAt.timeIntervalSince1970)",
+                kind: kind, providerKey: anomaly.providerKey,
+                providerTitle: displaySections.first { $0.id == anomaly.providerKey }?.title ?? anomaly.providerKey,
+                windowLabel: AnomalyDetector.windowLabel(windowId: anomaly.windowId),
+                summary: anomaly.summary, occurredAt: formatter.string(from: occurredAt))
+        }
+        if previousPayloads != anomalyOccurrencePayloads,
+           let data = try? JSONEncoder().encode(anomalyOccurrencePayloads) {
+            defaults.set(data, forKey: Self.anomalyPayloadsKey)
+            defaults.set(anomalyLocalEligibility, forKey: "anomalyLocalEligibility")
+        }
     }
 
     /// Whether this platform or pool currently has an active runaway usage anomaly.
@@ -1607,7 +1684,7 @@ final class MonitorModel: ObservableObject {
             sessionFileResult = nil
             currentCodexAccountID = nil
             localWindows = []
-            activeRunawayAnomalies = []
+            updateActiveAnomalies([])
             activePlanChanges = []
             if !skipsSnapshotIOForTesting { try? LocalQuotaSnapshot.remove() }
             rebuildLocalState(recordSamples: false)
@@ -1816,7 +1893,7 @@ final class MonitorModel: ObservableObject {
         sessionFileResult = nil
         currentCodexAccountID = nil
         hasCurrentLocalRead = false
-        activeRunawayAnomalies = []
+        updateActiveAnomalies([])
         activePlanChanges = []
         serverWindows = []
         response = QuotaResponse(generatedAt: "")
@@ -2033,6 +2110,19 @@ final class MonitorModel: ObservableObject {
                 self.lastSyncTime = Date()
                 self.lastSyncStatus = result.message
                 self.lastSyncError = nil
+                if self.remoteAlertRelayEnabled, targetFormat == .usageMonitorV2,
+                   self.pushForTesting == nil, !self.skipsSnapshotIOForTesting,
+                   let token, !token.isEmpty {
+                    let alerts = self.exportedAlerts(now: self.now)
+                    do {
+                        try await self.usageAlertPublisher.publish(alerts, quotaEndpoint: url, token: token)
+                        guard !Task.isCancelled, self.isCurrentPushSettings(generation, endpoint: targetEndpoint, format: targetFormat) else { return .cancelled }
+                        self.remoteAlertRelayError = nil
+                    } catch {
+                        guard !Task.isCancelled, self.isCurrentPushSettings(generation, endpoint: targetEndpoint, format: targetFormat) else { return .cancelled }
+                        self.remoteAlertRelayError = "iPhone alert relay failed." + sentenceGap + "Check the server's CodeCaps push setup."
+                    }
+                }
                 return .success(result)
             } catch {
                 guard !Task.isCancelled,
@@ -2156,7 +2246,7 @@ final class MonitorModel: ObservableObject {
                 self.consentNeeded = []
                 self.localWindows = []
                 self.hasCurrentLocalRead = false
-                self.activeRunawayAnomalies = []
+                self.updateActiveAnomalies([])
                 self.activePlanChanges = []
             }
 
@@ -2179,11 +2269,6 @@ final class MonitorModel: ObservableObject {
                 self.handoffError = nil
             } catch {
                 self.handoffError = "BotFleet quota sharing is unavailable."
-            }
-
-            // Push to remote server if enabled
-            if useLocal && self.syncEnabled && !self.localWindows.isEmpty {
-                _ = await self.pushQuotasIfEnabled(windows: self.localWindows)
             }
 
             guard !Task.isCancelled, self.revision == generation else { return }
@@ -2235,8 +2320,14 @@ final class MonitorModel: ObservableObject {
             self.response = QuotaResponse(generatedAt: ISO8601DateFormatter().string(from: self.now), windows: merged)
             self.publishWidgetSnapshot(candidates: merged + split.groups.flatMap(\.windows))
             self.refreshRunawayUsageState(recordSamples: local != nil)
+            self.refreshExhaustionWarnings(windows: merged + split.groups.flatMap(\.windows), now: self.now)
             self.alarmManager.evaluate(observations: self.resetAlarmObservationsForCurrentReadings(), now: self.now)
             self.evaluatePipLowQuota()
+            // Publish after evaluating this reading so remote alerts include its new events.
+            if useLocal && self.syncEnabled && !self.localWindows.isEmpty {
+                _ = await self.pushQuotasIfEnabled(windows: self.localWindows)
+            }
+            guard !Task.isCancelled, self.revision == generation else { return }
             self.isRefreshing = false
             self.request = nil
         }
@@ -2403,6 +2494,7 @@ final class MonitorModel: ObservableObject {
     }
 
     private func refreshExhaustionWarnings(windows: [QuotaWindow], now: Date) {
+        refreshActualExhaustion(windows: windows, now: now)
         guard exhaustionAlertsEnabled else {
             if !exhaustionWarnings.isEmpty { exhaustionWarnings = [:] }
             return
@@ -2442,8 +2534,68 @@ final class MonitorModel: ObservableObject {
         }
     }
 
-    /// The human name for the window a warning key refers to, preferring what
-    /// the row itself shows.
+    private var activeExhaustionAlerts: [String: LocalQuotaSnapshot.AlertPayload] = [:]
+
+    /// A missing or stale reading cannot rearm an exhausted window.
+    func refreshActualExhaustion(windows: [QuotaWindow], now: Date) {
+        var changed = false
+        defer {
+            if changed { persistExhaustionObservations() }
+        }
+        let formatter = ISO8601DateFormatter()
+        let masked = AntigravityQuotaGroups.maskedWindowIds(in: windows, now: now)
+        for window in windows {
+            let snapshot = QuotaWindowSnapshot(window: window, now: now)
+            guard snapshot.isFresh, let remaining = snapshot.remainingPercent, let observedAt = snapshot.observedAt,
+                  !window.isSupplementaryVideoQuota, !masked.contains(window.id),
+                  !window.remainingUnknown,
+                  issues[window.canonicalProviderKey] == nil,
+                  !disabledSources.contains(window.source ?? "") else { continue }
+            let key = window.canonicalProviderKey + "|" + window.id + "|" + (window.accountKey ?? "")
+            let previous = exhaustionObservationState[key]
+            guard previous == nil || observedAt > previous!.observedAt else { continue }
+            changed = true
+            if remaining > 0 {
+                exhaustionObservationState[key] = ExhaustionObservationState(observedAt: observedAt, alert: nil)
+                activeExhaustionAlerts.removeValue(forKey: key)
+                continue
+            }
+            if let previousAlert = previous?.alert {
+                exhaustionObservationState[key] = ExhaustionObservationState(observedAt: observedAt, alert: previousAlert)
+                continue
+            }
+            let title = "Quota Exhausted: " + window.provider
+            let body = window.label + " has no quota remaining."
+            let payload = LocalQuotaSnapshot.AlertPayload(
+                id: "quotaExhaustion|" + key + "|" + String(observedAt.timeIntervalSince1970),
+                kind: "quotaExhaustion", providerKey: window.canonicalProviderKey,
+                providerTitle: window.provider, windowLabel: window.label, summary: body,
+                occurredAt: formatter.string(from: observedAt))
+            activeExhaustionAlerts[key] = payload
+            exhaustionObservationState[key] = ExhaustionObservationState(observedAt: observedAt, alert: payload)
+            alarmManager.deliverUsageAlert(kind: .quotaExhaustion, title: title, body: body,
+                                          identifier: payload.id,
+                                          navigation: AlertNavigation(providerKey: window.canonicalProviderKey,
+                                                                      windowId: window.id, timestamp: now))
+        }
+    }
+
+    private func persistExhaustionObservations() {
+        // Bound healthy identity noise without evicting unresolved exhaustion.
+        if exhaustionObservationState.count > 1_024 {
+            let exhausted = Set(exhaustionObservationState.filter { $0.value.alert != nil }.keys)
+            let healthy = exhaustionObservationState.filter { $0.value.alert == nil }
+                .sorted { $0.value.observedAt > $1.value.observedAt }.prefix(1_024).map(\.key)
+            let retained = exhausted.union(healthy)
+            exhaustionObservationState = exhaustionObservationState.filter { retained.contains($0.key) }
+            activeExhaustionAlerts = activeExhaustionAlerts.filter { retained.contains($0.key) }
+        }
+        if let data = try? JSONEncoder().encode(exhaustionObservationState) {
+            defaults.set(data, forKey: Self.exhaustionObservationKey)
+        }
+    }
+
+    /// The human name for the window a warning key refers to.
     private func exhaustionWarningLabel(for key: String, in windows: [QuotaWindow]) -> String {
         let parts = key.split(separator: "|", maxSplits: 1).map(String.init)
         guard parts.count == 2 else { return parts.first ?? key }
@@ -2493,19 +2645,13 @@ final class MonitorModel: ObservableObject {
 
     private func refreshRunawayUsageState(recordSamples: Bool) {
         guard localEnabled, hasCurrentLocalRead else {
-            activeRunawayAnomalies = []
+            updateActiveAnomalies([])
             activePlanChanges = []
             return
         }
         if recordSamples {
             BurnRateMonitor.record(localWindows, now: now, historyURL: burnRateHistoryURL)
         }
-        guard burnRateAlertsEnabled else {
-            activeRunawayAnomalies = []
-            activePlanChanges = []
-            return
-        }
-
         let masked = maskedWindowIds
         let currentKeys = Set(localWindows.compactMap { window -> String? in
             let snapshot = QuotaWindowSnapshot(window: window, now: now)
@@ -2516,7 +2662,7 @@ final class MonitorModel: ObservableObject {
             return Self.runawayKey(window.canonicalProviderKey, window.id)
         })
         guard !currentKeys.isEmpty else {
-            activeRunawayAnomalies = []
+            updateActiveAnomalies([])
             activePlanChanges = []
             return
         }
@@ -2535,7 +2681,7 @@ final class MonitorModel: ObservableObject {
                                                   samples: samples)
             .filter { currentKeys.contains(Self.runawayKey($0.providerKey, $0.windowId)) }
             .filter { !manualProviders.contains($0.providerKey) }
-        activeRunawayAnomalies = anomalies
+        updateActiveAnomalies(anomalies, measuredWindowKeys: currentKeys)
         // Plan changes: automatic discontinuity detection plus the owner's
         // explicit Settings-text signal.  Either one puts the window in the
         // informational plan-change state instead of a runaway alert.
@@ -2559,12 +2705,15 @@ final class MonitorModel: ObservableObject {
         var groups: [String: [AnomalyDetector.Anomaly]] = [:]
         var order: [String] = []
         for anomaly in anomalies {
-            let key = Self.runawayKey(anomaly.providerKey, anomaly.windowId)
+            let key = Self.runawayKey(anomaly.providerKey, anomaly.windowId) + "|" + anomaly.kind.rawValue
             if groups[key] == nil { order.append(key) }
             groups[key, default: []].append(anomaly)
         }
         for key in order {
             guard let group = groups[key] else { continue }
+            let kind: UsageAlertKind = group[0].kind == .vsPeak ? .runaway : .anomaly
+            guard alarmManager.preferences[kind].enabled else { continue }
+            guard anomalyLocalEligibility[key] != false else { continue }
             let lastSent = lastRunawayAlertAt[key] ?? -.infinity
             guard now.timeIntervalSince1970 - lastSent >= BurnRateMonitor.alertCooldown else { continue }
             let matchingDisplayRow = self.displaySections.first { row in
@@ -2598,14 +2747,16 @@ final class MonitorModel: ObservableObject {
 
             let notification = BurnRateNotification(
                 anomalies: group,
-                sound: alarmManager.alarmSound,
+                sound: alarmManager.preferences[group[0].kind == .vsPeak ? .runaway : .anomaly].sound,
                 providerLabel: provLabel,
                 windowLabel: winLabel
             )
-            if let runawayNotificationForTesting {
-                runawayNotificationForTesting(notification)
-            } else {
-                alarmManager.deliverRunawayUsageAlert(notification)
+            if alarmManager.preferences[kind].enabled {
+                if let runawayNotificationForTesting {
+                    runawayNotificationForTesting(notification)
+                } else {
+                    alarmManager.deliverRunawayUsageAlert(notification)
+                }
             }
             lastRunawayAlertAt[key] = now.timeIntervalSince1970
 
@@ -2724,19 +2875,24 @@ extension MonitorModel {
         // Runaway usage currently burning far faster than the owner's own
         // pattern.  Only the live set, so a resolved anomaly stops being
         // re-offered on the next poll.
-        for anomaly in activeRunawayAnomalies {
-            let label = AnomalyDetector.windowLabel(windowId: anomaly.windowId)
-            let title = displaySections.first { $0.id == anomaly.providerKey }?.title
-                ?? anomaly.providerKey
-            out.append(LocalQuotaSnapshot.AlertPayload(
-                id: "runaway|\(anomaly.providerKey)|\(anomaly.windowId)|\(anomaly.kind.rawValue)",
-                kind: "runaway",
-                providerKey: anomaly.providerKey,
-                providerTitle: title,
-                windowLabel: label,
-                summary: anomaly.summary,
-                occurredAt: formatter.string(from: anomaly.observedAt ?? now)))
+        for anomaly in detectedUsageAnomalies {
+            let key = Self.runawayKey(anomaly.providerKey, anomaly.windowId) + "|" + anomaly.kind.rawValue
+            if let payload = anomalyOccurrencePayloads[key] { out.append(payload) }
         }
-        return out
+        out.append(contentsOf: activeExhaustionAlerts.values)
+        for record in alarmManager.detectedResetHistory where now.timeIntervalSince(record.timestamp) < 24 * 3_600 {
+            out.append(LocalQuotaSnapshot.AlertPayload(
+                id: record.id, kind: record.isVendorReset ? "vendorReset" : "quotaReset",
+                providerKey: record.providerKey, providerTitle: record.providerTitle,
+                windowLabel: record.windowLabel, summary: record.body,
+                occurredAt: formatter.string(from: record.timestamp)))
+        }
+        return out.map { alert in
+            LocalQuotaSnapshot.AlertPayload(
+                id: QuotaPublisher.producerInstanceId + "|" + SHA256.hash(data: Data(alert.id.utf8))
+                    .map { String(format: "%02x", $0) }.joined(),
+                kind: alert.kind, providerKey: alert.providerKey, providerTitle: alert.providerTitle,
+                windowLabel: alert.windowLabel, summary: alert.summary, occurredAt: alert.occurredAt)
+        }
     }
 }
