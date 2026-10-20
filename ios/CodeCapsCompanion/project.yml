@@ -53,6 +53,8 @@ targets:
       - path: Assets.xcassets
       # The reset alarm's rules and wording are shared with the Mac app, so the
       # two cannot drift apart.  Plain Foundation; no other QuotaCore type.
+      - path: ../../Sources/QuotaCore/UsageAlertPreferences.swift
+        group: Shared
       - path: ../../Sources/QuotaCore/ResetAlarmTracker.swift
         group: Shared
       - path: ../../Sources/QuotaCore/ResetAlarmMessage.swift
@@ -79,6 +81,7 @@ targets:
         DEVELOPMENT_TEAM: CC8UTF7ATG
         CODE_SIGN_STYLE: Automatic
         CODE_SIGN_ENTITLEMENTS: App/CodeCapsCompanion.entitlements
+        CODECAPS_APNS_ENVIRONMENT: development
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: NO
         ITSAppUsesNonExemptEncryption: false
@@ -89,7 +92,8 @@ targets:
         Release:
           CODE_SIGN_STYLE: Manual
           CODE_SIGN_IDENTITY: "Apple Distribution"
-          PROVISIONING_PROFILE_SPECIFIER: "CodeCaps Companion AppStore"
+          PROVISIONING_PROFILE_SPECIFIER: "CodeCaps Companion Push AppStore"
+          CODECAPS_APNS_ENVIRONMENT: production
           CODE_SIGN_ENTITLEMENTS: App/CodeCapsCompanion.entitlements
 
   CodeCapsWidgets:
@@ -149,6 +153,8 @@ targets:
         buildPhase: resources
         type: file
       - path: Assets.xcassets
+      - path: ../../Sources/QuotaCore/UsageAlertPreferences.swift
+        group: Shared
       - path: ../../Sources/QuotaCore/ResetAlarmTracker.swift
         group: Shared
       - path: ../../Sources/QuotaCore/ResetAlarmMessage.swift
