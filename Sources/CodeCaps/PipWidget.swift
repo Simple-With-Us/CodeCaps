@@ -459,7 +459,7 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
         guard issue == nil else { return [] }
         return row.section.windows
             .filter { !$0.window.isSupplementaryVideoQuota && !row.isMasked($0)
-                && !$0.window.remainingUnknown && !$0.window.skip
+                && !$0.window.remainingUnknown
                 && !disabledSources.contains($0.window.source ?? "") }
             .map { QuotaWindowSnapshot(window: $0.window, now: now) }
             .filter { $0.isFresh && $0.remainingPercent != nil }
