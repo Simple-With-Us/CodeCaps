@@ -498,6 +498,13 @@ def main() -> int:
             source = render_source(target)
             ink = dominant_ink(current) if is_template_variant(target.path) else None
             rebuilt = rebuild(current, source, ink)
+        except ValueError as exc:
+            # A rebuild the script deliberately refuses -- a source whose
+            # artwork cannot fill the box it replaces -- is a documented
+            # outcome, not a read failure.
+            print(f"{target.path:<70} skipped -- {exc}")
+            skipped += 1
+            continue
         except Exception as exc:  # noqa: BLE001 - one bad file must not stop the run
             # A single unreadable file must not leave a batch half-written or
             # suppress the summary, so it is reported and the run continues.

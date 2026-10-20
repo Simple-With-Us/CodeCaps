@@ -761,7 +761,15 @@ repo: CodeCaps; pre-work claim: posted to #agent-sync after reading AGENT-SYNC.m
   whose artwork cannot fill the exact box the artwork it replaces occupied,
   because letterboxing it would shrink and shift the mark -- the one thing
   the script must never do -- and one unreadable file no longer aborts the
-  whole run.
+  whole run.  Two more findings in the same round, both fixed: the test's
+  reader for the generator's limits never actually parsed the number, so it
+  silently fell back to its own copy and the claim that the two cannot drift
+  apart was not true; it now reads the capture group and fails loudly when
+  a limit is missing, and setting the generator's limit to 0.5 was checked
+  to make the test fail with every companion mark listed.  And a rebuild the
+  generator deliberately refuses was counted as a read failure, which made
+  the script exit non-zero over a refusal it had documented as an expected
+  outcome; a refusal is a skip, and the report-only run exits 0 again.
 - Reported rather than changed, because there is no same-art
   higher-resolution copy of them to raise: `openai-*` and `grok-bot-*` (this
   repository ships `openai.svg` and `grok-bot.svg`, but they are *different

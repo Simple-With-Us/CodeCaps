@@ -69,10 +69,15 @@ final class ProviderMarkDetailTests: XCTestCase {
     /// refuses to write a mark that would break them.  They are read from
     /// there rather than repeated, so the script and this test cannot drift
     /// apart.
-    private static func macEdgeLimit() -> Double { limit(named: "MAC_EDGE_LIMIT") ?? 1.0 }
-    private static func iosEdgeLimit() -> Double { limit(named: "IOS_EDGE_LIMIT") ?? 1.65 }
+    private static func macEdgeLimit() -> Double? { limit(named: "MAC_EDGE_LIMIT") }
+    private static func iosEdgeLimit() -> Double? { limit(named: "IOS_EDGE_LIMIT") }
 
     /// The absolute edge limit the generator uses, read from its source.
+    ///
+    /// The number is taken from the regular expression's capture group, not
+    /// from the matched text, and a limit that cannot be read is an error
+    /// rather than a silent fallback: a fallback would leave the test
+    /// enforcing a stale number while claiming to share one.
     private static func limit(named name: String) -> Double? {
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()   // CodeCapsTests
@@ -80,9 +85,11 @@ final class ProviderMarkDetailTests: XCTestCase {
             .deletingLastPathComponent()   // repository root
             .appendingPathComponent("scripts/regenerate-provider-marks.py")
         guard let source = try? String(contentsOf: url, encoding: .utf8) else { return nil }
-        let pattern = "\n\(name) = ([0-9.]+)"
-        guard let range = source.range(of: pattern, options: .regularExpression) else { return nil }
-        return Double(source[range].dropFirst(2).prefix(while: { $0.isNumber || $0 == "." }))
+        guard let regex = try? NSRegularExpression(pattern: "\\n\(name) = ([0-9.]+)"),
+              let match = regex.firstMatch(in: source, range: NSRange(source.startIndex..., in: source)),
+              let captured = Range(match.range(at: 1), in: source),
+              let value = Double(source[captured]) else { return nil }
+        return value
     }
 
     private static let solidAlpha = 247
@@ -112,6 +119,10 @@ final class ProviderMarkDetailTests: XCTestCase {
         XCTAssertGreaterThan(files.count, 30,
                              "expected the bundled provider marks in \(directory.path), found \(files.count)")
 
+        guard let macEdgeLimit = Self.macEdgeLimit() else {
+            XCTFail("MAC_EDGE_LIMIT could not be read from scripts/regenerate-provider-marks.py, so the shared limit could not be checked")
+            return
+        }
         var soft: [String] = []
         for file in files {
             let name = file.lastPathComponent
@@ -120,7 +131,7 @@ final class ProviderMarkDetailTests: XCTestCase {
                 continue
             }
             let devicePixels = mark.band * (Self.macDisplayPixels / Double(mark.width))
-            if devicePixels > Self.macEdgeLimit(), !Self.softByDesign.contains(name) {
+            if devicePixels > macEdgeLimit, !Self.softByDesign.contains(name) {
                 soft.append("\(name) \(String(format: "%.2f", devicePixels))px")
             }
         }
@@ -147,6 +158,10 @@ final class ProviderMarkDetailTests: XCTestCase {
         XCTAssertGreaterThan(imagesets.count, 3,
                              "expected the companion asset catalog in \(catalog.path), found \(imagesets.count)")
 
+        guard let iosEdgeLimit = Self.iosEdgeLimit() else {
+            XCTFail("IOS_EDGE_LIMIT could not be read from scripts/regenerate-provider-marks.py, so the shared limit could not be checked")
+            return
+        }
         var soft: [String] = []
         for imageset in imagesets {
             let densities = Self.densities(of: imageset)
@@ -172,7 +187,7 @@ final class ProviderMarkDetailTests: XCTestCase {
                     // largest possible size is the strict reading.
                     devicePixels = mark.band * (Self.iosDisplayPixels / Double(mark.width))
                 }
-                if devicePixels > Self.iosEdgeLimit() {
+                if devicePixels > iosEdgeLimit {
                     soft.append("\(imageset.lastPathComponent)/\(name) \(String(format: "%.2f", devicePixels))px")
                 }
             }
