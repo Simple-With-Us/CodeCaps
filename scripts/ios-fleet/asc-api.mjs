@@ -477,9 +477,14 @@ async function main() {
   // The raw body of an App Store Connect error is not printed: it is
   // whatever the service chose to say, and it may echo a header or a token.
   // Only the titles and details of the JSON API errors are used, and a run of
-  // token-like characters in one of those is redacted.  A rejected key is
-  // named, never previewed: a masked preview of a private key is still a
-  // piece of the key.
+  // token-like characters in one of those is redacted.
+  //
+  // A rejected key is reported with the fleet's masked preview of the key in
+  // play and the key id beside it, so the operator can tell which credential
+  // was refused without any of the key being published.  The preview is taken
+  // from the key material rather than from the envelope, because every key
+  // file opens and ends the same way and a preview of the envelope would
+  // identify none of them.
   function describeError(res) {
     if (res.networkError) {
       // A timeout and a transport failure have different causes, and the
@@ -531,7 +536,7 @@ async function main() {
   function requireObject(value, what) {
     if (!isPlainObject(value)) {
       process.exitCode = 2;
-      throw new NamedFailure(`upload-screenshots: invalid ${what} response`);
+      throw new NamedFailure(`${method}: invalid ${what} response`);
     }
     return value;
   }
@@ -539,7 +544,7 @@ async function main() {
   function requireArray(value, what) {
     if (!Array.isArray(value)) {
       process.exitCode = 2;
-      throw new NamedFailure(`upload-screenshots: invalid ${what} response`);
+      throw new NamedFailure(`${method}: invalid ${what} response`);
     }
     return value;
   }
