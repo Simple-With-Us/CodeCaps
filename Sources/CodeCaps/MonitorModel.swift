@@ -2546,7 +2546,7 @@ final class MonitorModel: ObservableObject {
             let snapshot = QuotaWindowSnapshot(window: window, now: now)
             guard snapshot.isFresh, let remaining = snapshot.remainingPercent, let observedAt = snapshot.observedAt,
                   !window.isSupplementaryVideoQuota, !masked.contains(window.id),
-                  !window.skip, !window.remainingUnknown,
+                  !window.remainingUnknown,
                   issues[window.canonicalProviderKey] == nil,
                   !disabledSources.contains(window.source ?? "") else { continue }
             let key = window.canonicalProviderKey + "|" + window.id + "|" + (window.accountKey ?? "")
@@ -2579,11 +2579,12 @@ final class MonitorModel: ObservableObject {
     }
 
     private func persistExhaustionObservations() {
-        // Keep a bounded set of the most recently measured identities.  Their
-        // exhausted tombstones preserve deduplication through gaps and relaunches.
+        // Bound healthy identity noise without evicting unresolved exhaustion.
         if exhaustionObservationState.count > 1_024 {
-            let retained = Set(exhaustionObservationState.sorted { $0.value.observedAt > $1.value.observedAt }
-                .prefix(1_024).map(\.key))
+            let exhausted = Set(exhaustionObservationState.filter { $0.value.alert != nil }.keys)
+            let healthy = exhaustionObservationState.filter { $0.value.alert == nil }
+                .sorted { $0.value.observedAt > $1.value.observedAt }.prefix(1_024).map(\.key)
+            let retained = exhausted.union(healthy)
             exhaustionObservationState = exhaustionObservationState.filter { retained.contains($0.key) }
             activeExhaustionAlerts = activeExhaustionAlerts.filter { retained.contains($0.key) }
         }
