@@ -3,6 +3,14 @@ import Security
 import SwiftUI
 import UserNotifications
 
+public struct CompanionInAppAlert: Identifiable, Equatable {
+    public let id: String
+    public let title: String
+    public let body: String
+    public let kind: UsageAlertKind
+    public let sourceInstanceId: String?
+}
+
 /// Whether the companion shows only this device's readings or every synced source.
 public enum CompanionSourceScope: String, CaseIterable, Identifiable, Sendable {
     case thisIPhone = "This iPhone"
@@ -51,6 +59,7 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
     public let quotaUnit: String?
     /// When this feed last reported the window (wire `reportedAt`, else `occurredAt`).
     public let reportedAt: Date?
+    public let producerInstanceId: String?
     /// Normalized allowance key used to pair primary and mirror windows.
     public let normalizedWindowKey: String
 
@@ -69,7 +78,8 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
         absoluteLimit: Double? = nil,
         quotaUnit: String? = nil,
         reportedAt: Date? = nil,
-        normalizedWindowKey: String = ""
+        normalizedWindowKey: String = "",
+        producerInstanceId: String? = nil
     ) {
         self.id = id
         self.label = label
@@ -85,6 +95,7 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
         self.absoluteLimit = absoluteLimit
         self.quotaUnit = quotaUnit
         self.reportedAt = reportedAt
+        self.producerInstanceId = producerInstanceId
         self.normalizedWindowKey = normalizedWindowKey.isEmpty
             ? Self.fallbackNormalizedWindowKey(cadence: cadence, label: label, resetAt: resetAt)
             : normalizedWindowKey
@@ -102,7 +113,7 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
         case id, label, cadence, remainingPercent, resetAt, source, via
         case isDuplicateSource, isExhausted, isMasked
         case absoluteRemaining, absoluteLimit, quotaUnit
-        case reportedAt, observedAt, normalizedWindowKey
+        case reportedAt, observedAt, normalizedWindowKey, producerInstanceId
     }
 
     public init(from decoder: Decoder) throws {
@@ -110,6 +121,7 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
         id = try container.decode(String.self, forKey: .id)
         label = try container.decode(String.self, forKey: .label)
         cadence = try container.decode(String.self, forKey: .cadence)
+        producerInstanceId = try container.decodeIfPresent(String.self, forKey: .producerInstanceId)
         remainingPercent = try container.decodeIfPresent(Double.self, forKey: .remainingPercent)
         resetAt = try container.decodeIfPresent(Date.self, forKey: .resetAt)
         source = try container.decodeIfPresent(String.self, forKey: .source)
@@ -144,6 +156,7 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
         try container.encodeIfPresent(absoluteLimit, forKey: .absoluteLimit)
         try container.encodeIfPresent(quotaUnit, forKey: .quotaUnit)
         try container.encodeIfPresent(reportedAt, forKey: .reportedAt)
+        try container.encodeIfPresent(producerInstanceId, forKey: .producerInstanceId)
         try container.encode(normalizedWindowKey, forKey: .normalizedWindowKey)
     }
 
@@ -569,11 +582,17 @@ public final class CompanionNotificationDelegate: NSObject, UNUserNotificationCe
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
+        #if os(iOS)
+        Task { @MainActor in
+            completionHandler(RemotePushRegistration.shared.presentationOptions(for: notification))
+        }
+        #else
         if #available(iOS 14.0, *) {
             completionHandler([.banner, .sound, .badge, .list])
         } else {
             completionHandler([.alert, .sound, .badge])
         }
+        #endif
     }
 
     public func userNotificationCenter(
@@ -581,7 +600,14 @@ public final class CompanionNotificationDelegate: NSObject, UNUserNotificationCe
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
+        #if os(iOS)
+        Task { @MainActor in
+            RemotePushRegistration.shared.recordReceived(notification: response.notification)
+            completionHandler()
+        }
+        #else
         completionHandler()
+        #endif
     }
 }
 
@@ -661,6 +687,17 @@ public final class CompanionQuotaModel: ObservableObject {
     /// Whether the system reports notifications as denied, so the sheet can
     /// offer a route into Settings instead of a button that does nothing.
     @Published public var notificationsDenied = false
+    @Published public private(set) var notificationStatus = "Checking system notification settings."
+    @Published public var inAppAlert: CompanionInAppAlert?
+    private var inAppQueue: [CompanionInAppAlert] = []
+    private var inAppQueueGeneration: UInt64 = 0
+    @Published public private(set) var alertSourceDevices: [String: String] = [:]
+    @Published public var foregroundRefreshSeconds: Int = {
+        let saved = UserDefaults.standard.object(forKey: "companionForegroundRefreshSeconds") as? Int ?? 60
+        return [0, 30, 60, 300].contains(saved) ? saved : 60
+    }() {
+        didSet { UserDefaults.standard.set(foregroundRefreshSeconds, forKey: "companionForegroundRefreshSeconds") }
+    }
     /// True when at least one real reading has been parsed.
     @Published public var hasDataSource = false
     @Published public private(set) var tokenStorageError: String?
@@ -711,6 +748,7 @@ public final class CompanionQuotaModel: ObservableObject {
     @Published public var alarmsAll: Bool {
         didSet {
             sharedDefaults.set(alarmsAll, forKey: AlarmKeys.all)
+            synchronizeRemoteAlertChoices()
             if alarmsAll && !oldValue { Task { await requestNotificationPermission() } }
         }
     }
@@ -718,7 +756,10 @@ public final class CompanionQuotaModel: ObservableObject {
     /// The providers picked one by one.  Kept while All is on, so turning All
     /// off again restores the owner's own selection.
     @Published public private(set) var alarmProviderIds: Set<String> {
-        didSet { sharedDefaults.set(alarmProviderIds.sorted(), forKey: AlarmKeys.providers) }
+        didSet {
+            sharedDefaults.set(alarmProviderIds.sorted(), forKey: AlarmKeys.providers)
+            synchronizeRemoteAlertChoices()
+        }
     }
 
     /// Keys for the alarm choices and the tracker's state.
@@ -745,6 +786,103 @@ public final class CompanionQuotaModel: ObservableObject {
     /// every evaluation, so a relaunch neither loses a reset that came due nor
     /// announces one twice.
     private var alarmTracker: ResetAlarmTracker
+    @Published public var alertPreferences: UsageAlertPreferences {
+        didSet {
+            alertPreferences.save(to: sharedDefaults, key: "companionAlertPreferences")
+            let presentationChanged = alertPreferences.sourceInstanceId != oldValue.sourceInstanceId
+                || UsageAlertKind.allCases.contains { alertPreferences[$0].wantsInAppMessage != oldValue[$0].wantsInAppMessage }
+            if presentationChanged { inAppQueueGeneration &+= 1 }
+            if alertPreferences.sourceInstanceId != oldValue.sourceInstanceId {
+                inAppQueue = []
+                inAppAlert = nil
+                deliveredQuotaEvents = [:]
+                sharedDefaults.removeObject(forKey: "companionDeliveredQuotaEvents")
+            }
+            if presentationChanged {
+                inAppQueue.removeAll { !canPresentInApp($0, generation: inAppQueueGeneration) }
+                if let current = inAppAlert, !canPresentInApp(current, generation: inAppQueueGeneration) { inAppAlert = nil }
+                if inAppAlert == nil { scheduleNextInAppAlert() }
+            }
+            for (id, alert) in retryAlerts where !alertPreferences[alert.kind].hasDelivery {
+                announcedAlertIds.insert(id)
+                retryAlerts.removeValue(forKey: id)
+            }
+            persistRetryAlerts()
+            NotificationCenter.default.post(name: Notification.Name("CodeCapsAlertPreferencesChanged"), object: nil)
+            if UsageAlertKind.allCases.contains(where: { alertPreferences[$0].enabled && alertPreferences[$0].notification }) {
+                Task { await requestNotificationPermission() }
+            }
+        }
+    }
+
+    public func synchronizeRemoteAlertChoices() {
+        var choices = alertPreferences
+        let owners = Dictionary(grouping: items, by: \.providerKey).mapValues { $0.map(\.id) }
+        choices.resetProviders = CompanionAlertSourcePolicy.remoteResetProviders(
+            all: alarmsAll, selected: alarmProviderIds, ownerIDsByProvider: owners)
+        if choices != alertPreferences { alertPreferences = choices }
+    }
+
+    public func setRemoteResetProvider(_ provider: String, enabled: Bool) {
+        let owners = items.filter { $0.providerKey == provider }.map(\.id)
+        if enabled { alarmProviderIds.formUnion(owners) }
+        else { alarmProviderIds.subtract(owners); alarmProviderIds.remove(provider) }
+        for index in items.indices { items[index].isAlarmEnabled = alarmProviderIds.contains(items[index].id) }
+    }
+
+    public func remoteResetProviderIsSelected(_ provider: String) -> Bool {
+        alertPreferences.resetProviders?.providerIDs.contains(provider) ?? false
+    }
+
+    public func presentInAppAlert(id: String, kind: UsageAlertKind, title: String, body: String, sourceInstanceId: String? = nil) {
+        let alert = CompanionInAppAlert(id: id, title: title, body: body, kind: kind, sourceInstanceId: sourceInstanceId)
+        guard canPresentInApp(alert, generation: inAppQueueGeneration) else { return }
+        var seen = sharedDefaults.stringArray(forKey: "companionInAppAlertIDs") ?? []
+        guard !seen.contains(id) else { return }
+        seen.append(id)
+        sharedDefaults.set(Array(seen.suffix(200)), forKey: "companionInAppAlertIDs")
+        guard inAppAlert?.id != id, !inAppQueue.contains(where: { $0.id == id }) else { return }
+        if inAppAlert == nil { inAppAlert = alert }
+        else { inAppQueue.append(alert) }
+    }
+
+    public func dismissInAppAlert() {
+        inAppAlert = nil
+        scheduleNextInAppAlert()
+    }
+
+    private func canPresentInApp(_ alert: CompanionInAppAlert, generation: UInt64) -> Bool {
+        CompanionInAppAlertPolicy.canPresent(option: alertPreferences[alert.kind],
+            selectedSource: alertPreferences.sourceInstanceId, reportedSource: alert.sourceInstanceId,
+            scheduledGeneration: generation, currentGeneration: inAppQueueGeneration)
+    }
+
+    private func scheduleNextInAppAlert() {
+        guard !inAppQueue.isEmpty else { return }
+        let generation = inAppQueueGeneration
+        Task { @MainActor in
+            await Task.yield()
+            guard generation == inAppQueueGeneration, inAppAlert == nil else { return }
+            inAppQueue.removeAll { !canPresentInApp($0, generation: generation) }
+            if !inAppQueue.isEmpty { inAppAlert = inAppQueue.removeFirst() }
+        }
+    }
+    private var pendingAlertIds = Set<String>()
+    private var pendingQuotaEvents = Set<String>()
+    private var remoteQuotaEvents = Set<String>()
+    private var exhaustionState: [String: Bool] = [:]
+    private var alertTrackingStartedAt: Date = .distantFuture
+    private var exhaustionObservedAt: [String: Date] = [:]
+    private var deliveredQuotaEvents: [String: Date] = [:]
+    private struct RetryAlert: Codable {
+        let kind: UsageAlertKind
+        let title: String
+        let body: String
+        let eventKey: String?
+        let createdAt: Date
+        let sourceInstanceId: String?
+    }
+    private var retryAlerts: [String: RetryAlert] = [:]
 
     public init() {
         let defaults = UserDefaults(suiteName: Self.appGroupId) ?? UserDefaults.standard
@@ -758,11 +896,14 @@ public final class CompanionQuotaModel: ObservableObject {
         // One-time migration of the two old mechanisms: a global "notify on
         // quota reset" switch, and one-shot bells armed per row.  The switch
         // meant "every provider", which is All; the bells meant "this row",
-        // which is a per-provider pick.  A fresh install lands on All, like the
-        // old switch's default.
+        // which is a per-provider pick.  Fresh installs require explicit opt-in.
         let legacyGlobal = defaults.object(forKey: AlarmKeys.legacyNotifyOnReset) as? Bool
             ?? UserDefaults.standard.object(forKey: AlarmKeys.legacyNotifyOnReset) as? Bool
-        let all = defaults.object(forKey: AlarmKeys.all) as? Bool ?? legacyGlobal ?? true
+        let hadResetPreferences = defaults.object(forKey: AlarmKeys.all) != nil
+            || defaults.object(forKey: AlarmKeys.providers) != nil || legacyGlobal != nil
+            || defaults.object(forKey: AlarmKeys.legacyArmedIds) != nil
+        let all = CompanionResetAlertPolicy.allProviders(
+            saved: defaults.object(forKey: AlarmKeys.all) as? Bool, legacy: legacyGlobal)
         let providers = Set(defaults.stringArray(forKey: AlarmKeys.providers)
                             ?? defaults.stringArray(forKey: AlarmKeys.legacyArmedIds) ?? [])
         defaults.set(all, forKey: AlarmKeys.all)
@@ -777,14 +918,25 @@ public final class CompanionQuotaModel: ObservableObject {
 
         let sharedRaw = defaults.string(forKey: "alarmSound")
             ?? UserDefaults.standard.string(forKey: "companionAlarmSound")
-        if let raw = sharedRaw, let picked = ResetAlarmSound(rawValue: raw) {
-            self.alarmSound = picked
-        } else {
-            self.alarmSound = .systemDefault
-        }
+        let migratedSound = sharedRaw.flatMap(ResetAlarmSound.init(rawValue:)) ?? .systemDefault
+        self.alarmSound = migratedSound
 
+        self.alertPreferences = UsageAlertPreferences.load(
+            from: defaults, key: "companionAlertPreferences", resetEnabled: hadResetPreferences && (all || !providers.isEmpty),
+            resetSound: migratedSound)
         self.platformOrder = defaults.stringArray(forKey: "platformOrder")
             ?? UserDefaults.standard.stringArray(forKey: "platformOrder") ?? []
+        self.alertPreferences.save(to: defaults, key: "companionAlertPreferences")
+        synchronizeRemoteAlertChoices()
+        let trackingStart = defaults.object(forKey: "companionAlertTrackingStartedAt") as? Date ?? Date()
+        self.alertTrackingStartedAt = trackingStart
+        defaults.set(trackingStart, forKey: "companionAlertTrackingStartedAt")
+        self.exhaustionState = defaults.dictionary(forKey: "companionExhaustionState") as? [String: Bool] ?? [:]
+        self.exhaustionObservedAt = defaults.dictionary(forKey: "companionExhaustionObservedAt") as? [String: Date] ?? [:]
+        self.deliveredQuotaEvents = defaults.dictionary(forKey: "companionDeliveredQuotaEvents") as? [String: Date] ?? [:]
+        if let data = defaults.data(forKey: "companionRetryAlerts") {
+            self.retryAlerts = (try? JSONDecoder().decode([String: RetryAlert].self, from: data)) ?? [:]
+        }
 
         // Register the foreground notification delegate so test notifications
         // and reset alerts display banners and play sounds immediately.
@@ -792,6 +944,15 @@ public final class CompanionQuotaModel: ObservableObject {
 
         Task { await refreshNotificationAuthorization() }
         loadLocalFallback()
+        #if targetEnvironment(simulator)
+        if ProcessInfo.processInfo.arguments.contains("-previewAlertOptions") {
+            var preview = alertPreferences
+            for kind in UsageAlertKind.allCases {
+                preview[kind] = UsageAlertOption(enabled: true, notification: false, popup: true, sound: .glass)
+            }
+            alertPreferences = preview
+        }
+        #endif
         switch tokenState {
         case .legacy(_, let status), .unavailable(let status):
             tokenStorageError = "Keychain could not secure the saved token (error \(status))."
@@ -808,6 +969,7 @@ public final class CompanionQuotaModel: ObservableObject {
             let granted = try await UNUserNotificationCenter.current()
                 .requestAuthorization(options: [.alert, .sound, .badge])
             notificationsDenied = !granted
+            await refreshNotificationAuthorization()
             return granted
         } catch {
             notificationsDenied = true
@@ -819,6 +981,19 @@ public final class CompanionQuotaModel: ObservableObject {
     public func refreshNotificationAuthorization() async {
         let settings = await UNUserNotificationCenter.current().notificationSettings()
         notificationsDenied = (settings.authorizationStatus == .denied)
+        let authorization: String
+        switch settings.authorizationStatus {
+        case .notDetermined: authorization = "Permission has not been requested."
+        case .denied: authorization = "System notifications are denied."
+        case .authorized: authorization = "System notifications are allowed."
+        case .provisional: authorization = "System notifications are delivered quietly."
+        #if os(iOS)
+        case .ephemeral: authorization = "Temporary notification permission is active."
+        #endif
+        @unknown default: authorization = "System notification permission is unknown."
+        }
+        notificationStatus = authorization + sentenceGap
+            + "Banners: \(settings.alertSetting == .enabled ? "allowed" : "off"); sounds: \(settings.soundSetting == .enabled ? "allowed" : "off")."
     }
 
     /// Sends a test notification and reports what happened, matching the macOS button.
@@ -841,8 +1016,10 @@ public final class CompanionQuotaModel: ObservableObject {
 
         let content = UNMutableNotificationContent()
         content.title = "CodeCaps Reset Alert Test"
-        content.body = "Reset alerts and alarms are working properly." + sentenceGap + "Sound and banner active."
-        content.sound = AlarmSoundPlayer.notificationSound(for: alarmSound) ?? .default
+        content.body = alarmSound == .silent
+            ? "Notification banners are working with sound set to Silent."
+            : "Notification banners and the selected sound are working."
+        content.sound = AlarmSoundPlayer.notificationSound(for: alarmSound)
 
         // Trigger with a brief delay (0.2s) ensures clean system dispatch
         let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 0.2, repeats: false)
@@ -1009,6 +1186,7 @@ public final class CompanionQuotaModel: ObservableObject {
         let windowLabel: String
         let summary: String
         let occurredAt: String
+        let sourceInstanceId: String?
     }
 
     private struct WireCustomMark: Decodable {
@@ -1038,6 +1216,8 @@ public final class CompanionQuotaModel: ObservableObject {
         let absoluteLimit: Double?
         let skip: Bool?
         let skipReason: String?
+        let producerInstanceId: String?
+        let machine: String?
     }
 
     /// Mirrors the backend manifest's provider group on the wire.  Optional
@@ -1097,34 +1277,172 @@ public final class CompanionQuotaModel: ObservableObject {
     /// it is told, rather than deciding for itself — which also means the two
     /// surfaces cannot disagree about whether something counted as runaway.
     private func raisePendingAlerts(_ alerts: [WireAlert]) {
-        guard !alerts.isEmpty else { return }
-        var announced = announcedAlertIds
-        var fresh: [WireAlert] = []
-        for alert in alerts where !announced.contains(alert.id) {
-            announced.insert(alert.id)
-            fresh.append(alert)
-        }
-        guard !fresh.isEmpty else { return }
-        announcedAlertIds = announced
-
-        for alert in fresh {
-            let content = UNMutableNotificationContent()
-            content.title = "Runaway Usage: \(alert.providerTitle)"
-            content.body = alert.summary
-            content.sound = AlarmSoundPlayer.notificationSound(for: alarmSound) ?? .default
-            // An id per alert rather than a shared one: identical bodies would
-            // otherwise collapse, and the owner does sometimes see the same
-            // wording twice for two different windows.
-            let request = UNNotificationRequest(identifier: "runaway-\(alert.id)",
-                                                content: content,
-                                                trigger: nil)
-            Task { @MainActor in
-                do {
-                    try await UNUserNotificationCenter.current().add(request)
-                } catch {
-                    lastError = "A runaway alert for \(alert.providerTitle) could not be delivered."
-                        + sentenceGap + error.localizedDescription
+        remoteQuotaEvents = []
+        for alert in alerts {
+            guard let kind = UsageAlertKind(rawValue: alert.kind) else { continue }
+            let sourceInstanceId = CompanionAlertSourcePolicy.sourceInstanceId(alertID: alert.id)
+            guard CompanionAlertSourcePolicy.matches(selected: alertPreferences.sourceInstanceId, reported: sourceInstanceId) else {
+                announcedAlertIds.insert(alert.id)
+                continue
+            }
+            guard let occurred = CompanionDateFormatter.date(from: alert.occurredAt),
+                  occurred >= alertTrackingStartedAt,
+                  occurred <= Date(),
+                  Date().timeIntervalSince(occurred) <= 15 * 60 else {
+                announcedAlertIds.insert(alert.id)
+                continue
+            }
+            let provider = CompanionAlertSourcePolicy.canonicalResetProvider(
+                Self.canonicalManifestKey(provider: alert.providerKey, via: nil))
+            let eventKey = Self.quotaEventKey(kind: kind, provider: provider, label: alert.windowLabel,
+                                              sourceInstanceId: sourceInstanceId)
+            remoteQuotaEvents.insert(eventKey)
+            if (kind == .quotaReset || kind == .vendorReset),
+               alertPreferences[kind].enabled && (alertPreferences[kind].notification || alertPreferences[kind].popup) {
+                guard let selected = resetSelection(for: provider) else {
+                    retryAlerts[alert.id] = RetryAlert(kind: kind, title: "\(kind.title): \(alert.providerTitle)",
+                        body: alert.summary, eventKey: eventKey, createdAt: occurred, sourceInstanceId: sourceInstanceId)
+                    persistRetryAlerts()
+                    continue
                 }
+                guard selected else {
+                    announcedAlertIds.insert(alert.id)
+                    continue
+                }
+            }
+            let quotaEvent = kind == .quotaReset || kind == .vendorReset || kind == .quotaExhaustion
+            deliverAlert(id: alert.id, kind: kind, title: "\(kind.title): \(alert.providerTitle)", body: alert.summary,
+                         eventKey: quotaEvent ? eventKey : nil, sourceInstanceId: sourceInstanceId)
+        }
+    }
+
+    private func resetSelection(for provider: String) -> Bool? {
+        CompanionResetAlertPolicy.selection(all: alarmsAll, selected: alarmProviderIds,
+            provider: provider, currentOwnerIDs: items.filter { $0.providerKey == provider }.map(\.id))
+    }
+
+    private func retryPendingAlerts() {
+        for (id, alert) in retryAlerts {
+            guard Date().timeIntervalSince(alert.createdAt) <= 15 * 60,
+                  CompanionAlertSourcePolicy.matches(selected: alertPreferences.sourceInstanceId, reported: alert.sourceInstanceId) else {
+                announcedAlertIds.insert(id)
+                retryAlerts.removeValue(forKey: id)
+                persistRetryAlerts()
+                continue
+            }
+            if (alert.kind == .quotaReset || alert.kind == .vendorReset),
+               alertPreferences[alert.kind].enabled && (alertPreferences[alert.kind].notification || alertPreferences[alert.kind].popup) {
+                guard let provider = alert.eventKey?.split(separator: "|").dropFirst().first,
+                      let selected = resetSelection(for: String(provider)) else { continue }
+                guard selected else {
+                    announcedAlertIds.insert(id)
+                    retryAlerts.removeValue(forKey: id)
+                    persistRetryAlerts()
+                    continue
+                }
+            }
+            deliverAlert(id: id, kind: alert.kind, title: alert.title, body: alert.body, eventKey: alert.eventKey,
+                         sourceInstanceId: alert.sourceInstanceId)
+        }
+    }
+
+    static func quotaEventKey(kind: UsageAlertKind, provider: String, label: String, sourceInstanceId: String? = nil) -> String {
+        let window = ResetAlarmCadence.periodSeconds(token: label, label: label).map { String($0) }
+            ?? label.lowercased()
+        return "\(kind.rawValue)|\(provider)|\(window)|\(sourceInstanceId?.lowercased() ?? "unknown")"
+    }
+
+    private func persistRetryAlerts() {
+        if let data = try? JSONEncoder().encode(retryAlerts) {
+            sharedDefaults.set(data, forKey: "companionRetryAlerts")
+        }
+    }
+
+    /// Disabled events are consumed; accepted notifications are marked after enqueue succeeds.
+    private func deliverAlert(id: String, kind: UsageAlertKind, title: String, body: String, eventKey: String? = nil,
+                              sourceInstanceId: String? = nil) {
+        guard !announcedAlertIds.contains(id), !pendingAlertIds.contains(id) else { return }
+        if let eventKey, pendingQuotaEvents.contains(eventKey) { return }
+        let option = alertPreferences[kind]
+        if let saved = sharedDefaults.dictionary(forKey: "companionDeliveredQuotaEvents") as? [String: Date] {
+            deliveredQuotaEvents.merge(saved) { max($0, $1) }
+        }
+        let recentlyDelivered = eventKey.flatMap { deliveredQuotaEvents[$0] }.map { Date().timeIntervalSince($0) < 90 } ?? false
+        guard option.hasDelivery && !recentlyDelivered else {
+            announcedAlertIds.insert(id)
+            retryAlerts.removeValue(forKey: id)
+            persistRetryAlerts()
+            return
+        }
+        retryAlerts[id] = RetryAlert(kind: kind, title: title, body: body, eventKey: eventKey,
+                                    createdAt: retryAlerts[id]?.createdAt ?? Date(),
+                                    sourceInstanceId: sourceInstanceId ?? alertPreferences.sourceInstanceId)
+        persistRetryAlerts()
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = AlarmSoundPlayer.notificationSound(for: option.sound)
+        pendingAlertIds.insert(id)
+        if let eventKey { pendingQuotaEvents.insert(eventKey) }
+        Task { @MainActor in
+            defer {
+                pendingAlertIds.remove(id)
+                if let eventKey { pendingQuotaEvents.remove(eventKey) }
+            }
+            do {
+                #if os(iOS)
+                // Reconcile background APNs before polling announces the same wire ID.
+                let delivered = await UNUserNotificationCenter.current().deliveredNotifications()
+                for notification in delivered {
+                    RemotePushRegistration.shared.recordReceived(notification: notification)
+                }
+                if announcedAlertIds.contains(id) {
+                    retryAlerts.removeValue(forKey: id)
+                    persistRetryAlerts()
+                    return
+                }
+                #endif
+                guard CompanionAlertSourcePolicy.matches(selected: alertPreferences.sourceInstanceId,
+                                                         reported: retryAlerts[id]?.sourceInstanceId) else {
+                    announcedAlertIds.insert(id)
+                    retryAlerts.removeValue(forKey: id)
+                    persistRetryAlerts()
+                    return
+                }
+                if (kind == .quotaReset || kind == .vendorReset),
+                   alertPreferences[kind].enabled && (alertPreferences[kind].notification || alertPreferences[kind].popup) {
+                    guard let provider = eventKey?.split(separator: "|").dropFirst().first,
+                          let selected = resetSelection(for: String(provider)) else { return }
+                    guard selected else {
+                        announcedAlertIds.insert(id)
+                        retryAlerts.removeValue(forKey: id)
+                        persistRetryAlerts()
+                        return
+                    }
+                }
+                guard alertPreferences[kind].enabled && (alertPreferences[kind].notification || alertPreferences[kind].popup) else {
+                    announcedAlertIds.insert(id)
+                    retryAlerts.removeValue(forKey: id)
+                    persistRetryAlerts()
+                    return
+                }
+                presentInAppAlert(id: id, kind: kind, title: title, body: body,
+                                  sourceInstanceId: retryAlerts[id]?.sourceInstanceId)
+                content.sound = AlarmSoundPlayer.notificationSound(for: alertPreferences[kind].sound)
+                if alertPreferences[kind].notification {
+                    try await UNUserNotificationCenter.current().add(
+                        UNNotificationRequest(identifier: "codecaps.alert.\(id)", content: content, trigger: nil))
+                }
+                announcedAlertIds.insert(id)
+                retryAlerts.removeValue(forKey: id)
+                persistRetryAlerts()
+                if let eventKey {
+                    deliveredQuotaEvents[eventKey] = Date()
+                    deliveredQuotaEvents = deliveredQuotaEvents.filter { Date().timeIntervalSince($0.value) < 90 }
+                    sharedDefaults.set(deliveredQuotaEvents, forKey: "companionDeliveredQuotaEvents")
+                }
+            } catch {
+                lastError = "An alert could not be delivered." + sentenceGap + error.localizedDescription
             }
         }
     }
@@ -1133,14 +1451,15 @@ public final class CompanionQuotaModel: ObservableObject {
     private func parseSnapshot(data: Data) -> Bool {
         guard let envelope = try? JSONDecoder().decode(WireEnvelope.self, from: data),
               let rawWindows = envelope.windows else { return false }
-
-        // Raise anything the Mac decided to raise that this phone has not
-        // announced yet.  Done before the windows are built so a decode
-        // failure further down cannot leave an alert half-processed.
-        raisePendingAlerts(envelope.alerts ?? [])
-
+        alertSourceDevices = rawWindows.reduce(into: [:]) { devices, window in
+            guard let raw = window.producerInstanceId, let id = UUID(uuidString: raw) else { return }
+            devices[id.uuidString.lowercased()] = window.machine ?? "Mac (\(id.uuidString.prefix(8)))"
+        }
         guard !rawWindows.isEmpty else {
             items = []
+            synchronizeRemoteAlertChoices()
+            retryPendingAlerts()
+            raisePendingAlerts(envelope.alerts ?? [])
             hasDataSource = false
             lastUpdated = nil
             evaluateResets(newItems: [])
@@ -1284,8 +1603,12 @@ public final class CompanionQuotaModel: ObservableObject {
         }
 
         let sortedItems = sortPlatforms(newItems)
-        evaluateResets(newItems: sortedItems)
         self.items = sortedItems
+        synchronizeRemoteAlertChoices()
+        retryPendingAlerts()
+        raisePendingAlerts(envelope.alerts ?? [])
+        evaluateResets(newItems: sortedItems)
+        evaluateExhaustion(newItems: sortedItems)
         return true
     }
 
@@ -1349,7 +1672,8 @@ public final class CompanionQuotaModel: ObservableObject {
                 absoluteLimit: w.absoluteLimit,
                 quotaUnit: w.quotaUnit,
                 reportedAt: parsedReportedAt,
-                normalizedWindowKey: cadenceKey
+                normalizedWindowKey: cadenceKey,
+                producerInstanceId: w.producerInstanceId
             )
 
             if isDuplicate {
@@ -1585,7 +1909,8 @@ public final class CompanionQuotaModel: ObservableObject {
                 absoluteLimit: nil,
                 quotaUnit: nil,
                 reportedAt: Self.reportedAt(from: driving),
-                normalizedWindowKey: cadenceToken.lowercased()
+                normalizedWindowKey: cadenceToken.lowercased(),
+                producerInstanceId: driving.producerInstanceId
             )
         }
     }
@@ -1740,64 +2065,77 @@ public final class CompanionQuotaModel: ObservableObject {
     private func evaluateResets(newItems: [CompanionQuotaItem]) {
         let now = Date()
         let before = alarmTracker.state
-        let events = alarmTracker.process(Self.resetAlarmObservations(for: newItems), now: now)
+        let events = alarmTracker.process(Self.resetAlarmObservations(for: newItems, sourceInstanceId: alertPreferences.sourceInstanceId).filter {
+            guard let observedAt = $0.observedAt else { return false }
+            return observedAt <= now && now.timeIntervalSince(observedAt) <= FleetSourceDisagreement.alertFreshnessWindow
+        }, now: now)
         if alarmTracker.state != before, let data = alarmTracker.state.encoded() {
             sharedDefaults.set(data, forKey: AlarmKeys.trackerState)
         }
 
-        var order: [String] = []
-        var byProvider: [String: [ResetAlarmEvent]] = [:]
         for event in events where isAlarmOn(for: event.providerId) {
-            if byProvider[event.providerId] == nil { order.append(event.providerId) }
-            byProvider[event.providerId, default: []].append(event)
+            let kind: UsageAlertKind = event.isVendorReset ? .vendorReset : .quotaReset
+            let provider = newItems.first { $0.id == event.providerId }?.providerKey ?? event.providerId
+            let source = CompanionAlertSourcePolicy.instanceId(observationScope: event.scope)
+            let eventKey = Self.quotaEventKey(kind: kind, provider: provider, label: event.windowLabel, sourceInstanceId: source)
+            guard !remoteQuotaEvents.contains(eventKey) else { continue }
+            let message = ResetAlarmMessage.content(for: [event])
+            let key = "\(kind.rawValue)|\(event.scope)|\(event.providerId)|\(event.windowLabel)|\(event.endedPeriodResetAt?.timeIntervalSince1970 ?? now.timeIntervalSince1970)"
+            deliverAlert(id: key, kind: kind, title: message.title, body: message.body, eventKey: eventKey, sourceInstanceId: source)
         }
-        for providerId in order {
-            guard let group = byProvider[providerId], !group.isEmpty else { continue }
-            sendResetAlert(providerId: providerId, events: group)
+    }
+
+    private func evaluateExhaustion(newItems: [CompanionQuotaItem]) {
+        for item in newItems {
+            for window in item.windows where !window.isDuplicateSource && !window.isMasked {
+                guard CompanionAlertSourcePolicy.matches(selected: alertPreferences.sourceInstanceId,
+                                                         reported: window.producerInstanceId) else { continue }
+                guard window.isFreshForSourceDiscrepancy(),
+                      window.remainingPercent != nil || window.isExhausted else { continue }
+                let source = CompanionAlertSourcePolicy.canonicalInstanceId(window.producerInstanceId)
+                let key = CompanionAlertSourcePolicy.observationIdentity(provider: item.id, window: window.normalizedWindowKey,
+                                                                          reportedInstanceId: source)
+                guard let observedAt = window.reportedAt,
+                      observedAt <= Date(),
+                      observedAt > (exhaustionObservedAt[key] ?? .distantPast) else { continue }
+                exhaustionObservedAt[key] = observedAt
+                let exhausted = window.isExhausted || (window.remainingPercent ?? 100) <= 0
+                let previous = exhaustionState[key]
+                exhaustionState[key] = exhausted
+                let eventKey = Self.quotaEventKey(kind: .quotaExhaustion, provider: item.providerKey, label: window.cadence,
+                                                 sourceInstanceId: window.producerInstanceId)
+                if !exhausted { deliveredQuotaEvents.removeValue(forKey: eventKey) }
+                guard previous == false && exhausted,
+                      !remoteQuotaEvents.contains(eventKey) else { continue }
+                deliverAlert(id: "exhaustion|\(key)|\(window.reportedAt?.timeIntervalSince1970 ?? Date().timeIntervalSince1970)",
+                             kind: .quotaExhaustion, title: "Quota Exhausted: \(item.title)",
+                             body: "\(window.label) has reached its limit.", eventKey: eventKey, sourceInstanceId: source)
+            }
         }
+        sharedDefaults.set(exhaustionState, forKey: "companionExhaustionState")
+        sharedDefaults.set(exhaustionObservedAt, forKey: "companionExhaustionObservedAt")
     }
 
     /// One observation per primary window; a masked window reports no
     /// percentage, because its percentage must not be believed.
-    static func resetAlarmObservations(for items: [CompanionQuotaItem]) -> [ResetAlarmObservation] {
+    static func resetAlarmObservations(for items: [CompanionQuotaItem], sourceInstanceId: String? = nil) -> [ResetAlarmObservation] {
         items.flatMap { item in
-            item.windows.map { window in
+            item.windows.filter { !$0.isDuplicateSource && CompanionAlertSourcePolicy.matches(
+                selected: sourceInstanceId, reported: $0.producerInstanceId) }.map { window in
                 let period = ResetAlarmCadence.periodSeconds(
                     token: nil,
                     label: window.cadence,
                     monthlyHint: item.providerKey == "cursor" && window.cadence.lowercased().contains("plan"))
                 return ResetAlarmObservation(
-                    scope: "companion",
+                    scope: CompanionAlertSourcePolicy.observationScope(reportedInstanceId: window.producerInstanceId),
                     providerId: item.id,
                     providerTitle: item.title,
-                    windowId: window.id,
+                    windowId: window.normalizedWindowKey,
                     windowLabel: period.map(ResetAlarmCadence.caption(forPeriod:)) ?? window.cadence,
                     periodSeconds: period,
                     resetAt: window.resetAt,
                     remainingPercent: window.isMasked ? nil : window.remainingPercent,
-                    observedAt: nil)
-            }
-        }
-    }
-
-    private func sendResetAlert(providerId: String, events: [ResetAlarmEvent]) {
-        let message = ResetAlarmMessage.content(for: events)
-        let content = UNMutableNotificationContent()
-        content.title = message.title
-        content.body = message.body
-        content.sound = AlarmSoundPlayer.notificationSound(for: alarmSound)
-
-        let request = UNNotificationRequest(
-            identifier: "codecaps.companion.reset.\(providerId).\(Date().timeIntervalSince1970)",
-            content: content,
-            trigger: nil
-        )
-        Task { @MainActor in
-            do {
-                try await UNUserNotificationCenter.current().add(request)
-            } catch {
-                lastError = "A reset alert for \(events.first?.providerTitle ?? "a provider") could not be delivered."
-                    + sentenceGap + error.localizedDescription
+                    observedAt: window.reportedAt)
             }
         }
     }

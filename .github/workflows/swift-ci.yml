@@ -123,6 +123,14 @@ jobs:
           xcrun simctl io "$SIMULATOR_ID" screenshot "$settings_shot"
           test -s "$settings_shot"
           xcrun simctl terminate "$SIMULATOR_ID" "$bundle_id"
+          xcrun simctl launch --terminate-running-process "$SIMULATOR_ID" "$bundle_id" -openSettings -openAlerts
+          sleep 3
+          xcrun simctl io "$SIMULATOR_ID" screenshot "$RUNNER_TEMP/codecaps-ios-alert-settings.png"
+          xcrun simctl terminate "$SIMULATOR_ID" "$bundle_id"
+          xcrun simctl launch --terminate-running-process "$SIMULATOR_ID" "$bundle_id" -openSettings -openAlerts -showAlertCategories -previewAlertOptions
+          sleep 3
+          xcrun simctl io "$SIMULATOR_ID" screenshot "$RUNNER_TEMP/codecaps-ios-alert-categories.png"
+          xcrun simctl terminate "$SIMULATOR_ID" "$bundle_id"
           python3 - "$app_data/Library/Application Support/CodeCaps/quota-windows.json" <<'PYEMPTY'
           import json, sys
           with open(sys.argv[1], "w", encoding="utf-8") as snapshot:
@@ -146,4 +154,6 @@ jobs:
             ${{ runner.temp }}/codecaps-ios-reorder.png
             ${{ runner.temp }}/codecaps-ios-empty.png
             ${{ runner.temp }}/codecaps-ios-settings.png
+            ${{ runner.temp }}/codecaps-ios-alert-settings.png
+            ${{ runner.temp }}/codecaps-ios-alert-categories.png
           if-no-files-found: error

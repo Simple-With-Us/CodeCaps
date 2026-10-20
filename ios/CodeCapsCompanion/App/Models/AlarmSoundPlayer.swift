@@ -44,8 +44,8 @@ public final class AlarmSoundPlayer: NSObject, ObservableObject {
             case .played(let name):
                 return "Played \(name)."
             case .delegatedToSystemDefault:
-                return "Default chime selected." + sentenceGap
-                    + "It plays with a real alert."
+                return "Default chime preview requested." + sentenceGap
+                    + "System notification settings control playback."
             case .silentByChoice:
                 return "Silent selected." + sentenceGap + "No sound plays."
             case .missingAsset(let name):
@@ -70,7 +70,33 @@ public final class AlarmSoundPlayer: NSObject, ObservableObject {
     /// still respects the ringer, because that is the notification system's job
     /// rather than the app's.
     public func preview(_ sound: ResetAlarmSound) {
+        if sound == .systemDefault {
+            Task { @MainActor in
+                do {
+                    let center = UNUserNotificationCenter.current()
+                    let allowed = try await center.requestAuthorization(options: [.alert, .sound])
+                    guard allowed else {
+                        lastPreview = .failed("Allow notifications in system Settings to preview the default chime.")
+                        return
+                    }
+                    let content = UNMutableNotificationContent()
+                    content.title = "CodeCaps Sound Preview"
+                    content.body = "Default notification chime."
+                    content.sound = .default
+                    try await center.add(UNNotificationRequest(identifier: "codecaps.sound-preview", content: content,
+                        trigger: UNTimeIntervalNotificationTrigger(timeInterval: 0.2, repeats: false)))
+                    lastPreview = .delegatedToSystemDefault
+                } catch { lastPreview = .failed(error.localizedDescription) }
+            }
+            return
+        }
         lastPreview = play(sound)
+    }
+
+    /// Automatic in-app tones respect the device's silent mode.
+    public func playInApp(_ sound: ResetAlarmSound) {
+        guard sound != .systemDefault else { return }
+        _ = play(sound, deliberatePreview: false)
     }
 
     /// The URL of a sound's bundled audio, or `nil` when the sound has none.
@@ -97,7 +123,7 @@ public final class AlarmSoundPlayer: NSObject, ObservableObject {
         }
     }
 
-    private func play(_ sound: ResetAlarmSound) -> PreviewResult {
+    private func play(_ sound: ResetAlarmSound, deliberatePreview: Bool = true) -> PreviewResult {
         switch sound {
         case .silent:
             return .silentByChoice
@@ -115,7 +141,7 @@ public final class AlarmSoundPlayer: NSObject, ObservableObject {
         do {
             #if os(iOS)
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+            try session.setCategory(deliberatePreview ? .playback : .ambient, mode: .default, options: [.mixWithOthers])
             try session.setActive(true)
             #endif
 

@@ -62,6 +62,19 @@ final class MonitorModelRunawayAlertTests: XCTestCase {
                        "the disabled path still adds the successful refresh sample")
     }
 
+    func testEnablingCategoryDoesNotReplayAnAlreadyObservedDisabledEpisode() async throws {
+        try seedSteadyHistory()
+        let model = makeModel()
+        var deliveries = 0
+        model.runawayNotificationForTesting = { _ in deliveries += 1 }
+        model.localResultForTesting = LocalQuotaResult(windows: [localWindow(remaining: latestRemaining(drop: 10))])
+        await refreshAndWait(model)
+        XCTAssertFalse(model.exportedAlerts().isEmpty, "remote recipients retain their independent choices")
+        model.burnRateAlertsEnabled = true
+        XCTAssertEqual(deliveries, 0, "enabling delivery starts with the next measured episode")
+        XCTAssertFalse(model.activeRunawayAnomalies.isEmpty)
+    }
+
     func testCooldownSurvivesRelaunchAndSuppressesSameWindowEpisode() async throws {
         try seedSteadyHistory()
         let first = makeModel()
