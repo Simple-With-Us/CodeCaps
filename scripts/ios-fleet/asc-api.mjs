@@ -29,6 +29,20 @@ import { join } from "node:path";
 // own, without a stack trace, and keeps the exit code the failure set.
 class NamedFailure extends Error {}
 
+// The fleet's masked key preview:  the first eight and the last four
+// characters, so a key can be identified without any of it being published.
+//
+// This is the owner's rule of 2026-07-16 and the same shape the other fleet
+// apps use (maskApiKeyPreview, buildKeyPreview).  It exists because there is
+// otherwise no way to tell which of several keys is the one in play, and
+// pasting a value to find out is never the answer.
+function maskKeyPreview(value) {
+  if (typeof value !== "string" || value.length < 12) {
+    return "(too short to preview)";
+  }
+  return `${value.slice(0, 8)}…${value.slice(-4)}`;
+}
+
 // The App Store Connect host.
 const PRODUCTION_API_BASE = "https://api.appstoreconnect.apple.com";
 
@@ -442,7 +456,12 @@ async function main() {
         : "the request never reached App Store Connect";
     }
     if (res.status === 401 || res.status === 403) {
-      return "App Store Connect rejected the key: check ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_P8 in Fleet-OPS prod /asc";
+      // The key id is a public identifier:  it travels in the header of every
+      // request to App Store Connect.  Together with the fleet's masked
+      // preview of the key in play it says which credential was rejected,
+      // which is the question an operator actually has, without publishing
+      // any of the key.
+      return `App Store Connect rejected the key: check ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_P8 in Fleet-OPS prod /asc (key id ${keyId}, key in play ${maskKeyPreview(privateKeyPem)})`;
     }
     const parts = [];
     const errors = res.parsed && Array.isArray(res.parsed.errors) ? res.parsed.errors : [];

@@ -11,7 +11,7 @@
 // port, with a synthetic key.  No network, no fleet-secrets, no real secret.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { generateKeyPairSync } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -183,6 +183,20 @@ test("a rejected key is reported as a rejected key, not as a missing app", async
   assert.ok(
     !/app not found/.test(result.stderr),
     `a rejected key was reported as a missing app:\n${result.stderr}`
+  );
+  //  The fleet's masked preview, so the key in play can be identified without
+  //  any of it being published.
+  const pem = readFileSync(keyPath, "utf8");
+  const expectedPreview = `${pem.slice(0, 8)}…${pem.slice(-4)}`;
+  assert.ok(
+    result.stderr.includes(expectedPreview),
+    `the failure did not carry the masked key preview ${expectedPreview}:\n${result.stderr}`
+  );
+  //  The key id is public:  it travels in every request to App Store
+  //  Connect, and it is the part that says which credential was refused.
+  assert.ok(
+    result.stderr.includes("SYNTHETICKEYID1"),
+    `the failure did not name the key id:\n${result.stderr}`
   );
 });
 
