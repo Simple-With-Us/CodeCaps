@@ -83,7 +83,10 @@ test('PRs cannot notarize or publish, and icon-only changes trigger releases', (
     assert.match(step(workflow, name), /if: steps.gate.outputs.publish == 'true'/);
   }
   assert.match(code, /'assets\/AppIcon.icns'/);
-  assert.match(code, /run: node --test scripts\/mac-release-workflow.test.mjs/);
+  assert.match(code, /run: node --test scripts\/mac-release-workflow.test.mjs scripts\/infisical-fetch-asc-key.node-test.mjs/);
+  // A manual run can be asked to prove the credentials without publishing.
+  assert.match(code, /verify-only:/);
+  assert.match(step(workflow, 'Decide whether this run can publish'), /inputs\.verify-only[\s\S]*publish=false/);
   assert.match(code, /needs.await-swift-ci.result == 'success'/);
   assert.match(code, /run: script\/build_and_run.sh --release/);
   assert.ok(code.indexOf('Verify notarization access') < code.indexOf('Build, sign, notarize'));
