@@ -299,6 +299,11 @@ capture_on() {
   local derived="$DERIVED_ROOT/$label"
   local container group_container bundle_id
 
+  # The single build writes to "$DERIVED_ROOT/app", so the per-device capture
+  # directory is no longer created as a side effect of building.  Without this
+  # the raw frame has nowhere to land and every poll reads an empty file.
+  mkdir -p "$derived"
+
   log "booting $label ($udid)"
   xcrun simctl boot "$udid" 2>/dev/null || true
   xcrun simctl bootstatus "$udid" -b >/dev/null

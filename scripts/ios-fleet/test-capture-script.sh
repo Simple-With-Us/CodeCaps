@@ -74,4 +74,4 @@ $builds"
 grep -q 'APP_PATH=' "$CAPTURE" || fail "the capture script has no shared app path"
 pass "the app is built once and installed on both simulators"
 
-echo "capture script contract: 8 checks passed"
+echo "capture script contract: 7 checks passed"
