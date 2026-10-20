@@ -589,6 +589,36 @@ final class LocalQuotaReaderTests: XCTestCase {
         }
     }
 
+    func testCodexPoolWithEmptyWindowSlotFallsBackToFlatReading() async throws {
+        let home = try makeFixtureHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        try writeJSON(["tokens": ["access_token": "fixture"]], to: home.appendingPathComponent(".codex/auth.json"))
+        let nestedFlat: [String: Any] = [
+            "primary_window": NSNull(),
+            "used_percent": 40,
+            "limit_window_seconds": 3600
+        ]
+        let pools: [[String: Any]] = [
+            ["limit_name": "Spark", "metered_feature": "spark",
+             "primary_window": NSNull(), "used_percent": 40, "limit_window_seconds": 3600],
+            ["limit_name": "Spark", "metered_feature": "spark", "rate_limit": nestedFlat]
+        ]
+        for pool in pools {
+            let payload: [String: Any] = ["additional_rate_limits": [pool]]
+            let data = try JSONSerialization.data(withJSONObject: payload)
+            let reader = LocalQuotaReader(homeDirectory: home, fetchJSON: { _ in
+                (data, Self.httpResponse("{}").1)
+            }, runAntigravity: { Data("{}".utf8) }, readClaudeCredential: { .missing })
+
+            let windows = await reader.read().windows.filter { $0.providerKey == "openai" }
+            let spark = try XCTUnwrap(windows.first { $0.modelId == "spark" })
+            XCTAssertEqual(windows.count, 1)
+            XCTAssertEqual(spark.remainingPercent, 60)
+            XCTAssertEqual(spark.window, "1h")
+            XCTAssertTrue(spark.isSubModelLimit)
+        }
+    }
+
     func testCodexMissingAPIPlanIgnoresStaleAuthPlan() async throws {
         let home = try makeFixtureHome()
         defer { try? FileManager.default.removeItem(at: home) }

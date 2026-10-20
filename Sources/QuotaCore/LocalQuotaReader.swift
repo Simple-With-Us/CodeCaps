@@ -241,8 +241,13 @@ public struct LocalQuotaReader: Sendable {
             let gate = ClaudeProfileCompletion(continuation)
             let task = Task.detached {
                 let profile = (try? await self.requestJSON(request)) ?? [:]
-                var details = ProviderUsageDetails.claude(payload: [:], profile: profile)
-                details.extraUsageEnabled = fallback.extraUsageEnabled
+                guard !profile.isEmpty else {
+                    gate.finish(fallback)
+                    return
+                }
+                var details = fallback
+                details.accountEmail = ProviderUsageDetails.claude(payload: [:], profile: profile).accountEmail
+                    ?? fallback.accountEmail
                 gate.finish(details)
             }
             gate.install(task)
@@ -747,16 +752,18 @@ private func parseCodex(_ root: [String: Any], planType: String?, accountKey: St
     func appendPool(_ entry: [String: Any], identity: String, label: String, modelId: String?) {
         let nested = record(entry["rate_limit"] ?? entry["rateLimit"])
         let pool = nested.isEmpty ? entry : nested
-        var hasSlots = false
+        let initialWindowCount = result.count
         for (slot, keys) in [("primary", ["primary_window", "primaryWindow", "primary"]), ("secondary", ["secondary_window", "secondaryWindow", "secondary"])] {
             for key in keys where pool[key] != nil {
-                hasSlots = true
                 append("\(identity):\(slot)", record(pool[key]), modelId: modelId, cadenceSlot: slot, poolLabel: label)
                 break
             }
         }
-        if !hasSlots {
+        if result.count == initialWindowCount {
             append(identity, pool, modelId: modelId, poolLabel: label)
+        }
+        if result.count == initialWindowCount, !nested.isEmpty {
+            append(identity, entry, modelId: modelId, poolLabel: label)
         }
     }
     if let records = additional as? [[String: Any]] {
