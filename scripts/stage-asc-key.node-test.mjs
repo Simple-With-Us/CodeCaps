@@ -24,7 +24,7 @@ import { run } from './stage-asc-key.mjs';
 // A synthetic fixture, not a credential.  It stands in for the private key
 // so the test can tell a leak from a clean run.
 const KEY_MARKER = 'SYNTHETIC-MULTILINE-FIXTURE-DO-NOT-USE';
-const KEY = `-----BEGIN PRIVATE KEY-----\n${KEY_MARKER}\n-----END PRIVATE KEY-----`;
+const KEY = `-----BEGIN PRIVATE KEY-----\n${KEY_MARKER}\n-----END PRIVATE KEY-----`; // gitleaks:allow
 const VAULT = {
   ASC_KEY_ID: 'STUBKEYID',
   ASC_ISSUER_ID: 'STUBISSUER',
