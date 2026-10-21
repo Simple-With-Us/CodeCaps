@@ -114,15 +114,26 @@ function assertNoKeySurvives(envPath) {
 
 /** Run a shell script and collect what it said and how it ended.  Used for
  * the installer, which is a shell script and not a function. */
-function runScript(script, { env }) {
+function runScript(script, { env, args = [] }) {
   return new Promise((resolve) => {
-    const child = spawn('bash', [script], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn('/bin/bash', [script, ...args], { env, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (d) => { stdout += d; });
     child.stderr.on('data', (d) => { stderr += d; });
     child.on('close', (code) => resolve({ code, stdout, stderr }));
   });
+}
+
+/** A stub reader that fails the way the fleet's reader fails.  The fleet
+ * reader's exit codes are its own: 2 is a refused configuration, 4 is a fetch
+ * or auth failure and 5 is an unresolved reference in the vault. */
+function writeStubReader(dir, exitCode, message) {
+  const stubDir = join(dir, 'reader');
+  mkdirSync(stubDir, { recursive: true });
+  const path = join(stubDir, 'fleet-secrets');
+  writeFileSync(path, `#!/bin/bash\nprintf '%s\\n' ${JSON.stringify(message)} >&2\nexit ${exitCode}\n`, { mode: 0o755 });
+  return path;
 }
 
 test('the key is staged to a mode-600 file and only its path is published', async () => {
@@ -526,6 +537,58 @@ test('an installer failure still runs the consumer and clears the key', async ()
     // And the key never reached the log.
     assert.ok(!result.stdout.includes(KEY_MARKER), 'the key bytes must not reach stdout');
     assert.ok(!result.stderr.includes(KEY_MARKER), 'the key bytes must not reach stderr');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a broken reader is reported as a reader fault, not as a missing credential', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'asc-reader-'));
+  try {
+    const script = fileURLToPath(new URL('install-release-secrets-tooling.sh', import.meta.url));
+    const home = join(dir, 'home');
+    mkdirSync(home, { recursive: true });
+
+    // The path holds bash and the coreutils and nothing else, so the reader
+    // is only ever the stub this test names.
+    const base = {
+      ...process.env,
+      HOME: home,
+      PATH: '/usr/bin:/bin',
+      INFISICAL_TOKEN: 'test-token',
+      INFISICAL_FLEET_OPS_PROJECT_ID: '11111111-2222-3333-4444-555555555555',
+    };
+
+    // A reader that cannot authenticate:  the token is at fault, and the
+    // message has to say so instead of blaming the vault permissions.
+    const rejected = writeStubReader(dir, 4, 'fleet-secrets: fetch-failed:  exit-1');
+    const rejectedResult = await runScript(script, { env: { ...base, FLEET_SECRETS: rejected }, args: ['check-reader'] });
+    assert.notEqual(rejectedResult.code, 0, 'a reader that cannot authenticate must fail the check');
+    assert.match(rejectedResult.stderr, /access token was rejected/, 'the message must name the token');
+    assert.doesNotMatch(rejectedResult.stderr, /Missing ASC_KEY_ID/, 'a reader fault must not read as a missing credential');
+
+    // A reader that refuses the request:  the tooling is at fault.
+    const refused = writeStubReader(dir, 2, 'fleet-secrets: refusing Infisical environment');
+    const refusedResult = await runScript(script, { env: { ...base, FLEET_SECRETS: refused }, args: ['check-reader'] });
+    assert.notEqual(refusedResult.code, 0, 'a refused reader must fail the check');
+    assert.match(refusedResult.stderr, /reader or its configuration is at fault/, 'the message must name the reader');
+
+    // An unresolved reference is a credential fault and the consumer names
+    // it, so the check does not blame the tooling for it.
+    const unresolved = writeStubReader(dir, 5, 'fleet-secrets: unresolved-reference:  ASC_KEY_P8 came back as an unexpanded Infisical reference');
+    const unresolvedResult = await runScript(script, { env: { ...base, FLEET_SECRETS: unresolved }, args: ['check-reader'] });
+    assert.equal(unresolvedResult.code, 0, 'an unresolved reference is not a reader fault');
+
+    // A working reader passes.
+    const working = writeStubReader(dir, 0, '');
+    const workingResult = await runScript(script, { env: { ...base, FLEET_SECRETS: working }, args: ['check-reader'] });
+    assert.equal(workingResult.code, 0, 'a working reader must pass the check');
+    assert.match(workingResult.stdout, /can read Fleet-OPS prod \/asc/, 'a passing check says so');
+
+    // No reader at all is a tooling fault, and it is named as one.
+    const missingResult = await runScript(script, { env: base, args: ['check-reader'] });
+    assert.notEqual(missingResult.code, 0, 'a missing reader must fail the check');
+    assert.match(missingResult.stderr, /reader is not on PATH/, 'the message must name the reader');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -194,7 +194,11 @@ test("ASC credentials come from Fleet-OPS /asc, never the stale repository secre
   const tooling = readFileSync(join(ROOT, "scripts/install-release-secrets-tooling.sh"), "utf8");
   assert.match(tooling, /node "\$repo_root\/scripts\/stage-asc-key\.mjs"/);
   assert.doesNotMatch(tooling, /release-secrets-env\.sh/);
-  assert.doesNotMatch(tooling, /printf[^\n]*\$(token|\{token\})/);
+  // The minted token must never reach the log.  The guard names every output
+  // helper the script has, because a regression that printed through `say` or
+  // `fail` would leak the token while a guard that only matched `printf`
+  // still passed.
+  assert.doesNotMatch(tooling, /\b(say|echo|printf|fail)\b[^\n]*\$(token|\{token\})/);
   assert.doesNotMatch(code, /release-secrets-env\.sh/);
   assert.match(tooling, /export INFISICAL_TOKEN="\$token"/);
   assert.match(tooling, /export INFISICAL_FLEET_OPS_PROJECT_ID="\$project_id"/);

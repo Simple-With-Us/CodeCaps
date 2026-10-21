@@ -82,10 +82,24 @@ test('Sparkle reads the ASC credentials through the fleet reader, never reposito
   const tooling = read('scripts/install-release-secrets-tooling.sh');
   assert.match(tooling, /node "\$repo_root\/scripts\/stage-asc-key\.mjs"/);
   assert.doesNotMatch(tooling, /release-secrets-env\.sh/);
-  assert.doesNotMatch(tooling, /printf[^\n]*\$(token|\{token\})/);
+  // The minted token must never reach the log.  The guard names every output
+  // helper the script has, because a regression that printed through `say` or
+  // `fail` would leak the token while a guard that only matched `printf`
+  // still passed.
+  assert.doesNotMatch(tooling, /\b(say|echo|printf|fail)\b[^\n]*\$(token|\{token\})/);
   assert.doesNotMatch(loader, /release-secrets-env\.sh/);
   assert.match(tooling, /export INFISICAL_TOKEN="\$token"/);
   assert.match(tooling, /export INFISICAL_FLEET_OPS_PROJECT_ID="\$project_id"/);
+  // The reader is proved before the consumer runs.  The consumer reads a
+  // failed lookup as an empty value, so without this check a broken reader
+  // and a rejected token both read as a missing credential, and the operator
+  // is sent to fix vault permissions when the fault is the tooling.
+  assert.match(tooling, /check_reader/);
+  assert.match(tooling, /names --path \/asc/);
+  assert.ok(
+    tooling.indexOf('check_reader || return 1') < tooling.indexOf('node "$repo_root/scripts/stage-asc-key.mjs"'),
+    'the reader has to be proved before the consumer runs',
+  );
   // The staging script resolves every credential environment-first, so a
   // value in the job's own environment always wins over the vault.
   const stage = read('scripts/stage-asc-key.mjs');

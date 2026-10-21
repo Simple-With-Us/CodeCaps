@@ -13,14 +13,21 @@
 #     public AI-Fleet-Coordinator repository and installed with the upstream
 #     installer, so the runner ends up with the layout every fleet Mac has.
 #
-# It then mints an Infisical access token with universal auth and runs
-# scripts/stage-asc-key.mjs, the only thing in the release that reads a
-# credential.
+# It then mints an Infisical access token with universal auth, proves that the
+# fleet's reader can use that token, and runs scripts/stage-asc-key.mjs, the
+# only thing in the release that reads a credential.
 #
 # The token never touches a file.  It is minted into a shell variable, it is
 # exported into the environment of the consumer, and the consumer runs in this
 # same process tree.  It is never echoed, never printed, never written to
 # $GITHUB_ENV and never written to disk.
+#
+# The reader is proven before the consumer runs, because the consumer cannot
+# tell a broken reader from a missing credential: it reads a failed lookup as
+# an empty value, so a broken tool and a rejected token both read as "the
+# credential is missing", and the operator is sent to fix vault permissions
+# when the fault is the tooling.  The proof is read-only: it lists the names
+# in Fleet-OPS prod /asc and never a value.
 #
 # The names the workflow already uses are mapped here onto the names the
 # reader and the CLI expect:
@@ -181,11 +188,79 @@ mint_token() {
   say "minted: an Infisical access token for the consumer"
 }
 
+# The reader is proven before the consumer runs.  The consumer reads a failed
+# lookup as an empty value, so a missing reader, a broken install and a token
+# the vault rejects would all read as "the credential is missing" and send the
+# operator to fix vault permissions when the fault is the tooling.  This check
+# names the fault instead.
+#
+# The proof is read-only and lists names, never values: `fleet-secrets names
+# --path /asc` is the fleet's own reader, and it carries the minted token
+# through INFISICAL_TOKEN.
+#
+# The reader's exit codes are its own: 2 is a refused configuration, 4 is a
+# fetch or auth failure and 5 is an unresolved reference in the vault.  A
+# reference is a credential fault, not a tooling fault, and the consumer names
+# it precisely, so it does not fail this check.
+check_reader() {
+  local reader status detail
+  reader="${FLEET_SECRETS:-}"
+  if [ -z "$reader" ]; then
+    reader="$(command -v fleet-secrets || true)"
+  fi
+  if [ -z "$reader" ]; then
+    fail "the fleet-secrets reader is not on PATH; the reader is at fault, not the vault permissions"
+    return 1
+  fi
+  status=0
+  "$reader" names --path /asc >"$work/names.out" 2>"$work/names.err" || status=$?
+  if [ "$status" -eq 0 ]; then
+    say "checked: the fleet-secrets reader can read Fleet-OPS prod /asc"
+    return 0
+  fi
+  if [ "$status" -eq 5 ]; then
+    # The fetch reached the vault, so the reader and the token both work and
+    # the fault is in the vault's content.  The consumer reports it.
+    say "checked: the fleet-secrets reader reached Fleet-OPS prod /asc; a value there is an unresolved Infisical reference"
+    return 0
+  fi
+  detail="$(scrub "$(cat "$work/names.err" 2>/dev/null || true)")"
+  detail="${detail:-the reader reported no detail}"
+  case "$status" in
+    2)
+      fail "the fleet-secrets reader refused to read Fleet-OPS prod /asc (exit 2); the reader or its configuration is at fault, not the vault permissions: ${detail}"
+      ;;
+    4)
+      fail "the fleet-secrets reader could not read Fleet-OPS prod /asc (exit 4); the minted Infisical access token was rejected or the vault was unreachable: ${detail}"
+      ;;
+    *)
+      fail "the fleet-secrets reader failed to list Fleet-OPS prod /asc (exit ${status}); the reader is at fault: ${detail}"
+      ;;
+  esac
+  return 1
+}
+
 install_tooling() {
   install_infisical_cli || return 1
   install_fleet_secrets || return 1
   mint_token || return 1
+  check_reader || return 1
 }
+
+# The reader can be proved on its own, with a token the caller already holds.
+# An operator runs it to test a reader or a token without running a release
+# step, and the contract test drives it with a stubbed reader:
+#
+#   INFISICAL_TOKEN=... INFISICAL_FLEET_OPS_PROJECT_ID=... \
+#     bash scripts/install-release-secrets-tooling.sh check-reader
+#
+# Without an argument the script does the whole release job: install the
+# tooling, mint the token, prove the reader and run the consumer.
+if [ "${1:-}" = "check-reader" ]; then
+  export PATH="$TOOLS_DIR:$PATH"
+  check_reader || exit 1
+  exit 0
+fi
 
 # The install is allowed to fail and the consumer still runs: the consumer is
 # what removes any key-bearing entry from the job's environment file, and the
