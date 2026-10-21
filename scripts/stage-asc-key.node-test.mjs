@@ -632,7 +632,7 @@ test('a broken reader is reported as a reader fault, not as a missing credential
     assert.doesNotMatch(rejectedResult.stderr, /Missing ASC_KEY_ID/, 'a reader fault must not read as a missing credential');
     assert.ok(!rejectedResult.stderr.includes('test-token'), 'the access token must not reach the log');
     assert.ok(!rejectedResult.stdout.includes('test-token'), 'the access token must not reach the log');
-    assert.match(rejectedResult.stderr, /fetch-failed:  exit-1 for <redacted>/, 'the rest of the detail survives');
+    assert.match(rejectedResult.stderr, /fetch-failed:  exit-1 for test-tok…oken/, 'the failure includes a masked first-8/last-4 token preview');
 
     // A reader that refuses the request:  the tooling is at fault.
     const refused = writeStubReader(dir, 2, 'fleet-secrets: refusing Infisical environment');
@@ -660,6 +660,17 @@ test('a broken reader is reported as a reader fault, not as a missing credential
     assert.notEqual(partialResult.code, 0, 'a name the release needs must be in the vault');
     assert.match(partialResult.stderr, /but ASC_KEY_P8 is not there/, 'the message must name the missing credential');
     assert.doesNotMatch(partialResult.stderr, /ASC_KEY_ID|ASC_ISSUER_ID/, 'only the missing name is reported');
+
+    // A name the job's own environment carries is resolved from there first
+    // (stage-asc-key.mjs reads the environment before the vault), so its
+    // absence from the vault is not a fault and the check must not fail.
+    const envProvided = writeStubReader(dir, 0, '', ['ASC_ISSUER_ID', 'ASC_KEY_ID']);
+    const envProvidedResult = await runScript(script, {
+      env: { ...base, FLEET_SECRETS: envProvided, ASC_KEY_P8: 'test-key-pem' },
+      args: ['check-reader']
+    });
+    assert.equal(envProvidedResult.code, 0, 'a name the environment carries must not be required in the vault');
+    assert.doesNotMatch(envProvidedResult.stderr, /ASC_KEY_P8/, 'the name is not reported as missing');
 
     // No token in the environment:  the reader would fail the way a rejected
     // token fails, so the absent token is named before the reader is asked.

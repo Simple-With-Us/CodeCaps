@@ -79,21 +79,40 @@ sha256_of() {
   fi
 }
 
+# A masked preview of a credential:  the first eight characters and the last
+# four, with an ellipsis between them.  It is not reversible, because the
+# ellipsis stands for the part that is not shown, and it names the value that
+# was rejected so an operator can tell which one it was without being handed
+# the value (rule 43).  A value too short to have a hidden middle is shown as
+# redacted instead.
+mask() {
+  local value="$1"
+  if [ "${#value}" -lt 5 ]; then
+    printf '%s' "<redacted>"
+    return
+  fi
+  printf '%s…%s' "${value:0:8}" "${value: -4}"
+}
+
 # A tool's own error text, with the client id, the client secret and the
 # access token taken out of it.  A failed login or a failed read must be
 # diagnosable from the log, and no part of the identity belongs in a log.
 # The token is minted fresh for every job, so a slice of it would identify
-# nothing an operator can act on; the diagnosis names the fault instead.
+# nothing an operator can act on; the diagnosis names the fault instead.  The
+# masked preview is what tells the operator which value was refused.
 scrub() {
-  local text="$1"
+  local text="$1" masked
   if [ -n "${INFISICAL_CLIENT_ID:-}" ]; then
-    text="${text//"$INFISICAL_CLIENT_ID"/<redacted>}"
+    masked="$(mask "$INFISICAL_CLIENT_ID")"
+    text="${text//"$INFISICAL_CLIENT_ID"/${masked}}"
   fi
   if [ -n "${INFISICAL_CLIENT_SECRET:-}" ]; then
-    text="${text//"$INFISICAL_CLIENT_SECRET"/<redacted>}"
+    masked="$(mask "$INFISICAL_CLIENT_SECRET")"
+    text="${text//"$INFISICAL_CLIENT_SECRET"/${masked}}"
   fi
   if [ -n "${INFISICAL_TOKEN:-}" ]; then
-    text="${text//"$INFISICAL_TOKEN"/<redacted>}"
+    masked="$(mask "$INFISICAL_TOKEN")"
+    text="${text//"$INFISICAL_TOKEN"/${masked}}"
   fi
   printf '%s' "$text"
 }
@@ -226,6 +245,12 @@ check_reader() {
     # send the operator to fix the read permissions.
     missing=""
     for name in ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8; do
+      # A name the job's own environment already carries is resolved from
+      # there first (stage-asc-key.mjs reads the environment before the
+      # vault), so its absence from the vault is not a fault.
+      if [ -n "${!name:-}" ]; then
+        continue
+      fi
       grep -qx -- "$name" "$work/names.out" || missing="${missing:+$missing, }$name"
     done
     if [ -n "$missing" ]; then
