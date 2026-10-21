@@ -42,10 +42,18 @@ asc_load_asc_key() {
 
   # The file holds a credential, so only its owner may read it.  The mode is
   # the last chance to notice, so a file that is group or world readable is
-  # refused rather than loaded.  BSD and GNU stat disagree on the flag, so
-  # both are tried and a mode that cannot be read at all is a refusal too.
-  local mode
-  mode="$(stat -f '%Lp' "$path" 2>/dev/null || stat -c '%a' "$path" 2>/dev/null || true)"
+  # refused rather than loaded.
+  #
+  # BSD and GNU stat disagree on the flag, and they are told apart by the
+  # platform rather than tried in turn:  GNU stat's -f does not take a
+  # permissions format, so it prints a filesystem report to stdout and then
+  # fails, and that report would be captured as the mode and would refuse a
+  # perfectly good file.
+  local mode=""
+  case "$(uname -s)" in
+    Darwin) mode="$(stat -f '%Lp' "$path" 2>/dev/null || true)" ;;
+    *) mode="$(stat -c '%a' "$path" 2>/dev/null || true)" ;;
+  esac
   case "$mode" in
     600) ;;
     '')

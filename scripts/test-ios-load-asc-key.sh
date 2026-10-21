@@ -92,6 +92,15 @@ refuse 'a world-readable key file' 'not 600' "$tmp_dir/loose.p8"
 chmod 600 "$tmp_dir/empty.p8"
 refuse 'an empty key file' 'no key material' "$tmp_dir/empty.p8"
 
+# The mode probe must be platform aware.  GNU stat's -f prints a filesystem
+# report to stdout when the format is not one it knows, and that report would
+# be captured as the mode, so a perfectly good file would be refused on
+# every Linux runner.
+if grep -E "stat -f" "$repo_root/scripts/ios-load-asc-key.sh" | grep -qv Darwin; then
+  echo 'the loader uses the BSD stat outside a Darwin branch' >&2
+  exit 1
+fi
+
 # The loader must not put the key into the job's environment file:  that file
 # feeds every later step, and the key belongs to one step at a time.  The
 # check is on the write, not on the word, because the loader explains in a

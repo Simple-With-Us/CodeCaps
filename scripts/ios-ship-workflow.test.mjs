@@ -321,7 +321,15 @@ test("scheduled gate and key handoff shell tests pass", () => {
     "scripts/test-ios-stage-asc-key.sh",
     "scripts/test-ios-load-asc-key.sh",
   ]) {
-    const out = execFileSync("bash", [join(ROOT, script)], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    // A shell test that fails says why on stderr, and the reason belongs in
+    // the failure message:  a CI log that only says "Command failed" is a
+    // dead end.
+    let out = "";
+    try {
+      out = execFileSync("bash", [join(ROOT, script)], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    } catch (error) {
+      assert.fail(`${script} failed: ${String(error.stderr || "").trim() || error.message}`);
+    }
     assert.match(out, /all tests passed/, `${script} did not report success`);
   }
 });
