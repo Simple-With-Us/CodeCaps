@@ -138,4 +138,41 @@ final class AtCapWindowTests: XCTestCase {
             providerKey: "anthropic", providerLabel: "Claude",
             via: nil, expected: true, windows: []).isAtCap)
     }
+
+    // MARK: Scoped allowances beside the subscription
+
+    func testAScopedCodexAllowanceDoesNotCapTheSubscription() {
+        // A response carrying only Code Review and additional pools has no
+        // primary window at all.  Falling back to "every eligible window" here
+        // would let a scoped allowance report the whole plan as capped.
+        let subject = section([
+            snapshot(id: "code-review:primary", label: "Code Review · 5-hour", token: "5h",
+                     remaining: 0, resetIn: 3 * hour, provider: "openai"),
+            snapshot(id: "additional:spark", label: "Spark · 7-day", token: "168h",
+                     remaining: 0, resetIn: 4 * day, provider: "openai"),
+        ])
+        XCTAssertFalse(subject.isAtCap,
+                       "Code Review and additional pools are allowances beside the subscription")
+    }
+
+    func testACodexSubscriptionWindowStillCapsBesideASpentScopedPool() {
+        let subject = section([
+            snapshot(id: "primary", label: "5h window", token: "5h",
+                     remaining: 0, resetIn: 3 * hour, provider: "openai"),
+            snapshot(id: "code-review:primary", label: "Code Review · 5-hour", token: "5h",
+                     remaining: 0, resetIn: 2 * hour, provider: "openai"),
+        ])
+        XCTAssertTrue(subject.isAtCap)
+        XCTAssertEqual(subject.atCapWindow()?.window.id, "primary")
+    }
+
+    func testAPlanWhoseOnlyWindowsAreSubModelQuotasStillCaps() {
+        // The fallback that lets an all-sub-model plan report a cap stays; only
+        // Codex's scoped pools opt out of it.
+        let subject = section([
+            snapshot(id: "local-mac:anthropic:fable:weekly", label: "Fable · 7-day", token: "168h",
+                     remaining: 0, resetIn: 4 * day, model: "fable"),
+        ])
+        XCTAssertTrue(subject.isAtCap)
+    }
 }
