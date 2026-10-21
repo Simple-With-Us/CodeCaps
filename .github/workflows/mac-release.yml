@@ -8,7 +8,7 @@ name: Mac Release (Sparkle)
 # Secrets (names only; no value is ever printed):
 #   MAC_CERT_P12_BASE64, MAC_CERT_PASSWORD  The Developer ID Application
 #       certificate for team CC8UTF7ATG.  Read from Infisical the way
-#       BotFleet's release.yml does (INFISICAL_PROJECT_ID plus
+#       BotFleet's release.yml does (INFISICAL_FLEET_OPS_PROJECT_ID plus
 #       INFISICAL_UNIVERSAL_AUTH_CLIENT_ID/_SECRET, or INFISICAL_CLIENT_ID/
 #       _SECRET), with same-named repository secrets as the fallback.
 #   ASC_KEY_ID, ASC_ISSUER_ID and the App Store Connect private key come from
@@ -96,7 +96,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Test Sparkle release contract without credentials
-        run: node --test scripts/mac-release-workflow.test.mjs scripts/stage-asc-key.node-test.mjs scripts/infisical-fetch-expand.node-test.mjs
+        run: node --test scripts/mac-release-workflow.test.mjs scripts/stage-asc-key.node-test.mjs scripts/infisical-fetch.node-test.mjs scripts/infisical-fetch-expand.node-test.mjs
 
       - name: Wait for Swift CI compile checks on this commit
         env:
@@ -131,7 +131,7 @@ jobs:
         uses: ./.github/actions/infisical-secrets
         with:
           names: MAC_CERT_P12_BASE64 MAC_CERT_PASSWORD SENTRY_DSN SENTRY_AUTH_TOKEN
-          project-id: ${{ secrets.INFISICAL_PROJECT_ID }}
+          project-id: ${{ secrets.INFISICAL_FLEET_OPS_PROJECT_ID }}
           client-id: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID || secrets.INFISICAL_CLIENT_ID }}
           client-secret: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET || secrets.INFISICAL_CLIENT_SECRET }}
         env:
