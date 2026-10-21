@@ -17,7 +17,7 @@ function step(s, name) {
   return s.slice(start, end < 0 ? undefined : end).trim();
 }
 const LOADERS = [
-  'Stage the ASC private key (Fleet-OPS prod /asc)',
+  'Load and stage the ASC credentials (Fleet-OPS prod /asc)',
   'Check the ASC credentials arrived',
 ];
 const stripGuard = s => s.replaceAll("        if: github.event_name != 'pull_request'\n", '');
@@ -58,18 +58,26 @@ test('Sparkle uses the existing fleet ASC loader, never repository ASC secrets',
   }
   assert.match(loader, /INFISICAL_PROJECT_ID: \$\{\{ secrets\.INFISICAL_FLEET_OPS_PROJECT_ID \}\}/);
   assert.doesNotMatch(loader, /echo .*\$\{ASC_INFISICAL_PROJECT_ID\}/);
-  // The key material must not enter the job environment.  The loader reads
-  // the vault itself, so the workflow never asks the composite action for the
-  // private key and never names it: only the file's path crosses a step
-  // boundary.  A name here would put the key in GITHUB_ENV, where every
-  // later step, every process listing and every environment dump can read
-  // it.
+  // The key material must not enter the job environment.  The approved
+  // loader and the staging script run in ONE step: the loader writes the
+  // three values into the job's environment file, the staging script reads
+  // them back out of it and writes the private key to a mode-600 file.  Split
+  // across two steps the key would be an environment variable of the
+  // second one, where every later step, every process listing and every
+  // environment dump can read it.
   assert.doesNotMatch(loader, /infisical-secrets/);
-  assert.doesNotMatch(loader, /ASC_KEY_P8/);
-  assert.doesNotMatch(loader, /names: ASC_/);
+  assert.doesNotMatch(loader, /uses: \.\/\.github\/actions/);
+  // The vault is reached by the approved loader, in the same step that
+  // stages the key.
+  assert.match(loader, /run: \|[\s\S]*node scripts\/infisical-fetch\.mjs[\s\S]*node scripts\/stage-asc-key\.mjs/);
+  // The loader is asked for exactly the three ASC names, and all three are
+  // required, so a vault that cannot serve them fails the step by name.
+  assert.match(loader, /INFISICAL_NAMES: ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8/);
+  assert.match(loader, /INFISICAL_REQUIRED: ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8/);
+  // The repository's stale ASC_* secrets are never read.
   for (const file of [code, iosCode]) {
-    assert.doesNotMatch(file, /ASC_KEY_P8/);
-    assert.doesNotMatch(file, /names: ASC_/);
+    assert.doesNotMatch(file, /secrets\.ASC_/);
+    assert.doesNotMatch(file, /ASC_KEY_P8: \$\{\{/);
   }
   // The loader is told where the vault is, and only where.
   assert.match(loader, /INFISICAL_ENVIRONMENT: prod/);
@@ -82,7 +90,7 @@ test('Sparkle uses the existing fleet ASC loader, never repository ASC secrets',
     assert.doesNotMatch(file, /infisical secrets get/);
     assert.doesNotMatch(file, /infisical\/get-cli/);
   }
-  assert.match(loader, /run: node scripts\/stage-asc-key\.mjs/);
+  assert.match(loader, /node scripts\/stage-asc-key\.mjs/);
   assert.match(loader, /Missing \$name in Fleet-OPS prod \/asc; verify the CI identity has read access to Fleet-OPS prod \/asc\./);
   assert.match(loader, /Missing ASC key material in Fleet-OPS prod \/asc; verify the CI identity has read access to Fleet-OPS prod \/asc\./);
   assert.match(code, /NOTARY_KEY_PATH: \$\{\{ env.ASC_KEY_PATH \}\}/);
@@ -122,6 +130,21 @@ test('PRs cannot notarize or publish, and icon-only changes trigger releases', (
     assert.doesNotMatch(file, /listSecretsRaw|loginUniversalAuth/);
   }
   assert.match(read('scripts/stage-asc-key.mjs'), /from '\.\/infisical-fetch\.mjs'/);
+  // The staging script resolves every credential environment-first and then
+  // through an injected getter, so the job's own environment is looked up
+  // before anything else, the fallback is stubbed at its seam rather than at
+  // a network endpoint, and the ASC_KEY_P8 entry is blanked so that no later
+  // step can read the key from the environment.  The script holds no vault
+  // client of its own.
+  const stage = read('scripts/stage-asc-key.mjs');
+  assert.match(stage, /env\[name\]/);
+  assert.match(stage, /getSecret = fleetSecretsGet/);
+  assert.match(stage, /appendFileSync\(env\.GITHUB_ENV, 'ASC_KEY_P8=/);
+  assert.match(stage, /isUnresolvedReference/);
+  assert.match(stage, /maskValue\(keyId, log\)/);
+  assert.match(stage, /maskValue\(issuerId, log\)/);
+  assert.doesNotMatch(stage, /listSecretsRaw|loginUniversalAuth/);
+  assert.doesNotMatch(stage, /maskValue\(key, log\)/);
   assert.match(code, /needs.await-swift-ci.result == 'success'/);
   assert.match(code, /run: script\/build_and_run.sh --release/);
   assert.ok(code.indexOf('Verify notarization access') < code.indexOf('Build, sign, notarize'));

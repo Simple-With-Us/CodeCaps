@@ -23,9 +23,9 @@ name: iOS TestFlight ship (GitHub-hosted macOS)
 #     copy that App Store Connect answers with HTTP 401 (CC-163), so they are
 #     deliberately not read here and there is no fallback to them.
 #   * The multiline key never enters the step environment.
-#     scripts/stage-asc-key.mjs reads the vault itself, streams the key over
-#     stdin into a mode-600 file and publishes only that file's path, so the
-#     key material crosses no step boundary.
+#     The approved loader and scripts/stage-asc-key.mjs run in one step, so the
+#     key goes from the job's environment file into a mode-600 file, and only
+#     that file's path and the two identifiers cross a step boundary.
 #   * IOS_DIST_P12_BASE64 / IOS_DIST_P12_PASSWORD (Apple Distribution identity)
 #     stay repository secrets.
 #   * SENTRY_DSN and SENTRY_AUTH_TOKEN are best-effort: an inert Sentry beats a
@@ -215,14 +215,28 @@ jobs:
       # ASC key from Fleet-OPS prod /asc.  ASC_KEY_ID and ASC_ISSUER_ID are
       # single-line and go to GITHUB_ENV; the multiline private key is staged
       # to a mode-600 file and only ASC_KEY_PATH is exported.
-      - name: Stage the ASC private key (Fleet-OPS prod /asc)
-        run: node scripts/stage-asc-key.mjs
+      #
+      # The approved loader (scripts/infisical-fetch.mjs, the script the
+      # infisical-secrets composite action runs) and the staging script run
+      # in ONE step on purpose.  The loader writes the three values into the
+      # job's environment file; the staging script reads them back out of it
+      # and writes the private key to a mode-600 file.  Split across two
+      # steps the key would be an environment variable of the second one,
+      # which is the boundary this step exists to close.
+      - name: Load and stage the ASC credentials (Fleet-OPS prod /asc)
         env:
+          INFISICAL_NAMES: ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8
+          INFISICAL_REQUIRED: ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8
           INFISICAL_PROJECT_ID: ${{ secrets.INFISICAL_FLEET_OPS_PROJECT_ID }}
           INFISICAL_ENVIRONMENT: prod
           INFISICAL_SECRET_PATH: /asc
           INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID || secrets.INFISICAL_CLIENT_ID }}
           INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET || secrets.INFISICAL_CLIENT_SECRET }}
+        run: |
+          set +o xtrace
+          set -euo pipefail
+          node scripts/infisical-fetch.mjs
+          node scripts/stage-asc-key.mjs
 
       - name: Check the ASC credentials arrived
         run: |

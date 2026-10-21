@@ -176,15 +176,22 @@ test("ASC credentials come from Fleet-OPS /asc, never the stale repository secre
   // No new code may talk to the vault directly.
   assert.doesNotMatch(code, /listSecretsRaw|loginUniversalAuth/);
 
-  // The multiline key never enters the step environment.  The loader reads
-  // the vault itself and streams the key over stdin into a mode-600 file, so
-  // only the file's path crosses into the later steps and the workflow never
-  // names the private key.
+  // The multiline key never enters the step environment.  The approved
+  // loader and the staging script run in ONE step: the loader writes the
+  // three values into the job's environment file, the staging script reads
+  // them back out of it, streams the key over stdin into a mode-600 file
+  // and blanks the ASC_KEY_P8 entry, so only the file's path and the two
+  // identifiers cross into the later steps.
   assert.match(code, /scripts\/stage-asc-key\.mjs/);
+  assert.match(code, /node scripts\/infisical-fetch\.mjs[\s\S]*node scripts\/stage-asc-key\.mjs/);
+  assert.match(code, /INFISICAL_NAMES: ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8/);
+  assert.match(code, /INFISICAL_REQUIRED: ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8/);
   assert.match(readFileSync(join(ROOT, "scripts/stage-asc-key.mjs"), "utf8"), /ios-stage-asc-key\.sh/);
+  assert.match(readFileSync(join(ROOT, "scripts/stage-asc-key.mjs"), "utf8"), /appendFileSync\(env\.GITHUB_ENV, 'ASC_KEY_P8=/);
   assert.doesNotMatch(code, /for name in .*ASC_KEY_P8/);
   assert.doesNotMatch(code, /printf '%s=%s\\n' "ASC_KEY_P8"/);
-  assert.doesNotMatch(code, /ASC_KEY_P8/);
+  // The workflow never writes the key into an environment entry itself.
+  assert.doesNotMatch(code, /ASC_KEY_P8:\s*\$\{\{/);
 
   // The Distribution identity stays a repository secret, scoped to its step.
   assert.match(code, /IOS_DIST_P12_BASE64:\s*\$\{\{ secrets\.IOS_DIST_P12_BASE64 \}\}/);
