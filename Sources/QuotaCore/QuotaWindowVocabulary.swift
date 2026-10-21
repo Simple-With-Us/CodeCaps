@@ -12,6 +12,19 @@ public enum QuotaWindowVocabulary {
     public static let oneMonth = "1-month"
     public static let otherLimit = "Other limit"
 
+    /// Short distinguishing nouns for the widget caption row.
+    ///
+    /// These sit *next to* the cadence token (`5h`, `7d`, `1m`) and must not
+    /// repeat its cadence form; "7-day" beside a `7d` token is the duplication
+    /// owner 2026-10-21 caught on the Antigravity weekly row.  A noun that
+    /// names the window kind ("weekly", "monthly", "additional") is what the
+    /// caption needs when two bars share one cadence.
+    public static let barQualifierWeekly = "weekly"
+    public static let barQualifierMonthly = "monthly"
+    public static let barQualifierDaily = "daily"
+    public static let barQualifierHourly = "hourly"
+    public static let barQualifierAdditional = "additional"
+
     /// Full cadence label for a window, suitable for main-window copy and wire export.
     public static func standardCadence(
         windowToken: String?,
