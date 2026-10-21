@@ -10,6 +10,15 @@ final class PlanComparisonTests: XCTestCase {
         }
     }
 
+    func testRawCopilotApiTokensAliasToUserFacingTiers() {
+        // The API reports raw tokens; users type display names (Sentry on #277).
+        XCTAssertFalse(PlanComparison.disagrees(detected: "individual_pro", entered: "Copilot Pro", providerKey: "github-copilot"))
+        XCTAssertFalse(PlanComparison.disagrees(detected: "individual_pro", entered: "Pro", providerKey: "github-copilot"))
+        XCTAssertFalse(PlanComparison.disagrees(detected: "individual_pro_plus", entered: "GitHub Copilot Pro+", providerKey: "github-copilot"))
+        XCTAssertFalse(PlanComparison.disagrees(detected: "free", entered: "Copilot Free", providerKey: "github-copilot"))
+        XCTAssertTrue(PlanComparison.disagrees(detected: "individual_pro", entered: "Copilot Business", providerKey: "github-copilot"))
+    }
+
     func testRealTierDifferencesStayDifferent() {
         XCTAssertTrue(PlanComparison.disagrees(detected: "Max 20x", entered: "Max 5x", providerKey: "anthropic"))
         XCTAssertTrue(PlanComparison.disagrees(detected: "Pro+", entered: "Pro", providerKey: "github-copilot"))

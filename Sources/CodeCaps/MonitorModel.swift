@@ -1423,6 +1423,17 @@ final class MonitorModel: ObservableObject {
     }
 
     func setCustomInfo(for providerKey: String, info: PlatformCustomInfo) {
+        // Passive visits must not bump the edit revision or schedule an
+        // export: only a real content change may win conflict resolution
+        // against remote edits (Sentry on #277).
+        if let existing = platformCustomInfo[providerKey],
+           existing.customSubtitle == info.customSubtitle,
+           existing.planName == info.planName,
+           existing.costUsd == info.costUsd,
+           existing.renewalDateText == info.renewalDateText,
+           existing.showCostAndRenewal == info.showCostAndRenewal {
+            return
+        }
         var revisedInfo = info
         let previous = platformCustomInfo[providerKey]?.updatedAt?.timeIntervalSince1970 ?? 0
         revisedInfo.updatedAt = Date(timeIntervalSince1970: max(Date().timeIntervalSince1970, previous + 0.001))

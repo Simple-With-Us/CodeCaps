@@ -90,6 +90,19 @@ public enum PlanComparison {
         text = text.replacingOccurrences(of: "×", with: "x")
         let key = text.unicodeScalars.filter { (CharacterSet.alphanumerics.contains($0) || $0 == "+") }.map(String.init).joined()
         guard !key.isEmpty, !["unknown", "unavailable", "notreported"].contains(key) else { return nil }
+        // Raw Copilot API plan tokens (for example `individual_pro`) name
+        // the same tiers users type; alias them to the user-facing forms so
+        // a standard entry is not a false mismatch (Sentry on #277).
+        if providerKey == "github-copilot", let alias = copilotTokenAliases[key] {
+            return alias
+        }
         return key
     }
+
+    private static let copilotTokenAliases: [String: String] = [
+        "individualpro": "pro",
+        "individualproplus": "pro+",
+        "copilotpro": "pro",
+        "copilotproplus": "pro+",
+    ]
 }
