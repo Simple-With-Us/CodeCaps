@@ -8,6 +8,47 @@ final class QuotaWindowVocabularyTests: XCTestCase {
         XCTAssertEqual(QuotaWindowVocabulary.standardCadence(windowToken: "1m", label: ""), "1-month")
     }
 
+    /// An extra allowance names no period of its own.
+    ///
+    /// It joins the group of the one sibling that has a period,  and the sibling
+    /// resolution is what does that.  The group lookup itself must not hand it a
+    /// period,  or a bar that prints "7d" would be split from the sibling that
+    /// prints the same token (Kody review 2026-10-21).
+    func testAnExtraAllowanceHasNoGroupOfItsOwn() {
+        XCTAssertEqual(
+            QuotaWindowVocabulary.barCadenceGroup(
+                cadence: "Other limit",
+                label: "Other limit",
+                isExtraAllowance: true
+            ),
+            QuotaWindowVocabulary.otherLimit
+        )
+    }
+
+    /// A canonical label names its period.
+    ///
+    /// The widget renders "7-day window",  "5-hour window" and "1-month window",
+    /// and a bar whose label says one of them has to group with the bar that
+    /// prints the same token,  or the two are split (Kody review 2026-10-21).
+    func testACanonicalLabelNamesItsPeriod() {
+        XCTAssertEqual(
+            QuotaWindowVocabulary.barCadenceGroup(cadence: "Other limit", label: "7-day window"),
+            QuotaWindowVocabulary.sevenDay
+        )
+        XCTAssertEqual(
+            QuotaWindowVocabulary.barCadenceGroup(cadence: "Other limit", label: "5-hour window"),
+            QuotaWindowVocabulary.fiveHour
+        )
+        XCTAssertEqual(
+            QuotaWindowVocabulary.barCadenceGroup(cadence: "Other limit", label: "1-month window"),
+            QuotaWindowVocabulary.oneMonth
+        )
+        XCTAssertEqual(
+            QuotaWindowVocabulary.barCadenceGroup(cadence: "Other limit", label: "1-day window"),
+            QuotaWindowVocabulary.oneDay
+        )
+    }
+
     func testOpaqueAnthropicKeyMapsToOtherLimit() {
         let label = QuotaWindowVocabulary.windowLabel(windowToken: nil, existingLabel: "iguana_necktie", resetAt: nil, periodStart: nil)
         XCTAssertEqual(label, "Other limit window")
