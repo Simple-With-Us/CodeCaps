@@ -562,6 +562,20 @@ public enum QuotaWindowVocabulary {
 /// Mac app, the iOS app and the widget, and a rule the two surfaces share
 /// cannot drift apart.
 public enum QuotaCapRule {
+    /// The level at or below which a remaining reading counts as spent.
+    ///
+    /// Half a point rather than zero, because the interface rounds a reading to
+    /// the nearest whole percent:  a window at 0.4% is drawn as "0%", so a rule
+    /// that called only an exact zero spent would answer "not at cap" beside a
+    /// reading of 0%.  Half a point is where the rounding happens, so the rule,
+    /// the drawing and the Antigravity pool's own weekly test all mean the same
+    /// thing by "at cap".
+    ///
+    /// This is the one number.  The Mac's Antigravity grouper reads it, the
+    /// phone's model reads it, and this file is compiled into the widget as
+    /// well, so no surface carries a copy of it.
+    public static let spentThreshold: Double = 0.5
+
     /// What the cap rule needs to know about one window.
     ///
     /// The Mac's windows and the phone's windows are different types, so the
@@ -641,15 +655,15 @@ public enum QuotaCapRule {
 
     /// Whether a window's allowance is spent.
     ///
-    /// The reading decides whenever there is one:  a number of zero is a
-    /// spent allowance and a number above zero is headroom, even when the
-    /// provider still carries an exhausted flag, which the Mac's own export
-    /// never clears and which would otherwise keep reporting a cap long
-    /// after the allowance came back.  With no reading at all there is
-    /// nothing to believe, and the window reports no cap.
+    /// The reading decides whenever there is one:  a reading at or below
+    /// `spentThreshold` is a spent allowance and a reading above it is
+    /// headroom, even when the provider still carries an exhausted flag,
+    /// which the Mac's own export never clears and which would otherwise keep
+    /// reporting a cap long after the allowance came back.  With no reading at
+    /// all there is nothing to believe, and the window reports no cap.
     public static func isAtCap(remainingPercent: Double?) -> Bool {
         guard let bounded = bounded(remainingPercent) else { return false }
-        return bounded <= 0
+        return bounded <= spentThreshold
     }
 
     /// Whether this window is a supplementary video allowance beside

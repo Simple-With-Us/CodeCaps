@@ -358,9 +358,19 @@ final class CompanionModelTests: XCTestCase {
     /// The Mac masks a pool's five-hour window at 0.5% remaining, because the
     /// interface rounds that to 0%.  The phone tested for exactly zero, so the
     /// same pool was capped on one surface and not on the other.
+    ///
+    /// The phone now reads the shared rule's threshold instead of carrying its
+    /// own number, so the two surfaces cannot drift again.
     func testThePhoneAndTheMacAgreeOnWhenAWeeklyCapCountsAsSpent() throws {
         let model = try readCompanionModelSource()
-        XCTAssertTrue(model.contains("public static let weeklySpentThreshold: Double = 0.5"))
+        XCTAssertTrue(
+            model.contains("public static let weeklySpentThreshold: Double = QuotaCapRule.spentThreshold"),
+            "the phone must read the shared threshold, not carry a number of its own"
+        )
+        XCTAssertFalse(
+            model.contains("public static let weeklySpentThreshold: Double = 0.5"),
+            "the phone must not keep its own copy of the threshold"
+        )
         XCTAssertTrue(model.contains("(weeklyPct ?? 100) <= Self.weeklySpentThreshold"))
     }
 

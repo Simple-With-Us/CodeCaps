@@ -61,6 +61,13 @@ final class AtCapWindowTests: XCTestCase {
         XCTAssertFalse(snapshot(id: "w", remaining: 100, resetIn: day).isAtCap)
     }
 
+    /// A reading is rounded to the nearest whole percent on screen, so 0.4% is
+    /// drawn as 0%.  The rule has to agree with what is drawn, and this is the
+    /// shared half of the contract the widget target spells out on its own.
+    func testAReadingThatRoundsToZeroIsACap() {
+        XCTAssertTrue(snapshot(id: "w", remaining: 0.4, resetIn: day).isAtCap)
+    }
+
     func testNoReadingIsNotACap() {
         XCTAssertFalse(snapshot(id: "w", remaining: nil, resetIn: day).isAtCap,
                        "an unreadable window is not a spent one")

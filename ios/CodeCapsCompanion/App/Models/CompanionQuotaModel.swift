@@ -1889,7 +1889,10 @@ public final class CompanionQuotaModel: ObservableObject {
     /// phone used to test for exactly zero, so the same pool was capped on the
     /// Mac and not on the phone, and each surface told the owner a different
     /// thing about the same account.
-    public static let weeklySpentThreshold: Double = 0.5
+    ///
+    /// The number now comes from the shared rule rather than being written out
+    /// here, so the phone, the Mac and the widget all read one threshold.
+    public static let weeklySpentThreshold: Double = QuotaCapRule.spentThreshold
 
     private func consolidateAntigravityPool(
         poolKey: String,

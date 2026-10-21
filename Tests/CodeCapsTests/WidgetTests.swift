@@ -79,6 +79,23 @@ final class WidgetTests: XCTestCase {
         )
     }
 
+    /// The widget spells the cap rule out rather than importing the module, so
+    /// its threshold is the one place a copy of the number could creep back in.
+    /// The widget target compiles `QuotaWindowVocabulary.swift` by path, so
+    /// `QuotaCapRule` is in scope and the number is read from the rule that
+    /// owns it.
+    func testWidgetReadsTheSharedSpentThreshold() throws {
+        let source = try readSource(at: Self.widgetPresentationURL)
+        XCTAssertTrue(
+            source.contains("percent <= QuotaCapRule.spentThreshold"),
+            "the widget must read the shared threshold, not carry a number of its own"
+        )
+        XCTAssertFalse(
+            source.contains("if let percent { return percent <= 0 }"),
+            "the widget must not keep the old exact-zero test"
+        )
+    }
+
     func testProjectYmlDeclaresWidgetTargets() throws {
         let yml = try readSource(at: Self.projectYmlURL)
         XCTAssertTrue(

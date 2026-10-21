@@ -108,7 +108,10 @@ public enum AntigravityQuotaGroups {
     /// saying vendor reset 5h quota early while the 7d is still at cap and
     /// unchanged".  Half a point is where the interface rounds, so the mask
     /// and the interface agree on what "at cap" means.
-    public static let weeklySpentThreshold: Double = 0.5
+    ///
+    /// The number itself lives in `QuotaCapRule.spentThreshold`, so the pool's
+    /// own weekly test and the shared cap rule cannot drift apart.
+    public static let weeklySpentThreshold: Double = QuotaCapRule.spentThreshold
 
     /// Whether a pool's weekly cap is spent.  A weekly that reports a number
     /// is spent at or below the rounding threshold; one that reports no number

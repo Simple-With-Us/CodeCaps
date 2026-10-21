@@ -315,15 +315,19 @@ public enum WidgetPresentation {
 
     /// Whether a window's allowance is spent.  Mirrors
     /// `QuotaWindowSnapshot.isAtCap` in QuotaCore, which the widget target
-    /// cannot import (it includes QuotaCore files by path rather than as a
-    /// module), so the rule is stated twice on purpose — one owner ruling, two
-    /// spellings.
+    /// cannot import as a module (it includes QuotaCore files by path rather
+    /// than as a module), so the rule is stated twice on purpose:  one owner
+    /// ruling, two spellings.
+    ///
+    /// The threshold itself is not restated.  The widget target compiles
+    /// `QuotaWindowVocabulary.swift`, so `QuotaCapRule` is in scope here and
+    /// the number is read from the one place that owns it.
     ///
     /// The reading wins whenever there is one, because QuotaCore only ever sets
     /// `isExhausted` and never clears it; believing the flag over a fresh
     /// positive reading would report a cap that no longer exists.
     public static func isAtCap(percent: Double?, isExhausted: Bool) -> Bool {
-        if let percent { return percent <= 0 }
+        if let percent { return percent <= QuotaCapRule.spentThreshold }
         return isExhausted
     }
 

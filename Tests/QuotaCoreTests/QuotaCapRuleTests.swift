@@ -38,9 +38,35 @@ final class QuotaCapRuleTests: XCTestCase {
         XCTAssertTrue(QuotaCapRule.isAtCap(remainingPercent: 0))
     }
 
-    func testAReadingAboveZeroIsNotTheCap() {
+    func testAReadingWithHeadroomIsNotTheCap() {
         XCTAssertFalse(QuotaCapRule.isAtCap(remainingPercent: 50))
-        XCTAssertFalse(QuotaCapRule.isAtCap(remainingPercent: 0.4))
+        XCTAssertFalse(QuotaCapRule.isAtCap(remainingPercent: 0.6))
+    }
+
+    /// A reading is rounded to the nearest whole percent on screen, so 0.4% is
+    /// drawn as 0%.  The rule has to agree with what is drawn, or the owner is
+    /// told a plan is not capped while its meter reads 0%.
+    ///
+    /// This is the drift the reviewer found:  the Antigravity pool's weekly
+    /// test counted 0.4% as spent while this rule called it headroom, so the
+    /// same pool was capped on one surface and not on the other, and the
+    /// at-cap summary line went missing beside the weekly.
+    func testAReadingAtTheRoundingThresholdIsTheCap() {
+        XCTAssertTrue(QuotaCapRule.isAtCap(remainingPercent: 0.4))
+        XCTAssertTrue(QuotaCapRule.isAtCap(remainingPercent: 0))
+    }
+
+    /// One number, so no surface can drift from another.
+    ///
+    /// The Antigravity grouper and this rule used to carry the threshold
+    /// separately, one of them at 0.5 and the other at 0, and the owner saw
+    /// two different answers about one account.
+    func testEverySurfaceReadsTheSameSpentThreshold() {
+        XCTAssertEqual(
+            AntigravityQuotaGroups.weeklySpentThreshold,
+            QuotaCapRule.spentThreshold,
+            "the Antigravity pool and the shared cap rule must use one threshold"
+        )
     }
 
     func testNoReadingIsNotTheCap() {
@@ -199,6 +225,7 @@ final class QuotaCapRuleTests: XCTestCase {
         let cases: [(name: String, windows: [QuotaWindowSnapshot])] = [
             ("one spent window", [snapshot(id: "weekly", remaining: 0, resetIn: 86_400)]),
             ("one window with room", [snapshot(id: "weekly", remaining: 50, resetIn: 86_400)]),
+            ("a reading that rounds to zero", [snapshot(id: "weekly", remaining: 0.4, resetIn: 86_400)]),
             ("one window with no reading", [snapshot(id: "weekly", remaining: nil, resetIn: 86_400)]),
             (
                 "two spent windows",
