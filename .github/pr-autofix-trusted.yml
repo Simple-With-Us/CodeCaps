@@ -25,13 +25,15 @@
 # not a path in this repository.  This policy is read only from the default
 # branch and sends the id to https://api.minimax.io/anthropic with
 # MINIMAX_API_KEY.  Two org or repo variables can override that at the reusable
-# SHA pinned in .github/workflows/autofix.yml (a652e467 when this was written).
-# SWU_AUTOFIX_MODEL_BASE_URL retargets the route only when its value is exactly
-# https://api.meta.ai (any other value is ignored, and the route stays on
-# https://api.minimax.io/anthropic).  A non-empty SWU_AUTOFIX_MODEL replaces the
-# effective model even over the pin below.  Check both variables when this
-# policy changes.  The id is pinned to the stable id the owner chose rather than
-# to the preview spelling.
+# SHA pinned in .github/workflows/autofix.yml (c97a2dae when this was written).
+# SWU_AUTOFIX_MODEL_BASE_URL selects the route:  unset or
+# https://api.minimax.io/anthropic keeps the MiniMax route, exactly
+# https://api.meta.ai retargets it (and needs a non-MiniMax SWU_AUTOFIX_MODEL
+# plus the META_MODEL_API_TOKEN secret), and any other value fails the run at
+# the reusable's Validate Model Switch step.  A non-empty SWU_AUTOFIX_MODEL
+# replaces the effective model even over the pin below.  Check both variables
+# when this policy changes.  The id is pinned to the stable id the owner chose
+# rather than to the preview spelling.
 model: MiniMax-M3.1-Flash
 max_turns: 60
 max_iterations: 5
