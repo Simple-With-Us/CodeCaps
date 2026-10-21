@@ -8,7 +8,7 @@ public struct CompanionContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var showingSettings: Bool
     @State private var expandedIds: Set<String> = []
-    @State private var settingsTab: CompanionSettingsTab = .display
+    @State private var settingsTab: CompanionSettingsTab
     #if os(iOS)
     @State private var platformOrderEditMode: EditMode = .inactive
     #endif
@@ -24,7 +24,13 @@ public struct CompanionContentView: View {
     public init(model: CompanionQuotaModel, showingSettings: Bool = ProcessInfo.processInfo.arguments.contains("-openSettings")) {
         self.model = model
         self._showingSettings = State(initialValue: showingSettings)
-        self._settingsTab = State(initialValue: ProcessInfo.processInfo.arguments.contains("-openAlerts") ? .alarms : .display)
+        // A launch argument picks the tab the settings sheet opens on, so the
+        // screenshot capture can reach a tab without a tap.  Both spellings
+        // are accepted:  -openAlarms is the capture's, and -openAlerts is
+        // the one the alert work introduced for the same tab.
+        let opensAlarms = ProcessInfo.processInfo.arguments.contains("-openAlarms")
+            || ProcessInfo.processInfo.arguments.contains("-openAlerts")
+        self._settingsTab = State(initialValue: opensAlarms ? .alarms : .display)
         #if os(iOS)
         self._platformOrderEditMode = State(
             initialValue: ProcessInfo.processInfo.arguments.contains("-reorderPlatforms") ? .active : .inactive
@@ -189,7 +195,7 @@ public struct CompanionContentView: View {
     private var headerCard: some View {
         Picker("Source scope", selection: $model.sourceScope) {
             ForEach(CompanionSourceScope.allCases) { scope in
-                Text(scope.rawValue).tag(scope)
+                Text(scope.displayTitle).tag(scope)
             }
         }
         .pickerStyle(.segmented)

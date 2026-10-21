@@ -6,7 +6,7 @@ import UserNotifications
 /// The payload sent when a quota reset alert is triggered.
 ///
 /// Carries the picked `ResetAlarmSound` so a test (and a future custom
-/// delivery handler) can verify the alert honours the Settings picker
+/// delivery handler) can verify the alert honours the Dashboard picker
 /// instead of trusting an external `UNNotificationSound` round-trip.
 public struct ResetAlarmNotification: Equatable, Sendable {
     public let id: String
@@ -153,7 +153,7 @@ public enum TestNotificationOutcome: Equatable, Sendable {
     /// rejected the request.
     case failed(String)
 
-    /// Owner-facing sentence for the Settings status line.
+    /// Owner-facing sentence for the Dashboard status line.
     public var message: String {
         switch self {
         case .sent:
@@ -283,7 +283,7 @@ public final class ResetAlarmManager: ObservableObject {
     }
 
     /// Result of the most recent "Send Test Notification", or `nil` before the
-    /// owner has ever pressed it.  Surfaced in Settings so a refused send is
+    /// owner has ever pressed it.  Surfaced in the Dashboard so a refused send is
     /// visible instead of silent.
     @Published public private(set) var testNotificationOutcome: TestNotificationOutcome?
 
@@ -302,7 +302,7 @@ public final class ResetAlarmManager: ObservableObject {
     /// Injectable sound player for unit testing.  Kept for the
     /// `sendTestNotification()` flow and for owners who set the picker
     /// to a system name we expose via `NSSound(named:)` even when
-    /// notifications are off, so the preview button in Settings still
+    /// notifications are off, so the preview button in the Dashboard still
     /// plays the chosen tone.
     var onPlaySound: (() -> Void)?
 
@@ -416,7 +416,7 @@ public final class ResetAlarmManager: ObservableObject {
         }
     }
 
-    /// Plays the picked sound.  Used by the Settings "Preview" button so
+    /// Plays the picked sound.  Used by the Dashboard "Preview" button so
     /// the owner can hear a sound before saving.
     public func previewChosenSound() {
         playAlarmSound(alarmSound)
@@ -459,7 +459,7 @@ public final class ResetAlarmManager: ObservableObject {
         Task { await requestNotificationPermission() }
     }
 
-    /// Refreshes the denied flag from the system so the Settings affordance
+    /// Refreshes the denied flag from the system so the Dashboard affordance
     /// reflects reality on open rather than only after a failed send.
     public func refreshNotificationAuthorization() async {
         guard Self.canUseUserNotifications else { return }

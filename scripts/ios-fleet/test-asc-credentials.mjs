@@ -12,6 +12,11 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
+//  The staged key reader has its own test file.  The import is what keeps
+//  those tests in CI:  the contract workflow runs this file, and it cannot
+//  know about a new one.
+import "./test-asc-key.test.mjs";
+
 const here = dirname(fileURLToPath(import.meta.url));
 const script = join(here, "asc-api.mjs");
 const pem = () => generateKeyPairSync("ec", { namedCurve: "prime256v1" }).privateKey
@@ -99,23 +104,42 @@ test("an env key id with no key material anywhere fails closed", async () => {
   assert.equal(r.kid, null);
 });
 
-test("a complete environment (id, issuer, key file) wins and never calls fleet-secrets", async () => {
-  const keyFile = join(root, "env-key.p8");
-  writeFileSync(keyFile, pem());
-  const r = await run({ ASC_KEY_ID: "ENVKEY0001", ASC_ISSUER_ID: "env-issuer", ASC_KEY_PATH: keyFile, FLEET_SECRETS: join(root, "does-not-exist") });
+test("a complete environment (id, issuer, key) wins and never calls fleet-secrets", async () => {
+  const r = await run({ ASC_KEY_ID: "ENVKEY0001", ASC_ISSUER_ID: "env-issuer", ASC_KEY_P8: pem(), FLEET_SECRETS: join(root, "does-not-exist") });
   assert.equal(r.code, 0);
   assert.equal(r.kid, "ENVKEY0001");
   assert.equal(r.iss, "env-issuer");
 });
 
-test("only a leading ~/ is expanded in ASC_KEY_PATH", async () => {
-  writeFileSync(join(home, "tilde-key.p8"), pem());
-  const gone = join(root, "does-not-exist");
-  const ok = await run({ ASC_KEY_ID: "TILDEKEY01", ASC_ISSUER_ID: "tilde-issuer", ASC_KEY_PATH: "~/tilde-key.p8", FLEET_SECRETS: gone });
-  assert.equal(ok.code, 0);
-  assert.equal(ok.kid, "TILDEKEY01");
-  const bad = await run({ ASC_KEY_ID: "TILDEKEY01", ASC_ISSUER_ID: "tilde-issuer", ASC_KEY_PATH: "~other/tilde-key.p8", FLEET_SECRETS: gone });
-  assert.notEqual(bad.code, 0);
+test("a named key file is not a credential source", async () => {
+  //  A path on disk is not an approved secret source, so the client never
+  //  reads one:  the shell layer that owns the credential reads the staged
+  //  key and hands it over in the environment.  The path below names a file
+  //  that is not a private key, so a client that still consulted it would
+  //  refuse the credential instead of signing the request.
+  const notAKey = join(root, "not-a-key.p8");
+  writeFileSync(notAKey, "this is not a private key\n");
+  chmodSync(notAKey, 0o600);
+  const r = await run({
+    ASC_KEY_ID: "ENVKEY0002",
+    ASC_ISSUER_ID: "env-issuer",
+    ASC_KEY_P8: pem(),
+    ASC_KEY_PATH: notAKey
+  });
+  assert.equal(r.code, 0);
+  assert.equal(r.kid, "ENVKEY0002");
+});
+
+test("a malformed PEM in the environment fails closed, before any request", async () => {
+  //  The envelope is not a key, so the credential has to be refused with a
+  //  credential error rather than reaching the signer.
+  const r = await run({
+    ASC_KEY_ID: "ENVKEY0003",
+    ASC_ISSUER_ID: "env-issuer",
+    ASC_KEY_P8: "-----BEGIN PRIVATE KEY-----\nnot base64 at all\n-----END PRIVATE KEY-----\n" // gitleaks:allow
+  });
+  assert.notEqual(r.code, 0);
+  assert.equal(r.kid, null);
 });
 
 test.after(() => rmSync(root, { recursive: true, force: true }));

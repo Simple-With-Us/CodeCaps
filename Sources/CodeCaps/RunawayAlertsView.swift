@@ -202,7 +202,7 @@ struct RunawayAlertsPage: View {
                 + sentenceGap
                 + "Stats Less Valid Until \(fmt.string(from: recalibratedAt))"
         } else {
-            detail = "Plan change noted in Settings,"
+            detail = "Plan change noted in the Dashboard,"
                 + sentenceGap
                 + "stats less valid while the baseline recalibrates"
         }

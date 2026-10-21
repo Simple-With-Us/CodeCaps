@@ -83,8 +83,15 @@ final class PipInteractionTests: XCTestCase {
     func testFailedAntigravityReadingStaysPinnedWithoutShowingCachedQuota() throws {
         let (model, defaults, suite) = GlanceFixtures.makeModel(view: .fromMac, alarmsAll: false, fleet: false)
         defer { defaults.removePersistentDomain(forName: suite) }
-        let windows = [GlanceFixtures.window("antigravity:gemini:weekly", provider: "google-antigravity",
-            label: "Gemini Models · Weekly", token: "weekly", remaining: 54, resetIn: 86_400)]
+        // The demo model plus a failed Antigravity provider.  The weekly
+        // reading is the cached 54 percent the owner saw in a screenshot, and
+        // the provider fails to refresh it.
+        let windows = GlanceFixtures.localWindows.map { window in
+            window.id == "antigravity:gemini:weekly"
+                ? GlanceFixtures.window("antigravity:gemini:weekly", provider: "google-antigravity",
+                    label: "Gemini Models · Weekly", token: "weekly", remaining: 54, resetIn: 86_400)
+                : window
+        }
         let sections = QuotaResponse(generatedAt: "", windows: windows).platformSections(now: GlanceFixtures.now)
         model.injectForTests(sections: sections, now: GlanceFixtures.now,
                              issues: ["google-antigravity": "Helper failed"])
@@ -97,8 +104,32 @@ final class PipInteractionTests: XCTestCase {
             issue: model.issues[row.providerKey]).isEmpty)
         XCTAssertEqual(PipWidgetController.meterCount(for: row, now: model.now,
             issue: model.issues[row.providerKey]), 0)
+        // Unpinning releases the row, but the panel does not go blank: the
+        // automatic selection falls back to the rows it can honestly measure,
+        // the rule testAllUnavailableFallbackStillShowsStatusRows asserts.
+        // What matters is that the failed provider never comes back with the
+        // cached 54 percent, and that every listed row is drawn honestly.
         model.pipPinnedRowIds = []
-        XCTAssertFalse(PipWidgetController.targetRows(for: model).contains { $0.id == row.id })
+        let rows = PipWidgetController.targetRows(for: model)
+        XCTAssertFalse(rows.isEmpty, "the panel must not go blank when the failed row is released")
+        XCTAssertFalse(rows.contains { $0.id == row.id },
+            "the failed row must not be listed: it would show the cached 54 percent")
+        for candidate in rows {
+            let candidateIssue = model.issues[candidate.providerKey]
+            let status = PipWidgetController.readingStatus(for: candidate, now: model.now,
+                issue: candidateIssue)
+            let meters = PipWidgetController.meterSnapshots(for: candidate, now: model.now,
+                issue: candidateIssue)
+            if candidateIssue != nil {
+                XCTAssertNotNil(status, "\(candidate.id) must carry a status, never a live meter")
+                XCTAssertTrue(meters.isEmpty, "\(candidate.id) must not draw a cached meter")
+            } else if status == nil {
+                XCTAssertFalse(meters.isEmpty, "\(candidate.id) must show its live meters")
+            } else {
+                XCTAssertTrue(meters.isEmpty,
+                    "\(candidate.id) must not draw meters for a row that only reports a status")
+            }
+        }
     }
 
     func testStaleOrDisabledReadingCannotDrawCurrentMeters() throws {

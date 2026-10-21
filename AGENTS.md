@@ -64,9 +64,11 @@ monitoring more broadly, not just coding subscriptions.  Owner ruling,
 "coding subscriptions" — frame it as a centralized monitor for AI plans
 generally.  The mark in `assets/brand/codecaps-logo-transparent.svg` is the
 app's primary brand: a teal open ring around a red open ring, with a dark
-needle and six dark dots.  The app icon in `assets/icon-1024.png` sets that
-same mark on an off-white ground, and the About and Settings pages show it in
-colour on a transparent background.  The orange 3D mark (Usage Monitor) is
+needle and six dark dots.  The app icon in `assets/AppIcon.icns` (derived from
+`assets/icon-1024.png`) sets that same mark on an off-white ground, and the
+About and Settings pages show it in colour on a transparent background in
+light appearance and on that off-white ground in dark appearance.  The orange
+3D mark (Usage Monitor) is
 reserved for the centralized-monitor landing surfaces
 (e.g. CodeCaps.SimpleWithUs.com) where the monitoring + sync semantics are
 the headline.

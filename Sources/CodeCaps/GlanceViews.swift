@@ -18,8 +18,8 @@ struct GlancePopover: View {
     @ObservedObject var occlusion: GlanceOcclusionState
     var openConsole: (ConsolePage) -> Void
     var openAlert: (String, String?, Date?) -> Void
-    /// Settings has its own entry point rather than a fixed page, so the gear
-    /// and `⌘,` land in the same place: the Settings page last used.
+    /// The Dashboard has its own entry point rather than a fixed page, so the gear
+    /// and `⌘,` land in the same place: the Dashboard page last used.
     var openSettings: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
@@ -65,7 +65,7 @@ struct GlancePopover: View {
         // often already open when the owner picks a colour, and `Theme.accent`
         // is a computed `UserDefaults` read with nothing to observe it.  The
         // body was never re-evaluated, so From Mac / From Fleet, the bell and
-        // Open CodeCaps kept the colour resolved when the window was built
+        // Dashboard kept the colour resolved when the window was built
         // (owner report 2026-10-09).
         .tint(model.accentColor)
         // The popover's own material is a vibrancy blur; the header and footer
@@ -125,8 +125,8 @@ struct GlancePopover: View {
                     symbol: "laptopcomputer",
                     title: "Local readers are off",
                     message: "This Mac is not reading any AI plan right now." + sentenceGap
-                        + "Turn local readers on in Settings to see them here.",
-                    actionTitle: "Open Settings") { openConsole(.settingsSourcesFleet) }
+                        + "Turn local readers on in the Dashboard to see them here.",
+                    actionTitle: "Open Dashboard") { openConsole(.settingsSourcesFleet) }
             } else {
                 ForEach(Array(localSections.enumerated()), id: \.element.id) { index, row in
                     if index > 0 {
@@ -183,13 +183,13 @@ struct GlancePopover: View {
                         message: model.serverError
                             ?? ("Your fleet endpoint has not reported any readings yet." + sentenceGap
                                 + "Readings appear here after the next pull."),
-                        actionTitle: "Open Fleet Settings") { openConsole(.settingsSourcesFleet) }
+                        actionTitle: "Open Fleet Dashboard") { openConsole(.settingsSourcesFleet) }
                 } else {
                     GlanceEmptyState(
                         symbol: "arrow.up.arrow.down.circle",
                         title: "No fleet endpoint connected",
                         message: "From Fleet shows the quotas your other machines push to an endpoint you run."
-                            + sentenceGap + "Add the endpoint and its Read Token in Settings to connect it.",
+                            + sentenceGap + "Add the endpoint and its Read Token in the Dashboard to connect it.",
                         actionTitle: "Connect Fleet Endpoint") { openConsole(.settingsSourcesFleet) }
                 }
             } else {
@@ -678,7 +678,7 @@ struct PlanChangeGlanceCard: View {
                 + sentenceGap
                 + "Stats Less Valid Until \(fmt.string(from: recalibratedAt))"
         }
-        return "Plan change noted in Settings,"
+        return "Plan change noted in the Dashboard,"
             + sentenceGap
             + "stats less valid while the baseline recalibrates"
     }
@@ -949,9 +949,8 @@ struct GlanceHeaderBar: View {
         // a 570pt popover, which is what pushed the cluster into crowding.
         // The mark's own gap is on the mark instead.
         HStack(spacing: 0) {
-            // Owner 2026-10-10: "in top left should have the black on
-            // transparent codecaps logo".  The owner's own artwork, drawn as a
-            // template so one file is correct on both appearances.  This is the
+            // Owner 2026-10-21: the upper left shows the transparent colour
+            // codecaps logo, the same artwork as the About page.  This is the
             // Glance popover, not the PiP: the PiP header is gone by the
             // owner's own request (#193), and the provider logos identify the
             // HUD there.
@@ -1032,26 +1031,23 @@ struct GlanceHeaderBar: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .foregroundStyle(.secondary)
-        .help("Settings")
-        .accessibilityLabel("Settings")
+        .help("Dashboard")
+        .accessibilityLabel("Dashboard")
     }
 }
 
-/// The owner's cropped black-on-transparent mark, resolved through the same
-/// bundle the menu bar and PiP use and drawn as a template.  Never re-cut,
-/// re-exported or substituted.
+/// The owner's colour mark on a transparent ground, resolved through the
+/// same bundle as the About page.  Owner 2026-10-21: this header and the
+/// About page both show the transparent colour artwork, never the black
+/// menu-bar template.  The template belongs only to the menu bar icon
+/// itself.  Never re-cut, re-exported or substituted.
 struct GlanceBrandMark: View {
+    static let asset: NSImage? = BrandMarkImage.asset
     @Environment(\.colorScheme) private var colorScheme
-    static let asset: NSImage? = {
-        guard let url = ResourceBundle.resolved?.url(forResource: "CodeCapsMenuBarIcon", withExtension: "png"),
-              let image = NSImage(contentsOf: url) else { return nil }
-        image.isTemplate = true
-        return image
-    }()
 
     /// The frame is applied to EACH branch, not to the Group around them.
-    /// A `.resizable()` image proposes its natural size, and the menu-bar
-    /// artwork is 850pt square: under a `.fixedSize` header that leaked ~40pt
+    /// A `.resizable()` image proposes its natural size, and the brand
+    /// artwork is large: under a `.fixedSize` header that leaked ~40pt
     /// of the 570pt popover's width into a 12pt mark.  Clamping the Group from
     /// the outside is too late — the ideal width has already been spent.
     var body: some View {
@@ -1059,10 +1055,18 @@ struct GlanceBrandMark: View {
             if let image = Self.asset {
                 Image(nsImage: image)
                     .resizable()
-                    .renderingMode(.template)
+                    .renderingMode(.original)
                     .interpolation(.high)
-                    .foregroundStyle(colorScheme == .dark ? Color.white : Theme.ink)
                     .frame(width: Metrics.glanceBrandMarkSize, height: Metrics.glanceBrandMarkSize)
+                    .background {
+                        // The needle and the dots are dark, so dark
+                        // appearance needs a light ground for them or the
+                        // mark reads as two empty rings.
+                        if colorScheme == .dark {
+                            RoundedRectangle(cornerRadius: Metrics.glanceBrandMarkSize * 0.22, style: .continuous)
+                                .fill(BrandMarkImage.lightGround)
+                        }
+                    }
             } else {
                 // Only if the owner's artwork is ever missing from the bundle.
                 Image(systemName: "gauge.with.dots.needle.50percent")
@@ -2437,10 +2441,10 @@ struct ConsentRow: View {
                 Text(message)
                     .font(.system(size: 12, weight: .medium))
                     .fixedSize(horizontal: false, vertical: true)
-                Button("Open Settings", action: action)
+                Button("Open Dashboard", action: action)
                     .controlSize(.small)
-                    .help("Open Settings")
-                    .accessibilityLabel("Open Settings")
+                    .help("Open Dashboard")
+                    .accessibilityLabel("Open Dashboard")
             }
             Spacer(minLength: 4)
         }
@@ -2573,7 +2577,7 @@ func glanceResetHelp(_ reset: Date?, now: Date, observedAt: Date? = nil, isFresh
 struct GlanceFooterProminentButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.colorScheme) private var colorScheme
-    /// Observed so Open CodeCaps follows the accent live; see `accentColor`.
+    /// Observed so Dashboard follows the accent live; see `accentColor`.
     @ObservedObject var model: MonitorModel
 
     func makeBody(configuration: Configuration) -> some View {
@@ -2586,7 +2590,7 @@ struct GlanceFooterProminentButtonStyle: ButtonStyle {
             // request 2026-10-06) broke that assumption: in Light appearance a
             // light accent got white text on a light fill, about 1.8:1.  The
             // owner noticed one swatch reading as black text on the System
-            // control and white text on Open CodeCaps (2026-10-09) -- AppKit
+            // control and white text on Dashboard (2026-10-09) -- AppKit
             // derives a native control's label colour from its own fill, so only
             // the hand-drawn surfaces were wrong.
             .foregroundStyle(Theme.onAccent.opacity(colorScheme == .dark ? 0.92 : 1.0))

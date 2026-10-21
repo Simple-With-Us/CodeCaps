@@ -501,7 +501,7 @@ enum Metrics {
     ///
     /// This is the contract `glanceWidth` has to honour.  It is computed rather
     /// than restated so a column change cannot silently overflow the popover —
-    /// a wider row inside a fixed frame is what truncated "Open CodeCaps ⌘1"
+    /// a wider row inside a fixed frame is what truncated "Dashboard ⌘1"
     /// in the footer once already.
     static let glanceRowIntrinsicWidth: CGFloat = glanceAlarmBellWidth + glanceLogoGap
         + glanceLogoWidth + glanceLogoGap
@@ -992,7 +992,7 @@ struct PlatformCard: View {
     /// alarms are picked per provider; under All there is nothing to pick.
     var isAlarmArmed: Bool = false
     var onToggleAlarm: (() -> Void)? = nil
-    /// Set only when the issue is one the owner can actually fix in Settings —
+    /// Set only when the issue is one the owner can actually fix in the Dashboard —
     /// today, the one-time Allow Access To Claude Code step.  The card then
     /// carries the same deep link the fleet banner uses.
     var onOpenSettings: (() -> Void)? = nil
@@ -1191,10 +1191,10 @@ struct PlatformCard: View {
     @ViewBuilder
     private var openSettingsButton: some View {
         if let onOpenSettings {
-            Button("Open Settings", action: onOpenSettings)
+            Button("Open Dashboard", action: onOpenSettings)
                 .controlSize(.small)
-                .help("Open Settings")
-                .accessibilityLabel("Open Settings")
+                .help("Open Dashboard")
+                .accessibilityLabel("Open Dashboard")
                 .padding(.top, 2)
         }
     }

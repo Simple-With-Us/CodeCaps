@@ -184,7 +184,7 @@ final class MonitorModel: ObservableObject {
     /// already displayed is never re-evaluated and keeps drawing the colour it
     /// resolved when it was built.  That is why the Glance popover — a separate
     /// window, usually already open when the swatch is clicked — kept its old
-    /// accent on From Mac / From Fleet, the alarm bell and Open CodeCaps.
+    /// accent on From Mac / From Fleet, the alarm bell and Dashboard.
     var accentColor: Color {
         // Reads `accent` on purpose.  SwiftUI registers the dependency during
         // body evaluation, so touching the `@Published` property here is what
@@ -337,7 +337,7 @@ final class MonitorModel: ObservableObject {
     }
     /// Windows whose baseline is currently invalid because the plan/quota size
     /// changed (automatic discontinuity detection) or the owner noted a change
-    /// in Settings text.  The runaway detector stands down for these; the UI
+    /// in the Dashboard text.  The runaway detector stands down for these; the UI
     /// shows the informational plan-change state instead of an alert.
     @Published private(set) var activePlanChanges: [AnomalyDetector.PlanChange] = []
     @Published var dismissedPlanChangeIds: Set<String> {
@@ -410,7 +410,7 @@ final class MonitorModel: ObservableObject {
     @Published private(set) var issues: [String: String] = [:]
     /// Provider keys whose saved login is on this Mac but unreadable until the
     /// owner allows this build once.  Drives the Allow Access To Claude Code
-    /// button and the Open Settings affordance beside the issue text.
+    /// button and the Open Dashboard affordance beside the issue text.
     @Published private(set) var consentNeeded: Set<String> = []
     @Published private(set) var serverError: String?
     @Published private(set) var handoffError: String?
@@ -646,7 +646,7 @@ final class MonitorModel: ObservableObject {
         // The running-out warnings default ON, because the whole point is to
         // catch a quota before it strands a run of work.  Popup is the default
         // channel because the owner asked for a window first; push is on too so
-        // it is useful without a second trip to Settings, and either can be
+        // it is useful without a second trip to the Dashboard, and either can be
         // switched off independently.
         exhaustionAlertsEnabled = defaults.object(forKey: "exhaustionAlertsEnabled") as? Bool ?? true
         exhaustionPopupEnabled = defaults.object(forKey: "exhaustionPopupEnabled") as? Bool ?? true
@@ -1751,7 +1751,7 @@ final class MonitorModel: ObservableObject {
     }
 
     /// Live binding for the local-readers toggle.  Writing the default and
-    /// refreshing in one call is what lets the Settings toggle apply on the spot
+    /// refreshing in one call is what lets the Dashboard toggle apply on the spot
     /// instead of waiting for a save.
     func setLocalEnabled(_ value: Bool) {
         guard value != localEnabled else { return }

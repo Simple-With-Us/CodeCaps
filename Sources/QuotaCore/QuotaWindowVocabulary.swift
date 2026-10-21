@@ -12,6 +12,199 @@ public enum QuotaWindowVocabulary {
     public static let oneMonth = "1-month"
     public static let otherLimit = "Other limit"
 
+    /// Short distinguishing nouns for the widget caption row.
+    ///
+    /// These sit *next to* the cadence token (`5h`, `7d`, `1m`) and must not
+    /// repeat its cadence form; "7-day" beside a `7d` token is the duplication
+    /// owner 2026-10-21 caught on the Antigravity weekly row.  A noun that
+    /// names the window kind ("weekly", "monthly", "additional") is what the
+    /// caption needs when two bars share one cadence.
+    public static let barQualifierWeekly = "weekly"
+    public static let barQualifierMonthly = "monthly"
+    /// Not "daily": the caption already shows the `1d` token, so the
+    /// qualifier must not restate the same cadence.  "daily allowance" names
+    /// the kind of allowance instead.
+    public static let barQualifierDaily = "daily allowance"
+    public static let barQualifierHourly = "hourly"
+    public static let barQualifierAdditional = "additional"
+
+    /// The cadence forms a bar qualifier must never repeat: the hyphenated
+    /// labels and the compact tokens the caption row already carries beside
+    /// the qualifier.
+    public static let barQualifierForbiddenCadenceForms = [
+        fiveHour, oneDay, sevenDay, oneMonth, otherLimit,
+        "5h", "1d", "7d", "1m", "+"
+    ]
+
+    /// The caption facts of one quota bar: the cadence it shows and the label
+    /// it carries.  A row of bars is resolved together, because whether a bar
+    /// needs a qualifier depends on the bars beside it.
+    public struct BarCaption: Equatable, Sendable {
+        public let cadence: String
+        public let label: String
+        /// True when the window is the extra allowance of another window on the
+        /// same plan.  The label alone cannot answer that:  the label pipeline
+        /// rewrites an extra allowance into the same "Other limit" copy every
+        /// unknown window gets, so the identity has to travel with the bar.
+        public let isExtraAllowance: Bool
+
+        public init(cadence: String, label: String, isExtraAllowance: Bool = false) {
+            self.cadence = cadence
+            self.label = label
+            self.isExtraAllowance = isExtraAllowance
+        }
+    }
+
+    /// The lowercased lexical tokens of a label, split on everything that is
+    /// not a letter or a number.
+    ///
+    /// Canonical qualifiers are matched against these tokens and never as
+    /// substrings, so a label such as "nothourly" is not an hourly window.
+    public static func lexicalTokens(_ text: String) -> Set<String> {
+        Set(
+            text.lowercased()
+                .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+                .map(String.init)
+        )
+    }
+
+    /// The short distinguishing noun for a bar caption row, or "" when the
+    /// row needs none.
+    ///
+    /// The qualifier is named from the canonical cadence the caption row
+    /// already prints, not from prose words:  the widget's own label pipeline
+    /// rewrites a label into the hyphenated cadence copy ("7-day window"), so
+    /// a matcher that looks for "weekly" in the label never matches a label
+    /// the widget renders (Kody review 2026-10-21).
+    ///
+    /// A cadence word is only worth printing when a sibling bar shares the
+    /// cadence, because on a lone bar "7d weekly" says the same thing twice.
+    ///
+    /// The label is consulted for the extra-allowance case alone, which is
+    /// the one qualifier the label still names.
+    ///
+    /// `isExtraAllowance` carries the identity the label cannot:  an extra
+    /// allowance is rewritten into the same "Other limit" copy every unknown
+    /// window gets, so a bar that is known to be the extra allowance has to
+    /// say so, or it is read as an ordinary window of its period.
+    public static func barQualifier(
+        forCadence cadence: String,
+        label: String,
+        sharesCadence: Bool,
+        isExtraAllowance: Bool = false
+    ) -> String {
+        guard sharesCadence else { return "" }
+        if isExtraAllowance || isExtraAllowanceLabel(label) { return barQualifierAdditional }
+        switch cadence {
+        case sevenDay: return barQualifierWeekly
+        case oneMonth: return barQualifierMonthly
+        case oneDay: return barQualifierDaily
+        case fiveHour: return barQualifierHourly
+        default: return ""
+        }
+    }
+
+    /// The canonical cadence a window belongs to, used to group the bars that
+    /// share one period.
+    ///
+    /// The window's own cadence decides the group, because that is what the
+    /// caption token beside the bar prints.  The label is deliberately not
+    /// handed to the canonicalizer:  the prose matcher behind it reads
+    /// substrings, so a label such as "notweekly" or "notdaily" was read as a
+    /// weekly or daily window before the exact-token fallback below ever ran
+    /// (Kody rule 40, binding 2026-10-21).  A label resolves a group only
+    /// through whole lexical tokens, below.
+    ///
+    /// The canonical forms the widget renders — "7-day window", "5-hour
+    /// window", "1-day window", "1-month window" — name their period through
+    /// whole tokens too, so a bar whose own cadence does not resolve still
+    /// groups with the sibling that prints the same caption token.
+    ///
+    /// An extra allowance is extra capacity of the period it doubles, so it
+    /// groups with that window rather than standing alone.  It carries no
+    /// cadence of its own, so its label is left out of the lookup rather
+    /// than collapsing the row to "Other limit".
+    public static func barCadenceGroup(
+        cadence: String,
+        label: String,
+        isExtraAllowance: Bool = false
+    ) -> String {
+        let canonical = standardCadence(
+            windowToken: cadence,
+            label: ""
+        )
+        if canonical != otherLimit { return canonical }
+        //  An extra allowance names no period of its own, and its label is
+        //  left out of the lookup:  it joins the group of the one sibling
+        //  that has a period, which is what makes the owner-approved pair
+        //  ("weekly" / "additional") reachable.
+        if isExtraAllowance { return otherLimit }
+        //  The label resolves a group only through whole lexical tokens:
+        //  "weekly" names the weekly group, "notweekly" names no group at all.
+        let tokens = lexicalTokens(label)
+        if tokens.contains("weekly") { return sevenDay }
+        if tokens.contains("monthly") || tokens.contains("billing") { return oneMonth }
+        if tokens.contains("daily") { return oneDay }
+        if tokens.contains("hourly") { return fiveHour }
+        //  The canonical forms the widget renders still name their period:
+        //  "7-day window", "5-hour window", "1-day window", "1-month window".
+        //  The caption token beside the bar resolves the same form through
+        //  the prose matcher, so the group has to resolve it too, or a bar
+        //  that prints "7d" is grouped as "Other limit" and split from the
+        //  sibling that prints the same token.
+        let hasDay = tokens.contains("day") || tokens.contains("days")
+        let hasHour = tokens.contains("hour") || tokens.contains("hours")
+        let hasMonth = tokens.contains("month") || tokens.contains("months")
+        if tokens.contains("7"), hasDay { return sevenDay }
+        if tokens.contains("1"), hasDay { return oneDay }
+        if tokens.contains("5"), hasHour { return fiveHour }
+        if tokens.contains("1"), hasMonth { return oneMonth }
+        return canonical
+    }
+
+    /// The qualifier of every bar in a caption row, in the same order.
+    ///
+    /// Each bar is resolved against its siblings, so a bar that shares its
+    /// cadence with another bar gets the word that tells the two apart and a
+    /// lone bar gets none.
+    ///
+    /// An extra allowance has no period of its own:  it is extra capacity of
+    /// the period it doubles, and a provider that reports it without a token
+    /// names no period at all.  When its own cadence resolves to nothing, it
+    /// joins the group of the one sibling that has a period, which is what
+    /// makes the owner-approved pair ("weekly" / "additional") reachable.
+    /// The sibling has to be unambiguous, so a platform with two different
+    /// periods beside it leaves the extra allowance on its own.
+    public static func barQualifiers(forBars bars: [BarCaption]) -> [String] {
+        var groups = bars.map {
+            barCadenceGroup(
+                cadence: $0.cadence,
+                label: $0.label,
+                isExtraAllowance: $0.isExtraAllowance
+            )
+        }
+        for index in bars.indices where bars[index].isExtraAllowance && groups[index] == otherLimit {
+            let siblingGroups = Set(
+                bars.indices
+                    .filter { $0 != index }
+                    .map { groups[$0] }
+                    .filter { $0 != otherLimit }
+            )
+            if siblingGroups.count == 1, let adopted = siblingGroups.first {
+                groups[index] = adopted
+            }
+        }
+        return bars.indices.map { index in
+            let siblings = groups.indices.filter { $0 != index }.map { groups[$0] }
+            return barQualifier(
+                forCadence: groups[index],
+                label: bars[index].label,
+                sharesCadence: siblings.contains(groups[index]),
+                isExtraAllowance: bars[index].isExtraAllowance
+            )
+        }
+    }
+
     /// Full cadence label for a window, suitable for main-window copy and wire export.
     public static func standardCadence(
         windowToken: String?,
@@ -179,6 +372,29 @@ public enum QuotaWindowVocabulary {
             || lower.hasSuffix(" extra")
     }
 
+    /// Whether a window is the extra allowance of another window on the same
+    /// plan.
+    ///
+    /// The label detector answers for labels that name the kind ("Additional
+    /// allowance", "+ extra").  A provider that files its extra allowance
+    /// without naming it is caught by the provider-aware check:  Muse Assist
+    /// reports it as a tokenless window that resolves to no period, and the
+    /// Mac popover already treats exactly that window as the extra allowance
+    /// (`isMuseAssistExtra`).
+    ///
+    /// The identity has to be carried with the window rather than read back
+    /// from its label, because the label pipeline rewrites an extra allowance
+    /// into the same "Other limit" copy every unknown window gets.
+    public static func isExtraAllowance(
+        providerKey: String?,
+        label: String,
+        windowToken: String? = nil
+    ) -> Bool {
+        if isExtraAllowanceLabel(label) { return true }
+        guard let providerKey, !providerKey.isEmpty else { return false }
+        return isMuseAssistExtra(providerKey: providerKey, windowToken: windowToken, label: label)
+    }
+
     public static func isOpaqueProviderKey(_ text: String) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
@@ -211,9 +427,9 @@ public enum QuotaWindowVocabulary {
     ) -> String? {
         let lower = token.lowercased()
         if ["5h", "5hr", "5-hour", "5hours", "300m"].contains(lower) { return fiveHour }
-        if ["1d", "24h", "daily", "day"].contains(lower) { return oneDay }
-        if ["7d", "168h", "1w", "weekly", "week"].contains(lower) { return sevenDay }
-        if ["1m", "30d", "mo", "month", "monthly"].contains(lower) { return oneMonth }
+        if ["1d", "24h", "daily", "day", "1-day"].contains(lower) { return oneDay }
+        if ["7d", "168h", "1w", "weekly", "week", "7-day"].contains(lower) { return sevenDay }
+        if ["1m", "30d", "mo", "month", "monthly", "1-month"].contains(lower) { return oneMonth }
         if let seconds = ResetAlarmCadence.durationSeconds(lower) {
             return cadenceFromDuration(seconds, label: label, monthlyHint: monthlyHint)
         }

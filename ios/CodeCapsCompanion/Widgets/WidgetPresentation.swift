@@ -14,6 +14,27 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
     public let isExhausted: Bool
     public let isMasked: Bool
     public let observedAt: Date?
+    /// True when the window is the extra allowance of another window on the
+    /// same plan.  The label cannot answer this:  an extra allowance is
+    /// rewritten into the same "Other limit" copy every unknown window gets,
+    /// so the identity travels with the window.
+    public let isExtraAllowance: Bool
+    /// Short distinguishing label for a bar when two bars share one cadence
+    /// token (e.g. two "7d" bars).  "Free weekly limit" reads "weekly",
+    /// "Additional tokens" reads "additional".  Empty when the row needs no
+    /// qualifier.
+    ///
+    /// Owner 2026-10-21: the qualifier previously returned the hyphenated
+    /// cadence form ("7-day", "5-hour", "1-month") and sat beside the
+    /// cadence token in the same caption row, which made a `7d 7-day`
+    /// duplicate on the Antigravity weekly row.  Short nouns that do not
+    /// repeat the cadence are kept here, so two 7-day bars read "weekly" /
+    /// "additional" (owner, 2026-10-21).
+    ///
+    /// The qualifier is resolved by the platform item that owns the sibling
+    /// windows, because a lone bar printing "7d weekly" says the same thing
+    /// twice (owner 2026-10-21).
+    public let barQualifier: String
 
     public init(
         id: String,
@@ -23,7 +44,9 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
         resetAt: Date?,
         isExhausted: Bool = false,
         isMasked: Bool = false,
-        observedAt: Date? = nil
+        observedAt: Date? = nil,
+        barQualifier: String = "",
+        isExtraAllowance: Bool = false
     ) {
         self.id = id
         self.label = label
@@ -33,6 +56,8 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
         self.isExhausted = isExhausted
         self.isMasked = isMasked
         self.observedAt = observedAt
+        self.barQualifier = barQualifier
+        self.isExtraAllowance = isExtraAllowance
     }
 
     private static let staleAfter: TimeInterval = 30 * 60
@@ -59,18 +84,34 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
         WidgetPresentation.shortCadence(cadence: cadence, label: label)
     }
 
-    /// Short distinguishing label for a bar when two bars share one cadence
-    /// token (e.g. two "7d" bars).  "Free weekly limit" reads "weekly",
-    /// "Additional tokens" reads "additional".  Empty when the window label
-    /// carries no such qualifier.
-    public var barQualifier: String {
-        if QuotaWindowVocabulary.isExtraAllowanceLabel(label) { return QuotaWindowVocabulary.otherLimit }
-        let text = label.lowercased()
-        if text.contains("weekly") { return QuotaWindowVocabulary.sevenDay }
-        if text.contains("monthly") || text.contains("billing") { return QuotaWindowVocabulary.oneMonth }
-        if text.contains("daily") { return "daily" }
-        if text.contains("hourly") { return QuotaWindowVocabulary.fiveHour }
-        return ""
+    /// The caption this window's bar prints.
+    ///
+    /// The caption carries the qualifier,  so a surface that renders it cannot leave
+    /// the qualifier out:  a caption built from the window and a caption built
+    /// without it are different values,  and only the first one names the sibling.
+    public var caption: QuotaWindowCaption {
+        QuotaWindowCaption(
+            token: cadenceToken,
+            qualifier: barQualifier,
+            resetCaption: resetCaption()
+        )
+    }
+
+    /// A copy of this window that prints the given qualifier in its caption
+    /// row.  The platform item calls this once it knows the sibling windows.
+    func withBarQualifier(_ qualifier: String) -> WidgetWindowItem {
+        WidgetWindowItem(
+            id: id,
+            label: label,
+            cadence: cadence,
+            remainingPercent: remainingPercent,
+            resetAt: resetAt,
+            isExhausted: isExhausted,
+            isMasked: isMasked,
+            observedAt: observedAt,
+            barQualifier: qualifier,
+            isExtraAllowance: isExtraAllowance
+        )
     }
 
     /// `Resets in 12d 22m`, or an empty string when the provider reports no reset.
@@ -136,9 +177,37 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
         self.resetAt = resetAt
         self.isExhausted = isExhausted
         self.isMasked = isMasked
-        self.windows = windows
+        self.windows = WidgetPlatformItem.windowsResolvingBarQualifiers(windows)
         self.iconHint = iconHint
         self.defaultWindowLabel = defaultWindowLabel
+    }
+
+    /// Resolve every window's caption qualifier against its siblings.
+    ///
+    /// The qualifier is a cadence word, and a cadence word is only worth
+    /// printing when another bar in the same platform shares the cadence: on
+    /// a lone bar the widget printed "7d weekly", which says the same thing
+    /// twice.  The resolution lives here, where the sibling windows are
+    /// known, and not on the single window (owner 2026-10-21).
+    private static func windowsResolvingBarQualifiers(_ windows: [WidgetWindowItem]) -> [WidgetWindowItem] {
+        guard windows.count > 1 else { return windows }
+        let qualifiers = QuotaWindowVocabulary.barQualifiers(
+            forBars: windows.map {
+                QuotaWindowVocabulary.BarCaption(
+                    cadence: $0.cadence,
+                    label: $0.label,
+                    isExtraAllowance: $0.isExtraAllowance
+                )
+            }
+        )
+        return windows.indices.map { index in
+            // A caller that named the qualifier keeps it.  The sibling
+            // resolution only fills in a qualifier the caller left blank, so
+            // the public `barQualifier:` parameter does not silently vanish on
+            // a platform with two or more windows (Kody review 2026-10-21).
+            let qualifier = qualifiers[index].isEmpty ? windows[index].barQualifier : qualifiers[index]
+            return windows[index].withBarQualifier(qualifier)
+        }
     }
 
     public var displayPercent: String {
@@ -583,6 +652,16 @@ public enum WidgetPresentation {
                 existingLabel: w.label.isEmpty ? cadence : w.label,
                 resetAt: parsedReset
             )
+            //  The extra-allowance identity is read off the wire label, not
+            //  off the display label:  the display copy rewrites an extra
+            //  allowance into the same "Other limit" text every unknown
+            //  window gets, so by the time the qualifier is resolved the
+            //  difference is gone.
+            let isExtraAllowance = QuotaWindowVocabulary.isExtraAllowance(
+                providerKey: providerKey,
+                label: w.label,
+                windowToken: w.window
+            )
 
             let cadenceKey = cadence.lowercased()
             if !seenCadenceKeys.contains(cadenceKey) {
@@ -595,7 +674,8 @@ public enum WidgetPresentation {
                     resetAt: parsedReset,
                     isExhausted: exhausted,
                     isMasked: false,
-                    observedAt: observed
+                    observedAt: observed,
+                    isExtraAllowance: isExtraAllowance
                 ))
             }
         }
