@@ -20,43 +20,64 @@
 		1D4D70BAAB091F8992DB1693 /* ResetAlarmCadence.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B76200EBE871E29BAC8A41B /* ResetAlarmCadence.swift */; };
 		1E390605C8A820FFB895AA0F /* alarm-tink.wav in Resources */ = {isa = PBXBuildFile; fileRef = 4FE56A36DCE8762AD17C6776 /* alarm-tink.wav */; };
 		1F27C36495D3FB241A242476 /* alarm-blow.wav in Resources */ = {isa = PBXBuildFile; fileRef = 0638A6007D4E7A392FD7D595 /* alarm-blow.wav */; };
+		1FFA2ED8A54A8F8FDE6C2226 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 13B67B47EAC3ED255FDB0018 /* PrivacyInfo.xcprivacy */; };
 		2018A85587B07653EFF5445C /* CompanionContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84C4C2C5DC3AA20234129F15 /* CompanionContentView.swift */; };
 		2300043111EDF02526E8D53B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = DF46F01EE0931315955EE9AF /* Assets.xcassets */; };
 		238EE47D0BA13D2064CE6DE6 /* alarm-tink.wav in Resources */ = {isa = PBXBuildFile; fileRef = 4FE56A36DCE8762AD17C6776 /* alarm-tink.wav */; };
 		2440D143F835BAD99240BE8D /* CompanionContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84C4C2C5DC3AA20234129F15 /* CompanionContentView.swift */; };
+		28EECA14D0CD8CE69B1250B6 /* QuotaWindowVocabulary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B93F39BFE99C5CA6EB141F5 /* QuotaWindowVocabulary.swift */; };
 		2AA3DE1AA8DD20DD5AD6E403 /* WidgetViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A40D20353A8D6C1D9E9D349 /* WidgetViews.swift */; };
 		2CA370B5E2149BEA3FCB3F6C /* CodeCapsCompanionApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34CE8BC7DF9DCF088BF1B805 /* CodeCapsCompanionApp.swift */; };
 		311AB846015F2FEDF0014C43 /* CompanionTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C1CF45BE162CC9B8CD968DC /* CompanionTheme.swift */; };
 		31CFC3813E00700F4A1D0E2F /* ResetAlarmCadence.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B76200EBE871E29BAC8A41B /* ResetAlarmCadence.swift */; };
+		33D335245DED8229722048BA /* WidgetPlatformDisplay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F3FDD012180112242E80DF3 /* WidgetPlatformDisplay.swift */; };
 		346906A2DDABDF60AF9D4F62 /* alarm-submarine.wav in Resources */ = {isa = PBXBuildFile; fileRef = 5F63EE805947E5707E2A0C3F /* alarm-submarine.wav */; };
 		3C07D53C4EFEE8F91EEDDEC7 /* ResetAlarmCadence.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B76200EBE871E29BAC8A41B /* ResetAlarmCadence.swift */; };
+		41F6AE401AE48C11EDDA4B80 /* SentryTelemetry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50C98744F4C98CE0C6227834 /* SentryTelemetry.swift */; };
+		4A84751C143F11619F941B8C /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = 897AB651A949F8B5454F5C3C /* Sentry */; };
 		4D9258D010AD16F059277D93 /* alarm-submarine.wav in Resources */ = {isa = PBXBuildFile; fileRef = 5F63EE805947E5707E2A0C3F /* alarm-submarine.wav */; };
 		4F76A47C0A1C84A3525F004C /* CompanionReadTokenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7E7C693CD5357E0391881F0 /* CompanionReadTokenStore.swift */; };
+		500162E6C6D0CFA94D715BD0 /* FleetSourceDisagreement.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4A7E538557D6D936242BE41 /* FleetSourceDisagreement.swift */; };
+		55B1F0DECD506D0BACFFBBB7 /* RemotePushRegistration.swift in Sources */ = {isa = PBXBuildFile; fileRef = A736FD344F79D520A16227B3 /* RemotePushRegistration.swift */; };
+		5EF6E3804FDCF37670BB45C0 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = 07191D727884C7621506D926 /* Sentry */; };
 		6447965E07907E9AA3407123 /* alarm-sosumi.wav in Resources */ = {isa = PBXBuildFile; fileRef = 4FA72166D5E5A0F726B4DF18 /* alarm-sosumi.wav */; };
+		67E08982F84A1E831F95464B /* FleetSourceDisagreement.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4A7E538557D6D936242BE41 /* FleetSourceDisagreement.swift */; };
 		689104F1DF3DDC7C7F75D168 /* WidgetSnapshotFetcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DE3A7D9C36FF286A082F60E /* WidgetSnapshotFetcher.swift */; };
 		6AF2CF64E8C9F39D87C4B24C /* CompanionReadTokenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7E7C693CD5357E0391881F0 /* CompanionReadTokenStore.swift */; };
+		6BF5A6C33EC9F93F7354379F /* UsageAlertPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9E8877EA13789E3986BFEF9 /* UsageAlertPreferences.swift */; };
 		717D1C459A127B80594F8905 /* WidgetWindowRows.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7A7EF5A19DFD2299052F4DE /* WidgetWindowRows.swift */; };
 		7A59C4CE14A8C4532A6C9327 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = DF46F01EE0931315955EE9AF /* Assets.xcassets */; };
+		7DA53137FC1697E13889298B /* QuotaWindowVocabulary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B93F39BFE99C5CA6EB141F5 /* QuotaWindowVocabulary.swift */; };
 		7DFD68E2400E127E11B80471 /* CodeCapsWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = FD27E95016C7BDDE19F6C6E2 /* CodeCapsWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		7F3D6663EA86FDE73EA17DCB /* alarm-sosumi.wav in Resources */ = {isa = PBXBuildFile; fileRef = 4FA72166D5E5A0F726B4DF18 /* alarm-sosumi.wav */; };
+		80AFBDA4491ADD0F917DEF11 /* FleetSourceDisagreement.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4A7E538557D6D936242BE41 /* FleetSourceDisagreement.swift */; };
 		831B4D460D912E65E3D869D3 /* ResetAlarmSound.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89A5807594DFD989CADCC6F2 /* ResetAlarmSound.swift */; };
+		8A473847ACFCA158CD1E9386 /* QuotaWindowVocabulary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B93F39BFE99C5CA6EB141F5 /* QuotaWindowVocabulary.swift */; };
 		99A788DAEA41B4AB83A93501 /* CodeCapsCompanionApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34CE8BC7DF9DCF088BF1B805 /* CodeCapsCompanionApp.swift */; };
 		99E4B46415A2BCB252FAA6C0 /* ResetAlarmMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5ECFD3E9DC2728ACB5FB5488 /* ResetAlarmMessage.swift */; };
 		9D826DF8BA1D0C240F17EAFC /* ResetAlarmSound.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89A5807594DFD989CADCC6F2 /* ResetAlarmSound.swift */; };
+		9DCBAAF5AED382505D06C03D /* RemotePushRegistration.swift in Sources */ = {isa = PBXBuildFile; fileRef = A736FD344F79D520A16227B3 /* RemotePushRegistration.swift */; };
+		A27D61CE3DC2A52A0B83E662 /* WidgetPlatformDisplay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F3FDD012180112242E80DF3 /* WidgetPlatformDisplay.swift */; };
+		A82BDBD544318CBB2DC1FE96 /* QuotaWindowVocabulary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B93F39BFE99C5CA6EB141F5 /* QuotaWindowVocabulary.swift */; };
 		A90E0EF383B2CDF27263BAF0 /* WidgetConfigurationIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72DB68669C8EFB8E9045184C /* WidgetConfigurationIntent.swift */; };
 		AB8C667473DF14CCF7B48F2A /* WidgetDataProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = F281E65EF7010842967CD100 /* WidgetDataProvider.swift */; };
 		AFBBFB2FD8EEA9DA9EF40042 /* alarm-bottle.wav in Resources */ = {isa = PBXBuildFile; fileRef = 302C44DD0C87899C354A914C /* alarm-bottle.wav */; };
 		BBE95186FD35EC37DBF13D51 /* ResetAlarmCadence.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B76200EBE871E29BAC8A41B /* ResetAlarmCadence.swift */; };
 		BD4C31C68641BA2ED6BE8798 /* alarm-bottle.wav in Resources */ = {isa = PBXBuildFile; fileRef = 302C44DD0C87899C354A914C /* alarm-bottle.wav */; };
+		BE0C14400B9E798CA08168F7 /* WidgetPlatformDisplay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F3FDD012180112242E80DF3 /* WidgetPlatformDisplay.swift */; };
 		BF0A24BA7D7B70B182950DA9 /* ResetAlarmTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5FD1EFF75431229A669FC5A /* ResetAlarmTracker.swift */; };
 		C1B3C6C3651687B8283C75CD /* WidgetSnapshotFetcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DE3A7D9C36FF286A082F60E /* WidgetSnapshotFetcher.swift */; };
 		C23393B11365D16E8ECA5D8E /* alarm-blow.wav in Resources */ = {isa = PBXBuildFile; fileRef = 0638A6007D4E7A392FD7D595 /* alarm-blow.wav */; };
 		C48D9F8052E4F39044504C84 /* CompanionQuotaModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1371DB889435F70346FB6AF /* CompanionQuotaModel.swift */; };
 		C7498C0ACDD5320564DE32B0 /* WidgetPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 716F800EA9DEDFC597BD08BB /* WidgetPresentation.swift */; };
+		CADE19D9C4D7A21C22D894AC /* UsageAlertPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9E8877EA13789E3986BFEF9 /* UsageAlertPreferences.swift */; };
 		D3C30EA2E4A6B59A22E086DB /* WidgetDataProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = F281E65EF7010842967CD100 /* WidgetDataProvider.swift */; };
+		D403E6C85AA58126F1F15557 /* WidgetPlatformDisplay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F3FDD012180112242E80DF3 /* WidgetPlatformDisplay.swift */; };
+		D88D34F03E978D88086FFCAE /* SentryTelemetry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50C98744F4C98CE0C6227834 /* SentryTelemetry.swift */; };
 		DA221384FC017A40031C0446 /* ResetAlarmMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5ECFD3E9DC2728ACB5FB5488 /* ResetAlarmMessage.swift */; };
 		DD572CC08FCFC7414D7236B7 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = DF46F01EE0931315955EE9AF /* Assets.xcassets */; };
 		E0EE20CDC3987E143A3FCB48 /* ResetAlarmTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5FD1EFF75431229A669FC5A /* ResetAlarmTracker.swift */; };
+		E38B758D8183E576DEE41A6C /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 13B67B47EAC3ED255FDB0018 /* PrivacyInfo.xcprivacy */; };
 		E4F68F451FCE5A7069DA052D /* alarm-frog.wav in Resources */ = {isa = PBXBuildFile; fileRef = 881BAB30A7762A0170BE4FD8 /* alarm-frog.wav */; };
 		E77E1CAAEDCB9C3AAD706144 /* alarm-frog.wav in Resources */ = {isa = PBXBuildFile; fileRef = 881BAB30A7762A0170BE4FD8 /* alarm-frog.wav */; };
 		E8DE0A145EA5D76CD51886E8 /* CompanionReadTokenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7E7C693CD5357E0391881F0 /* CompanionReadTokenStore.swift */; };
@@ -64,6 +85,7 @@
 		EA984A6E75520CAB2639A8B4 /* CodeCapsWidgetBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6316FA88D130531D99C73AEE /* CodeCapsWidgetBundle.swift */; };
 		F245CD4AA6FA8D9C23A5D373 /* CompanionTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C1CF45BE162CC9B8CD968DC /* CompanionTheme.swift */; };
 		F3C6891672DADC0AD9667E90 /* WidgetPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 716F800EA9DEDFC597BD08BB /* WidgetPresentation.swift */; };
+		F4FCB18D25C83B7AAD11C565 /* FleetSourceDisagreement.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4A7E538557D6D936242BE41 /* FleetSourceDisagreement.swift */; };
 		F912D93277350586352FE398 /* WidgetWindowRows.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7A7EF5A19DFD2299052F4DE /* WidgetWindowRows.swift */; };
 		FC810FA7900F297E014083A5 /* AlarmSoundPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 674BB9709E48A6D00D4EE92C /* AlarmSoundPlayer.swift */; };
 		FE52A4A8D224D9DBB320ABCC /* alarm-glass.wav in Resources */ = {isa = PBXBuildFile; fileRef = 185B2FA090E97F0B48E3E9A8 /* alarm-glass.wav */; };
@@ -115,33 +137,40 @@
 		0638A6007D4E7A392FD7D595 /* alarm-blow.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "alarm-blow.wav"; sourceTree = "<group>"; };
 		0A40D20353A8D6C1D9E9D349 /* WidgetViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetViews.swift; sourceTree = "<group>"; };
 		10FF587176549AAC4A616E3B /* InfoMac.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = InfoMac.plist; sourceTree = "<group>"; };
+		13B67B47EAC3ED255FDB0018 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		154D17A5A492536F43729222 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		185B2FA090E97F0B48E3E9A8 /* alarm-glass.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "alarm-glass.wav"; sourceTree = "<group>"; };
 		1981252E1F614DC809CAB013 /* CodeCapsWidgetsMac.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = CodeCapsWidgetsMac.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		1B93F39BFE99C5CA6EB141F5 /* QuotaWindowVocabulary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = QuotaWindowVocabulary.swift; path = ../../Sources/QuotaCore/QuotaWindowVocabulary.swift; sourceTree = "<group>"; };
 		1C1CF45BE162CC9B8CD968DC /* CompanionTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionTheme.swift; sourceTree = "<group>"; };
 		302C44DD0C87899C354A914C /* alarm-bottle.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "alarm-bottle.wav"; sourceTree = "<group>"; };
 		34CE8BC7DF9DCF088BF1B805 /* CodeCapsCompanionApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeCapsCompanionApp.swift; sourceTree = "<group>"; };
 		4FA72166D5E5A0F726B4DF18 /* alarm-sosumi.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "alarm-sosumi.wav"; sourceTree = "<group>"; };
 		4FE56A36DCE8762AD17C6776 /* alarm-tink.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "alarm-tink.wav"; sourceTree = "<group>"; };
 		5087F87CE3B2EDD3B9E1309C /* CodeCapsWidgets.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = CodeCapsWidgets.entitlements; sourceTree = "<group>"; };
+		50C98744F4C98CE0C6227834 /* SentryTelemetry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SentryTelemetry.swift; sourceTree = "<group>"; };
 		5ECFD3E9DC2728ACB5FB5488 /* ResetAlarmMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ResetAlarmMessage.swift; path = ../../Sources/QuotaCore/ResetAlarmMessage.swift; sourceTree = "<group>"; };
 		5F63EE805947E5707E2A0C3F /* alarm-submarine.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "alarm-submarine.wav"; sourceTree = "<group>"; };
 		6316FA88D130531D99C73AEE /* CodeCapsWidgetBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeCapsWidgetBundle.swift; sourceTree = "<group>"; };
 		674BB9709E48A6D00D4EE92C /* AlarmSoundPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlarmSoundPlayer.swift; sourceTree = "<group>"; };
 		6B76200EBE871E29BAC8A41B /* ResetAlarmCadence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ResetAlarmCadence.swift; path = ../../Sources/QuotaCore/ResetAlarmCadence.swift; sourceTree = "<group>"; };
+		6F3FDD012180112242E80DF3 /* WidgetPlatformDisplay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WidgetPlatformDisplay.swift; path = ../../Sources/QuotaCore/WidgetPlatformDisplay.swift; sourceTree = "<group>"; };
 		716F800EA9DEDFC597BD08BB /* WidgetPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetPresentation.swift; sourceTree = "<group>"; };
 		72DB68669C8EFB8E9045184C /* WidgetConfigurationIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetConfigurationIntent.swift; sourceTree = "<group>"; };
 		84C4C2C5DC3AA20234129F15 /* CompanionContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionContentView.swift; sourceTree = "<group>"; };
 		881BAB30A7762A0170BE4FD8 /* alarm-frog.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "alarm-frog.wav"; sourceTree = "<group>"; };
 		89A5807594DFD989CADCC6F2 /* ResetAlarmSound.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResetAlarmSound.swift; sourceTree = "<group>"; };
 		9DE3A7D9C36FF286A082F60E /* WidgetSnapshotFetcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WidgetSnapshotFetcher.swift; path = ../../Sources/QuotaCore/WidgetSnapshotFetcher.swift; sourceTree = "<group>"; };
+		A736FD344F79D520A16227B3 /* RemotePushRegistration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemotePushRegistration.swift; sourceTree = "<group>"; };
 		B47E0485E1902045DBFE06B1 /* CodeCapsCompanion.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = CodeCapsCompanion.entitlements; sourceTree = "<group>"; };
 		C1371DB889435F70346FB6AF /* CompanionQuotaModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionQuotaModel.swift; sourceTree = "<group>"; };
 		C2EA171A442F77D9348C68D4 /* InfoMac.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = InfoMac.plist; sourceTree = "<group>"; };
 		C679EF2BE96C94E938E56DC1 /* CodeCapsCompanionMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CodeCapsCompanionMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		D4A7E538557D6D936242BE41 /* FleetSourceDisagreement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = FleetSourceDisagreement.swift; path = ../../Sources/QuotaCore/FleetSourceDisagreement.swift; sourceTree = "<group>"; };
 		D5FD1EFF75431229A669FC5A /* ResetAlarmTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ResetAlarmTracker.swift; path = ../../Sources/QuotaCore/ResetAlarmTracker.swift; sourceTree = "<group>"; };
 		D7A7EF5A19DFD2299052F4DE /* WidgetWindowRows.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetWindowRows.swift; sourceTree = "<group>"; };
 		D7E7C693CD5357E0391881F0 /* CompanionReadTokenStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CompanionReadTokenStore.swift; path = ../../Sources/QuotaCore/CompanionReadTokenStore.swift; sourceTree = "<group>"; };
+		D9E8877EA13789E3986BFEF9 /* UsageAlertPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = UsageAlertPreferences.swift; path = ../../Sources/QuotaCore/UsageAlertPreferences.swift; sourceTree = "<group>"; };
 		DF46F01EE0931315955EE9AF /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		E124B68EB2FF725D59E2EC1F /* SentenceGap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SentenceGap.swift; sourceTree = "<group>"; };
 		E53A47DB2534669DD3BEE62E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
@@ -149,6 +178,25 @@
 		FD27E95016C7BDDE19F6C6E2 /* CodeCapsWidgets.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = CodeCapsWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		FFD1407F089F595B7B485517 /* CodeCapsCompanion.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = CodeCapsCompanion.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		1D9F2C453D32145A481FD28E /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5EF6E3804FDCF37670BB45C0 /* Sentry in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F9880B8D20C15C76764708DB /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4A84751C143F11619F941B8C /* Sentry in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
 		1A10513D0EF01D22E9941268 /* Resources */ = {
@@ -171,6 +219,7 @@
 				674BB9709E48A6D00D4EE92C /* AlarmSoundPlayer.swift */,
 				C1371DB889435F70346FB6AF /* CompanionQuotaModel.swift */,
 				1C1CF45BE162CC9B8CD968DC /* CompanionTheme.swift */,
+				A736FD344F79D520A16227B3 /* RemotePushRegistration.swift */,
 				89A5807594DFD989CADCC6F2 /* ResetAlarmSound.swift */,
 				E124B68EB2FF725D59E2EC1F /* SentenceGap.swift */,
 			);
@@ -187,6 +236,8 @@
 				34CE8BC7DF9DCF088BF1B805 /* CodeCapsCompanionApp.swift */,
 				154D17A5A492536F43729222 /* Info.plist */,
 				C2EA171A442F77D9348C68D4 /* InfoMac.plist */,
+				13B67B47EAC3ED255FDB0018 /* PrivacyInfo.xcprivacy */,
+				50C98744F4C98CE0C6227834 /* SentryTelemetry.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -203,9 +254,13 @@
 			isa = PBXGroup;
 			children = (
 				D7E7C693CD5357E0391881F0 /* CompanionReadTokenStore.swift */,
+				D4A7E538557D6D936242BE41 /* FleetSourceDisagreement.swift */,
+				1B93F39BFE99C5CA6EB141F5 /* QuotaWindowVocabulary.swift */,
 				6B76200EBE871E29BAC8A41B /* ResetAlarmCadence.swift */,
 				5ECFD3E9DC2728ACB5FB5488 /* ResetAlarmMessage.swift */,
 				D5FD1EFF75431229A669FC5A /* ResetAlarmTracker.swift */,
+				D9E8877EA13789E3986BFEF9 /* UsageAlertPreferences.swift */,
+				6F3FDD012180112242E80DF3 /* WidgetPlatformDisplay.swift */,
 				9DE3A7D9C36FF286A082F60E /* WidgetSnapshotFetcher.swift */,
 			);
 			name = Shared;
@@ -258,6 +313,7 @@
 			buildPhases = (
 				5D95C7E939C75DD1BC3FB9A4 /* Sources */,
 				F6BBA5E1D41955121FAB7BDB /* Resources */,
+				1D9F2C453D32145A481FD28E /* Frameworks */,
 				3101B2E13CD6120DF91E6796 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
@@ -267,6 +323,7 @@
 			);
 			name = CodeCapsCompanion;
 			packageProductDependencies = (
+				07191D727884C7621506D926 /* Sentry */,
 			);
 			productName = CodeCapsCompanion;
 			productReference = FFD1407F089F595B7B485517 /* CodeCapsCompanion.app */;
@@ -296,6 +353,7 @@
 			buildPhases = (
 				05C6704BA23A5E8CD1A8412F /* Sources */,
 				30E6F3D60263C25E6403C9E4 /* Resources */,
+				F9880B8D20C15C76764708DB /* Frameworks */,
 				A5CDFCA78778D754F2C17BC0 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
@@ -305,6 +363,7 @@
 			);
 			name = CodeCapsCompanionMac;
 			packageProductDependencies = (
+				897AB651A949F8B5454F5C3C /* Sentry */,
 			);
 			productName = CodeCapsCompanionMac;
 			productReference = C679EF2BE96C94E938E56DC1 /* CodeCapsCompanionMac.app */;
@@ -342,9 +401,11 @@
 					};
 					27F7C2D31B71471EDEB75F09 = {
 						DevelopmentTeam = CC8UTF7ATG;
+						ProvisioningStyle = Automatic;
 					};
 					7B3804F93936EEE96F26551D = {
 						DevelopmentTeam = CC8UTF7ATG;
+						ProvisioningStyle = Automatic;
 					};
 					B8CBE2BF110881FA5BE5725B = {
 						DevelopmentTeam = CC8UTF7ATG;
@@ -360,6 +421,9 @@
 			);
 			mainGroup = 8E8ACB61F08661AAACE99C81;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				53D4D087439DA6FAE23B49F4 /* XCRemoteSwiftPackageReference "sentry-cocoa" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = C53A412A4B40988009B93D1B /* Products */;
 			projectDirPath = "";
@@ -387,6 +451,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				034780ECDDEB89E523E7E1B7 /* Assets.xcassets in Resources */,
+				1FFA2ED8A54A8F8FDE6C2226 /* PrivacyInfo.xcprivacy in Resources */,
 				1F27C36495D3FB241A242476 /* alarm-blow.wav in Resources */,
 				AFBBFB2FD8EEA9DA9EF40042 /* alarm-bottle.wav in Resources */,
 				E77E1CAAEDCB9C3AAD706144 /* alarm-frog.wav in Resources */,
@@ -410,6 +475,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				2300043111EDF02526E8D53B /* Assets.xcassets in Resources */,
+				E38B758D8183E576DEE41A6C /* PrivacyInfo.xcprivacy in Resources */,
 				C23393B11365D16E8ECA5D8E /* alarm-blow.wav in Resources */,
 				BD4C31C68641BA2ED6BE8798 /* alarm-bottle.wav in Resources */,
 				E4F68F451FCE5A7069DA052D /* alarm-frog.wav in Resources */,
@@ -433,11 +499,17 @@
 				0BDDE676F287EA3372B9D24B /* CompanionQuotaModel.swift in Sources */,
 				EA216B5CF6C52764BFD21988 /* CompanionReadTokenStore.swift in Sources */,
 				F245CD4AA6FA8D9C23A5D373 /* CompanionTheme.swift in Sources */,
+				500162E6C6D0CFA94D715BD0 /* FleetSourceDisagreement.swift in Sources */,
+				A82BDBD544318CBB2DC1FE96 /* QuotaWindowVocabulary.swift in Sources */,
+				9DCBAAF5AED382505D06C03D /* RemotePushRegistration.swift in Sources */,
 				1D4D70BAAB091F8992DB1693 /* ResetAlarmCadence.swift in Sources */,
 				99E4B46415A2BCB252FAA6C0 /* ResetAlarmMessage.swift in Sources */,
 				831B4D460D912E65E3D869D3 /* ResetAlarmSound.swift in Sources */,
 				E0EE20CDC3987E143A3FCB48 /* ResetAlarmTracker.swift in Sources */,
 				135997B0E383FB2D00C87CB0 /* SentenceGap.swift in Sources */,
+				41F6AE401AE48C11EDDA4B80 /* SentryTelemetry.swift in Sources */,
+				CADE19D9C4D7A21C22D894AC /* UsageAlertPreferences.swift in Sources */,
+				BE0C14400B9E798CA08168F7 /* WidgetPlatformDisplay.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -451,11 +523,17 @@
 				C48D9F8052E4F39044504C84 /* CompanionQuotaModel.swift in Sources */,
 				4F76A47C0A1C84A3525F004C /* CompanionReadTokenStore.swift in Sources */,
 				311AB846015F2FEDF0014C43 /* CompanionTheme.swift in Sources */,
+				67E08982F84A1E831F95464B /* FleetSourceDisagreement.swift in Sources */,
+				7DA53137FC1697E13889298B /* QuotaWindowVocabulary.swift in Sources */,
+				55B1F0DECD506D0BACFFBBB7 /* RemotePushRegistration.swift in Sources */,
 				31CFC3813E00700F4A1D0E2F /* ResetAlarmCadence.swift in Sources */,
 				DA221384FC017A40031C0446 /* ResetAlarmMessage.swift in Sources */,
 				9D826DF8BA1D0C240F17EAFC /* ResetAlarmSound.swift in Sources */,
 				BF0A24BA7D7B70B182950DA9 /* ResetAlarmTracker.swift in Sources */,
 				137C79F45750F4FA04219AFE /* SentenceGap.swift in Sources */,
+				D88D34F03E978D88086FFCAE /* SentryTelemetry.swift in Sources */,
+				6BF5A6C33EC9F93F7354379F /* UsageAlertPreferences.swift in Sources */,
+				33D335245DED8229722048BA /* WidgetPlatformDisplay.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -465,9 +543,12 @@
 			files = (
 				170FA7844615930B5A1D4CBD /* CodeCapsWidgetBundle.swift in Sources */,
 				6AF2CF64E8C9F39D87C4B24C /* CompanionReadTokenStore.swift in Sources */,
+				F4FCB18D25C83B7AAD11C565 /* FleetSourceDisagreement.swift in Sources */,
+				28EECA14D0CD8CE69B1250B6 /* QuotaWindowVocabulary.swift in Sources */,
 				3C07D53C4EFEE8F91EEDDEC7 /* ResetAlarmCadence.swift in Sources */,
 				0FB40BD33AB5375F6C02ACFC /* WidgetConfigurationIntent.swift in Sources */,
 				AB8C667473DF14CCF7B48F2A /* WidgetDataProvider.swift in Sources */,
+				D403E6C85AA58126F1F15557 /* WidgetPlatformDisplay.swift in Sources */,
 				C7498C0ACDD5320564DE32B0 /* WidgetPresentation.swift in Sources */,
 				C1B3C6C3651687B8283C75CD /* WidgetSnapshotFetcher.swift in Sources */,
 				1C938ECE1998071D65A908EA /* WidgetViews.swift in Sources */,
@@ -481,9 +562,12 @@
 			files = (
 				EA984A6E75520CAB2639A8B4 /* CodeCapsWidgetBundle.swift in Sources */,
 				E8DE0A145EA5D76CD51886E8 /* CompanionReadTokenStore.swift in Sources */,
+				80AFBDA4491ADD0F917DEF11 /* FleetSourceDisagreement.swift in Sources */,
+				8A473847ACFCA158CD1E9386 /* QuotaWindowVocabulary.swift in Sources */,
 				BBE95186FD35EC37DBF13D51 /* ResetAlarmCadence.swift in Sources */,
 				A90E0EF383B2CDF27263BAF0 /* WidgetConfigurationIntent.swift in Sources */,
 				D3C30EA2E4A6B59A22E086DB /* WidgetDataProvider.swift in Sources */,
+				A27D61CE3DC2A52A0B83E662 /* WidgetPlatformDisplay.swift in Sources */,
 				F3C6891672DADC0AD9667E90 /* WidgetPresentation.swift in Sources */,
 				689104F1DF3DDC7C7F75D168 /* WidgetSnapshotFetcher.swift in Sources */,
 				2AA3DE1AA8DD20DD5AD6E403 /* WidgetViews.swift in Sources */,
@@ -534,8 +618,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Generated/CodeCapsCompanionMac.entitlements;
-				CODE_SIGN_IDENTITY = "Apple Distribution";
-				CODE_SIGN_STYLE = Manual;
+				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = CC8UTF7ATG;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -548,7 +631,6 @@
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.simplewithus.codecaps.macos;
 				PRODUCT_NAME = CodeCaps;
-				PROVISIONING_PROFILE_SPECIFIER = "CodeCaps for Mac AppStore";
 				SDKROOT = macosx;
 			};
 			name = Release;
@@ -557,8 +639,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = Generated/CodeCapsWidgetsMac.entitlements;
-				CODE_SIGN_IDENTITY = "Apple Distribution";
-				CODE_SIGN_STYLE = Manual;
+				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = CC8UTF7ATG;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -572,7 +653,6 @@
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.simplewithus.codecaps.macos.widgets;
 				PRODUCT_NAME = CodeCapsWidgets;
-				PROVISIONING_PROFILE_SPECIFIER = "CodeCaps Mac Widgets AppStore";
 				SDKROOT = macosx;
 			};
 			name = Release;
@@ -654,6 +734,7 @@
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SENTRY_DSN = "";
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_STRICT_CONCURRENCY = targeted;
@@ -743,6 +824,7 @@
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SENTRY_DSN = "";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_STRICT_CONCURRENCY = targeted;
@@ -776,6 +858,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODECAPS_APNS_ENVIRONMENT = development;
 				CODE_SIGN_ENTITLEMENTS = App/CodeCapsCompanion.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
@@ -797,6 +880,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODECAPS_APNS_ENVIRONMENT = production;
 				CODE_SIGN_ENTITLEMENTS = App/CodeCapsCompanion.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Distribution";
 				CODE_SIGN_STYLE = Manual;
@@ -864,6 +948,30 @@
 			defaultConfigurationName = Debug;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		53D4D087439DA6FAE23B49F4 /* XCRemoteSwiftPackageReference "sentry-cocoa" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/getsentry/sentry-cocoa.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 9.30.2;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		07191D727884C7621506D926 /* Sentry */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 53D4D087439DA6FAE23B49F4 /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
+			productName = Sentry;
+		};
+		897AB651A949F8B5454F5C3C /* Sentry */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 53D4D087439DA6FAE23B49F4 /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
+			productName = Sentry;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 6952667DEF0FAD0771A6E8A9 /* Project object */;
 }

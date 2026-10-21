@@ -70,6 +70,24 @@ jobs:
           fi
           cd ios/CodeCapsCompanion
           xcodegen generate
+      # The tracked Xcode project, its shared schemes and the generated
+      # entitlement plists are all outputs of project.yml.  Anyone who opens
+      # the tracked project without regenerating it (Xcode, a local
+      # xcodebuild, the TestFlight fallback that reuses the checked-in copy)
+      # gets whatever was last committed, so a project.yml change that does not
+      # carry its regenerated output leaves a project that no longer compiles.
+      # Run before any build step so a stale project fails fast.
+      - name: Check the tracked Xcode project matches project.yml
+        run: |
+          echo "Generated with: $(xcodegen --version)"
+          if [ -n "$(git status --porcelain -- ios/CodeCapsCompanion)" ]; then
+            echo "::error title=Companion Xcode project is stale::The tracked files under ios/CodeCapsCompanion do not match what xcodegen generates from project.yml.  Fix:  cd ios/CodeCapsCompanion && xcodegen generate, then commit the changed files."
+            git status --porcelain -- ios/CodeCapsCompanion
+            git --no-pager diff --stat -- ios/CodeCapsCompanion
+            echo "If the diff looks like generator noise rather than a project.yml change, regenerate with the XcodeGen version printed above, which is the one CI uses."
+            exit 1
+          fi
+          echo "The tracked companion Xcode project matches project.yml."
       - name: List schemes (debug)
         run: |
           cd ios/CodeCapsCompanion
