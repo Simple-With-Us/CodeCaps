@@ -162,6 +162,31 @@ final class AtCapTests: XCTestCase {
         XCTAssertFalse(row.isAtCap)
     }
 
+    func testAScopedCodexAllowanceDoesNotCapTheSubscription() {
+        // A Codex response with only Code Review and additional pools has no
+        // primary window.  These sit beside the subscription, so spending one
+        // must not make the whole Codex row read "At Cap".
+        let row = makeRow([
+            makeWindow(id: "code-review:primary", label: "Code Review · 5-hour", token: "5h",
+                       remaining: 0, resetIn: 3 * hour, provider: "openai"),
+            makeWindow(id: "additional:spark", label: "Spark · 7-day", token: "168h",
+                       remaining: 0, resetIn: 4 * day, provider: "openai"),
+        ])
+        XCTAssertFalse(row.isAtCap)
+        XCTAssertNil(row.atCapWindow)
+    }
+
+    func testACodexSubscriptionWindowStillCapsBesideASpentScopedPool() {
+        let row = makeRow([
+            makeWindow(id: "primary", label: "5h window", token: "5h",
+                       remaining: 0, resetIn: 3 * hour, provider: "openai"),
+            makeWindow(id: "code-review:primary", label: "Code Review · 5-hour", token: "5h",
+                       remaining: 0, resetIn: 2 * hour, provider: "openai"),
+        ])
+        XCTAssertTrue(row.isAtCap)
+        XCTAssertEqual(row.atCapWindow?.window.id, "primary")
+    }
+
     // MARK: What the row says
 
     func testTheCappedRowSpeaksTheCapNotTheMeters() {

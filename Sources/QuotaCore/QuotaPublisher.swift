@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 public enum QuotaSyncFormat: String, CaseIterable, Identifiable, Codable, Sendable {
     case usageMonitorV2 = "usage_monitor_v2"
@@ -236,21 +237,26 @@ public actor QuotaPublisher {
     private nonisolated func makeUsageMonitorV2Payload(windows: [QuotaWindow], occurredAtIso: String, machineName: String?, producerInstanceId: String = QuotaPublisher.producerInstanceId) throws -> (data: Data, eventCount: Int) {
         let machine = machineName ?? Self.machineName
         let events: [[String: Any]] = windows.compactMap { window in
-            guard let remaining = window.boundedRemainingPercent ?? window.remainingPercent else { return nil }
+            let remaining = window.boundedRemainingPercent
+            guard remaining != nil || window.planMetadata != nil else { return nil }
             let seriesKey = window.resetAt ?? "\(occurredAtIso.prefix(13)):00"
             let bucketId = UsageMonitorPushMetadata.bucketId(for: window)
             let readingTime = window.occurredAt.isEmpty ? occurredAtIso : window.occurredAt
             // Include the instance in a length-prefixed key: two Macs can observe
             // the same bucket at the same instant, while retries stay idempotent.
-            let eventId = "subq:" + [producerInstanceId, window.canonicalProviderKey, bucketId, seriesKey, readingTime]
+            var eventId = "subq:" + [producerInstanceId, window.canonicalProviderKey, bucketId, seriesKey, readingTime]
                 .map { "\($0.utf8.count):\($0)" }.joined()
-            let clampedRemaining = round(remaining * 100.0) / 100.0
-            let usedPercent = round(max(0, min(100, 100.0 - clampedRemaining)) * 100.0) / 100.0
+            let planFields = window.planMetadata.map(Self.planTransportFields) ?? [:]
+            if !planFields.isEmpty, let data = try? JSONSerialization.data(withJSONObject: planFields, options: [.sortedKeys]) {
+                let identity = Data(eventId.utf8) + Data([0x1f]) + data
+                eventId = "subq:plan:" + SHA256.hash(data: identity).map { String(format: "%02x", $0) }.joined()
+            }
+            let clampedRemaining = remaining.map { round($0 * 100.0) / 100.0 }
 
             var meta: [String: Any] = [
                 "bucketId": bucketId,
-                "isExhausted": window.isExhausted || clampedRemaining <= 0,
-                "remainingUnknown": false,
+                "isExhausted": window.isExhausted || (clampedRemaining.map { $0 <= 0 } ?? false),
+                "remainingUnknown": clampedRemaining == nil,
                 "scale": "percent_0_100",
                 "source": Self.producerId,
                 "machine": machine,
@@ -262,7 +268,10 @@ public actor QuotaPublisher {
             }
             if let modelId = window.modelId { meta["modelId"] = modelId }
             if let plan = window.planName { meta["planType"] = plan }
-            meta["usedPercent"] = usedPercent
+            meta.merge(planFields) { _, new in new }
+            if let remaining = clampedRemaining {
+                meta["usedPercent"] = round(max(0, min(100, 100 - remaining)) * 100) / 100
+            }
 
             var event: [String: Any] = [
                 "eventId": eventId,
@@ -272,11 +281,13 @@ public actor QuotaPublisher {
                 "metricType": "quota",
                 "billingMode": "actual",
                 "confidence": "actual",
-                "limit": 100,
-                "credits": clampedRemaining,
                 "occurredAt": readingTime,
                 "metadata": meta
             ]
+            if let remaining = clampedRemaining {
+                event["limit"] = 100
+                event["credits"] = remaining
+            }
             // Provenance lives in `metadata` only.  The v2 event schema is
             // strict and `additionalProperties: false`: putting `machine` or
             // `producerInstanceId` on the event itself is rejected as
@@ -298,9 +309,22 @@ public actor QuotaPublisher {
         return (try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys]), events.count)
     }
 
+    /// Usage Monitor permits scalar metadata values only.
+    private nonisolated static func planTransportFields(_ plan: PlanMetadata) -> [String: Any] {
+        var fields: [String: Any] = ["planHasMismatch": plan.hasMismatch]
+        fields["planDetectedName"] = plan.detectedPlanName
+        fields["planUserUpdatedAt"] = plan.userUpdatedAt
+        fields["planUserName"] = plan.userPlanName
+        fields["planUserCostUsd"] = plan.userCostUsd
+        fields["planUserRenewalDateText"] = plan.userRenewalDateText
+        fields["planUserSubtitle"] = plan.userSubtitle
+        fields["planShowCostAndRenewal"] = plan.showCostAndRenewal
+        return fields
+    }
+
     public nonisolated func buildGenericWebhookPayload(windows: [QuotaWindow], occurredAtIso: String, machineName: String?, producerInstanceId: String = QuotaPublisher.producerInstanceId) throws -> Data {
         let machine = machineName ?? Self.machineName
-        let windowPayloads: [[String: Any]] = windows.map { w in
+        let windowPayloads: [[String: Any]] = try windows.map { w in
             var dict: [String: Any] = [
                 "id": w.id,
                 "provider": w.provider,
@@ -314,6 +338,9 @@ public actor QuotaPublisher {
             if let reset = w.resetAt { dict["resetAt"] = reset }
             if let win = w.window { dict["window"] = win }
             if let plan = w.planName { dict["plan"] = plan }
+            if let planMetadata = w.planMetadata {
+                dict["planMetadata"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(planMetadata))
+            }
             dict["occurredAt"] = w.occurredAt
             return dict
         }

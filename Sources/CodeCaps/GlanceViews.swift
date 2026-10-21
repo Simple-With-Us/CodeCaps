@@ -1922,8 +1922,16 @@ func glanceExpandedLines(for row: DisplaySection, now: Date) -> [GlanceMeterLine
     var grouped: [String: [QuotaWindowSnapshot]] = [:]
     for snapshot in rest {
         let label = glanceLineLabel(snapshot)
-        if grouped[label] == nil { order.append(label) }
-        grouped[label, default: []].append(snapshot)
+        let key: String
+        if snapshot.window.canonicalProviderKey == "openai", snapshot.window.isSubModelLimit {
+            let parts = snapshot.window.id.components(separatedBy: ":")
+            key = parts.last == "primary" || parts.last == "secondary"
+                ? parts.dropLast().joined(separator: ":") : snapshot.window.id
+        } else {
+            key = label
+        }
+        if grouped[key] == nil { order.append(key) }
+        grouped[key, default: []].append(snapshot)
     }
 
     return order.flatMap { label -> [GlanceMeterLine] in
@@ -1932,7 +1940,8 @@ func glanceExpandedLines(for row: DisplaySection, now: Date) -> [GlanceMeterLine
             let right = glanceWindowLength(rhs.element, now: now)
             return left == right ? lhs.offset < rhs.offset : left < right
         }.map(\.element)
-        return glanceMeterLines(label: label, windows: windows, now: now)
+        let displayLabel = windows.first.map(glanceLineLabel) ?? label
+        return glanceMeterLines(label: displayLabel, windows: windows, now: now)
     }
 }
 
@@ -1983,6 +1992,9 @@ private func glanceMeterLines(label: String, windows: [QuotaWindowSnapshot], now
 /// ("7d window (Sonnet)" reads "Sonnet"), or its pool.  A window that names
 /// only its cadence covers the whole subscription, so it reads "Overall".
 func glanceLineLabel(_ snapshot: QuotaWindowSnapshot) -> String {
+    if snapshot.window.canonicalProviderKey == "openai", snapshot.window.isSubModelLimit {
+        return snapshot.window.label.components(separatedBy: " · ").first ?? snapshot.window.label
+    }
     let cadence = QuotaWindowVocabulary.standardCadence(
         windowToken: snapshot.window.window,
         label: snapshot.window.label,
@@ -2093,7 +2105,7 @@ struct GlanceRow: View {
     }
 
     private var canExpand: Bool {
-        allowsExpansion && !extraLines.isEmpty
+        allowsExpansion && (!extraLines.isEmpty || (origin == .local && !section.providerDetailRows.isEmpty))
     }
 
     /// The window the row speaks for: the one closest to its cap, ignoring any
@@ -2189,7 +2201,7 @@ struct GlanceRow: View {
                             .help("Active runaway usage anomaly detected")
                     }
                 }
-                if let subtitle = row.poolTitle {
+                if let subtitle = row.poolTitle ?? section.displaySubtitle(customInfo: customInfo) {
                     Text(subtitle)
                         .font(.system(size: 10))
                         .italic(platformNameDimmed)
@@ -2325,6 +2337,11 @@ struct GlanceRow: View {
                 .accessibilityLabel(lineAccessibilityTitle(line))
                 .accessibilityValue(glanceMetersSpeech([line.short, line.long], now: now))
             }
+            if origin == .local && !section.providerDetailRows.isEmpty {
+                ProviderDetailsView(rows: section.providerDetailRows)
+                    .padding(.horizontal, Metrics.glanceGutter)
+                    .padding(.vertical, 6)
+            }
         }
         .padding(.bottom, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -2334,6 +2351,7 @@ struct GlanceRow: View {
     private func lineTitle(_ line: GlanceMeterLine) -> String {
         let windows = [line.short, line.long].compactMap { $0 }
         if let subModel = windows.first(where: { $0.window.isSubModelLimit }) {
+            if subModel.window.canonicalProviderKey == "openai" { return line.label }
             if subModel.window.canonicalProviderKey == "google-antigravity" {
                 return "Gemini 4 Argon"
             }

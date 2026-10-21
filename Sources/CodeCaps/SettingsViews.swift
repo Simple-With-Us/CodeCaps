@@ -455,11 +455,11 @@ struct SettingsSourcesFleetPage: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("CodeCaps reads each CLI's own saved credentials in place." + sentenceGap
                      + "It never asks you for a provider API key.")
-                Text("Provider Checks: 7 HTTP paths and 3 local helpers across 8 AI plan families." + sentenceGap
-                     + "These are source capabilities, not a request count per check.")
+                Text("Provider Checks use existing local sign-ins and provider quota endpoints." + sentenceGap
+                     + "Copilot uses your existing GitHub CLI sign-in.")
                 Text("Codex Session File Checks: 1 local quota source." + sentenceGap
                      + "File checks do not upload or download on their own.")
-                Text("A snapshot is written to ~/Library/Application Support/Usage Monitor/quota-windows.json for BotFleet.")
+                Text("A snapshot is written to ~/Library/Application Support/Usage Monitor/quota-windows.json for BotFleet and other connected fleet apps.")
                 if let widgetSharingError = model.widgetSharingError {
                     Text(widgetSharingError).foregroundStyle(Theme.warning)
                 }
@@ -942,6 +942,7 @@ struct ReaderStatus {
         ReaderStatus(providerKey: "openai", label: "Codex", source: "Codex CLI credentials"),
         ReaderStatus(providerKey: "google-antigravity", label: "Antigravity", source: "Antigravity app or CLI"),
         ReaderStatus(providerKey: "cursor", label: "Cursor", source: "Cursor app session"),
+        ReaderStatus(providerKey: "github-copilot", label: "GitHub Copilot", source: "GitHub CLI sign-in"),
         ReaderStatus(providerKey: "grok", label: "Grok", source: "Grok CLI credentials"),
         ReaderStatus(providerKey: "grok-bot", label: "Grok Bot", source: "Cursor app session"),
         ReaderStatus(providerKey: "minimax", label: "MiniMax", source: "MiniMax CLI credentials"),
