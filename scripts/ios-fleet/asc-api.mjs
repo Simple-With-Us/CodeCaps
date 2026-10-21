@@ -91,6 +91,19 @@ const DISPLAY_TYPE_FAMILY = {
   APP_DESKTOP: "desktop"
 };
 
+// The specific display types an iOS version has to carry, by name.
+//
+// Counting the iPad family is not enough, because the two iPad types are one
+// family and only one of them is the 13-inch profile.  A version carrying
+// only the 12.9-inch set passes a family count and is still refused by App
+// Store Connect with STATE_ERROR.SCREENSHOT_REQUIRED.IPAD_13_PROFILE, which
+// is the refusal this check exists to catch before the submission goes out.
+//
+// The 6.9-inch iPhone is named for the same reason:  its refusal is
+// STATE_ERROR.SCREENSHOT_REQUIRED.IPHONE_DYNAMIC_ISLAND, and a version
+// carrying only the 6.5-inch set is short of it.
+const REQUIRED_SCREENSHOT_DISPLAY_TYPES_IOS = ["APP_IPHONE_67", "APP_IPAD_PRO_3GEN_129"];
+
 // The App Store Connect host.
 const PRODUCTION_API_BASE = "https://api.appstoreconnect.apple.com";
 
@@ -1095,6 +1108,23 @@ async function main() {
       process.exitCode = 2;
       return;
     }
+    //  The named display types, for the same reason the families are checked
+    //  and one step finer.  The iPad family has two members and only the
+    //  13-inch one is the profile App Store Connect requires, so a version
+    //  carrying the 12.9-inch set alone is short of it even though its
+    //  family count is satisfied.
+    if (platform !== "MAC_OS") {
+      const missingTypes = REQUIRED_SCREENSHOT_DISPLAY_TYPES_IOS.filter(
+        (type) => (byDisplayType.get(type) || 0) < 1
+      );
+      if (missingTypes.length > 0) {
+        console.error(
+          `submit-review: not submitting, the version has no screenshot for the required display type ${missingTypes.join(" and ")}`
+        );
+        process.exitCode = 2;
+        return;
+      }
+    }
 
     // 2. The build.
     const attached = await api("GET", `/v1/appStoreVersions/${versionId}/build`);
@@ -1559,7 +1589,7 @@ async function main() {
   // The screenshot set (one per display size) is created on demand and reused,
   // so running this twice does not create a second set.  The display type is
   // the App Store Connect enum, e.g. APP_IPHONE_67 for the 6.9-inch iPhone
-  // set and APP_IPAD_PRO_129 for the 13-inch iPad set.
+  // set and APP_IPAD_PRO_3GEN_129 for the 13-inch iPad set.
   if (method === "upload-screenshots") {
     const localizationId = path;
     let displayType = body;
@@ -1572,18 +1602,30 @@ async function main() {
 
     // "auto" reads the pixel size out of the file and picks the screenshot set
     // that size belongs to, so the display type cannot be mis-specified.
-    // App Store Connect has no APP_IPHONE_69 or APP_IPAD_PRO_13: the 6.9-inch
-    // iPhone size lives in APP_IPHONE_67 and the 13-inch iPad size in
-    // APP_IPAD_PRO_129.  The Mac sizes are Apple's own list, all 16:10, and
-    // they belong to the desktop set.  The sizes are Apple's list, at
+    // App Store Connect has no APP_IPHONE_69 and no APP_IPAD_PRO_13:  the
+    // 6.9-inch iPhone size lives in APP_IPHONE_67.
+    //
+    // The two iPad types are the trap, because the enum names and Apple's
+    // size table point in opposite directions.  Apple's own table at
     // developer.apple.com/help/app-store-connect/reference/screenshot-specifications
+    // says the 13-inch display accepts 2064 x 2752 AND 2048 x 2732, and the
+    // 12.9-inch display accepts only 2048 x 2732.  The enum that takes the
+    // 13-inch resolution is APP_IPAD_PRO_3GEN_129, because the iPad Pro of
+    // the 3rd generation and everything after it, the 13-inch M4 and M5
+    // included, all render at 2064 x 2752.  APP_IPAD_PRO_129 is the 12.9-inch
+    // Pro of the 2nd generation, whose only accepted size is 2048 x 2732.
+    //
+    // Putting 2064 x 2752 in APP_IPAD_PRO_129 is therefore a spec mismatch,
+    // and App Store Connect says so on the asset:  SPEC_MISMATCH, and every
+    // image in the set is FAILED.  The iPhone sizes are Apple's own list, all
+    // 16:10, and they belong to the desktop set.
     const sizeToDisplayType = {
       "1320x2868": "APP_IPHONE_67",
       "1290x2796": "APP_IPHONE_67",
       "1284x2778": "APP_IPHONE_65",
       "1242x2688": "APP_IPHONE_65",
-      "2064x2752": "APP_IPAD_PRO_129",
-      "2048x2732": "APP_IPAD_PRO_3GEN_129",
+      "2064x2752": "APP_IPAD_PRO_3GEN_129",
+      "2048x2732": "APP_IPAD_PRO_129",
       "1280x800": "APP_DESKTOP",
       "1440x900": "APP_DESKTOP",
       "2560x1600": "APP_DESKTOP",

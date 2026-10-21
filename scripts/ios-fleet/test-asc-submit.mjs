@@ -31,7 +31,12 @@ const SUBMISSION_ID = "sub-1";
 // A server that answers the endpoints the command walks.
 //
 // `options` says what the server should report:
-//   iphoneScreens / ipadScreens: the count in each display type's set
+//   iphoneScreens / ipadScreens: the count in each display type's set.
+//     ipadScreens is the 13-inch set, APP_IPAD_PRO_3GEN_129, which is the
+//     profile App Store Connect requires.
+//   ipad129Screens: the count in the 12.9-inch set, APP_IPAD_PRO_129.  The
+//     set is only served when this is given, so a server that does not name
+//     it is a version that carries no 12.9-inch screenshot at all.
 //   desktopScreens: the count in the macOS display type's set; the set is
 //     only served when this is given, so a server that does not name it is a
 //     version that carries no desktop screenshot at all
@@ -213,9 +218,15 @@ function serve(options) {
           },
           {
             id: "set-2",
-            attributes: { screenshotDisplayType: "APP_IPAD_PRO_129", screenshotCount: options.ipadScreens }
+            attributes: { screenshotDisplayType: "APP_IPAD_PRO_3GEN_129", screenshotCount: options.ipadScreens }
           }
         ];
+        if (options.ipad129Screens !== undefined) {
+          sets.push({
+            id: "set-4",
+            attributes: { screenshotDisplayType: "APP_IPAD_PRO_129", screenshotCount: options.ipad129Screens }
+          });
+        }
         if (options.desktopScreens !== undefined) {
           sets.push({
             id: "set-3",
@@ -542,6 +553,25 @@ test("an empty iPad set does not pass on the iPhone images alone", async () => {
     );
     assert.equal(patched.length, 0, "the submission was patched without an iPad screenshot");
   });
+});
+
+test("the 12.9-inch iPad set does not stand in for the 13-inch one", async () => {
+  //  The two iPad display types are one device family, so a version carrying
+  //  only the 12.9-inch set satisfies a family count.  App Store Connect
+  //  still refuses it, with STATE_ERROR.SCREENSHOT_REQUIRED.IPAD_13_PROFILE,
+  //  and the refusal has to happen before the submission goes out.
+  await withServer(
+    { ...READY, ipadScreens: 0, ipad129Screens: 3 },
+    async (base, patched) => {
+      const { code, stderr } = await submit(base);
+      assert.equal(code, 2, `expected a refusal, got ${code}: ${stderr}`);
+      assert.ok(
+        /no screenshot for the required display type APP_IPAD_PRO_3GEN_129/.test(stderr),
+        `the refusal did not name the missing display type:\n${stderr}`
+      );
+      assert.equal(patched.length, 0, "the submission was patched without a 13-inch iPad screenshot");
+    }
+  );
 });
 
 test("a screenshot set that could not be read stops the submission", async () => {

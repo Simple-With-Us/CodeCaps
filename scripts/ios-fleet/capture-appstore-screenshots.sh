@@ -81,11 +81,12 @@ mkdir -p "$DERIVED_ROOT"
 #   iPhone 6.7"    1290 x 2796   (iPhone 16 Plus and friends)
 #   iPhone 6.5"    1284 x 2778   (iPhone 13 Pro Max and friends)
 #   iPhone 6.5"    1242 x 2688   (iPhone 12 Pro Max and friends)
-#   iPad    13"    2064 x 2752   (iPad Pro 13-inch, M4 and M5)
-#   iPad    12.9"  2048 x 2732   (iPad Pro 12.9-inch, 6th generation)
+#   iPad    13"    2064 x 2752   (iPad Pro 13-inch M4 and M5, and the 12.9-inch
+#                                    Pro of the 3rd generation and later)
+#   iPad    12.9"  2048 x 2732   (iPad Pro 12.9-inch, 2nd generation)
 #
-# The iPad Pro 12.9-inch of the 2nd generation captures at 2048 x 2732 like
-# the other 12.9-inch Pro generations.  There is no 2000 x 2664 device.
+# The iPad Pro 12.9-inch of the 2nd generation is the only iPad that renders at
+# 2048 x 2732.  There is no 2000 x 2664 device.
 #
 # The first entry for each display class is the one the App Store Connect
 # screenshot set expects, and the upload step maps a captured file to its set
@@ -120,17 +121,29 @@ image_size() {
 # size, separated by a pipe, or nothing if the size is not one Apple accepts.
 #
 #   1320x2868 -> APP_IPHONE_67|iphone
-#   2064x2752 -> APP_IPAD_PRO_129|ipad
+#   2064x2752 -> APP_IPAD_PRO_3GEN_129|ipad
 #
 # App Store Connect has no APP_IPHONE_69 and no APP_IPAD_PRO_13: the
-# 6.9-inch iPhone size lives in APP_IPHONE_67 and the 13-inch iPad size in
-# APP_IPAD_PRO_129.
+# 6.9-inch iPhone size lives in APP_IPHONE_67.
+#
+# The iPad pair is named against the device, not against the size, and that is
+# what makes it easy to get backwards.  Apple's table says the 13-inch display
+# accepts 2064 x 2752 and 2048 x 2732, and the 12.9-inch display accepts only
+# 2048 x 2732.  The enum that takes the 13-inch resolution is
+# APP_IPAD_PRO_3GEN_129, because the iPad Pro of the 3rd generation and
+# everything after it, the 13-inch M4 and M5 included, all render at
+# 2064 x 2752.  APP_IPAD_PRO_129 is the 12.9-inch Pro of the 2nd generation.
+#
+# Putting 2064 x 2752 in APP_IPAD_PRO_129 is a spec mismatch, and App Store
+# Connect says so on the asset:  SPEC_MISMATCH, and every image in the set is
+# FAILED.  The capture names its files for the class they belong to, so a
+# capture that picks the wrong class names the files wrong as well.
 class_for_size() {
   case "$1" in
     1320x2868|1290x2796) echo "APP_IPHONE_67|iphone" ;;
     1284x2778|1242x2688) echo "APP_IPHONE_65|iphone" ;;
-    2064x2752) echo "APP_IPAD_PRO_129|ipad" ;;
-    2048x2732) echo "APP_IPAD_PRO_3GEN_129|ipad" ;;
+    2064x2752) echo "APP_IPAD_PRO_3GEN_129|ipad" ;;
+    2048x2732) echo "APP_IPAD_PRO_129|ipad" ;;
   esac
 }
 
