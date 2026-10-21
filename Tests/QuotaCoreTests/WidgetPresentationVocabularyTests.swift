@@ -284,4 +284,162 @@ final class WidgetPresentationVocabularyTests: XCTestCase {
             QuotaWindowVocabulary.sevenDay
         )
     }
+
+    /// A sanitized Muse Assist wire payload, as the reader files it today.
+    ///
+    /// The weekly limit arrives with a "weekly" token.  The extra allowance
+    /// arrives with no token at all and with a label the pipeline has already
+    /// rewritten to the catch-all "Other limit" copy, so nothing in the label
+    /// says what kind of window it is.  The provider and the missing token are
+    /// the whole of the signal, which is why the identity has to be carried
+    /// with the window instead of read back from its label.
+    private struct MuseAssistWireWindow {
+        let id: String
+        let label: String
+        let window: String?
+        let providerKey: String
+
+        /// The canonical cadence the widget gives this window.
+        var canonicalCadence: String {
+            QuotaWindowVocabulary.standardCadence(windowToken: window, label: label)
+        }
+
+        /// The label the widget renders for this window.
+        var displayLabel: String {
+            QuotaWindowVocabulary.windowLabel(windowToken: window, existingLabel: label)
+        }
+
+        /// The bar facts the widget's qualifier resolution sees.
+        var barCaption: QuotaWindowVocabulary.BarCaption {
+            QuotaWindowVocabulary.BarCaption(
+                cadence: canonicalCadence,
+                label: displayLabel,
+                isExtraAllowance: QuotaWindowVocabulary.isExtraAllowance(
+                    providerKey: providerKey,
+                    label: label,
+                    windowToken: window
+                )
+            )
+        }
+    }
+
+    private let museAssistWeekly = MuseAssistWireWindow(
+        id: "weekly",
+        label: "weekly window",
+        window: "weekly",
+        providerKey: "muse-assist"
+    )
+
+    private let museAssistExtra = MuseAssistWireWindow(
+        id: "extra",
+        label: "Other limit window",
+        window: nil,
+        providerKey: "muse-assist"
+    )
+
+    /// The extra-allowance identity comes from the provider and the wire
+    /// label, because the rendered label cannot answer it.
+    func testExtraAllowanceIdentityIsReadFromTheWireNotTheDisplayLabel() {
+        XCTAssertTrue(
+            QuotaWindowVocabulary.isExtraAllowance(
+                providerKey: "muse-assist",
+                label: "Other limit window",
+                windowToken: nil
+            ),
+            "a tokenless Muse Assist window that names no period is the extra allowance."
+        )
+        XCTAssertFalse(
+            QuotaWindowVocabulary.isExtraAllowance(
+                providerKey: "muse-assist",
+                label: "8h window",
+                windowToken: "8h"
+            ),
+            "a Muse Assist window with a real token is a meter, not extra usage."
+        )
+        XCTAssertFalse(
+            QuotaWindowVocabulary.isExtraAllowance(
+                providerKey: "anthropic",
+                label: "Other limit window",
+                windowToken: nil
+            ),
+            "another provider's unknown window is not the Muse Assist extra allowance."
+        )
+        // A label that names the kind is an extra allowance for any provider.
+        XCTAssertTrue(
+            QuotaWindowVocabulary.isExtraAllowance(
+                providerKey: "anthropic",
+                label: "Additional allowance",
+                windowToken: "7d"
+            )
+        )
+    }
+
+    /// The owner-approved pair, driven by the real Muse Assist wire shapes.
+    ///
+    /// The extra allowance names no period of its own, so it cannot join the
+    /// weekly's group by itself and the pair never appeared:  the weekly bar
+    /// read no qualifier and the extra bar read none either.  It is extra
+    /// capacity of the period it doubles, so it joins the one sibling that has
+    /// a period, and the two bars read "weekly" and "additional" (owner,
+    /// 2026-10-21).
+    func testMuseAssistExtraAllowanceReadsAdditionalBesideTheWeekly() {
+        let bars = [museAssistWeekly, museAssistExtra]
+
+        // The wire shapes are what the reader files:  the weekly carries a
+        // token, the extra carries none and its label is the catch-all copy.
+        XCTAssertEqual(museAssistWeekly.canonicalCadence, QuotaWindowVocabulary.sevenDay)
+        XCTAssertEqual(museAssistWeekly.displayLabel, "7-day window")
+        XCTAssertEqual(museAssistExtra.canonicalCadence, QuotaWindowVocabulary.otherLimit)
+        XCTAssertEqual(museAssistExtra.displayLabel, "Other limit window")
+
+        let qualifiers = QuotaWindowVocabulary.barQualifiers(forBars: bars.map(\.barCaption))
+        XCTAssertEqual(qualifiers, [
+            QuotaWindowVocabulary.barQualifierWeekly,
+            QuotaWindowVocabulary.barQualifierAdditional
+        ])
+
+        // The caption row is the token beside the qualifier, and the extra
+        // allowance keeps the "+" marker the owner uses for extra quota.
+        let weeklyToken = QuotaWindowVocabulary.popoverCaption(
+            windowToken: museAssistWeekly.canonicalCadence,
+            label: museAssistWeekly.displayLabel
+        )
+        let extraToken = QuotaWindowVocabulary.popoverCaption(
+            windowToken: museAssistExtra.canonicalCadence,
+            label: museAssistExtra.displayLabel
+        )
+        XCTAssertEqual(weeklyToken, "7d")
+        XCTAssertEqual(extraToken, "+")
+        XCTAssertEqual("\(weeklyToken) \(qualifiers[0])", "7d weekly")
+        XCTAssertEqual("\(extraToken) \(qualifiers[1])", "+ additional")
+    }
+
+    /// The sibling has to be unambiguous:  with two different periods beside
+    /// it, an extra allowance cannot know which one it doubles, so it stays on
+    /// its own and neither bar prints a qualifier.
+    func testExtraAllowanceDoesNotJoinWhenItsSiblingsDisagree() {
+        let qualifiers = QuotaWindowVocabulary.barQualifiers(forBars: [
+            QuotaWindowVocabulary.BarCaption(cadence: "7-day", label: "7-day window"),
+            QuotaWindowVocabulary.BarCaption(cadence: "5-hour", label: "5-hour window"),
+            QuotaWindowVocabulary.BarCaption(
+                cadence: QuotaWindowVocabulary.otherLimit,
+                label: "Other limit window",
+                isExtraAllowance: true
+            )
+        ])
+        XCTAssertEqual(qualifiers, ["", "", ""])
+    }
+
+    /// An extra allowance on its own still prints no qualifier:  there is no
+    /// sibling to tell it apart from.
+    func testLoneExtraAllowancePrintsNoQualifier() {
+        let qualifiers = QuotaWindowVocabulary.barQualifiers(forBars: [
+            QuotaWindowVocabulary.BarCaption(
+                cadence: QuotaWindowVocabulary.otherLimit,
+                label: "Other limit window",
+                isExtraAllowance: true
+            )
+        ])
+        XCTAssertEqual(qualifiers, [""])
+    }
 }

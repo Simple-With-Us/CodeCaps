@@ -42,10 +42,16 @@ public enum QuotaWindowVocabulary {
     public struct BarCaption: Equatable, Sendable {
         public let cadence: String
         public let label: String
+        /// True when the window is the extra allowance of another window on the
+        /// same plan.  The label alone cannot answer that:  the label pipeline
+        /// rewrites an extra allowance into the same "Other limit" copy every
+        /// unknown window gets, so the identity has to travel with the bar.
+        public let isExtraAllowance: Bool
 
-        public init(cadence: String, label: String) {
+        public init(cadence: String, label: String, isExtraAllowance: Bool = false) {
             self.cadence = cadence
             self.label = label
+            self.isExtraAllowance = isExtraAllowance
         }
     }
 
@@ -76,9 +82,19 @@ public enum QuotaWindowVocabulary {
     ///
     /// The label is consulted for the extra-allowance case alone, which is
     /// the one qualifier the label still names.
-    public static func barQualifier(forCadence cadence: String, label: String, sharesCadence: Bool) -> String {
+    ///
+    /// `isExtraAllowance` carries the identity the label cannot:  an extra
+    /// allowance is rewritten into the same "Other limit" copy every unknown
+    /// window gets, so a bar that is known to be the extra allowance has to
+    /// say so, or it is read as an ordinary window of its period.
+    public static func barQualifier(
+        forCadence cadence: String,
+        label: String,
+        sharesCadence: Bool,
+        isExtraAllowance: Bool = false
+    ) -> String {
         guard sharesCadence else { return "" }
-        if isExtraAllowanceLabel(label) { return barQualifierAdditional }
+        if isExtraAllowance || isExtraAllowanceLabel(label) { return barQualifierAdditional }
         switch cadence {
         case sevenDay: return barQualifierWeekly
         case oneMonth: return barQualifierMonthly
@@ -99,10 +115,15 @@ public enum QuotaWindowVocabulary {
     /// groups with that window rather than standing alone.  It carries no
     /// cadence of its own, so its label is left out of the lookup rather
     /// than collapsing the row to "Other limit".
-    public static func barCadenceGroup(cadence: String, label: String) -> String {
+    public static func barCadenceGroup(
+        cadence: String,
+        label: String,
+        isExtraAllowance: Bool = false
+    ) -> String {
+        let extra = isExtraAllowance || isExtraAllowanceLabel(label)
         let canonical = standardCadence(
             windowToken: cadence,
-            label: isExtraAllowanceLabel(label) ? "" : label
+            label: extra ? "" : label
         )
         if canonical != otherLimit { return canonical }
         let tokens = lexicalTokens(label)
@@ -118,14 +139,40 @@ public enum QuotaWindowVocabulary {
     /// Each bar is resolved against its siblings, so a bar that shares its
     /// cadence with another bar gets the word that tells the two apart and a
     /// lone bar gets none.
+    ///
+    /// An extra allowance has no period of its own:  it is extra capacity of
+    /// the period it doubles, and a provider that reports it without a token
+    /// names no period at all.  When its own cadence resolves to nothing, it
+    /// joins the group of the one sibling that has a period, which is what
+    /// makes the owner-approved pair ("weekly" / "additional") reachable.
+    /// The sibling has to be unambiguous, so a platform with two different
+    /// periods beside it leaves the extra allowance on its own.
     public static func barQualifiers(forBars bars: [BarCaption]) -> [String] {
-        let groups = bars.map { barCadenceGroup(cadence: $0.cadence, label: $0.label) }
+        var groups = bars.map {
+            barCadenceGroup(
+                cadence: $0.cadence,
+                label: $0.label,
+                isExtraAllowance: $0.isExtraAllowance
+            )
+        }
+        for index in bars.indices where bars[index].isExtraAllowance && groups[index] == otherLimit {
+            let siblingGroups = Set(
+                bars.indices
+                    .filter { $0 != index }
+                    .map { groups[$0] }
+                    .filter { $0 != otherLimit }
+            )
+            if siblingGroups.count == 1, let adopted = siblingGroups.first {
+                groups[index] = adopted
+            }
+        }
         return bars.indices.map { index in
             let siblings = groups.indices.filter { $0 != index }.map { groups[$0] }
             return barQualifier(
                 forCadence: groups[index],
                 label: bars[index].label,
-                sharesCadence: siblings.contains(groups[index])
+                sharesCadence: siblings.contains(groups[index]),
+                isExtraAllowance: bars[index].isExtraAllowance
             )
         }
     }
@@ -255,6 +302,29 @@ public enum QuotaWindowVocabulary {
             || lower.contains("+ extra")
             || (lower.contains("additional") && lower.contains("extra"))
             || lower.hasSuffix(" extra")
+    }
+
+    /// Whether a window is the extra allowance of another window on the same
+    /// plan.
+    ///
+    /// The label detector answers for labels that name the kind ("Additional
+    /// allowance", "+ extra").  A provider that files its extra allowance
+    /// without naming it is caught by the provider-aware check:  Muse Assist
+    /// reports it as a tokenless window that resolves to no period, and the
+    /// Mac popover already treats exactly that window as the extra allowance
+    /// (`isMuseAssistExtra`).
+    ///
+    /// The identity has to be carried with the window rather than read back
+    /// from its label, because the label pipeline rewrites an extra allowance
+    /// into the same "Other limit" copy every unknown window gets.
+    public static func isExtraAllowance(
+        providerKey: String?,
+        label: String,
+        windowToken: String? = nil
+    ) -> Bool {
+        if isExtraAllowanceLabel(label) { return true }
+        guard let providerKey, !providerKey.isEmpty else { return false }
+        return isMuseAssistExtra(providerKey: providerKey, windowToken: windowToken, label: label)
     }
 
     public static func isOpaqueProviderKey(_ text: String) -> Bool {

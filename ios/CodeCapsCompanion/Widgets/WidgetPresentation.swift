@@ -14,6 +14,11 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
     public let isExhausted: Bool
     public let isMasked: Bool
     public let observedAt: Date?
+    /// True when the window is the extra allowance of another window on the
+    /// same plan.  The label cannot answer this:  an extra allowance is
+    /// rewritten into the same "Other limit" copy every unknown window gets,
+    /// so the identity travels with the window.
+    public let isExtraAllowance: Bool
     /// Short distinguishing label for a bar when two bars share one cadence
     /// token (e.g. two "7d" bars).  "Free weekly limit" reads "weekly",
     /// "Additional tokens" reads "additional".  Empty when the row needs no
@@ -40,7 +45,8 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
         isExhausted: Bool = false,
         isMasked: Bool = false,
         observedAt: Date? = nil,
-        barQualifier: String = ""
+        barQualifier: String = "",
+        isExtraAllowance: Bool = false
     ) {
         self.id = id
         self.label = label
@@ -51,6 +57,7 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
         self.isMasked = isMasked
         self.observedAt = observedAt
         self.barQualifier = barQualifier
+        self.isExtraAllowance = isExtraAllowance
     }
 
     private static let staleAfter: TimeInterval = 30 * 60
@@ -89,7 +96,8 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
             isExhausted: isExhausted,
             isMasked: isMasked,
             observedAt: observedAt,
-            barQualifier: qualifier
+            barQualifier: qualifier,
+            isExtraAllowance: isExtraAllowance
         )
     }
 
@@ -172,7 +180,11 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
         guard windows.count > 1 else { return windows }
         let qualifiers = QuotaWindowVocabulary.barQualifiers(
             forBars: windows.map {
-                QuotaWindowVocabulary.BarCaption(cadence: $0.cadence, label: $0.label)
+                QuotaWindowVocabulary.BarCaption(
+                    cadence: $0.cadence,
+                    label: $0.label,
+                    isExtraAllowance: $0.isExtraAllowance
+                )
             }
         )
         return windows.indices.map { index in
@@ -627,6 +639,16 @@ public enum WidgetPresentation {
                 existingLabel: w.label.isEmpty ? cadence : w.label,
                 resetAt: parsedReset
             )
+            //  The extra-allowance identity is read off the wire label, not
+            //  off the display label:  the display copy rewrites an extra
+            //  allowance into the same "Other limit" text every unknown
+            //  window gets, so by the time the qualifier is resolved the
+            //  difference is gone.
+            let isExtraAllowance = QuotaWindowVocabulary.isExtraAllowance(
+                providerKey: providerKey,
+                label: w.label,
+                windowToken: w.window
+            )
 
             let cadenceKey = cadence.lowercased()
             if !seenCadenceKeys.contains(cadenceKey) {
@@ -639,7 +661,8 @@ public enum WidgetPresentation {
                     resetAt: parsedReset,
                     isExhausted: exhausted,
                     isMasked: false,
-                    observedAt: observed
+                    observedAt: observed,
+                    isExtraAllowance: isExtraAllowance
                 ))
             }
         }
