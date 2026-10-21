@@ -11,7 +11,7 @@
 // port, with a synthetic key.  No network, no fleet-secrets, no real secret.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { generateKeyPairSync } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -24,11 +24,11 @@ const script = join(here, "asc-api.mjs");
 const root = mkdtempSync(join(tmpdir(), "asc-client-test-"));
 
 const keyPath = join(root, "synthetic.p8");
-writeFileSync(keyPath, generateKeyPairSync("ec", { namedCurve: "prime256v1" }).privateKey
-  .export({ type: "pkcs8", format: "pem" }));
-//  A private key only its owner may read, which is what the client now
-//  requires of a file it is pointed at.  The staged key that
-//  ios-stage-asc-key.sh publishes is mode 600 for the same reason.
+const keyPem = generateKeyPairSync("ec", { namedCurve: "prime256v1" }).privateKey
+  .export({ type: "pkcs8", format: "pem" });
+writeFileSync(keyPath, keyPem);
+//  The staged key that ios-stage-asc-key.sh publishes is mode 600, and the
+//  shell layer refuses a key file other users can read.
 chmodSync(keyPath, 0o600);
 
 const PROD = "https://api.appstoreconnect.apple.com";
@@ -40,11 +40,14 @@ function run(args, env = {}) {
         ...process.env,
         ASC_KEY_ID: "SYNTHETICKEYID1",
         ASC_ISSUER_ID: "synthetic-issuer",
-        ASC_KEY_PATH: keyPath,
-        //  The credential sources are cleared so an ambient ASC_KEY_P8 or
+        //  The client takes the key from the environment:  a path on disk is
+        //  not an approved secret source (Kody rule 42), so the shell layer
+        //  hands the key over in ASC_KEY_P8.
+        ASC_KEY_P8: keyPem,
+        //  The credential sources are cleared so an ambient ASC_KEY_PATH or
         //  APPLE_API_* on the machine running the suite cannot decide which
         //  credential a test gets.
-        ASC_KEY_P8: "",
+        ASC_KEY_PATH: "",
         APPLE_API_KEY_ID: "",
         APPLE_API_ISSUER_ID: "",
         APPLE_API_KEY_P8_BASE64: "",
@@ -199,7 +202,7 @@ test("a rejected key is reported as a rejected key, not as a missing app", async
   //  any of it being published.  It is taken from the key material rather
   //  than from the PEM envelope:  the envelope is the same for every key, so
   //  a preview of it names none of them.
-  const pem = readFileSync(keyPath, "utf8");
+  const pem = keyPem;
   const material = pem.replace(/-----[^-]+-----/g, "").trim();
   const expectedPreview = `${material.slice(0, 8)}…${material.slice(-4)}`;
   assert.ok(
@@ -228,9 +231,10 @@ test("two different keys do not get the same masked preview", async () => {
   //  from the same file in the test above cannot catch a preview that is
   //  identical for every key, so the two keys have to be compared with each
   //  other.
+  const otherKeyPem = generateKeyPairSync("ec", { namedCurve: "prime256v1" }).privateKey
+    .export({ type: "pkcs8", format: "pem" });
   const otherKeyPath = join(root, "other-synthetic.p8");
-  writeFileSync(otherKeyPath, generateKeyPairSync("ec", { namedCurve: "prime256v1" }).privateKey
-    .export({ type: "pkcs8", format: "pem" }));
+  writeFileSync(otherKeyPath, otherKeyPem);
   chmodSync(otherKeyPath, 0o600);
 
   const server = createServer((req, res) => {
@@ -241,10 +245,10 @@ test("two different keys do not get the same masked preview", async () => {
   const base = `http://127.0.0.1:${server.address().port}`;
   const previews = [];
   try {
-    for (const path of [keyPath, otherKeyPath]) {
+    for (const pem of [keyPem, otherKeyPem]) {
       const result = await run(["latest-build-seq", "com.example.nothing", "1.0"], {
         ASC_API_BASE: base,
-        ASC_KEY_PATH: path
+        ASC_KEY_P8: pem
       });
       const diagnostic = result.stderr.split("\n").find((line) => line.startsWith("latest-build-seq:"));
       const preview = diagnostic && diagnostic.match(/key in play (\S+)/);
@@ -286,13 +290,12 @@ test("a large payload is not truncated on the way out", async () => {
   );
 });
 
-test("a secret in the environment wins over a key file", async () => {
-  //  Two credential sources are present: the key the operator exported and a
-  //  path left over from an earlier step.  The secret has to be the one used,
-  //  because a file is the weakest source and the path must never decide which
-  //  credential signs the request.
-  const secretPem = generateKeyPairSync("ec", { namedCurve: "prime256v1" }).privateKey
-    .export({ type: "pkcs8", format: "pem" });
+test("a named key file is not a credential source", async () => {
+  //  A path on disk is not an approved secret source, so the client never
+  //  reads one:  the shell layer that owns the credential reads the staged
+  //  key and hands it over in the environment.  The file below holds a real
+  //  private key, so a client that still read paths would sign the request
+  //  with it and name the file as the credential in play.
   const server = createServer((req, res) => {
     res.writeHead(401, { "Content-Type": "text/plain" });
     res.end("unauthorized");
@@ -303,8 +306,7 @@ test("a secret in the environment wins over a key file", async () => {
   try {
     result = await run(["GET", "/v1/apps"], {
       ASC_API_BASE: base,
-      ASC_KEY_P8: secretPem,
-      ASC_KEY_PATH: join(root, "never-read.p8")
+      ASC_KEY_PATH: keyPath
     });
   } finally {
     server.close();
@@ -312,16 +314,16 @@ test("a secret in the environment wins over a key file", async () => {
   assert.match(
     result.stderr,
     /asc-auth: using ASC_KEY_P8 environment/,
-    `the exported secret was not the credential in play:\n${result.stderr}`
+    `the environment was not the credential in play:\n${result.stderr}`
   );
   assert.doesNotMatch(result.stderr, /using ASC_KEY_PATH environment/);
 });
 
-test("a key file that is not a private key is refused, and its content stays out of the log", async () => {
-  //  The path names a real file, so the client used to read it, treat it as
-  //  key material, and print a masked preview of it when App Store Connect
-  //  refused the credential.  A path that names the wrong file has to be
-  //  refused instead, and the file's content must never reach a log line.
+test("a path that names the wrong file is not read, and its content stays out of the log", async () => {
+  //  The path names a real file.  A client that read paths would treat it as
+  //  key material and print a masked preview of it when App Store Connect
+  //  refused the credential, so the file's content must never reach a log
+  //  line and the request has to be signed with the environment credential.
   const notAKey = join(root, "not-a-key.txt");
   writeFileSync(notAKey, "hunter2 this is not a private key\n");
   chmodSync(notAKey, 0o600);
@@ -339,30 +341,38 @@ test("a key file that is not a private key is refused, and its content stays out
   } finally {
     server.close();
   }
-  assert.equal(result.code, 1, `expected the refusal exit, got ${result.code}: ${result.stderr}`);
-  assert.match(result.stderr, /does not hold a PEM private key/);
-  assert.doesNotMatch(result.stderr, /hunter2/, "the refused file's content reached the log");
-  assert.equal(requests, 0, "a refused credential must not reach App Store Connect");
+  assert.match(result.stderr, /asc-auth: using ASC_KEY_P8 environment/);
+  assert.doesNotMatch(result.stderr, /hunter2/, "the named file's content reached the log");
+  assert.equal(requests, 1, "the request has to be signed with the environment credential");
 });
 
-test("a key file other users can read is refused", async () => {
-  //  A private key another user can read is already leaked, so the client
-  //  must not treat it as usable key material in the first place.
-  const loose = join(root, "loose.p8");
-  writeFileSync(loose, generateKeyPairSync("ec", { namedCurve: "prime256v1" }).privateKey
-    .export({ type: "pkcs8", format: "pem" }));
-  chmodSync(loose, 0o644);
-  const result = await run(["GET", "/v1/apps"], { ASC_KEY_PATH: loose });
+test("a malformed PEM in the environment is a credential error, not a stack trace", async () => {
+  //  An envelope is not a key:  a truncated key, an armored block or a
+  //  mangled export carries the envelope and still fails to parse.  The
+  //  refusal has to name the credential, because the signer would fail with a
+  //  stack trace that says nothing about what to change.
+  const malformed = "-----BEGIN PRIVATE KEY-----\nnot base64 at all\n-----END PRIVATE KEY-----\n";
+  const result = await run(["GET", "/v1/apps"], { ASC_KEY_P8: malformed });
   assert.equal(result.code, 1, `expected the refusal exit, got ${result.code}: ${result.stderr}`);
-  assert.match(result.stderr, /readable by others/);
+  assert.match(result.stderr, /ASC_KEY_P8 is set but is not a PEM private key/);
+  assert.ok(
+    !/at Object\.|at Module\.|at file:/.test(result.stderr),
+    `the refusal came with a stack trace:\n${result.stderr}`
+  );
 });
 
-test("a symlinked key path is refused rather than followed", async () => {
+//  The two refusals below belong to the staged key file, which the shell
+//  layer reads, not to the client.  They are covered in test-asc-key.test.mjs:
+//  a file other users can read is refused, and a symlink is not followed.
+
+test("a symlinked key path is never followed", async () => {
   //  A symlink is followed by every ordinary file read, so it would let a
-  //  path that looks like a key file resolve to something else entirely.
+  //  path that looks like a key file resolve to something else entirely.  The
+  //  client reads no path at all, and the staged key reader that does read
+  //  files refuses a symlink as well (test-asc-key.test.mjs).
   const link = join(root, "linked.p8");
   symlinkSync(keyPath, link);
   const result = await run(["GET", "/v1/apps"], { ASC_KEY_PATH: link });
-  assert.equal(result.code, 1, `expected the refusal exit, got ${result.code}: ${result.stderr}`);
-  assert.match(result.stderr, /is not a regular file/);
+  assert.match(result.stderr, /asc-auth: using ASC_KEY_P8 environment/);
+  assert.doesNotMatch(result.stderr, /is not a regular file/);
 });

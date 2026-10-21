@@ -25,12 +25,11 @@ const root = mkdtempSync(join(tmpdir(), "asc-upload-test-"));
 
 // A synthetic EC key: the script signs a JWT with it and the server here never
 // verifies the signature.
-const keyPath = join(root, "synthetic.p8");
-writeFileSync(keyPath, generateKeyPairSync("ec", { namedCurve: "prime256v1" }).privateKey
-  .export({ type: "pkcs8", format: "pem" }));
-//  A private key only its owner may read, which is what the client now
-//  requires of a file it is pointed at.
-chmodSync(keyPath, 0o600);
+//  A synthetic EC key.  The client takes it from the environment, because a
+//  path on disk is not an approved secret source:  the shell layer that owns
+//  the credential hands it over in ASC_KEY_P8.
+const keyPem = generateKeyPairSync("ec", { namedCurve: "prime256v1" }).privateKey
+  .export({ type: "pkcs8", format: "pem" });
 
 // A stub PNG: the script only reads the IHDR width and height out of bytes
 // 16..23 to decide which screenshot set the file belongs to, and never looks
@@ -173,7 +172,7 @@ function upload(behaviour, file = pngPath) {
           ASC_API_BASE: apiBase,
           ASC_KEY_ID: "SYNTHETICKEYID1",
           ASC_ISSUER_ID: "synthetic-issuer",
-          ASC_KEY_PATH: keyPath
+          ASC_KEY_P8: keyPem
         },
         stdio: ["ignore", "pipe", "pipe"]
       });
@@ -278,7 +277,7 @@ test("a rejected key is named, never previewed", async () => {
         ASC_API_BASE: apiBase,
         ASC_KEY_ID: "SYNTHETICKEYID1",
         ASC_ISSUER_ID: "synthetic-issuer",
-        ASC_KEY_PATH: keyPath
+        ASC_KEY_P8: keyPem
       },
       stdio: ["ignore", "pipe", "pipe"]
     });
