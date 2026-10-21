@@ -63,43 +63,54 @@ public enum QuotaWindowVocabulary {
     }
 
     /// The short distinguishing noun for a bar caption row, or "" when the
-    /// label names none.
+    /// row needs none.
     ///
-    /// "Free weekly limit" reads "weekly", "Additional tokens" reads
-    /// "additional", and a label with no such word reads nothing.
-    public static func barQualifier(forLabel label: String) -> String {
-        if isExtraAllowanceLabel(label) { return barQualifierAdditional }
-        let tokens = lexicalTokens(label)
-        if tokens.contains("weekly") { return barQualifierWeekly }
-        if tokens.contains("monthly") || tokens.contains("billing") { return barQualifierMonthly }
-        if tokens.contains("daily") { return barQualifierDaily }
-        if tokens.contains("hourly") { return barQualifierHourly }
-        return ""
-    }
-
-    /// The qualifier for a bar caption row, or "" when the row needs none.
+    /// The qualifier is named from the canonical cadence the caption row
+    /// already prints, not from prose words:  the widget's own label pipeline
+    /// rewrites a label into the hyphenated cadence copy ("7-day window"), so
+    /// a matcher that looks for "weekly" in the label never matches a label
+    /// the widget renders (Kody review 2026-10-21).
     ///
     /// A cadence word is only worth printing when a sibling bar shares the
     /// cadence, because on a lone bar "7d weekly" says the same thing twice.
-    public static func barQualifier(forLabel label: String, sharesCadence: Bool) -> String {
+    ///
+    /// The label is consulted for the extra-allowance case alone, which is
+    /// the one qualifier the label still names.
+    public static func barQualifier(forCadence cadence: String, label: String, sharesCadence: Bool) -> String {
         guard sharesCadence else { return "" }
-        return barQualifier(forLabel: label)
+        if isExtraAllowanceLabel(label) { return barQualifierAdditional }
+        switch cadence {
+        case sevenDay: return barQualifierWeekly
+        case oneMonth: return barQualifierMonthly
+        case oneDay: return barQualifierDaily
+        case fiveHour: return barQualifierHourly
+        default: return ""
+        }
     }
 
     /// The canonical cadence a window belongs to, used to group the bars that
     /// share one period.
+    ///
+    /// The window's own cadence wins, because that is what the caption token
+    /// beside the bar prints;  the label is only consulted when the cadence
+    /// field cannot be resolved on its own (Kody review 2026-10-21).
+    ///
+    /// An extra allowance is extra capacity of the period it doubles, so it
+    /// groups with that window rather than standing alone.  It carries no
+    /// cadence of its own, so its label is left out of the lookup rather
+    /// than collapsing the row to "Other limit".
     public static func barCadenceGroup(cadence: String, label: String) -> String {
+        let canonical = standardCadence(
+            windowToken: cadence,
+            label: isExtraAllowanceLabel(label) ? "" : label
+        )
+        if canonical != otherLimit { return canonical }
         let tokens = lexicalTokens(label)
         if tokens.contains("weekly") { return sevenDay }
         if tokens.contains("monthly") || tokens.contains("billing") { return oneMonth }
         if tokens.contains("daily") { return oneDay }
         if tokens.contains("hourly") { return fiveHour }
-        if isExtraAllowanceLabel(label) {
-            // An extra allowance is extra capacity of the period it doubles,
-            // so it groups with that window rather than standing alone.
-            return standardCadence(windowToken: cadence, label: "")
-        }
-        return standardCadence(windowToken: cadence, label: label)
+        return canonical
     }
 
     /// The qualifier of every bar in a caption row, in the same order.
@@ -112,7 +123,8 @@ public enum QuotaWindowVocabulary {
         return bars.indices.map { index in
             let siblings = groups.indices.filter { $0 != index }.map { groups[$0] }
             return barQualifier(
-                forLabel: bars[index].label,
+                forCadence: groups[index],
+                label: bars[index].label,
                 sharesCadence: siblings.contains(groups[index])
             )
         }
@@ -277,9 +289,9 @@ public enum QuotaWindowVocabulary {
     ) -> String? {
         let lower = token.lowercased()
         if ["5h", "5hr", "5-hour", "5hours", "300m"].contains(lower) { return fiveHour }
-        if ["1d", "24h", "daily", "day"].contains(lower) { return oneDay }
-        if ["7d", "168h", "1w", "weekly", "week"].contains(lower) { return sevenDay }
-        if ["1m", "30d", "mo", "month", "monthly"].contains(lower) { return oneMonth }
+        if ["1d", "24h", "daily", "day", "1-day"].contains(lower) { return oneDay }
+        if ["7d", "168h", "1w", "weekly", "week", "7-day"].contains(lower) { return sevenDay }
+        if ["1m", "30d", "mo", "month", "monthly", "1-month"].contains(lower) { return oneMonth }
         if let seconds = ResetAlarmCadence.durationSeconds(lower) {
             return cadenceFromDuration(seconds, label: label, monthlyHint: monthlyHint)
         }

@@ -65,49 +65,120 @@ final class WidgetPresentationVocabularyTests: XCTestCase {
     /// caption token already showed, so a daily window read "1d daily".  The
     /// qualifier names the kind of allowance instead.
     func testDailyQualifierDoesNotRestateTheCadenceToken() {
-        XCTAssertEqual(
-            QuotaWindowVocabulary.barQualifier(forLabel: "Daily cap", sharesCadence: true),
-            "daily allowance"
+        // The production label for a daily window is "1-day window":  the
+        // widget's label pipeline rewrites the prose away.
+        let qualifier = QuotaWindowVocabulary.barQualifier(
+            forCadence: QuotaWindowVocabulary.oneDay,
+            label: "1-day window",
+            sharesCadence: true
         )
-        XCTAssertNotEqual(
-            QuotaWindowVocabulary.barQualifier(forLabel: "Daily cap", sharesCadence: true),
-            "daily"
-        )
+        XCTAssertEqual(qualifier, "daily allowance")
+        XCTAssertNotEqual(qualifier, "daily")
 
-        let token = QuotaWindowVocabulary.popoverCaption(windowToken: "Daily", label: "Daily cap")
+        let token = QuotaWindowVocabulary.popoverCaption(windowToken: "1-day", label: "1-day window")
         XCTAssertEqual(token, "1d")
-        let caption = "\(token) \(QuotaWindowVocabulary.barQualifier(forLabel: "Daily cap", sharesCadence: true))"
+        let caption = "\(token) \(qualifier)"
         XCTAssertEqual(caption, "1d daily allowance")
         XCTAssertNotEqual(caption, "1d daily")
     }
 
-    /// Kody rule "Avoid Substring Matching for Canonical Limit/Window Labels"
-    /// (binding, 2026-10-21): a canonical qualifier is matched on an exact
-    /// lexical token, never as a substring, so "nothourly" is not an hourly
-    /// window.
-    func testBarQualifierMatchesExactTokensNotSubstrings() {
-        XCTAssertEqual(QuotaWindowVocabulary.barQualifier(forLabel: "nothourly"), "")
-        XCTAssertEqual(QuotaWindowVocabulary.barQualifier(forLabel: "notweekly"), "")
-        XCTAssertEqual(QuotaWindowVocabulary.barQualifier(forLabel: "notmonthly"), "")
-        XCTAssertEqual(QuotaWindowVocabulary.barQualifier(forLabel: "notdaily"), "")
-        XCTAssertEqual(QuotaWindowVocabulary.barQualifier(forLabel: "unhourlyplan"), "")
-
+    /// Kody review 2026-10-21: the qualifier is named from the canonical
+    /// cadence the caption row prints, not from prose words in the label.
+    ///
+    /// The widget builds every window label through
+    /// `QuotaWindowVocabulary.windowLabel(...)`, which rewrites the label into
+    /// the hyphenated cadence copy ("7-day window"), so a matcher that looks
+    /// for "weekly" in the label never matched a label the widget renders and
+    /// the owner-approved "weekly" / "additional" pair never appeared.
+    func testBarQualifierIsNamedFromTheCadenceNotTheLabel() {
         XCTAssertEqual(
-            QuotaWindowVocabulary.barQualifier(forLabel: "Hourly plan"),
-            QuotaWindowVocabulary.barQualifierHourly
-        )
-        XCTAssertEqual(
-            QuotaWindowVocabulary.barQualifier(forLabel: "Weekly cap"),
+            QuotaWindowVocabulary.barQualifier(
+                forCadence: QuotaWindowVocabulary.sevenDay,
+                label: "7-day window",
+                sharesCadence: true
+            ),
             QuotaWindowVocabulary.barQualifierWeekly
         )
         XCTAssertEqual(
-            QuotaWindowVocabulary.barQualifier(forLabel: "Monthly plan"),
+            QuotaWindowVocabulary.barQualifier(
+                forCadence: QuotaWindowVocabulary.oneMonth,
+                label: "1-month window",
+                sharesCadence: true
+            ),
             QuotaWindowVocabulary.barQualifierMonthly
         )
         XCTAssertEqual(
-            QuotaWindowVocabulary.barQualifier(forLabel: "Daily cap"),
-            QuotaWindowVocabulary.barQualifierDaily
+            QuotaWindowVocabulary.barQualifier(
+                forCadence: QuotaWindowVocabulary.fiveHour,
+                label: "5-hour window",
+                sharesCadence: true
+            ),
+            QuotaWindowVocabulary.barQualifierHourly
         )
+        // A label that still carries prose cannot rename the cadence the row
+        // already prints.
+        XCTAssertEqual(
+            QuotaWindowVocabulary.barQualifier(
+                forCadence: QuotaWindowVocabulary.sevenDay,
+                label: "Free weekly limit",
+                sharesCadence: true
+            ),
+            QuotaWindowVocabulary.barQualifierWeekly
+        )
+        // A lone bar needs none.
+        XCTAssertEqual(
+            QuotaWindowVocabulary.barQualifier(
+                forCadence: QuotaWindowVocabulary.sevenDay,
+                label: "7-day window",
+                sharesCadence: false
+            ),
+            ""
+        )
+        // The extra allowance is the one case the label still names.
+        XCTAssertEqual(
+            QuotaWindowVocabulary.barQualifier(
+                forCadence: QuotaWindowVocabulary.sevenDay,
+                label: "Additional allowance",
+                sharesCadence: true
+            ),
+            QuotaWindowVocabulary.barQualifierAdditional
+        )
+    }
+
+    /// Kody rule "Avoid Substring Matching for Canonical Limit/Window Labels"
+    /// (binding, 2026-10-21): the prose fallback in the cadence group reads
+    /// whole lexical tokens, so "nothourly" is not an hourly window.
+    func testBarCadenceGroupFallbackMatchesExactTokensNotSubstrings() {
+        XCTAssertEqual(
+            QuotaWindowVocabulary.barCadenceGroup(cadence: "", label: "nothourly"),
+            QuotaWindowVocabulary.otherLimit
+        )
+        XCTAssertEqual(
+            QuotaWindowVocabulary.barCadenceGroup(cadence: "", label: "unhourlyplan"),
+            QuotaWindowVocabulary.otherLimit
+        )
+    }
+
+    /// The canonical labels the vocabulary produces must resolve back to
+    /// themselves when they are handed to the cadence lookup as a token.
+    ///
+    /// The widget passes a window's canonical cadence back through
+    /// `standardCadence(windowToken:label:)`, and an extra allowance is looked
+    /// up with an empty label, so a canonical label that did not resolve would
+    /// collapse that row to "Other limit" and lose the period it doubles.
+    func testCanonicalCadenceLabelsRoundTripThroughTheToken() {
+        for canonical in [
+            QuotaWindowVocabulary.fiveHour,
+            QuotaWindowVocabulary.oneDay,
+            QuotaWindowVocabulary.sevenDay,
+            QuotaWindowVocabulary.oneMonth
+        ] {
+            XCTAssertEqual(
+                QuotaWindowVocabulary.standardCadence(windowToken: canonical, label: ""),
+                canonical,
+                "the canonical label '\(canonical)' must resolve back to itself."
+            )
+        }
     }
 
     /// Kody review 2026-10-21: a lone bar printing a cadence word says the
@@ -149,6 +220,32 @@ final class WidgetPresentationVocabularyTests: XCTestCase {
         ])
     }
 
+    /// The same rule, driven by the labels the widget actually renders.
+    ///
+    /// A window label is built through `QuotaWindowVocabulary.windowLabel(...)`,
+    /// which rewrites the prose into the hyphenated cadence copy, so the
+    /// production shape of a 7-day window is "7-day window" and not "Free
+    /// weekly limit".  The pair the owner approved has to come out of that
+    /// shape too (Kody review 2026-10-21).
+    func testProductionLabelsNameTheQualifierFromTheCadence() {
+        let sharedWeek = QuotaWindowVocabulary.barQualifiers(forBars: [
+            QuotaWindowVocabulary.BarCaption(cadence: "7-day", label: "7-day window"),
+            QuotaWindowVocabulary.BarCaption(cadence: "7-day", label: "Additional allowance")
+        ])
+        XCTAssertEqual(sharedWeek, [
+            QuotaWindowVocabulary.barQualifierWeekly,
+            QuotaWindowVocabulary.barQualifierAdditional
+        ])
+
+        // Two windows of different periods are not siblings, so a lone 7-day
+        // bar prints no qualifier at all.
+        let loneWeek = QuotaWindowVocabulary.barQualifiers(forBars: [
+            QuotaWindowVocabulary.BarCaption(cadence: "7-day", label: "7-day window"),
+            QuotaWindowVocabulary.BarCaption(cadence: "5-hour", label: "5-hour window")
+        ])
+        XCTAssertEqual(loneWeek, ["", ""])
+    }
+
     /// The cadence group is what decides whether two bars share a cadence, so
     /// it has to follow the period rather than the wording.
     func testBarCadenceGroupFollowsThePeriod() {
@@ -167,6 +264,24 @@ final class WidgetPresentationVocabularyTests: XCTestCase {
         XCTAssertEqual(
             QuotaWindowVocabulary.barCadenceGroup(cadence: "1m", label: "Billing cycle"),
             QuotaWindowVocabulary.oneMonth
+        )
+        // The window's own cadence wins over the label's prose, because that
+        // is the cadence the caption token beside the bar prints.  A group
+        // that disagreed with the token gave a bar a qualifier that named a
+        // period its own token contradicted (Kody review 2026-10-21).
+        XCTAssertEqual(
+            QuotaWindowVocabulary.barCadenceGroup(cadence: "5h", label: "Weekly cap"),
+            QuotaWindowVocabulary.fiveHour
+        )
+        XCTAssertEqual(
+            QuotaWindowVocabulary.barCadenceGroup(cadence: "7-day", label: "7-day window"),
+            QuotaWindowVocabulary.sevenDay
+        )
+        // An extra allowance is looked up without its label, so it keeps the
+        // period it doubles instead of collapsing to "Other limit".
+        XCTAssertEqual(
+            QuotaWindowVocabulary.barCadenceGroup(cadence: "7-day", label: "Additional allowance"),
+            QuotaWindowVocabulary.sevenDay
         )
     }
 }

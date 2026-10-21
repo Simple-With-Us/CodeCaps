@@ -176,7 +176,12 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
             }
         )
         return windows.indices.map { index in
-            windows[index].withBarQualifier(qualifiers[index])
+            // A caller that named the qualifier keeps it.  The sibling
+            // resolution only fills in a qualifier the caller left blank, so
+            // the public `barQualifier:` parameter does not silently vanish on
+            // a platform with two or more windows (Kody review 2026-10-21).
+            let qualifier = qualifiers[index].isEmpty ? windows[index].barQualifier : qualifiers[index]
+            return windows[index].withBarQualifier(qualifier)
         }
     }
 
