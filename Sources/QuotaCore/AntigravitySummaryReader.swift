@@ -46,7 +46,14 @@ public struct AntigravitySummaryReader: Sendable {
                 guard let family else { continue }
                 for bucket in (group["buckets"] as? [[String: Any]]) ?? [] {
                     guard let bucketID = bucket["bucketId"] as? String, let period = period(bucket) else { continue }
-                    let fraction = finiteNumber(bucket["remainingFraction"]).flatMap { $0 >= 0 && $0 <= 1 ? $0 : nil }
+                    // A fraction this reader cannot interpret is not a fraction
+                    // it may offer as remaining quota, so a value outside
+                    // 0...1 is refused the same way an omitted value is:  no
+                    // remaining, exhausted.  The provider's payload is a 0...1
+                    // fraction, so a number outside that range means the shape
+                    // changed and nothing in it can be believed.
+                    let fraction = finiteNumber(bucket["remainingFraction"])
+                        .flatMap { $0 >= 0 && $0 <= 1 ? $0 : nil }
                     let reset = bucket["resetTime"] as? String
                     let cadenceName = period == "5h" ? QuotaWindowVocabulary.fiveHour : QuotaWindowVocabulary.sevenDay
                     let label = modelId == "argon"
