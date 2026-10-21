@@ -784,8 +784,11 @@ async function main() {
     const preRelease = hasPreRelease
       ? included.find((item) => isPlainObject(item) && item.id === preReleaseId)
       : null;
+    //  The marketing version lives on the pre-release version as `version`
+    //  (see the field map above); `versionString` belongs to
+    //  appStoreVersions, which is where the version's own name is read.
     const marketing = preRelease && isPlainObject(preRelease.attributes)
-      ? preRelease.attributes.versionString
+      ? preRelease.attributes.version
       : null;
     //  A build that names a pre-release version but whose marketing version
     //  cannot be read is not a build with nothing to compare:  it is a

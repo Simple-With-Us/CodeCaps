@@ -56,6 +56,7 @@ const SET_ID = "set-xyz-789";
 function upload(behaviour, file = pngPath) {
   return new Promise((resolve) => {
     const calls = [];
+    const createdSets = [];
     // The pre-signed upload URL Apple hands out is absolute, so the port has to
     // be known before a reservation is written -- and the port is only known
     // once the server is listening.
@@ -85,6 +86,10 @@ function upload(behaviour, file = pngPath) {
       if (req.url === "/v1/appScreenshotSets" && req.method === "POST") {
         //  A set for a display type the server does not have yet.
         const wanted = JSON.parse(body || "{}")?.data?.attributes?.screenshotDisplayType;
+        //  The response echoes `wanted`, so echoing it back cannot tell a
+        //  correct size-to-display-type mapping from a wrong one.  Record what
+        //  was actually asked for so a test can assert on it directly.
+        createdSets.push(wanted);
         return json(201, { data: {
           id: `set-${wanted}`,
           type: "appScreenshotSets",
@@ -153,7 +158,7 @@ function upload(behaviour, file = pngPath) {
       child.stdout.on("data", (d) => { stdout += d; });
       child.stderr.on("data", (d) => { stderr += d; });
       child.on("close", (code) => {
-        server.close(() => resolve({ code, stdout, stderr, calls }));
+        server.close(() => resolve({ code, stdout, stderr, calls, createdSets }));
       });
     });
   });
@@ -173,9 +178,15 @@ const reportsDropped = (stderr) => stderr.includes(`dropped the reservation ${SC
 test("a Mac screenshot goes to the desktop set", async () => {
   //  Apple's Mac sizes are all 16:10, and they belong to the desktop set.
   //  Without them in the map the upload would refuse a file it should
-  //  accept.
-  const { code, stderr } = await upload({}, macPath);
+  //  accept.  The exit code alone cannot tell the desktop set from a wrong
+  //  one, because the mock answers with whatever display type it was asked
+  //  for, so the created set is asserted on directly.
+  const { code, stderr, createdSets } = await upload({}, macPath);
   assert.equal(code, 0, `expected a clean run, got ${code}: ${stderr}`);
+  assert.deepEqual(
+    createdSets, ["APP_DESKTOP"],
+    `the Mac size was mapped to the wrong set: ${JSON.stringify(createdSets)}`
+  );
 });
 
 test("a successful upload commits the reservation and leaves nothing open", async () => {

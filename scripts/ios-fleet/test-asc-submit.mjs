@@ -132,7 +132,7 @@ function serve(options) {
             attributes: { version: "243" },
             relationships: { preReleaseVersion: { data: { type: "preReleaseVersions", id: "pre-1" } } }
           },
-          included: [{ type: "preReleaseVersions", id: "pre-1", attributes: { versionString: "1.0.243" } }]
+          included: [{ type: "preReleaseVersions", id: "pre-1", attributes: { version: "1.0.243" } }]
         });
       }
       if (url === `/v1/appStoreVersions/${VERSION_ID}`) {
