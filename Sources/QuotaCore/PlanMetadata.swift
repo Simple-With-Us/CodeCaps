@@ -83,8 +83,13 @@ public enum PlanComparison {
         case "github-copilot": names = ["github copilot", "copilot", "github"]
         default: names = []
         }
-        for name in names where text.hasPrefix(name + " ") || text.hasPrefix(name + ":") {
-            text = String(text.dropFirst(name.count)).trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+        // Strip only a separator after the provider name, never punctuation
+        // that belongs to the tier: "GitHub Copilot Pro+" and "Pro+" must
+        // reach the key filter identically, and a raw token such as
+        // "chatgpt_plus" must match an entered "ChatGPT Plus".
+        let separators = CharacterSet(charactersIn: " :_-").union(.whitespacesAndNewlines)
+        for name in names where [" ", ":", "_", "-"].contains(where: { text.hasPrefix(name + $0) }) {
+            text = String(text.dropFirst(name.count)).trimmingCharacters(in: separators)
             break
         }
         text = text.replacingOccurrences(of: "×", with: "x")

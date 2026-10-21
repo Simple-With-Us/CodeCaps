@@ -36,6 +36,19 @@ final class ProviderDetailsPresentationTests: XCTestCase {
         XCTAssertEqual(section.drivingWindow?.window.id, base.id)
     }
 
+    func testScopedOnlyCodexPoolsDoNotDriveTheHeadline() {
+        let now = Date()
+        let stamp = ISO8601DateFormatter().string(from: now)
+        let scoped = QuotaWindow(id: "local-mac:openai:code-review", provider: "Codex", providerKey: "openai",
+                                 label: "Code Review · 5h", remainingPercent: 0,
+                                 isExhausted: true, occurredAt: stamp)
+        let section = QuotaPlatformSection(providerKey: "openai", providerLabel: "Codex", expected: true,
+                                           windows: [QuotaWindowSnapshot(window: scoped, now: now)])
+        XCTAssertFalse(section.isAtCap)
+        XCTAssertNil(section.drivingWindow, "a spent scoped pool must not read as the subscription at 0%")
+        XCTAssertNil(section.minimumRemainingPercent)
+    }
+
     func testExpandedCodexPoolsKeepTheirOwnLabelsAndCadences() {
         let now = Date()
         let stamp = ISO8601DateFormatter().string(from: now)

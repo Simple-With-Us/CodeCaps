@@ -18,6 +18,15 @@ final class ProviderUsageDetailsTests: XCTestCase {
         XCTAssertNil(details.creditBalance)
     }
 
+    func testCodexIdentityHonorsCamelCaseTokenKeys() {
+        let fromAccess = ProviderUsageDetails.codex(payload: [:], tokens: [
+            "accessToken": jwt(["https://api.openai.com/profile": ["email": "camel-access@example.test"]])])
+        XCTAssertEqual(fromAccess.accountEmail, "camel-access@example.test")
+        let fromIdentity = ProviderUsageDetails.codex(payload: [:], tokens: [
+            "idToken": jwt(["email": "camel-identity@example.test"])])
+        XCTAssertEqual(fromIdentity.accountEmail, "camel-identity@example.test")
+    }
+
     func testInvalidMetadataDoesNotBecomeAReading() {
         for value: Any in [true, -1, "NaN", "inf", "unknown"] {
             XCTAssertNil(ProviderUsageDetails.codex(payload: ["credits": ["balance": value]], tokens: [:]).creditBalance)

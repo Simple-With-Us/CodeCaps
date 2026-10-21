@@ -843,7 +843,10 @@ extension QuotaPlatformSection {
 
     /// The window a one-line row speaks for: whichever is closest to its cap.
     var drivingWindow: QuotaWindowSnapshot? {
-        let eligible = windows.filter { !$0.window.isSupplementaryVideoQuota }
+        // Scoped Codex pools sit beside the subscription and never cap it
+        // (`atCapWindow`), so they cannot speak for the row either: the
+        // headline and the cap verdict come from one window set.
+        let eligible = windows.filter { !$0.window.isSupplementaryVideoQuota && !$0.window.isScopedPoolAllowance }
         let primary = eligible.filter { !$0.window.isSubModelLimit }
         let pool = primary.isEmpty ? eligible : primary
         return pool.filter { $0.remainingPercent != nil }
@@ -853,7 +856,7 @@ extension QuotaPlatformSection {
 
     /// The lowest remaining percentage across the windows a sidebar row summarises.
     var minimumRemainingPercent: Double? {
-        let fresh = windows.filter { $0.isFresh && !$0.window.isSupplementaryVideoQuota }
+        let fresh = windows.filter { $0.isFresh && !$0.window.isSupplementaryVideoQuota && !$0.window.isScopedPoolAllowance }
         let primary = fresh.filter { !$0.window.isSubModelLimit }
         let pool = primary.isEmpty ? fresh : primary
         return pool

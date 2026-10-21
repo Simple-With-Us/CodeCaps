@@ -1575,7 +1575,8 @@ final class MonitorModel: ObservableObject {
                 handoffError = nil
             } catch { handoffError = "BotFleet quota sharing is unavailable." }
         }
-        publishWidgetSnapshot(candidates: response.windows)
+        // Same candidate set as the refresh paths, so a Settings edit never drops the fleet rows.
+        publishWidgetSnapshot(candidates: response.windows + fleetWindowGroups.flatMap(\.windows))
         if syncEnabled && !windows.isEmpty {
             Task { [weak self] in _ = await self?.pushQuotasIfEnabled(windows: windows) }
         }

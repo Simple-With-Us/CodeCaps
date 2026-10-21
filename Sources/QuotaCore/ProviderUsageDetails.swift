@@ -32,8 +32,10 @@ public struct ProviderUsageDetails: Equatable, Sendable {
         }()
         // The usage response is authoritative; JWT payloads are display-only
         // fallbacks and never authorize requests or change account routing.
-        let access = claims(tokens["access_token"] as? String)
-        let identity = claims(tokens["id_token"] as? String)
+        // Either key spelling is accepted, matching `readCodex`.  Only the
+        // key names are consulted here; the token text is never logged.
+        let access = claims(firstString(tokens, ["access_token", "accessToken"]))
+        let identity = claims(firstString(tokens, ["id_token", "idToken"]))
         let accessProfile = access["https://api.openai.com/profile"] as? [String: Any] ?? [:]
         let identityProfile = identity["https://api.openai.com/profile"] as? [String: Any] ?? [:]
         let candidates = [payload["email"], accessProfile["email"], access["email"],
@@ -48,6 +50,16 @@ public struct ProviderUsageDetails: Equatable, Sendable {
               !value.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
         else { return nil }
         return value
+    }
+
+    private static func firstString(_ root: [String: Any], _ keys: [String]) -> String? {
+        for key in keys {
+            if let string = root[key] as? String,
+               !string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return string.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+        return nil
     }
 
     private static func claims(_ token: String?) -> [String: Any] {

@@ -19,6 +19,16 @@ final class PlanComparisonTests: XCTestCase {
         XCTAssertTrue(PlanComparison.disagrees(detected: "individual_pro", entered: "Copilot Business", providerKey: "github-copilot"))
     }
 
+    func testProviderPrefixKeepsTierPlusAndAcceptsUnderscoreSeparators() {
+        // The prefix strip must not eat a "+" that belongs to the tier, so a
+        // typed provider prefix cannot change whether Pro and Pro+ match.
+        XCTAssertFalse(PlanComparison.disagrees(detected: "Pro+", entered: "GitHub Copilot Pro+", providerKey: "github-copilot"))
+        XCTAssertFalse(PlanComparison.disagrees(detected: "individual_pro_plus", entered: "Copilot Pro+", providerKey: "github-copilot"))
+        XCTAssertTrue(PlanComparison.disagrees(detected: "individual_pro_plus", entered: "GitHub Copilot Pro", providerKey: "github-copilot"))
+        XCTAssertFalse(PlanComparison.disagrees(detected: "chatgpt_plus", entered: "ChatGPT Plus", providerKey: "openai"))
+        XCTAssertFalse(PlanComparison.disagrees(detected: "chatgpt-plus", entered: "Plus", providerKey: "openai"))
+    }
+
     func testRealTierDifferencesStayDifferent() {
         XCTAssertTrue(PlanComparison.disagrees(detected: "Max 20x", entered: "Max 5x", providerKey: "anthropic"))
         XCTAssertTrue(PlanComparison.disagrees(detected: "Pro+", entered: "Pro", providerKey: "github-copilot"))
