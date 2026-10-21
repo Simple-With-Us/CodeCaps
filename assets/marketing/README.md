@@ -10,5 +10,4 @@ here; the website build does its own sizing.
 | `muse-code-pace-card.png` | Muse Code platform card: 5h window under pace, 7-day window over pace |
 | `minimax-usage-history-all-windows.png` | MiniMax Usage History, all windows, with the 5-hour / 7-day quota bars below |
 
-Missing files are pending owner upload (requested 2026-10-21).  Drop the
-three PNGs beside this README with exactly the names above.
+All three files were supplied by the owner 2026-10-21 and stored below.  To replace one, overwrite the file in place and keep the name.
