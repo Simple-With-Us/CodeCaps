@@ -74,6 +74,27 @@ class DecideTests(unittest.TestCase):
         verdict, _details = status.decide([payload], self.names)
         self.assertEqual(verdict, "success")
 
+    def test_cancelled_run_is_pending_not_failure(self):
+        # A cancelled run never finished, so it is no verdict about the
+        # code.  The gate waits for a replacement instead of failing on a
+        # run that never ran.
+        payload = {"check_runs": [
+            run_check("package", "cancelled", 3),
+            run_check("companion", "success", 4),
+        ]}
+        verdict, details = status.decide([payload], self.names)
+        self.assertEqual(verdict, "pending")
+        self.assertEqual(details, ["package=cancelled"])
+
+    def test_failure_still_wins_over_a_cancelled_sibling(self):
+        payload = {"check_runs": [
+            run_check("package", "cancelled", 3),
+            run_check("companion", "failure", 4),
+        ]}
+        verdict, details = status.decide([payload], self.names)
+        self.assertEqual(verdict, "failure")
+        self.assertIn("companion=failure", details)
+
     def test_newer_failure_replaces_success(self):
         payload = {"check_runs": [
             run_check("package", "success", 1),
@@ -213,6 +234,124 @@ class AwaitScriptTests(unittest.TestCase):
                 env={"CHECKS_JSON": str(path), "PATH": "/usr/bin:/bin"},
             )
             self.assertEqual(pending.returncode, 2, pending.stderr)
+
+    def test_cancelled_fixture_is_pending_not_failure(self):
+        script = ROOT / "await-swift-ci-checks.sh"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "checks.json"
+            path.write_text(json.dumps({"check_runs": [
+                run_check("Mac package build and test", "cancelled", 1),
+            ]}), encoding="utf-8")
+            pending = subprocess.run(
+                ["bash", str(script)],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={"CHECKS_JSON": str(path), "PATH": "/usr/bin:/bin"},
+            )
+            self.assertEqual(pending.returncode, 2, pending.stderr)
+
+
+class RedispatchTests(unittest.TestCase):
+    """The gate replaces a cancelled compile run instead of waiting forever."""
+
+    def test_cancelled_run_is_replaced_and_the_gate_waits_for_the_replacement(self):
+        script = ROOT / "await-swift-ci-checks.sh"
+        sha = "0" * 40
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stub_dir = root / "bin"
+            stub_dir.mkdir()
+            log = root / "dispatch.log"
+            current = root / "current.json"
+            good = root / "good.json"
+            current.write_text(json.dumps({"check_runs": [
+                run_check("Mac package build and test", "cancelled", 1),
+            ]}), encoding="utf-8")
+            good.write_text(json.dumps({"check_runs": [
+                run_check("Mac package build and test", "success", 2),
+                run_check("iOS companion compile", "success", 3),
+            ]}), encoding="utf-8")
+            gh = stub_dir / "gh"
+            gh.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -u\n"
+                'if [[ "$*" == *"/dispatches"* ]]; then\n'
+                f'  echo "$*" >> "{log}"\n'
+                f'  cp "{good}" "{current}"\n'
+                "  exit 0\n"
+                "fi\n"
+                'if [[ "$*" == *"check-runs"* ]]; then\n'
+                f'  cat "{current}"\n'
+                "  exit 0\n"
+                "fi\n"
+                "exit 0\n",
+                encoding="utf-8")
+            gh.chmod(0o755)
+            completed = subprocess.run(
+                ["bash", str(script)],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={
+                    "PATH": f"{stub_dir}:/usr/bin:/bin",
+                    "REPO": "Simple-With-Us/CodeCaps",
+                    "SHA": sha,
+                    "GH_TOKEN": "stub",
+                    "REDISPATCH_ON_CANCEL": "1",
+                    "DEADLINE_SECONDS": "60",
+                    "POLL_SECONDS": "1",
+                },
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertTrue(log.exists(), "the gate did not dispatch a replacement run")
+            dispatched = log.read_text(encoding="utf-8")
+            self.assertIn(f"ref={sha}", dispatched)
+            self.assertIn("actions/workflows/swift-ci.yml/dispatches", dispatched)
+
+    def test_without_the_opt_in_the_gate_does_not_dispatch(self):
+        script = ROOT / "await-swift-ci-checks.sh"
+        sha = "0" * 40
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stub_dir = root / "bin"
+            stub_dir.mkdir()
+            log = root / "dispatch.log"
+            current = root / "current.json"
+            current.write_text(json.dumps({"check_runs": [
+                run_check("Mac package build and test", "cancelled", 1),
+            ]}), encoding="utf-8")
+            gh = stub_dir / "gh"
+            gh.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -u\n"
+                'if [[ "$*" == *"/dispatches"* ]]; then\n'
+                f'  echo "$*" >> "{log}"\n'
+                "  exit 0\n"
+                "fi\n"
+                'if [[ "$*" == *"check-runs"* ]]; then\n'
+                f'  cat "{current}"\n'
+                "  exit 0\n"
+                "fi\n"
+                "exit 0\n",
+                encoding="utf-8")
+            gh.chmod(0o755)
+            completed = subprocess.run(
+                ["bash", str(script)],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={
+                    "PATH": f"{stub_dir}:/usr/bin:/bin",
+                    "REPO": "Simple-With-Us/CodeCaps",
+                    "SHA": sha,
+                    "GH_TOKEN": "stub",
+                    "DEADLINE_SECONDS": "2",
+                    "POLL_SECONDS": "1",
+                },
+            )
+            self.assertEqual(completed.returncode, 1, completed.stderr)
+            self.assertFalse(log.exists(), "the gate dispatched a replacement without the opt-in")
 
 
 if __name__ == "__main__":

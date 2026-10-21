@@ -16,7 +16,13 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: swift-ci-${{ github.ref }}
+  # A pull request keeps one group, so a new push cancels the run it
+  # replaces.  A push to main gets one group per commit instead:  GitHub
+  # cancels a run that is still PENDING when a new run joins its group, so a
+  # single shared group made every later merge cancel the compile run that
+  # the release gate was waiting on.  One group per commit means a merge
+  # never cancels another merge's compile run.
+  group: swift-ci-${{ github.event_name == 'pull_request' && github.ref || format('{0}-{1}', github.ref, github.sha) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
