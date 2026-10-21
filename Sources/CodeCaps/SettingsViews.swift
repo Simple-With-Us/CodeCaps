@@ -32,7 +32,7 @@ struct SettingsMenuBarPage: View {
                 .pickerStyle(.segmented)
             } footer: {
                 Text("Both keeps the menu bar icon and a Dock icon." + sentenceGap
-                     + "Dock hides the menu bar icon, so use Open CodeCaps to reach your quota.")
+                     + "Dock hides the menu bar icon, so use the Dashboard to reach your quota.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
@@ -455,11 +455,11 @@ struct SettingsSourcesFleetPage: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("CodeCaps reads each CLI's own saved credentials in place." + sentenceGap
                      + "It never asks you for a provider API key.")
-                Text("Provider Checks: 7 HTTP paths and 3 local helpers across 8 AI plan families." + sentenceGap
-                     + "These are source capabilities, not a request count per check.")
+                Text("Provider Checks use existing local sign-ins and provider quota endpoints." + sentenceGap
+                     + "Copilot uses your existing GitHub CLI sign-in.")
                 Text("Codex Session File Checks: 1 local quota source." + sentenceGap
                      + "File checks do not upload or download on their own.")
-                Text("A snapshot is written to ~/Library/Application Support/Usage Monitor/quota-windows.json for BotFleet.")
+                Text("A snapshot is written to ~/Library/Application Support/Usage Monitor/quota-windows.json for BotFleet and other connected fleet apps.")
                 if let widgetSharingError = model.widgetSharingError {
                     Text(widgetSharingError).foregroundStyle(Theme.warning)
                 }
@@ -556,7 +556,7 @@ struct SettingsSourcesFleetPage: View {
     // MARK: Source Ranking
 
     /// Per-provider source enable + rank.  Sections only render for providers
-    /// that have more than one observed source — the Settings page should not
+    /// that have more than one observed source — the Dashboard page should not
     /// tease a control that has no effect.
     @ViewBuilder
     private var sourcesRankSection: some View {
@@ -942,6 +942,7 @@ struct ReaderStatus {
         ReaderStatus(providerKey: "openai", label: "Codex", source: "Codex CLI credentials"),
         ReaderStatus(providerKey: "google-antigravity", label: "Antigravity", source: "Antigravity app or CLI"),
         ReaderStatus(providerKey: "cursor", label: "Cursor", source: "Cursor app session"),
+        ReaderStatus(providerKey: "github-copilot", label: "GitHub Copilot", source: "GitHub CLI sign-in"),
         ReaderStatus(providerKey: "grok", label: "Grok", source: "Grok CLI credentials"),
         ReaderStatus(providerKey: "grok-bot", label: "Grok Bot", source: "Cursor app session"),
         ReaderStatus(providerKey: "minimax", label: "MiniMax", source: "MiniMax CLI credentials"),
@@ -1238,7 +1239,9 @@ struct SettingsAboutPage: View {
         /// keeps the owner's own black template icon; this is the version that
         /// belongs inside the app.  Owner 2026-10-20: "transparent background
         /// when it is shown on the app like on the About page or settings.  For
-        /// those versions the time dots and hand are dark."
+        /// those versions the time dots and hand are dark."  Dark appearance
+        /// keeps the off-white ground, because the needle and the dots are
+        /// dark and would otherwise disappear against the page.
         static let asset: NSImage? = BrandMarkImage.asset
 
         var body: some View {
@@ -1259,8 +1262,10 @@ struct SettingsAboutPage: View {
                             }
                         }
                 } else {
-                    // Only if the owner's artwork is ever missing from the
-                    // bundle: keep a mark on screen rather than an empty gap.
+                    // A last resort only.  The owner's artwork is a required
+                    // bundled resource, and `BrandAssetTests` fails CI when
+                    // the bundle stops carrying it, so this only ever keeps a
+                    // mark on screen rather than an empty gap.
                     Image(systemName: "gauge.with.dots.needle.50percent")
                         .font(.system(size: size))
                         .foregroundStyle(Theme.accent)
@@ -1935,7 +1940,7 @@ struct SettingsInfisicalPage: View {
             try settings.clearConfiguration { try InfisicalIdentityStore.delete() }
             refreshFromStore(reloadSetup: true)
             succeeded = true
-            message = "Setup removed." + sentenceGap + "Settings stay local until you add one again."
+            message = "Setup removed." + sentenceGap + "The Dashboard stays local until you add one again."
             keyMessage = nil
             NotificationCenter.default.post(name: .infisicalIdentityChanged, object: nil)
         } catch {

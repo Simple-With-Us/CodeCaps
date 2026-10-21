@@ -131,7 +131,7 @@ final class AccentContrastTests: XCTestCase {
 // MARK: - Ink on an accent fill
 //
 // Owner report 2026-10-09: the same accent read as black text on the System
-// control and white text on Open CodeCaps.  Only the hand-drawn surface was
+// control and white text on Dashboard.  Only the hand-drawn surface was
 // wrong — AppKit derives a native control's own label colour from its fill —
 // and it was wrong because the ink was chosen from the *appearance* rather than
 // from the accent.

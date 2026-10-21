@@ -102,7 +102,7 @@ struct DisplaySection: Identifiable, Equatable {
     /// real number that must not be believed and only the pool knows it.
     var atCapWindow: QuotaWindowSnapshot? {
         let eligible = section.windows
-            .filter { !$0.window.isSupplementaryVideoQuota && !isMasked($0) }
+            .filter { !$0.window.isSupplementaryVideoQuota && !$0.window.isScopedPoolAllowance && !isMasked($0) }
             .filter { $0.remainingPercent != nil }
         let primary = eligible.filter { !$0.window.isSubModelLimit }
         let pool = primary.isEmpty ? eligible : primary

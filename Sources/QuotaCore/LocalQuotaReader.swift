@@ -39,6 +39,7 @@ public struct LocalQuotaReader: Sendable {
     private let renewClaudeLogin: @Sendable () async -> Void
     private let renewalThrottle: ClaudeRenewalThrottle
     private let claudeKeychainTimeout: TimeInterval
+    private let claudeProfileTimeout: TimeInterval
 
     private static let maxCredentialBytes = 1_048_576
     private static let maxResponseBytes = 1_048_576
@@ -58,7 +59,8 @@ public struct LocalQuotaReader: Sendable {
         readClaudeCredential: (@Sendable () async -> ClaudeCredentialAccess)? = nil,
         renewClaudeLogin: (@Sendable () async -> Void)? = nil,
         renewalThrottle: ClaudeRenewalThrottle = .shared,
-        claudeKeychainTimeout: TimeInterval = ClaudeCredentialSource.boundedAccessTimeout
+        claudeKeychainTimeout: TimeInterval = ClaudeCredentialSource.boundedAccessTimeout,
+        claudeProfileTimeout: TimeInterval = 1
     ) {
         self.homeDirectory = homeDirectory.standardizedFileURL
         self.now = now
@@ -74,6 +76,7 @@ public struct LocalQuotaReader: Sendable {
         } else { self.renewClaudeLogin = {} }
         self.renewalThrottle = renewalThrottle
         self.claudeKeychainTimeout = claudeKeychainTimeout
+        self.claudeProfileTimeout = claudeProfileTimeout.isFinite ? min(1, max(0.001, claudeProfileTimeout)) : 1
     }
 
     /// Reads all configured local sources concurrently.  This method never
@@ -196,7 +199,12 @@ public struct LocalQuotaReader: Sendable {
                     retryRequest.setValue("Bearer \(refreshedToken)", forHTTPHeaderField: "Authorization")
                     retryRequest.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
                     if let retryPayload = try? await requestJSON(retryRequest) {
-                        let retryWindows = parseClaude(retryPayload, planType: firstString(refreshedOAuth, ["subscriptionType", "subscription_type"]), observedAt: now())
+                        let retryDetails = await claudeUsageDetails(payload: retryPayload, usageRequest: retryRequest)
+                        let retryWindows = parseClaude(retryPayload, planType: claudePlanName(refreshedOAuth), observedAt: now()).map { value in
+                            var value = value
+                            value.usageDetails = retryDetails
+                            return value
+                        }
                         if !retryWindows.isEmpty {
                             return ProviderRead(provider: provider, windows: retryWindows, issue: nil)
                         }
@@ -209,11 +217,44 @@ public struct LocalQuotaReader: Sendable {
             return ProviderRead(provider: provider, windows: [], issue: issue,
                                 needsConsent: false)
         }
-        let windows = parseClaude(payload, planType: firstString(oauth, ["subscriptionType", "subscription_type"]), observedAt: now())
+        let details = await claudeUsageDetails(payload: payload, usageRequest: request)
+        let windows = parseClaude(payload, planType: claudePlanName(oauth), observedAt: now()).map { value in
+            var value = value
+            value.usageDetails = details
+            return value
+        }
         guard !windows.isEmpty else {
             return ProviderRead(provider: provider, windows: [unknownWindow(provider: provider, label: "Claude quota", observedAt: now())], issue: "Claude returned no readable quota windows.")
         }
         return ProviderRead(provider: provider, windows: windows, issue: nil)
+    }
+
+    private func claudeUsageDetails(payload: [String: Any], usageRequest: URLRequest) async -> ProviderUsageDetails {
+        var profileRequest = usageRequest
+        profileRequest.url = URL(string: "https://api.anthropic.com/api/oauth/profile")!
+        profileRequest.timeoutInterval = 1
+        let request = profileRequest
+        let fallback = ProviderUsageDetails.claude(payload: payload, profile: [:])
+        // A transport may ignore cancellation, so a task-group race would
+        // still wait for it.  Resume independently and ignore late results.
+        return await withCheckedContinuation { continuation in
+            let gate = ClaudeProfileCompletion(continuation)
+            let task = Task.detached {
+                let profile = (try? await self.requestJSON(request)) ?? [:]
+                guard !profile.isEmpty else {
+                    gate.finish(fallback)
+                    return
+                }
+                var details = fallback
+                details.accountEmail = ProviderUsageDetails.claude(payload: [:], profile: profile).accountEmail
+                    ?? fallback.accountEmail
+                gate.finish(details)
+            }
+            gate.install(task)
+            DispatchQueue.global().asyncAfter(deadline: .now() + claudeProfileTimeout) {
+                gate.finish(fallback)
+            }
+        }
     }
 
     /// The decoded Keychain record, or an empty dictionary when it is absent,
@@ -240,8 +281,12 @@ public struct LocalQuotaReader: Sendable {
         if let accountID = firstString(tokens, ["account_id", "accountId"]) { request.setValue(accountID, forHTTPHeaderField: "chatgpt-account-id") }
         let payload = try await requestJSON(request)
         let accountID = firstString(tokens, ["account_id", "accountId"]).flatMap { $0.utf8.count <= 256 ? $0 : nil }
-        let windows = parseCodex(payload, planType: firstString(root, ["plan_type", "planType", "plan"]),
-                                 accountKey: accountID, observedAt: now())
+        let windows = parseCodex(payload, planType: firstString(payload, ["plan_type", "planType", "plan"]),
+                                 accountKey: accountID, observedAt: now()).map { value in
+            var value = value
+            value.usageDetails = .codex(payload: payload, tokens: tokens)
+            return value
+        }
         guard !windows.isEmpty else {
             return ProviderRead(provider: provider, windows: [unknownWindow(provider: provider, label: "Codex quota", observedAt: now())], issue: "Codex returned no readable quota windows.")
         }
@@ -458,6 +503,39 @@ private func windowToken(seconds: Double?) -> String? {
     return nil
 }
 
+/// A single winner resumes the reader without waiting for a cancelled transport.
+private final class ClaudeProfileCompletion: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<ProviderUsageDetails, Never>?
+    private var task: Task<Void, Never>?
+
+    init(_ continuation: CheckedContinuation<ProviderUsageDetails, Never>) {
+        self.continuation = continuation
+    }
+
+    func install(_ task: Task<Void, Never>) {
+        lock.lock()
+        if continuation == nil {
+            lock.unlock()
+            task.cancel()
+        } else {
+            self.task = task
+            lock.unlock()
+        }
+    }
+
+    func finish(_ details: ProviderUsageDetails) {
+        lock.lock()
+        guard let continuation else { lock.unlock(); return }
+        self.continuation = nil
+        let task = self.task
+        self.task = nil
+        lock.unlock()
+        task?.cancel()
+        continuation.resume(returning: details)
+    }
+}
+
 private func window(
     provider: Provider,
     id: String,
@@ -490,6 +568,16 @@ private func window(
 
 private func unknownWindow(provider: Provider, label: String, observedAt: Date) -> QuotaWindow {
     window(provider: provider, id: "unknown", label: label, remaining: nil, resetAt: nil, windowToken: nil, observedAt: observedAt)
+}
+
+/// Only a numeric multiplier is meaningful plan metadata; arbitrary tier suffixes are not.
+private func claudePlanName(_ oauth: [String: Any]) -> String? {
+    guard let subscription = firstString(oauth, ["subscriptionType", "subscription_type"]) else { return nil }
+    let label = subscription.replacingOccurrences(of: "_", with: " ").replacingOccurrences(of: "-", with: " ").capitalized
+    guard let tier = firstString(oauth, ["rateLimitTier", "rate_limit_tier"]),
+          let suffix = tier.split(separator: "_").last,
+          suffix.range(of: #"^[1-9][0-9]*x$"#, options: .regularExpression) != nil else { return label }
+    return "\(label) \(suffix)"
 }
 
 private func parseClaude(_ root: [String: Any], planType: String?, observedAt: Date) -> [QuotaWindow] {
@@ -620,7 +708,7 @@ private func claudeToken(_ value: String) -> String? {
 private func parseCodex(_ root: [String: Any], planType: String?, accountKey: String?, observedAt: Date) -> [QuotaWindow] {
     let limits = record(root["rate_limit"] ?? root["rateLimit"] ?? root["rate_limits"] ?? root["rateLimits"] ?? root["limits"])
     var result: [QuotaWindow] = []
-    func append(_ slot: String, _ value: [String: Any], modelId: String? = nil) {
+    func append(_ slot: String, _ value: [String: Any], modelId: String? = nil, cadenceSlot: String? = nil, poolLabel: String? = nil) {
         let used = firstNumber(value, ["used_percent", "usedPercent", "utilization", "percent_used"])
         let direct = firstNumber(value, ["remaining_percent", "remainingPercent"])
         guard used != nil || direct != nil else { return }
@@ -628,10 +716,12 @@ private func parseCodex(_ root: [String: Any], planType: String?, accountKey: St
         let reset = firstTimestamp(value, ["resets_at", "resetsAt", "reset_at", "resetAt"]) ?? firstNumber(value, ["reset_after_seconds", "resetAfterSeconds", "resets_in_seconds"]).flatMap { seconds in seconds >= 0 && seconds.isFinite && seconds <= 31_536_000 ? isoFormatter.string(from: observedAt.addingTimeInterval(seconds)) : nil }
         let remaining = direct.map(percentage) ?? used.map { 100 - min(100, max(0, $0)) }
         let resetDate = reset.flatMap(parseDate)
-        let resolvedToken = token ?? fallbackCodexSlotToken(slot)
+        let resolvedToken = token ?? fallbackCodexSlotToken(cadenceSlot ?? slot)
         let isAdditional = slot.lowercased().contains("additional")
             || (modelId?.lowercased().contains("additional") == true)
-        let label = if isAdditional {
+        let label = if let poolLabel {
+            poolLabel + " · " + QuotaWindowVocabulary.windowLabel(windowToken: resolvedToken, existingLabel: cadenceSlot ?? slot, resetAt: resetDate, periodStart: nil)
+        } else if isAdditional {
             QuotaWindowVocabulary.windowLabel(windowToken: resolvedToken, existingLabel: QuotaWindowVocabulary.otherLimit, resetAt: resetDate, periodStart: nil)
         } else if let resolvedToken {
             QuotaWindowVocabulary.windowLabel(windowToken: resolvedToken, existingLabel: slot, resetAt: resetDate, periodStart: nil)
@@ -659,13 +749,42 @@ private func parseCodex(_ root: [String: Any], planType: String?, accountKey: St
         append(slot, value)
     }
     let additional = limits["additional_rate_limits"] ?? limits["additionalRateLimits"] ?? root["additional_rate_limits"] ?? root["additionalRateLimits"]
+    func appendPool(_ entry: [String: Any], identity: String, label: String, modelId: String?) {
+        let nested = record(entry["rate_limit"] ?? entry["rateLimit"])
+        let pool = nested.isEmpty ? entry : nested
+        let initialWindowCount = result.count
+        for (slot, keys) in [("primary", ["primary_window", "primaryWindow", "primary"]), ("secondary", ["secondary_window", "secondaryWindow", "secondary"])] {
+            for key in keys where pool[key] != nil {
+                append("\(identity):\(slot)", record(pool[key]), modelId: modelId, cadenceSlot: slot, poolLabel: label)
+                break
+            }
+        }
+        if result.count == initialWindowCount {
+            append(identity, pool, modelId: modelId, poolLabel: label)
+        }
+        if result.count == initialWindowCount, !nested.isEmpty {
+            append(identity, entry, modelId: modelId, poolLabel: label)
+        }
+    }
     if let records = additional as? [[String: Any]] {
+        var occurrences: [String: Int] = [:]
         for (index, entry) in records.enumerated() {
-            let name = firstString(entry, ["name", "id", "model", "model_id", "modelId"]) ?? "additional-\(index + 1)"
-            append(name, entry, modelId: firstString(entry, ["model", "model_id", "modelId"]))
+            let name = firstString(entry, ["limit_name", "limitName", "name", "id", "model", "model_id", "modelId"]) ?? "additional-\(index + 1)"
+            let model = firstString(entry, ["metered_feature", "meteredFeature", "model", "model_id", "modelId"])
+            let base = "additional:\(name):\(model ?? "")"
+            let occurrence = occurrences[base, default: 0] + 1
+            occurrences[base] = occurrence
+            let identity = occurrence == 1 ? base : "\(base):\(occurrence)"
+            appendPool(entry, identity: identity, label: name, modelId: model)
         }
     } else if let records = additional as? [String: Any] {
-        for (name, raw) in records { append(name, record(raw), modelId: name) }
+        for (name, raw) in records.sorted(by: { $0.key < $1.key }) {
+            appendPool(record(raw), identity: "additional:\(name)", label: name, modelId: name)
+        }
+    }
+    let review = record(root["code_review_rate_limit"] ?? root["codeReviewRateLimit"] ?? limits["code_review_rate_limit"])
+    if !review.isEmpty {
+        appendPool(review, identity: "code-review", label: "Code Review", modelId: "code-review")
     }
     return result
 }

@@ -61,15 +61,51 @@ jobs:
     needs: package
     runs-on: macos-latest
     timeout-minutes: 45
+    env:
+      # The drift check below compares generated files byte for byte, so CI
+      # installs the exact XcodeGen that produced the tracked project instead
+      # of whatever Homebrew ships this week (a Homebrew bump would otherwise
+      # turn this required check red on every PR).  To move to a newer
+      # XcodeGen, bump both values (the digest is the xcodegen.zip sha256 shown
+      # on that release's GitHub page), run `xcodegen generate` with that
+      # version and commit the result.
+      XCODEGEN_VERSION: "2.46.0"
+      XCODEGEN_SHA256: "4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806"
     steps:
       - uses: actions/checkout@v7
-      - name: Install XcodeGen and regenerate companion project
+      - name: Install pinned XcodeGen
         run: |
-          if ! command -v xcodegen >/dev/null 2>&1; then
-            brew install xcodegen
+          archive="$RUNNER_TEMP/xcodegen-${XCODEGEN_VERSION}.zip"
+          curl -fsSL --retry 3 -o "$archive" \
+            "https://github.com/yonaskolb/XcodeGen/releases/download/${XCODEGEN_VERSION}/xcodegen.zip"
+          echo "${XCODEGEN_SHA256}  ${archive}" | shasum -a 256 -c -
+          unzip -q "$archive" -d "$RUNNER_TEMP/xcodegen-dist"
+          echo "$RUNNER_TEMP/xcodegen-dist/xcodegen/bin" >> "$GITHUB_PATH"
+      - name: Regenerate companion project
+        run: |
+          actual="$(xcodegen --version | awk '{print $NF}')"
+          if [ "$actual" != "$XCODEGEN_VERSION" ]; then
+            echo "::error title=Wrong XcodeGen version::Expected $XCODEGEN_VERSION but the PATH resolves $actual."
+            exit 1
           fi
           cd ios/CodeCapsCompanion
           xcodegen generate
+      # The tracked Xcode project, its shared schemes and the generated
+      # entitlement plists are all outputs of project.yml.  Anyone who opens
+      # the tracked project without regenerating it (Xcode, a local
+      # xcodebuild, the TestFlight fallback that reuses the checked-in copy)
+      # gets whatever was last committed, so a project.yml change that does not
+      # carry its regenerated output leaves a project that no longer compiles.
+      # Run before any build step so a stale project fails fast.
+      - name: Check the tracked Xcode project matches project.yml
+        run: |
+          if [ -n "$(git status --porcelain -- ios/CodeCapsCompanion)" ]; then
+            echo "::error title=Companion Xcode project is stale::The tracked files under ios/CodeCapsCompanion do not match what XcodeGen ${XCODEGEN_VERSION} generates from project.yml.  Fix:  cd ios/CodeCapsCompanion && xcodegen generate (XcodeGen ${XCODEGEN_VERSION}), then commit the changed files."
+            git status --porcelain -- ios/CodeCapsCompanion
+            git --no-pager diff --stat -- ios/CodeCapsCompanion
+            exit 1
+          fi
+          echo "The tracked companion Xcode project matches project.yml (XcodeGen ${XCODEGEN_VERSION})."
       - name: List schemes (debug)
         run: |
           cd ios/CodeCapsCompanion

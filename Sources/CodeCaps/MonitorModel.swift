@@ -184,7 +184,7 @@ final class MonitorModel: ObservableObject {
     /// already displayed is never re-evaluated and keeps drawing the colour it
     /// resolved when it was built.  That is why the Glance popover — a separate
     /// window, usually already open when the swatch is clicked — kept its old
-    /// accent on From Mac / From Fleet, the alarm bell and Open CodeCaps.
+    /// accent on From Mac / From Fleet, the alarm bell and Dashboard.
     var accentColor: Color {
         // Reads `accent` on purpose.  SwiftUI registers the dependency during
         // body evaluation, so touching the `@Published` property here is what
@@ -337,7 +337,7 @@ final class MonitorModel: ObservableObject {
     }
     /// Windows whose baseline is currently invalid because the plan/quota size
     /// changed (automatic discontinuity detection) or the owner noted a change
-    /// in Settings text.  The runaway detector stands down for these; the UI
+    /// in the Dashboard text.  The runaway detector stands down for these; the UI
     /// shows the informational plan-change state instead of an alert.
     @Published private(set) var activePlanChanges: [AnomalyDetector.PlanChange] = []
     @Published var dismissedPlanChangeIds: Set<String> {
@@ -410,7 +410,7 @@ final class MonitorModel: ObservableObject {
     @Published private(set) var issues: [String: String] = [:]
     /// Provider keys whose saved login is on this Mac but unreadable until the
     /// owner allows this build once.  Drives the Allow Access To Claude Code
-    /// button and the Open Settings affordance beside the issue text.
+    /// button and the Open Dashboard affordance beside the issue text.
     @Published private(set) var consentNeeded: Set<String> = []
     @Published private(set) var serverError: String?
     @Published private(set) var handoffError: String?
@@ -575,6 +575,7 @@ final class MonitorModel: ObservableObject {
     var exhaustionHistoryURLForTesting: URL?
     var skipsSnapshotIOForTesting = false
     private var localWindows: [QuotaWindow] = []
+    var detectedPlanWindows: [QuotaWindow] { localWindows }
     private var providerResult: LocalQuotaResult?
     private var sessionFileResult: LocalQuotaResult?
     private var currentCodexAccountID: String?
@@ -585,6 +586,8 @@ final class MonitorModel: ObservableObject {
     private var sessionFileTimer: Timer?
     private var hasStarted = false
     private var clockTimer: Timer?
+    private var planMetadataExportTask: Task<Void, Never>?
+    var planMetadataExportTaskForTesting: Task<Void, Never>? { planMetadataExportTask }
     private var request: Task<Void, Never>?
     private var sessionFileRequest: Task<Void, Never>?
     var sessionFileTaskForTesting: Task<Void, Never>? { sessionFileRequest }
@@ -643,7 +646,7 @@ final class MonitorModel: ObservableObject {
         // The running-out warnings default ON, because the whole point is to
         // catch a quota before it strands a run of work.  Popup is the default
         // channel because the owner asked for a window first; push is on too so
-        // it is useful without a second trip to Settings, and either can be
+        // it is useful without a second trip to the Dashboard, and either can be
         // switched off independently.
         exhaustionAlertsEnabled = defaults.object(forKey: "exhaustionAlertsEnabled") as? Bool ?? true
         exhaustionPopupEnabled = defaults.object(forKey: "exhaustionPopupEnabled") as? Bool ?? true
@@ -1369,6 +1372,7 @@ final class MonitorModel: ObservableObject {
     }
 
     func stop() {
+        planMetadataExportTask?.cancel()
         hasStarted = false
         revision += 1
         request?.cancel()
@@ -1498,7 +1502,84 @@ final class MonitorModel: ObservableObject {
     }
 
     func setCustomInfo(for providerKey: String, info: PlatformCustomInfo) {
-        platformCustomInfo[providerKey] = info
+        // Passive visits must not bump the edit revision or schedule an
+        // export: only a real content change may win conflict resolution
+        // against remote edits (Sentry on #277).
+        if let existing = platformCustomInfo[providerKey],
+           existing.customSubtitle == info.customSubtitle,
+           existing.planName == info.planName,
+           existing.costUsd == info.costUsd,
+           existing.renewalDateText == info.renewalDateText,
+           existing.showCostAndRenewal == info.showCostAndRenewal {
+            return
+        }
+        var revisedInfo = info
+        let previous = platformCustomInfo[providerKey]?.updatedAt?.timeIntervalSince1970 ?? 0
+        revisedInfo.updatedAt = Date(timeIntervalSince1970: max(Date().timeIntervalSince1970, previous + 0.001))
+        platformCustomInfo[providerKey] = revisedInfo
+        planMetadataExportTask?.cancel()
+        planMetadataExportTask = Task { [weak self] in
+            do { try await Task.sleep(nanoseconds: 350_000_000) } catch { return }
+            guard !Task.isCancelled else { return }
+            self?.refreshPlanMetadataExports()
+        }
+    }
+
+    /// Adds explicit settings only to this Mac's windows; fleet metadata keeps its provenance.
+    func exportedWindows(_ windows: [QuotaWindow], locallyProduced: Bool = true) -> [QuotaWindow] {
+        var result = windows.map { window in
+            var copy = window
+            let isLocal = locallyProduced || localWindows.contains {
+                $0.id == window.id && $0.canonicalProviderKey == window.canonicalProviderKey
+                    && $0.occurredAt == window.occurredAt && $0.accountKey == window.accountKey
+                    && $0.producerInstanceId == window.producerInstanceId && $0.machine == window.machine
+            }
+
+            if isLocal {
+                let metadata = PlanMetadata(detectedPlanName: window.planName,
+                                            customInfo: platformCustomInfo[window.canonicalProviderKey],
+                                            providerKey: window.canonicalProviderKey)
+                copy.planMetadata = metadata.detectedPlanName != nil || metadata.userPlanName != nil
+                    || metadata.userCostUsd != nil || metadata.userRenewalDateText != nil
+                    || metadata.userSubtitle != nil || metadata.userUpdatedAt != nil ? metadata : nil
+            }
+            return copy
+        }
+        if localEnabled && providerChecksEnabled {
+            let existing = Set(result.map(\.canonicalProviderKey))
+            for key in platformCustomInfo.keys.sorted() where !existing.contains(key) && expectedQuotaProviderKeys.contains(key) {
+                guard let info = platformCustomInfo[key],
+                      info.updatedAt != nil || [info.planName, info.costUsd, info.renewalDateText, info.customSubtitle].contains(where: {
+                          !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                      }), !disabledSources.contains("CodeCaps Settings") else { continue }
+                result.append(QuotaWindow(id: "local-mac:\(key):plan-metadata", provider: key,
+                                          providerKey: key, label: "Plan Details", planMetadata:
+                                            PlanMetadata(detectedPlanName: nil, customInfo: info, providerKey: key),
+                                          remainingUnknown: true, occurredAt: ISO8601DateFormatter().string(from: now),
+                                          source: "CodeCaps Settings"))
+            }
+        }
+        return result
+    }
+
+    private func refreshPlanMetadataExports() {
+        guard localEnabled else { return }
+        let windows = exportedWindows(localWindows)
+        if let writeForTesting = handoffWriteForTesting { writeForTesting(windows) }
+        else if !skipsSnapshotIOForTesting {
+            do {
+                try LocalQuotaSnapshot.write(windows: windows, issues: issues,
+                                             customMarks: exportedCustomMarks(),
+                                             alerts: exportedAlerts(now: now), now: now,
+                                             stampInstallationProvenance: true)
+                handoffError = nil
+            } catch { handoffError = "BotFleet quota sharing is unavailable." }
+        }
+        // Same candidate set as the refresh paths, so a Settings edit never drops the fleet rows.
+        publishWidgetSnapshot(candidates: response.windows + fleetWindowGroups.flatMap(\.windows))
+        if syncEnabled && !windows.isEmpty {
+            Task { [weak self] in _ = await self?.pushQuotasIfEnabled(windows: windows) }
+        }
     }
 
     // MARK: - Mark Style
@@ -1670,7 +1751,7 @@ final class MonitorModel: ObservableObject {
     }
 
     /// Live binding for the local-readers toggle.  Writing the default and
-    /// refreshing in one call is what lets the Settings toggle apply on the spot
+    /// refreshing in one call is what lets the Dashboard toggle apply on the spot
     /// instead of waiting for a save.
     func setLocalEnabled(_ value: Bool) {
         guard value != localEnabled else { return }
@@ -2018,7 +2099,7 @@ final class MonitorModel: ObservableObject {
         guard isCurrentPushSettings(generation, endpoint: targetEndpoint, format: targetFormat) else {
             return (false, "Push cancelled because sharing was disabled or its settings changed.")
         }
-        guard !windowsToPush.isEmpty else {
+        guard !exportedWindows(windowsToPush).isEmpty else {
             return (false, "No local agent quotas available to push.")
         }
         let cleanToken = sanitizedToken(inputToken)
@@ -2061,6 +2142,7 @@ final class MonitorModel: ObservableObject {
                                      tokenOverride: String? = nil,
                                      formatOverride: QuotaSyncFormat? = nil) async -> PushOutcome {
         let targetEndpoint = endpointOverride ?? syncEndpoint
+        let windows = exportedWindows(windows)
         let targetFormat = formatOverride ?? syncFormat
         guard localEnabled, syncEnabled, targetEndpoint == syncEndpoint, targetFormat == syncFormat,
               let url = URL(string: targetEndpoint), QuotaClient.isAllowedEndpoint(url), !windows.isEmpty else {
@@ -2256,11 +2338,11 @@ final class MonitorModel: ObservableObject {
                 // failure below is merged in afterwards and must never reach a
                 // file that promises local-only readings.
                 if let writeForTesting = self.handoffWriteForTesting {
-                    writeForTesting(self.localWindows)
+                    writeForTesting(self.exportedWindows(self.localWindows))
                 } else if self.skipsSnapshotIOForTesting {
                     self.handoffError = nil
                 } else if self.localEnabled && local != nil {
-                    try LocalQuotaSnapshot.write(windows: self.localWindows, issues: self.issues,
+                    try LocalQuotaSnapshot.write(windows: self.exportedWindows(self.localWindows), issues: self.issues,
                                                  customMarks: exportedCustomMarks(),
                                                  alerts: exportedAlerts(now: self.now), now: self.now,
                                                  stampInstallationProvenance: true)
@@ -2324,7 +2406,7 @@ final class MonitorModel: ObservableObject {
             self.alarmManager.evaluate(observations: self.resetAlarmObservationsForCurrentReadings(), now: self.now)
             self.evaluatePipLowQuota()
             // Publish after evaluating this reading so remote alerts include its new events.
-            if useLocal && self.syncEnabled && !self.localWindows.isEmpty {
+            if useLocal && self.syncEnabled && !self.exportedWindows(self.localWindows).isEmpty {
                 _ = await self.pushQuotasIfEnabled(windows: self.localWindows)
             }
             guard !Task.isCancelled, self.revision == generation else { return }
@@ -2413,7 +2495,14 @@ final class MonitorModel: ObservableObject {
                 guard current.boundedRemainingPercent == nil
                         || (fileWindow.occurredDate ?? .distantPast) > (current.occurredDate ?? .distantPast)
                 else { continue }
-                resolved[index] = fileWindow
+                var replacement = fileWindow
+                // A session event updates quota observations, not the provider's
+                // account metadata.  Never carry details across account switches.
+                if let account = current.accountKey, account == fileWindow.accountKey {
+                    replacement.planName = current.planName ?? fileWindow.planName
+                    replacement.usageDetails = current.usageDetails ?? fileWindow.usageDetails
+                }
+                resolved[index] = replacement
             } else {
                 resolved.append(fileWindow)
             }
@@ -2455,12 +2544,12 @@ final class MonitorModel: ObservableObject {
         originByProvider = Dictionary(uniqueKeysWithValues: Set(merged.map(\.canonicalProviderKey)).map { ($0, .local) })
         response = QuotaResponse(generatedAt: ISO8601DateFormatter().string(from: now), windows: merged)
         if let writeForTesting = handoffWriteForTesting {
-            writeForTesting(localWindows)
+            writeForTesting(exportedWindows(localWindows))
             handoffError = nil
         } else if !skipsSnapshotIOForTesting {
             do {
                 if localEnabled {
-                    try LocalQuotaSnapshot.write(windows: localWindows, issues: issues,
+                    try LocalQuotaSnapshot.write(windows: exportedWindows(localWindows), issues: issues,
                                                  customMarks: exportedCustomMarks(),
                                                  alerts: exportedAlerts(now: now), now: now,
                                                  stampInstallationProvenance: true)
@@ -2618,7 +2707,7 @@ final class MonitorModel: ObservableObject {
         }
         let visibleProviderKeys = Set(QuotaResponse(generatedAt: "", windows: unique)
             .platformSections(now: now).map(\.providerKey))
-        let windows = unique.filter {
+        let windows = exportedWindows(unique, locallyProduced: false).filter {
             visibleProviderKeys.contains($0.canonicalProviderKey)
                 && !disabledSources.contains($0.source ?? "")
                 && !$0.isSupplementaryVideoQuota
@@ -2807,12 +2896,13 @@ final class MonitorModel: ObservableObject {
     private nonisolated static func readLocalSources() async -> LocalQuotaResult {
         async let primary = LocalQuotaReader().read()
         async let cursor = CursorQuotaReader().read()
+        async let copilot = CopilotQuotaReader().read()
         async let grokBot = GrokBotQuotaReader().read()
         // EXTRA Grok Bot source beside Cursor DashboardService; `source: "gbu"`
         // so Settings can rank/disable it without replacing the Cursor reader.
         async let gbu = GbuQuotaReader().read()
         async let antigravity = AntigravitySummaryReader().read()
-        let results = await [primary, cursor, grokBot, gbu]
+        let results = await [primary, cursor, copilot, grokBot, gbu]
         let summary = await antigravity
         var windows = results.flatMap(\.windows)
         var issues = results.reduce(into: [String: String]()) { $0.merge($1.issues) { _, next in next } }

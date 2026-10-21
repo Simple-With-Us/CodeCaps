@@ -313,7 +313,7 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
     /// The console window while it sits elevated above the Glance popover
     /// (`popUpMenuWindow + 1`), or nil once it has been lowered.  Remembered
     /// rather than applied once: the panel is torn down and recreated at
-    /// `.floating` whenever the PiP toggle on the elevated Settings page is
+    /// `.floating` whenever the PiP toggle on the elevated Dashboard page is
     /// flipped, and the HUD or the console can be moved while elevated.
     private weak var elevatedConsole: NSWindow?
 
@@ -370,7 +370,7 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
         )
         p.isFloatingPanel = true
         // Start at `.floating`; `applyLevel()` below lifts the HUD again if it
-        // is recreated (Settings toggle) while the console is still elevated
+        // is recreated (Dashboard toggle) while the console is still elevated
         // and its frame overlaps the console.
         p.level = .floating
         p.isMovableByWindowBackground = true
@@ -443,18 +443,39 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
             let rows = all.filter { selected.contains($0.id) }
             if !rows.isEmpty { return rows }
         }
-        let sorted = all.sorted { a, b in
-            let aAvailable = readingStatus(for: a, now: model.now, issue: model.issues[a.providerKey],
-                                          disabledSources: model.disabledSources) == nil
-            let bAvailable = readingStatus(for: b, now: model.now, issue: model.issues[b.providerKey],
-                                          disabledSources: model.disabledSources) == nil
-            if aAvailable != bAvailable { return aAvailable }
-            return (currentWindows(for: a, now: model.now, disabledSources: model.disabledSources)
-                .compactMap(\.remainingPercent).min() ?? 100)
-                < (currentWindows(for: b, now: model.now, disabledSources: model.disabledSources)
-                    .compactMap(\.remainingPercent).min() ?? 100)
+        // The default target set is what the HUD can honestly draw.  A row
+        // whose provider failed cannot describe the current allowance, so it is
+        // not a default target and it never displaces a row that can be
+        // measured.  It is used only to fill a HUD that would otherwise have
+        // nothing to show, and only after the rows that are quiet rather than
+        // failed.  A pinned failed row still shows, because the user asked for
+        // it and it reports its status instead of a cached quota.
+        func remainingPercent(_ row: DisplaySection) -> Double {
+            rankingPercent(for: row, now: model.now, issue: model.issues[row.providerKey],
+                disabledSources: model.disabledSources)
         }
-        return Array(sorted.prefix(2))
+        func isMeasurable(_ row: DisplaySection) -> Bool {
+            readingStatus(for: row, now: model.now, issue: model.issues[row.providerKey],
+                          disabledSources: model.disabledSources) == nil
+        }
+        let measurable = all.filter { isMeasurable($0) }
+        let failed = all.filter { model.issues[$0.providerKey] != nil }
+        let quiet = all.filter { !isMeasurable($0) && model.issues[$0.providerKey] == nil }
+        var chosen = Array(measurable.sorted { remainingPercent($0) < remainingPercent($1) }.prefix(2))
+        if chosen.count < 2 {
+            chosen += Array(quiet.sorted { remainingPercent($0) < remainingPercent($1) }
+                .prefix(2 - chosen.count))
+        }
+        if chosen.count < 2 {
+            chosen += Array(failed.sorted { remainingPercent($0) < remainingPercent($1) }
+                .prefix(2 - chosen.count))
+        }
+        return chosen.sorted { a, b in
+            let aAvailable = isMeasurable(a)
+            let bAvailable = isMeasurable(b)
+            if aAvailable != bAvailable { return aAvailable }
+            return remainingPercent(a) < remainingPercent(b)
+        }
     }
 
     /// Cached or failed-source readings cannot describe the current allowance.
@@ -468,6 +489,16 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
             .map { QuotaWindowSnapshot(window: $0.window, now: now) }
             .filter { $0.isFresh && $0.remainingPercent != nil
                 && (!$0.window.skip || $0.remainingPercent == 0) }
+    }
+
+    /// The percentage a row may be ranked by when the HUD picks its default
+    /// targets.  A row whose provider failed has no current reading, so it
+    /// ranks as unreadable rather than by a cached quota the panel has already
+    /// declared untrustworthy.
+    static func rankingPercent(for row: DisplaySection, now: Date, issue: String? = nil,
+                                disabledSources: Set<String> = []) -> Double {
+        (currentWindows(for: row, now: now, issue: issue, disabledSources: disabledSources)
+            .compactMap(\.remainingPercent).min() ?? 100)
     }
 
     static func readingStatus(for row: DisplaySection, now: Date, issue: String? = nil,
@@ -711,8 +742,8 @@ struct PipWidgetView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("Open Settings")
-        .accessibilityLabel("Open Settings")
+        .help("Open Dashboard")
+        .accessibilityLabel("Open Dashboard")
     }
 
     private var closeButton: some View {
