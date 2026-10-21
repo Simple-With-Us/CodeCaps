@@ -909,6 +909,16 @@ enum QuotaGlanceMetrics {
 
     @MainActor
     static func popoverHeight(for model: MonitorModel, on screen: NSScreen? = nil) -> CGFloat {
+        let total = uncappedPopoverHeight(for: model)
+        return min(Metrics.glanceMaxHeight(on: screen), max(Metrics.glanceMinHeight, total))
+    }
+
+    /// The popover height before the screen cap and the minimum are applied.
+    /// Layout tests measure against this: capping to a small screen is a
+    /// separate, deliberate behavior (the list scrolls), so pinning the
+    /// budget arithmetic must not depend on the host's display size.
+    @MainActor
+    static func uncappedPopoverHeight(for model: MonitorModel) -> CGFloat {
         let actualRows = model.displaySections.count
         let rows = actualRows > 0 ? actualRows : expectedLocalRows(for: model)
         let showsSetupCard = !model.syncEnabled && !model.serverEnabled
@@ -929,8 +939,7 @@ enum QuotaGlanceMetrics {
         // Both lists are still measured, because a mode switch resizes through
         // the same path and must not have to wait for that view's rows to load.
         let active: CGFloat = model.glanceView == .fromFleet ? max(local, fleet) : local
-        let total = popoverHeight(forListHeight: active)
-        return min(Metrics.glanceMaxHeight(on: screen), max(Metrics.glanceMinHeight, total))
+        return popoverHeight(forListHeight: active)
     }
 }
 

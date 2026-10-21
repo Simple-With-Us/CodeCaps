@@ -53,6 +53,7 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
     public var absoluteLimit: Double?
     public var quotaUnit: String?
     public var planName: String?
+    public var planMetadata: PlanMetadata?
     /// Local display details; never encoded into fleet or handoff payloads.
     public var usageDetails: ProviderUsageDetails? = nil
     public var remainingUnknown: Bool
@@ -82,7 +83,7 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case id, provider, providerKey, providerLabel, via, sourceApp, modelId, modelType, label
-        case remainingPercent, absoluteRemaining, absoluteLimit, quotaUnit, planName
+        case remainingPercent, absoluteRemaining, absoluteLimit, quotaUnit, planName, planMetadata
         case remainingUnknown, isExhausted, resetAt, window, status, skip, skipReason
         case occurredAt, source, producerInstanceId, machine
     }
@@ -102,6 +103,7 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
         absoluteLimit: Double? = nil,
         quotaUnit: String? = nil,
         planName: String? = nil,
+        planMetadata: PlanMetadata? = nil,
         remainingUnknown: Bool = false,
         isExhausted: Bool = false,
         resetAt: String? = nil,
@@ -132,6 +134,7 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
         self.absoluteLimit = absoluteLimit
         self.quotaUnit = quotaUnit
         self.planName = planName
+        self.planMetadata = planMetadata
         self.remainingUnknown = remainingUnknown
         self.isExhausted = isExhausted
         self.resetAt = resetAt
@@ -163,6 +166,7 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
         absoluteLimit = try container.decodeIfPresent(Double.self, forKey: .absoluteLimit)
         quotaUnit = try container.decodeIfPresent(String.self, forKey: .quotaUnit)
         planName = try container.decodeIfPresent(String.self, forKey: .planName)
+        planMetadata = try? container.decode(PlanMetadata.self, forKey: .planMetadata)
         remainingUnknown = try container.decodeIfPresent(Bool.self, forKey: .remainingUnknown) ?? false
         isExhausted = try container.decodeIfPresent(Bool.self, forKey: .isExhausted) ?? false
         resetAt = try container.decodeIfPresent(String.self, forKey: .resetAt)
@@ -791,13 +795,14 @@ enum QuotaProviders {
 
     // deepseek is retired as a quota provider (no local reader ever existed for it);
     // hidden also drops any server-pulled window that still canonicalizes to it.
-    static let hidden: Set<String> = ["kimi", "github-copilot", "windsurf", "deepseek", "gemini-cli"]
+    static let hidden: Set<String> = ["kimi", "windsurf", "deepseek", "gemini-cli"]
 
     static let expected: [Expected] = [
         Expected(key: "anthropic", label: "Claude", via: nil),
         Expected(key: "openai", label: "Codex", via: nil),
         Expected(key: "google-antigravity", label: "Antigravity", via: "antigravity"),
         Expected(key: "cursor", label: "Cursor", via: nil),
+        Expected(key: "github-copilot", label: "GitHub Copilot", via: nil),
         Expected(key: "xai", label: "xAI", via: nil),
         Expected(key: "grok", label: "Grok", via: nil),
         Expected(key: "grok-bot", label: "Grok Bot", via: "cursor"),
@@ -1015,6 +1020,8 @@ public extension QuotaWindowSnapshot {
 // MARK: - Platform Custom Metadata
 
 public struct PlatformCustomInfo: Codable, Equatable, Sendable {
+    /// Persisted edit revision; quota observation time remains independent.
+    public var updatedAt: Date?
     public var customSubtitle: String
     public var planName: String
     public var costUsd: String
@@ -1028,6 +1035,7 @@ public struct PlatformCustomInfo: Codable, Equatable, Sendable {
         renewalDateText: String = "",
         showCostAndRenewal: Bool = false
     ) {
+        self.updatedAt = nil
         self.customSubtitle = customSubtitle
         self.planName = planName
         self.costUsd = costUsd
