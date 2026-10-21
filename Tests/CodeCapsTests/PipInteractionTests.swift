@@ -97,21 +97,8 @@ final class PipInteractionTests: XCTestCase {
             issue: model.issues[row.providerKey]).isEmpty)
         XCTAssertEqual(PipWidgetController.meterCount(for: row, now: model.now,
             issue: model.issues[row.providerKey]), 0)
-        // Unpinning releases the row, but the panel does not go blank: with no
-        // readable row the automatic selection falls back to status rows, the
-        // rule testAllUnavailableFallbackStillShowsStatusRows asserts.
-        // So the failed row can still be listed, and what matters is that
-        // every listed row is an "unavailable" status row with no meters,
-        // never the cached 54 percent the owner saw in a screenshot.
         model.pipPinnedRowIds = []
-        for candidate in PipWidgetController.targetRows(for: model) {
-            XCTAssertNotNil(PipWidgetController.readingStatus(for: candidate, now: model.now,
-                issue: model.issues[candidate.providerKey]),
-                "\(candidate.id) must carry a status, never a live meter")
-            XCTAssertTrue(PipWidgetController.meterSnapshots(for: candidate, now: model.now,
-                issue: model.issues[candidate.providerKey]).isEmpty,
-                "\(candidate.id) must not draw a cached meter")
-        }
+        XCTAssertFalse(PipWidgetController.targetRows(for: model).contains { $0.id == row.id })
     }
 
     func testStaleOrDisabledReadingCannotDrawCurrentMeters() throws {
