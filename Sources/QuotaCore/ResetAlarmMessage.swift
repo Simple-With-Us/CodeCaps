@@ -12,15 +12,14 @@ public enum ResetAlarmMessage {
     /// first.
     public static func content(for events: [ResetAlarmEvent]) -> (title: String, body: String, windowLabels: [String]) {
         let isVendorReset = events.contains { $0.isVendorReset }
+        let isPlanChange = !isVendorReset && events.contains { $0.isPlanChange }
+        let provider = events.first?.providerTitle ?? "Quota"
         let title = isVendorReset
-            ? "Vendor Reset: \(events.first?.providerTitle ?? "Quota")"
-            : "Quota Reset: \(events.first?.providerTitle ?? "Quota")"
+            ? "Vendor Reset: \(provider)"
+            : (isPlanChange ? "Likely Plan Change: \(provider)" : "Quota Reset: \(provider)")
         var labels: [String] = []
         for event in events {
-            var label = event.windowLabel
-            if (label == "4h" || label == "4-hour") && event.providerTitle.lowercased().contains("minimax") {
-                label = "5h"
-            }
+            let label = normalizedWindowLabel(for: event)
             if !labels.contains(label) {
                 labels.append(label)
             }
@@ -30,6 +29,18 @@ public enum ResetAlarmMessage {
         case 0, 1: joined = labels.first ?? "quota"
         case 2: joined = "\(labels[0]) and \(labels[1])"
         default: joined = labels.dropLast().joined(separator: ", ") + " and " + (labels.last ?? "")
+        }
+
+        if isPlanChange {
+            // The level it came back to is the whole point, so it is in the
+            // sentence: a plan change and a vendor reset look the same until
+            // you see how much of the allowance is back.
+            let level = events.first(where: { $0.isPlanChange })?.remainingPercent
+            let rose = level.map { " to \(Int($0.rounded()))%" } ?? ""
+            let change = labels.count > 1
+                ? "The \(joined) windows' quota rose\(rose) mid-cycle."
+                : "The \(joined) window's quota rose\(rose) mid-cycle."
+            return (title, change + sentenceGap + "More likely a plan change than a vendor reset.", labels)
         }
 
         if isVendorReset {
@@ -48,6 +59,20 @@ public enum ResetAlarmMessage {
             return (title, "The \(joined) window reset \(reached)." + sentenceGap + "Ready to use again.", labels)
         }
         return (title, "The \(joined) windows reset." + sentenceGap + "Ready to use again.", labels)
+    }
+
+    /// The label the owner reads for one event's window, with the one
+    /// provider-specific correction the fleet applies.
+    ///
+    /// MiniMax reports a four-hour window that it calls five hours, so the
+    /// label is corrected once and everywhere: in the notification, in the
+    /// window list and in the Usage History card.
+    public static func normalizedWindowLabel(for event: ResetAlarmEvent) -> String {
+        let label = event.windowLabel
+        if (label == "4h" || label == "4-hour") && event.providerTitle.lowercased().contains("minimax") {
+            return "5h"
+        }
+        return label
     }
 
     /// "A new week of quota is available." and friends, by period length.

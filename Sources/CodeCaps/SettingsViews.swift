@@ -171,7 +171,7 @@ struct SettingsMenuBarPage: View {
                     .padding(.vertical, 4)
                 }
             } header: {
-                Eyebrow("PICTURE IN PICTURE (PIP)")
+                Eyebrow("Picture-in-Picture (PiP)")
             } footer: {
                 Text("A tiny on-screen HUD stays on top of all windows so you are aware of critical quotas in real time.")
                     .font(.system(size: 11))
@@ -1234,25 +1234,31 @@ struct SettingsAboutPage: View {
         let size: CGFloat
         @Environment(\.colorScheme) private var colorScheme
 
-        /// The owner's cropped black-on-transparent artwork, resolved through
-        /// the same bundle the menu bar and PiP use.  Loaded once; it is drawn
-        /// as a template, which is what makes one asset correct in both
-        /// appearances.
-        static let asset: NSImage? = {
-            guard let url = ResourceBundle.resolved?.url(forResource: "CodeCapsMenuBarIcon", withExtension: "png"),
-                  let image = NSImage(contentsOf: url) else { return nil }
-            image.isTemplate = true
-            return image
-        }()
+        /// The owner's mark in colour on a transparent background, resolved
+        /// through the same bundle the menu bar and PiP use.  The menu bar
+        /// keeps the owner's own black template icon; this is the version that
+        /// belongs inside the app.  Owner 2026-10-20: "transparent background
+        /// when it is shown on the app like on the About page or settings.  For
+        /// those versions the time dots and hand are dark."
+        static let asset: NSImage? = BrandMarkImage.asset
 
         var body: some View {
             Group {
                 if let image = AboutBrandMark.asset {
                     Image(nsImage: image)
                         .resizable()
-                        .renderingMode(.template)
+                        .renderingMode(.original)
                         .interpolation(.high)
-                        .foregroundStyle(colorScheme == .dark ? Color.white : Theme.ink)
+                        .padding(size * 0.06)
+                        .background {
+                            // The needle and the dots are dark, so dark
+                            // appearance needs a light ground for them or the
+                            // mark reads as two empty rings.
+                            if colorScheme == .dark {
+                                RoundedRectangle(cornerRadius: size * 0.22, style: .continuous)
+                                    .fill(BrandMarkImage.lightGround)
+                            }
+                        }
                 } else {
                     // Only if the owner's artwork is ever missing from the
                     // bundle: keep a mark on screen rather than an empty gap.
@@ -1344,8 +1350,53 @@ struct SettingsNotificationsPage: View {
     @ObservedObject var model: MonitorModel
     @ObservedObject var state: ConsoleState
 
+    private func alertBinding<Value>(_ kind: UsageAlertKind,
+                                     _ path: WritableKeyPath<UsageAlertOption, Value>) -> Binding<Value> {
+        Binding(get: { model.alarmManager.preferences[kind][keyPath: path] },
+                set: { value in
+                    var option = model.alarmManager.preferences[kind]
+                    option[keyPath: path] = value
+                    model.alarmManager.preferences[kind] = option
+                })
+    }
+
     var body: some View {
         SettingsPage {
+            Section {
+                Toggle("Send Alerts To iPhone", isOn: $model.remoteAlertRelayEnabled)
+                if let error = model.remoteAlertRelayError {
+                    Text(error).foregroundStyle(.orange).font(.caption)
+                }
+            } footer: {
+                Text("Requires quota push to Usage Monitor and remote push enrollment on your iPhone." + sentenceGap
+                     + "The iPhone chooses its own alert categories and sounds.")
+            }
+            Section {
+                ForEach(UsageAlertKind.allCases) { kind in
+                    HStack {
+                        Toggle(kind.title, isOn: alertBinding(kind, \.enabled))
+                            .frame(width: 200, alignment: .leading)
+                        Toggle("Notification", isOn: alertBinding(kind, \.notification))
+                        Toggle("Popup", isOn: alertBinding(kind, \.popup))
+                        Picker("Sound", selection: Binding(
+                            get: { model.alarmManager.preferences[kind].sound },
+                            set: { model.alarmManager.setSound($0, for: kind) })) {
+                            ForEach(ResetAlarmSound.defaultPickerOrder, id: \.self) { sound in
+                                Text(sound.displayName).tag(sound)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 110)
+                    }
+                    .toggleStyle(.checkbox)
+                }
+            } header: {
+                Eyebrow("ALERT DELIVERY")
+            } footer: {
+                Text("Anomalies compare usage with your average; runaway usage compares it with your peak." + sentenceGap
+                     + "Quota Exhausted fires at zero remaining." + sentenceGap
+                     + "Provider bells choose which scheduled and vendor resets alert on this Mac.")
+            }
             if let row = model.displaySections.first(where: {
                 $0.providerKey == model.runawayAlertHistory.first?.providerKey
             }) ?? model.displaySections.first {
@@ -1373,40 +1424,6 @@ struct SettingsNotificationsPage: View {
                             .font(.system(size: 10, weight: .semibold))
                             .foregroundStyle(.secondary)
                             .frame(width: 300, alignment: .leading)
-                    }
-
-                    GridRow {
-                        Text("Reset Alerts")
-                            .font(.system(size: 11, weight: .medium))
-                            .help("Alert when a quota window resets, so you know a new week or month began.")
-                            .frame(width: 130, alignment: .leading)
-                        Toggle("", isOn: $model.alarmsAll)
-                            .labelsHidden()
-                            .toggleStyle(.switch)
-                            .help("The same switch as the All bell at the top of the Docked Bar.")
-                            .accessibilityLabel("Reset Alarms For All Providers")
-                        Picker("", selection: $model.alarmSound) {
-                            ForEach(ResetAlarmSound.defaultPickerOrder, id: \.self) { sound in
-                                Text(sound.displayName).tag(sound)
-                            }
-                        }
-                        .labelsHidden()
-                        .pickerStyle(.menu)
-                        .help("The sound played when a quota window resets. \"Silent\" keeps the banner and drops the sound.")
-                        .accessibilityLabel("Reset alert sound")
-                        .frame(width: 300, alignment: .leading)
-                    }
-
-                    GridRow {
-                        Text("Runaway Usage")
-                            .font(.system(size: 11, weight: .medium))
-                            .help("Alert when quota is being spent far faster than your own recent pattern.")
-                            .frame(width: 130, alignment: .leading)
-                        Toggle("", isOn: $model.burnRateAlertsEnabled)
-                            .labelsHidden()
-                            .toggleStyle(.switch)
-                            .accessibilityLabel("Alert on runaway usage")
-                        exhaustionThresholdCell
                     }
 
                     GridRow {
@@ -1486,11 +1503,10 @@ struct SettingsNotificationsPage: View {
             }
 
             Section {
-                Toggle("Alert on Runaway Usage", isOn: $model.burnRateAlertsEnabled)
-                    .help("Alert when quota is being spent far faster than your own recent pattern.")
-                    .accessibilityLabel("Alert on runaway usage")
+                Text("Usage Alert Thresholds")
+                    .font(.headline)
 
-                if model.burnRateAlertsEnabled {
+                if model.alarmManager.preferences[.anomaly].enabled || model.alarmManager.preferences[.runaway].enabled {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
                             Text("Versus Your Recent Average")

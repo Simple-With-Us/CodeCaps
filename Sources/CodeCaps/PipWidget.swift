@@ -360,7 +360,8 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
     private func createPanel(model: MonitorModel) {
         let rows = Self.targetRows(for: model)
         let initialSize = PipMetrics.fitSize(rowCount: rows.count,
-            hasDualMeterRow: rows.contains { Self.meterCount(for: $0, now: model.now) > 1 })
+            hasDualMeterRow: rows.contains { Self.meterCount(for: $0, now: model.now,
+                issue: model.issues[$0.providerKey], disabledSources: model.disabledSources) > 1 })
         let p = NSPanel(
             contentRect: NSRect(origin: NSPoint(x: 120, y: 120), size: initialSize),
             styleMask: PipMetrics.panelStyleMask,
@@ -407,7 +408,8 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
         guard signature != fittedRowSignature else { return }
         fittedRowSignature = signature
 
-        let hasDualMeterRow = rows.contains { Self.meterCount(for: $0, now: model.now) > 1 }
+        let hasDualMeterRow = rows.contains { Self.meterCount(for: $0, now: model.now,
+            issue: model.issues[$0.providerKey], disabledSources: model.disabledSources) > 1 }
         let fit = PipMetrics.fitSize(rowCount: rows.count, hasDualMeterRow: hasDualMeterRow)
         let clamped = NSSize(
             width: min(max(panel.frame.width, panel.minSize.width), panel.maxSize.width),
@@ -442,9 +444,44 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
             if !rows.isEmpty { return rows }
         }
         let sorted = all.sorted { a, b in
-            (a.section.minimumRemainingPercent ?? 100) < (b.section.minimumRemainingPercent ?? 100)
+            let aAvailable = readingStatus(for: a, now: model.now, issue: model.issues[a.providerKey],
+                                          disabledSources: model.disabledSources) == nil
+            let bAvailable = readingStatus(for: b, now: model.now, issue: model.issues[b.providerKey],
+                                          disabledSources: model.disabledSources) == nil
+            if aAvailable != bAvailable { return aAvailable }
+            return (currentWindows(for: a, now: model.now, disabledSources: model.disabledSources)
+                .compactMap(\.remainingPercent).min() ?? 100)
+                < (currentWindows(for: b, now: model.now, disabledSources: model.disabledSources)
+                    .compactMap(\.remainingPercent).min() ?? 100)
         }
         return Array(sorted.prefix(2))
+    }
+
+    /// Cached or failed-source readings cannot describe the current allowance.
+    static func currentWindows(for row: DisplaySection, now: Date, issue: String? = nil,
+                               disabledSources: Set<String> = []) -> [QuotaWindowSnapshot] {
+        guard issue == nil else { return [] }
+        return row.section.windows
+            .filter { !$0.window.isSupplementaryVideoQuota && !row.isMasked($0)
+                && !$0.window.remainingUnknown
+                && !disabledSources.contains($0.window.source ?? "") }
+            .map { QuotaWindowSnapshot(window: $0.window, now: now) }
+            .filter { $0.isFresh && $0.remainingPercent != nil
+                && (!$0.window.skip || $0.remainingPercent == 0) }
+    }
+
+    static func readingStatus(for row: DisplaySection, now: Date, issue: String? = nil,
+                              disabledSources: Set<String> = []) -> String? {
+        if let issue { return glanceRowStatusText(issue: issue, hasWindows: !row.section.windows.isEmpty) }
+        if !currentWindows(for: row, now: now, disabledSources: disabledSources).isEmpty { return nil }
+        let relevant = row.section.windows.filter { !$0.window.isSupplementaryVideoQuota && !row.isMasked($0) }
+        if !relevant.isEmpty, relevant.allSatisfy({ disabledSources.contains($0.window.source ?? "") }) {
+            return "source disabled"
+        }
+        let snapshots = relevant.map { QuotaWindowSnapshot(window: $0.window, now: now) }
+        if snapshots.contains(where: \.isAwaitingRefresh) { return "awaiting refresh" }
+        if snapshots.contains(where: \.isStale) { return "stale reading" }
+        return "unavailable"
     }
 
     private static func rowSignature(for model: MonitorModel) -> [String] {
@@ -453,17 +490,26 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
 
     /// The snapshots one row draws as meters, de-duplicated the same way Glance
     /// de-duplicates them so the HUD never renders one window twice.
-    static func meterCount(for row: DisplaySection, now: Date) -> Int {
-        meterSnapshots(for: row, now: now).count
+    static func meterCount(for row: DisplaySection, now: Date, issue: String? = nil,
+                           disabledSources: Set<String> = []) -> Int {
+        meterSnapshots(for: row, now: now, issue: issue, disabledSources: disabledSources).count
     }
 
-    static func meterSnapshots(for row: DisplaySection, now: Date) -> [QuotaWindowSnapshot] {
-        let meters = glanceMeterPair(for: row, now: now)
+    static func meterSnapshots(for row: DisplaySection, now: Date, issue: String? = nil,
+                               disabledSources: Set<String> = []) -> [QuotaWindowSnapshot] {
+        let windows = currentWindows(for: row, now: now, issue: issue, disabledSources: disabledSources)
+        let current = DisplaySection(id: row.id, providerKey: row.providerKey, title: row.title,
+            platformTitle: row.platformTitle,
+            section: QuotaPlatformSection(providerKey: row.providerKey, providerLabel: row.section.providerLabel,
+                via: row.section.via, expected: row.section.expected, windows: windows, iconHint: row.section.iconHint),
+            poolKey: row.poolKey, remainingPercent: windows.compactMap(\.remainingPercent).min(),
+            resetAt: nil, maskedWindowIds: row.maskedWindowIds)
+        let meters = glanceMeterPair(for: current, now: now)
         var out: [QuotaWindowSnapshot] = []
         if let short = meters.short { out.append(short) }
         if let long = meters.long, long.window.id != meters.short?.window.id {
             out.append(long)
-        } else if meters.short == nil, let primary = row.section.windows.first {
+        } else if meters.short == nil, let primary = windows.first {
             out.append(primary)
         }
         return out
@@ -761,17 +807,24 @@ struct PipWidgetView: View {
     /// One row.  The whole row is the tap target for opening that platform's
     /// detail.
     private func pipRow(_ row: DisplaySection, detail: PipMetrics.Detail) -> some View {
+        let issue = model.issues[row.providerKey]
+        let status = PipWidgetController.readingStatus(for: row, now: model.now, issue: issue,
+                                                       disabledSources: model.disabledSources)
         let meters = Array(
-            PipWidgetController.meterSnapshots(for: row, now: model.now)
+            PipWidgetController.meterSnapshots(for: row, now: model.now, issue: issue,
+                                               disabledSources: model.disabledSources)
                 .prefix(detail.maxMeters)
         )
 
-        let spiking = model.hasActiveRunawayAnomaly(for: row)
+        let spiking = status == nil && model.hasActiveRunawayAnomaly(for: row)
         // Owner 2026-10-11: the HUD showed a capped plan's meters, so a plan
         // that could not be used at all drew a full 100% bar.  One line of
         // words is the honest thing in a strip this narrow.
-        let atCap = row.atCapWindow
-        let extra = glanceUsableMuseExtra(row.section.windows)
+        let windows = PipWidgetController.currentWindows(for: row, now: model.now, issue: issue,
+                                                         disabledSources: model.disabledSources)
+        let atCap = QuotaPlatformSection(providerKey: row.providerKey, providerLabel: row.section.providerLabel,
+                                         expected: row.section.expected, windows: windows).atCapWindow()
+        let extra = glanceUsableMuseExtra(windows)
 
         return HStack(spacing: PipMetrics.rowSpacing) {
             if detail.showsProviderLogo {
@@ -805,7 +858,13 @@ struct PipWidgetView: View {
 
             if atCap == nil { Spacer(minLength: 0) }
 
-            if atCap != nil, let extra {
+            if let status {
+                Text(status)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(background.countdownInk)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else if atCap != nil, let extra {
                 HStack(spacing: PipMetrics.meterSpacing) {
                     Text("Using extra balance")
                         .font(.system(size: 10, weight: .semibold))
@@ -842,8 +901,11 @@ struct PipWidgetView: View {
     /// One platform, in the panel, with every window it publishes rather than
     /// the two the summary row has room for.
     private func detailPanel(_ row: DisplaySection, detail: PipMetrics.Detail) -> some View {
-        let windows = row.section.windows
-            .filter { !$0.window.isSupplementaryVideoQuota && !row.isMasked($0) }
+        let issue = model.issues[row.providerKey]
+        let windows = PipWidgetController.currentWindows(for: row, now: model.now, issue: issue,
+                                                         disabledSources: model.disabledSources)
+        let status = PipWidgetController.readingStatus(for: row, now: model.now, issue: issue,
+                                                       disabledSources: model.disabledSources)
 
         return ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 3) {
@@ -858,7 +920,7 @@ struct PipWidgetView: View {
                         .foregroundStyle(background.ink)
                         .lineLimit(1)
                     Spacer(minLength: 0)
-                    if row.section.expected, windows.isEmpty {
+                    if row.section.expected, row.section.windows.isEmpty {
                         Text("No readings published")
                             .font(.system(size: 9, weight: .semibold))
                             .foregroundStyle(Theme.warning)
@@ -872,7 +934,7 @@ struct PipWidgetView: View {
                 }
 
                 if windows.isEmpty {
-                    Text("No readings for this platform right now.")
+                    Text(status ?? "No readings for this platform right now.")
                         .font(.system(size: 10))
                         .foregroundStyle(background.countdownInk)
                 }

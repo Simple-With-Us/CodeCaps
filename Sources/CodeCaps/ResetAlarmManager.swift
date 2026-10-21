@@ -23,6 +23,15 @@ public struct ResetAlarmNotification: Equatable, Sendable {
     public let windowId: String?
     public let timestamp: Date
     public let isVendorReset: Bool
+    /// The quota rose mid-cycle without reaching the level a vendor reset has
+    /// to reach, so a change of plan is the likelier reason.
+    public let isPlanChange: Bool
+    /// The window the plan change happened on, when the notification carries
+    /// one.  A group can hold a scheduled rollover and a plan change at once,
+    /// and the owner's own window is the one that changed.
+    public let planChangeWindowLabel: String?
+    /// The level the plan change landed on, when the notification carries one.
+    public let planChangeRemainingPercent: Int?
 
     public init(
         id: String,
@@ -35,7 +44,10 @@ public struct ResetAlarmNotification: Equatable, Sendable {
         windowLabels: [String],
         windowId: String?,
         timestamp: Date,
-        isVendorReset: Bool = false
+        isVendorReset: Bool = false,
+        isPlanChange: Bool = false,
+        planChangeWindowLabel: String? = nil,
+        planChangeRemainingPercent: Int? = nil
     ) {
         self.id = id
         self.providerId = providerId
@@ -48,6 +60,9 @@ public struct ResetAlarmNotification: Equatable, Sendable {
         self.windowId = windowId
         self.timestamp = timestamp
         self.isVendorReset = isVendorReset
+        self.isPlanChange = isPlanChange
+        self.planChangeWindowLabel = planChangeWindowLabel
+        self.planChangeRemainingPercent = planChangeRemainingPercent
     }
 }
 
@@ -63,6 +78,14 @@ public struct ResetAlertRecord: Codable, Identifiable, Equatable, Sendable {
     public let windowLabel: String
     public let remainingPercent: Int
     public let isVendorReset: Bool
+    /// The quota rose mid-cycle without reaching the level a vendor reset has
+    /// to reach, so a change of plan is the likelier reason.
+    public let isPlanChange: Bool
+    /// The window the plan change happened on.  The alert's own window is the
+    /// group's first one, which is not always the window that changed.
+    public let planChangeWindowLabel: String?
+    /// The level the plan change landed on.
+    public let planChangeRemainingPercent: Int?
     public let title: String
     public let body: String
 
@@ -75,7 +98,10 @@ public struct ResetAlertRecord: Codable, Identifiable, Equatable, Sendable {
                 remainingPercent: Int,
                 isVendorReset: Bool,
                 title: String,
-                body: String) {
+                body: String,
+                isPlanChange: Bool = false,
+                planChangeWindowLabel: String? = nil,
+                planChangeRemainingPercent: Int? = nil) {
         self.id = id
         self.timestamp = timestamp
         self.providerKey = providerKey
@@ -86,6 +112,29 @@ public struct ResetAlertRecord: Codable, Identifiable, Equatable, Sendable {
         self.isVendorReset = isVendorReset
         self.title = title
         self.body = body
+        self.isPlanChange = isPlanChange
+        self.planChangeWindowLabel = planChangeWindowLabel
+        self.planChangeRemainingPercent = planChangeRemainingPercent
+    }
+
+    /// Records written before the plan-change flag existed have no such key,
+    /// and they must still load: the owner's reset history is worth more than
+    /// the field that would have to be invented for them.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        timestamp = try container.decode(Date.self, forKey: .timestamp)
+        providerKey = try container.decode(String.self, forKey: .providerKey)
+        providerTitle = try container.decode(String.self, forKey: .providerTitle)
+        windowId = try container.decodeIfPresent(String.self, forKey: .windowId)
+        windowLabel = try container.decode(String.self, forKey: .windowLabel)
+        remainingPercent = try container.decode(Int.self, forKey: .remainingPercent)
+        isVendorReset = try container.decode(Bool.self, forKey: .isVendorReset)
+        title = try container.decode(String.self, forKey: .title)
+        body = try container.decode(String.self, forKey: .body)
+        isPlanChange = try container.decodeIfPresent(Bool.self, forKey: .isPlanChange) ?? false
+        planChangeWindowLabel = try container.decodeIfPresent(String.self, forKey: .planChangeWindowLabel)
+        planChangeRemainingPercent = try container.decodeIfPresent(Int.self, forKey: .planChangeRemainingPercent)
     }
 }
 
@@ -167,6 +216,7 @@ public struct TestNotificationPlanner {
 public final class ResetAlarmManager: ObservableObject {
     /// UserDefaults keys, in one place so the migration tests can seed them.
     public enum Keys {
+        public static let preferences = "usageAlertPreferences"
         public static let all = "resetAlarmAll"
         public static let providers = "resetAlarmProviders"
         public static let trackerState = "resetAlarmTrackerState"
@@ -178,6 +228,21 @@ public final class ResetAlarmManager: ObservableObject {
         public static let legacySoundOnReset = "soundOnReset"
     }
 
+    @Published public var preferences: UsageAlertPreferences {
+        didSet {
+            if !updatingLegacySound {
+                let changed = UsageAlertKind.allCases.filter { preferences[$0].sound != oldValue[$0].sound }
+                customizedSoundKinds.formUnion(changed.map(\.rawValue))
+                defaults.set(customizedSoundKinds.sorted(), forKey: "usageAlertCustomizedSounds")
+            }
+            preferences.save(to: defaults, key: Keys.preferences)
+        }
+    }
+    private var customizedSoundKinds: Set<String> = []
+    private var updatingLegacySound = false
+    private(set) var detectedResetHistory: [ResetAlertRecord] = []
+    var onUsageDelivery: ((UsageAlertKind, String, String, UsageAlertOption) -> Void)?
+    private var popupWindows: [NSWindow] = []
     private let defaults: UserDefaults
 
     /// Recorded reset alerts (scheduled and mid-cycle vendor resets),
@@ -205,7 +270,16 @@ public final class ResetAlarmManager: ObservableObject {
     /// `systemDefault` so a fresh install lands on the platform chime,
     /// matching the previous behaviour when `soundOnReset` was true.
     @Published public var alarmSound: ResetAlarmSound {
-        didSet { defaults.set(alarmSound.rawValue, forKey: Keys.sound) }
+        didSet {
+            defaults.set(alarmSound.rawValue, forKey: Keys.sound)
+            updatingLegacySound = true
+            defer { updatingLegacySound = false }
+            for kind in UsageAlertKind.allCases where !customizedSoundKinds.contains(kind.rawValue) {
+                var option = preferences[kind]
+                option.sound = alarmSound
+                preferences[kind] = option
+            }
+        }
     }
 
     /// Result of the most recent "Send Test Notification", or `nil` before the
@@ -272,6 +346,14 @@ public final class ResetAlarmManager: ObservableObject {
             resolved = .systemDefault
         }
         self.alarmSound = resolved
+        self.preferences = UsageAlertPreferences.load(
+            from: defaults, key: Keys.preferences, resetEnabled: true, resetSound: resolved,
+            runawayEnabled: defaults.object(forKey: "burnRateAlertsEnabled") as? Bool ?? false)
+        customizedSoundKinds = Set(defaults.stringArray(forKey: "usageAlertCustomizedSounds") ?? [])
+        if let data = defaults.data(forKey: "detectedResetHistory"),
+           let saved = try? JSONDecoder().decode([ResetAlertRecord].self, from: data) {
+            detectedResetHistory = saved
+        }
 
         if let data = defaults.data(forKey: Keys.alertHistory),
            let history = try? JSONDecoder().decode([ResetAlertRecord].self, from: data) {
@@ -282,9 +364,17 @@ public final class ResetAlarmManager: ObservableObject {
 
         self.tracker = ResetAlarmTracker(
             state: ResetAlarmTrackerState.decoded(from: defaults.data(forKey: Keys.trackerState)))
+        self.preferences.save(to: defaults, key: Keys.preferences)
     }
 
     // MARK: - Choices
+
+    /// Explicit picker intent matters even when the selected sound equals the default.
+    public func setSound(_ sound: ResetAlarmSound, for kind: UsageAlertKind) {
+        customizedSoundKinds.insert(kind.rawValue)
+        defaults.set(customizedSoundKinds.sorted(), forKey: "usageAlertCustomizedSounds")
+        preferences[kind].sound = sound
+    }
 
     /// Whether `providerId`'s reset alarm is on: every provider under All,
     /// otherwise only the ones picked.
@@ -399,14 +489,26 @@ public final class ResetAlarmManager: ObservableObject {
 
         var order: [String] = []
         var byProvider: [String: [ResetAlarmEvent]] = [:]
-        for event in events where isAlarmEnabled(for: event.providerId) {
-            if byProvider[event.providerId] == nil { order.append(event.providerId) }
-            byProvider[event.providerId, default: []].append(event)
+        for event in events {
+            let key = event.providerId + (event.isVendorReset ? "|vendor" : "|scheduled")
+            if byProvider[key] == nil { order.append(key) }
+            byProvider[key, default: []].append(event)
         }
-        return order.compactMap { providerId in
-            guard let group = byProvider[providerId], !group.isEmpty else { return nil }
+        return order.compactMap { key in
+            guard let group = byProvider[key], let event = group.first else { return nil }
+            let providerId = event.providerId
             let content = Self.notificationContent(for: group)
             let isVendorReset = group.contains { $0.isVendorReset }
+            // The two names are mutually exclusive, and the notification body
+            // already resolves them in favour of the vendor reset.  The record
+            // has to agree with the banner, or the same alarm is labelled two
+            // different ways in two places.
+            let isPlanChange = !isVendorReset && group.contains { $0.isPlanChange }
+            // The plan change's own window and level, not the group's first
+            // one: a group can hold a scheduled rollover and a plan change at
+            // once, and the card has to describe the change the owner is being
+            // asked to act on.
+            let planChangeEvent = group.first(where: { $0.isPlanChange })
             let first = group.first
             let providerTitle = first?.providerTitle ?? providerId.capitalized
             let payload = ResetAlarmNotification(
@@ -416,13 +518,17 @@ public final class ResetAlarmManager: ObservableObject {
                 title: content.title,
                 body: content.body,
                 remainingPercent: Int((first?.remainingPercent ?? 100).rounded()),
-                sound: alarmSound,
+                sound: preferences[isVendorReset ? .vendorReset : .quotaReset].sound,
                 windowLabels: content.windowLabels,
                 windowId: first?.windowId,
                 timestamp: now,
-                isVendorReset: isVendorReset)
+                isVendorReset: isVendorReset,
+                isPlanChange: isPlanChange,
+                planChangeWindowLabel: planChangeEvent.map { ResetAlarmMessage.normalizedWindowLabel(for: $0) },
+                planChangeRemainingPercent: planChangeEvent?.remainingPercent.map { Int($0.rounded()) })
             deliver(payload)
-            return payload
+            let kind: UsageAlertKind = isVendorReset ? .vendorReset : .quotaReset
+            return isAlarmEnabled(for: providerId) && preferences[kind].enabled ? payload : nil
         }
     }
 
@@ -450,51 +556,85 @@ public final class ResetAlarmManager: ObservableObject {
     }
 
     private func deliver(_ payload: ResetAlarmNotification) {
-        // Only deliver alerts if the master top bell is armed (All) or this specific quota's bell is on
-        guard isAlarmEnabled(for: payload.providerId) else { return }
-        appendAlertRecord(for: payload)
-        if payload.sound.isAudible {
-            playAlarmSound(payload.sound)
+        detectedResetHistory.insert(Self.record(for: payload), at: 0)
+        detectedResetHistory = Array(detectedResetHistory.prefix(50))
+        if let data = try? JSONEncoder().encode(detectedResetHistory) {
+            defaults.set(data, forKey: "detectedResetHistory")
         }
-        // Deliver via custom test handler if installed
+        guard isAlarmEnabled(for: payload.providerId) else { return }
+        let kind: UsageAlertKind = payload.isVendorReset ? .vendorReset : .quotaReset
+        guard preferences[kind].enabled else { return }
+        guard preferences[kind].notification || preferences[kind].popup else { return }
+        appendAlertRecord(for: payload)
         if let onNotification {
             onNotification(payload)
             return
         }
+        deliverUsageAlert(kind: kind, title: payload.title, body: payload.body,
+                          identifier: payload.id,
+                          navigation: AlertNavigation(providerKey: payload.providerId,
+                                                      windowId: payload.windowId, timestamp: payload.timestamp))
+    }
+
+    /// The system plays notification audio.  Popup-only alerts play once locally.
+    func deliverUsageAlert(kind: UsageAlertKind, title: String, body: String,
+                           identifier: String, navigation: AlertNavigation? = nil) {
+        let option = preferences[kind]
+        guard option.enabled else { return }
+        if let onUsageDelivery {
+            onUsageDelivery(kind, title, body, option)
+            return
+        }
+        if option.popup && !Self.isRunningUnderTests {
+            let alert = NSAlert()
+            alert.messageText = title
+            alert.informativeText = body
+            alert.addButton(withTitle: "Dismiss")
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 180),
+                                  styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.title = "CodeCaps Alert"
+            window.center()
+            popupWindows.append(window)
+            window.makeKeyAndOrderFront(nil)
+            alert.beginSheetModal(for: window) { [weak self, weak window] _ in
+                window?.close()
+                self?.popupWindows.removeAll { $0 === window }
+            }
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        if !option.notification {
+            if option.popup { playAlarmSound(option.sound) }
+            return
+        }
         guard Self.canUseUserNotifications else { return }
         let content = UNMutableNotificationContent()
-        content.title = payload.title
-        content.body = payload.body
-        content.sound = notificationSound(for: payload.sound)
-        content.userInfo = AlertNavigation(providerKey: payload.providerId,
-                                           windowId: payload.windowId,
-                                           timestamp: payload.timestamp).userInfo
-
-        let request = UNNotificationRequest(
-            identifier: "codecaps.reset.\(payload.providerId).\(Date().timeIntervalSince1970)",
-            content: content,
-            trigger: nil
-        )
-        // A real alert that the centre refuses is worth recording for the
-        // same reason the test button is: a silent no-op reads as "the app
-        // is broken" when it is actually a permission problem.  All is on by
-        // default, so the first alarm may be the first time anyone asked.
+        content.title = title
+        content.body = body
+        content.sound = notificationSound(for: option.sound)
+        content.userInfo = navigation?.userInfo ?? [:]
+        let request = UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
         Task { [weak self] in
             let center = UNUserNotificationCenter.current()
             let settings = await center.notificationSettings()
+            if settings.authorizationStatus == .denied {
+                self?.notificationsDenied = true
+                return
+            }
             if settings.authorizationStatus == .notDetermined {
                 guard await self?.requestNotificationPermission() == true else { return }
             }
-            do {
-                try await center.add(request)
-            } catch {
-                self?.testNotificationOutcome = .failed(error.localizedDescription)
-            }
+            do { try await center.add(request) }
+            catch { self?.testNotificationOutcome = .failed(error.localizedDescription) }
         }
     }
 
     public func appendAlertRecord(for payload: ResetAlarmNotification) {
-        let record = ResetAlertRecord(
+        appendAlertRecord(Self.record(for: payload))
+    }
+
+    private static func record(for payload: ResetAlarmNotification) -> ResetAlertRecord {
+        ResetAlertRecord(
             id: payload.id,
             timestamp: payload.timestamp,
             providerKey: payload.providerId,
@@ -504,9 +644,11 @@ public final class ResetAlarmManager: ObservableObject {
             remainingPercent: payload.remainingPercent,
             isVendorReset: payload.isVendorReset,
             title: payload.title,
-            body: payload.body
+            body: payload.body,
+            isPlanChange: payload.isPlanChange,
+            planChangeWindowLabel: payload.planChangeWindowLabel,
+            planChangeRemainingPercent: payload.planChangeRemainingPercent
         )
-        appendAlertRecord(record)
     }
 
     public func appendAlertRecord(_ record: ResetAlertRecord) {
@@ -525,7 +667,9 @@ public final class ResetAlarmManager: ObservableObject {
 
     public func clearAlertHistory() {
         alertHistory.removeAll()
+        detectedResetHistory.removeAll()
         defaults.removeObject(forKey: Keys.alertHistory)
+        defaults.removeObject(forKey: "detectedResetHistory")
     }
 
     /// Delivers an opt-in runaway-usage alert through the same notification
@@ -561,35 +705,11 @@ public final class ResetAlarmManager: ObservableObject {
     }
 
     func deliverRunawayUsageAlert(_ payload: BurnRateNotification) {
-        guard Self.canUseUserNotifications else { return }
-        let content = UNMutableNotificationContent()
-        content.title = payload.title
-        content.body = payload.body
-        content.sound = notificationSound(for: payload.sound)
-        if let first = payload.anomalies.first {
-            content.userInfo = AlertNavigation(providerKey: first.providerKey,
-                                               windowId: first.windowId,
-                                               timestamp: first.observedAt).userInfo
-        }
-        let request = UNNotificationRequest(identifier: payload.identifier,
-                                            content: content,
-                                            trigger: nil)
-        Task { [weak self] in
-            let center = UNUserNotificationCenter.current()
-            let settings = await center.notificationSettings()
-            if settings.authorizationStatus == .denied {
-                self?.notificationsDenied = true
-                return
-            }
-            if settings.authorizationStatus == .notDetermined {
-                guard await self?.requestNotificationPermission() == true else { return }
-            }
-            do {
-                try await center.add(request)
-            } catch {
-                self?.notificationsDenied = true
-            }
-        }
+        guard let first = payload.anomalies.first else { return }
+        deliverUsageAlert(kind: first.kind == .vsPeak ? .runaway : .anomaly,
+                          title: payload.title, body: payload.body, identifier: payload.identifier,
+                          navigation: AlertNavigation(providerKey: first.providerKey,
+                                                      windowId: first.windowId, timestamp: first.observedAt))
     }
 
     /// Sends an immediate test notification to verify notification delivery and sound.

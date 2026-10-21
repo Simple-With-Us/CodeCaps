@@ -62,10 +62,14 @@ The name "CodeCaps" is the brand; the app's scope is AI subscription
 monitoring more broadly, not just coding subscriptions.  Owner ruling,
 2026-09-21: marketing copy and taglines must not narrow the position to
 "coding subscriptions" — frame it as a centralized monitor for AI plans
-generally.  The teal "C-with-cap" mark in `assets/icon-1024.png` is the
-app's primary brand; the orange 3D mark (Usage Monitor) is reserved for
-the centralized-monitor landing surfaces (e.g. CodeCaps.SimpleWithUs.com)
-where the monitoring + sync semantics are the headline.
+generally.  The mark in `assets/brand/codecaps-logo-transparent.svg` is the
+app's primary brand: a teal open ring around a red open ring, with a dark
+needle and six dark dots.  The app icon in `assets/icon-1024.png` sets that
+same mark on an off-white ground, and the About and Settings pages show it in
+colour on a transparent background.  The orange 3D mark (Usage Monitor) is
+reserved for the centralized-monitor landing surfaces
+(e.g. CodeCaps.SimpleWithUs.com) where the monitoring + sync semantics are
+the headline.
 
 Two SPM targets in `Package.swift`:
 
