@@ -1021,6 +1021,11 @@ async function main() {
   if (method === "submit-review") {
     const versionId = path;
     const submissionId = body;
+    //  The platform the operator asked for by name, and the platform in play.
+    //  They are not the same thing:  a platform that was not asked for is
+    //  this command's default, and the default must never rewrite a
+    //  submission somebody else prepared for another platform.
+    const platformRequested = typeof arg4 === "string" && arg4.length > 0;
     const platform = arg4 || "IOS";
     if (!versionId) {
       console.error("Usage: node asc-api.mjs submit-review <versionId> [reviewSubmissionId] [platform]");
@@ -1197,14 +1202,20 @@ async function main() {
     // it.  A submission bound to nothing is the one that gets this version.
     const blockers = [];
     let candidates = [];
+    //  The platform every candidate carries, so the platform can be checked
+    //  against the one in play before the irreversible call goes out.
+    const candidatePlatforms = new Map();
     if (submissionId) {
       candidates = [submissionId];
       //  A named submission is taken as given, but two things about it still
       //  have to be checked:  a submission that was already sent cannot be
       //  sent again, and its platform has to be the one asked for, because a
       //  macOS submission for an iOS version would send the wrong build to
-      //  review.  The platform is a settable attribute, so it is set here
-      //  rather than left to the one call that cannot be undone.
+      //  review.
+      //
+      //  The platform is NOT set here.  The binding is read first, because a
+      //  submission that holds another version is left alone, and a
+      //  submission that is left alone must not be mutated either.
       const named = await api("GET", `/v1/reviewSubmissions/${submissionId}`);
       if (!named.ok) {
         console.error(`submit-review: ${describeError(named)}`);
@@ -1224,20 +1235,10 @@ async function main() {
         process.exitCode = 2;
         return;
       }
-      if (namedAttributes.platform !== platform) {
-        const setPlatform = await api("PATCH", `/v1/reviewSubmissions/${submissionId}`, JSON.stringify({
-          data: {
-            type: "reviewSubmissions",
-            id: submissionId,
-            attributes: { platform }
-          }
-        }));
-        if (!setPlatform.ok) {
-          console.error(`submit-review: the platform could not be set: ${describeError(setPlatform)}`);
-          process.exitCode = 2;
-          return;
-        }
-      }
+      candidatePlatforms.set(
+        submissionId,
+        typeof namedAttributes.platform === "string" ? namedAttributes.platform : null
+      );
     } else {
       if (typeof appId !== "string" || appId.length === 0) {
         console.error("submit-review: not submitting, the version names no app");
@@ -1257,10 +1258,20 @@ async function main() {
           //  A submission that was already sent cannot be sent again.
           if (attributes.submittedDate !== null && attributes.submittedDate !== undefined) return false;
           //  A submission for another platform would put the wrong build in
-          //  review, so it is not a candidate.
+          //  review, so it is not a candidate.  A submission with no platform
+          //  at all is a candidate:  the platform is set on it and read back
+          //  before the irreversible call, so it never goes to review with
+          //  the wrong platform.
           return typeof attributes.platform !== "string" || attributes.platform === platform;
         })
-        .map((s) => s.id);
+        .map((s) => {
+          const attributes = isPlainObject(s.attributes) ? s.attributes : {};
+          candidatePlatforms.set(
+            s.id,
+            typeof attributes.platform === "string" ? attributes.platform : null
+          );
+          return s.id;
+        });
     }
     if (candidates.length === 0) {
       //  The app has no draft submission at all, so one is made.  The
@@ -1290,6 +1301,12 @@ async function main() {
         return;
       }
       candidates = [createdId];
+      //  The platform went on it at create time, so it does not have to be
+      //  set again.
+      const createdPlatform = isPlainObject(created.parsed?.data?.attributes)
+        ? created.parsed.data.attributes.platform
+        : null;
+      candidatePlatforms.set(createdId, typeof createdPlatform === "string" ? createdPlatform : platform);
     }
 
     // Is this submission bound to the version?
@@ -1325,6 +1342,20 @@ async function main() {
         );
         continue;
       }
+      //  The platform is checked before anything is written:  a submission
+      //  that carries another platform is never rewritten to one the operator
+      //  did not ask for, and a refusal mutates nothing.
+      const candidatePlatform = candidatePlatforms.has(candidate)
+        ? candidatePlatforms.get(candidate)
+        : null;
+      if (candidatePlatform !== platform && !platformRequested && typeof candidatePlatform === "string") {
+        console.error(
+          `submit-review: not submitting, the review submission ${candidate} is for ${candidatePlatform} ` +
+          "and no platform was requested.  Name the platform to submit it."
+        );
+        process.exitCode = 2;
+        return;
+      }
       if (boundTo.length === 0) {
         //  The submission is bound to nothing, so this version goes on it.
         const bound = await api("POST", "/v1/reviewSubmissionItems", JSON.stringify({
@@ -1339,13 +1370,52 @@ async function main() {
         if (!bound.ok) {
           for (const line of describeAssociatedErrors(bound)) blockers.push(line);
           console.error(`submit-review: ${candidate} could not be bound to ${versionId}: ${describeError(bound)}`);
+          //  A rejected credential is not a recoverable error:  the calls
+          //  that follow this one include the submit, which cannot be undone,
+          //  so the run stops here instead of issuing them with a credential
+          //  App Store Connect has already refused.
+          if (bound.status === 401 || bound.status === 403) {
+            process.exitCode = 2;
+            return;
+          }
           continue;
         }
         console.error(`submit-review: bound ${versionId} to review submission ${candidate}`);
       }
+      //  The platform is set on the candidate that is actually going to be
+      //  submitted, and only now, after the binding was read and made.  A
+      //  submission that is skipped is never mutated.
+      if (candidatePlatform !== platform) {
+        const setPlatform = await api("PATCH", `/v1/reviewSubmissions/${candidate}`, JSON.stringify({
+          data: {
+            type: "reviewSubmissions",
+            id: candidate,
+            attributes: { platform }
+          }
+        }));
+        if (!setPlatform.ok) {
+          console.error(`submit-review: the platform could not be set: ${describeError(setPlatform)}`);
+          process.exitCode = 2;
+          return;
+        }
+        //  The platform is read back, so a change that was ignored or only
+        //  half applied cannot slip into the call that cannot be undone.
+        const readBack = await api("GET", `/v1/reviewSubmissions/${candidate}`);
+        const applied = isPlainObject(readBack.parsed?.data?.attributes)
+          ? readBack.parsed.data.attributes.platform
+          : null;
+        if (applied !== platform) {
+          console.error(
+            `submit-review: the platform on ${candidate} is ${applied === null ? "unreadable" : applied}, ` +
+            `not ${platform}; not submitting`
+          );
+          process.exitCode = 2;
+          return;
+        }
+      }
       //  The one call that cannot be undone carries the one attribute that
       //  has been proven in production, and nothing else.  The platform was
-      //  set when the submission was made.
+      //  set above, on a call that can be undone.
       const result = await api("PATCH", `/v1/reviewSubmissions/${candidate}`, JSON.stringify({
         data: {
           type: "reviewSubmissions",
@@ -1354,7 +1424,18 @@ async function main() {
         }
       }));
       if (!result.ok) {
+        //  The refusal on the submit carries the same blockers the binding
+        //  refusal carries, and they are the most useful thing this command
+        //  can print.
+        for (const line of describeAssociatedErrors(result)) blockers.push(line);
         console.error(`submit-review: ${candidate} refused: ${describeError(result)}`);
+        //  A rejected credential stops the run here as well:  the next
+        //  candidate would be submitted with a credential that has already
+        //  been refused.
+        if (result.status === 401 || result.status === 403) {
+          process.exitCode = 2;
+          return;
+        }
         continue;
       }
       submitted = candidate;
@@ -1371,7 +1452,10 @@ async function main() {
           "cleared in App Store Connect before this one can go to review."
         );
       } else {
-        console.error("submit-review: not submitting, no review submission is bound to this version");
+        //  The run got as far as the submit and App Store Connect refused
+        //  it.  Saying that no submission is bound would be false:  this run
+        //  bound the version itself.
+        console.error("submit-review: not submitting, App Store Connect refused the submission");
       }
       process.exitCode = 2;
       return;
