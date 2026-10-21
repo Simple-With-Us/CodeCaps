@@ -258,3 +258,23 @@ for (const [error, category] of [['HTTP 401 PRIVATE_SENTINEL','authentication re
 test('missing credential fails before invoking Apple', () => {
   const r=preflight(0,'',true); assert.equal(r.status,1); assert.match(r.stderr,/missing ASC_KEY_ID/);
 });
+test('the certificate path reads the vault project the repository actually has', () => {
+  // The repository has no secret named INFISICAL_PROJECT_ID, so the vault leg
+  // of the certificate step resolved nothing and the step fell through to the
+  // repository copies without saying so.  The org secret that names the
+  // Fleet-OPS project is INFISICAL_FLEET_OPS_PROJECT_ID, and the ASC path in
+  // the same file already uses it.  The repository copies stay as the
+  // fallback the action already implements, so the vault leg can be fixed
+  // without taking the fallback away.
+  for (const file of [code, iosCode]) {
+    assert.doesNotMatch(file, /project-id: \$\{\{ secrets\.INFISICAL_PROJECT_ID \}\}/);
+  }
+  assert.match(workflow, /project-id: \$\{\{ secrets\.INFISICAL_FLEET_OPS_PROJECT_ID \}\}/);
+  assert.match(iosShip, /project-id: \$\{\{ secrets\.INFISICAL_FLEET_OPS_PROJECT_ID \}\}/);
+  // The loader compares physical paths, so a symlinked checkout still runs it
+  // as the entry module instead of silently doing nothing.
+  const loader = read('scripts/infisical-fetch.mjs');
+  assert.match(loader, /function isEntryModule\(\)/);
+  assert.match(loader, /realpathSync/);
+  assert.doesNotMatch(loader, /pathToFileURL\(process\.argv\[1\]\)\.href === import\.meta\.url/);
+});
