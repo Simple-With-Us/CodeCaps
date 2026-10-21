@@ -34,20 +34,20 @@ function allSteps(s, name) {
 }
 const iosShip = read('.github/workflows/ios-ship.yml');
 const iosCode = iosShip.split('\n').filter(l => !/^\s*#/.test(l)).join('\n');
-test('Sparkle uses the existing fleet ASC loader, never repository ASC secrets', () => {
+test('Sparkle reads the ASC credentials through the fleet reader, never repository ASC secrets', () => {
   // The three signing credentials are named on purpose.  A blanket
   // `secrets.ASC_` would also catch ASC_STANDING_TESTERS, which is a list of
   // TestFlight tester addresses and is read from the repository on purpose.
   for (const name of ['ASC_KEY_ID', 'ASC_ISSUER_ID', 'ASC_KEY_P8']) {
     assert.doesNotMatch(code, new RegExp(`secrets\\.${name}`));
   }
-  // One loader, two workflows.  The release path and the iOS ship path must
+  // One handoff, two workflows.  The release path and the iOS ship path must
   // carry the same text, so a fix to one is a fix to the other.
   for (const name of LOADERS) {
     assert.equal(stripGuard(step(workflow, name)), step(iosShip, name), `mac-release and ios-ship disagree on "${name}"`);
     assert.match(step(workflow, name), /if: github.event_name != 'pull_request'/);
   }
-  // The credential check job runs the same loader as the release job, so a
+  // The credential check job runs the same handoff as the release job, so a
   // change to one cannot leave the other proving nothing.
   for (const name of LOADERS) {
     const copies = allSteps(workflow, name);
@@ -63,22 +63,34 @@ test('Sparkle uses the existing fleet ASC loader, never repository ASC secrets',
   }
   assert.match(loader, /INFISICAL_PROJECT_ID: \$\{\{ secrets\.INFISICAL_FLEET_OPS_PROJECT_ID \}\}/);
   assert.doesNotMatch(loader, /echo .*\$\{ASC_INFISICAL_PROJECT_ID\}/);
-  // The key material must not enter the job environment.  The approved
-  // loader and the staging script run in ONE step: the loader writes the
-  // three values into the job's environment file, the staging script reads
-  // them back out of it and writes the private key to a mode-600 file.  Split
-  // across two steps the key would be an environment variable of the
-  // second one, where every later step, every process listing and every
-  // environment dump can read it.
+  // The key material must not enter the job environment.  The tooling
+  // install and the staging script run in ONE step: the install brings the
+  // fleet's reader onto the runner and the staging script writes the private
+  // key to a mode-600 file.  Split across two steps the key would be an
+  // environment variable of the second one, where every later step, every
+  // process listing and every environment dump can read it.
   assert.doesNotMatch(loader, /infisical-secrets/);
   assert.doesNotMatch(loader, /uses: \.\/\.github\/actions/);
-  // The vault is reached by the approved loader, in the same step that
-  // stages the key.
-  assert.match(loader, /run: \|[\s\S]*node scripts\/infisical-fetch\.mjs[\s\S]*node scripts\/stage-asc-key\.mjs/);
-  // The loader is asked for exactly the three ASC names, and all three are
-  // required, so a vault that cannot serve them fails the step by name.
-  assert.match(loader, /INFISICAL_NAMES: ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8/);
-  assert.match(loader, /INFISICAL_REQUIRED: ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8/);
+  // No workflow step reads the vault.  The reader is the fleet's own, and
+  // the staging script is the only thing that resolves a credential, so the
+  // direct loader must not be called from a workflow at all.
+  assert.doesNotMatch(loader, /node scripts\/infisical-fetch\.mjs/);
+  assert.match(loader, /run: \|[\s\S]*bash scripts\/install-release-secrets-tooling\.sh[\s\S]*node scripts\/stage-asc-key\.mjs/);
+  // The staging script resolves every credential environment-first, so a
+  // value in the job's own environment always wins over the vault.
+  const stage = read('scripts/stage-asc-key.mjs');
+  assert.match(stage, /process\.env[\s\S]*fleet-secrets/s);
+  assert.ok(
+    stage.indexOf('fromProcess.get(name)') < stage.indexOf('getSecret(name'),
+    'the environment must be looked up before the approved reader',
+  );
+  // The staging script runs even when the tooling install fails, so a
+  // key-bearing entry can never wait in the job's environment file, and the
+  // step reports the status of the command that actually failed.
+  assert.match(loader, /bash scripts\/install-release-secrets-tooling\.sh \|\| loader_rc=\$\?/);
+  assert.match(loader, /node scripts\/stage-asc-key\.mjs \|\| stage_rc=\$\?/);
+  assert.match(loader, /if \[ "\$loader_rc" -ne 0 \]; then exit "\$loader_rc"; fi/);
+  assert.match(loader, /exit "\$stage_rc"/);
   // The repository's stale signing secrets are never read.  The three
   // signing credentials are named on purpose: a blanket `secrets.ASC_` would
   // also catch ASC_STANDING_TESTERS, which is a list of TestFlight tester
@@ -88,10 +100,15 @@ test('Sparkle uses the existing fleet ASC loader, never repository ASC secrets',
       assert.doesNotMatch(file, new RegExp(`secrets\\.${name}`));
     }
     assert.doesNotMatch(file, /ASC_KEY_P8: \$\{\{/);
+    // No step may ask the composite action for an ASC_* name: the action
+    // writes every requested value into $GITHUB_ENV, which would put the
+    // private key back into the environment of every later step.
+    assert.doesNotMatch(file, /names: ASC_/);
   }
-  // The loader is told where the vault is, and only where.
-  assert.match(loader, /INFISICAL_ENVIRONMENT: prod/);
-  assert.match(loader, /INFISICAL_SECRET_PATH: \/asc/);
+  // The vault is named where it is read: the step says which vault it
+  // reads, and the staging script owns the folder inside it.
+  assert.match(loader, /Load and stage the ASC credentials \(Fleet-OPS prod \/asc\)/);
+  assert.match(stage, /SECRET_FOLDER = '\/asc'/);
   assert.match(loader, /INFISICAL_CLIENT_ID: \$\{\{ secrets\.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID \|\| secrets\.INFISICAL_CLIENT_ID \}\}/);
   assert.match(loader, /INFISICAL_CLIENT_SECRET: \$\{\{ secrets\.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET \|\| secrets\.INFISICAL_CLIENT_SECRET \}\}/);
   // The bare Infisical CLI is gone: it prints the value to stdout, and its

@@ -19,6 +19,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import { run } from './stage-asc-key.mjs';
+import { run as loaderRun } from './infisical-fetch.mjs';
 
 // A synthetic fixture, not a credential.  It stands in for the private key
 // so the test can tell a leak from a clean run.
@@ -179,6 +180,64 @@ test("the loader's key entry is removed from the environment file, not blanked",
   }
 });
 
+test('the loader-then-staging sequence leaves no key behind when the loader fails', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'asc-stage-'));
+  try {
+    const env = baseEnv(dir);
+    // The vault answers with the private key and nothing for the identifier,
+    // which is the shape of a partial read.  The loader writes every value it
+    // does have into the job's environment file and only then fails on the
+    // one that is missing, so the key is already in the file when the step
+    // dies.
+    const stubFetch = async (url) => {
+      const u = String(url);
+      if (u.includes('/api/v1/auth/universal-auth/login')) {
+        return { ok: true, json: async () => ({ accessToken: 'test-token', expiresIn: 3600 }) };
+      }
+      if (u.includes('/api/v3/secrets/raw')) {
+        return {
+          ok: true,
+          json: async () => ({
+            secrets: [{ secretKey: 'ASC_KEY_P8', secretValue: KEY }],
+          }),
+        };
+      }
+      throw new Error(`stubFetch: unexpected URL ${u}`);
+    };
+
+    await assert.rejects(
+      loaderRun({
+        env: {
+          ...env,
+          INFISICAL_NAMES: 'ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8',
+          INFISICAL_REQUIRED: 'ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8',
+          INFISICAL_PROJECT_ID: 'project',
+          INFISICAL_CLIENT_ID: 'client',
+          INFISICAL_CLIENT_SECRET: 'secret',
+        },
+        fetchImpl: stubFetch,
+        log: () => {},
+      }),
+      /Missing required Infisical name/,
+    );
+
+    // The loader wrote the key before it failed: this is the state the
+    // staging script has to clean up, and the state the workflow leaves
+    // behind when the fetch fails.
+    assert.ok(
+      readFileSync(env.GITHUB_ENV, 'utf8').includes(KEY_MARKER),
+      'the loader wrote the key into the environment file before it failed',
+    );
+
+    // Now the staging script runs, exactly as the workflow runs it.
+    await run({ env, getSecret: stubGetter(), log: () => {} });
+
+    assertNoKeySurvives(env.GITHUB_ENV);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('a staging failure leaves no key-bearing entry behind', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'asc-stage-'));
   try {
@@ -223,6 +282,28 @@ test('malformed multiline data fails closed and leaves no key-bearing entry', as
     assert.ok(lines.some((l) => l.includes('Fleet-OPS prod /asc')), 'the error names the path');
 
     assertNoKeySurvives(env.GITHUB_ENV);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a malformed entry does not reject a credential the environment carries', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'asc-stage-'));
+  try {
+    const env = baseEnv(dir, { ASC_KEY_ID: 'ENVKEYID' });
+    // The file holds a truncated block for the same name.  The malformed
+    // verdict is about the file, not about the value in hand, so the
+    // environment's own credential is used and the step is not failed with
+    // an error that names a file nobody read.
+    writeFileSync(env.GITHUB_ENV, 'ASC_KEY_ID<<INFISICAL_TESTDELIMITER\ntruncated\n');
+    const lines = [];
+    await run({ env, getSecret: stubGetter(), log: (l) => lines.push(l) });
+    assert.ok(
+      !lines.some((l) => l.includes('malformed')),
+      'the verdict on the file must not reject a credential the environment carries',
+    );
+    const written = readFileSync(env.GITHUB_ENV, 'utf8');
+    assert.match(written, /ENVKEYID/, 'the credential the environment carried is the one that crosses forward');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

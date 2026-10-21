@@ -11,9 +11,9 @@
  *      entries from.  A named variable always wins, so the job's own
  *      environment is the first place a credential is looked up.
  *   2. the approved fallback: `fleet-secrets get <name> --path /asc`,
- *      which reads Fleet-OPS Infisical prod /asc on a developer machine.
- *      The getter is injected, so a test stubs the getter rather than a
- *      network endpoint.
+ *      which reads Fleet-OPS Infisical prod /asc through the fleet's own
+ *      reader.  The getter is injected, so a test stubs the getter rather
+ *      than a network endpoint.
  *
  * The private key never crosses a step boundary.  It is streamed over
  * stdin into scripts/ios-stage-asc-key.sh, which writes a mode-600 file
@@ -22,13 +22,12 @@
  * no later step can read the key from the environment.  Only the two
  * identifiers are published, and they are masked before they are written.
  *
- * This script does not talk to the vault.  The approved loader
- * (scripts/infisical-fetch.mjs, byte-identical to the BotFleet copy, the
- * script the infisical-secrets composite action runs) does that, and the
- * values it exports are read here through the environment.  Keeping the
- * retrieval in one place is what lets the key stay out of every step's
- * environment: the loader and this script run in the same step, so the
- * key never becomes an environment variable of any step.
+ * This script is the only thing in the release that reads a credential.  The
+ * workflow installs the reader (scripts/install-release-secrets-tooling.sh
+ * brings the Infisical CLI and the fleet's `fleet-secrets` onto the runner
+ * and mints the access token they use) and this script calls the reader.
+ * No workflow step asks the vault for a value, and no step's environment
+ * carries the private key.
  *
  * Run: node scripts/stage-asc-key.mjs
  */
@@ -67,13 +66,15 @@ function childEnv(env) {
 /** Read the job's environment file: the entries a step wrote through
  * $GITHUB_ENV, which the runner applies to the steps that follow.  Both
  * the single-line form (`NAME=value`) and the multiline form
- * (`NAME<<delimiter` ... `delimiter`) are understood, because the approved
- * loader writes the multiline form for a value that carries newlines.
+ * (`NAME<<delimiter` ... `delimiter`) are understood, because a step that
+ * writes a value that carries newlines writes the multiline form.
  *
  * A multiline block whose delimiter never arrives is malformed: the file was
  * truncated, or a step that was writing it was interrupted.  The name is
  * reported separately, because a value read out of such a block is not the
- * value that was written. */
+ * value that was written.  The body that did arrive is kept as the file's
+ * candidate for that name, so a malformed entry is still rejected on its own
+ * terms instead of being silently passed over. */
 function readEnvironmentFile(path) {
   const values = new Map();
   const malformed = new Set();
@@ -90,7 +91,7 @@ function readEnvironmentFile(path) {
       }
       if (j >= lines.length) {
         malformed.add(heredoc[1]);
-        values.set(heredoc[1], '');
+        values.set(heredoc[1], body.join('\n'));
         i = lines.length;
         continue;
       }
@@ -112,8 +113,8 @@ function readEnvironmentFile(path) {
  * that stays in the file is a key that reaches those steps.  Writing a blank
  * assignment for the same name does not help: the earlier bytes are still in
  * the file, and the runner reads the file line by line.  The entry itself is
- * removed instead, in the single-line form and in the heredoc form the
- * approved loader writes for a value that carries newlines.
+ * removed instead, in the single-line form and in the heredoc form a step
+ * writes for a value that carries newlines.
  *
  * A heredoc block whose delimiter never arrives is dropped to the end of the
  * file.  The end of the key material cannot be known in that case, so the
@@ -245,19 +246,25 @@ export async function run({
     const fromProcess = new Map(CREDENTIALS.map((name) => [name, env[name]]));
     sanitize();
 
-    /** Environment first, then the approved fallback. */
+    /** Environment first, then the approved fallback: `fleet-secrets get`,
+     *  captured and never echoed.  The result says where the value came
+     *  from, because the verdict on a malformed job environment file only
+     *  belongs to a value that file actually supplied. */
     const resolve = async (name) => {
       const named = fromProcess.get(name);
-      if (typeof named === 'string' && named.trim() !== '') return named;
+      if (typeof named === 'string' && named.trim() !== '') return { value: named, fromFile: false };
       const written = fromFile.get(name);
-      if (typeof written === 'string' && written.trim() !== '') return written;
+      if (typeof written === 'string' && written.trim() !== '') return { value: written, fromFile: true };
       const fetched = await getSecret(name, SECRET_FOLDER);
-      return typeof fetched === 'string' ? fetched : '';
+      return { value: typeof fetched === 'string' ? fetched : '', fromFile: false };
     };
 
-    const keyId = checkCredential(log, 'ASC_KEY_ID', await resolve('ASC_KEY_ID'), malformed.has('ASC_KEY_ID'));
-    const issuerId = checkCredential(log, 'ASC_ISSUER_ID', await resolve('ASC_ISSUER_ID'), malformed.has('ASC_ISSUER_ID'));
-    const key = checkCredential(log, 'ASC_KEY_P8', await resolve('ASC_KEY_P8'), malformed.has('ASC_KEY_P8'));
+    const keyIdSrc = await resolve('ASC_KEY_ID');
+    const issuerIdSrc = await resolve('ASC_ISSUER_ID');
+    const keySrc = await resolve('ASC_KEY_P8');
+    const keyId = checkCredential(log, 'ASC_KEY_ID', keyIdSrc.value, keyIdSrc.fromFile && malformed.has('ASC_KEY_ID'));
+    const issuerId = checkCredential(log, 'ASC_ISSUER_ID', issuerIdSrc.value, issuerIdSrc.fromFile && malformed.has('ASC_ISSUER_ID'));
+    const key = checkCredential(log, 'ASC_KEY_P8', keySrc.value, keySrc.fromFile && malformed.has('ASC_KEY_P8'));
 
     // The identifiers cross into the later steps, so they are masked first: a
     // tool that echoes them leaves nothing behind in the public job log.  The

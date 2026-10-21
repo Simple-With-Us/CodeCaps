@@ -168,7 +168,6 @@ test("ASC credentials come from Fleet-OPS /asc, never the stale repository secre
   assert.doesNotMatch(code, /8dae6d03/);
   assert.doesNotMatch(code, /ASC_INFISICAL_PROJECT_ID/);
   assert.match(code, /INFISICAL_PROJECT_ID: \$\{\{ secrets\.INFISICAL_FLEET_OPS_PROJECT_ID \}\}/);
-  assert.match(code, /INFISICAL_SECRET_PATH: \/asc/);
   assert.match(code, /uses: \.\/\.github\/actions\/infisical-secrets/);
   assert.match(code, /secrets\.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID/);
   assert.doesNotMatch(code, /infisical secrets get/);
@@ -176,16 +175,35 @@ test("ASC credentials come from Fleet-OPS /asc, never the stale repository secre
   // No new code may talk to the vault directly.
   assert.doesNotMatch(code, /listSecretsRaw|loginUniversalAuth/);
 
-  // The multiline key never enters the step environment.  The approved
-  // loader and the staging script run in ONE step: the loader writes the
-  // three values into the job's environment file, the staging script reads
-  // them back out of it, streams the key over stdin into a mode-600 file
-  // and blanks the ASC_KEY_P8 entry, so only the file's path and the two
-  // identifiers cross into the later steps.
+  // The multiline key never enters the step environment.  The tooling
+  // install and the staging script run in ONE step: the install brings the
+  // fleet's reader onto the runner, the staging script resolves the three
+  // values environment-first, streams the key over stdin into a mode-600
+  // file and removes the ASC_KEY_P8 entry, so only the file's path and the
+  // two identifiers cross into the later steps.
   assert.match(code, /scripts\/stage-asc-key\.mjs/);
-  assert.match(code, /node scripts\/infisical-fetch\.mjs[\s\S]*node scripts\/stage-asc-key\.mjs/);
-  assert.match(code, /INFISICAL_NAMES: ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8/);
-  assert.match(code, /INFISICAL_REQUIRED: ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8/);
+  // No workflow step reads the vault directly: the reader is the fleet's
+  // own, and the staging script is the only thing that resolves a value.
+  assert.doesNotMatch(code, /node scripts\/infisical-fetch\.mjs/);
+  assert.match(code, /bash scripts\/install-release-secrets-tooling\.sh/);
+  assert.match(code, /node scripts\/stage-asc-key\.mjs \|\| stage_rc=\$\?/);
+  // The staging script resolves each value from process.env first and only
+  // then through the approved reader, so a credential in the step's own
+  // environment always wins over the vault.
+  const stage = readFileSync(join(ROOT, "scripts/stage-asc-key.mjs"), "utf8");
+  assert.match(stage, /process\.env[\s\S]*fleet-secrets/s);
+  assert.ok(
+    stage.indexOf("fromProcess.get(name)") < stage.indexOf("getSecret(name"),
+    "the environment must be looked up before the approved reader",
+  );
+  // The vault is named where it is read: the step says which vault it
+  // reads, and the staging script owns the folder inside it.
+  assert.match(code, /Load and stage the ASC credentials \(Fleet-OPS prod \/asc\)/);
+  assert.match(stage, /SECRET_FOLDER = '\/asc'/);
+  // No step may ask the composite action for an ASC_* name: the action
+  // writes every requested value into $GITHUB_ENV, which would put the
+  // private key back into the environment of every later step.
+  assert.doesNotMatch(code, /names: ASC_/);
   assert.match(readFileSync(join(ROOT, "scripts/stage-asc-key.mjs"), "utf8"), /ios-stage-asc-key\.sh/);
   // The key leaves the environment file with the entry itself removed, not
   // with a blank assignment that leaves the earlier bytes in the file for the
