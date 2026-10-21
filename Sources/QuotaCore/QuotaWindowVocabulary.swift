@@ -21,9 +21,102 @@ public enum QuotaWindowVocabulary {
     /// caption needs when two bars share one cadence.
     public static let barQualifierWeekly = "weekly"
     public static let barQualifierMonthly = "monthly"
-    public static let barQualifierDaily = "daily"
+    /// Not "daily": the caption already shows the `1d` token, so the
+    /// qualifier must not restate the same cadence.  "daily allowance" names
+    /// the kind of allowance instead.
+    public static let barQualifierDaily = "daily allowance"
     public static let barQualifierHourly = "hourly"
     public static let barQualifierAdditional = "additional"
+
+    /// The cadence forms a bar qualifier must never repeat: the hyphenated
+    /// labels and the compact tokens the caption row already carries beside
+    /// the qualifier.
+    public static let barQualifierForbiddenCadenceForms = [
+        fiveHour, oneDay, sevenDay, oneMonth, otherLimit,
+        "5h", "1d", "7d", "1m", "+"
+    ]
+
+    /// The caption facts of one quota bar: the cadence it shows and the label
+    /// it carries.  A row of bars is resolved together, because whether a bar
+    /// needs a qualifier depends on the bars beside it.
+    public struct BarCaption: Equatable, Sendable {
+        public let cadence: String
+        public let label: String
+
+        public init(cadence: String, label: String) {
+            self.cadence = cadence
+            self.label = label
+        }
+    }
+
+    /// The lowercased lexical tokens of a label, split on everything that is
+    /// not a letter or a number.
+    ///
+    /// Canonical qualifiers are matched against these tokens and never as
+    /// substrings, so a label such as "nothourly" is not an hourly window.
+    public static func lexicalTokens(_ text: String) -> Set<String> {
+        Set(
+            text.lowercased()
+                .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+                .map(String.init)
+        )
+    }
+
+    /// The short distinguishing noun for a bar caption row, or "" when the
+    /// label names none.
+    ///
+    /// "Free weekly limit" reads "weekly", "Additional tokens" reads
+    /// "additional", and a label with no such word reads nothing.
+    public static func barQualifier(forLabel label: String) -> String {
+        if isExtraAllowanceLabel(label) { return barQualifierAdditional }
+        let tokens = lexicalTokens(label)
+        if tokens.contains("weekly") { return barQualifierWeekly }
+        if tokens.contains("monthly") || tokens.contains("billing") { return barQualifierMonthly }
+        if tokens.contains("daily") { return barQualifierDaily }
+        if tokens.contains("hourly") { return barQualifierHourly }
+        return ""
+    }
+
+    /// The qualifier for a bar caption row, or "" when the row needs none.
+    ///
+    /// A cadence word is only worth printing when a sibling bar shares the
+    /// cadence, because on a lone bar "7d weekly" says the same thing twice.
+    public static func barQualifier(forLabel label: String, sharesCadence: Bool) -> String {
+        guard sharesCadence else { return "" }
+        return barQualifier(forLabel: label)
+    }
+
+    /// The canonical cadence a window belongs to, used to group the bars that
+    /// share one period.
+    public static func barCadenceGroup(cadence: String, label: String) -> String {
+        let tokens = lexicalTokens(label)
+        if tokens.contains("weekly") { return sevenDay }
+        if tokens.contains("monthly") || tokens.contains("billing") { return oneMonth }
+        if tokens.contains("daily") { return oneDay }
+        if tokens.contains("hourly") { return fiveHour }
+        if isExtraAllowanceLabel(label) {
+            // An extra allowance is extra capacity of the period it doubles,
+            // so it groups with that window rather than standing alone.
+            return standardCadence(windowToken: cadence, label: "")
+        }
+        return standardCadence(windowToken: cadence, label: label)
+    }
+
+    /// The qualifier of every bar in a caption row, in the same order.
+    ///
+    /// Each bar is resolved against its siblings, so a bar that shares its
+    /// cadence with another bar gets the word that tells the two apart and a
+    /// lone bar gets none.
+    public static func barQualifiers(forBars bars: [BarCaption]) -> [String] {
+        let groups = bars.map { barCadenceGroup(cadence: $0.cadence, label: $0.label) }
+        return bars.indices.map { index in
+            let siblings = groups.indices.filter { $0 != index }.map { groups[$0] }
+            return barQualifier(
+                forLabel: bars[index].label,
+                sharesCadence: siblings.contains(groups[index])
+            )
+        }
+    }
 
     /// Full cadence label for a window, suitable for main-window copy and wire export.
     public static func standardCadence(
