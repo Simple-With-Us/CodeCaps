@@ -787,6 +787,17 @@ async function main() {
     const marketing = preRelease && isPlainObject(preRelease.attributes)
       ? preRelease.attributes.versionString
       : null;
+    //  A build that names a pre-release version but whose marketing version
+    //  cannot be read is not a build with nothing to compare:  it is a
+    //  comparison that did not happen, and letting the submission through
+    //  would skip the one check that pairs the version with the build.
+    if (hasPreRelease && (typeof marketing !== "string" || marketing.length === 0)) {
+      console.error(
+        `submit-review: not submitting, the build names pre-release ${preReleaseId} but its marketing version could not be read`
+      );
+      process.exitCode = 2;
+      return;
+    }
     if (typeof marketing === "string" && marketing.length > 0 && marketing !== versionString) {
       console.error(
         `submit-review: not submitting, the version says ${versionString} and the build says ${marketing}. ` +

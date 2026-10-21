@@ -100,6 +100,31 @@ function serve(options) {
             data: { type: "builds", id: "build-1", attributes: { version: "243" } }
           });
         }
+        if (options.preReleaseWithoutVersion) {
+          //  The include is there, but it carries no version string, so the
+          //  comparison still cannot be made.
+          return json(200, {
+            data: {
+              type: "builds",
+              id: "build-1",
+              attributes: { version: "243" },
+              relationships: { preReleaseVersion: { data: { type: "preReleaseVersions", id: "pre-1" } } }
+            },
+            included: [{ type: "preReleaseVersions", id: "pre-1", attributes: {} }]
+          });
+        }
+        if (options.preReleaseWithoutInclude) {
+          //  The build names a pre-release version, but the read returns no
+          //  include for it, so the marketing version cannot be read.
+          return json(200, {
+            data: {
+              type: "builds",
+              id: "build-1",
+              attributes: { version: "243" },
+              relationships: { preReleaseVersion: { data: { type: "preReleaseVersions", id: "pre-1" } } }
+            }
+          });
+        }
         return json(200, {
           data: {
             type: "builds",
@@ -232,6 +257,35 @@ test("a review submission bound to another version is not submitted", async () =
       `the refusal did not say the submission was bound elsewhere:\n${stderr}`
     );
     assert.equal(patched.length, 0, "the wrong version's submission was patched");
+  });
+});
+
+test("a build whose pre-release version has no include stops the submission", async () => {
+  //  The build names a pre-release version and the read returns no include
+  //  for it, so the comparison that pairs the version with the build did not
+  //  happen.  Letting the submission through would skip it.
+  await withServer({ ...READY, preReleaseWithoutInclude: true }, async (base, patched) => {
+    const { code, stderr } = await submit(base);
+    assert.equal(code, 2, `expected a refusal, got ${code}: ${stderr}`);
+    assert.ok(
+      /returns no include for it/.test(stderr),
+      `the refusal did not say what was unreadable:\n${stderr}`
+    );
+    assert.equal(patched.length, 0, "the submission was patched without a comparable build");
+  });
+});
+
+test("a build whose marketing version cannot be read stops the submission", async () => {
+  //  The include is there but carries no version string, so the comparison
+  //  is still impossible and the submission must not go out.
+  await withServer({ ...READY, preReleaseWithoutVersion: true }, async (base, patched) => {
+    const { code, stderr } = await submit(base);
+    assert.equal(code, 2, `expected a refusal, got ${code}: ${stderr}`);
+    assert.ok(
+      /marketing version could not be read/.test(stderr),
+      `the refusal did not say what was unreadable:\n${stderr}`
+    );
+    assert.equal(patched.length, 0, "the submission was patched without a comparable build");
   });
 });
 
