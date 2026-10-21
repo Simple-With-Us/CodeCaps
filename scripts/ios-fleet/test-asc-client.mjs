@@ -351,7 +351,7 @@ test("a malformed PEM in the environment is a credential error, not a stack trac
   //  mangled export carries the envelope and still fails to parse.  The
   //  refusal has to name the credential, because the signer would fail with a
   //  stack trace that says nothing about what to change.
-  const malformed = "-----BEGIN PRIVATE KEY-----\nnot base64 at all\n-----END PRIVATE KEY-----\n";
+  const malformed = "-----BEGIN PRIVATE KEY-----\nnot base64 at all\n-----END PRIVATE KEY-----\n"; // gitleaks:allow
   const result = await run(["GET", "/v1/apps"], { ASC_KEY_P8: malformed });
   assert.equal(result.code, 1, `expected the refusal exit, got ${result.code}: ${result.stderr}`);
   assert.match(result.stderr, /ASC_KEY_P8 is set but is not a PEM private key/);

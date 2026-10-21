@@ -136,7 +136,7 @@ test("a malformed PEM in the environment fails closed, before any request", asyn
   const r = await run({
     ASC_KEY_ID: "ENVKEY0003",
     ASC_ISSUER_ID: "env-issuer",
-    ASC_KEY_P8: "-----BEGIN PRIVATE KEY-----\nnot base64 at all\n-----END PRIVATE KEY-----\n"
+    ASC_KEY_P8: "-----BEGIN PRIVATE KEY-----\nnot base64 at all\n-----END PRIVATE KEY-----\n" // gitleaks:allow
   });
   assert.notEqual(r.code, 0);
   assert.equal(r.kid, null);

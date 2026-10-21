@@ -67,8 +67,8 @@ test("a malformed PEM is refused, because the envelope is not a key", () => {
   //  envelope and still fail to parse.  Accepting them would hand the signer
   //  something it cannot use, and the failure would come back as a stack
   //  trace instead of a credential error.
-  assert.equal(normalizePrivateKey("-----BEGIN PRIVATE KEY-----\nnot base64 at all\n-----END PRIVATE KEY-----\n"), null);
-  assert.equal(normalizePrivateKey("-----BEGIN PRIVATE KEY-----\n-----END PRIVATE KEY-----\n"), null);
+  assert.equal(normalizePrivateKey("-----BEGIN PRIVATE KEY-----\nnot base64 at all\n-----END PRIVATE KEY-----\n"), null); // gitleaks:allow
+  assert.equal(normalizePrivateKey("-----BEGIN PRIVATE KEY-----\n-----END PRIVATE KEY-----\n"), null); // gitleaks:allow
   assert.equal(normalizePrivateKey(""), null);
   assert.equal(normalizePrivateKey(undefined), null);
   assert.equal(normalizePrivateKey("hunter2"), null);
