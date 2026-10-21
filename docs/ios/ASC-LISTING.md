@@ -7,7 +7,9 @@ The owner presses Submit for Review.
 ## What was staged
 
 - Description rewritten (3,304 chars): differentiators verified in-repo —
-  kept usage history, anomaly vs average + peak, runaway-before-gone, widgets,
+  kept usage history (Mac-only: only `Sources/CodeCaps/UsageHistoryViews.swift`
+  implements it; the iOS companion has no history view, so the iOS metadata
+  must not promise it), anomaly vs average + peak, runaway-before-gone, widgets,
   PiP (Mac), provider marks; added vendor mid-cycle reset detection, five alert
   categories with per-kind delivery + sound on iPhone, source-scope
   disagreement flag, no-API-keys; Getting Started now mirrors the real UI

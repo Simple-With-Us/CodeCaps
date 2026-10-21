@@ -353,15 +353,15 @@ struct GlancePopover: View {
             openConsole(model.displaySections.first.map { .platform($0.id) } ?? .settingsSourcesFleet)
         } label: {
             HStack(spacing: 5) {
-                Text("Dashboard")
+                Text("Open CodeCaps")
                 Text("⌘1")
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(colorScheme == .dark ? Color.black.opacity(0.55) : Color.white.opacity(0.75))
             }
         }
         .buttonStyle(GlanceFooterProminentButtonStyle(model: model))
-        .help("Open Dashboard")
-        .accessibilityLabel("Open Dashboard")
+        .help("Open CodeCaps")
+        .accessibilityLabel("Open CodeCaps")
     }
 
     private var runawayFooterItems: [String] {
@@ -1039,10 +1039,13 @@ struct GlanceHeaderBar: View {
 /// The owner's colour mark on a transparent ground, resolved through the
 /// same bundle as the About page.  Owner 2026-10-21: this header and the
 /// About page both show the transparent colour artwork, never the black
-/// menu-bar template.  The template belongs only to the menu bar icon
-/// itself.  Never re-cut, re-exported or substituted.
+/// template.  The template itself serves two places: the menu bar icon
+/// and the PiP HUD, which still renders it tinted.  Never re-cut,
+/// re-exported or substituted.
 struct GlanceBrandMark: View {
     static let asset: NSImage? = BrandMarkImage.asset
+
+    @Environment(\.colorScheme) private var colorScheme
 
     /// The frame is applied to EACH branch, not to the Group around them.
     /// A `.resizable()` image proposes its natural size, and the brand
@@ -1056,6 +1059,17 @@ struct GlanceBrandMark: View {
                     .resizable()
                     .renderingMode(.original)
                     .interpolation(.high)
+                    .padding(Metrics.glanceBrandMarkSize * 0.06)
+                    .background {
+                        // The needle and the dots are dark, so dark
+                        // appearance needs a light ground for them or the
+                        // mark reads as two empty rings.  Same ground the
+                        // About page draws.
+                        if colorScheme == .dark {
+                            RoundedRectangle(cornerRadius: Metrics.glanceBrandMarkSize * 0.22, style: .continuous)
+                                .fill(BrandMarkImage.lightGround)
+                        }
+                    }
                     .frame(width: Metrics.glanceBrandMarkSize, height: Metrics.glanceBrandMarkSize)
             } else {
                 // Only if the owner's artwork is ever missing from the bundle.
