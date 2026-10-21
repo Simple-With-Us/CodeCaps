@@ -36,9 +36,18 @@ final class BrandAssetTests: XCTestCase {
     /// How dark a pixel of the template mark has to be to count as the
     /// owner's ink.
     ///
-    /// The template is the mark in a single near-black over transparency, so
-    /// every one of its flat fills is well under this.  Only the anti-aliased
-    /// edge pixels are lighter than the ink.
+    /// This is the owner's ruling about the file the app ships, not a claim
+    /// about how macOS draws a template.  macOS tints a template from its
+    /// alpha channel alone, so a re-export with white ink would draw
+    /// identically in the menu bar, the PiP widget header and the Glance
+    /// popover header.  The rule still holds, because the one template in
+    /// the bundle is the owner's own dark silhouette:  a re-export that
+    /// swapped the ink would ship artwork the owner never approved, and the
+    /// same file is what a future non-template use would draw.
+    ///
+    /// The shipped mark is the mark in a single near-black over
+    /// transparency, so every one of its flat fills is well under this.
+    /// Only the anti-aliased edge pixels are lighter than the ink.
     private static let templateInkLimit = 0.35
 
     /// The share of the template mark's opaque pixels that have to be dark
@@ -147,6 +156,13 @@ final class BrandAssetTests: XCTestCase {
     /// So the template is sampled the way the colour mark is:  its opaque
     /// pixels have to be the owner's dark ink, and it has to keep the
     /// transparency that makes it a silhouette rather than a filled block.
+    ///
+    /// The ink rule is the owner's ruling about the asset, not a claim about
+    /// the rendering.  macOS draws a template from its alpha channel alone,
+    /// so the ink colour is not what the menu bar, the PiP widget header and
+    /// the Glance popover header show.  The rule keeps the file in the
+    /// bundle the owner's own dark silhouette, and the shape check below is
+    /// what proves it is the owner's mark rather than a stand-in.
     func testTheTemplateMarkIsTheDarkOwnerSilhouette() throws {
         let bundle = try XCTUnwrap(ResourceBundle.resolved,
                                     "the SwiftPM resource bundle could not be resolved at all")
@@ -161,9 +177,8 @@ final class BrandAssetTests: XCTestCase {
         let share = Double(ink) / Double(pixels.opaque.count)
         XCTAssertGreaterThanOrEqual(share, Self.templateInkShare, """
             \(Self.templateMark).png is not the owner's dark silhouette:  only \
-            \(Int(share * 100))% of its opaque pixels are dark ink, so the menu bar, the PiP \
-            widget header and the Glance popover header would tint artwork that is not the \
-            owner's mark.
+            \(Int(share * 100))% of its opaque pixels are dark ink, so the file the app ships \
+            is not the owner's own artwork, even though macOS would tint it the same way.
             """)
 
         XCTAssertGreaterThan(pixels.transparent, pixels.opaque.count, """
