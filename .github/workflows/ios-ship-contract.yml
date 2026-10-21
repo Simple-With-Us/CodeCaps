@@ -48,6 +48,7 @@ jobs:
           node --test scripts/ios-fleet/test-asc-client.mjs
           node --test scripts/ios-fleet/test-asc-upload.mjs
           node --test scripts/ios-fleet/test-asc-submit.mjs
+          node --test scripts/ios-fleet/test-asc-key.test.mjs
           python3 scripts/ios-fleet/test_pick_simulator.py
           python3 scripts/ios-fleet/test_screenshot_ink.py
           bash scripts/ios-fleet/test-capture-script.sh

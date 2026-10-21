@@ -338,7 +338,15 @@ jobs:
             exit 0
           fi
           set +e
-          node scripts/ios-fleet/asc-api.mjs ensure-standing-testers "$appleid"
+          # The client resolves the signing key from its environment and never
+          # from a path (Kody rule 42), so the staged key is read here and
+          # handed to the child through the child's environment.  It stays out
+          # of argv, out of $GITHUB_ENV and out of the log.
+          asc_pem=""
+          if [ -n "${ASC_KEY_PATH:-}" ]; then
+            asc_pem="$(node scripts/ios-fleet/asc-key.mjs read "$ASC_KEY_PATH" 2>/dev/null)" || asc_pem=""
+          fi
+          ASC_KEY_P8="$asc_pem" node scripts/ios-fleet/asc-api.mjs ensure-standing-testers "$appleid"
           rc=$?
           set -e
           if [ "$rc" -ne 0 ]; then
