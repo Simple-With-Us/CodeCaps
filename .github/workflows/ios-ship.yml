@@ -66,6 +66,7 @@ on:
       # ship a TestFlight build.
       - 'Sources/QuotaCore/CompanionReadTokenStore.swift'
       - 'Sources/QuotaCore/FleetSourceDisagreement.swift'
+      - 'Sources/QuotaCore/QuotaWindowCaption.swift'
       - 'Sources/QuotaCore/QuotaWindowVocabulary.swift'
       - 'Sources/QuotaCore/ResetAlarmCadence.swift'
       - 'Sources/QuotaCore/ResetAlarmMessage.swift'
@@ -134,6 +135,7 @@ jobs:
             --path-prefix 'ios/CodeCapsCompanion/' \
             --path-prefix 'Sources/QuotaCore/CompanionReadTokenStore.swift' \
             --path-prefix 'Sources/QuotaCore/FleetSourceDisagreement.swift' \
+            --path-prefix 'Sources/QuotaCore/QuotaWindowCaption.swift' \
             --path-prefix 'Sources/QuotaCore/QuotaWindowVocabulary.swift' \
             --path-prefix 'Sources/QuotaCore/ResetAlarmCadence.swift' \
             --path-prefix 'Sources/QuotaCore/ResetAlarmMessage.swift' \
@@ -298,8 +300,19 @@ jobs:
             exit 0
           fi
           set +e
-          node scripts/ios-fleet/asc-api.mjs ensure-standing-testers "$appleid"
-          rc=$?
+          # The client resolves the signing key from its environment and never
+          # from a path (Kody rule 42), so the staged key is handed to the
+          # child through the child's environment by the hardened reader.  The
+          # key stays out of argv, out of stdout, out of $GITHUB_ENV and out
+          # of the log.
+          if [ -n "${ASC_KEY_PATH:-}" ]; then
+            node scripts/ios-fleet/asc-key.mjs exec "$ASC_KEY_PATH" -- \
+              node scripts/ios-fleet/asc-api.mjs ensure-standing-testers "$appleid"
+            rc=$?
+          else
+            node scripts/ios-fleet/asc-api.mjs ensure-standing-testers "$appleid"
+            rc=$?
+          fi
           set -e
           if [ "$rc" -ne 0 ]; then
             echo "::warning title=TestFlight standing testers::tester sync exited ${rc}; see the standing-testers lines above.  The TestFlight upload itself succeeded."

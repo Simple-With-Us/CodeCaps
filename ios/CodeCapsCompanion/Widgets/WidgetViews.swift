@@ -547,7 +547,10 @@ struct ProviderFocusView: View {
                     .lineLimit(2)
                     .minimumScaleFactor(0.85)
             } else {
-                WindowCaptionRow(token: captionToken, resetCaption: captionReset, font: 9)
+                WindowCaptionRow(
+                    caption: .withoutQualifier(token: captionToken, resetCaption: captionReset),
+                    font: 9
+                )
             }
         }
         .padding(12)
@@ -640,7 +643,10 @@ struct ProviderFocusView: View {
                             percentFont: 11
                         )
                     } else if windowsToShow.isEmpty {
-                        WindowCaptionRow(token: captionToken, resetCaption: captionReset, font: 9.5)
+                        WindowCaptionRow(
+                            caption: .withoutQualifier(token: captionToken, resetCaption: captionReset),
+                            font: 9.5
+                        )
                     } else {
                         ForEach(windowsToShow) { win in
                             VStack(alignment: .leading, spacing: 2) {
@@ -660,8 +666,7 @@ struct ProviderFocusView: View {
                                     height: 3.5
                                 )
                                 WindowCaptionRow(
-                                    token: win.cadenceToken,
-                                    resetCaption: win.resetCaption(),
+                                    caption: win.caption,
                                     font: 9
                                 )
                             }
@@ -717,8 +722,7 @@ struct AccessoryView: View {
                                 .font(.system(size: 12, weight: .bold, design: .rounded))
                         }
                         WindowCaptionRow(
-                            token: atCap.cadenceToken,
-                            resetCaption: atCap.resetCaption(),
+                            caption: atCap.caption,
                             font: 9
                         )
                     }
@@ -772,14 +776,12 @@ struct AccessoryView: View {
                         }
                         HStack(spacing: 4) {
                             WindowCaptionRow(
-                                token: pair.window1.cadenceToken,
-                                resetCaption: pair.window1.resetCaption(),
+                                caption: pair.window1.caption,
                                 font: 8.5
                             )
                             .frame(maxWidth: .infinity)
                             WindowCaptionRow(
-                                token: pair.window2.cadenceToken,
-                                resetCaption: pair.window2.resetCaption(),
+                                caption: pair.window2.caption,
                                 font: 8.5
                             )
                             .frame(maxWidth: .infinity)
@@ -798,9 +800,14 @@ struct AccessoryView: View {
                         }
                         MiniProgressBar(fraction: platform.progressFraction, color: .primary, elapsedFraction: platform.elapsedFraction, height: 4)
                         WindowCaptionRow(
-                            token: platform.controllingWindow(entry.windowPick)?.cadenceToken
-                                ?? WidgetPresentation.shortCadence(cadence: platform.subtitle, label: platform.title),
-                            resetCaption: platform.controllingWindow(entry.windowPick)?.resetCaption() ?? platform.resetCaption(),
+                            caption: platform.controllingWindow(entry.windowPick)?.caption
+                                ?? .withoutQualifier(
+                                    token: WidgetPresentation.shortCadence(
+                                        cadence: platform.subtitle,
+                                        label: platform.title
+                                    ),
+                                    resetCaption: platform.resetCaption()
+                                ),
                             font: 9
                         )
                     }

@@ -111,6 +111,8 @@ targets:
         group: Shared
       - path: ../../Sources/QuotaCore/QuotaWindowVocabulary.swift
         group: Shared
+      - path: ../../Sources/QuotaCore/QuotaWindowCaption.swift
+        group: Shared
       - path: ../../Sources/QuotaCore/FleetSourceDisagreement.swift
         group: Shared
       - path: ../../Sources/QuotaCore/WidgetPlatformDisplay.swift
@@ -208,6 +210,8 @@ targets:
       - path: ../../Sources/QuotaCore/ResetAlarmCadence.swift
         group: Shared
       - path: ../../Sources/QuotaCore/QuotaWindowVocabulary.swift
+        group: Shared
+      - path: ../../Sources/QuotaCore/QuotaWindowCaption.swift
         group: Shared
       - path: ../../Sources/QuotaCore/FleetSourceDisagreement.swift
         group: Shared
