@@ -15,9 +15,10 @@ import SwiftUI
 /// else.
 public enum BrandMarkImage {
     /// The mark, loaded once.  The asset is a required, bundled resource:
-    /// `BrandAssetTests` fails the build if the bundle ever stops carrying it.
-    /// `nil` only if the bundle is missing it, in which case every surface
-    /// falls back to an SF Symbol rather than showing an empty gap.
+    /// `BrandAssetTests` fails the test suite, and so CI, if the bundle ever
+    /// stops carrying it or the artwork stops being the owner's.  `nil` only
+    /// if the bundle is missing it, in which case every surface falls back to
+    /// an SF Symbol rather than showing an empty gap.
     public static let asset: NSImage? = {
         guard let url = ResourceBundle.resolved?.url(forResource: "CodeCapsBrandMark", withExtension: "png"),
               let image = NSImage(contentsOf: url) else { return nil }
