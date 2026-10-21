@@ -49,7 +49,7 @@ enum AutoUpdateAvailability: Equatable {
         return false
     }
 
-    /// One line for Settings ▸ About.
+    /// One line for Dashboard ▸ About.
     var summary: String {
         switch self {
         case .enabled: "On"

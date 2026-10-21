@@ -32,7 +32,7 @@ struct SettingsMenuBarPage: View {
                 .pickerStyle(.segmented)
             } footer: {
                 Text("Both keeps the menu bar icon and a Dock icon." + sentenceGap
-                     + "Dock hides the menu bar icon, so use Open CodeCaps to reach your quota.")
+                     + "Dock hides the menu bar icon, so use the Dashboard to reach your quota.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
@@ -556,7 +556,7 @@ struct SettingsSourcesFleetPage: View {
     // MARK: Source Ranking
 
     /// Per-provider source enable + rank.  Sections only render for providers
-    /// that have more than one observed source — the Settings page should not
+    /// that have more than one observed source — the Dashboard page should not
     /// tease a control that has no effect.
     @ViewBuilder
     private var sourcesRankSection: some View {
@@ -1936,7 +1936,7 @@ struct SettingsInfisicalPage: View {
             try settings.clearConfiguration { try InfisicalIdentityStore.delete() }
             refreshFromStore(reloadSetup: true)
             succeeded = true
-            message = "Setup removed." + sentenceGap + "Settings stay local until you add one again."
+            message = "Setup removed." + sentenceGap + "The Dashboard stays local until you add one again."
             keyMessage = nil
             NotificationCenter.default.post(name: .infisicalIdentityChanged, object: nil)
         } catch {

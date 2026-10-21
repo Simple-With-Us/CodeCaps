@@ -1,6 +1,6 @@
 # Refresh Sources and Intervals
 
-CodeCaps has two kinds of local quota input.  Configure them separately in Settings → Sources & Fleet under Read Quotas From This Mac.
+CodeCaps has two kinds of local quota input.  Configure them separately in Dashboard → Sources & Fleet under Read Quotas From This Mac.
 
 | Input | Available Sources | Default | What a Check Does |
 |---|---|---|---|
