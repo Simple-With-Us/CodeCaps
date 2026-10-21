@@ -1238,7 +1238,9 @@ struct SettingsAboutPage: View {
         /// keeps the owner's own black template icon; this is the version that
         /// belongs inside the app.  Owner 2026-10-20: "transparent background
         /// when it is shown on the app like on the About page or settings.  For
-        /// those versions the time dots and hand are dark."
+        /// those versions the time dots and hand are dark."  Dark appearance
+        /// keeps the off-white ground, because the needle and the dots are
+        /// dark and would otherwise disappear against the page.
         static let asset: NSImage? = BrandMarkImage.asset
 
         var body: some View {
@@ -1259,8 +1261,10 @@ struct SettingsAboutPage: View {
                             }
                         }
                 } else {
-                    // Only if the owner's artwork is ever missing from the
-                    // bundle: keep a mark on screen rather than an empty gap.
+                    // A last resort only.  The owner's artwork is a required
+                    // bundled resource, and `BrandAssetTests` fails CI when
+                    // the bundle stops carrying it, so this only ever keeps a
+                    // mark on screen rather than an empty gap.
                     Image(systemName: "gauge.with.dots.needle.50percent")
                         .font(.system(size: size))
                         .foregroundStyle(Theme.accent)
