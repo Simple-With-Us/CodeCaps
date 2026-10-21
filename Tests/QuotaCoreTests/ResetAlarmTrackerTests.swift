@@ -411,7 +411,14 @@ final class ResetAlarmTrackerTests: XCTestCase {
     /// vendor that gives back a partial allowance looked like ordinary drift.
     /// A fixed-period window cannot regain quota inside its own period, so a
     /// large rise is the signal and the level it lands at is not.
-    func testAVendorRestoreBelow95PercentIsDetected() {
+    ///
+    /// Owner ruling 2026-10-20 supersedes the last sentence.  A rise is still
+    /// detected and still alarms, but the level it lands at now decides the
+    /// name: at or above `vendorRestoreLevel` it is a vendor reset, below it a
+    /// change of plan is the likelier reason.  The same numbers as before are
+    /// used, because they are the ones that were argued about: a restore that
+    /// comes back to 89% now reads as a plan change, and 95% would not.
+    func testARestoreThatLandsBelow95PercentIsReportedAsAPlanChange() {
         var tracker = ResetAlarmTracker()
         // Cursor: a 30-day billing cycle, thirteen days left when it was restored.
         let cursorEnd = t0 + 13 * day
@@ -423,8 +430,9 @@ final class ResetAlarmTrackerTests: XCTestCase {
         let cursorEvents = tracker.process(
             [reading("plan", period: 30 * day, resetAt: cursorEnd, remaining: 89.02, observedAt: cursorLater, provider: "cursor")],
             now: cursorLater)
-        XCTAssertEqual(cursorEvents.map(\.windowId), ["plan"])
-        XCTAssertEqual(cursorEvents.first?.isVendorReset, true, "A mid-cycle restore is a vendor reset.")
+        XCTAssertEqual(cursorEvents.map(\.windowId), ["plan"], "A mid-cycle rise is still detected.")
+        XCTAssertEqual(cursorEvents.first?.isVendorReset, false, "89% is below the level a vendor reset has to reach.")
+        XCTAssertEqual(cursorEvents.first?.isPlanChange, true, "A rise that lands below the level is a likely plan change.")
     }
 
     func testAPartialRestoreOfEverySizeIsDetected() {
@@ -440,7 +448,8 @@ final class ResetAlarmTrackerTests: XCTestCase {
             [reading("weekly", period: 7 * day, resetAt: weekEnd, remaining: 91.96, observedAt: later, provider: "grok-bot")],
             now: later)
         XCTAssertEqual(events.map(\.windowId), ["weekly"])
-        XCTAssertEqual(events.first?.isVendorReset, true)
+        XCTAssertEqual(events.first?.isPlanChange, true, "It landed at 91.96%, below the vendor-reset level.")
+        XCTAssertEqual(events.first?.isVendorReset, false)
     }
 
     /// A rise is only new evidence when the period end holds still.  When the
@@ -474,7 +483,7 @@ final class ResetAlarmTrackerTests: XCTestCase {
             [reading("weekly", period: 7 * day, resetAt: end + 60, remaining: 89.0, observedAt: later, provider: "grok-bot")],
             now: later)
         XCTAssertEqual(events.map(\.windowId), ["weekly"])
-        XCTAssertEqual(events.first?.isVendorReset, true)
+        XCTAssertEqual(events.first?.isPlanChange, true, "It landed at 89%, so the name is a plan change.")
     }
 
     /// Small drift is still drift, not a restore.
@@ -546,7 +555,7 @@ final class ResetAlarmTrackerTests: XCTestCase {
                 now: t0)
             let later = t0 + gap
             let events = tracker.process(
-                [reading("weekly", period: 7 * day, resetAt: end, remaining: 89.0, observedAt: later, provider: "grok-bot")],
+                [reading("weekly", period: 7 * day, resetAt: end, remaining: 100.0, observedAt: later, provider: "grok-bot")],
                 now: later)
             XCTAssertEqual(events.map(\.windowId), ["weekly"], "Gap of \(Int(gap))s must still detect a restore.")
             XCTAssertEqual(events.first?.isVendorReset, true, "Gap of \(Int(gap))s.")
@@ -585,7 +594,7 @@ final class ResetAlarmTrackerTests: XCTestCase {
             now: t0)
         let later = t0 + 300
         let events = tracker.process(
-            [reading("weekly", period: 7 * day, resetAt: end, remaining: 89.0, observedAt: nil, provider: "grok-bot")],
+            [reading("weekly", period: 7 * day, resetAt: end, remaining: 100.0, observedAt: nil, provider: "grok-bot")],
             now: later)
         XCTAssertEqual(events.map(\.windowId), ["weekly"])
         XCTAssertEqual(events.first?.isVendorReset, true)

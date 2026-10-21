@@ -98,6 +98,28 @@ public enum AntigravityQuotaGroups {
     /// The pool keys, in display order.
     public static let poolKeys = ["gemini", "third-party"]
 
+    /// The level a weekly cap has to reach before the pool counts as spent.
+    ///
+    /// The provider reports a fractional remaining, 0.4% is ordinary, and the
+    /// interface rounds that to 0%, so a cap that reads "at cap" on screen can
+    /// carry a number that is not exactly zero.  An exact-zero test let those
+    /// through, and the five-hour window under them was then believed when its
+    /// percentage must not be believed: owner 2026-10-19, "Antigravity is
+    /// saying vendor reset 5h quota early while the 7d is still at cap and
+    /// unchanged".  Half a point is where the interface rounds, so the mask
+    /// and the interface agree on what "at cap" means.
+    public static let weeklySpentThreshold: Double = 0.5
+
+    /// Whether a pool's weekly cap is spent.  A weekly that reports a number
+    /// is spent at or below the rounding threshold; one that reports no number
+    /// falls back to the provider's own word for it.
+    private static func weeklyIsSpent(_ window: QuotaWindow) -> Bool {
+        if let remaining = window.boundedRemainingPercent {
+            return remaining <= weeklySpentThreshold
+        }
+        return window.isExhausted
+    }
+
     /// Splits Antigravity windows into their two pools.  Windows that belong to
     /// no recognisable pool are dropped rather than guessed at, and a pool with
     /// no windows at all is omitted.
@@ -117,7 +139,7 @@ public enum AntigravityQuotaGroups {
                 return left.id < right.id
             }
             let weeklyExhausted = ordered.contains {
-                !$0.isSubModelLimit && cadence($0) == "weekly" && $0.boundedRemainingPercent == 0
+                !$0.isSubModelLimit && cadence($0) == "weekly" && weeklyIsSpent($0)
             }
             let masked: Set<String> = weeklyExhausted
                 ? Set(ordered.filter { !$0.isSubModelLimit && cadence($0) == "5h" }.map(\.id))

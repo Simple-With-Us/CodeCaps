@@ -71,6 +71,7 @@ on:
       - 'Sources/QuotaCore/ResetAlarmCadence.swift'
       - 'Sources/QuotaCore/ResetAlarmMessage.swift'
       - 'Sources/QuotaCore/ResetAlarmTracker.swift'
+      - 'Sources/QuotaCore/UsageAlertPreferences.swift'
       - 'Sources/QuotaCore/WidgetPlatformDisplay.swift'
       - 'Sources/QuotaCore/WidgetSnapshotFetcher.swift'
       - '.github/workflows/ios-ship.yml'
@@ -137,6 +138,7 @@ jobs:
             --path-prefix 'Sources/QuotaCore/ResetAlarmCadence.swift' \
             --path-prefix 'Sources/QuotaCore/ResetAlarmMessage.swift' \
             --path-prefix 'Sources/QuotaCore/ResetAlarmTracker.swift' \
+            --path-prefix 'Sources/QuotaCore/UsageAlertPreferences.swift' \
             --path-prefix 'Sources/QuotaCore/WidgetPlatformDisplay.swift' \
             --path-prefix 'Sources/QuotaCore/WidgetSnapshotFetcher.swift' \
             --repo-root "$GITHUB_WORKSPACE" \
@@ -255,6 +257,9 @@ jobs:
             exit 1
           fi
           bash "$GITHUB_WORKSPACE/scripts/ios-appstore-gm-prepare.sh"
+
+      - name: Enable CodeCaps APNs and verify production push profile
+        run: node "$GITHUB_WORKSPACE/scripts/ios-enable-apns.mjs"
 
       - name: Install App Store profiles
         run: bash "$GITHUB_WORKSPACE/scripts/ios-install-appstore-profiles.sh"
