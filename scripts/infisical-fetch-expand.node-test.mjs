@@ -43,6 +43,30 @@ function baseEnv(githubEnv, names) {
   };
 }
 
+test("the secrets request carries the bearer token from the login", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ops818-fetch-"));
+  try {
+    const authHeaders = [];
+    const stub = async (url, options) => {
+      const u = String(url);
+      if (u.includes("/api/v1/auth/universal-auth/login")) {
+        return { ok: true, json: async () => ({ accessToken: "test-token", expiresIn: 3600 }) };
+      }
+      if (u.includes("/api/v3/secrets/raw")) {
+        authHeaders.push(options && options.headers && options.headers.authorization);
+        return { ok: true, json: async () => ({ secrets: [{ secretKey: "FOO", secretValue: RESOLVED }] }) };
+      }
+      throw new Error(`unexpected URL ${u}`);
+    };
+    await run({ env: baseEnv(join(dir, "env"), "FOO"), fetchImpl: stub, log: () => {} });
+    // A broken token has to fail the request, and a test that ignored the
+    // header would not have noticed.
+    assert.deepEqual(authHeaders, ["Bearer test-token"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("the secrets list asks Infisical to expand secret references", async () => {
   const dir = mkdtempSync(join(tmpdir(), "ops818-fetch-"));
   try {

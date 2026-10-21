@@ -1,0 +1,15 @@
+# One reviewed false positive, by fingerprint.
+#
+# The finding is the 40-character commit hash of the public
+# AI-Fleet-Coordinator repository that scripts/install-release-secrets-tooling.sh
+# pins the fleet's reader to.  It is a public commit id, not a credential: the
+# secret scanner reads it as one because the constant it was assigned to held
+# the word "secret".  The constant is named FLEET_READER_COMMIT today, and the
+# scanner does not flag it.
+#
+# The entry is here because the commit that introduced the old name is already
+# on the branch, and this branch is never force-pushed: the scanner walks the
+# commits a pull request adds, so it still reads the old line there.  Every
+# other rule stays active, and a real credential in this repository is still
+# caught.
+053e42631eaf6389365bbb37dedb2d67143ca2f6:scripts/install-release-secrets-tooling.sh:generic-api-key:38

@@ -163,15 +163,81 @@ test("ASC credentials come from Fleet-OPS /asc, never the stale repository secre
   assert.doesNotMatch(code, /secrets\.ASC_KEY_P8/);
   assert.doesNotMatch(code, /ASC_KEY_(ID|P8):\s*\$\{\{/);
 
-  assert.match(code, /ASC_INFISICAL_PROJECT_ID:\s*8dae6d03-8f12-48b2-adf3-e5c1b881c8c5/);
-  assert.match(code, /--path=\/asc/);
-  assert.match(code, /infisical login --method=universal-auth/);
+  // The project id is a secret, never a literal in this public file, and the
+  // bare Infisical CLI is not used: it prints the value to stdout.
+  assert.doesNotMatch(code, /8dae6d03/);
+  assert.doesNotMatch(code, /ASC_INFISICAL_PROJECT_ID/);
+  assert.match(code, /INFISICAL_PROJECT_ID: \$\{\{ secrets\.INFISICAL_FLEET_OPS_PROJECT_ID \}\}/);
+  assert.match(code, /uses: \.\/\.github\/actions\/infisical-secrets/);
   assert.match(code, /secrets\.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID/);
+  assert.doesNotMatch(code, /infisical secrets get/);
+  assert.doesNotMatch(code, /infisical\/get-cli/);
+  // No new code may talk to the vault directly.
+  assert.doesNotMatch(code, /listSecretsRaw|loginUniversalAuth/);
 
-  // The multiline key goes to a mode-600 file, never GITHUB_ENV.
-  assert.match(code, /scripts\/ios-stage-asc-key\.sh/);
+  // The multiline key never enters the step environment.  The tooling and
+  // the staging script run in ONE step: the tooling brings the fleet's
+  // reader onto the runner, the staging script resolves the three values
+  // environment-first, streams the key over stdin into a mode-600 file and
+  // removes the ASC_KEY_P8 entry, so only the file's path and the two
+  // identifiers cross into the later steps.
+  // The step names the tooling, and the tooling names the consumer that
+  // resolves the values.
+  assert.match(code, /scripts\/install-release-secrets-tooling\.sh/);
+  // No workflow step reads the vault directly: the reader is the fleet's
+  // own, and the staging script is the only thing that resolves a value.
+  assert.doesNotMatch(code, /node scripts\/infisical-fetch\.mjs/);
+  // The step is a single call to the tooling, and the tooling runs the
+  // consumer in the same process tree, so the minted token reaches it
+  // through its environment and never through a file.
+  assert.match(code, /bash scripts\/install-release-secrets-tooling\.sh/);
+  const tooling = readFileSync(join(ROOT, "scripts/install-release-secrets-tooling.sh"), "utf8");
+  assert.match(tooling, /node "\$repo_root\/scripts\/stage-asc-key\.mjs"/);
+  assert.doesNotMatch(tooling, /release-secrets-env\.sh/);
+  // The minted token must never reach the log.  The guard names every output
+  // helper the script has, because a regression that printed through `say` or
+  // `fail` would leak the token while a guard that only matched `printf`
+  // still passed.
+  assert.doesNotMatch(tooling, /\b(say|echo|printf|fail)\b[^\n]*\$(token|\{token\})/);
+  assert.doesNotMatch(code, /release-secrets-env\.sh/);
+  assert.match(tooling, /export INFISICAL_TOKEN="\$token"/);
+  assert.match(tooling, /export INFISICAL_FLEET_OPS_PROJECT_ID="\$project_id"/);
+  // The consumer runs even when the tooling install fails, and the step
+  // reports the status of the command that actually failed.
+  assert.match(tooling, /install_rc=0[\s\S]*install_tooling \|\| install_rc=\$\?/);
+  assert.match(tooling, /stage_rc=0[\s\S]*stage-asc-key\.mjs"? \|\| stage_rc=\$\?/);
+  assert.match(tooling, /if \[ "\$install_rc" -ne 0 \]; then exit "\$install_rc"; fi/);
+  assert.match(tooling, /exit "\$stage_rc"/);
+  // The tooling is part of the ship, so a change to it runs the ship the
+  // same way a change to any other ship script does.
+  assert.match(code, /'scripts\/install-release-secrets-tooling\.sh'/);
+  // The staging script resolves each value from process.env first and only
+  // then through the approved reader, so a credential in the step's own
+  // environment always wins over the vault.
+  const stage = readFileSync(join(ROOT, "scripts/stage-asc-key.mjs"), "utf8");
+  assert.match(stage, /process\.env[\s\S]*fleet-secrets/s);
+  assert.ok(
+    stage.indexOf("fromProcess.get(name)") < stage.indexOf("getSecret(name"),
+    "the environment must be looked up before the approved reader",
+  );
+  // The vault is named where it is read: the step says which vault it
+  // reads, and the staging script owns the folder inside it.
+  assert.match(code, /Load and stage the ASC credentials \(Fleet-OPS prod \/asc\)/);
+  assert.match(stage, /SECRET_FOLDER = '\/asc'/);
+  // No step may ask the composite action for an ASC_* name: the action
+  // writes every requested value into $GITHUB_ENV, which would put the
+  // private key back into the environment of every later step.
+  assert.doesNotMatch(code, /names: ASC_/);
+  assert.match(readFileSync(join(ROOT, "scripts/stage-asc-key.mjs"), "utf8"), /ios-stage-asc-key\.sh/);
+  // The key leaves the environment file with the entry itself removed, not
+  // with a blank assignment that leaves the earlier bytes in the file for the
+  // runner to import into a later step.
+  assert.match(readFileSync(join(ROOT, "scripts/stage-asc-key.mjs"), "utf8"), /removeEnvironmentEntries/);
+  assert.doesNotMatch(readFileSync(join(ROOT, "scripts/stage-asc-key.mjs"), "utf8"), /appendFileSync\(env\.GITHUB_ENV, 'ASC_KEY_P8=/);
   assert.doesNotMatch(code, /for name in .*ASC_KEY_P8/);
   assert.doesNotMatch(code, /printf '%s=%s\\n' "ASC_KEY_P8"/);
+  // The workflow never writes the key into an environment entry itself.
+  assert.doesNotMatch(code, /ASC_KEY_P8:\s*\$\{\{/);
 
   // The Distribution identity stays a repository secret, scoped to its step.
   assert.match(code, /IOS_DIST_P12_BASE64:\s*\$\{\{ secrets\.IOS_DIST_P12_BASE64 \}\}/);

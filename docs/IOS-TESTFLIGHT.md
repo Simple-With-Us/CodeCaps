@@ -28,7 +28,7 @@ Marketing and build both come from the repo's commit count: `1.0.<commit_count>`
 ## When A Build Is Missing
 
 1. `gh workflow view ios-ship.yml -R Simple-With-Us/CodeCaps` must say the workflow is active, and the latest `main` push touching the paths above should have a run.
-2. A failed run names its step.  `Load ASC credentials (Fleet-OPS prod /asc)` failing means the CI Infisical identity lost read access to Fleet-OPS `/asc`; that is an owner fix in Infisical, never a new App Store Connect key.
+2. A failed run names its step.  `Load and stage the ASC credentials (Fleet-OPS prod /asc)` failing means the CI Infisical identity lost read access to Fleet-OPS `/asc`; that is an owner fix in Infisical, never a new App Store Connect key.
 3. Compare the newest processed TestFlight build against `git log -1 -- ios/CodeCapsCompanion` before saying the app is up to date.
 
 ## CodeCaps For Mac (Retired From TestFlight)

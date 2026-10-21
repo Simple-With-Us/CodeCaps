@@ -15,6 +15,12 @@
 #   POLL_SECONDS      delay between polls (default: 30)
 #   ONCE              if 1, decide from one fetch and do not poll
 #   CHECKS_JSON       one-shot fixture path; skips the network
+#   REDISPATCH_ON_CANCEL  if 1, a cancelled compile run is replaced by a
+#                       fresh dispatch of the compile workflow on the same
+#                       commit, instead of the gate waiting for a run that
+#                       will never arrive (default: 0)
+#   REDISPATCH_WORKFLOW  the workflow file to dispatch (default: swift-ci.yml)
+#   MAX_REDISPATCH    how many replacements to dispatch (default: 3)
 #
 # Exit 0 when every named check's newest github-actions run succeeded.
 # Exit 1 on a failed, skipped, or cancelled check, or on timeout.
@@ -28,6 +34,10 @@ SHA="${SHA:-}"
 DEADLINE_SECONDS="${DEADLINE_SECONDS:-5100}"
 POLL_SECONDS="${POLL_SECONDS:-30}"
 ONCE="${ONCE:-0}"
+REDISPATCH_ON_CANCEL="${REDISPATCH_ON_CANCEL:-0}"
+REDISPATCH_WORKFLOW="${REDISPATCH_WORKFLOW:-swift-ci.yml}"
+MAX_REDISPATCH="${MAX_REDISPATCH:-3}"
+redispatches=0
 if [[ $# -gt 0 ]]; then
   CHECK_NAMES=("$@")
 else
@@ -65,6 +75,8 @@ if [[ -n "${CHECKS_JSON:-}" ]]; then
 fi
 
 deadline=$(( $(date +%s) + DEADLINE_SECONDS ))
+details="$(mktemp)"
+trap 'rm -f "$details"' EXIT
 while true; do
   files=()
   for name in "${CHECK_NAMES[@]}"; do
@@ -74,7 +86,7 @@ while true; do
     gh api "repos/${REPO}/commits/${SHA}/check-runs?check_name=${encoded}&per_page=100" >"$payload"
   done
   set +e
-  verdict="$(decide "${files[@]}")"
+  verdict="$(decide "${files[@]}" 2>"$details")"
   code=$?
   set -e
   rm -f "${files[@]}"
@@ -97,6 +109,22 @@ while true; do
     fi
     echo "::error::Timed out after ${DEADLINE_SECONDS}s waiting for Swift CI on ${SHA}: ${verdict}"
     exit 1
+  fi
+  # A cancelled run never finished, so it is no verdict at all about the
+  # code.  Waiting for a run that will never arrive only wastes the window
+  # the release has, so dispatch a replacement on the same commit instead.
+  if [[ "$code" -eq 2 && "$REDISPATCH_ON_CANCEL" == "1" ]] \
+    && [[ "$redispatches" -lt "$MAX_REDISPATCH" ]] \
+    && grep -q "=cancelled" "$details"; then
+    redispatches=$(( redispatches + 1 ))
+    echo "::notice title=Swift CI cancelled::the compile run on ${SHA} was cancelled before it finished.  Dispatching a replacement (${redispatches} of ${MAX_REDISPATCH})."
+    if gh api --method POST \
+      "repos/${REPO}/actions/workflows/${REDISPATCH_WORKFLOW}/dispatches" \
+      -f ref="$SHA" >/dev/null 2>&1; then
+      echo "dispatched ${REDISPATCH_WORKFLOW} on ${SHA}"
+    else
+      echo "::warning title=Swift CI cancelled::the replacement compile run could not be dispatched; the gate keeps waiting for a run to appear."
+    fi
   fi
   echo "Waiting for Swift CI on ${SHA}: ${verdict}"
   sleep "$POLL_SECONDS"
