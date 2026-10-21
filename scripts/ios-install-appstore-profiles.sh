@@ -8,7 +8,6 @@ umask 077
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAP="${ROOT}/ios/CodeCapsCompanion/appstore-profiles.json"
 CLIENT="${ROOT}/scripts/ios-fleet/asc-api.mjs"
-KEY_READER="${ROOT}/scripts/ios-fleet/asc-key.mjs"
 DEST="${HOME}/Library/MobileDevice/Provisioning Profiles"
 WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/cc-profiles.XXXXXX")"
 trap 'rm -rf "$WORKDIR"' EXIT
@@ -21,21 +20,42 @@ chmod 700 "$DEST"
 }
 
 # The client takes the key from the environment, because a path on disk is not
-# an approved secret source (Kody rule 42).  The hosted runner stages the key
-# to a mode-600 file and publishes only its path, so the staged key is handed
-# to the child in the child's environment by the hardened reader.  The key
-# never reaches a command line, a log, the environment file, or a temporary
-# file, and it never reaches this shell:  the reader keeps it in the file and
-# puts it in the child's environment.
+# an approved secret source (Kody rule 42).  The only approved sources are
+# process.env.ASC_KEY_P8 and `fleet-secrets get ASC_KEY_P8`, and the client
+# resolves both on its own.  A named ASC_KEY_PATH is not a credential source
+# at all and is not read here, so a stale or foreign path can never decide
+# which credential signs the request.
 #
-# A path that names nothing is not a credential:  the run falls through and the
-# client resolves the credential the way it does today, from an exported
-# ASC_KEY_P8 or from fleet-secrets.
+# The key never reaches a command line, a log, the environment file, or a
+# temporary file.  A run that resolves no credential at all is a hard stop,
+# and it names the variables that could not be resolved, so the operator is
+# told which one to set instead of being left with a permission message that
+# points at nothing.
 run_client() {
-  if [[ -n "${ASC_KEY_PATH:-}" ]]; then
-    node "$KEY_READER" exec "$ASC_KEY_PATH" -- node "$CLIENT" "$@"
-  else
-    node "$CLIENT" "$@"
+  local rc=0 err="$WORKDIR/client.stderr"
+  node "$CLIENT" "$@" 2>"$err" || rc=$?
+  show_client_stderr "$err"
+  name_missing_credential "$err"
+  return "$rc"
+}
+
+# Prints what the client said, so nothing it reported is lost when its
+# stderr is captured.
+show_client_stderr() {
+  local err="$1"
+  if [[ -s "$err" ]]; then
+    cat "$err" >&2
+  fi
+}
+
+# Names the variables that could not be resolved when the client found no
+# credential.  The client says which sources it tried;  this says which
+# variables to set, so the failure is actionable instead of a permission
+# message that points at nothing.
+name_missing_credential() {
+  local err="$1"
+  if grep -q "no App Store Connect credential found" "$err" 2>/dev/null; then
+    echo "error: no App Store Connect credential resolved: set ASC_KEY_P8 with ASC_KEY_ID and ASC_ISSUER_ID, or let fleet-secrets answer for Fleet-OPS prod /asc" >&2
   fi
 }
 

@@ -51,14 +51,36 @@ const SUBMISSION_ID = "sub-1";
 //     does not stop at a rejected credential has somewhere to go
 //   submissionHasNoPlatform: the draft submission carries no platform at all
 //   submissionPlatform: the platform the named submission answers with
+//   platformPatchFails: the platform change is refused, which happens after
+//     the version was already bound
+//   platformPatchIgnored: the platform change is accepted but the read still
+//     answers with the platform the submission started with, so the change
+//     did not take
+//   platformReadBackMissing: the read of a draft answers with no platform at
+//     all
+//   createHidesPlatform: the created submission comes back with no platform
+//   bindFailsPlain: the binding is refused and names no blockers
+//   itemsFail: the read of the submission's items fails
 //   platform: the platform the submission answers with
 function serve(options) {
   const patched = [];
   const bound = [];
   const created = [];
+  //  The order the writes came in, so a test can see which one came first.
+  const order = [];
   //  The platform each submission carries.  A platform that was set on it is
   //  remembered, so the read after the change answers with it.
   const platforms = new Map();
+  //  The platform a read of a submission answers with.  A server that
+  //  ignores a platform patch keeps answering with the platform the
+  //  submission started with, and a server that has no platform at all
+  //  answers with none:  both are states the client's read-back guard has to
+  //  catch, so the mock can play them.
+  const platformOf = (id) => {
+    if (options.platformReadBackMissing) return null;
+    if (options.platformPatchIgnored) return options.submissionPlatform || "IOS";
+    return platforms.get(id) || options.submissionPlatform || "IOS";
+  };
   //  A submission that has been marked submitted reads back as one, and a
   //  draft reads back as a draft.  The read before the submit and the read
   //  after it are the same call, so what changed in between is what tells
@@ -75,16 +97,59 @@ function serve(options) {
       const url = req.url.split("?")[0];
 
       if (req.method === "PATCH" && url.startsWith("/v1/reviewSubmissions/")) {
-        const body = JSON.parse(raw || "{}");
-        patched.push({ url, body });
-        const attributes = body?.data?.attributes ?? {};
-        const id = body?.data?.id || SUBMISSION_ID;
+        //  The body is untrusted input, so it is parsed in a try block and
+        //  validated before anything is stored.  The shape is checked by
+        //  hand, because the script has no dependencies to lean on.
+        let parsed = null;
+        try {
+          parsed = raw ? JSON.parse(raw) : null;
+        } catch {
+          return json(400, { errors: [{ title: "the body is not JSON" }] });
+        }
+        const isPlain = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+        if (!isPlain(parsed) || !isPlain(parsed.data) || !isPlain(parsed.data.attributes)) {
+          return json(400, { errors: [{ title: "the body does not name a submission with attributes" }] });
+        }
+        const id = parsed.data.id;
+        if (typeof id !== "string" || id.length === 0) {
+          return json(400, { errors: [{ title: "the body does not name a submission" }] });
+        }
+        const attributes = parsed.data.attributes;
+        if (attributes.submitted !== undefined && typeof attributes.submitted !== "boolean") {
+          return json(400, { errors: [{ title: "submitted is not a boolean" }] });
+        }
+        if (attributes.platform !== undefined &&
+            (typeof attributes.platform !== "string" || attributes.platform.length === 0)) {
+          return json(400, { errors: [{ title: "platform is not a platform" }] });
+        }
+        //  Only the normalized values are kept:  the id, the submitted flag
+        //  and the platform, and nothing else the request carried.
         const submitted = attributes.submitted === true;
+        const platform = typeof attributes.platform === "string" ? attributes.platform : null;
+        patched.push({
+          url,
+          body: {
+            data: {
+              type: "reviewSubmissions",
+              id,
+              attributes: { ...(submitted ? { submitted: true } : {}), ...(platform ? { platform } : {}) }
+            }
+          }
+        });
+        order.push(submitted ? "submit" : "platform");
         if (submitted) {
           sent.add(id);
         }
-        if (typeof attributes.platform === "string") {
-          platforms.set(id, attributes.platform);
+        if (platform !== null) {
+          platforms.set(id, platform);
+        }
+        if (!submitted && platform !== null && options.platformPatchFails) {
+          //  The refusal of the platform change.
+          return json(409, { errors: [{
+            status: "409",
+            code: "STATE_ERROR.ENTITY_STATE_INVALID",
+            title: "the platform could not be set on the review submission."
+          }] });
         }
         if (submitted && (options.submitFails || options.submitFailsPlain)) {
           if (options.submitFailsPlain) {
@@ -120,15 +185,17 @@ function serve(options) {
             }
           }] });
         }
+        const patchedPlatform = platformOf(id);
+        const patchedAttributes = {
+          state: submitted ? "WAITING_FOR_REVIEW" : "READY_FOR_REVIEW",
+          submittedDate: submitted ? "2026-10-20T00:00:00Z" : null
+        };
+        if (patchedPlatform !== null) patchedAttributes.platform = patchedPlatform;
         return json(200, {
           data: {
             type: "reviewSubmissions",
             id,
-            attributes: {
-              platform: platforms.get(id) || options.submissionPlatform || "IOS",
-              state: submitted ? "WAITING_FOR_REVIEW" : "READY_FOR_REVIEW",
-              submittedDate: submitted ? "2026-10-20T00:00:00Z" : null
-            }
+            attributes: patchedAttributes
           }
         });
       }
@@ -229,7 +296,9 @@ function serve(options) {
         }
         const draft = (id) => {
           const attributes = { state: "READY_FOR_REVIEW", submittedDate: null };
-          if (!options.submissionHasNoPlatform) {
+          //  A service that answers a draft with no platform at all:  the
+          //  client has to set the platform and read it back.
+          if (!options.submissionHasNoPlatform && !options.platformReadBackMissing) {
             attributes.platform = options.submissionPlatform || "IOS";
           }
           return { id, type: "reviewSubmissions", attributes };
@@ -241,14 +310,44 @@ function serve(options) {
         return json(200, { data });
       }
       if (req.method === "POST" && url === "/v1/reviewSubmissions") {
-        const body = JSON.parse(raw || "{}");
-        created.push(body);
+        //  The body is untrusted input, so it is parsed in a try block and
+        //  validated before anything is stored.  A body that is not JSON, or
+        //  that names no platform and no app, is refused with a 400 instead
+        //  of throwing out of the handler.
+        let parsed = null;
+        try {
+          parsed = raw ? JSON.parse(raw) : null;
+        } catch {
+          return json(400, { errors: [{ title: "the body is not JSON" }] });
+        }
+        const data = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed.data : null;
+        const attributes = data && typeof data === "object" && !Array.isArray(data) ? data.attributes : null;
+        const platform = attributes && typeof attributes === "object" && !Array.isArray(attributes)
+          ? attributes.platform
+          : null;
+        const appId = data?.relationships?.app?.data?.id;
+        if (typeof platform !== "string" || platform.length === 0 ||
+            typeof appId !== "string" || appId.length === 0) {
+          return json(400, { errors: [{ title: "the body does not name a platform and an app" }] });
+        }
+        //  Only the validated object is stored.
+        created.push({
+          data: {
+            type: "reviewSubmissions",
+            attributes: { platform },
+            relationships: { app: { data: { type: "apps", id: appId } } }
+          }
+        });
         //  The created submission carries the platform it was made with.
-        platforms.set("sub-new", body?.data?.attributes?.platform || "IOS");
+        platforms.set("sub-new", platform);
+        const createdAttributes = { state: "READY_FOR_REVIEW", submittedDate: null };
+        //  A create response that does not echo the platform is a response
+        //  the client cannot take the platform from.
+        if (!options.createHidesPlatform) createdAttributes.platform = platform;
         return json(201, { data: {
           type: "reviewSubmissions",
           id: "sub-new",
-          attributes: { platform: body?.data?.attributes?.platform || "IOS", state: "READY_FOR_REVIEW", submittedDate: null }
+          attributes: createdAttributes
         } });
       }
       if (req.method === "POST" && url === "/v1/reviewSubmissionItems") {
@@ -280,6 +379,7 @@ function serve(options) {
             }
           }
         });
+        order.push("bind");
         if (options.bindAuthFailsOnce && bound.length === 1) {
           //  The refusal a rejected credential gets.  The calls after this
           //  one include the submit, which cannot be undone.
@@ -287,6 +387,14 @@ function serve(options) {
             status: "401",
             code: "NOT_AUTHORIZED",
             title: "Authentication credentials are missing or invalid."
+          }] });
+        }
+        if (options.bindFailsPlain) {
+          //  A refusal that names no blockers at all.
+          return json(409, { errors: [{
+            status: "409",
+            code: "STATE_ERROR.ENTITY_STATE_INVALID",
+            title: "appStoreVersions with id 'version-1' is not in valid state."
           }] });
         }
         if (options.bindFails) {
@@ -318,6 +426,14 @@ function serve(options) {
         return json(201, { data: { type: "reviewSubmissionItems", id: "item-1" } });
       }
       if (req.method === "GET" && /^\/v1\/reviewSubmissions\/[^/]+\/items$/.test(url)) {
+        if (options.itemsFail) {
+          //  A read that fails:  the run never gets as far as a submit.
+          return json(500, { errors: [{
+            status: "500",
+            code: "INTERNAL_ERROR",
+            title: "the items could not be read."
+          }] });
+        }
         if (options.boundTo === undefined) {
           //  A submission with no items:  the version is bound to nothing.
           return json(200, { data: [] });
@@ -345,23 +461,23 @@ function serve(options) {
           });
         }
         //  The read before the submission is touched:  a draft, with the
-        //  platform it carries.
+        //  platform it carries.  A server that has no platform at all
+        //  answers with none, and the client has to catch that.
+        const draftPlatform = platformOf(id);
+        const draftAttributes = { state: "READY_FOR_REVIEW", submittedDate: null };
+        if (draftPlatform !== null) draftAttributes.platform = draftPlatform;
         return json(200, {
           data: {
             type: "reviewSubmissions",
             id,
-            attributes: {
-              platform: platforms.get(id) || options.submissionPlatform || "IOS",
-              state: "READY_FOR_REVIEW",
-              submittedDate: null
-            }
+            attributes: draftAttributes
           }
         });
       }
       return json(404, { errors: [{ title: "not found" }] });
     });
   });
-  return { server, patched, bound, created };
+  return { server, patched, bound, created, order };
 }
 
 function submit(base, args = []) {
@@ -389,11 +505,11 @@ function submit(base, args = []) {
 }
 
 async function withServer(options, fn) {
-  const { server, patched, bound, created } = serve(options);
+  const { server, patched, bound, created, order } = serve(options);
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
   try {
-    return await fn(base, patched, bound, created);
+    return await fn(base, patched, bound, created, order);
   } finally {
     server.close();
   }
@@ -776,4 +892,209 @@ test("the platform can be chosen, and a bad one is refused", async () => {
     assert.equal(code, 2, `expected a refusal, got ${code}: ${stderr}`);
     assert.ok(/not a review platform/.test(stderr), `the refusal did not say what was wrong:\n${stderr}`);
   });
+});
+
+test("a refused submit binds the version once and stops the run", async () => {
+  //  The submit was refused after the version was bound to a submission.  A
+  //  second candidate would be bound to the same version, and one version
+  //  lives on one submission:  the binding cannot be undone from the tool,
+  //  so the run stops at the refusal instead of binding a second time.
+  await withServer({ ...READY, boundTo: undefined, submitFails: true, secondSubmission: true },
+    async (base, patched, bound) => {
+      const { code, stderr } = await submit(base);
+      assert.equal(code, 2, `expected a refusal, got ${code}: ${stderr}`);
+      assert.equal(bound.length, 1, "the version was bound to more than one submission");
+      assert.ok(
+        /is bound to review submission/.test(stderr),
+        `the run did not say that the version is bound:\n${stderr}`
+      );
+    });
+});
+
+test("a run that never submitted says that the version was never bound", async () => {
+  //  The binding was refused and no submit was sent, so saying that App
+  //  Store Connect refused a submission would be false:  none was sent.
+  await withServer({ ...READY, boundTo: undefined, bindFailsPlain: true },
+    async (base, patched, bound) => {
+      const { code, stderr } = await submit(base);
+      assert.equal(code, 2, `expected a refusal, got ${code}: ${stderr}`);
+      assert.ok(
+        /the version was never bound to a submission/.test(stderr),
+        `the run did not say that nothing was bound:\n${stderr}`
+      );
+      assert.doesNotMatch(
+        stderr,
+        /App Store Connect refused the submission/,
+        `the run said a submission was refused when none was sent:\n${stderr}`
+      );
+      assert.equal(patched.length, 0, "the submission was patched even though the binding was refused");
+    });
+});
+
+test("a failed items read says that the version was never bound", async () => {
+  //  The items could not be read, so the run never reached a binding and
+  //  never reached a submit.
+  await withServer({ ...READY, itemsFail: true },
+    async (base, patched, bound) => {
+      const { code, stderr } = await submit(base);
+      assert.equal(code, 2, `expected a refusal, got ${code}: ${stderr}`);
+      assert.ok(
+        /the version was never bound to a submission/.test(stderr),
+        `the run did not say that nothing was bound:\n${stderr}`
+      );
+      assert.doesNotMatch(
+        stderr,
+        /App Store Connect refused the submission/,
+        `the run said a submission was refused when none was sent:\n${stderr}`
+      );
+      assert.equal(bound.length, 0, "the version was bound even though the items could not be read");
+    });
+});
+
+test("a refused platform change leaves the version unbound", async () => {
+  //  The platform is proven before the binding, so a platform that cannot be
+  //  set stops the run with the version on no submission at all:  there is
+  //  nothing for the operator to clear by hand.
+  await withServer({ ...READY, boundTo: undefined, submissionHasNoPlatform: true, platformPatchFails: true },
+    async (base, patched, bound) => {
+      const { code, stderr } = await submit(base);
+      assert.equal(code, 2, `expected a refusal, got ${code}: ${stderr}`);
+      assert.match(stderr, /the platform could not be set/, `the refusal did not name the platform:\n${stderr}`);
+      assert.match(stderr, /the version was not bound/, `the refusal did not say nothing was bound:\n${stderr}`);
+      assert.equal(bound.length, 0, "the version was bound even though the platform could not be set");
+      assert.equal(patched.length, 1, "the submit was sent even though the platform could not be set");
+      assert.equal(patched[0].body?.data?.attributes?.submitted, undefined);
+    });
+});
+
+test("the platform is proven before the version is bound", async () => {
+  //  The order matters:  the binding cannot be undone, so the platform is
+  //  set and read back first.
+  await withServer({ ...READY, boundTo: undefined, submissionHasNoPlatform: true },
+    async (base, patched, bound, created, order) => {
+      const { code, stderr } = await submit(base);
+      assert.equal(code, 0, `expected a clean run, got ${code}: ${stderr}`);
+      assert.deepEqual(order, ["platform", "bind", "submit"], "the platform was not proven before the binding");
+      assert.equal(bound.length, 1, "the version was not bound");
+    });
+});
+
+test("a draft with no platform stops the submit", async () => {
+  //  The read back after the platform change answers with no platform at
+  //  all, so the platform could not be proven and the submit does not go
+  //  out.
+  await withServer({ ...READY, boundTo: undefined, platformReadBackMissing: true },
+    async (base, patched, bound) => {
+      const { code, stderr } = await submit(base);
+      assert.equal(code, 2, `expected a refusal, got ${code}: ${stderr}`);
+      assert.match(
+        stderr,
+        /the platform on sub-1 is unreadable, not IOS/,
+        `the refusal did not name the platform:\n${stderr}`
+      );
+      assert.equal(bound.length, 0, "the version was bound even though the platform was not proven");
+      assert.equal(patched.length, 1, "the submit was sent even though the platform was not proven");
+      assert.equal(patched[0].body?.data?.attributes?.submitted, undefined);
+    });
+});
+
+test("a platform that did not take stops the submit", async () => {
+  //  The service accepted the platform change and then answered with the
+  //  platform the submission had before, so the change did not take and the
+  //  submit does not go out.
+  await withServer({ ...READY, boundTo: undefined, submissionPlatform: "MAC_OS", platformPatchIgnored: true },
+    async (base, patched, bound) => {
+      const { code, stderr } = await submit(base, [SUBMISSION_ID, "IOS"]);
+      assert.equal(code, 2, `expected a refusal, got ${code}: ${stderr}`);
+      assert.match(
+        stderr,
+        /the platform on sub-1 is MAC_OS, not IOS/,
+        `the refusal did not name the platform:\n${stderr}`
+      );
+      assert.equal(bound.length, 0, "the version was bound even though the platform did not take");
+      assert.equal(patched.length, 1, "the submit was sent even though the platform did not take");
+      assert.equal(patched[0].body?.data?.attributes?.submitted, undefined);
+    });
+});
+
+test("a created submission with no platform in the response is set before the submit", async () => {
+  //  The create response did not echo a platform.  Recording the platform
+  //  that was asked for would make the platform check pass, and the
+  //  submission would go to review with a platform that was never proven.
+  await withServer({ ...READY, noSubmissions: true, boundTo: undefined, createHidesPlatform: true },
+    async (base, patched, bound, created) => {
+      const { code, stderr } = await submit(base);
+      assert.equal(code, 0, `expected a clean run, got ${code}: ${stderr}`);
+      assert.equal(created.length, 1, "no review submission was created");
+      assert.equal(bound.length, 1, "the version was not bound to the new submission");
+      assert.equal(patched.length, 2, `expected a platform patch and a submit patch, got ${patched.length}`);
+      assert.equal(patched[0].body?.data?.attributes?.platform, "IOS");
+      assert.equal(patched[0].body?.data?.attributes?.submitted, undefined);
+      assert.equal(patched[1].body?.data?.attributes?.submitted, true);
+    });
+});
+
+test("the mock refuses a patch body that is not a submission", async () => {
+  //  The mock is a trust boundary too:  an inbound body is validated before
+  //  it is stored, and a malformed one is refused with a 400 instead of
+  //  throwing out of the handler.
+  const { server } = serve({ ...READY });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const patch = (body) => new Promise((resolve) => {
+    const request = fetch(`${base}/v1/reviewSubmissions/sub-1`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body,
+      signal: AbortSignal.timeout(2000)
+    });
+    request.then((response) => resolve(response.status)).catch(() => resolve(0));
+  });
+  try {
+    assert.equal(await patch("{not json"), 400, "a body that is not JSON was accepted");
+    assert.equal(await patch(JSON.stringify({ data: { id: "sub-1" } })), 400,
+      "a body without attributes was accepted");
+    assert.equal(await patch(JSON.stringify({ data: { attributes: { platform: "IOS" } } })), 400,
+      "a body without an id was accepted");
+    assert.equal(await patch(JSON.stringify({ data: { id: "", attributes: {} } })), 400,
+      "a body with an empty id was accepted");
+    assert.equal(await patch(JSON.stringify({ data: { id: "sub-1", attributes: { submitted: "yes" } } })), 400,
+      "a body with a submitted flag that is not a boolean was accepted");
+    assert.equal(await patch(JSON.stringify({ data: { id: "sub-1", attributes: { platform: "" } } })), 400,
+      "a body with an empty platform was accepted");
+    assert.equal(await patch(JSON.stringify([1, 2, 3])), 400, "a body that is not an object was accepted");
+  } finally {
+    server.close();
+  }
+});
+
+test("the mock refuses a create body that names no platform and no app", async () => {
+  //  The mock is a trust boundary too:  an inbound body is validated before
+  //  it is stored, and a malformed one is refused with a 400 instead of
+  //  throwing out of the handler.
+  const { server, created } = serve({ ...READY });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const post = (body) => new Promise((resolve) => {
+    const request = fetch(`${base}/v1/reviewSubmissions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+      signal: AbortSignal.timeout(2000)
+    });
+    request.then((response) => resolve(response.status)).catch(() => resolve(0));
+  });
+  try {
+    assert.equal(await post("{not json"), 400, "a body that is not JSON was accepted");
+    assert.equal(await post(JSON.stringify({ data: { attributes: {} } })), 400,
+      "a body without a platform was accepted");
+    assert.equal(await post(JSON.stringify({ data: { attributes: { platform: "IOS" } } })), 400,
+      "a body without an app was accepted");
+    assert.equal(await post(JSON.stringify({ data: { attributes: { platform: "IOS" },
+      relationships: { app: { data: { id: "" } } } } })), 400,
+      "a body with an empty app id was accepted");
+    assert.equal(created.length, 0, "a refused body was stored");
+  } finally {
+    server.close();
+  }
 });

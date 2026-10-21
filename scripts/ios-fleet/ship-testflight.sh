@@ -84,10 +84,12 @@
 #   ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8  (env first, e.g. CI; else Infisical via
 #   `fleet-secrets get` from Fleet-OPS /asc: ASC_KEY_ID, ASC_ISSUER_ID and the .p8 in ASC_KEY_P8,
 #   written to a 0600 temp file and deleted on exit)
-#   A named ASC_KEY_PATH is never read by the node client, because a path on disk
-#   is not an approved secret source.  The key material stays in that file:  the
-#   client is handed the key in the child's environment (see asc_client), and
-#   altool and Xcode are given the path.
+#   A named ASC_KEY_PATH is not a credential source at all:  it is ignored, so
+#   a stale or foreign path in an operator's shell can never decide which
+#   credential signs a request.  The credential comes from the environment or
+#   from Infisical, and the key is handed to the node client in the client's
+#   environment (see asc_client).  altool and Xcode are given the path of the
+#   staged copy this script writes for them.
 #   or Xcode-signed-in session for destination=upload export
 #   SENTRY_AUTH_TOKEN  (dSYM + Size Analysis upload; env or `fleet-secrets get`)
 #   SENTRY_DSN         (injected into xcodebuild so Cocoa plist $(SENTRY_DSN) is set)
@@ -218,28 +220,26 @@ fs_get() {
 # altool and Xcode, so it hands the key to the client in the environment,
 # which is where the client looks for it.
 #
-# THE ENVIRONMENT IS RESOLVED FIRST (2026-10-21, Kody rule 42 on PR #271):
+# THE CREDENTIAL IS RESOLVED FROM TWO PLACES (2026-10-21, Kody rule 42 on
+# PR #271):
 #   1. ASC_KEY_P8, when it holds a PEM private key and comes with its key id
-#   2. a named ASC_KEY_PATH, used as a FILE and never read into a variable
-#   3. Infisical Fleet-OPS /asc (or /authkey-<id>-p8)
-# A disk credential never overrides the environment:  a stale or foreign value
-# in an operator's shell would sign the upload with the wrong key, and App
-# Store Connect would answer 401 without saying which input was wrong.  The
-# staged file stays a file:  the key material never enters this shell, and the
-# client is handed the key in the child's environment by the hardened reader
-# (see asc_client).
+#   2. Infisical Fleet-OPS /asc (or /authkey-<id>-p8)
+# A disk credential is not a source at all:  a named ASC_KEY_PATH is ignored,
+# so a stale or foreign path in an operator's shell can never sign the
+# upload with the wrong key, and App Store Connect would answer 401 without
+# saying which input was wrong.  The key material never enters a command
+# argument and never reaches a log line.
 load_secrets() {
   AUTH_MODE="none"
   local kid="${ASC_KEY_ID:-}" iss="${ASC_ISSUER_ID:-}" p8="" fkid="" lower
-  local key_pem="" key_path="" staged_path="" rc=0
-  # The staged key file, when it is the credential in play.  The client is run
-  # through the hardened reader, which puts the key in the child's
-  # environment;  the key itself never enters this shell.
-  ASC_STAGED_KEY_PATH=""
+  local key_pem="" key_path="" rc=0
+  #  A named ASC_KEY_PATH is not a credential source.  It is remembered only
+  #  so the run can say that it ignored it.
+  local named_path="${ASC_KEY_PATH:-}"
 
   # 1. An ambient ASC_KEY_P8.  It is only usable when it really is a PEM
   #    private key and comes with the key id and issuer it belongs to.  It is
-  #    resolved first, so nothing on disk can override it.
+  #    resolved first, so nothing can override it.
   if [[ -n "${ASC_KEY_P8:-}" ]]; then
     if [[ -z "$kid" || -z "$iss" ]]; then
       log "ASC_KEY_P8 is set without ASC_KEY_ID and ASC_ISSUER_ID; ignoring it"
@@ -256,31 +256,10 @@ load_secrets() {
     fi
   fi
 
-  # 2. A key file the operator named.  It is checked with the hardened
-  #    reader, which reports whether the file holds a usable key and never
-  #    prints the key, so the key material stays in the file.  A path that
-  #    names nothing falls through to the fleet credential instead of
-  #    aborting the run.
-  if [[ -z "$key_pem" && -n "$kid" && -n "$iss" && -n "${ASC_KEY_PATH:-}" ]]; then
-    local expanded
-    expanded="$(expand_tilde "$ASC_KEY_PATH")"
-    rc=0
-    node "${FLEET_DIR}/asc-key.mjs" read "$expanded" >/dev/null || rc=$?
-    if [[ "$rc" -eq 0 ]]; then
-      staged_path="$expanded"
-    else
-      if [[ "$rc" -eq 3 ]]; then
-        log "ASC_KEY_PATH names a file that does not exist; falling back to the fleet credential"
-      else
-        log "ASC_KEY_PATH does not hold a usable private key; falling back to the fleet credential"
-      fi
-    fi
-  fi
-
-  # 3. The key id, issuer and private key must belong together:  with nothing named in the
+  # 2. The key id, issuer and private key must belong together:  with nothing named in the
   # environment all three come from /asc;  an env key id that is not the /asc one gets its
   # own .p8 from /authkey-<id>-p8, never the /asc key.
-  if [[ -z "$key_pem" && -z "$staged_path" ]]; then
+  if [[ -z "$key_pem" ]]; then
     fkid="$(fs_get ASC_KEY_ID /asc)" || fkid=""
     if [[ -z "$kid" ]]; then
       kid="$fkid"
@@ -308,31 +287,27 @@ load_secrets() {
   fi
 
   # The key has to be in a mode-600 file for altool and Xcode, and in the
-  # environment for the node client, which never reads a file.  A staged key
-  # file is already a mode-600 file, so it is used where it lies.
-  if [[ -n "$staged_path" ]]; then
-    key_path="$staged_path"
-    ASC_STAGED_KEY_PATH="$staged_path"
-  elif [[ -z "$key_path" ]]; then
-    if [[ -z "$ASC_TMP_DIR" ]]; then
-      ASC_TMP_DIR="$(umask 077; mktemp -d "${TMPDIR:-/tmp}/asc-key.XXXXXX")"
-    fi
-    key_path="${ASC_TMP_DIR}/AuthKey_${kid}.p8"
-    if ! node "${FLEET_DIR}/asc-key.mjs" write "$key_path" <<< "$key_pem"; then
-      log "could not write the ASC key file; the credential is not usable"
-      return 0
-    fi
-    # altool searches API_PRIVATE_KEYS_DIR first, so no symlink into ~/.appstoreconnect is needed.
-    export API_PRIVATE_KEYS_DIR="$ASC_TMP_DIR"
+  # environment for the node client, which never reads a file.  The file is
+  # written from the credential that was just resolved, so it is never read
+  # back as a credential.
+  if [[ -z "$ASC_TMP_DIR" ]]; then
+    ASC_TMP_DIR="$(umask 077; mktemp -d "${TMPDIR:-/tmp}/asc-key.XXXXXX")"
   fi
+  key_path="${ASC_TMP_DIR}/AuthKey_${kid}.p8"
+  if ! node "${FLEET_DIR}/asc-key.mjs" write "$key_path" <<< "$key_pem"; then
+    log "could not write the ASC key file; the credential is not usable"
+    return 0
+  fi
+  # altool searches API_PRIVATE_KEYS_DIR first, so no symlink into ~/.appstoreconnect is needed.
+  export API_PRIVATE_KEYS_DIR="$ASC_TMP_DIR"
   export ASC_KEY_ID="$kid" ASC_ISSUER_ID="$iss" ASC_KEY_PATH="$key_path"
   # The client takes the key from the environment:  a path is not an approved
-  # secret source, so it never reads one.  A staged key file is handed over
-  # by the hardened reader instead, in the child's environment.
-  if [[ -n "$key_pem" ]]; then
-    export ASC_KEY_P8="$key_pem"
-  fi
+  # secret source, so it never reads one.
+  export ASC_KEY_P8="$key_pem"
   key_pem=""
+  if [[ -n "$named_path" && "$named_path" != "$key_path" ]]; then
+    log "ASC_KEY_PATH is not a credential source; the credential came from the environment or from Infisical"
+  fi
   AUTH_MODE="api_key"
   return 0
 }
@@ -340,16 +315,10 @@ load_secrets() {
 # Run the App Store Connect client.
 #
 # The client takes the key from its environment and never reads a file (Kody
-# rule 42).  When the credential in play is a staged key file, the hardened
-# reader hands the key to the client in the child's environment:  the key is
-# never an argument, never on this script's stdout, and never in a log line.
+# rule 42).  The key is never an argument, never on this script's stdout, and
+# never in a log line.
 asc_client() {
-  if [[ -n "${ASC_STAGED_KEY_PATH:-}" ]]; then
-    node "${FLEET_DIR}/asc-key.mjs" exec "$ASC_STAGED_KEY_PATH" -- \
-      node "${FLEET_DIR}/asc-api.mjs" "$@"
-  else
-    node "${FLEET_DIR}/asc-api.mjs" "$@"
-  fi
+  node "${FLEET_DIR}/asc-api.mjs" "$@"
 }
 
 # Map ship APP_KEY to Sentry project slug in org simple-with-us.

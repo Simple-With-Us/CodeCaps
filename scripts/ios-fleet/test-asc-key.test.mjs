@@ -1,18 +1,17 @@
-// The staged App Store Connect key file:  how it is validated, and how it is
-// read.
+// The App Store Connect private key:  how it is validated, how it is staged,
+// and how it reaches the client.
 //
-// The private key is a secret, and the approved secret sources are the
-// process environment, a captured `fleet-secrets get NAME` and bootstrap-only
-// Keychain credentials.  A caller-supplied file is not one of them, so the
-// node client never reads a key file:  the shell layer that owns the
-// credential reads the staged key and hands it over in the environment.  These
-// tests cover that reader, because it is the one place a file is read.
+// The private key is a secret, and the approved secret sources are the process
+// environment, a captured `fleet-secrets get NAME` and bootstrap-only Keychain
+// credentials.  A caller-supplied file is not one of them, so nothing reads a
+// key file:  the key travels in the environment, and the file this module
+// writes is a staging copy for the Apple tools that need a key on disk.
 //
 // Everything here is synthetic:  the keys are generated at test time and are
 // never committed, and nothing reaches the network.
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { generateKeyPairSync } from "node:crypto";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -20,7 +19,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 
-import { normalizePrivateKey, readPrivateKeyFile } from "./asc-key.mjs";
+import { CLIENT_ENV_ALLOWLIST, clientEnvironment, normalizePrivateKey } from "./asc-key.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const helper = join(here, "asc-key.mjs");
@@ -32,6 +31,10 @@ const root = mkdtempSync(join(tmpdir(), "asc-key-test-"));
 //  A PATH with node and nothing else:  the fleet reader lives in the operator's
 //  own bin directory, and a test must never reach it or Infisical.
 const safePath = [dirname(process.execPath), "/usr/bin", "/bin"].join(":");
+//  A secret that has nothing to do with App Store Connect.  It is in the
+//  environment of the parent on purpose, so the tests can show that it does
+//  not reach the client.
+const unrelatedSecret = "unrelated-runtime-secret-4f1c9a";
 
 const keyPem = generateKeyPairSync("ec", { namedCurve: "prime256v1" }).privateKey
   .export({ type: "pkcs8", format: "pem" });
@@ -43,9 +46,12 @@ function staged(name, content = keyPem, mode = 0o600) {
   return path;
 }
 
-function run(args, stdin = "") {
+function run(args, stdin = "", env = undefined) {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [helper, ...args], { stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(process.execPath, [helper, ...args], {
+      ...(env ? { env } : {}),
+      stdio: ["pipe", "pipe", "pipe"]
+    });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (d) => { stdout += d; });
@@ -74,69 +80,6 @@ test("a malformed PEM is refused, because the envelope is not a key", () => {
   assert.equal(normalizePrivateKey("hunter2"), null);
 });
 
-test("a staged key file is read and its key is returned", () => {
-  const path = staged("good.p8");
-  const read = readPrivateKeyFile(path);
-  assert.ok(read.pem, `the staged key was not read: ${read.error}`);
-  assert.equal(read.pem.trim(), keyPem.trim());
-});
-
-test("a path that names nothing is reported apart from every other failure", () => {
-  //  A path that names nothing is not a credential, so the caller falls
-  //  through to the next source instead of aborting the run.
-  const read = readPrivateKeyFile(join(root, "no-such-key.p8"));
-  assert.equal(read.missing, true);
-  assert.equal(read.error, undefined);
-});
-
-test("a symlink is refused rather than followed", () => {
-  //  Every ordinary file read follows a symlink, so a path that looks like a
-  //  key file could resolve to something else entirely.  The path is opened
-  //  once with O_NOFOLLOW, so the symlink is never followed.
-  const target = staged("target.p8");
-  const link = join(root, "linked.p8");
-  symlinkSync(target, link);
-  const read = readPrivateKeyFile(link);
-  assert.ok(read.error, "a symlinked key path was read");
-  assert.match(read.error, /symbolic link/);
-});
-
-test("a key file other users can read is refused", () => {
-  //  A private key another user can read is already leaked.
-  const path = staged("loose.p8", keyPem, 0o644);
-  const read = readPrivateKeyFile(path);
-  assert.ok(read.error, "a key file readable by others was accepted");
-  assert.match(read.error, /readable by others/);
-});
-
-test("a file that is not a private key is refused", () => {
-  const path = staged("not-a-key.p8", "hunter2 this is not a private key\n");
-  const read = readPrivateKeyFile(path);
-  assert.ok(read.error, "a file that is not a key was accepted");
-  assert.match(read.error, /does not hold a PEM private key/);
-});
-
-test("the command line reports the status of a staged key and never prints it", async () => {
-  //  A key on stdout is a key in every log that captures it, so the reader
-  //  reports whether the file is usable and nothing else.
-  const path = staged("cli.p8");
-  const ok = await run(["read", path]);
-  assert.equal(ok.code, 0, `the staged key was refused: ${ok.stderr}`);
-  assert.match(ok.stdout, /holds a PEM private key/, `the status was not reported:\n${ok.stdout}`);
-  assert.doesNotMatch(ok.stdout, /PRIVATE KEY/, "the key reached stdout");
-  assert.doesNotMatch(ok.stderr, /PRIVATE KEY/, "the key reached stderr");
-
-  const missing = await run(["read", join(root, "no-such-key.p8")]);
-  assert.equal(missing.code, 3, "a path that names nothing must report EXIT_MISSING");
-  assert.match(missing.stderr, /does not exist/);
-  assert.equal(missing.stdout, "", "a missing key must not put anything on stdout");
-
-  const malformed = await run(["read", staged("bad.p8", "this is not a private key\n")]);
-  assert.equal(malformed.code, 1, "a file that is not a key must be refused");
-  assert.match(malformed.stderr, /does not hold a PEM private key/);
-  assert.equal(malformed.stdout, "", "a refused key must not put anything on stdout");
-});
-
 test("the key never travels in the command arguments", async () => {
   //  The key goes in on stdin, and the command reports the status of it
   //  without printing it, so it is never an argument of any process and never
@@ -148,26 +91,24 @@ test("the key never travels in the command arguments", async () => {
   assert.ok(!result.stderr.includes("PRIVATE KEY"), "the key envelope reached a log line");
 });
 
-test("the exec command hands the key to the child in its environment", async () => {
-  //  This is the handoff the hosted runner uses:  the staged key reaches the
-  //  consumer in the child's environment, and in nowhere else.  Not in an
-  //  argument, not on stdout, not on stderr, not in a log line.
-  const path = staged("exec.p8");
-  const child = await run(["exec", path, "--", process.execPath, "-e",
-    "process.stdout.write('seen:' + (process.env.ASC_KEY_P8 ? 'yes' : 'no') + ':' + String(process.env.ASC_KEY_P8 || '').length)"]);
-  assert.equal(child.code, 0, `the child did not run: ${child.stderr}`);
-  assert.match(child.stdout, /^seen:yes:\d+$/, `the child did not receive the key:\n${child.stdout}`);
-  assert.doesNotMatch(child.stdout + child.stderr, /PRIVATE KEY/, "the key reached the output");
+test("the command line refuses a value that is not a key", async () => {
+  const result = await run(["validate"], "not a private key");
+  assert.notEqual(result.code, 0);
+  assert.match(result.stderr, /not a PEM private key/);
 });
 
-test("the exec command reports a missing key and passes the child's exit code on", async () => {
-  const missing = await run(["exec", join(root, "no-such-key.p8"), "--", process.execPath, "-e", "process.exit(0)"]);
-  assert.equal(missing.code, 3, "a path that names nothing must report EXIT_MISSING");
-  assert.match(missing.stderr, /does not exist/);
-
-  const path = staged("exit.p8");
-  const child = await run(["exec", path, "--", process.execPath, "-e", "process.exit(7)"]);
-  assert.equal(child.code, 7, "the child's exit code was not passed on");
+test("the command line has no way to read a key file", async () => {
+  //  A path is not an approved secret source, so the command line has no
+  //  command that reads one:  the key comes from the environment or from
+  //  fleet-secrets, and nowhere else.
+  const path = staged("no-reader.p8");
+  const read = await run(["read", path]);
+  assert.notEqual(read.code, 0, "the command line read a key file");
+  assert.match(read.stderr, /usage/);
+  assert.equal(read.stdout, "", "a refused command must not put anything on stdout");
+  const exec = await run(["exec", path, "--", process.execPath, "-e", "process.exit(0)"]);
+  assert.notEqual(exec.code, 0, "the command line handed a key file to a child");
+  assert.match(exec.stderr, /usage/);
 });
 
 test("the command line writes a key to a file only its owner can read", async () => {
@@ -178,74 +119,106 @@ test("the command line writes a key to a file only its owner can read", async ()
   assert.equal(readFileSync(path, "utf8").trim(), keyPem.trim());
 });
 
-test("the command line refuses a value that is not a key", async () => {
+test("the command line refuses to write a value that is not a key", async () => {
   const path = join(root, "refused.p8");
   const result = await run(["write", path], "not a private key");
   assert.notEqual(result.code, 0);
   assert.match(result.stderr, /not a PEM private key/);
 });
 
-test("the staged key reaches the client through the environment", async () => {
-  //  This is the hosted CI path end to end:  the runner stages the key to a
-  //  mode-600 file and publishes only its path, the hardened reader hands
-  //  that key to the client in the child's environment, and the client takes
-  //  the key from the environment.  The client reads no file at all, which is
-  //  why the path is in the environment here and the file is still the
-  //  credential in play.
-  const path = staged("ci.p8");
-  const client = spawn(process.execPath, [
-    helper, "exec", path, "--", process.execPath, join(here, "asc-api.mjs"), "GET", "http://127.0.0.1:1/v1/apps"
-  ], {
-    env: {
-      PATH: process.env.PATH,
-      HOME: process.env.HOME,
-      ASC_API_BASE: "http://127.0.0.1:1",
-      ASC_KEY_ID: "SYNTHETICKEYID1",
-      ASC_ISSUER_ID: "synthetic-issuer",
-      ASC_KEY_PATH: path
-    },
-    stdio: ["ignore", "pipe", "pipe"]
-  });
-  let stderr = "";
-  client.stderr.on("data", (d) => { stderr += d; });
-  client.stdout.resume();
-  await new Promise((resolve) => client.on("close", resolve));
-  assert.match(stderr, /asc-auth: using ASC_KEY_P8 environment/, `the client did not take the key from the environment:\n${stderr}`);
-  assert.doesNotMatch(stderr, /using ASC_KEY_PATH environment/);
-  assert.doesNotMatch(stderr, /PRIVATE KEY/, "the key reached the output");
+test("the child's environment is an allowlist, not a copy of the parent's", () => {
+  //  A wholesale copy of the parent's environment hands every credential on
+  //  the operator's machine to the child, including the ones that have
+  //  nothing to do with App Store Connect.
+  const child = clientEnvironment({
+    PATH: "/usr/bin",
+    HOME: "/tmp/home",
+    ASC_KEY_ID: "SYNTHETICKEYID1",
+    ASC_ISSUER_ID: "synthetic-issuer",
+    UNRELATED_RUNTIME_SECRET: unrelatedSecret
+  }, { ASC_KEY_P8: keyPem });
+  assert.equal(child.UNRELATED_RUNTIME_SECRET, undefined, "an unrelated secret reached the child");
+  assert.equal(child.ASC_KEY_P8.trim(), keyPem.trim(), "the key was not handed over");
+  assert.equal(child.ASC_KEY_ID, "SYNTHETICKEYID1");
+  assert.deepEqual(Object.keys(child).sort(), ["ASC_ISSUER_ID", "ASC_KEY_ID", "ASC_KEY_P8", "HOME", "PATH"]);
+  //  Every variable the child gets is on the allowlist.
+  for (const name of Object.keys(child)) {
+    assert.ok(CLIENT_ENV_ALLOWLIST.includes(name) || name === "ASC_KEY_P8",
+      `${name} crossed over and is not on the allowlist`);
+  }
+});
+
+test("the credential comes from the environment, and a path is not a source", async () => {
+  const { credentialEnvironment } = await import(pathToFileURL(apnsScript).href);
+  //  The environment is an approved source.
+  const env = credentialEnvironment({ ASC_KEY_P8: keyPem });
+  assert.equal(env.ASC_KEY_P8.trim(), keyPem.trim(), "the key was not handed over");
+  assert.equal(Object.keys(env).length, 1, "the child environment carries nothing but the key");
+  //  A path on disk is not an approved source, so it is not read.
+  assert.deepEqual(credentialEnvironment({ ASC_KEY_PATH: staged("path-only.p8") }), {});
+  //  Nothing in the environment means nothing to hand over:  the client
+  //  resolves the credential from fleet-secrets on its own.
+  assert.deepEqual(credentialEnvironment({}), {});
+  //  A key that is set but is not a key is refused with the variable named,
+  //  instead of being dropped and leaving the child with no credential and
+  //  the operator with a permission message that points at nothing.
+  assert.throws(
+    () => credentialEnvironment({ ASC_KEY_P8: "not a private key" }),
+    /ASC_KEY_P8 is set but does not hold a PEM private key/
+  );
 });
 
 // The consumers that call the client as a child process.
 //
-// The client has no path source (Kody rule 42), so a consumer that runs in the
-// hosted runner, where the staged key is published as a path, has to read that
-// key and hand it to the child in the child's environment.  These tests drive
-// the two consumers that do that, and prove the key stays out of argv, out of
-// the environment file, and out of every log line.
+// The client has no path source (Kody rule 42), so the consumers hand it the
+// key in the child's environment and give the child an allowlist of
+// variables.  These tests drive the two consumers that do that, and prove the
+// key stays out of argv, out of the environment file and out of every log
+// line.
 
-function localServer({ holdFirst = 0 } = {}) {
+// A server that answers the endpoints the consumers walk.
+//
+// Every request is held open until the test releases it, so the consumer is
+// still alive, with its credential in its environment, while the process
+// table is read.  The `firstRequest` promise is the readiness signal:  it
+// settles when a request has arrived, which is after the consumer has built
+// its environment and sent it.
+function localServer({ hold = false } = {}) {
   const seen = [];
-  let requests = 0;
+  const pending = [];
+  let holding = hold;
+  let signal = null;
+  const firstRequest = new Promise((resolve) => { signal = resolve; });
+  const respond = (req, res) => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    if (req.url.startsWith("/v1/bundleIds?")) {
+      res.end(JSON.stringify({ data: [{ type: "bundleIds", id: "BUNDLE1",
+        attributes: { identifier: "com.simplewithus.codecaps.ios" } }] }));
+      return;
+    }
+    res.end(JSON.stringify({ data: [] }));
+  };
   const server = createServer((req, res) => {
     seen.push({ url: req.url, authorization: req.headers.authorization || "" });
-    requests += 1;
-    //  The first request is held open, so the child process is still alive
-    //  while the process table is read.
-    const delay = requests === 1 ? holdFirst : 0;
-    setTimeout(() => {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      if (req.url.startsWith("/v1/bundleIds?")) {
-        res.end(JSON.stringify({ data: [{ type: "bundleIds", id: "BUNDLE1",
-          attributes: { identifier: "com.simplewithus.codecaps.ios" } }] }));
-        return;
-      }
-      res.end(JSON.stringify({ data: [] }));
-    }, delay);
+    signal();
+    if (holding) {
+      pending.push(() => respond(req, res));
+      return;
+    }
+    respond(req, res);
   });
   return new Promise((resolve) => {
     server.listen(0, "127.0.0.1", () => resolve({
       base: `http://127.0.0.1:${server.address().port}`,
       seen,
+      firstRequest,
+      //  Releasing answers every request that is held and stops holding the
+      //  ones that come after it, so a consumer that asks for more than once
+      //  can finish.
+      releaseAll: () => {
+        holding = false;
+        while (pending.length > 0) pending.shift()();
+      },
       close: () => server.close()
     }));
   });
@@ -273,29 +246,88 @@ function spawnBash(args, env) {
   });
 }
 
+// Spawns a consumer and hands back its pid, so the process table can be read
+// while it is waiting on App Store Connect.
+function spawnTracked(command, args, env) {
+  const child = spawn(command, args, { env, stdio: ["ignore", "pipe", "pipe"] });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (d) => { stdout += d; });
+  child.stderr.on("data", (d) => { stderr += d; });
+  const done = new Promise((resolve) => {
+    child.on("close", (code) => resolve({ code, stdout, stderr }));
+  });
+  return {
+    pid: child.pid,
+    done,
+    kill: () => { try { child.kill("SIGKILL"); } catch { /* already gone */ } }
+  };
+}
+
+// The command line of one process.
+function processArgs(pid) {
+  return execFileSync("ps", ["-p", String(pid), "-o", "args="], { encoding: "utf8" });
+}
+
+// The environment of one process, the way another process of the same user
+// can read it on this platform.
+function processEnvironment(pid) {
+  return execFileSync("ps", ["-E", "-p", String(pid), "-o", "args="], { encoding: "utf8" });
+}
+
+// The children of one process.
+function childPids(pid) {
+  try {
+    const listed = execFileSync("pgrep", ["-P", String(pid)], { encoding: "utf8" });
+    return listed.split("\n").map((line) => line.trim()).filter(Boolean).map(Number);
+  } catch {
+    return [];
+  }
+}
+
+// The client processes below one consumer.
+function clientPidsBelow(pid) {
+  const found = [];
+  const walk = (parent) => {
+    for (const child of childPids(parent)) {
+      found.push(child);
+      walk(child);
+    }
+  };
+  walk(pid);
+  return found.filter((child) => {
+    try {
+      return processArgs(child).includes("asc-api.mjs");
+    } catch {
+      return false;
+    }
+  });
+}
+
+// Waits for the client of every consumer to be running.
+//
+// The wait is for the process itself and not for a fixed number of
+// milliseconds:  a fixed sleep is a race, and the process table is only
+// worth reading while the process is there.
+async function waitForClients(pids, timeoutMs = 10000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const found = pids.map((pid) => clientPidsBelow(pid)).filter((list) => list.length > 0);
+    if (found.length === pids.length) return found.flat();
+    if (Date.now() > deadline) {
+      throw new Error(`only ${found.length} of ${pids.length} clients started`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
 function jwtKeyId(authorization) {
   const token = String(authorization || "").replace(/^Bearer /, "");
   if (!token) return null;
   return JSON.parse(Buffer.from(token.split(".")[0], "base64url").toString()).kid;
 }
 
-test("the staged key is handed to the child in its environment", async () => {
-  const { stagedKeyEnvironment } = await import(pathToFileURL(apnsScript).href);
-  const path = staged("handoff.p8");
-  const env = stagedKeyEnvironment({ ASC_KEY_PATH: path });
-  assert.equal(env.ASC_KEY_P8.trim(), keyPem.trim(), "the staged key was not handed over");
-  assert.equal(Object.keys(env).length, 1, "the child environment carries nothing but the key");
-  //  No staged key means no override, so a developer who exports ASC_KEY_P8 in
-  //  their own shell keeps working.
-  assert.deepEqual(stagedKeyEnvironment({}), {});
-  assert.deepEqual(stagedKeyEnvironment({ ASC_KEY_P8: "ambient" }), {});
-  //  A path that names nothing is not a credential, so the run falls through
-  //  and the client resolves the credential the way it does today.
-  assert.deepEqual(stagedKeyEnvironment({ ASC_KEY_PATH: join(root, "no-such-key.p8") }), {});
-});
-
 test("the child client reports the ASC_KEY_P8 environment source", async () => {
-  const { stagedKeyEnvironment } = await import(pathToFileURL(apnsScript).href);
   const server = await localServer();
   try {
     const result = await spawnNode([client, "GET", `${server.base}/v1/apps`], {
@@ -304,18 +336,18 @@ test("the child client reports the ASC_KEY_P8 environment source", async () => {
       ASC_API_BASE: server.base,
       ASC_KEY_ID: "SYNTHETICKEYID1",
       ASC_ISSUER_ID: "synthetic-issuer",
-      ...stagedKeyEnvironment({ ASC_KEY_PATH: staged("client.p8") })
+      ASC_KEY_P8: keyPem
     });
     assert.match(result.stderr, /asc-auth: using ASC_KEY_P8 environment/,
       `the client did not report the environment source:\n${result.stderr}`);
     assert.equal(jwtKeyId(server.seen[0].authorization), "SYNTHETICKEYID1",
-      "the request was not signed with the staged key");
+      "the request was not signed with the key from the environment");
   } finally {
     server.close();
   }
 });
 
-test("with no staged key and no ambient key the client reports that it has no credential", async () => {
+test("with no key in the environment and no fleet secret the client reports that it has no credential", async () => {
   const result = await spawnNode([client, "GET", "http://127.0.0.1:1/v1/apps"], {
     //  A bare PATH and a throwaway HOME keep the fleet reader out of the way,
     //  so the client really has no source left.
@@ -329,7 +361,7 @@ test("with no staged key and no ambient key the client reports that it has no cr
   assert.match(result.stderr, /no App Store Connect credential found/);
 });
 
-test("the APNs consumer signs its requests with the staged key", async () => {
+test("the APNs consumer signs its requests with the key from the environment", async () => {
   const server = await localServer();
   try {
     const home = join(root, "home-apns");
@@ -340,12 +372,11 @@ test("the APNs consumer signs its requests with the staged key", async () => {
       ASC_API_BASE: server.base,
       ASC_KEY_ID: "SYNTHETICKEYID1",
       ASC_ISSUER_ID: "synthetic-issuer",
-      ASC_KEY_PATH: staged("apns.p8"),
-      ASC_KEY_P8: ""
+      ASC_KEY_P8: keyPem
     });
     assert.ok(server.seen.length > 0, "the consumer never reached App Store Connect");
     assert.equal(jwtKeyId(server.seen[0].authorization), "SYNTHETICKEYID1",
-      "the request was not signed with the staged key");
+      "the request was not signed with the key from the environment");
     assert.doesNotMatch(result.stdout + result.stderr, /BEGIN PRIVATE KEY/,
       "the key reached the consumer's output");
   } finally {
@@ -353,38 +384,46 @@ test("the APNs consumer signs its requests with the staged key", async () => {
   }
 });
 
-test("the key never reaches argv and never reaches the environment file", async () => {
+test("the key never reaches argv, and the child's environment carries it", async () => {
   const needle = keyPem.split("\n").find((line) => line.length > 32);
   const envFile = join(root, "github-env");
   writeFileSync(envFile, "");
   const home = join(root, "home-argv");
   mkdirSync(home, { recursive: true });
-  const server = await localServer({ holdFirst: 1500 });
+  const server = await localServer({ hold: true });
   const env = {
     PATH: safePath,
     HOME: home,
     ASC_API_BASE: server.base,
     ASC_KEY_ID: "SYNTHETICKEYID1",
     ASC_ISSUER_ID: "synthetic-issuer",
-    ASC_KEY_PATH: staged("argv.p8"),
-    ASC_KEY_P8: "",
+    ASC_KEY_P8: keyPem,
     GITHUB_ENV: envFile
   };
-  const runs = [
-    spawnNode([apnsScript], env),
-    spawnBash([profilesScript], env)
-  ];
+  const apns = spawnTracked(process.execPath, [apnsScript], env);
+  const profiles = spawnTracked("bash", [profilesScript], env);
   try {
+    //  The request arriving is the readiness signal:  the consumer has built
+    //  its environment and sent it, so it is alive with the credential in it.
+    await server.firstRequest;
+    const clientPids = await waitForClients([apns.pid, profiles.pid]);
     //  While the consumers are waiting on App Store Connect, no process may
     //  carry the key in its command line.
-    await new Promise((resolve) => setTimeout(resolve, 700));
     const table = execFileSync("ps", ["-A", "-o", "args="], { encoding: "utf8", maxBuffer: 8 * 1024 * 1024 });
     assert.ok(!table.includes(needle), "the key reached a command line");
-    const results = await Promise.all(runs);
-    //  Both consumers signed their requests with the staged key, so the
-    //  handoff is what put the credential in front of the client.
+    //  The environment of a same-user process is readable on this platform,
+    //  and the key is in the environment of the key-bearing child by design.
+    //  The check can see it there, so it fails when the handoff breaks.
+    for (const pid of clientPids) {
+      assert.ok(processEnvironment(pid).includes(needle),
+        "the key did not reach the environment of the client");
+    }
+    server.releaseAll();
+    const results = await Promise.all([apns.done, profiles.done]);
+    //  Both consumers signed their requests with the key, so the handoff is
+    //  what put the credential in front of the client.
     const signed = server.seen.filter((entry) => jwtKeyId(entry.authorization) === "SYNTHETICKEYID1");
-    assert.ok(signed.length >= 2, `only ${signed.length} of the requests carried the staged key`);
+    assert.ok(signed.length >= 2, `only ${signed.length} of the requests carried the key`);
     assert.ok(server.seen.some((entry) => entry.url.startsWith("/v1/profiles?")),
       "the profile consumer never reached App Store Connect");
     assert.ok(server.seen.some((entry) => entry.url.startsWith("/v1/bundleIds?")),
@@ -395,6 +434,48 @@ test("the key never reaches argv and never reaches the environment file", async 
     }
     assert.ok(!readFileSync(envFile, "utf8").includes(needle), "the key reached the environment file");
   } finally {
+    server.releaseAll();
+    apns.kill();
+    profiles.kill();
+    server.close();
+  }
+});
+
+test("an unrelated secret in the environment does not reach the client", async () => {
+  //  The child's environment is an allowlist:  a wholesale copy of the
+  //  parent's environment would hand every credential on the operator's
+  //  machine to the client.
+  const home = join(root, "home-unrelated");
+  mkdirSync(home, { recursive: true });
+  const server = await localServer({ hold: true });
+  const env = {
+    PATH: safePath,
+    HOME: home,
+    ASC_API_BASE: server.base,
+    ASC_KEY_ID: "SYNTHETICKEYID1",
+    ASC_ISSUER_ID: "synthetic-issuer",
+    ASC_KEY_P8: keyPem,
+    UNRELATED_RUNTIME_SECRET: unrelatedSecret
+  };
+  const apns = spawnTracked(process.execPath, [apnsScript], env);
+  try {
+    await server.firstRequest;
+    const clientPids = await waitForClients([apns.pid]);
+    assert.ok(clientPids.length > 0, "the client never started");
+    for (const pid of clientPids) {
+      const childEnvironment = processEnvironment(pid);
+      assert.ok(!childEnvironment.includes("UNRELATED_RUNTIME_SECRET"),
+        "an unrelated secret reached the client");
+      assert.ok(!childEnvironment.includes(unrelatedSecret),
+        "the value of an unrelated secret reached the client");
+    }
+    //  The parent had it, so the check is not passing because the secret was
+    //  never there.
+    assert.ok(processEnvironment(apns.pid).includes("UNRELATED_RUNTIME_SECRET"),
+      "the parent did not carry the unrelated secret");
+  } finally {
+    server.releaseAll();
+    apns.kill();
     server.close();
   }
 });

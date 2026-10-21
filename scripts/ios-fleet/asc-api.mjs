@@ -1302,11 +1302,14 @@ async function main() {
       }
       candidates = [createdId];
       //  The platform went on it at create time, so it does not have to be
-      //  set again.
+      //  set again.  A response that does not echo a platform is recorded as
+      //  carrying none:  recording the platform that was asked for would make
+      //  the platform check pass, and the submission would go to review with a
+      //  platform that was never proven.
       const createdPlatform = isPlainObject(created.parsed?.data?.attributes)
         ? created.parsed.data.attributes.platform
         : null;
-      candidatePlatforms.set(createdId, typeof createdPlatform === "string" ? createdPlatform : platform);
+      candidatePlatforms.set(createdId, typeof createdPlatform === "string" ? createdPlatform : null);
     }
 
     // Is this submission bound to the version?
@@ -1326,7 +1329,23 @@ async function main() {
     };
 
     let submitted = null;
+    //  Whether the submit was ever attempted.  A refusal of the submit and a
+    //  run that never sent one are different failures, and the final report
+    //  has to say which one happened.
+    let submitAttempted = false;
     const boundElsewhere = [];
+    //  The submission this run bound the version to.  A binding cannot be
+    //  undone from this tool, and one version lives on one submission, so
+    //  every path that leaves the version bound and the submission unsent
+    //  says so and stops the run.
+    let boundSubmission = null;
+    const reportBound = () => {
+      console.error(
+        `submit-review: the version ${versionId} is bound to review submission ${boundSubmission}, ` +
+        "which was not submitted.  The binding cannot be undone from here:  clear it in App Store Connect " +
+        "before the next run."
+      );
+    };
     for (const candidate of candidates) {
       const items = await api("GET", `/v1/reviewSubmissions/${candidate}/items`);
       if (!items.ok) {
@@ -1344,7 +1363,9 @@ async function main() {
       }
       //  The platform is checked before anything is written:  a submission
       //  that carries another platform is never rewritten to one the operator
-      //  did not ask for, and a refusal mutates nothing.
+      //  did not ask for, and this refusal mutates nothing.  The platform is
+      //  set and read back below, before the binding, so that a platform
+      //  that cannot be proven stops the run with the version still unbound.
       const candidatePlatform = candidatePlatforms.has(candidate)
         ? candidatePlatforms.get(candidate)
         : null;
@@ -1355,6 +1376,46 @@ async function main() {
         );
         process.exitCode = 2;
         return;
+      }
+      //  The platform is set and read back BEFORE the binding, so the
+      //  platform is proven before any write that cannot be undone.  A
+      //  platform that cannot be set, or that is not there when it is read
+      //  back, stops the run with the version still unbound, so there is
+      //  nothing for the operator to clear by hand.
+      if (candidatePlatform !== platform) {
+        const setPlatform = await api("PATCH", `/v1/reviewSubmissions/${candidate}`, JSON.stringify({
+          data: {
+            type: "reviewSubmissions",
+            id: candidate,
+            attributes: { platform }
+          }
+        }));
+        if (!setPlatform.ok) {
+          console.error(`submit-review: the platform could not be set: ${describeError(setPlatform)}`);
+          //  The binding has not happened yet, so the version is on no
+          //  submission and nothing has to be cleared by hand.
+          console.error("submit-review: the version was not bound and nothing was submitted");
+          process.exitCode = 2;
+          return;
+        }
+        //  The platform is read back, so a change that was ignored or only
+        //  half applied cannot slip into the call that cannot be undone.
+        const readBack = await api("GET", `/v1/reviewSubmissions/${candidate}`);
+        const applied = isPlainObject(readBack.parsed?.data?.attributes)
+          ? readBack.parsed.data.attributes.platform
+          : null;
+        if (applied !== platform) {
+          console.error(
+            `submit-review: the platform on ${candidate} is ` +
+            `${typeof applied === "string" ? applied : "unreadable"}, ` +
+            `not ${platform}; not submitting`
+          );
+          //  The binding has not happened yet, so the version is on no
+          //  submission and nothing has to be cleared by hand.
+          console.error("submit-review: the version was not bound and nothing was submitted");
+          process.exitCode = 2;
+          return;
+        }
       }
       if (boundTo.length === 0) {
         //  The submission is bound to nothing, so this version goes on it.
@@ -1380,42 +1441,15 @@ async function main() {
           }
           continue;
         }
+        //  The version is bound to this submission now, and the binding
+        //  cannot be undone from here.
+        boundSubmission = candidate;
         console.error(`submit-review: bound ${versionId} to review submission ${candidate}`);
-      }
-      //  The platform is set on the candidate that is actually going to be
-      //  submitted, and only now, after the binding was read and made.  A
-      //  submission that is skipped is never mutated.
-      if (candidatePlatform !== platform) {
-        const setPlatform = await api("PATCH", `/v1/reviewSubmissions/${candidate}`, JSON.stringify({
-          data: {
-            type: "reviewSubmissions",
-            id: candidate,
-            attributes: { platform }
-          }
-        }));
-        if (!setPlatform.ok) {
-          console.error(`submit-review: the platform could not be set: ${describeError(setPlatform)}`);
-          process.exitCode = 2;
-          return;
-        }
-        //  The platform is read back, so a change that was ignored or only
-        //  half applied cannot slip into the call that cannot be undone.
-        const readBack = await api("GET", `/v1/reviewSubmissions/${candidate}`);
-        const applied = isPlainObject(readBack.parsed?.data?.attributes)
-          ? readBack.parsed.data.attributes.platform
-          : null;
-        if (applied !== platform) {
-          console.error(
-            `submit-review: the platform on ${candidate} is ${applied === null ? "unreadable" : applied}, ` +
-            `not ${platform}; not submitting`
-          );
-          process.exitCode = 2;
-          return;
-        }
       }
       //  The one call that cannot be undone carries the one attribute that
       //  has been proven in production, and nothing else.  The platform was
       //  set above, on a call that can be undone.
+      submitAttempted = true;
       const result = await api("PATCH", `/v1/reviewSubmissions/${candidate}`, JSON.stringify({
         data: {
           type: "reviewSubmissions",
@@ -1433,8 +1467,17 @@ async function main() {
         //  candidate would be submitted with a credential that has already
         //  been refused.
         if (result.status === 401 || result.status === 403) {
+          if (boundSubmission) reportBound();
           process.exitCode = 2;
           return;
+        }
+        //  This run bound the version, so the run stops here.  A refused
+        //  submit leaves the version attached to a submission, and a second
+        //  candidate would be bound to the same version:  one version lives
+        //  on one submission, and the binding cannot be undone from here.
+        if (boundSubmission) {
+          reportBound();
+          break;
         }
         continue;
       }
@@ -1442,20 +1485,26 @@ async function main() {
       break;
     }
     if (!submitted) {
-      if (blockers.length > 0) {
-        console.error("submit-review: not submitting, App Store Connect says the version is not ready:");
-        for (const line of blockers) console.error(`  ${line}`);
-      } else if (boundElsewhere.length > 0) {
-        console.error(
-          "submit-review: not submitting, the app's review submission holds another version " +
-          `(${boundElsewhere.join("; ")}).  One submission carries one version, so it has to be ` +
-          "cleared in App Store Connect before this one can go to review."
-        );
-      } else {
+      if (submitAttempted) {
         //  The run got as far as the submit and App Store Connect refused
         //  it.  Saying that no submission is bound would be false:  this run
         //  bound the version itself.
         console.error("submit-review: not submitting, App Store Connect refused the submission");
+      } else {
+        //  The run never got as far as the submit, so no submission carries
+        //  this version.  Saying that App Store Connect refused a submission
+        //  would be false:  none was sent.
+        console.error("submit-review: not submitting, the version was never bound to a submission");
+      }
+      if (blockers.length > 0) {
+        console.error("submit-review: App Store Connect says the version is not ready:");
+        for (const line of blockers) console.error(`  ${line}`);
+      } else if (!submitAttempted && boundElsewhere.length > 0) {
+        console.error(
+          "submit-review: the app's review submission holds another version " +
+          `(${boundElsewhere.join("; ")}).  One submission carries one version, so it has to be ` +
+          "cleared in App Store Connect before this one can go to review."
+        );
       }
       process.exitCode = 2;
       return;
