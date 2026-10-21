@@ -39,10 +39,22 @@ const SUBMISSION_ID = "sub-1";
 //   preReleaseFails: the build read answers 401
 //   preReleaseMissing: the build read names no pre-release version, so the
 //     document carries no `included` member
-//   boundTo: the version the review submission is bound to
+//   boundTo: the version the review submission's item names;  left out, the
+//     submission has no items at all, which is the state a fresh account is
+//     in and the one the command has to bind
+//   bindFails: the binding call answers 409 and names the blockers
+//   noSubmissions: the app has no review submission at all
+//   submissionPlatform: the platform the named submission answers with
 //   platform: the platform the submission answers with
 function serve(options) {
   const patched = [];
+  const bound = [];
+  const created = [];
+  //  A submission that has been marked submitted reads back as one, and a
+  //  draft reads back as a draft.  The read before the submit and the read
+  //  after it are the same call, so what changed in between is what tells
+  //  them apart.
+  const sent = new Set();
   const server = createServer((req, res) => {
     let raw = "";
     req.on("data", (chunk) => { raw += chunk; });
@@ -54,7 +66,11 @@ function serve(options) {
       const url = req.url.split("?")[0];
 
       if (req.method === "PATCH" && url.startsWith("/v1/reviewSubmissions/")) {
-        patched.push({ url, body: JSON.parse(raw || "{}") });
+        const body = JSON.parse(raw || "{}");
+        patched.push({ url, body });
+        if (body?.data?.attributes?.submitted === true) {
+          sent.add(body.data.id);
+        }
         return json(200, {
           data: {
             type: "reviewSubmissions",
@@ -155,30 +171,98 @@ function serve(options) {
         } });
       }
       if (url === `/v1/apps/${APP_ID}/reviewSubmissions`) {
+        if (options.noSubmissions) {
+          return json(200, { data: [] });
+        }
         return json(200, { data: [{
           id: SUBMISSION_ID,
           type: "reviewSubmissions",
           attributes: { platform: "IOS", state: "READY_FOR_REVIEW", submittedDate: null }
         }] });
       }
-      if (url === `/v1/reviewSubmissions/${SUBMISSION_ID}/items`) {
-        return json(200, { data: [{ type: "appStoreVersions", id: options.boundTo }] });
+      if (req.method === "POST" && url === "/v1/reviewSubmissions") {
+        created.push(JSON.parse(raw || "{}"));
+        return json(201, { data: {
+          type: "reviewSubmissions",
+          id: "sub-new",
+          attributes: { platform: "IOS", state: "READY_FOR_REVIEW", submittedDate: null }
+        } });
       }
-      if (req.method === "GET" && url === `/v1/reviewSubmissions/${SUBMISSION_ID}`) {
+      if (req.method === "POST" && url === "/v1/reviewSubmissionItems") {
+        bound.push(JSON.parse(raw || "{}"));
+        if (options.bindFails) {
+          //  The refusal the live service answers with when the version is
+          //  not ready:  the blockers are named, one entry per resource.
+          return json(409, { errors: [{
+            status: "409",
+            code: "STATE_ERROR.ENTITY_STATE_INVALID",
+            title: "appStoreVersions with id 'version-1' is not in valid state.",
+            detail: "This resource cannot be reviewed, please check associated errors to see why.",
+            meta: {
+              associatedErrors: {
+                "/v1/appStoreVersionLocalizations/loc-1/placements": [{
+                  status: "409",
+                  code: "STATE_ERROR.SCREENSHOT_REQUIRED.IPAD_13_PROFILE",
+                  title: "App screenshot missing (IPAD_13_PROFILE).",
+                  detail: "A screenshot for one of the following types is required but was not provided: IPAD_13_PROFILE"
+                }],
+                "/v1/appDataUsages/": [{
+                  status: "409",
+                  code: "STATE_ERROR.APP_DATA_USAGES_REQUIRED",
+                  title: "Answers to what data your app collects and how it's used are needed.",
+                  detail: "You must have published answers to your app's data usages."
+                }]
+              }
+            }
+          }] });
+        }
+        return json(201, { data: { type: "reviewSubmissionItems", id: "item-1" } });
+      }
+      if (req.method === "GET" && /^\/v1\/reviewSubmissions\/[^/]+\/items$/.test(url)) {
+        if (options.boundTo === undefined) {
+          //  A submission with no items:  the version is bound to nothing.
+          return json(200, { data: [] });
+        }
+        //  The item's own id is the item's id.  The version is named in the
+        //  relationship, and reading the item's id as the version's would
+        //  never match.
+        return json(200, { data: [{
+          type: "reviewSubmissionItems",
+          id: "item-1",
+          relationships: { appStoreVersion: { data: { type: "appStoreVersions", id: options.boundTo } } }
+        }] });
+      }
+      if (req.method === "GET" && /^\/v1\/reviewSubmissions\/[^/]+$/.test(url)) {
         //  The read back after the submit, so the report can say what the
         //  submission's state actually is.
+        const id = url.split("/").pop();
+        if (sent.has(id)) {
+          return json(200, {
+            data: {
+              type: "reviewSubmissions",
+              id,
+              attributes: { state: "WAITING_FOR_REVIEW", submittedDate: "2026-10-20T00:00:00Z" }
+            }
+          });
+        }
+        //  The read before the submission is touched:  a draft, with the
+        //  platform it carries.
         return json(200, {
           data: {
             type: "reviewSubmissions",
-            id: SUBMISSION_ID,
-            attributes: { state: "WAITING_FOR_REVIEW", submittedDate: "2026-10-20T00:00:00Z" }
+            id,
+            attributes: {
+              platform: options.submissionPlatform || "IOS",
+              state: "READY_FOR_REVIEW",
+              submittedDate: null
+            }
           }
         });
       }
       return json(404, { errors: [{ title: "not found" }] });
     });
   });
-  return { server, patched };
+  return { server, patched, bound, created };
 }
 
 function submit(base, args = []) {
@@ -206,11 +290,11 @@ function submit(base, args = []) {
 }
 
 async function withServer(options, fn) {
-  const { server, patched } = serve(options);
+  const { server, patched, bound, created } = serve(options);
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
   try {
-    return await fn(base, patched);
+    return await fn(base, patched, bound, created);
   } finally {
     server.close();
   }
@@ -260,14 +344,75 @@ test("a screenshot set that could not be read stops the submission", async () =>
 });
 
 test("a review submission bound to another version is not submitted", async () => {
+  //  One submission carries one version, so a submission that already holds
+  //  another version cannot be given this one.  It is left alone rather than
+  //  submitted, because submitting it would send the wrong build to review.
   await withServer({ ...READY, boundTo: "some-other-version" }, async (base, patched) => {
     const { code, stderr } = await submit(base);
     assert.equal(code, 2, `expected a refusal, got ${code}: ${stderr}`);
     assert.ok(
-      /is not bound to version-1/.test(stderr),
+      /is bound to some-other-version/.test(stderr),
       `the refusal did not say the submission was bound elsewhere:\n${stderr}`
     );
+    assert.ok(
+      /holds another version/.test(stderr),
+      `the refusal did not say what has to be cleared:\n${stderr}`
+    );
     assert.equal(patched.length, 0, "the wrong version's submission was patched");
+  });
+});
+
+test("a submission with no items is bound to the version and submitted", async () => {
+  //  This is the state a clean account is in:  the version is bound to
+  //  nothing, and the command has to make the binding itself.  The items
+  //  relationship cannot be written, so the binding is a review submission
+  //  item of its own.
+  await withServer({ ...READY, boundTo: undefined }, async (base, patched, bound) => {
+    const { code, stdout, stderr } = await submit(base);
+    assert.equal(code, 0, `expected a clean run, got ${code}: ${stderr}`);
+    assert.equal(bound.length, 1, "the version was not bound to a review submission");
+    const relationships = bound[0].data?.relationships;
+    assert.equal(relationships?.reviewSubmission?.data?.id, SUBMISSION_ID);
+    assert.equal(relationships?.appStoreVersion?.data?.id, VERSION_ID);
+    assert.equal(patched.length, 1, "the submission was not patched");
+    assert.equal(patched[0].body?.data?.attributes?.submitted, true);
+    const report = JSON.parse(stdout.trim());
+    assert.equal(report.reviewSubmission, SUBMISSION_ID);
+  });
+});
+
+test("the binding refusal reports the blockers App Store Connect named", async () => {
+  //  The refusal on the binding call carries the list of what is not ready,
+  //  one entry per resource.  It is the most useful thing the command can
+  //  print, so it is reported rather than swallowed.
+  await withServer({ ...READY, boundTo: undefined, bindFails: true }, async (base, patched) => {
+    const { code, stderr } = await submit(base);
+    assert.equal(code, 2, `expected a refusal, got ${code}: ${stderr}`);
+    assert.ok(
+      /STATE_ERROR\.SCREENSHOT_REQUIRED\.IPAD_13_PROFILE/.test(stderr),
+      `the refusal did not name the missing screenshot:\n${stderr}`
+    );
+    assert.ok(
+      /STATE_ERROR\.APP_DATA_USAGES_REQUIRED/.test(stderr),
+      `the refusal did not name the missing privacy answers:\n${stderr}`
+    );
+    assert.ok(
+      /\/v1\/appDataUsages\//.test(stderr),
+      `the refusal did not name the resource that is not ready:\n${stderr}`
+    );
+    assert.equal(patched.length, 0, "the submission was patched even though the version was not ready");
+  });
+});
+
+test("a review submission is created when the app has none", async () => {
+  await withServer({ ...READY, noSubmissions: true, boundTo: undefined }, async (base, patched, bound, created) => {
+    const { code, stderr } = await submit(base);
+    assert.equal(code, 0, `expected a clean run, got ${code}: ${stderr}`);
+    assert.equal(created.length, 1, "no review submission was created");
+    assert.equal(created[0].data?.attributes?.platform, "IOS");
+    assert.equal(created[0].data?.relationships?.app?.data?.id, APP_ID);
+    assert.equal(bound.length, 1, "the version was not bound to the new submission");
+    assert.equal(patched.length, 1, "the submission was not patched");
   });
 });
 
@@ -354,7 +499,10 @@ test("a ready version is submitted, and only the report is on stdout", async () 
     assert.equal(patched.length, 1, "the submission was not patched");
     const attributes = patched[0].body?.data?.attributes;
     assert.equal(attributes?.submitted, true, "the submission was not marked submitted");
-    assert.equal(attributes?.platform, "IOS", "the platform was not set");
+    //  The one call that cannot be undone carries the one attribute that has
+    //  been proven in production, and nothing else.  The platform was already
+    //  on the submission.
+    assert.equal(attributes?.platform, undefined, "the irreversible call carried more than the submit");
   });
 });
 
@@ -362,11 +510,18 @@ test("the platform can be chosen, and a bad one is refused", async () => {
   //  A macOS version carries desktop screenshots, so it is submitted against
   //  a server that serves them rather than the iPhone and iPad sets.
   await withServer({ ...READY, iphoneScreens: 0, ipadScreens: 0, desktopScreens: 3 }, async (base, patched) => {
-    const { code, stdout } = await submit(base, [SUBMISSION_ID, "MAC_OS"]);
-    assert.equal(code, 0, "the macOS platform was not accepted");
+    const { code, stdout, stderr } = await submit(base, [SUBMISSION_ID, "MAC_OS"]);
+    assert.equal(code, 0, `expected a clean run, got ${code}: ${stderr}`);
     const report = JSON.parse(stdout.trim());
     assert.equal(report.platform, "MAC_OS");
+    //  A named submission that carries another platform has it set first, on
+    //  a call that can be undone, so the irreversible one carries only the
+    //  submit.
+    assert.equal(patched.length, 2, `expected a platform patch and a submit patch, got ${patched.length}`);
     assert.equal(patched[0].body?.data?.attributes?.platform, "MAC_OS");
+    assert.equal(patched[0].body?.data?.attributes?.submitted, undefined);
+    assert.equal(patched[1].body?.data?.attributes?.submitted, true);
+    assert.equal(patched[1].body?.data?.attributes?.platform, undefined);
   });
   await withServer(READY, async (base, patched) => {
     //  The iPhone and iPad sets a macOS version does not carry are not

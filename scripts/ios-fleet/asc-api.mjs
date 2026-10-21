@@ -789,7 +789,7 @@ async function main() {
     console.error("       node asc-api.mjs ensure-standing-testers <appleId> [buildVersion]   (emails from ASC_STANDING_TESTERS)");
     console.error("       node asc-api.mjs latest-build-seq <bundleId> <prefix> [platform] [appleId]");
     console.error("       node asc-api.mjs upload-screenshots <localizationId> <displayType|auto> <file...>");
-    console.error("       node asc-api.mjs submit-review <versionId> [reviewSubmissionId]");
+    console.error("       node asc-api.mjs submit-review <versionId> [reviewSubmissionId] [platform]");
     // The exit code is set rather than the process ended, so a diagnostic
     // written to a pipe is flushed instead of dropped.
     process.exitCode = 1;
@@ -859,6 +859,35 @@ async function main() {
     return parts
       .map((part) => part.replace(/[A-Za-z0-9._~+/=-]{24,}/g, "[redacted]"))
       .join("; ");
+  }
+
+  // The blockers App Store Connect names when a version cannot be reviewed.
+  //
+  // The refusal on the review submission item carries a `meta.associatedErrors`
+  // member:  a map from the resource that is not ready to the list of state
+  // errors on it.  Each entry carries a code, a title and a detail, and the
+  // code is the part an operator can act on, so both the resource and the
+  // code are printed.  The shape is checked before anything is read, because
+  // a refusal is a document from the service and its members are not
+  // guaranteed.
+  function describeAssociatedErrors(res) {
+    const errors = res && res.parsed && Array.isArray(res.parsed.errors) ? res.parsed.errors : [];
+    const lines = [];
+    for (const problem of errors) {
+      if (!isPlainObject(problem)) continue;
+      const meta = isPlainObject(problem.meta) ? problem.meta : null;
+      if (!meta || !isPlainObject(meta.associatedErrors)) continue;
+      for (const [resource, list] of Object.entries(meta.associatedErrors)) {
+        if (!Array.isArray(list)) continue;
+        for (const item of list) {
+          if (!isPlainObject(item)) continue;
+          const code = typeof item.code === "string" ? item.code : "unknown error";
+          const title = typeof item.title === "string" ? item.title : "";
+          lines.push(`${resource} -> ${code}${title ? ` (${title})` : ""}`);
+        }
+      }
+    }
+    return lines;
   }
 
   // Guard the shape of a response before any of it is read.
@@ -966,22 +995,29 @@ async function main() {
   // -------------------------------------------------------------------------
   // Submit an app store version for review
   // -------------------------------------------------------------------------
-  // Usage: node asc-api.mjs submit-review <versionId> [reviewSubmissionId]
+  // Usage: node asc-api.mjs submit-review <versionId> [reviewSubmissionId] [platform]
   //
   // Submitting is the one call that cannot be undone, so the things that
   // have to be true first are checked here rather than discovered from
   // Apple's refusal:
   //
   //   1. the version's screenshots are uploaded (a version with no
-  //      screenshots is not submittable, and the review submission's items
-  //      stay empty while that is true)
+  //      screenshots is not submittable, and the binding call refuses with
+  //      the list of what is missing)
   //   2. a build is attached to the version
   //   3. the version's versionString matches that build's marketing version
   //
-  // The review submission's items cannot be set:  the relationship allows
-  // GET_RELATED and GET_RELATIONSHIP only, and a review submission is
-  // created with the app relationship, so the version is bound by App Store
-  // Connect itself when the version becomes submittable.
+  // The version is attached to the review submission here, because App Store
+  // Connect never attaches it by itself.  The items relationship on the
+  // submission allows GET_RELATED and GET_RELATIONSHIP only, so it can be
+  // read but never written:  the binding is a resource of its own, a review
+  // submission item.  Without that step the command can never work from a
+  // clean account, because a fresh version is bound to nothing.
+  //
+  // When the version is not yet reviewable, the binding call is refused with
+  // a 409 whose body names every blocker, one entry per resource.  That list
+  // is the most useful thing this command can print, so it is reported
+  // rather than swallowed.
   if (method === "submit-review") {
     const versionId = path;
     const submissionId = body;
@@ -1147,13 +1183,61 @@ async function main() {
       return;
     }
 
-    // The review submission.  When none is named, the app's own are listed.
-    // Each candidate is checked to be bound to THIS version before it is
-    // submitted:  a submission can be bound to another version, and
-    // submitting that one would send the wrong build to review.
+    // The review submission.
+    //
+    // The version is bound to a submission by a review submission item, a
+    // resource of its own.  The items relationship on the submission allows
+    // GET_RELATED and GET_RELATIONSHIP only, so it can be read but never
+    // written, and a version that no item names is bound to nothing.  So the
+    // binding is made here, which is what lets this command work from a
+    // clean account instead of only against a version somebody else prepared.
+    //
+    // A submission already bound to a different version is left alone:  one
+    // submission carries one version, and a second one cannot be added to
+    // it.  A submission bound to nothing is the one that gets this version.
+    const blockers = [];
     let candidates = [];
     if (submissionId) {
       candidates = [submissionId];
+      //  A named submission is taken as given, but two things about it still
+      //  have to be checked:  a submission that was already sent cannot be
+      //  sent again, and its platform has to be the one asked for, because a
+      //  macOS submission for an iOS version would send the wrong build to
+      //  review.  The platform is a settable attribute, so it is set here
+      //  rather than left to the one call that cannot be undone.
+      const named = await api("GET", `/v1/reviewSubmissions/${submissionId}`);
+      if (!named.ok) {
+        console.error(`submit-review: ${describeError(named)}`);
+        process.exitCode = 2;
+        return;
+      }
+      const namedAttributes = isPlainObject(named.parsed?.data?.attributes)
+        ? named.parsed.data.attributes
+        : null;
+      if (!namedAttributes) {
+        console.error("submit-review: the review submission came back without readable attributes");
+        process.exitCode = 2;
+        return;
+      }
+      if (namedAttributes.submittedDate !== null && namedAttributes.submittedDate !== undefined) {
+        console.error("submit-review: not submitting, the review submission was already submitted");
+        process.exitCode = 2;
+        return;
+      }
+      if (namedAttributes.platform !== platform) {
+        const setPlatform = await api("PATCH", `/v1/reviewSubmissions/${submissionId}`, JSON.stringify({
+          data: {
+            type: "reviewSubmissions",
+            id: submissionId,
+            attributes: { platform }
+          }
+        }));
+        if (!setPlatform.ok) {
+          console.error(`submit-review: the platform could not be set: ${describeError(setPlatform)}`);
+          process.exitCode = 2;
+          return;
+        }
+      }
     } else {
       if (typeof appId !== "string" || appId.length === 0) {
         console.error("submit-review: not submitting, the version names no app");
@@ -1167,33 +1251,106 @@ async function main() {
         return;
       }
       candidates = requireArray(listed.parsed?.data, "review submission list")
-        .map((s) => (isPlainObject(s) && typeof s.id === "string" ? s.id : null))
-        .filter(Boolean);
+        .filter((s) => isPlainObject(s) && typeof s.id === "string")
+        .filter((s) => {
+          const attributes = isPlainObject(s.attributes) ? s.attributes : {};
+          //  A submission that was already sent cannot be sent again.
+          if (attributes.submittedDate !== null && attributes.submittedDate !== undefined) return false;
+          //  A submission for another platform would put the wrong build in
+          //  review, so it is not a candidate.
+          return typeof attributes.platform !== "string" || attributes.platform === platform;
+        })
+        .map((s) => s.id);
     }
     if (candidates.length === 0) {
-      console.error("submit-review: not submitting, the app has no review submission");
-      process.exitCode = 2;
-      return;
+      //  The app has no draft submission at all, so one is made.  The
+      //  platform goes on it at create time, which is the shape App Store
+      //  Connect accepts:  items and submitted are both refused on create.
+      if (typeof appId !== "string" || appId.length === 0) {
+        console.error("submit-review: not submitting, the version names no app");
+        process.exitCode = 2;
+        return;
+      }
+      const created = await api("POST", "/v1/reviewSubmissions", JSON.stringify({
+        data: {
+          type: "reviewSubmissions",
+          attributes: { platform },
+          relationships: { app: { data: { type: "apps", id: appId } } }
+        }
+      }));
+      if (!created.ok) {
+        console.error(`submit-review: ${describeError(created)}`);
+        process.exitCode = 2;
+        return;
+      }
+      const createdId = created.parsed?.data?.id;
+      if (typeof createdId !== "string" || createdId.length === 0) {
+        console.error("submit-review: the review submission was created but came back without an id");
+        process.exitCode = 2;
+        return;
+      }
+      candidates = [createdId];
     }
 
+    // Is this submission bound to the version?
+    //
+    // The item's own id is the review submission item's id, not the
+    // version's:  the version is named in the item's relationship.  Reading
+    // the item's id as the version's would never match, so the check has to
+    // follow the relationship.
+    const boundVersionOf = (item) => {
+      if (!isPlainObject(item)) return null;
+      const relationships = isPlainObject(item.relationships) ? item.relationships : null;
+      if (!relationships) return null;
+      const related = isPlainObject(relationships.appStoreVersion) ? relationships.appStoreVersion : null;
+      if (!related) return null;
+      const data = isPlainObject(related.data) ? related.data : null;
+      return data && typeof data.id === "string" ? data.id : null;
+    };
+
     let submitted = null;
+    const boundElsewhere = [];
     for (const candidate of candidates) {
       const items = await api("GET", `/v1/reviewSubmissions/${candidate}/items`);
       if (!items.ok) {
         console.error(`submit-review: ${candidate}: ${describeError(items)}`);
         continue;
       }
-      const bound = requireArray(items.parsed?.data, "review submission item list")
-        .some((item) => isPlainObject(item) && item.id === versionId);
-      if (!bound) {
-        console.error(`submit-review: ${candidate} is not bound to ${versionId}; skipping it`);
+      const list = requireArray(items.parsed?.data, "review submission item list");
+      const boundTo = list.map(boundVersionOf).filter(Boolean);
+      if (boundTo.length > 0 && !boundTo.includes(versionId)) {
+        boundElsewhere.push(`${candidate} -> ${boundTo.join(", ")}`);
+        console.error(
+          `submit-review: ${candidate} is bound to ${boundTo.join(", ")}; skipping it`
+        );
         continue;
       }
+      if (boundTo.length === 0) {
+        //  The submission is bound to nothing, so this version goes on it.
+        const bound = await api("POST", "/v1/reviewSubmissionItems", JSON.stringify({
+          data: {
+            type: "reviewSubmissionItems",
+            relationships: {
+              reviewSubmission: { data: { type: "reviewSubmissions", id: candidate } },
+              appStoreVersion: { data: { type: "appStoreVersions", id: versionId } }
+            }
+          }
+        }));
+        if (!bound.ok) {
+          for (const line of describeAssociatedErrors(bound)) blockers.push(line);
+          console.error(`submit-review: ${candidate} could not be bound to ${versionId}: ${describeError(bound)}`);
+          continue;
+        }
+        console.error(`submit-review: bound ${versionId} to review submission ${candidate}`);
+      }
+      //  The one call that cannot be undone carries the one attribute that
+      //  has been proven in production, and nothing else.  The platform was
+      //  set when the submission was made.
       const result = await api("PATCH", `/v1/reviewSubmissions/${candidate}`, JSON.stringify({
         data: {
           type: "reviewSubmissions",
           id: candidate,
-          attributes: { submitted: true, platform }
+          attributes: { submitted: true }
         }
       }));
       if (!result.ok) {
@@ -1204,7 +1361,18 @@ async function main() {
       break;
     }
     if (!submitted) {
-      console.error("submit-review: not submitting, no review submission is bound to this version");
+      if (blockers.length > 0) {
+        console.error("submit-review: not submitting, App Store Connect says the version is not ready:");
+        for (const line of blockers) console.error(`  ${line}`);
+      } else if (boundElsewhere.length > 0) {
+        console.error(
+          "submit-review: not submitting, the app's review submission holds another version " +
+          `(${boundElsewhere.join("; ")}).  One submission carries one version, so it has to be ` +
+          "cleared in App Store Connect before this one can go to review."
+        );
+      } else {
+        console.error("submit-review: not submitting, no review submission is bound to this version");
+      }
       process.exitCode = 2;
       return;
     }
