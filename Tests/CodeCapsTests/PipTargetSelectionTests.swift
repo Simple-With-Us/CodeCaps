@@ -47,4 +47,24 @@ final class PipTargetSelectionTests: XCTestCase {
         XCTAssertEqual(PipWidgetController.meterCount(for: row, now: model.now,
             issue: model.issues[row.providerKey]), 0)
     }
+
+    /// A failed provider may not be ranked by the quota it last reported.  That
+    /// cached number is exactly what the panel refuses to draw, so letting it
+    /// order the HUD would make the order depend on a reading the panel calls
+    /// untrustworthy.
+    func testAFailedProviderIsNotRankedByItsCachedQuota() throws {
+        let (model, defaults, suite) = GlanceFixtures.makeModel(view: .fromMac, alarmsAll: false, fleet: false)
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let windows = [GlanceFixtures.window("anthropic:5h", provider: "anthropic", label: "5-hour window",
+            token: "5h", remaining: 4, resetIn: 3_600)]
+        model.injectForTests(sections: QuotaResponse(generatedAt: "", windows: windows)
+            .platformSections(now: GlanceFixtures.now), now: GlanceFixtures.now,
+            issues: ["anthropic": "Helper failed"])
+        let row = try XCTUnwrap(model.displaySections.first { $0.providerKey == "anthropic" })
+        // The provider failed, so the row has no reading and ranks as unreadable.
+        XCTAssertEqual(PipWidgetController.rankingPercent(for: row, now: model.now,
+            issue: model.issues[row.providerKey]), 100)
+        // The same row without the failure still ranks by its live reading.
+        XCTAssertEqual(PipWidgetController.rankingPercent(for: row, now: model.now), 4)
+    }
 }

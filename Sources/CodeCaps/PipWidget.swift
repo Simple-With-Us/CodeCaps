@@ -451,8 +451,8 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
         // failed.  A pinned failed row still shows, because the user asked for
         // it and it reports its status instead of a cached quota.
         func remainingPercent(_ row: DisplaySection) -> Double {
-            (currentWindows(for: row, now: model.now, disabledSources: model.disabledSources)
-                .compactMap(\.remainingPercent).min() ?? 100)
+            rankingPercent(for: row, now: model.now, issue: model.issues[row.providerKey],
+                disabledSources: model.disabledSources)
         }
         func isMeasurable(_ row: DisplaySection) -> Bool {
             readingStatus(for: row, now: model.now, issue: model.issues[row.providerKey],
@@ -489,6 +489,16 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
             .map { QuotaWindowSnapshot(window: $0.window, now: now) }
             .filter { $0.isFresh && $0.remainingPercent != nil
                 && (!$0.window.skip || $0.remainingPercent == 0) }
+    }
+
+    /// The percentage a row may be ranked by when the HUD picks its default
+    /// targets.  A row whose provider failed has no current reading, so it
+    /// ranks as unreadable rather than by a cached quota the panel has already
+    /// declared untrustworthy.
+    static func rankingPercent(for row: DisplaySection, now: Date, issue: String? = nil,
+                                disabledSources: Set<String> = []) -> Double {
+        (currentWindows(for: row, now: now, issue: issue, disabledSources: disabledSources)
+            .compactMap(\.remainingPercent).min() ?? 100)
     }
 
     static func readingStatus(for row: DisplaySection, now: Date, issue: String? = nil,
