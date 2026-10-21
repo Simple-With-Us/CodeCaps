@@ -632,7 +632,9 @@ test('a broken reader is reported as a reader fault, not as a missing credential
     assert.doesNotMatch(rejectedResult.stderr, /Missing ASC_KEY_ID/, 'a reader fault must not read as a missing credential');
     assert.ok(!rejectedResult.stderr.includes('test-token'), 'the access token must not reach the log');
     assert.ok(!rejectedResult.stdout.includes('test-token'), 'the access token must not reach the log');
-    assert.match(rejectedResult.stderr, /fetch-failed:  exit-1 for test-tok…oken/, 'the failure includes a masked first-8/last-4 token preview');
+    assert.ok(!rejectedResult.stderr.includes('test-tok'), 'no slice of a short access token may reach the log');
+    assert.ok(!rejectedResult.stdout.includes('test-tok'), 'no slice of a short access token may reach the log');
+    assert.match(rejectedResult.stderr, /fetch-failed:  exit-1 for <redacted>/, 'a token too short to have a hidden middle is redacted outright');
 
     // A reader that refuses the request:  the tooling is at fault.
     const refused = writeStubReader(dir, 2, 'fleet-secrets: refusing Infisical environment');
@@ -687,5 +689,57 @@ test('a broken reader is reported as a reader fault, not as a missing credential
     assert.match(missingResult.stderr, /reader is not on PATH/, 'the message must name the reader');
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/** A literal string for a regular expression.  The preview carries an ellipsis
+ * and angle brackets, neither of which is a metacharacter, but the helper keeps
+ * a future preview from changing the meaning of the pattern. */
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+test('a credential is previewed only when the middle of it is really hidden', async () => {
+  const script = fileURLToPath(new URL('install-release-secrets-tooling.sh', import.meta.url));
+
+  // The two slices the preview is built from cover twelve characters between
+  // them, so a value of twelve characters or fewer is reconstructed in full
+  // by the two of them together.  Thirteen is the first length with a middle
+  // left over, and it is the boundary the helper has to hold.  The hidden
+  // middle of each case is a string that does not occur in the prose around
+  // it, so a leak of it is a leak and not a coincidence.
+  const cases = [
+    { token: 'abcdefghij', preview: '<redacted>', hidden: 'abcdefghij' },
+    { token: 'abcdefghijkl', preview: '<redacted>', hidden: 'abcdefghijkl' },
+    { token: 'abcdefghZijkl', preview: 'abcdefgh…ijkl', hidden: 'Z' },
+    { token: 'abcdefghijklmnopqrstuvwxyz0123', preview: 'abcdefgh…0123', hidden: 'ijklmnopqrstuvwxyz' }
+  ];
+
+  for (const { token, preview, hidden } of cases) {
+    const dir = mkdtempSync(join(tmpdir(), 'asc-preview-'));
+    try {
+      const home = join(dir, 'home');
+      mkdirSync(home, { recursive: true });
+      const base = {
+        ...process.env,
+        HOME: home,
+        PATH: '/usr/bin:/bin',
+        INFISICAL_TOKEN: token,
+        INFISICAL_FLEET_OPS_PROJECT_ID: '11111111-2222-3333-4444-555555555555'
+      };
+
+      // The reader repeats the token in its own error text, which is the text
+      // the failure carries, so the token is in the log unless it is masked.
+      const rejected = writeStubReader(dir, 4, `fleet-secrets: fetch-failed:  exit-1 for ${token}`);
+      const result = await runScript(script, { env: { ...base, FLEET_SECRETS: rejected }, args: ['check-reader'] });
+
+      assert.notEqual(result.code, 0, 'a reader that cannot authenticate must fail the check');
+      assert.ok(!result.stderr.includes(token), `the access token must not reach the log (${token.length} characters)`);
+      assert.ok(!result.stdout.includes(token), `the access token must not reach stdout (${token.length} characters)`);
+      assert.match(result.stderr, new RegExp(`fetch-failed:  exit-1 for ${escapeRegExp(preview)}`), `the failure carries the preview of a ${token.length} character token`);
+      assert.ok(!result.stderr.includes(hidden), `the hidden middle must stay hidden (${token.length} characters)`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   }
 });

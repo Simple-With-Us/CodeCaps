@@ -83,11 +83,17 @@ sha256_of() {
 # four, with an ellipsis between them.  It is not reversible, because the
 # ellipsis stands for the part that is not shown, and it names the value that
 # was rejected so an operator can tell which one it was without being handed
-# the value (rule 43).  A value too short to have a hidden middle is shown as
-# redacted instead.
+# the value (rule 43).
+#
+# The preview is only a preview when the middle of the value is really hidden.
+# The two slices cover twelve characters between them, so a value of twelve
+# characters or fewer would be reconstructed in full by the two of them
+# together; those are redacted outright instead.  The message that carries the
+# preview names the credential, so an operator still knows which value was
+# refused without any part of the value being shown.
 mask() {
   local value="$1"
-  if [ "${#value}" -lt 5 ]; then
+  if [ "${#value}" -le 12 ]; then
     printf '%s' "<redacted>"
     return
   fi
@@ -195,7 +201,7 @@ mint_token() {
   status=0
   token="$("$TOOLS_DIR/infisical" login --method=universal-auth --plain --silent 2>"$work/login.err")" || status=$?
   if [ "$status" -ne 0 ]; then
-    say "the Infisical CLI refused the universal auth login (exit $status): $(scrub "$(cat "$work/login.err")")"
+    say "the Infisical CLI refused the universal auth login (exit $status); the client id or the client secret was refused: $(scrub "$(cat "$work/login.err")")"
     fail "no Infisical access token was minted"
     return 1
   fi
