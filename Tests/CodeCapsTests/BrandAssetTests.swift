@@ -26,14 +26,37 @@ final class BrandAssetTests: XCTestCase {
 
     /// How far a sampled pixel may sit from a declared ring colour.
     ///
-    /// The shipped PNG is the owner's vector rasterised, so a flat fill lands
-    /// a little off the declared value: the rasteriser rounds and the colour
-    /// profile shifts the flats slightly.  The shipped teal sits 17 units from
-    /// the declared teal and the shipped red 29.  The limit is set well above
-    /// both and far below the distance to any other artwork, so a black
-    /// silhouette, a greyscale upscale or another brand's mark is still
-    /// rejected.
-    private static let colourTolerance = 48.0
+    /// The flat fills of the shipped mark land exactly on the declared values
+    /// once only the fully opaque pixels are compared in one explicit colour
+    /// space, so this limit is tight:  it covers a unit of rounding and
+    /// nothing else.  Any other artwork is far outside it.
+    private static let colourTolerance = 8.0
+
+    /// How dark a template pixel has to be.
+    ///
+    /// The template mark is tinted by macOS at draw time, so the file itself
+    /// has to stay a black silhouette.  The colour mark's teal sits at a
+    /// luminance of 0.71 and its red at 0.54, so both are outside this limit
+    /// while the shipped silhouette, at about 0.13, is well inside it.
+    private static let templateLuminance = 0.35
+
+    /// How much of the template has to be that dark silhouette.
+    ///
+    /// The shipped template is 95.8 percent dark, with a thin tail of fully
+    /// opaque pixels that the rasteriser rounded up from the anti-aliased
+    /// edge.  A per-pixel rule would trip on that tail, so the rule is on the
+    /// share.  The colour mark is 8 percent dark, so it cannot pass.
+    private static let templateDarkShare = 0.9
+
+    /// How much of the two silhouettes has to agree.
+    ///
+    /// The shipped template and the shipped colour mark agree on 94 percent
+    /// of their shape, so this leaves room for a re-rasterisation of the same
+    /// vector while still rejecting a filled shape or an unrelated mark.
+    private static let silhouetteOverlap = 0.85
+
+    /// The grid each silhouette is reduced to before the two are compared.
+    private static let silhouetteCells = 48
 
     /// The repository root, found from this file's own path so the test reads
     /// the committed palette rather than a copy the build happened to make.
@@ -98,20 +121,69 @@ final class BrandAssetTests: XCTestCase {
                                     "the SwiftPM resource bundle could not be resolved at all")
         let url = try XCTUnwrap(bundle.url(forResource: Self.colourMark, withExtension: "png"),
                                 "\(Self.colourMark).png is missing from the CodeCaps resource bundle")
-        let data = try Data(contentsOf: url)
-        let rep = try XCTUnwrap(NSBitmapImageRep(data: data),
-                                "\(Self.colourMark).png could not be read as a bitmap")
-        let sampled = Self.sampledColours(of: rep)
-        XCTAssertFalse(sampled.isEmpty, "\(Self.colourMark).png has no readable pixels")
+        let pixels = try XCTUnwrap(Self.srgbPixels(of: url),
+                                   "\(Self.colourMark).png could not be read as a bitmap")
+        let colours = Self.opaqueColours(of: pixels)
+        XCTAssertFalse(colours.isEmpty, "\(Self.colourMark).png has no fully opaque pixels")
 
         for (role, target) in try Self.declaredRingColours() {
-            let closest = sampled.map { Self.distance($0, target) }.min() ?? .greatestFiniteMagnitude
+            let closest = colours.map { Self.distance($0, target) }.min() ?? .greatestFiniteMagnitude
             XCTAssertLessThanOrEqual(closest, Self.colourTolerance, """
-                the \(role) ring is missing from \(Self.colourMark).png:  the closest sampled \
-                pixel is \(Int(closest)) units away, so the bundled artwork is not the owner's \
-                mark.
+                the \(role) ring is missing from \(Self.colourMark).png:  the closest fully opaque \
+                pixel is \(Self.describe(closest)) units from the declared colour, so the bundled \
+                artwork is not the owner's mark.
                 """)
         }
+    }
+
+    /// The template mark is drawn as a silhouette in three places, so its
+    /// content has to be the owner's mark and not just any opaque PNG.
+    ///
+    /// The three load sites force `isTemplate = true`, so macOS tints
+    /// whatever shape the file holds instead of falling back to an SF
+    /// Symbol.  That makes a substituted file worse than a missing one:  a
+    /// black square, the colour mark or another brand's silhouette would all
+    /// draw quietly and wrongly.
+    ///
+    /// Two properties rule that out.  The file has to stay black, because
+    /// macOS tints it.  And its shape has to be the same mark the About and
+    /// Settings pages draw, so the menu bar and the two floating headers
+    /// cannot show a different artwork from the rest of the app.
+    func testTheTemplateMarkIsTheDarkOwnerSilhouette() throws {
+        let bundle = try XCTUnwrap(ResourceBundle.resolved,
+                                    "the SwiftPM resource bundle could not be resolved at all")
+        let templateURL = try XCTUnwrap(bundle.url(forResource: Self.templateMark, withExtension: "png"),
+                                         "\(Self.templateMark).png is missing from the CodeCaps resource bundle")
+        let colourURL = try XCTUnwrap(bundle.url(forResource: Self.colourMark, withExtension: "png"),
+                                       "\(Self.colourMark).png is missing from the CodeCaps resource bundle")
+        let templatePixels = try XCTUnwrap(Self.srgbPixels(of: templateURL),
+                                           "\(Self.templateMark).png could not be read as a bitmap")
+        let colourPixels = try XCTUnwrap(Self.srgbPixels(of: colourURL),
+                                         "\(Self.colourMark).png could not be read as a bitmap")
+
+        let templateColours = Self.opaqueColours(of: templatePixels)
+        XCTAssertFalse(templateColours.isEmpty, "\(Self.templateMark).png has no fully opaque pixels")
+        let dark = templateColours.filter { Self.luminance($0) <= Self.templateLuminance }.count
+        let darkShare = templateColours.isEmpty ? 0 : Double(dark) / Double(templateColours.count)
+        XCTAssertGreaterThanOrEqual(darkShare, Self.templateDarkShare, """
+            \(Self.templateMark).png is not the dark owner silhouette:  only \(Int(darkShare * 100)) \
+            percent of its opaque pixels are dark, and macOS tints this file at draw time, so a \
+            coloured file would draw the wrong artwork in every appearance.
+            """)
+
+        let templateGrid = Self.silhouetteGrid(of: templatePixels)
+        let colourGrid = Self.silhouetteGrid(of: colourPixels)
+        XCTAssertFalse(templateGrid.isEmpty, "\(Self.templateMark).png has no opaque silhouette")
+        XCTAssertFalse(colourGrid.isEmpty, "\(Self.colourMark).png has no opaque silhouette")
+        let overlap = zip(templateGrid, colourGrid).reduce(0.0) { $0 + min($1.0, $1.1) }
+        let union = zip(templateGrid, colourGrid).reduce(0.0) { $0 + max($1.0, $1.1) }
+        let agreement = union > 0 ? overlap / union : 0
+        XCTAssertGreaterThanOrEqual(agreement, Self.silhouetteOverlap, """
+            \(Self.templateMark).png is not the same silhouette as \(Self.colourMark).png:  the two \
+            agree on only \(Int(agreement * 100)) percent of their shape, so the menu bar, the PiP \
+            widget header and the Glance popover header would draw a different artwork from the \
+            one the About and Settings pages show.
+            """)
     }
 
     /// The UI keeps an SF Symbol fallback, but only as a last resort.  With the
@@ -149,17 +221,82 @@ final class BrandAssetTests: XCTestCase {
         return rings
     }
 
-    /// Every fourth pixel of the raster, which is enough to catch the flat
-    /// fills of the two rings without walking a quarter of a million pixels.
-    private static func sampledColours(of rep: NSBitmapImageRep) -> [(Double, Double, Double)] {
+    /// The raster drawn into one explicit sRGB space.
+    ///
+    /// The shipped PNGs carry no iCCP, sRGB or gAMA chunk, so reading them
+    /// straight through `NSBitmapImageRep` hands back premultiplied
+    /// components in an uncalibrated space:  an edge pixel's colour is not
+    /// the artwork's colour.  Drawing into an sRGB context normalises the
+    /// space, and taking only the fully opaque pixels means the flat fills
+    /// are compared as they were drawn.
+    private static func srgbPixels(of url: URL) -> (width: Int, height: Int, bytes: [UInt8])? {
+        guard let image = NSImage(contentsOf: url),
+              let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+        let width = cgImage.width
+        let height = cgImage.height
+        guard width > 0, height > 0 else { return nil }
+        var bytes = [UInt8](repeating: 0, count: width * height * 4)
+        let drew = bytes.withUnsafeMutableBytes { raw -> Bool in
+            guard let base = raw.baseAddress,
+                  let context = CGContext(data: base, width: width, height: height,
+                                          bitsPerComponent: 8, bytesPerRow: width * 4,
+                                          space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+                return false
+            }
+            context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+        guard drew else { return nil }
+        return (width, height, bytes)
+    }
+
+    /// The fully opaque pixels, in sRGB.
+    private static func opaqueColours(of pixels: (width: Int, height: Int, bytes: [UInt8])) -> [(Double, Double, Double)] {
         var colours: [(Double, Double, Double)] = []
-        for x in stride(from: 0, to: rep.pixelsWide, by: 4) {
-            for y in stride(from: 0, to: rep.pixelsHigh, by: 4) {
-                guard let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
-                colours.append((c.redComponent, c.greenComponent, c.blueComponent))
+        pixels.bytes.withUnsafeBufferPointer { buffer in
+            for index in 0..<(pixels.width * pixels.height) {
+                guard buffer[index * 4 + 3] == 255 else { continue }
+                colours.append((Double(buffer[index * 4]) / 255.0,
+                                Double(buffer[index * 4 + 1]) / 255.0,
+                                Double(buffer[index * 4 + 2]) / 255.0))
             }
         }
         return colours
+    }
+
+    /// The mark's opaque silhouette, normalised by its own bounding box and
+    /// reduced to a grid of coverage fractions.
+    ///
+    /// Normalising by the bounding box is what lets a cropped black template
+    /// and a 512px colour raster be compared at all:  the artwork lands in
+    /// the same place in the grid even though the canvases differ.
+    private static func silhouetteGrid(of pixels: (width: Int, height: Int, bytes: [UInt8])) -> [Double] {
+        let (width, height, bytes) = pixels
+        var minX = width, maxX = -1, minY = height, maxY = -1
+        for y in 0..<height {
+            for x in 0..<width where bytes[(y * width + x) * 4 + 3] == 255 {
+                if x < minX { minX = x }
+                if x > maxX { maxX = x }
+                if y < minY { minY = y }
+                if y > maxY { maxY = y }
+            }
+        }
+        guard maxX >= minX, maxY >= minY else { return [] }
+        let boxWidth = maxX - minX + 1
+        let boxHeight = maxY - minY + 1
+        let cells = silhouetteCells
+        var grid = [Double](repeating: 0, count: cells * cells)
+        for y in 0..<height {
+            for x in 0..<width where bytes[(y * width + x) * 4 + 3] == 255 {
+                let cellX = min(cells - 1, (x - minX) * cells / boxWidth)
+                let cellY = min(cells - 1, (y - minY) * cells / boxHeight)
+                grid[cellY * cells + cellX] += 1.0
+            }
+        }
+        let perCell = Double(boxWidth) * Double(boxHeight) / Double(cells * cells)
+        for index in grid.indices { grid[index] = min(1.0, grid[index] / perCell) }
+        return grid
     }
 
     private static func rgb(fromHex hex: String) -> (Double, Double, Double)? {
@@ -177,5 +314,19 @@ final class BrandAssetTests: XCTestCase {
         let dg = (a.1 - b.1) * 255.0
         let db = (a.2 - b.2) * 255.0
         return (dr * dr + dg * dg + db * db).squareRoot()
+    }
+
+    /// The perceived brightness of a colour.
+    private static func luminance(_ colour: (Double, Double, Double)) -> Double {
+        0.2126 * colour.0 + 0.7152 * colour.1 + 0.0722 * colour.2
+    }
+
+    /// A distance in plain words.
+    ///
+    /// `Int()` traps on a value this large, and a test that crashes while
+    /// reporting a failure reports nothing at all, so the distance is
+    /// formatted rather than converted.
+    private static func describe(_ distance: Double) -> String {
+        distance < 1_000_000 ? "\(Int(distance))" : "no comparable pixel"
     }
 }
