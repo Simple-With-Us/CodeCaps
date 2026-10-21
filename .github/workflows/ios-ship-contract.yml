@@ -14,6 +14,8 @@ on:
       - '.github/workflows/ios-ship*.yml'
       - 'ios/CodeCapsCompanion/project.yml'
       - 'scripts/ios-*'
+      - 'scripts/infisical-fetch*.mjs'
+      - 'scripts/stage-asc-key*'
       - 'scripts/ios-fleet/**'
       - 'scripts/test-ios-stage-asc-key.sh'
   push:
@@ -22,6 +24,8 @@ on:
       - '.github/workflows/ios-ship*.yml'
       - 'ios/CodeCapsCompanion/project.yml'
       - 'scripts/ios-*'
+      - 'scripts/infisical-fetch*.mjs'
+      - 'scripts/stage-asc-key*'
       - 'scripts/ios-fleet/**'
       - 'scripts/test-ios-stage-asc-key.sh'
   workflow_dispatch:
@@ -42,6 +46,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Pin the auto-ship wiring
         run: |
-          node --test scripts/ios-ship-workflow.test.mjs
+          node --test scripts/ios-ship-workflow.test.mjs scripts/stage-asc-key.node-test.mjs scripts/infisical-fetch-expand.node-test.mjs scripts/ios-enable-apns.test.mjs
           bash scripts/ios-fleet/test-asc-credentials.sh
           node --test scripts/ios-fleet/test-asc-credentials.mjs
+          node --test scripts/ios-fleet/test-asc-client.mjs
+          node --test scripts/ios-fleet/test-asc-upload.mjs
+          node --test scripts/ios-fleet/test-asc-submit.mjs
+          node --test scripts/ios-fleet/test-asc-key.test.mjs
+          python3 scripts/ios-fleet/test_pick_simulator.py
+          python3 scripts/ios-fleet/test_screenshot_ink.py
+          bash scripts/ios-fleet/test-capture-script.sh

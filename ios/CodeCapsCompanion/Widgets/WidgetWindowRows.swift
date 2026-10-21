@@ -61,26 +61,28 @@ struct CodeCapsMarkView: View {
 /// 3h 12m".  Both halves are optional — a window with no reset shows the token
 /// alone, and one with an unknown cadence shows the reset alone.
 struct WindowCaptionRow: View {
-    let token: String
-    let resetCaption: String
+    /// What the caption says.
+    ///
+    /// It is a value and not three arguments,  because the qualifier used to be an
+    /// argument with a default:  a surface that rendered a window's caption could
+    /// leave it out,  and the omission showed up only in a review.  A caption now
+    /// carries its qualifier,  and one built from a window carries that window's.
+    let caption: QuotaWindowCaption
     var font: CGFloat = 9
-    /// Short distinguishing label shown after the token when two bars share
-    /// one cadence (e.g. "weekly" / "additional" for two "7d" bars).
-    var qualifier: String = ""
 
     var body: some View {
         HStack(spacing: 4) {
-            if !token.isEmpty || !qualifier.isEmpty {
+            if !caption.token.isEmpty || !caption.qualifier.isEmpty {
                 HStack(spacing: 3) {
-                    if !token.isEmpty {
-                        Text(token)
+                    if !caption.token.isEmpty {
+                        Text(caption.token)
                             .font(.system(size: font, weight: .semibold, design: .rounded))
                             .foregroundColor(.secondary)
                             .lineLimit(1)
                             .fixedSize()
                     }
-                    if !qualifier.isEmpty {
-                        Text(qualifier)
+                    if !caption.qualifier.isEmpty {
+                        Text(caption.qualifier)
                             .font(.system(size: font, weight: .medium))
                             .foregroundColor(.secondary.opacity(0.8))
                             .lineLimit(1)
@@ -89,8 +91,8 @@ struct WindowCaptionRow: View {
                 }
             }
             Spacer(minLength: 0)
-            if !resetCaption.isEmpty {
-                Text(resetCaption)
+            if !caption.resetCaption.isEmpty {
+                Text(caption.resetCaption)
                     .font(.system(size: font, weight: .medium, design: .monospaced))
                     .foregroundColor(.secondary)
                     .lineLimit(1)
@@ -147,10 +149,8 @@ struct PlanAtCapRow: View {
             }
 
             WindowCaptionRow(
-                token: captionToken,
-                resetCaption: window.resetCaption(),
-                font: captionFont,
-                qualifier: window.barQualifier
+                caption: window.caption,
+                font: captionFont
             )
         }
         .accessibilityElement(children: .combine)
@@ -258,8 +258,7 @@ struct PlanBarRow: View {
                 )
 
                 WindowCaptionRow(
-                    token: captionToken,
-                    resetCaption: captionReset,
+                    caption: .withoutQualifier(token: captionToken, resetCaption: captionReset),
                     font: captionFont
                 )
             }
@@ -352,18 +351,14 @@ struct PlanDualBarRow: View {
             // Dual captions
             HStack(spacing: columnSpacing) {
                 WindowCaptionRow(
-                    token: window1.cadenceToken,
-                    resetCaption: window1.resetCaption(),
-                    font: captionFont,
-                    qualifier: window1.barQualifier
+                    caption: window1.caption,
+                    font: captionFont
                 )
                 .frame(maxWidth: .infinity)
 
                 WindowCaptionRow(
-                    token: window2.cadenceToken,
-                    resetCaption: window2.resetCaption(),
-                    font: captionFont,
-                    qualifier: window2.barQualifier
+                    caption: window2.caption,
+                    font: captionFont
                 )
                 .frame(maxWidth: .infinity)
             }
