@@ -67,6 +67,16 @@ final class BrandAssetTests: XCTestCase {
     /// The grid each silhouette is reduced to before the two are compared.
     private static let silhouetteCells = 48
 
+    /// The alpha at which a pixel counts as part of the mark's outline, half
+    /// of full opacity.
+    ///
+    /// An anti-aliased edge is centred on its half-opacity contour, so this is
+    /// where the edge sits at any raster size.  Any alpha at all would also
+    /// admit the faint stray pixels around the artwork and shift the outline of
+    /// the shipped colour mark by two source pixels, enough to pull the
+    /// shipped pair from 94 percent agreement down to 86.
+    private static let silhouetteEdgeAlpha: UInt8 = 128
+
     /// The repository root, found from this file's own path so the test reads
     /// the committed palette rather than a copy the build happened to make.
     private static var repositoryRoot: URL {
@@ -139,8 +149,8 @@ final class BrandAssetTests: XCTestCase {
             let closest = sampled.map { Self.distance($0, target) }.min() ?? .greatestFiniteMagnitude
             XCTAssertLessThanOrEqual(closest, Self.colourTolerance, """
                 the \(role) ring is missing from \(Self.colourMark).png:  the closest sampled \
-                pixel is \(Self.describe(closest)) units away, so the bundled artwork is not the \
-                owner's mark.
+                pixel is \(Self.describe(closest)) units away, past the limit of \
+                \(Self.describe(Self.colourTolerance)), so the bundled artwork is not the owner's mark.
                 """)
         }
     }
@@ -171,7 +181,13 @@ final class BrandAssetTests: XCTestCase {
         let raster = try XCTUnwrap(Self.rawSamples(of: url),
                                    "\(Self.templateMark).png could not be read as a bitmap")
         let pixels = Self.sampledPixels(of: raster)
-        XCTAssertFalse(pixels.opaque.isEmpty, "\(Self.templateMark).png has no visible pixels")
+        // An empty sample stops the test here.  Carrying on would divide zero by
+        // zero, and the failure message below would then convert the resulting
+        // NaN to an `Int`, which traps and reports nothing at all.
+        guard !pixels.opaque.isEmpty else {
+            XCTFail("\(Self.templateMark).png has no opaque pixels, so it cannot be the owner's silhouette")
+            return
+        }
 
         let ink = pixels.opaque.filter { max($0.0, max($0.1, $0.2)) < Self.templateInkLimit }.count
         let share = Double(ink) / Double(pixels.opaque.count)
@@ -195,10 +211,10 @@ final class BrandAssetTests: XCTestCase {
                                       "\(Self.colourMark).png is missing from the CodeCaps resource bundle")
         let colourRaster = try XCTUnwrap(Self.rawSamples(of: colourURL),
                                          "\(Self.colourMark).png could not be read as a bitmap")
-        let templateGrid = Self.silhouetteGrid(of: raster)
-        let colourGrid = Self.silhouetteGrid(of: colourRaster)
-        XCTAssertFalse(templateGrid.isEmpty, "\(Self.templateMark).png has no opaque silhouette")
-        XCTAssertFalse(colourGrid.isEmpty, "\(Self.colourMark).png has no opaque silhouette")
+        let templateGrid = try XCTUnwrap(Self.silhouetteGrid(of: raster),
+                                         "\(Self.templateMark).png has no silhouette:  no pixel is even half opaque")
+        let colourGrid = try XCTUnwrap(Self.silhouetteGrid(of: colourRaster),
+                                       "\(Self.colourMark).png has no silhouette:  no pixel is even half opaque")
         let overlap = zip(templateGrid, colourGrid).reduce(0.0) { $0 + min($1.0, $1.1) }
         let union = zip(templateGrid, colourGrid).reduce(0.0) { $0 + max($1.0, $1.1) }
         let agreement = union > 0 ? overlap / union : 0
@@ -332,42 +348,57 @@ final class BrandAssetTests: XCTestCase {
 
     /// A distance in plain words.
     ///
-    /// `Int()` traps on a value this large, and a test that crashes while it
-    /// is reporting a failure reports nothing at all, so the distance is
-    /// formatted rather than converted.
+    /// Converting to an `Int` would truncate 8.4 to 8, so a failure against a
+    /// limit of 8 would read as a distance inside the limit.  `Int()` also
+    /// traps on a value as large as the "no comparable pixel" sentinel, and a
+    /// test that crashes while it is reporting a failure reports nothing at
+    /// all, so the sentinel is named and every other distance is formatted to
+    /// the hundredth rather than converted.
     private static func describe(_ distance: Double) -> String {
-        distance < 1_000_000 ? "\(Int(distance))" : "no comparable pixel"
+        distance < 1_000_000 ? String(format: "%.2f", distance) : "no comparable pixel"
     }
 
-    /// The mark's opaque silhouette, normalised by its own bounding box and
-    /// reduced to a grid of coverage fractions.
+    /// The mark's silhouette, normalised by its own bounding box and reduced
+    /// to a grid of coverage fractions.  The result is nil when no pixel is at
+    /// least half opaque, because there is no silhouette to compare.
     ///
-    /// Normalising by the bounding box is what lets a cropped black template
-    /// and a 512px colour raster be compared at all:  the artwork lands in
-    /// the same place in the grid even though the canvases differ.
-    private static func silhouetteGrid(of raster: Raster) -> [Double] {
+    /// Normalising by the bounding box is what lets a template and a colour
+    /// mark be compared at all even though their canvases differ:  the shipped
+    /// template is an 850px raster and the shipped colour mark is a 512px
+    /// raster, and the artwork lands in the same place in the grid.
+    ///
+    /// Coverage is each pixel's alpha, added up per cell, and the bounding box
+    /// is the mark's half-opacity outline.  A cut near full opacity would drop
+    /// the anti-aliased edge, and that edge is a fixed number of source pixels
+    /// wide, so a smaller raster would lose a larger share of its shape than a
+    /// bigger one and a valid re-export at another size could fail the
+    /// comparison.  Summing alpha measures the area the mark covers, which
+    /// does not depend on the size it was rasterised at.
+    private static func silhouetteGrid(of raster: Raster) -> [Double]? {
         let width = raster.width
         let height = raster.height
         let bytes = raster.bytes
         var minX = width, maxX = -1, minY = height, maxY = -1
         for y in 0..<height {
-            for x in 0..<width where bytes[(y * width + x) * 4 + 3] >= 253 {
+            for x in 0..<width where bytes[(y * width + x) * 4 + 3] >= silhouetteEdgeAlpha {
                 if x < minX { minX = x }
                 if x > maxX { maxX = x }
                 if y < minY { minY = y }
                 if y > maxY { maxY = y }
             }
         }
-        guard maxX >= minX, maxY >= minY else { return [] }
+        guard maxX >= minX, maxY >= minY else { return nil }
         let boxWidth = maxX - minX + 1
         let boxHeight = maxY - minY + 1
         let cells = silhouetteCells
         var grid = [Double](repeating: 0, count: cells * cells)
-        for y in 0..<height {
-            for x in 0..<width where bytes[(y * width + x) * 4 + 3] >= 253 {
+        for y in minY...maxY {
+            for x in minX...maxX {
+                let alpha = bytes[(y * width + x) * 4 + 3]
+                guard alpha > 0 else { continue }
                 let cellX = min(cells - 1, (x - minX) * cells / boxWidth)
                 let cellY = min(cells - 1, (y - minY) * cells / boxHeight)
-                grid[cellY * cells + cellX] += 1.0
+                grid[cellY * cells + cellX] += Double(alpha) / 255.0
             }
         }
         let perCell = Double(boxWidth) * Double(boxHeight) / Double(cells * cells)
