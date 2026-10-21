@@ -19,11 +19,22 @@
  * file is a hard stop.
  *
  * The command line never carries key material:
- *   read <path>    read a staged key file and print the validated key
- *   validate       read a key on stdin and print the validated key
+ *   read <path>    check that a staged key file holds a usable key
+ *   validate       check that a key on stdin holds a usable key
  *   write <path>   read a key on stdin and write it to a mode-600 file
+ *   exec <path> -- <command> [args...]
+ *                  run a command with the staged key in its environment
+ *
+ * WHY NOTHING PRINTS THE KEY (2026-10-21, Kody rule 42 on PR #271):
+ * A key on stdout is a key in a log, in a CI transcript, in a process
+ * listing and in whatever captures that output next.  So `read` and
+ * `validate` report the STATUS of a key and never the key itself, and the
+ * only way the key reaches a consumer is `exec`, which puts it in the
+ * child's environment as ASC_KEY_P8:  never in an argument, never on
+ * stdout, never in a log line.
  */
 import { closeSync, constants, fstatSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { createPrivateKey } from "node:crypto";
 
 // A private key is a few kilobytes.  Anything larger is not one.
@@ -110,6 +121,31 @@ async function readStdin() {
   return Buffer.concat(chunks).toString("utf8");
 }
 
+// Runs a command with the staged key in its environment.
+//
+// The key goes into the child's environment as ASC_KEY_P8, which is where the
+// client looks for it.  It is never an argument, never reaches this process's
+// stdout or stderr, and never reaches a log line.
+//
+// The child's exit code is returned, so a caller that runs the client through
+// this keeps the client's own result.
+export function execWithKey(keyPath, command, args) {
+  const read = readPrivateKeyFile(keyPath);
+  if (read.missing) return { missing: true };
+  if (read.error) return { error: read.error };
+  const child = spawnSync(command, args, {
+    stdio: "inherit",
+    env: { ...process.env, ASC_KEY_P8: read.pem }
+  });
+  if (child.error) {
+    return { error: `the command could not be started: ${child.error.message}` };
+  }
+  if (child.signal) {
+    return { error: `the command was killed by ${child.signal}` };
+  }
+  return { status: typeof child.status === "number" ? child.status : 1 };
+}
+
 // The exit codes the shell layer reads:
 //   0  the key was read
 //   1  the path names something that is not a usable key
@@ -132,7 +168,9 @@ async function main() {
       console.error(`asc-key: ${read.error}`);
       return 1;
     }
-    process.stdout.write(read.pem);
+    //  The status is reported and the key is not:  a key on stdout is a key
+    //  in every log that captures it.
+    console.log(`asc-key: ${target} holds a PEM private key`);
     return 0;
   }
   if (command === "validate") {
@@ -141,7 +179,8 @@ async function main() {
       console.error("asc-key: the value is not a PEM private key");
       return 1;
     }
-    process.stdout.write(pem);
+    //  The key is not printed here either:  see the read command.
+    console.log("asc-key: the value is a PEM private key");
     return 0;
   }
   if (command === "write") {
@@ -156,7 +195,25 @@ async function main() {
     }
     return 0;
   }
-  console.error("asc-key: usage: asc-key.mjs read <path> | validate | write <path>");
+  if (command === "exec") {
+    const rest = process.argv.slice(3);
+    const separator = rest.indexOf("--");
+    if (!target || separator < 0 || separator === rest.length - 1) {
+      console.error("asc-key: usage: asc-key.mjs exec <path> -- <command> [args...]");
+      return 1;
+    }
+    const child = execWithKey(target, rest[separator + 1], rest.slice(separator + 2));
+    if (child.missing) {
+      console.error(`asc-key: the key file ${target} does not exist`);
+      return EXIT_MISSING;
+    }
+    if (child.error) {
+      console.error(`asc-key: ${child.error}`);
+      return 1;
+    }
+    return child.status;
+  }
+  console.error("asc-key: usage: asc-key.mjs read <path> | validate | write <path> | exec <path> -- <command> [args...]");
   return 1;
 }
 

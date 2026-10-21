@@ -3,6 +3,8 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 
+import { readPrivateKeyFile } from './ios-fleet/asc-key.mjs';
+
 export const bundleIdentifier = 'com.simplewithus.codecaps.ios';
 export const pushProfileName = 'CodeCaps Companion AppStore';
 
@@ -173,8 +175,8 @@ function inspectProductionProfile(encoded) {
 // in the child's environment.
 //
 // The key never reaches a command line, a log, the environment file, or a
-// temporary file:  the reader prints it on stdout, the caller captures it,
-// and only the child process receives it.
+// temporary file:  the reader keeps it in the file, this function keeps it in
+// the process, and only the child process receives it.
 //
 // A path that names nothing is not a credential:  the run falls through and
 // the client resolves the credential the way it does today, from an exported
@@ -182,15 +184,8 @@ function inspectProductionProfile(encoded) {
 export function stagedKeyEnvironment(env = process.env) {
   const keyPath = env.ASC_KEY_PATH;
   if (!keyPath) return {};
-  const reader = fileURLToPath(new URL('./ios-fleet/asc-key.mjs', import.meta.url));
-  try {
-    const pem = execFileSync(process.execPath, [reader, 'read', keyPath], {
-      encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], maxBuffer: 64 * 1024
-    });
-    return pem ? { ASC_KEY_P8: pem } : {};
-  } catch {
-    return {};
-  }
+  const read = readPrivateKeyFile(keyPath);
+  return read.pem ? { ASC_KEY_P8: read.pem } : {};
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

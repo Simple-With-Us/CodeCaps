@@ -22,26 +22,18 @@ chmod 700 "$DEST"
 
 # The client takes the key from the environment, because a path on disk is not
 # an approved secret source (Kody rule 42).  The hosted runner stages the key
-# to a mode-600 file and publishes only its path, so the staged key is read
-# here, with the hardened reader, and handed to the child in the child's
-# environment.  The key never reaches a command line, a log, the environment
-# file, or a temporary file.
+# to a mode-600 file and publishes only its path, so the staged key is handed
+# to the child in the child's environment by the hardened reader.  The key
+# never reaches a command line, a log, the environment file, or a temporary
+# file, and it never reaches this shell:  the reader keeps it in the file and
+# puts it in the child's environment.
 #
 # A path that names nothing is not a credential:  the run falls through and the
 # client resolves the credential the way it does today, from an exported
 # ASC_KEY_P8 or from fleet-secrets.
-staged_key=""
-if [[ -n "${ASC_KEY_PATH:-}" ]]; then
-  read_rc=0
-  staged_key="$(node "$KEY_READER" read "$ASC_KEY_PATH")" || read_rc=$?
-  if [[ "$read_rc" -ne 0 ]]; then
-    staged_key=""
-  fi
-fi
-
 run_client() {
-  if [[ -n "$staged_key" ]]; then
-    ASC_KEY_P8="$staged_key" node "$CLIENT" "$@"
+  if [[ -n "${ASC_KEY_PATH:-}" ]]; then
+    node "$KEY_READER" exec "$ASC_KEY_PATH" -- node "$CLIENT" "$@"
   else
     node "$CLIENT" "$@"
   fi

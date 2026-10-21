@@ -95,7 +95,29 @@ out="$(env -u ASC_KEY_ID -u ASC_ISSUER_ID -u ASC_KEY_PATH -u ASC_KEY_P8 bash -c 
 grep -q '^ASC_KEY_ID /asc$' "$FAKE_LOG" || fail "did not ask Infisical /asc for the key id"
 grep -q '^ASC_KEY_P8 /asc$' "$FAKE_LOG" || fail "did not ask Infisical /asc for the key"
 
-# 2. An explicit ASC_* environment wins and fleet-secrets is not called.
+# 2. The environment wins over a named key file.  A disk credential never
+# overrides the environment (Kody rule 42 on PR #271):  a stale or foreign
+# value in an operator's shell would sign the upload with the wrong key.
+: > "$FAKE_LOG"
+cp "${tmp}/asc.p8" "${tmp}/named-key.p8"
+chmod 600 "${tmp}/named-key.p8"
+ASC_KEY_ID=ENVKEY0001 ASC_ISSUER_ID=env-issuer \
+  ASC_KEY_P8="$(<"${tmp}/other.p8")" ASC_KEY_PATH="${tmp}/named-key.p8" bash -c '
+  set -euo pipefail
+  source "'"$funcs"'"
+  load_secrets
+  [[ "$AUTH_MODE" == api_key && "$ASC_KEY_ID" == ENVKEY0001 ]]
+  # The environment key is the credential in play.
+  [[ "$(printf "%s" "$ASC_KEY_P8")" == "$(cat "'"$tmp"'/other.p8")" ]]
+  [[ "$(printf "%s" "$ASC_KEY_P8")" != "$(cat "'"$tmp"'/asc.p8")" ]]
+  # The named file was not read:  no file was staged for the client.
+  [[ -z "${ASC_STAGED_KEY_PATH:-}" ]]
+' || fail "a named key file overrode the environment"
+[[ ! -s "$FAKE_LOG" ]] || fail "fleet-secrets was called although the environment was complete"
+
+# 2a. A named key file is used as a FILE:  the key material never enters this
+# shell, the file is used where it lies, and the client is handed the key in
+# the child's environment by the hardened reader.
 : > "$FAKE_LOG"
 cp "${tmp}/asc.p8" "${tmp}/env-key.p8"
 chmod 600 "${tmp}/env-key.p8"
@@ -106,28 +128,18 @@ env -u ASC_KEY_P8 ASC_KEY_ID=ENVKEY0001 ASC_ISSUER_ID=env-issuer ASC_KEY_PATH="$
   [[ "$AUTH_MODE" == api_key && "$ASC_KEY_ID" == ENVKEY0001 && -z "$ASC_TMP_DIR" ]]
   # The named file is used where it lies:  no copy is made of it.
   [[ "$ASC_KEY_PATH" == "'"${tmp}"'/env-key.p8" ]]
-  # The client still gets the key in the environment.
-  [[ "$(printf "%s" "$ASC_KEY_P8")" == "$(cat "'"$tmp"'/asc.p8")" ]]
-' || fail "environment credentials were not honored"
-[[ ! -s "$FAKE_LOG" ]] || fail "fleet-secrets was called although the environment was complete"
+  # The key stays in the file:  it never enters this shell.
+  [[ -z "${ASC_KEY_P8:-}" ]]
+  # The client is handed the key from the file, in the child environment.
+  [[ "$ASC_STAGED_KEY_PATH" == "'"${tmp}"'/env-key.p8" ]]
+' || fail "the named key file was not used as a file"
+[[ ! -s "$FAKE_LOG" ]] || fail "fleet-secrets was called although the named file was usable"
 
-# 2a. A stale ambient ASC_KEY_P8 does not hijack a working ASC_KEY_PATH credential.
-# The named file is the credential in play; the stale secret in the environment
-# must not replace it, because the upload would then be signed with a key
-# App Store Connect does not expect.
-: > "$FAKE_LOG"
-cp "${tmp}/asc.p8" "${tmp}/named-key.p8"
-chmod 600 "${tmp}/named-key.p8"
-ASC_KEY_ID=ENVKEY0003 ASC_ISSUER_ID=env-issuer \
-  ASC_KEY_P8="$(<"${tmp}/other.p8")" ASC_KEY_PATH="${tmp}/named-key.p8" bash -c '
-  set -euo pipefail
-  source "'"$funcs"'"
-  load_secrets
-  [[ "$AUTH_MODE" == api_key && "$ASC_KEY_ID" == ENVKEY0003 ]]
-  [[ "$(printf "%s" "$ASC_KEY_P8")" == "$(cat "'"$tmp"'/asc.p8")" ]]
-  [[ "$(printf "%s" "$ASC_KEY_P8")" != "$(cat "'"$tmp"'/other.p8")" ]]
-' || fail "a stale ambient ASC_KEY_P8 hijacked the named key file"
-[[ ! -s "$FAKE_LOG" ]] || fail "fleet-secrets was called although the environment was complete"
+# 2b. A staged key file is never read into a variable:  the shell that owns it
+# only ever holds its path.
+if grep -nE 'asc-key\.mjs" read .*\)" \|\|' "$script" >/dev/null; then
+  fail "ship-testflight.sh reads the key material into a variable"
+fi
 
 # 2b. An ambient ASC_KEY_P8 that is not a PEM private key is ignored, and the
 # run fails closed rather than signing with something that is not a key.
@@ -249,4 +261,4 @@ if grep -nE '(~|\$\{?HOME\}?)/\.secrets' "$script" >/dev/null; then
   fail "ship-testflight.sh still names the old secrets folder"
 fi
 
-echo "ok: ASC credential resolution (env first, then Infisical, temp key removed)"
+echo "ok: ASC credential resolution (env first, then the named file as a file, then Infisical, temp key removed)"

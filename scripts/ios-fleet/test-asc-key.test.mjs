@@ -116,26 +116,58 @@ test("a file that is not a private key is refused", () => {
   assert.match(read.error, /does not hold a PEM private key/);
 });
 
-test("the command line reads a staged key and reports a missing one", async () => {
+test("the command line reports the status of a staged key and never prints it", async () => {
+  //  A key on stdout is a key in every log that captures it, so the reader
+  //  reports whether the file is usable and nothing else.
   const path = staged("cli.p8");
   const ok = await run(["read", path]);
-  assert.equal(ok.code, 0);
-  assert.equal(ok.stdout.trim(), keyPem.trim());
+  assert.equal(ok.code, 0, `the staged key was refused: ${ok.stderr}`);
+  assert.match(ok.stdout, /holds a PEM private key/, `the status was not reported:\n${ok.stdout}`);
+  assert.doesNotMatch(ok.stdout, /PRIVATE KEY/, "the key reached stdout");
+  assert.doesNotMatch(ok.stderr, /PRIVATE KEY/, "the key reached stderr");
 
   const missing = await run(["read", join(root, "no-such-key.p8")]);
-  assert.notEqual(missing.code, 0);
+  assert.equal(missing.code, 3, "a path that names nothing must report EXIT_MISSING");
   assert.match(missing.stderr, /does not exist/);
   assert.equal(missing.stdout, "", "a missing key must not put anything on stdout");
+
+  const malformed = await run(["read", staged("bad.p8", "this is not a private key\n")]);
+  assert.equal(malformed.code, 1, "a file that is not a key must be refused");
+  assert.match(malformed.stderr, /does not hold a PEM private key/);
+  assert.equal(malformed.stdout, "", "a refused key must not put anything on stdout");
 });
 
 test("the key never travels in the command arguments", async () => {
-  //  The key goes in on stdin and comes out on stdout, so it is never an
-  //  argument of any process.
-  const path = staged("argv.p8");
+  //  The key goes in on stdin, and the command reports the status of it
+  //  without printing it, so it is never an argument of any process and never
+  //  on stdout.
   const result = await run(["validate"], keyPem);
   assert.equal(result.code, 0);
-  assert.equal(result.stdout.trim(), keyPem.trim());
+  assert.match(result.stdout, /is a PEM private key/, `the status was not reported:\n${result.stdout}`);
+  assert.doesNotMatch(result.stdout, /PRIVATE KEY/, "the key reached stdout");
   assert.ok(!result.stderr.includes("PRIVATE KEY"), "the key envelope reached a log line");
+});
+
+test("the exec command hands the key to the child in its environment", async () => {
+  //  This is the handoff the hosted runner uses:  the staged key reaches the
+  //  consumer in the child's environment, and in nowhere else.  Not in an
+  //  argument, not on stdout, not on stderr, not in a log line.
+  const path = staged("exec.p8");
+  const child = await run(["exec", path, "--", process.execPath, "-e",
+    "process.stdout.write('seen:' + (process.env.ASC_KEY_P8 ? 'yes' : 'no') + ':' + String(process.env.ASC_KEY_P8 || '').length)"]);
+  assert.equal(child.code, 0, `the child did not run: ${child.stderr}`);
+  assert.match(child.stdout, /^seen:yes:\d+$/, `the child did not receive the key:\n${child.stdout}`);
+  assert.doesNotMatch(child.stdout + child.stderr, /PRIVATE KEY/, "the key reached the output");
+});
+
+test("the exec command reports a missing key and passes the child's exit code on", async () => {
+  const missing = await run(["exec", join(root, "no-such-key.p8"), "--", process.execPath, "-e", "process.exit(0)"]);
+  assert.equal(missing.code, 3, "a path that names nothing must report EXIT_MISSING");
+  assert.match(missing.stderr, /does not exist/);
+
+  const path = staged("exit.p8");
+  const child = await run(["exec", path, "--", process.execPath, "-e", "process.exit(7)"]);
+  assert.equal(child.code, 7, "the child's exit code was not passed on");
 });
 
 test("the command line writes a key to a file only its owner can read", async () => {
@@ -155,20 +187,21 @@ test("the command line refuses a value that is not a key", async () => {
 
 test("the staged key reaches the client through the environment", async () => {
   //  This is the hosted CI path end to end:  the runner stages the key to a
-  //  mode-600 file and publishes only its path, the shell layer reads that
-  //  file, and the client takes the key from the environment.  The client
-  //  reads no file at all, which is why the path is in the environment here
-  //  and the file is still the credential in play.
+  //  mode-600 file and publishes only its path, the hardened reader hands
+  //  that key to the client in the child's environment, and the client takes
+  //  the key from the environment.  The client reads no file at all, which is
+  //  why the path is in the environment here and the file is still the
+  //  credential in play.
   const path = staged("ci.p8");
-  const read = await run(["read", path]);
-  assert.equal(read.code, 0, `the staged key was not read: ${read.stderr}`);
-  const client = spawn(process.execPath, [join(here, "asc-api.mjs"), "GET", "http://127.0.0.1:1/v1/apps"], {
+  const client = spawn(process.execPath, [
+    helper, "exec", path, "--", process.execPath, join(here, "asc-api.mjs"), "GET", "http://127.0.0.1:1/v1/apps"
+  ], {
     env: {
-      ...process.env,
+      PATH: process.env.PATH,
+      HOME: process.env.HOME,
       ASC_API_BASE: "http://127.0.0.1:1",
       ASC_KEY_ID: "SYNTHETICKEYID1",
       ASC_ISSUER_ID: "synthetic-issuer",
-      ASC_KEY_P8: read.stdout,
       ASC_KEY_PATH: path
     },
     stdio: ["ignore", "pipe", "pipe"]
@@ -179,6 +212,7 @@ test("the staged key reaches the client through the environment", async () => {
   await new Promise((resolve) => client.on("close", resolve));
   assert.match(stderr, /asc-auth: using ASC_KEY_P8 environment/, `the client did not take the key from the environment:\n${stderr}`);
   assert.doesNotMatch(stderr, /using ASC_KEY_PATH environment/);
+  assert.doesNotMatch(stderr, /PRIVATE KEY/, "the key reached the output");
 });
 
 // The consumers that call the client as a child process.

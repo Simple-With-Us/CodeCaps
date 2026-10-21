@@ -339,15 +339,18 @@ jobs:
           fi
           set +e
           # The client resolves the signing key from its environment and never
-          # from a path (Kody rule 42), so the staged key is read here and
-          # handed to the child through the child's environment.  It stays out
-          # of argv, out of $GITHUB_ENV and out of the log.
-          asc_pem=""
+          # from a path (Kody rule 42), so the staged key is handed to the
+          # child through the child's environment by the hardened reader.  The
+          # key stays out of argv, out of stdout, out of $GITHUB_ENV and out
+          # of the log.
           if [ -n "${ASC_KEY_PATH:-}" ]; then
-            asc_pem="$(node scripts/ios-fleet/asc-key.mjs read "$ASC_KEY_PATH" 2>/dev/null)" || asc_pem=""
+            node scripts/ios-fleet/asc-key.mjs exec "$ASC_KEY_PATH" -- \
+              node scripts/ios-fleet/asc-api.mjs ensure-standing-testers "$appleid"
+            rc=$?
+          else
+            node scripts/ios-fleet/asc-api.mjs ensure-standing-testers "$appleid"
+            rc=$?
           fi
-          ASC_KEY_P8="$asc_pem" node scripts/ios-fleet/asc-api.mjs ensure-standing-testers "$appleid"
-          rc=$?
           set -e
           if [ "$rc" -ne 0 ]; then
             echo "::warning title=TestFlight standing testers::tester sync exited ${rc}; see the standing-testers lines above.  The TestFlight upload itself succeeded."
