@@ -171,7 +171,7 @@ struct SettingsMenuBarPage: View {
                     .padding(.vertical, 4)
                 }
             } header: {
-                Eyebrow("PICTURE IN PICTURE (PIP)")
+                Eyebrow("Picture-in-Picture (PiP)")
             } footer: {
                 Text("A tiny on-screen HUD stays on top of all windows so you are aware of critical quotas in real time.")
                     .font(.system(size: 11))

@@ -13,7 +13,7 @@ struct QuickSettingsCommands: View {
         Divider()
         LaunchAtLoginToggle()
         Toggle("Attach to Menu Bar", isOn: $model.glanceAttachedToMenuBar)
-        Toggle("Picture in Picture", isOn: $model.isPipEnabled)
+        Toggle("Picture-in-Picture", isOn: $model.isPipEnabled)
         Divider()
         Button("Quit CodeCaps") { NSApp.terminate(nil) }
             .keyboardShortcut("q", modifiers: .command)

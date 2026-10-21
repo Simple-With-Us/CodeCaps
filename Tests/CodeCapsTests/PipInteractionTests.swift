@@ -1,9 +1,28 @@
 import AppKit
+import QuotaCore
 import XCTest
 @testable import CodeCaps
 
 @MainActor
 final class PipInteractionTests: XCTestCase {
+    func testExplicitSkippedNonzeroReadingIsUnavailableButZeroRemainsVisible() throws {
+        let (model, defaults, suite) = GlanceFixtures.makeModel(view: .fromMac, alarmsAll: false, fleet: false)
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var skipped = GlanceFixtures.window("anthropic:5h", provider: "anthropic",
+            label: "5h", token: "5h", remaining: 54, resetIn: 18_000)
+        skipped.skip = true
+        for percent in [54.0, 0.0] {
+            skipped.remainingPercent = percent
+            model.injectForTests(sections: QuotaResponse(generatedAt: "", windows: [skipped])
+                .platformSections(now: GlanceFixtures.now), now: GlanceFixtures.now)
+            let row = try XCTUnwrap(model.displaySections.first { $0.id == "anthropic" })
+            let current = PipWidgetController.currentWindows(for: row, now: model.now)
+            XCTAssertEqual(current.count, percent == 0 ? 1 : 0)
+            XCTAssertEqual(PipWidgetController.readingStatus(for: row, now: model.now),
+                           percent == 0 ? nil : "unavailable")
+        }
+    }
+
     func testBodyDragIncludesLogosBarsAndTextButNotResizeEdgesOrControls() {
         let size = NSSize(width: 400, height: 180)
         for point in [NSPoint(x: 18, y: 70), NSPoint(x: 160, y: 110), NSPoint(x: 310, y: 40)] {
@@ -59,6 +78,78 @@ final class PipInteractionTests: XCTestCase {
             XCTAssertNotNil(row)
             if let row { XCTAssertGreaterThan(PipWidgetController.meterCount(for: row, now: model.now), 0) }
         }
+    }
+
+    func testFailedAntigravityReadingStaysPinnedWithoutShowingCachedQuota() throws {
+        let (model, defaults, suite) = GlanceFixtures.makeModel(view: .fromMac, alarmsAll: false, fleet: false)
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let windows = [GlanceFixtures.window("antigravity:gemini:weekly", provider: "google-antigravity",
+            label: "Gemini Models · Weekly", token: "weekly", remaining: 54, resetIn: 86_400)]
+        let sections = QuotaResponse(generatedAt: "", windows: windows).platformSections(now: GlanceFixtures.now)
+        model.injectForTests(sections: sections, now: GlanceFixtures.now,
+                             issues: ["google-antigravity": "Helper failed"])
+        let row = try XCTUnwrap(model.displaySections.first { $0.poolKey == "gemini" })
+        model.pipPinnedRowIds = [row.id]
+        XCTAssertEqual(PipWidgetController.targetRows(for: model).map(\.id), [row.id])
+        XCTAssertEqual(PipWidgetController.readingStatus(for: row, now: model.now,
+            issue: model.issues[row.providerKey]), "unavailable")
+        XCTAssertTrue(PipWidgetController.meterSnapshots(for: row, now: model.now,
+            issue: model.issues[row.providerKey]).isEmpty)
+        XCTAssertEqual(PipWidgetController.meterCount(for: row, now: model.now,
+            issue: model.issues[row.providerKey]), 0)
+        model.pipPinnedRowIds = []
+        XCTAssertFalse(PipWidgetController.targetRows(for: model).contains { $0.id == row.id })
+    }
+
+    func testStaleOrDisabledReadingCannotDrawCurrentMeters() throws {
+        let (model, defaults, suite) = GlanceFixtures.makeModel(view: .fromMac, alarmsAll: false, fleet: false)
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let row = try XCTUnwrap(model.displaySections.first { $0.id == "anthropic" })
+        XCTAssertFalse(PipWidgetController.meterSnapshots(for: row, now: model.now).isEmpty)
+        XCTAssertEqual(PipWidgetController.readingStatus(for: row, now: model.now.addingTimeInterval(3_600)),
+                       "stale reading")
+        XCTAssertTrue(PipWidgetController.meterSnapshots(for: row,
+            now: model.now.addingTimeInterval(3_600)).isEmpty)
+        XCTAssertEqual(PipWidgetController.readingStatus(for: row, now: model.now,
+            disabledSources: ["anthropic"]), "source disabled")
+        XCTAssertTrue(PipWidgetController.meterSnapshots(for: row, now: model.now,
+            disabledSources: ["anthropic"]).isEmpty)
+        XCTAssertEqual(PipWidgetController.meterCount(for: row, now: model.now,
+            disabledSources: ["anthropic"]), 0)
+    }
+
+    func testAllUnavailableFallbackStillShowsStatusRows() {
+        let (model, defaults, suite) = GlanceFixtures.makeModel(view: .fromMac, alarmsAll: false, fleet: false)
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let windows = GlanceFixtures.localWindows
+        let issues = Dictionary(uniqueKeysWithValues: Set(windows.map(\.canonicalProviderKey)).map { ($0, "Unavailable") })
+        model.injectForTests(sections: QuotaResponse(generatedAt: "", windows: windows)
+            .platformSections(now: GlanceFixtures.now), now: GlanceFixtures.now, issues: issues)
+        model.pipPinnedRowIds = []
+        model.pipAutoAddedRowIds = []
+        let rows = PipWidgetController.targetRows(for: model)
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertTrue(rows.allSatisfy {
+            PipWidgetController.readingStatus(for: $0, now: model.now, issue: model.issues[$0.providerKey]) != nil
+        })
+    }
+
+    func testFreshWeeklyCapRemainsVisibleBesideFullShortWindow() throws {
+        let (model, defaults, suite) = GlanceFixtures.makeModel(view: .fromMac, alarmsAll: false, fleet: false)
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let windows = [
+            GlanceFixtures.window("antigravity:gemini:5h", provider: "google-antigravity",
+                label: "Gemini Models · 5-hour", token: "5h", remaining: 100, resetIn: 18_000),
+            GlanceFixtures.window("antigravity:gemini:weekly", provider: "google-antigravity",
+                label: "Gemini Models · Weekly", token: "weekly", remaining: 0, resetIn: 86_400)
+        ]
+        model.injectForTests(sections: QuotaResponse(generatedAt: "", windows: windows)
+            .platformSections(now: GlanceFixtures.now), now: GlanceFixtures.now)
+        let row = try XCTUnwrap(model.displaySections.first { $0.poolKey == "gemini" })
+        XCTAssertNil(PipWidgetController.readingStatus(for: row, now: model.now))
+        let current = PipWidgetController.currentWindows(for: row, now: model.now)
+        XCTAssertEqual(current.first { $0.window.window == "weekly" }?.remainingPercent, 0)
+        XCTAssertEqual(row.atCapWindow?.remainingPercent, 0)
     }
 
     func testAttachmentPreferencePersistsAndDefaultsToAttached() {
