@@ -85,7 +85,28 @@ function upload(behaviour, file = pngPath) {
       }
       if (req.url === "/v1/appScreenshotSets" && req.method === "POST") {
         //  A set for a display type the server does not have yet.
-        const wanted = JSON.parse(body || "{}")?.data?.attributes?.screenshotDisplayType;
+        let wanted;
+        try {
+          const parsed = JSON.parse(body || "{}");
+          if (
+            parsed === null ||
+            typeof parsed !== "object" ||
+            Array.isArray(parsed) ||
+            parsed.data === null ||
+            typeof parsed.data !== "object" ||
+            Array.isArray(parsed.data) ||
+            parsed.data.attributes === null ||
+            typeof parsed.data.attributes !== "object" ||
+            Array.isArray(parsed.data.attributes) ||
+            typeof parsed.data.attributes.screenshotDisplayType !== "string" ||
+            parsed.data.attributes.screenshotDisplayType.trim().length === 0
+          ) {
+            return json(400, { errors: [{ status: "400", code: "INVALID_REQUEST" }] });
+          }
+          wanted = parsed.data.attributes.screenshotDisplayType;
+        } catch {
+          return json(400, { errors: [{ status: "400", code: "INVALID_REQUEST" }] });
+        }
         //  The response echoes `wanted`, so echoing it back cannot tell a
         //  correct size-to-display-type mapping from a wrong one.  Record what
         //  was actually asked for so a test can assert on it directly.
