@@ -7,6 +7,10 @@ on stdout: ``success``, ``failure``, or ``pending``.
 
 Exit status matches that word: 0, 1, or 2.  The newest github-actions run
 for each requested name wins, so a rerun replaces a cancelled attempt.
+
+A CANCELLED run is reported as pending, not as a failure:  a cancelled run
+never finished, so it carries no verdict about the code.  The gate waits for
+a replacement instead of failing on a run that never ran.
 """
 
 from __future__ import annotations
@@ -53,6 +57,9 @@ def decide(payloads: Iterable[Mapping], names: Sequence[str]) -> tuple[str, list
     skipped companion after a failed package.  A missing or still-running
     check stays pending so the caller can poll.  Failure wins over pending
     so a red package is not hidden behind a companion that has not started.
+
+    A cancelled run stays pending rather than failing:  it never finished,
+    so it says nothing about the code, and a replacement may still arrive.
     """
     if not names:
         raise ValueError("at least one check name is required")
@@ -67,6 +74,9 @@ def decide(payloads: Iterable[Mapping], names: Sequence[str]) -> tuple[str, list
         conclusion = run.get("conclusion")
         status = run.get("status") or ""
         if conclusion == "success":
+            continue
+        if conclusion == "cancelled":
+            pending.append(f"{name}=cancelled")
             continue
         if conclusion:
             failed.append(f"{name}={conclusion}")

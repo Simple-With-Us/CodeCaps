@@ -85,6 +85,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
+      # actions: write lets this gate dispatch a replacement compile run
+      # when the one it is waiting on is cancelled before it finishes.  A
+      # cancelled run carries no verdict about the code, and the release
+      # window is too short to wait for a run that will never arrive.
+      actions: write
       checks: read
       contents: read
     steps:
@@ -98,6 +103,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          REDISPATCH_ON_CANCEL: '1'
         run: bash scripts/await-swift-ci-checks.sh
 
   release:
