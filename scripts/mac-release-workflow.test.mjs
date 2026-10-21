@@ -17,7 +17,6 @@ function step(s, name) {
   return s.slice(start, end < 0 ? undefined : end).trim();
 }
 const LOADERS = [
-  'Load ASC credentials (Fleet-OPS prod /asc)',
   'Stage the ASC private key (Fleet-OPS prod /asc)',
   'Check the ASC credentials arrived',
 ];
@@ -34,6 +33,7 @@ function allSteps(s, name) {
   return out;
 }
 const iosShip = read('.github/workflows/ios-ship.yml');
+const iosCode = iosShip.split('\n').filter(l => !/^\s*#/.test(l)).join('\n');
 test('Sparkle uses the existing fleet ASC loader, never repository ASC secrets', () => {
   assert.doesNotMatch(code, /secrets\.ASC_/);
   // One loader, two workflows.  The release path and the iOS ship path must
@@ -56,8 +56,26 @@ test('Sparkle uses the existing fleet ASC loader, never repository ASC secrets',
     assert.doesNotMatch(file, /8dae6d03/);
     assert.doesNotMatch(file, /ASC_INFISICAL_PROJECT_ID/);
   }
-  assert.match(loader, /project-id: \$\{\{ secrets\.INFISICAL_FLEET_OPS_PROJECT_ID \}\}/);
+  assert.match(loader, /INFISICAL_PROJECT_ID: \$\{\{ secrets\.INFISICAL_FLEET_OPS_PROJECT_ID \}\}/);
   assert.doesNotMatch(loader, /echo .*\$\{ASC_INFISICAL_PROJECT_ID\}/);
+  // The key material must not enter the job environment.  The loader reads
+  // the vault itself, so the workflow never asks the composite action for the
+  // private key and never names it: only the file's path crosses a step
+  // boundary.  A name here would put the key in GITHUB_ENV, where every
+  // later step, every process listing and every environment dump can read
+  // it.
+  assert.doesNotMatch(loader, /infisical-secrets/);
+  assert.doesNotMatch(loader, /ASC_KEY_P8/);
+  assert.doesNotMatch(loader, /names: ASC_/);
+  for (const file of [code, iosCode]) {
+    assert.doesNotMatch(file, /ASC_KEY_P8/);
+    assert.doesNotMatch(file, /names: ASC_/);
+  }
+  // The loader is told where the vault is, and only where.
+  assert.match(loader, /INFISICAL_ENVIRONMENT: prod/);
+  assert.match(loader, /INFISICAL_SECRET_PATH: \/asc/);
+  assert.match(loader, /INFISICAL_CLIENT_ID: \$\{\{ secrets\.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID \|\| secrets\.INFISICAL_CLIENT_ID \}\}/);
+  assert.match(loader, /INFISICAL_CLIENT_SECRET: \$\{\{ secrets\.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET \|\| secrets\.INFISICAL_CLIENT_SECRET \}\}/);
   // The bare Infisical CLI is gone: it prints the value to stdout, and its
   // only install path is macOS-only.
   for (const file of [workflow, iosShip]) {
@@ -97,12 +115,13 @@ test('PRs cannot notarize or publish, and icon-only changes trigger releases', (
   // The credential check job holds the signing key, so it must not be able
   // to push commits, tags or releases.
   assert.match(code, /verify-release-credentials:[\s\S]*permissions:\s*\n\s*contents: read/);
-  // No new code may talk to the vault directly: the values come from the
-  // approved composite action, and the only thing a script does is stage
-  // one of them to a file.
+  // The vault is reached by exactly one script for the ASC material, and the
+  // workflow names that script rather than the vault helpers.  The other
+  // values still come from the approved composite action.
   for (const file of [workflow, iosShip]) {
     assert.doesNotMatch(file, /listSecretsRaw|loginUniversalAuth/);
   }
+  assert.match(read('scripts/stage-asc-key.mjs'), /from '\.\/infisical-fetch\.mjs'/);
   assert.match(code, /needs.await-swift-ci.result == 'success'/);
   assert.match(code, /run: script\/build_and_run.sh --release/);
   assert.ok(code.indexOf('Verify notarization access') < code.indexOf('Build, sign, notarize'));

@@ -11,9 +11,12 @@ name: Mac Release (Sparkle)
 #       BotFleet's release.yml does (INFISICAL_PROJECT_ID plus
 #       INFISICAL_UNIVERSAL_AUTH_CLIENT_ID/_SECRET, or INFISICAL_CLIENT_ID/
 #       _SECRET), with same-named repository secrets as the fallback.
-#   ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8 come from Fleet-OPS Infisical prod
-#       /asc, matching ios-ship.yml. Never fall back to the stale repository
-#       ASC_* secrets. The private key stays in a mode-600 temporary file.
+#   ASC_KEY_ID, ASC_ISSUER_ID and the App Store Connect private key come from
+#       Fleet-OPS Infisical prod /asc, matching ios-ship.yml. Never fall back
+#       to the stale repository ASC_* secrets.  The private key never enters
+#       the job environment: scripts/stage-asc-key.mjs reads it from the vault
+#       itself, streams it over stdin into a mode-600 file and publishes only
+#       that file's path.
 #   SPARKLE_ED_PRIVATE_KEY  The EdDSA key that signs each update archive
 #       (Sparkle's generate_keys -x output).
 # Pull requests build without credentials and never publish. A main release
@@ -128,20 +131,15 @@ jobs:
           GH_FALLBACK_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           GH_FALLBACK_SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
 
-      - name: Load ASC credentials (Fleet-OPS prod /asc)
-        if: github.event_name != 'pull_request'
-        uses: ./.github/actions/infisical-secrets
-        with:
-          names: ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8
-          project-id: ${{ secrets.INFISICAL_FLEET_OPS_PROJECT_ID }}
-          environment: prod
-          secret-path: /asc
-          client-id: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID || secrets.INFISICAL_CLIENT_ID }}
-          client-secret: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET || secrets.INFISICAL_CLIENT_SECRET }}
-
       - name: Stage the ASC private key (Fleet-OPS prod /asc)
         if: github.event_name != 'pull_request'
         run: node scripts/stage-asc-key.mjs
+        env:
+          INFISICAL_PROJECT_ID: ${{ secrets.INFISICAL_FLEET_OPS_PROJECT_ID }}
+          INFISICAL_ENVIRONMENT: prod
+          INFISICAL_SECRET_PATH: /asc
+          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID || secrets.INFISICAL_CLIENT_ID }}
+          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET || secrets.INFISICAL_CLIENT_SECRET }}
 
       - name: Check the ASC credentials arrived
         if: github.event_name != 'pull_request'
@@ -364,18 +362,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - name: Load ASC credentials (Fleet-OPS prod /asc)
-        uses: ./.github/actions/infisical-secrets
-        with:
-          names: ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8
-          project-id: ${{ secrets.INFISICAL_FLEET_OPS_PROJECT_ID }}
-          environment: prod
-          secret-path: /asc
-          client-id: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID || secrets.INFISICAL_CLIENT_ID }}
-          client-secret: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET || secrets.INFISICAL_CLIENT_SECRET }}
-
       - name: Stage the ASC private key (Fleet-OPS prod /asc)
         run: node scripts/stage-asc-key.mjs
+        env:
+          INFISICAL_PROJECT_ID: ${{ secrets.INFISICAL_FLEET_OPS_PROJECT_ID }}
+          INFISICAL_ENVIRONMENT: prod
+          INFISICAL_SECRET_PATH: /asc
+          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID || secrets.INFISICAL_CLIENT_ID }}
+          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET || secrets.INFISICAL_CLIENT_SECRET }}
 
       - name: Check the ASC credentials arrived
         run: |

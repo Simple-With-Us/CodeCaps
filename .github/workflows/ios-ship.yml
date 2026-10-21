@@ -22,11 +22,10 @@ name: iOS TestFlight ship (GitHub-hosted macOS)
 #     Usage-Monitor read it.  The same-named repository secrets are a stale
 #     copy that App Store Connect answers with HTTP 401 (CC-163), so they are
 #     deliberately not read here and there is no fallback to them.
-#   * The multiline key arrives in the step environment from the
-#     infisical-secrets action, is streamed over stdin into a mode-600 file by
-#     scripts/stage-asc-key.mjs, and the ASC_KEY_P8 environment entry is
-#     blanked in the same step, so only that file's path crosses into the
-#     later steps.
+#   * The multiline key never enters the step environment.
+#     scripts/stage-asc-key.mjs reads the vault itself, streams the key over
+#     stdin into a mode-600 file and publishes only that file's path, so the
+#     key material crosses no step boundary.
 #   * IOS_DIST_P12_BASE64 / IOS_DIST_P12_PASSWORD (Apple Distribution identity)
 #     stay repository secrets.
 #   * SENTRY_DSN and SENTRY_AUTH_TOKEN are best-effort: an inert Sentry beats a
@@ -216,18 +215,14 @@ jobs:
       # ASC key from Fleet-OPS prod /asc.  ASC_KEY_ID and ASC_ISSUER_ID are
       # single-line and go to GITHUB_ENV; the multiline private key is staged
       # to a mode-600 file and only ASC_KEY_PATH is exported.
-      - name: Load ASC credentials (Fleet-OPS prod /asc)
-        uses: ./.github/actions/infisical-secrets
-        with:
-          names: ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8
-          project-id: ${{ secrets.INFISICAL_FLEET_OPS_PROJECT_ID }}
-          environment: prod
-          secret-path: /asc
-          client-id: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID || secrets.INFISICAL_CLIENT_ID }}
-          client-secret: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET || secrets.INFISICAL_CLIENT_SECRET }}
-
       - name: Stage the ASC private key (Fleet-OPS prod /asc)
         run: node scripts/stage-asc-key.mjs
+        env:
+          INFISICAL_PROJECT_ID: ${{ secrets.INFISICAL_FLEET_OPS_PROJECT_ID }}
+          INFISICAL_ENVIRONMENT: prod
+          INFISICAL_SECRET_PATH: /asc
+          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID || secrets.INFISICAL_CLIENT_ID }}
+          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET || secrets.INFISICAL_CLIENT_SECRET }}
 
       - name: Check the ASC credentials arrived
         run: |

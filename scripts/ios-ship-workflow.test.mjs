@@ -167,8 +167,8 @@ test("ASC credentials come from Fleet-OPS /asc, never the stale repository secre
   // bare Infisical CLI is not used: it prints the value to stdout.
   assert.doesNotMatch(code, /8dae6d03/);
   assert.doesNotMatch(code, /ASC_INFISICAL_PROJECT_ID/);
-  assert.match(code, /project-id: \$\{\{ secrets\.INFISICAL_FLEET_OPS_PROJECT_ID \}\}/);
-  assert.match(code, /secret-path: \/asc/);
+  assert.match(code, /INFISICAL_PROJECT_ID: \$\{\{ secrets\.INFISICAL_FLEET_OPS_PROJECT_ID \}\}/);
+  assert.match(code, /INFISICAL_SECRET_PATH: \/asc/);
   assert.match(code, /uses: \.\/\.github\/actions\/infisical-secrets/);
   assert.match(code, /secrets\.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID/);
   assert.doesNotMatch(code, /infisical secrets get/);
@@ -176,14 +176,15 @@ test("ASC credentials come from Fleet-OPS /asc, never the stale repository secre
   // No new code may talk to the vault directly.
   assert.doesNotMatch(code, /listSecretsRaw|loginUniversalAuth/);
 
-  // The multiline key arrives in the step environment from the
-  // infisical-secrets action and is streamed over stdin into a mode-600 file
-  // by scripts/stage-asc-key.mjs, which then blanks the environment entry,
-  // so only the path crosses into the later steps.
+  // The multiline key never enters the step environment.  The loader reads
+  // the vault itself and streams the key over stdin into a mode-600 file, so
+  // only the file's path crosses into the later steps and the workflow never
+  // names the private key.
   assert.match(code, /scripts\/stage-asc-key\.mjs/);
   assert.match(readFileSync(join(ROOT, "scripts/stage-asc-key.mjs"), "utf8"), /ios-stage-asc-key\.sh/);
   assert.doesNotMatch(code, /for name in .*ASC_KEY_P8/);
   assert.doesNotMatch(code, /printf '%s=%s\\n' "ASC_KEY_P8"/);
+  assert.doesNotMatch(code, /ASC_KEY_P8/);
 
   // The Distribution identity stays a repository secret, scoped to its step.
   assert.match(code, /IOS_DIST_P12_BASE64:\s*\$\{\{ secrets\.IOS_DIST_P12_BASE64 \}\}/);
