@@ -114,7 +114,7 @@ test("ios-ship.yml ships automatically on a merge that touches the native tree",
   // What to Test is mandatory and published, never dry-rendered.
   assert.match(code, /IOS_TF_RELEASE_NOTES:\s*"1"/);
   // Ship through the wrapper that runs ship-testflight.sh (ensure-tf-ready inside).
-  assert.match(code, /run: bash scripts\/ios-ship-testflight\.sh\s*$/m);
+  assert.match(code, /bash scripts\/ios-ship-testflight\.sh\s*$/m);
   assert.match(read("scripts/ios-fleet/ship-testflight.sh"), /ensure-tf-ready/);
   // Hosted macOS with the stable-Xcode guard, never a self-hosted label.
   assert.match(code, /runs-on:\s*macos-latest/);
@@ -251,6 +251,47 @@ test("ASC credentials come from Fleet-OPS /asc, never the stale repository secre
   assert.doesNotMatch(prepare, /echo "\$IOS_DIST_P12/);
 });
 
+test("the ASC credential reaches every client through the environment, never a path", () => {
+  // The clients refuse a path as a credential source (Kody rule 42), so the
+  // shell layer that owns the credential has to hand it over in the
+  // environment.  Every step that starts a client sources the loader first,
+  // or the step runs with no credential at all and the failure reads like a
+  // permission problem.
+  const clients = [
+    "ios-enable-apns.mjs",
+    "ios-install-appstore-profiles.sh",
+    "ios-ship-testflight.sh",
+    "asc-api.mjs",
+  ];
+  const blocks = [...code.matchAll(/^[ ]*run: \|\n((?:[ ]{10,}.*\n|\n)*)/gm)].map((m) => m[1]);
+  assert.ok(blocks.length >= 6, `the workflow should have several run blocks, found ${blocks.length}`);
+  for (const client of clients) {
+    const starters = blocks.filter((b) => b.includes(client));
+    assert.ok(starters.length >= 1, `no run block starts ${client}`);
+    for (const block of starters) {
+      assert.match(
+        block,
+        /source scripts\/ios-load-asc-key\.sh/,
+        `a step that starts ${client} must hand it the credential through the environment`,
+      );
+    }
+  }
+
+  // The removed subcommand must not come back:  asc-key.mjs has no exec.
+  assert.doesNotMatch(code, /asc-key\.mjs exec/);
+  assert.doesNotMatch(read("scripts/ios-fleet/asc-key.mjs"), /"exec"/);
+
+  // The loader exports the key and never prints it.
+  const loader = read("scripts/ios-load-asc-key.sh");
+  assert.match(loader, /export ASC_KEY_P8/);
+  assert.doesNotMatch(loader, /echo "\$pem"/);
+  assert.doesNotMatch(loader, /echo "\$ASC_KEY_P8"/);
+  assert.doesNotMatch(loader, /printf[^\n]*\$pem/);
+
+  // The loader is part of the ship, so a change to it runs the ship.
+  assert.ok(pushPaths().includes("scripts/ios-load-asc-key.sh"), "editing the loader must re-ship");
+});
+
 test("the ship carries no standing gate override and always publishes What to Test", () => {
   assert.doesNotMatch(code, /IOS_TF_MIN_INTERVAL_SEC/);
   assert.doesNotMatch(code, /--force-ship/);
@@ -275,8 +316,20 @@ test("the marketing train is 1.0.N and release notes use the owner clock", () =>
 });
 
 test("scheduled gate and key handoff shell tests pass", () => {
-  for (const script of ["scripts/ios-fleet/test-scheduled-ship-gate.sh", "scripts/test-ios-stage-asc-key.sh"]) {
-    const out = execFileSync("bash", [join(ROOT, script)], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  for (const script of [
+    "scripts/ios-fleet/test-scheduled-ship-gate.sh",
+    "scripts/test-ios-stage-asc-key.sh",
+    "scripts/test-ios-load-asc-key.sh",
+  ]) {
+    // A shell test that fails says why on stderr, and the reason belongs in
+    // the failure message:  a CI log that only says "Command failed" is a
+    // dead end.
+    let out = "";
+    try {
+      out = execFileSync("bash", [join(ROOT, script)], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    } catch (error) {
+      assert.fail(`${script} failed: ${String(error.stderr || "").trim() || error.message}`);
+    }
     assert.match(out, /all tests passed/, `${script} did not report success`);
   }
 });
