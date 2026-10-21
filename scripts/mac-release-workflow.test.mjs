@@ -96,10 +96,19 @@ test('Sparkle reads the ASC credentials through the fleet reader, never reposito
   // is sent to fix vault permissions when the fault is the tooling.
   assert.match(tooling, /check_reader/);
   assert.match(tooling, /names --path \/asc/);
-  assert.ok(
-    tooling.indexOf('check_reader || return 1') < tooling.indexOf('node "$repo_root/scripts/stage-asc-key.mjs"'),
-    'the reader has to be proved before the consumer runs',
-  );
+  // The proof is a step of the install, after the token is minted, and the
+  // install is called before the consumer.  The order is asserted at the
+  // call site:  the guard inside the function body only says the function
+  // would prove the reader, not that the release calls it first.
+  const installStart = tooling.indexOf('install_tooling() {');
+  assert.notEqual(installStart, -1, 'the install has to be one function');
+  const installBody = tooling.slice(installStart, tooling.indexOf('\n}\n', installStart));
+  assert.match(installBody, /mint_token \|\| return 1[\s\S]*check_reader \|\| return 1/);
+  const installCall = tooling.indexOf('install_tooling || install_rc=$?');
+  const consumerCall = tooling.indexOf('node "$repo_root/scripts/stage-asc-key.mjs"');
+  assert.notEqual(installCall, -1, 'the release has to call the install');
+  assert.notEqual(consumerCall, -1, 'the release has to call the consumer');
+  assert.ok(installCall < consumerCall, 'the reader has to be proved before the consumer runs');
   // The staging script resolves every credential environment-first, so a
   // value in the job's own environment always wins over the vault.
   const stage = read('scripts/stage-asc-key.mjs');

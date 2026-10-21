@@ -79,9 +79,11 @@ sha256_of() {
   fi
 }
 
-# The CLI's own error text, with the client id and the client secret taken
-# out of it.  A failed login must be diagnosable from the log, and neither
-# half of the identity belongs in a log.
+# A tool's own error text, with the client id, the client secret and the
+# access token taken out of it.  A failed login or a failed read must be
+# diagnosable from the log, and no part of the identity belongs in a log.
+# The token is minted fresh for every job, so a slice of it would identify
+# nothing an operator can act on; the diagnosis names the fault instead.
 scrub() {
   local text="$1"
   if [ -n "${INFISICAL_CLIENT_ID:-}" ]; then
@@ -89,6 +91,9 @@ scrub() {
   fi
   if [ -n "${INFISICAL_CLIENT_SECRET:-}" ]; then
     text="${text//"$INFISICAL_CLIENT_SECRET"/<redacted>}"
+  fi
+  if [ -n "${INFISICAL_TOKEN:-}" ]; then
+    text="${text//"$INFISICAL_TOKEN"/<redacted>}"
   fi
   printf '%s' "$text"
 }
@@ -203,7 +208,7 @@ mint_token() {
 # reference is a credential fault, not a tooling fault, and the consumer names
 # it precisely, so it does not fail this check.
 check_reader() {
-  local reader status detail
+  local reader status detail name missing
   reader="${FLEET_SECRETS:-}"
   if [ -z "$reader" ]; then
     reader="$(command -v fleet-secrets || true)"
@@ -215,12 +220,26 @@ check_reader() {
   status=0
   "$reader" names --path /asc >"$work/names.out" 2>"$work/names.err" || status=$?
   if [ "$status" -eq 0 ]; then
+    # The reader works, so a name the release needs that is not in the list
+    # is a credential missing from the vault.  It is named here, because the
+    # consumer cannot tell an absent name from an unreadable one and would
+    # send the operator to fix the read permissions.
+    missing=""
+    for name in ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8; do
+      grep -qx -- "$name" "$work/names.out" || missing="${missing:+$missing, }$name"
+    done
+    if [ -n "$missing" ]; then
+      fail "the fleet-secrets reader can read Fleet-OPS prod /asc, but ${missing} is not there; the credential is missing from the vault, not unreadable"
+      return 1
+    fi
     say "checked: the fleet-secrets reader can read Fleet-OPS prod /asc"
     return 0
   fi
   if [ "$status" -eq 5 ]; then
     # The fetch reached the vault, so the reader and the token both work and
-    # the fault is in the vault's content.  The consumer reports it.
+    # the fault is in the vault's content.  The consumer reports it:  it keeps
+    # the reader's exit 5 and names the unresolved reference rather than a
+    # missing credential.
     say "checked: the fleet-secrets reader reached Fleet-OPS prod /asc; a value there is an unresolved Infisical reference"
     return 0
   fi
@@ -258,6 +277,13 @@ install_tooling() {
 # tooling, mint the token, prove the reader and run the consumer.
 if [ "${1:-}" = "check-reader" ]; then
   export PATH="$TOOLS_DIR:$PATH"
+  # Without a token the reader falls back to sources a runner does not have
+  # and fails the way a rejected token fails, so an absent token is named
+  # before the reader is asked.
+  if [ -z "${INFISICAL_TOKEN:-}" ]; then
+    fail "no Infisical access token in the environment; export INFISICAL_TOKEN and INFISICAL_FLEET_OPS_PROJECT_ID before proving the reader"
+    exit 1
+  fi
   check_reader || exit 1
   exit 0
 fi

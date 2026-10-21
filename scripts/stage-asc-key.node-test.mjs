@@ -19,7 +19,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { run } from './stage-asc-key.mjs';
+import { run, UNRESOLVED_REFERENCE } from './stage-asc-key.mjs';
 
 // A synthetic fixture, not a credential.  It stands in for the private key
 // so the test can tell a leak from a clean run.
@@ -127,12 +127,14 @@ function runScript(script, { env, args = [] }) {
 
 /** A stub reader that fails the way the fleet's reader fails.  The fleet
  * reader's exit codes are its own: 2 is a refused configuration, 4 is a fetch
- * or auth failure and 5 is an unresolved reference in the vault. */
-function writeStubReader(dir, exitCode, message) {
+ * or auth failure and 5 is an unresolved reference in the vault.  A working
+ * reader lists the names it found on stdout, one per line, as `names` does. */
+function writeStubReader(dir, exitCode, message, names = []) {
   const stubDir = join(dir, 'reader');
   mkdirSync(stubDir, { recursive: true });
   const path = join(stubDir, 'fleet-secrets');
-  writeFileSync(path, `#!/bin/bash\nprintf '%s\\n' ${JSON.stringify(message)} >&2\nexit ${exitCode}\n`, { mode: 0o755 });
+  const listing = names.map((name) => `printf '%s\\n' ${JSON.stringify(name)}\n`).join('');
+  writeFileSync(path, `#!/bin/bash\n${listing}printf '%s\\n' ${JSON.stringify(message)} >&2\nexit ${exitCode}\n`, { mode: 0o755 });
   return path;
 }
 
@@ -481,6 +483,48 @@ test('an unresolved Infisical reference is rejected before anything is staged', 
   }
 });
 
+test('a reader that reports an unresolved reference is not read as a missing credential', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'asc-stage-'));
+  const saved = process.env.FLEET_SECRETS;
+  try {
+    // At the seam:  the fallback hands back the reader's verdict, and the
+    // consumer names the reference.
+    const lines = [];
+    await assert.rejects(
+      run({
+        env: baseEnv(dir),
+        getSecret: stubGetter({ ...VAULT, ASC_KEY_P8: UNRESOLVED_REFERENCE }),
+        log: (l) => lines.push(l),
+      }),
+      (err) => {
+        assert.match(err.message, /ASC_KEY_P8 is still an unresolved Infisical secret reference/);
+        return true;
+      },
+    );
+    assert.ok(!lines.some((l) => l.includes('Missing ASC_KEY_P8')), 'a reference must not read as a missing credential');
+
+    // Through the real fallback:  `fleet-secrets get` exits 5 and prints
+    // nothing, and the exit code is what has to survive.
+    process.env.FLEET_SECRETS = writeStubReader(dir, 5, 'fleet-secrets: unresolved-reference:  ASC_KEY_ID');
+    const env = baseEnv(dir);
+    writeEnvEntry(env.GITHUB_ENV, 'ASC_KEY_P8', KEY);
+    const realLines = [];
+    await assert.rejects(
+      run({ env, log: (l) => realLines.push(l) }),
+      (err) => {
+        assert.match(err.message, /ASC_KEY_ID is still an unresolved Infisical secret reference/);
+        return true;
+      },
+    );
+    assert.ok(!realLines.some((l) => l.includes('Missing ASC_KEY_ID')), 'a reference must not read as a missing credential');
+    assertNoKeySurvives(env.GITHUB_ENV);
+  } finally {
+    if (saved === undefined) delete process.env.FLEET_SECRETS;
+    else process.env.FLEET_SECRETS = saved;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 /** The installer, run for real, with the install made to fail.
  *
  * The install is allowed to fail and the consumer still has to run, because
@@ -579,11 +623,16 @@ test('a broken reader is reported as a reader fault, not as a missing credential
 
     // A reader that cannot authenticate:  the token is at fault, and the
     // message has to say so instead of blaming the vault permissions.
-    const rejected = writeStubReader(dir, 4, 'fleet-secrets: fetch-failed:  exit-1');
+    // The reader's own text is passed through for the diagnosis, so the
+    // stub repeats the token in it:  the token must not reach the log.
+    const rejected = writeStubReader(dir, 4, 'fleet-secrets: fetch-failed:  exit-1 for test-token');
     const rejectedResult = await runScript(script, { env: { ...base, FLEET_SECRETS: rejected }, args: ['check-reader'] });
     assert.notEqual(rejectedResult.code, 0, 'a reader that cannot authenticate must fail the check');
     assert.match(rejectedResult.stderr, /access token was rejected/, 'the message must name the token');
     assert.doesNotMatch(rejectedResult.stderr, /Missing ASC_KEY_ID/, 'a reader fault must not read as a missing credential');
+    assert.ok(!rejectedResult.stderr.includes('test-token'), 'the access token must not reach the log');
+    assert.ok(!rejectedResult.stdout.includes('test-token'), 'the access token must not reach the log');
+    assert.match(rejectedResult.stderr, /fetch-failed:  exit-1 for <redacted>/, 'the rest of the detail survives');
 
     // A reader that refuses the request:  the tooling is at fault.
     const refused = writeStubReader(dir, 2, 'fleet-secrets: refusing Infisical environment');
@@ -597,11 +646,29 @@ test('a broken reader is reported as a reader fault, not as a missing credential
     const unresolvedResult = await runScript(script, { env: { ...base, FLEET_SECRETS: unresolved }, args: ['check-reader'] });
     assert.equal(unresolvedResult.code, 0, 'an unresolved reference is not a reader fault');
 
-    // A working reader passes.
-    const working = writeStubReader(dir, 0, '');
+    // A working reader that finds every name the release needs passes.
+    const working = writeStubReader(dir, 0, '', ['ASC_ISSUER_ID', 'ASC_KEY_ID', 'ASC_KEY_P8', 'OTHER_NAME']);
     const workingResult = await runScript(script, { env: { ...base, FLEET_SECRETS: working }, args: ['check-reader'] });
     assert.equal(workingResult.code, 0, 'a working reader must pass the check');
     assert.match(workingResult.stdout, /can read Fleet-OPS prod \/asc/, 'a passing check says so');
+
+    // A working reader that does not find a name the release needs:  the
+    // credential is missing from the vault, and the check names it instead
+    // of letting the consumer blame the read permissions.
+    const partial = writeStubReader(dir, 0, '', ['ASC_ISSUER_ID', 'ASC_KEY_ID', 'ASC_KEY_P8_OLD']);
+    const partialResult = await runScript(script, { env: { ...base, FLEET_SECRETS: partial }, args: ['check-reader'] });
+    assert.notEqual(partialResult.code, 0, 'a name the release needs must be in the vault');
+    assert.match(partialResult.stderr, /but ASC_KEY_P8 is not there/, 'the message must name the missing credential');
+    assert.doesNotMatch(partialResult.stderr, /ASC_KEY_ID|ASC_ISSUER_ID/, 'only the missing name is reported');
+
+    // No token in the environment:  the reader would fail the way a rejected
+    // token fails, so the absent token is named before the reader is asked.
+    const noToken = { ...base, FLEET_SECRETS: working };
+    delete noToken.INFISICAL_TOKEN;
+    const noTokenResult = await runScript(script, { env: noToken, args: ['check-reader'] });
+    assert.notEqual(noTokenResult.code, 0, 'a check without a token must fail');
+    assert.match(noTokenResult.stderr, /no Infisical access token in the environment/, 'the message must name the absent token');
+    assert.doesNotMatch(noTokenResult.stderr, /was rejected/, 'an absent token is not a rejected one');
 
     // No reader at all is a tooling fault, and it is named as one.
     const missingResult = await runScript(script, { env: base, args: ['check-reader'] });

@@ -162,10 +162,23 @@ export function removeEnvironmentEntries(path, names) {
   return true;
 }
 
+/** The reader's own exit code for a value that came back as an unresolved
+ *  Infisical reference.  `fleet-secrets get` prints nothing in that case, so
+ *  the code is the only thing that says what went wrong. */
+const READER_EXIT_UNRESOLVED = 5;
+
+/** What the approved fallback returns when the reader exited 5:  the vault
+ *  was reached and the value is an unexpanded reference.  It is kept apart
+ *  from an empty value, because an empty value reads as a missing
+ *  credential and sends the operator to fix the read permissions. */
+export const UNRESOLVED_REFERENCE = Symbol('unresolved Infisical reference');
+
 /** The approved fallback: `fleet-secrets get <name> --path <folder>` reads
  * Fleet-OPS Infisical prod /asc.  The value is captured, never echoed, and
- * the failure is an empty string rather than an exception, so a missing
- * tool reads as a missing credential. */
+ * a failure is an empty string rather than an exception, so a missing tool
+ * reads as a missing credential.  The one exception is the reader's exit 5,
+ * an unresolved reference, which comes back as UNRESOLVED_REFERENCE so the
+ * consumer names it as one. */
 export function fleetSecretsGet(name, folder) {
   const localBin = join(homedir(), '.local', 'bin', 'fleet-secrets');
   const bin = process.env.FLEET_SECRETS || (existsSync(localBin) ? localBin : 'fleet-secrets');
@@ -174,7 +187,8 @@ export function fleetSecretsGet(name, folder) {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
     }).replace(/\n$/, '');
-  } catch {
+  } catch (err) {
+    if (err && err.status === READER_EXIT_UNRESOLVED) return UNRESOLVED_REFERENCE;
     return '';
   }
 }
@@ -200,12 +214,14 @@ function checkCredential(log, name, value, malformed = false) {
   if (malformed) {
     fail(log, `${name} is malformed in the job environment file: its multiline block is not terminated, so the file was truncated or a step that was writing it was interrupted; verify the CI identity can read Fleet-OPS prod /asc.`);
   }
+  const unresolved = () => fail(log, `${name} is still an unresolved Infisical secret reference in Fleet-OPS prod /asc; check the target exists and the CI identity can read the referenced folder.`);
+  // The reader reached the vault and refused the value as a reference, so
+  // this is not a missing credential and must not read as one.
+  if (value === UNRESOLVED_REFERENCE) unresolved();
   if (typeof value !== 'string' || value.trim() === '') {
     fail(log, `Missing ${name} in Fleet-OPS prod /asc; verify the CI identity has read access to Fleet-OPS prod /asc.`);
   }
-  if (isUnresolvedReference(value)) {
-    fail(log, `${name} is still an unresolved Infisical secret reference in Fleet-OPS prod /asc; check the target exists and the CI identity can read the referenced folder.`);
-  }
+  if (isUnresolvedReference(value)) unresolved();
   return value;
 }
 
@@ -267,7 +283,8 @@ export async function run({
       const written = fromFile.get(name);
       if (typeof written === 'string' && written.trim() !== '') return { value: written, malformedEntry: malformed.has(name) };
       const fetched = await getSecret(name, SECRET_FOLDER);
-      return { value: typeof fetched === 'string' ? fetched : '', malformedEntry: malformed.has(name) };
+      const value = typeof fetched === 'string' || fetched === UNRESOLVED_REFERENCE ? fetched : '';
+      return { value, malformedEntry: malformed.has(name) };
     };
 
     const keyIdSrc = await resolve('ASC_KEY_ID');
