@@ -17,6 +17,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, wri
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import { run } from './stage-asc-key.mjs';
 
@@ -109,6 +110,19 @@ function assertNoKeySurvives(envPath) {
   assert.ok(!('ASC_KEY_P8' in imported), 'a later step must not be handed the key');
   assert.equal(imported.ASC_KEY_P8, undefined, 'a later step must see no value for the key');
   return imported;
+}
+
+/** Run a shell script and collect what it said and how it ended.  Used for
+ * the installer, which is a shell script and not a function. */
+function runScript(script, { env }) {
+  return new Promise((resolve) => {
+    const child = spawn('bash', [script], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d) => { stdout += d; });
+    child.stderr.on('data', (d) => { stderr += d; });
+    child.on('close', (code) => resolve({ code, stdout, stderr }));
+  });
 }
 
 test('the key is staged to a mode-600 file and only its path is published', async () => {
@@ -451,6 +465,67 @@ test('an unresolved Infisical reference is rejected before anything is staged', 
     );
     assert.ok(!existsSync(env.GITHUB_ENV) || !readFileSync(env.GITHUB_ENV, 'utf8').includes('ASC_KEY_PATH'));
     assert.ok(lines.some((l) => l.includes('ASC_KEY_P8')), 'the error names the secret');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/** The installer, run for real, with the install made to fail.
+ *
+ * The install is allowed to fail and the consumer still has to run, because
+ * the consumer is what removes a key-bearing entry from the job's environment
+ * file.  The step then reports the status of the command that actually
+ * failed, so a failed install is never reported as a clean run.
+ *
+ * The install is made to fail with a stub `curl` on PATH, so nothing here
+ * reaches the network and the pinned download cannot succeed.  The credential
+ * the consumer needs is already in the job's environment file, which is the
+ * case this path exists for:  a key was written by an earlier step, the
+ * tooling could not be installed, and the key must still not survive.
+ */
+test('an installer failure still runs the consumer and clears the key', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'asc-install-'));
+  try {
+    const envFile = join(dir, 'env');
+    writeEnvEntry(envFile, 'ASC_KEY_ID', 'FILEKEYID');
+    writeEnvEntry(envFile, 'ASC_ISSUER_ID', 'FILEISSUER');
+    writeEnvEntry(envFile, 'ASC_KEY_P8', KEY);
+
+    // A stub curl that always fails:  the pinned download cannot succeed.
+    const stubDir = join(dir, 'stub');
+    mkdirSync(stubDir, { recursive: true });
+    writeFileSync(join(stubDir, 'curl'), '#!/usr/bin/env bash\nexit 22\n', { mode: 0o755 });
+
+    const home = join(dir, 'home');
+    mkdirSync(home, { recursive: true });
+    const staging = join(dir, 'staging');
+    mkdirSync(staging, { recursive: true });
+
+    const result = await runScript(fileURLToPath(new URL('install-release-secrets-tooling.sh', import.meta.url)), {
+      env: {
+        ...process.env,
+        HOME: home,
+        PATH: `${stubDir}:${process.env.PATH}`,
+        GITHUB_ENV: envFile,
+        ASC_STAGING_ROOT: staging,
+        INFISICAL_PROJECT_ID: 'test-project-id',
+        INFISICAL_CLIENT_ID: 'test-client-id',
+        INFISICAL_CLIENT_SECRET: 'test-client-secret',
+      },
+    });
+
+    // The install failed, and the step says so instead of reporting success.
+    assert.notEqual(result.code, 0, 'a failed install must fail the step');
+    assert.match(result.stderr, /could not be downloaded/, 'the failure must name what failed');
+
+    // The consumer ran anyway:  it staged the key, so the path crossed
+    // forward, and the key-bearing entry is out of the environment file.
+    const imported = assertNoKeySurvives(envFile);
+    assert.ok(imported.ASC_KEY_PATH, 'the consumer has to run, so the key was staged');
+
+    // And the key never reached the log.
+    assert.ok(!result.stdout.includes(KEY_MARKER), 'the key bytes must not reach stdout');
+    assert.ok(!result.stderr.includes(KEY_MARKER), 'the key bytes must not reach stderr');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
