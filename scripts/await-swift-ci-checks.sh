@@ -166,7 +166,7 @@ while true; do
       exit 2
     fi
     if [[ "$redispatches" -gt 0 ]]; then
-      echo "::error::Timed out after ${DEADLINE_SECONDS}s waiting for Swift CI on ${SHA}: ${summary} (${redispatches} replacement run(s) dispatched)"
+      echo "::error::Timed out after ${DEADLINE_SECONDS}s waiting for Swift CI on ${SHA}: ${summary} (${redispatches} replacement run(s) re-run)"
     else
       echo "::error::Timed out after ${DEADLINE_SECONDS}s waiting for Swift CI on ${SHA}: ${summary}"
     fi
