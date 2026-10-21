@@ -132,7 +132,16 @@ function serve(options) {
             attributes: { version: "243" },
             relationships: { preReleaseVersion: { data: { type: "preReleaseVersions", id: "pre-1" } } }
           },
-          included: [{ type: "preReleaseVersions", id: "pre-1", attributes: { version: "1.0.243" } }]
+          //  The pre-release version carries `version`, and the live API
+          //  answers with no `versionString` on that resource at all.  A
+          //  `versionString` here would be a different field, and the
+          //  command must not read it:  `versionString` belongs to an
+          //  appStoreVersion.
+          included: [{
+            type: "preReleaseVersions",
+            id: "pre-1",
+            attributes: { version: "1.0.243", versionString: "9.9.9", platform: "IOS" }
+          }]
         });
       }
       if (url === `/v1/appStoreVersions/${VERSION_ID}`) {

@@ -784,9 +784,12 @@ async function main() {
     const preRelease = hasPreRelease
       ? included.find((item) => isPlainObject(item) && item.id === preReleaseId)
       : null;
-    //  The marketing version lives on the pre-release version as `version`
-    //  (see the field map above); `versionString` belongs to
-    //  appStoreVersions, which is where the version's own name is read.
+    //  The marketing version lives on the pre-release version as `version`.
+    //  That is not a guess:  the live API answers
+    //  GET /v1/builds/<id>?include=preReleaseVersion with
+    //  included[].attributes.version = "1.0.235" and no `versionString` on
+    //  that resource at all.  `versionString` is the field of an
+    //  appStoreVersion, which is where the version's own name is read above.
     const marketing = preRelease && isPlainObject(preRelease.attributes)
       ? preRelease.attributes.version
       : null;
