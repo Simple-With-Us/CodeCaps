@@ -24,7 +24,7 @@ import { run } from './stage-asc-key.mjs';
 // A synthetic fixture, not a credential.  It stands in for the private key
 // so the test can tell a leak from a clean run.
 const KEY_MARKER = 'SYNTHETIC-MULTILINE-FIXTURE-DO-NOT-USE';
-const KEY = `-----BEGIN PRIVATE KEY-----\n${KEY_MARKER}\n-----END PRIVATE KEY-----`;
+const KEY = `-----BEGIN PRIVATE KEY-----\n${KEY_MARKER}\n-----END PRIVATE KEY-----`; // gitleaks:allow
 const VAULT = {
   ASC_KEY_ID: 'STUBKEYID',
   ASC_ISSUER_ID: 'STUBISSUER',
@@ -370,7 +370,7 @@ test('the environment is looked up first, before the approved fallback', async (
     const env = baseEnv(dir, {
       ASC_KEY_ID: 'ENVKEYID',
       ASC_ISSUER_ID: 'ENVISSUER',
-      ASC_KEY_P8: `-----BEGIN PRIVATE KEY-----\nENVIRONMENT-COPY\n-----END PRIVATE KEY-----`,
+      ASC_KEY_P8: `-----BEGIN PRIVATE KEY-----\nENVIRONMENT-COPY\n-----END PRIVATE KEY-----`, // gitleaks:allow
     });
     const getter = stubGetter();
     await run({ env, getSecret: getter, log: () => {} });
