@@ -70,11 +70,11 @@ Each reset alarms once.  The state behind it is saved on every refresh, so a res
 
 None of the above ever asks for a typed credential — every reader reuses a session or file the CLI already created.
 
-CodeCaps reads Claude Code's saved login through macOS's own `security` tool, so a fresh install needs no setup and never raises a Keychain panel of its own.  The **Allow Access To Claude Code** button on the Claude row (Console → Settings → Sources & Fleet) appears only if macOS explicitly refuses that read; press it and choose **Always Allow** in the panel macOS puts up.  On a heavily loaded Mac the Claude row may briefly read "temporarily unavailable" and recover on the next refresh.  CodeCaps only ever reads Claude Code's saved login: it never writes to, re-permissions, or removes it.
+CodeCaps reads Claude Code's saved login through macOS's own `security` tool, so a fresh install needs no setup and never raises a Keychain panel of its own.  The **Allow Access To Claude Code** button on the Claude row (Console → Dashboard → Sources & Fleet) appears only if macOS explicitly refuses that read; press it and choose **Always Allow** in the panel macOS puts up.  On a heavily loaded Mac the Claude row may briefly read "temporarily unavailable" and recover on the next refresh.  CodeCaps only ever reads Claude Code's saved login: it never writes to, re-permissions, or removes it.
 
 ## Fleet Push And Pull
 
-Both off by default, configured on Console → Settings → Sources & Fleet.
+Both off by default, configured on Console → Dashboard → Sources & Fleet.
 
 **Push formats** — two, chosen when pushing.  The producer id is `codecaps` (with `agent-bar` retained as a recognized legacy alias for seamless backwards compatibility).
 
@@ -201,7 +201,7 @@ Console's sidebar has eight Dashboard pages.
 - **Platforms** — platform list order, shared by Glance, Console, and the menu bar.
 - **Logo Style** — the brand mark variant used across Glance, Console, and the menu bar.
 - **Sources & Fleet** — three groups: **This Mac** (readers on/off, one status row per platform), **Share This Mac** (push: Push Endpoint, Push Token, Payload Format, Save & Push Now), **Pull The Fleet** (pull: Quota Endpoint, Read Token, Save & Fetch Now).  Both fleet groups also offer Forget Token and, only when a saved token can't be read back, Re-Authorize Saved Token.
-- **Alerts & Alarms** — runaway and cap notifications, thresholds, and quiet hours.
+- **Alerts & Alarms** — runaway and cap notifications, alert thresholds, and the reset-alarm sound.
 - **Appearance** — Light, Dark, or System; System follows your Mac's setting and is the default.
 - **Infisical Sync** — the Infisical project and environment that supply shared settings.
 - **About** — version, push/pull/local-reader status, and a project page link.
