@@ -12,7 +12,7 @@
 //
 // Run: node --test scripts/stage-asc-key.node-test.mjs
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -114,9 +114,9 @@ function assertNoKeySurvives(envPath) {
 
 /** Run a shell script and collect what it said and how it ended.  Used for
  * the installer, which is a shell script and not a function. */
-function runScript(script, { env, args = [] }) {
+function runScript(script, { env, args = [], shell = '/bin/bash' }) {
   return new Promise((resolve) => {
-    const child = spawn('/bin/bash', [script, ...args], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(shell, [script, ...args], { env, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (d) => { stdout += d; });
@@ -741,5 +741,124 @@ test('a credential is previewed only when the middle of it is really hidden', as
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  }
+});
+
+/** The shells the script has to be safe in.  The replacement in a bash
+ * substitution expands an ampersand to the text that matched in bash 5.2 and
+ * later, so that failure only appears in the newer shell; the test runs in
+ * every bash it can find so both generations are covered. */
+function shells() {
+  const found = ['/bin/bash'];
+  for (const candidate of ['/opt/homebrew/bin/bash', '/usr/local/bin/bash', '/opt/homebrew/bin/bash5']) {
+    if (!existsSync(candidate)) continue;
+    let version = '';
+    try {
+      version = spawnSync(candidate, ['--version']).stdout.toString();
+    } catch {
+      continue;
+    }
+    const match = version.match(/version (\d+)\.(\d+)/);
+    if (!match) continue;
+    const major = Number(match[1]);
+    const minor = Number(match[2]);
+    if (major > 5 || (major === 5 && minor >= 2)) found.push(candidate);
+  }
+  return found;
+}
+
+test('a credential that carries an ampersand is never expanded back into the log', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'asc-amp-'));
+  try {
+    const script = fileURLToPath(new URL('install-release-secrets-tooling.sh', import.meta.url));
+    const home = join(dir, 'home');
+    mkdirSync(home, { recursive: true });
+
+    // The replacement in a bash substitution is a pattern, and in bash 5.2
+    // and later an ampersand in it expands to the text that matched, which
+    // here would be the whole credential.  The ampersand sits in the first
+    // eight characters, so it is in the part of the value a preview shows.
+    const token = 'abc&efghijklmnopqrst';
+    const base = {
+      ...process.env,
+      HOME: home,
+      PATH: '/usr/bin:/bin',
+      INFISICAL_TOKEN: token,
+      INFISICAL_FLEET_OPS_PROJECT_ID: '11111111-2222-3333-4444-555555555555'
+    };
+    const rejected = writeStubReader(dir, 4, `fleet-secrets: fetch-failed:  exit-1 for ${token}`);
+
+    for (const shell of shells()) {
+      const result = await runScript(script, { env: { ...base, FLEET_SECRETS: rejected }, args: ['check-reader'], shell });
+      assert.notEqual(result.code, 0, 'a reader that cannot authenticate must fail the check');
+      assert.ok(!result.stderr.includes(token), `the access token must not reach the log (${shell})`);
+      assert.ok(!result.stdout.includes(token), `the access token must not reach stdout (${shell})`);
+      assert.ok(!result.stderr.includes('&'), `no ampersand may reach the log (${shell})`);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the long lived client credentials are redacted whole', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'asc-client-'));
+  try {
+    const script = fileURLToPath(new URL('install-release-secrets-tooling.sh', import.meta.url));
+    const home = join(dir, 'home');
+    mkdirSync(home, { recursive: true });
+
+    // The client id and the client secret stand for months and the runner
+    // masks them by value, so a preview of either would defeat that masking
+    // and put twelve characters of a standing credential in a public log.
+    const clientId = 'client-id-abcdefghijklmnop';
+    const clientSecret = 'client-secret-abcdefghijklmnop';
+    const base = {
+      ...process.env,
+      HOME: home,
+      PATH: '/usr/bin:/bin',
+      INFISICAL_CLIENT_ID: clientId,
+      INFISICAL_CLIENT_SECRET: clientSecret,
+      INFISICAL_TOKEN: 'abcdefghijklmnopqrstuvwxyz0123',
+      INFISICAL_FLEET_OPS_PROJECT_ID: '11111111-2222-3333-4444-555555555555'
+    };
+    const rejected = writeStubReader(dir, 4, `fleet-secrets: fetch-failed:  exit-1 for ${clientId} and ${clientSecret}`);
+    const result = await runScript(script, { env: { ...base, FLEET_SECRETS: rejected }, args: ['check-reader'] });
+
+    assert.notEqual(result.code, 0, 'a reader that cannot authenticate must fail the check');
+    assert.ok(!result.stderr.includes(clientId), 'the client id must not reach the log');
+    assert.ok(!result.stderr.includes(clientSecret), 'the client secret must not reach the log');
+    assert.ok(!result.stderr.includes('client-id-abc'), 'no slice of the client id may reach the log');
+    assert.ok(!result.stderr.includes('client-sec'), 'no slice of the client secret may reach the log');
+    assert.match(result.stderr, /for <redacted>/, 'the credentials are redacted whole');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a name the environment carries as whitespace is still required in the vault', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'asc-blank-'));
+  try {
+    const script = fileURLToPath(new URL('install-release-secrets-tooling.sh', import.meta.url));
+    const home = join(dir, 'home');
+    mkdirSync(home, { recursive: true });
+
+    const base = {
+      ...process.env,
+      HOME: home,
+      PATH: '/usr/bin:/bin',
+      INFISICAL_TOKEN: 'abcdefghijklmnopqrstuvwxyz0123',
+      INFISICAL_FLEET_OPS_PROJECT_ID: '11111111-2222-3333-4444-555555555555'
+    };
+
+    // The consumer trims a value and refuses one that holds nothing but
+    // whitespace, so a name the environment carries in that shape is not
+    // resolved from there and the vault still has to carry it.
+    const reader = writeStubReader(dir, 0, '', ['ASC_ISSUER_ID', 'ASC_KEY_P8']);
+    const result = await runScript(script, { env: { ...base, FLEET_SECRETS: reader, ASC_KEY_ID: '   ' }, args: ['check-reader'] });
+
+    assert.notEqual(result.code, 0, 'a name the environment holds only whitespace is not resolved from there');
+    assert.match(result.stderr, /but ASC_KEY_ID is not there/, 'the message must name the credential the vault has to carry');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });

@@ -40,6 +40,15 @@
 set +o xtrace
 set -euo pipefail
 
+# The replacement in a bash substitution is a pattern, and in bash 5.2 and
+# later an ampersand in it expands to the text that matched, which here would
+# be the credential itself.  The option is turned off where the shell has it,
+# and the preview refuses a value that could put one in the replacement, so
+# neither shell can expand one back into the secret.
+if shopt -q patsub_replacement 2>/dev/null; then
+  shopt -u patsub_replacement
+fi
+
 INFISICAL_CLI_VERSION="0.44.4"
 INFISICAL_CLI_SHA256_arm64="02ccd2ce6e1d80eeafb06022697fe7f3c6434ba757b31590f2ff8f88d6ccaf51"
 INFISICAL_CLI_SHA256_x86_64="35a6af67d361bf4f14ec814c08143293dd00f35eb0ad6a171eec967ca5c9585e"
@@ -91,8 +100,17 @@ sha256_of() {
 # together; those are redacted outright instead.  The message that carries the
 # preview names the credential, so an operator still knows which value was
 # refused without any part of the value being shown.
+#
+# The preview also has to be an ordinary string.  The replacement in a bash
+# substitution is a pattern, and in bash 5.2 and later an ampersand in it
+# expands to the text that matched, which here would be the credential
+# itself.  A value that could put one in the preview is refused, so the
+# preview can only ever be text.
 mask() {
   local value="$1"
+  case "$value" in
+    *[\&]*) printf '%s' "<redacted>"; return ;;
+  esac
   if [ "${#value}" -le 12 ]; then
     printf '%s' "<redacted>"
     return
@@ -104,17 +122,22 @@ mask() {
 # access token taken out of it.  A failed login or a failed read must be
 # diagnosable from the log, and no part of the identity belongs in a log.
 # The token is minted fresh for every job, so a slice of it would identify
-# nothing an operator can act on; the diagnosis names the fault instead.  The
-# masked preview is what tells the operator which value was refused.
+# nothing an operator can act on; the diagnosis names the fault instead.
+#
+# The client id and the client secret are long lived and the runner masks
+# them by value, so they are redacted whole:  a preview of either would
+# defeat that masking and put twelve characters of a standing credential in
+# a public log.  The access token is minted for one job, so it may carry a
+# preview, and that preview is what tells the operator which value was
+# refused.
 scrub() {
-  local text="$1" masked
+  local text="$1" masked redacted
+  redacted='<redacted>'
   if [ -n "${INFISICAL_CLIENT_ID:-}" ]; then
-    masked="$(mask "$INFISICAL_CLIENT_ID")"
-    text="${text//"$INFISICAL_CLIENT_ID"/${masked}}"
+    text="${text//"$INFISICAL_CLIENT_ID"/${redacted}}"
   fi
   if [ -n "${INFISICAL_CLIENT_SECRET:-}" ]; then
-    masked="$(mask "$INFISICAL_CLIENT_SECRET")"
-    text="${text//"$INFISICAL_CLIENT_SECRET"/${masked}}"
+    text="${text//"$INFISICAL_CLIENT_SECRET"/${redacted}}"
   fi
   if [ -n "${INFISICAL_TOKEN:-}" ]; then
     masked="$(mask "$INFISICAL_TOKEN")"
@@ -253,10 +276,13 @@ check_reader() {
     for name in ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8; do
       # A name the job's own environment already carries is resolved from
       # there first (stage-asc-key.mjs reads the environment before the
-      # vault), so its absence from the vault is not a fault.
-      if [ -n "${!name:-}" ]; then
-        continue
-      fi
+      # vault), so its absence from the vault is not a fault.  The consumer
+      # trims a value before it uses it and refuses one that holds nothing
+      # but whitespace, so a name the environment carries in that shape is
+      # not resolved from there either and has to come from the vault.
+      case "${!name:-}" in
+        *[![:space:]]*) continue ;;
+      esac
       grep -qx -- "$name" "$work/names.out" || missing="${missing:+$missing, }$name"
     done
     if [ -n "$missing" ]; then
