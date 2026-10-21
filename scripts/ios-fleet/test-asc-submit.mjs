@@ -6,7 +6,7 @@
 // server:  no network, no fleet-secrets, no real secret.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { generateKeyPairSync } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -21,6 +21,9 @@ const root = mkdtempSync(join(tmpdir(), "asc-submit-test-"));
 const keyPath = join(root, "synthetic.p8");
 writeFileSync(keyPath, generateKeyPairSync("ec", { namedCurve: "prime256v1" }).privateKey
   .export({ type: "pkcs8", format: "pem" }));
+//  A private key only its owner may read, which is what the client now
+//  requires of a file it is pointed at.
+chmodSync(keyPath, 0o600);
 
 const VERSION_ID = "version-1";
 const APP_ID = "app-1";

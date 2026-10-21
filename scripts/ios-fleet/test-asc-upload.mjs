@@ -11,7 +11,7 @@
 // and without a real secret anywhere.  No network, no fleet-secrets.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { generateKeyPairSync } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -28,6 +28,9 @@ const root = mkdtempSync(join(tmpdir(), "asc-upload-test-"));
 const keyPath = join(root, "synthetic.p8");
 writeFileSync(keyPath, generateKeyPairSync("ec", { namedCurve: "prime256v1" }).privateKey
   .export({ type: "pkcs8", format: "pem" }));
+//  A private key only its owner may read, which is what the client now
+//  requires of a file it is pointed at.
+chmodSync(keyPath, 0o600);
 
 // A stub PNG: the script only reads the IHDR width and height out of bytes
 // 16..23 to decide which screenshot set the file belongs to, and never looks

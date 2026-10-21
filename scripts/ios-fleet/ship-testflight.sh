@@ -208,6 +208,25 @@ fs_get() {
 # ASC_KEY_PATH/ASC_KEY_ID/ASC_ISSUER_ID in the environment, else Infisical.
 load_secrets() {
   AUTH_MODE="none"
+  local kid="${ASC_KEY_ID:-}" iss="${ASC_ISSUER_ID:-}" p8="" fkid="" lower
+  # A secret-valued environment variable beats a path on disk.  ASC_KEY_P8 is
+  # what fleet-secrets hands out, so an operator who exported the key gets
+  # that key used; a leftover ASC_KEY_PATH must not decide which credential
+  # signs the upload.  The hosted runner never exports ASC_KEY_P8 (the
+  # multiline PEM stays out of GITHUB_ENV), so this branch is the local
+  # operator's path and leaves the runner's behaviour untouched.
+  if [[ -n "$kid" && -n "$iss" && -n "${ASC_KEY_P8:-}" ]]; then
+    if [[ -z "$ASC_TMP_DIR" ]]; then
+      ASC_TMP_DIR="$(umask 077; mktemp -d "${TMPDIR:-/tmp}/asc-key.XXXXXX")"
+    fi
+    ( umask 077; printf '%s\n' "$ASC_KEY_P8" > "${ASC_TMP_DIR}/AuthKey_${kid}.p8" )
+    chmod 600 "${ASC_TMP_DIR}/AuthKey_${kid}.p8"
+    export ASC_KEY_ID="$kid" ASC_ISSUER_ID="$iss" ASC_KEY_PATH="${ASC_TMP_DIR}/AuthKey_${kid}.p8"
+    export API_PRIVATE_KEYS_DIR="$ASC_TMP_DIR"
+    ASC_KEY_P8=""
+    AUTH_MODE="api_key"
+    return 0
+  fi
   if [[ -n "${ASC_KEY_ID:-}" && -n "${ASC_ISSUER_ID:-}" && -n "${ASC_KEY_PATH:-}" ]]; then
     if [[ -f "$(expand_tilde "$ASC_KEY_PATH")" ]]; then
       AUTH_MODE="api_key"
@@ -215,7 +234,6 @@ load_secrets() {
     fi
     log "ASC_KEY_PATH set but file missing (not printing path contents)"
   fi
-  local kid="${ASC_KEY_ID:-}" iss="${ASC_ISSUER_ID:-}" p8="" fkid="" lower
   # The key id, issuer and private key must belong together:  with nothing named in the
   # environment all three come from /asc;  an env key id that is not the /asc one gets its
   # own .p8 from /authkey-<id>-p8, never the /asc key.

@@ -11,7 +11,7 @@
 // port, with a synthetic key.  No network, no fleet-secrets, no real secret.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { generateKeyPairSync } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -26,6 +26,10 @@ const root = mkdtempSync(join(tmpdir(), "asc-client-test-"));
 const keyPath = join(root, "synthetic.p8");
 writeFileSync(keyPath, generateKeyPairSync("ec", { namedCurve: "prime256v1" }).privateKey
   .export({ type: "pkcs8", format: "pem" }));
+//  A private key only its owner may read, which is what the client now
+//  requires of a file it is pointed at.  The staged key that
+//  ios-stage-asc-key.sh publishes is mode 600 for the same reason.
+chmodSync(keyPath, 0o600);
 
 const PROD = "https://api.appstoreconnect.apple.com";
 
@@ -37,6 +41,13 @@ function run(args, env = {}) {
         ASC_KEY_ID: "SYNTHETICKEYID1",
         ASC_ISSUER_ID: "synthetic-issuer",
         ASC_KEY_PATH: keyPath,
+        //  The credential sources are cleared so an ambient ASC_KEY_P8 or
+        //  APPLE_API_* on the machine running the suite cannot decide which
+        //  credential a test gets.
+        ASC_KEY_P8: "",
+        APPLE_API_KEY_ID: "",
+        APPLE_API_ISSUER_ID: "",
+        APPLE_API_KEY_P8_BASE64: "",
         ...env
       },
       stdio: ["ignore", "pipe", "pipe"]
@@ -220,6 +231,7 @@ test("two different keys do not get the same masked preview", async () => {
   const otherKeyPath = join(root, "other-synthetic.p8");
   writeFileSync(otherKeyPath, generateKeyPairSync("ec", { namedCurve: "prime256v1" }).privateKey
     .export({ type: "pkcs8", format: "pem" }));
+  chmodSync(otherKeyPath, 0o600);
 
   const server = createServer((req, res) => {
     res.writeHead(401, { "Content-Type": "text/plain" });
@@ -272,4 +284,85 @@ test("a large payload is not truncated on the way out", async () => {
     result.stdout.length >= body.length,
     `the payload was cut short: ${result.stdout.length} of ${body.length} bytes arrived`
   );
+});
+
+test("a secret in the environment wins over a key file", async () => {
+  //  Two credential sources are present: the key the operator exported and a
+  //  path left over from an earlier step.  The secret has to be the one used,
+  //  because a file is the weakest source and the path must never decide which
+  //  credential signs the request.
+  const secretPem = generateKeyPairSync("ec", { namedCurve: "prime256v1" }).privateKey
+    .export({ type: "pkcs8", format: "pem" });
+  const server = createServer((req, res) => {
+    res.writeHead(401, { "Content-Type": "text/plain" });
+    res.end("unauthorized");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  let result;
+  try {
+    result = await run(["GET", "/v1/apps"], {
+      ASC_API_BASE: base,
+      ASC_KEY_P8: secretPem,
+      ASC_KEY_PATH: join(root, "never-read.p8")
+    });
+  } finally {
+    server.close();
+  }
+  assert.match(
+    result.stderr,
+    /asc-auth: using ASC_KEY_P8 environment/,
+    `the exported secret was not the credential in play:\n${result.stderr}`
+  );
+  assert.doesNotMatch(result.stderr, /using ASC_KEY_PATH environment/);
+});
+
+test("a key file that is not a private key is refused, and its content stays out of the log", async () => {
+  //  The path names a real file, so the client used to read it, treat it as
+  //  key material, and print a masked preview of it when App Store Connect
+  //  refused the credential.  A path that names the wrong file has to be
+  //  refused instead, and the file's content must never reach a log line.
+  const notAKey = join(root, "not-a-key.txt");
+  writeFileSync(notAKey, "hunter2 this is not a private key\n");
+  chmodSync(notAKey, 0o600);
+  let requests = 0;
+  const server = createServer((req, res) => {
+    requests += 1;
+    res.writeHead(401, { "Content-Type": "text/plain" });
+    res.end("unauthorized");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  let result;
+  try {
+    result = await run(["GET", "/v1/apps"], { ASC_API_BASE: base, ASC_KEY_PATH: notAKey });
+  } finally {
+    server.close();
+  }
+  assert.equal(result.code, 1, `expected the refusal exit, got ${result.code}: ${result.stderr}`);
+  assert.match(result.stderr, /does not hold a PEM private key/);
+  assert.doesNotMatch(result.stderr, /hunter2/, "the refused file's content reached the log");
+  assert.equal(requests, 0, "a refused credential must not reach App Store Connect");
+});
+
+test("a key file other users can read is refused", async () => {
+  //  A private key another user can read is already leaked, so the client
+  //  must not treat it as usable key material in the first place.
+  const loose = join(root, "loose.p8");
+  writeFileSync(loose, generateKeyPairSync("ec", { namedCurve: "prime256v1" }).privateKey
+    .export({ type: "pkcs8", format: "pem" }));
+  chmodSync(loose, 0o644);
+  const result = await run(["GET", "/v1/apps"], { ASC_KEY_PATH: loose });
+  assert.equal(result.code, 1, `expected the refusal exit, got ${result.code}: ${result.stderr}`);
+  assert.match(result.stderr, /readable by others/);
+});
+
+test("a symlinked key path is refused rather than followed", async () => {
+  //  A symlink is followed by every ordinary file read, so it would let a
+  //  path that looks like a key file resolve to something else entirely.
+  const link = join(root, "linked.p8");
+  symlinkSync(keyPath, link);
+  const result = await run(["GET", "/v1/apps"], { ASC_KEY_PATH: link });
+  assert.equal(result.code, 1, `expected the refusal exit, got ${result.code}: ${result.stderr}`);
+  assert.match(result.stderr, /is not a regular file/);
 });

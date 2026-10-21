@@ -81,6 +81,31 @@ env ASC_KEY_ID=ENVKEY0001 ASC_ISSUER_ID=env-issuer ASC_KEY_PATH="${tmp}/env-key.
 ' || fail "environment credentials were not honored"
 [[ ! -s "$FAKE_LOG" ]] || fail "fleet-secrets was called although the environment was complete"
 
+# 2a. A secret in the environment beats a key file:  the operator handed the key to the
+# process, so a leftover path must not decide which credential signs the upload.  The file
+# here is deliberately unusable, so a run that consulted it would fail.
+: > "$FAKE_LOG"
+printf 'not a private key\n' > "${tmp}/not-a-key.p8"
+chmod 600 "${tmp}/not-a-key.p8"
+secret_pem='-----BEGIN PRIVATE KEY-----
+SECRETMATERIAL
+-----END PRIVATE KEY-----'
+out="$(env ASC_KEY_ID=ENVKEY0002 ASC_ISSUER_ID=env-issuer ASC_KEY_P8="$secret_pem" \
+  ASC_KEY_PATH="${tmp}/not-a-key.p8" bash -c '
+  set -euo pipefail
+  source "'"$funcs"'"
+  load_secrets
+  [[ "$AUTH_MODE" == api_key ]]
+  [[ "$ASC_KEY_ID" == ENVKEY0002 && "$ASC_ISSUER_ID" == env-issuer ]]
+  grep -q SECRETMATERIAL "$ASC_KEY_PATH"
+  mode="$(stat -c %a "$ASC_KEY_PATH" 2>/dev/null || stat -f %Lp "$ASC_KEY_PATH")"
+  [[ "$mode" == 600 ]]
+  echo "the exported secret was the key in play"
+  cleanup_asc_tmp
+')" || fail "the exported secret did not win over the key file"
+[[ "$out" == *"the exported secret was the key in play"* ]] || fail "the exported secret was not the key in play"
+[[ ! -s "$FAKE_LOG" ]] || fail "fleet-secrets was called although the environment was complete"
+
 # 2b. An env key id that is NOT the /asc one never gets the /asc key:  its own .p8 comes from
 # /authkey-<id>-p8, and /asc ASC_KEY_P8 is not requested.
 : > "$FAKE_LOG"

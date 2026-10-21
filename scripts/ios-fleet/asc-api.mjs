@@ -20,7 +20,7 @@
  * echoing anything secret-shaped from the response (ASC responses don't
  * carry credentials, only app metadata, so this is safe to print as-is).
  */
-import { existsSync, readFileSync, writeFileSync, mkdtempSync, rmSync, chmodSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, writeFileSync, mkdtempSync, rmSync, chmodSync, realpathSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createHash, createSign } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
@@ -193,32 +193,77 @@ function expandTilde(p) {
   return p.startsWith("~/") ? join(homedir(), p.slice(2)) : p;
 }
 
-function fromFile(keyId, issuerId, keyPath, source) {
+// Normalizes a PEM private key and refuses anything that is not one.
+//
+// The check matters because the key can arrive from a file or from an
+// environment variable, and both end up in the masked preview that a refused
+// request prints.  A preview is only safe when the material behind it really
+// is a private key.
+function normalizePrivateKey(value) {
+  const pem = String(value || "").replace(/\r\n/g, "\n").trim();
+  if (!pem) return null;
+  if (!/-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/.test(pem)) return null;
+  return pem.endsWith("\n") ? pem : `${pem}\n`;
+}
+
+// The private key may legitimately live in a file: ios-stage-asc-key.sh keeps
+// the multiline PEM out of GITHUB_ENV and publishes only a mode-600 path.
+//
+// That makes the path a credential source, so it gets rules.  Without them the
+// client reads whatever the path names, treats it as a key, and prints part of
+// it into a log line when App Store Connect refuses the credential.
+//
+//   * The file is read with lstat, so a symlink is refused, not followed.
+//   * It has to be a regular file, small, and a PEM private key, so a path
+//     that names the wrong file is refused instead of half-read.
+//   * Only its owner may read it.  A private key other users can read is
+//     already leaked, and the staged key is mode 600.
+//
+// Returns { pem } or { error }.
+function readPrivateKeyFile(keyPath) {
+  let info;
   try {
-    return { keyId: keyId.trim(), issuerId: issuerId.trim(), privateKeyPem: readFileSync(keyPath, "utf8"), source };
+    info = lstatSync(keyPath);
   } catch {
-    return null;
+    return { error: `the key file ${keyPath} could not be read` };
   }
+  if (!info.isFile()) {
+    return { error: `the key path ${keyPath} is not a regular file` };
+  }
+  if ((info.mode & 0o077) !== 0) {
+    const mode = (info.mode & 0o777).toString(8).padStart(3, "0");
+    return { error: `the key file ${keyPath} is readable by others (mode ${mode}); a private key has to be owner-only (chmod 600)` };
+  }
+  if (info.size > 64 * 1024) {
+    return { error: `the key file ${keyPath} is ${info.size} bytes, which is not a private key` };
+  }
+  let raw;
+  try {
+    raw = readFileSync(keyPath, "utf8");
+  } catch {
+    return { error: `the key file ${keyPath} could not be read` };
+  }
+  const pem = normalizePrivateKey(raw);
+  if (!pem) {
+    return { error: `the key file ${keyPath} does not hold a PEM private key` };
+  }
+  return { pem };
 }
 
 // Returns { keyId, issuerId, privateKeyPem, source } or { error } or { error: null }.
+//
+// The order is the rule: a secret-valued environment variable beats a file,
+// and a file beats the network.  A path on disk is the weakest source, so it
+// must never decide which credential is used when the operator already handed
+// the key to the process.
 function resolveCredential() {
-  // 1) Already-exported ASC_* (DealDex's workflow does this).
   const envKeyId = String(process.env.ASC_KEY_ID || "").trim();
   const envIssuer = String(process.env.ASC_ISSUER_ID || "").trim();
   const envKeyPath = expandTilde(String(process.env.ASC_KEY_PATH || "").trim());
-  if (envKeyId && envIssuer && envKeyPath && existsSync(envKeyPath)) {
-    const got = fromFile(envKeyId, envIssuer, envKeyPath, "ASC_KEY_* environment");
-    if (got) return got;
-  }
+  const envKeyPem = String(process.env.ASC_KEY_P8 || "").trim();
 
-  // No file is read here (AFC-359).  Local-Mac operators set ASC_KEY_ID /
-  // ASC_ISSUER_ID / ASC_KEY_PATH (or the APPLE_API_* names) in their shell, or
-  // let ship-testflight.sh stage the Infisical key and export ASC_* before
-  // it invokes this module (step 3 below also reads Infisical directly).  The hosted ios-ship runner only has the APPLE_API_*
-  // form in $GITHUB_ENV.
-
-  // 2) The APPLE_API_* trio the ship workflow exports from Infisical.
+  // 1) The APPLE_API_* trio the ship workflow exports from Infisical.  The
+  //    key itself is in the environment, so it wins over every file on disk.
   const keyId = String(process.env.APPLE_API_KEY_ID || "").trim();
   const issuerId = String(process.env.APPLE_API_ISSUER_ID || "").trim();
   if (keyId && issuerId && process.env.APPLE_API_KEY_P8_BASE64) {
@@ -228,7 +273,29 @@ function resolveCredential() {
     return { keyId, issuerId, privateKeyPem: pem, source: "APPLE_API_* environment (base64 p8)" };
   }
 
-  // 3) Infisical Fleet-OPS /asc: key id and issuer (unless the environment already
+  // 2) The same secret as a plain environment variable.  This is the form
+  //    fleet-secrets hands out, so an operator who exported the key gets that
+  //    key used, not whatever ASC_KEY_PATH happens to point at.
+  if (envKeyId && envIssuer && envKeyPem) {
+    const pem = normalizePrivateKey(envKeyPem);
+    if (!pem) return { error: "ASC_KEY_P8 is set but is not a PEM private key" };
+    return { keyId: envKeyId, issuerId: envIssuer, privateKeyPem: pem, source: "ASC_KEY_P8 environment" };
+  }
+
+  // 3) The file-backed form.  Last, because it is the weakest source, and
+  //    checked, because a path that names the wrong file would put that
+  //    file's content into a log line.
+  if (envKeyId && envIssuer && envKeyPath) {
+    const read = readPrivateKeyFile(envKeyPath);
+    if (read.error) return { error: read.error };
+    return { keyId: envKeyId, issuerId: envIssuer, privateKeyPem: read.pem, source: "ASC_KEY_PATH environment" };
+  }
+
+  // No file is read here (AFC-359).  A file is read only when the operator
+  // names one in ASC_KEY_PATH, and never a default path.  Step 4 reads
+  // Infisical directly, so a local operator needs nothing exported at all.
+
+  // 4) Infisical Fleet-OPS /asc: key id and issuer (unless the environment already
   //    has them) and the PEM as ASC_KEY_P8 when the key id is the /asc one;  another
   //    key id falls back to AUTHKEY_<KEY_ID> in /authkey-<key id lower case>-p8.
   //    Kept in memory, never written to disk.
@@ -757,8 +824,10 @@ async function main() {
   if (!cred.privateKeyPem) {
     console.error(
       "asc-auth: no App Store Connect credential found. Tried, in order:\n" +
-      "  1) ASC_KEY_ID / ASC_ISSUER_ID / ASC_KEY_PATH in the environment\n" +
-      "  2) APPLE_API_KEY_ID / APPLE_API_ISSUER_ID / APPLE_API_KEY_P8_BASE64 in the environment"
+      "  1) APPLE_API_KEY_ID / APPLE_API_ISSUER_ID / APPLE_API_KEY_P8_BASE64 in the environment\n" +
+      "  2) ASC_KEY_ID / ASC_ISSUER_ID / ASC_KEY_P8 in the environment\n" +
+      "  3) ASC_KEY_ID / ASC_ISSUER_ID / ASC_KEY_PATH in the environment\n" +
+      "  4) Fleet-OPS prod /asc through fleet-secrets"
     );
     process.exit(1);
   }

@@ -102,14 +102,35 @@ test("an env key id with no key material anywhere fails closed", async () => {
 test("a complete environment (id, issuer, key file) wins and never calls fleet-secrets", async () => {
   const keyFile = join(root, "env-key.p8");
   writeFileSync(keyFile, pem());
+  chmodSync(keyFile, 0o600);
   const r = await run({ ASC_KEY_ID: "ENVKEY0001", ASC_ISSUER_ID: "env-issuer", ASC_KEY_PATH: keyFile, FLEET_SECRETS: join(root, "does-not-exist") });
   assert.equal(r.code, 0);
   assert.equal(r.kid, "ENVKEY0001");
   assert.equal(r.iss, "env-issuer");
 });
 
+test("an exported secret wins over a key file, so an unusable path cannot break the run", async () => {
+  //  The path names a file that is not a private key, so it would be refused
+  //  if it were consulted.  The secret has to be used instead, because a
+  //  path on disk is the weakest source and must never decide which
+  //  credential signs the request.
+  const notAKey = join(root, "not-a-key.p8");
+  writeFileSync(notAKey, "this is not a private key\n");
+  chmodSync(notAKey, 0o600);
+  const r = await run({
+    ASC_KEY_ID: "ENVKEY0002",
+    ASC_ISSUER_ID: "env-issuer",
+    ASC_KEY_P8: pem(),
+    ASC_KEY_PATH: notAKey
+  });
+  assert.equal(r.code, 0);
+  assert.equal(r.kid, "ENVKEY0002");
+});
+
 test("only a leading ~/ is expanded in ASC_KEY_PATH", async () => {
-  writeFileSync(join(home, "tilde-key.p8"), pem());
+  const tildeKey = join(home, "tilde-key.p8");
+  writeFileSync(tildeKey, pem());
+  chmodSync(tildeKey, 0o600);
   const gone = join(root, "does-not-exist");
   const ok = await run({ ASC_KEY_ID: "TILDEKEY01", ASC_ISSUER_ID: "tilde-issuer", ASC_KEY_PATH: "~/tilde-key.p8", FLEET_SECRETS: gone });
   assert.equal(ok.code, 0);
