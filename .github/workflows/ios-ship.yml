@@ -85,6 +85,7 @@ on:
       - 'scripts/ios-appstore-gm-prepare.sh'
       - 'scripts/ios-install-appstore-profiles.sh'
       - 'scripts/ios-stage-asc-key.sh'
+      - 'scripts/ios-load-asc-key.sh'
   workflow_dispatch:
   schedule:
     # Twice an hour, offset from other fleet apps
@@ -270,17 +271,29 @@ jobs:
           fi
           bash "$GITHUB_WORKSPACE/scripts/ios-appstore-gm-prepare.sh"
 
+      # The clients take the credential from the environment and never from a
+      # path (Kody rule 42), so the staged key is handed to each of them
+      # through its environment.  The loader reads the file the load step
+      # staged and exports ASC_KEY_P8 into this step's shell; the value never
+      # enters $GITHUB_ENV, never becomes an argument and never reaches a log
+      # line.
       - name: Enable CodeCaps APNs and verify production push profile
-        run: node "$GITHUB_WORKSPACE/scripts/ios-enable-apns.mjs"
+        run: |
+          source scripts/ios-load-asc-key.sh
+          node "$GITHUB_WORKSPACE/scripts/ios-enable-apns.mjs"
 
       - name: Install App Store profiles
-        run: bash "$GITHUB_WORKSPACE/scripts/ios-install-appstore-profiles.sh"
+        run: |
+          source scripts/ios-load-asc-key.sh
+          bash "$GITHUB_WORKSPACE/scripts/ios-install-appstore-profiles.sh"
 
       - name: Ship CodeCaps to TestFlight
         env:
           IOS_TF_RELEASE_NOTES: "1"
           IOS_MANUAL_SIGN: "1"
-        run: bash scripts/ios-ship-testflight.sh
+        run: |
+          source scripts/ios-load-asc-key.sh
+          bash scripts/ios-ship-testflight.sh
 
       - name: Sync standing TestFlight testers
         if: success()
@@ -302,17 +315,12 @@ jobs:
           set +e
           # The client resolves the signing key from its environment and never
           # from a path (Kody rule 42), so the staged key is handed to the
-          # child through the child's environment by the hardened reader.  The
-          # key stays out of argv, out of stdout, out of $GITHUB_ENV and out
-          # of the log.
-          if [ -n "${ASC_KEY_PATH:-}" ]; then
-            node scripts/ios-fleet/asc-key.mjs exec "$ASC_KEY_PATH" -- \
-              node scripts/ios-fleet/asc-api.mjs ensure-standing-testers "$appleid"
-            rc=$?
-          else
-            node scripts/ios-fleet/asc-api.mjs ensure-standing-testers "$appleid"
-            rc=$?
-          fi
+          # child through the child's environment by the loader.  The key
+          # stays out of argv, out of stdout, out of $GITHUB_ENV and out of
+          # the log.
+          source scripts/ios-load-asc-key.sh
+          node scripts/ios-fleet/asc-api.mjs ensure-standing-testers "$appleid"
+          rc=$?
           set -e
           if [ "$rc" -ne 0 ]; then
             echo "::warning title=TestFlight standing testers::tester sync exited ${rc}; see the standing-testers lines above.  The TestFlight upload itself succeeded."
