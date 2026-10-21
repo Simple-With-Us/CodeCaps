@@ -493,7 +493,7 @@ final class GlanceMeterTests: XCTestCase {
         // The whole point of the widen: two meters plus the title, the reset
         // countdown and the chevron, with the gutters, have to fit the frame
         // the popover actually opens at.  If a column grows past this, the
-        // footer clips "Open CodeCaps ⌘1" the way the old 360pt width did.
+        // footer clips "Dashboard ⌘1" the way the old 360pt width did.
         XCTAssertLessThanOrEqual(Metrics.glanceRowIntrinsicWidth, Metrics.glanceWidth,
             "the two-meter row is wider than the popover it renders in")
     }

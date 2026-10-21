@@ -154,7 +154,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         // the owner could not switch to CodeCaps at all.  Dock + activate is
         // what they actually wanted..store(in: &subscriptions)
         consoleState.$page.removeDuplicates().sink { [weak self] page in
-            self?.consoleWindow?.title = page.isSettings ? "CodeCaps Settings" : "CodeCaps"
+            self?.consoleWindow?.title = page.isSettings ? "CodeCaps Dashboard" : "CodeCaps"
         }.store(in: &subscriptions)
         model.$glanceView.removeDuplicates().sink { [weak self] _ in
             DispatchQueue.main.async {
@@ -223,7 +223,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// succeeds the app simply keeps its local values.
     private func startInfisicalSync() {
         // Install persisted configuration synchronously on the main actor.
-        // A delayed startup task must never restore A after Settings saved B.
+        // A delayed startup task must never restore A after Dashboard saved B.
         let settings = InfisicalSettings.shared
         guard let identity = InfisicalIdentityStore.load() else {
             settings.clearConfiguration()
@@ -423,7 +423,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         }
         add("Refresh Quotas", #selector(refresh), "r")
         add("Open CodeCaps", #selector(showMonitor), "1")
-        add("Settings…", #selector(showSettings), ",")
+        add("Dashboard…", #selector(showSettings), ",")
         menu.addItem(.separator())
         add("About CodeCaps", #selector(showAbout))
         add("Check For Updates…", #selector(checkForUpdates))
@@ -553,7 +553,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             window.setFrameAutosaveName("CodeCapsConsoleWindow")
             consoleWindow = window
         }
-        consoleWindow?.title = consoleState.page.isSettings ? "CodeCaps Settings" : "CodeCaps"
+        consoleWindow?.title = consoleState.page.isSettings ? "CodeCaps Dashboard" : "CodeCaps"
         // Derive the level unconditionally on every call.  The old branch
         // only ever raised and left a stale popUpMenuWindow + 1 in place when
         // the popover had been dismissed by a path that does not also resign
@@ -593,14 +593,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         showConsole(page: nil)
     }
 
-    /// `⌘,` always lands on a Settings page, the last one used.
+    /// `⌘,` always lands on a Dashboard page, the last one used.
     @objc func showSettings() { showConsole(page: consoleState.lastSettingsPage) }
 
     @objc private func showAbout() { showConsole(page: .settingsAbout) }
     @objc private func checkForUpdates() { AppUpdater.shared.checkForUpdates() }
 
     /// "Check For Updates…" is greyed out while Sparkle is busy, and on a build
-    /// that cannot update itself (Settings ▸ About says why).
+    /// that cannot update itself (Dashboard ▸ About says why).
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(checkForUpdates) { return AppUpdater.shared.canCheckForUpdates }
         return true
@@ -614,7 +614,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// rather than a window registry.
     ///
     /// The display mode wins over the window.  A menu-bar-only app must never
-    /// While Settings or Console is open, the Dock icon is visible so the
+    /// While the Dashboard or Console is open, the Dock icon is visible so the
     /// window can be switched to normally.  When closed in Menu Bar mode,
     /// the app reverts to .accessory so no stray Dock icon remains.
     private func applyActivationPolicy() {
@@ -660,7 +660,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         glanceOcclusion.isOccluded = true
         // The PiP HUD is documented to stay "visible on top of all windows at
         // all times".  The controller remembers the elevated console so a HUD
-        // recreated from the Settings toggle comes back above it too.
+        // recreated from the Dashboard toggle comes back above it too.
         PipWidgetController.shared.raise(above: consoleWindow)
     }
 
@@ -700,7 +700,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         }
         add("Open CodeCaps", #selector(showMonitor), "1")
         add("Docked Bar", #selector(togglePopover), "2")
-        add("Settings…", #selector(showSettings), ",")
+        add("Dashboard…", #selector(showSettings), ",")
         add("Refresh Quotas", #selector(refresh), "r")
         appMenu.addItem(.separator())
         add("About CodeCaps", #selector(showAbout))
