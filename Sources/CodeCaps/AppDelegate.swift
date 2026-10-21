@@ -57,6 +57,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     let model = MonitorModel()
     let consoleState = ConsoleState()
     private var statusItem: NSStatusItem?
+    private var planWarningCycle = PlanWarningCycle()
+    private var navigatingPlanWarning = false
+    private var planWarningCheckPending = false
 
     /// CodeCaps' own mark, from the owner's cropped black-on-transparent
     /// artwork.  It is a template image so macOS tints it to the menu bar's
@@ -171,6 +174,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         model.objectWillChange.sink { [weak self] _ in
             DispatchQueue.main.async {
                 self?.updateStatus()
+                self?.checkPlanMismatches()
                 if let self, let window = self.floatingGlance, window.isVisible {
                     let size = NSSize(width: Metrics.glanceWidth, height: QuotaGlanceMetrics.popoverHeight(for: self.model, on: window.screen))
                     if abs(window.contentLayoutRect.height - size.height) > 1 { window.setContentSize(size) }
@@ -194,6 +198,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         }.store(in: &subscriptions)
         exhaustionPopupController = ExhaustionPopupController(model: model)
         if model.displayMode != .menuBar && !relaunchedForUpdate { showConsole(page: nil) }
+        beginPlanWarningOpen()
         model.start()
         startInfisicalSync()
         NotificationCenter.default.addObserver(
@@ -282,7 +287,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
+        beginPlanWarningOpen()
         refreshInfisicalSettings()
+    }
+
+    private func beginPlanWarningOpen() {
+        guard !navigatingPlanWarning, !planWarningCycle.isPresenting else { return }
+        planWarningCycle.beginOpen(customInfo: model.platformCustomInfo)
+        planWarningCheckPending = true
+        DispatchQueue.main.async { [weak self] in self?.checkPlanMismatches() }
+    }
+
+    private func checkPlanMismatches() {
+        guard !navigatingPlanWarning,
+              planWarningCheckPending || popover.isShown || consoleWindow?.isVisible == true || floatingGlance?.isVisible == true else { return }
+        let warnings = planWarningCycle.warnings(windows: model.detectedPlanWindows,
+                                                  customInfo: model.platformCustomInfo, now: Date())
+        if model.lastChecked != nil { planWarningCheckPending = false }
+        guard !warnings.isEmpty else { return }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Plan Information Mismatch"
+        let values = warnings.map {
+            "\($0.providerLabel): entered “\($0.enteredPlan)”; provider reports “\($0.detectedPlan)”."
+        }.joined(separator: "\n")
+        alert.informativeText = values + "\n\n"
+            + "Your entered values have been kept." + sentenceGap
+            + "Review the plan fields in Settings to resolve the difference."
+        alert.addButton(withTitle: "Open Settings")
+        alert.addButton(withTitle: "Continue")
+        NSApp.activate(ignoringOtherApps: true)
+        let response = alert.runModal()
+        navigatingPlanWarning = true
+        planWarningCycle.finishPresentation()
+        if response == .alertFirstButtonReturn { showSettings() }
+        DispatchQueue.main.async { [weak self] in self?.navigatingPlanWarning = false }
     }
 
     func applicationWillTerminate(_ notification: Notification) { model.stop() }
@@ -444,6 +483,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         guard let button = statusItem?.button else { showConsole(page: nil); return }
         if popover.isShown { popover.performClose(nil) }
         else {
+            beginPlanWarningOpen()
             // Sized immediately before every show, from the expected provider
             // count, so the popover cannot resize while it is open.
             // The ceiling comes from the screen the status item is on, not
@@ -458,6 +498,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     private func showFloatingGlance() {
+        beginPlanWarningOpen()
         if floatingGlance == nil {
             let size = NSSize(width: Metrics.glanceWidth,
                               height: QuotaGlanceMetrics.popoverHeight(for: model, on: NSScreen.main))
@@ -522,6 +563,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// The single window.  `page` nil means "leave the selection alone", which
     /// is what a reopen or a Dock-mode switch wants.
     func showConsole(page: ConsolePage?) {
+        beginPlanWarningOpen()
         let shouldElevate = popover.isShown
         if let page {
             consoleState.clearHistoryFocus()
