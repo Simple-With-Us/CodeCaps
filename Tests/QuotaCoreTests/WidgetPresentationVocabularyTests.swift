@@ -146,8 +146,8 @@ final class WidgetPresentationVocabularyTests: XCTestCase {
     }
 
     /// Kody rule "Avoid Substring Matching for Canonical Limit/Window Labels"
-    /// (binding, 2026-10-21): the prose fallback in the cadence group reads
-    /// whole lexical tokens, so "nothourly" is not an hourly window.
+    /// (binding, 2026-10-21): the cadence group reads whole lexical tokens,
+    /// so "nothourly" is not an hourly window.
     func testBarCadenceGroupFallbackMatchesExactTokensNotSubstrings() {
         XCTAssertEqual(
             QuotaWindowVocabulary.barCadenceGroup(cadence: "", label: "nothourly"),
@@ -156,6 +156,40 @@ final class WidgetPresentationVocabularyTests: XCTestCase {
         XCTAssertEqual(
             QuotaWindowVocabulary.barCadenceGroup(cadence: "", label: "unhourlyplan"),
             QuotaWindowVocabulary.otherLimit
+        )
+    }
+
+    /// A label that merely contains a cadence word named that window.
+    ///
+    /// The canonicalizer reads the label as prose, and prose matching is
+    /// substring matching, so "notweekly" was a weekly bar and "notdaily" was a
+    /// daily one (Kody rule 40, binding 2026-10-21).  The cadence field is
+    /// now the only thing that may name a group, and the label resolves a
+    /// group only through whole tokens.
+    func testBarCadenceGroupDoesNotReadACadenceWordOutOfTheLabel() {
+        for label in ["notweekly", "unweeklyplan", "notdaily", "notbilling", "notinterval", "notcycle", "not1d"] {
+            XCTAssertEqual(
+                QuotaWindowVocabulary.barCadenceGroup(cadence: "", label: label),
+                QuotaWindowVocabulary.otherLimit,
+                "the label '\(label)' names no window and must not resolve a group."
+            )
+        }
+    }
+
+    /// A label that names the period outright still resolves the group,
+    /// because the fallback matches whole tokens.
+    func testBarCadenceGroupStillResolvesALabelThatNamesThePeriod() {
+        XCTAssertEqual(
+            QuotaWindowVocabulary.barCadenceGroup(cadence: "", label: "Weekly cap"),
+            QuotaWindowVocabulary.sevenDay
+        )
+        XCTAssertEqual(
+            QuotaWindowVocabulary.barCadenceGroup(cadence: "", label: "Billing cycle"),
+            QuotaWindowVocabulary.oneMonth
+        )
+        XCTAssertEqual(
+            QuotaWindowVocabulary.barCadenceGroup(cadence: "", label: "Daily cap"),
+            QuotaWindowVocabulary.oneDay
         )
     }
 

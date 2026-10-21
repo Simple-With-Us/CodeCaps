@@ -107,9 +107,13 @@ public enum QuotaWindowVocabulary {
     /// The canonical cadence a window belongs to, used to group the bars that
     /// share one period.
     ///
-    /// The window's own cadence wins, because that is what the caption token
-    /// beside the bar prints;  the label is only consulted when the cadence
-    /// field cannot be resolved on its own (Kody review 2026-10-21).
+    /// The window's own cadence decides the group, because that is what the
+    /// caption token beside the bar prints.  The label is deliberately not
+    /// handed to the canonicalizer:  the prose matcher behind it reads
+    /// substrings, so a label such as "notweekly" or "notdaily" was read as a
+    /// weekly or daily window before the exact-token fallback below ever ran
+    /// (Kody rule 40, binding 2026-10-21).  A label resolves a group only
+    /// through whole lexical tokens, below.
     ///
     /// An extra allowance is extra capacity of the period it doubles, so it
     /// groups with that window rather than standing alone.  It carries no
@@ -120,12 +124,13 @@ public enum QuotaWindowVocabulary {
         label: String,
         isExtraAllowance: Bool = false
     ) -> String {
-        let extra = isExtraAllowance || isExtraAllowanceLabel(label)
         let canonical = standardCadence(
             windowToken: cadence,
-            label: extra ? "" : label
+            label: ""
         )
         if canonical != otherLimit { return canonical }
+        //  The label resolves a group only through whole lexical tokens:
+        //  "weekly" names the weekly group, "notweekly" names no group at all.
         let tokens = lexicalTokens(label)
         if tokens.contains("weekly") { return sevenDay }
         if tokens.contains("monthly") || tokens.contains("billing") { return oneMonth }
