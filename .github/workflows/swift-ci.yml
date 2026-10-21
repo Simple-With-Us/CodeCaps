@@ -20,11 +20,10 @@ concurrency:
   # replaces.  Everything else gets one group per commit and per event:  a
   # single shared group made every later merge cancel the compile run that
   # the release gate was waiting on, because GitHub cancels a run that is
-  # still PENDING when a new run joins its group.  The event is in the
-  # group so a push to main and a workflow_dispatch at the same commit do
-  # not share a group:  the release gate re-runs the compile workflow as a
-  # workflow_dispatch, and a shared group would make that replacement wait
-  # behind the run it replaces.
+  # still PENDING when a new run joins its group.  One group per commit
+  # means a merge never cancels another merge's compile run.  The event is
+  # in the group as well, so two runs at the same commit that were started
+  # by different events do not cancel one another.
   group: swift-ci-${{ github.event_name == 'pull_request' && github.ref || format('{0}-{1}-{2}', github.event_name, github.ref, github.sha) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
