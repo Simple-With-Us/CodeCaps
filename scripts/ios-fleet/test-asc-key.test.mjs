@@ -11,19 +11,27 @@
 // Everything here is synthetic:  the keys are generated at test time and are
 // never committed, and nothing reaches the network.
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { generateKeyPairSync } from "node:crypto";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 
 import { normalizePrivateKey, readPrivateKeyFile } from "./asc-key.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const helper = join(here, "asc-key.mjs");
+const client = join(here, "asc-api.mjs");
+const repoRoot = join(here, "..", "..");
+const apnsScript = join(repoRoot, "scripts", "ios-enable-apns.mjs");
+const profilesScript = join(repoRoot, "scripts", "ios-install-appstore-profiles.sh");
 const root = mkdtempSync(join(tmpdir(), "asc-key-test-"));
+//  A PATH with node and nothing else:  the fleet reader lives in the operator's
+//  own bin directory, and a test must never reach it or Infisical.
+const safePath = [dirname(process.execPath), "/usr/bin", "/bin"].join(":");
 
 const keyPem = generateKeyPairSync("ec", { namedCurve: "prime256v1" }).privateKey
   .export({ type: "pkcs8", format: "pem" });
@@ -171,4 +179,188 @@ test("the staged key reaches the client through the environment", async () => {
   await new Promise((resolve) => client.on("close", resolve));
   assert.match(stderr, /asc-auth: using ASC_KEY_P8 environment/, `the client did not take the key from the environment:\n${stderr}`);
   assert.doesNotMatch(stderr, /using ASC_KEY_PATH environment/);
+});
+
+// The consumers that call the client as a child process.
+//
+// The client has no path source (Kody rule 42), so a consumer that runs in the
+// hosted runner, where the staged key is published as a path, has to read that
+// key and hand it to the child in the child's environment.  These tests drive
+// the two consumers that do that, and prove the key stays out of argv, out of
+// the environment file, and out of every log line.
+
+function localServer({ holdFirst = 0 } = {}) {
+  const seen = [];
+  let requests = 0;
+  const server = createServer((req, res) => {
+    seen.push({ url: req.url, authorization: req.headers.authorization || "" });
+    requests += 1;
+    //  The first request is held open, so the child process is still alive
+    //  while the process table is read.
+    const delay = requests === 1 ? holdFirst : 0;
+    setTimeout(() => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      if (req.url.startsWith("/v1/bundleIds?")) {
+        res.end(JSON.stringify({ data: [{ type: "bundleIds", id: "BUNDLE1",
+          attributes: { identifier: "com.simplewithus.codecaps.ios" } }] }));
+        return;
+      }
+      res.end(JSON.stringify({ data: [] }));
+    }, delay);
+  });
+  return new Promise((resolve) => {
+    server.listen(0, "127.0.0.1", () => resolve({
+      base: `http://127.0.0.1:${server.address().port}`,
+      seen,
+      close: () => server.close()
+    }));
+  });
+}
+
+function spawnNode(args, env) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, args, { env, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (d) => { stdout += d; });
+    child.stderr.on("data", (d) => { stderr += d; });
+    child.on("close", (code) => resolve({ code, stdout, stderr }));
+  });
+}
+
+function spawnBash(args, env) {
+  return new Promise((resolve) => {
+    const child = spawn("bash", args, { env, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (d) => { stdout += d; });
+    child.stderr.on("data", (d) => { stderr += d; });
+    child.on("close", (code) => resolve({ code, stdout, stderr }));
+  });
+}
+
+function jwtKeyId(authorization) {
+  const token = String(authorization || "").replace(/^Bearer /, "");
+  if (!token) return null;
+  return JSON.parse(Buffer.from(token.split(".")[0], "base64url").toString()).kid;
+}
+
+test("the staged key is handed to the child in its environment", async () => {
+  const { stagedKeyEnvironment } = await import(pathToFileURL(apnsScript).href);
+  const path = staged("handoff.p8");
+  const env = stagedKeyEnvironment({ ASC_KEY_PATH: path });
+  assert.equal(env.ASC_KEY_P8.trim(), keyPem.trim(), "the staged key was not handed over");
+  assert.equal(Object.keys(env).length, 1, "the child environment carries nothing but the key");
+  //  No staged key means no override, so a developer who exports ASC_KEY_P8 in
+  //  their own shell keeps working.
+  assert.deepEqual(stagedKeyEnvironment({}), {});
+  assert.deepEqual(stagedKeyEnvironment({ ASC_KEY_P8: "ambient" }), {});
+  //  A path that names nothing is not a credential, so the run falls through
+  //  and the client resolves the credential the way it does today.
+  assert.deepEqual(stagedKeyEnvironment({ ASC_KEY_PATH: join(root, "no-such-key.p8") }), {});
+});
+
+test("the child client reports the ASC_KEY_P8 environment source", async () => {
+  const { stagedKeyEnvironment } = await import(pathToFileURL(apnsScript).href);
+  const server = await localServer();
+  try {
+    const result = await spawnNode([client, "GET", `${server.base}/v1/apps`], {
+      PATH: safePath,
+      HOME: join(root, "home-client"),
+      ASC_API_BASE: server.base,
+      ASC_KEY_ID: "SYNTHETICKEYID1",
+      ASC_ISSUER_ID: "synthetic-issuer",
+      ...stagedKeyEnvironment({ ASC_KEY_PATH: staged("client.p8") })
+    });
+    assert.match(result.stderr, /asc-auth: using ASC_KEY_P8 environment/,
+      `the client did not report the environment source:\n${result.stderr}`);
+    assert.equal(jwtKeyId(server.seen[0].authorization), "SYNTHETICKEYID1",
+      "the request was not signed with the staged key");
+  } finally {
+    server.close();
+  }
+});
+
+test("with no staged key and no ambient key the client reports that it has no credential", async () => {
+  const result = await spawnNode([client, "GET", "http://127.0.0.1:1/v1/apps"], {
+    //  A bare PATH and a throwaway HOME keep the fleet reader out of the way,
+    //  so the client really has no source left.
+    PATH: "/usr/bin:/bin",
+    HOME: join(root, "home-empty"),
+    ASC_API_BASE: "http://127.0.0.1:1",
+    ASC_KEY_ID: "SYNTHETICKEYID1",
+    ASC_ISSUER_ID: "synthetic-issuer"
+  });
+  assert.equal(result.code, 1, `expected the refusal exit, got ${result.code}: ${result.stderr}`);
+  assert.match(result.stderr, /no App Store Connect credential found/);
+});
+
+test("the APNs consumer signs its requests with the staged key", async () => {
+  const server = await localServer();
+  try {
+    const home = join(root, "home-apns");
+    mkdirSync(home, { recursive: true });
+    const result = await spawnNode([apnsScript], {
+      PATH: safePath,
+      HOME: home,
+      ASC_API_BASE: server.base,
+      ASC_KEY_ID: "SYNTHETICKEYID1",
+      ASC_ISSUER_ID: "synthetic-issuer",
+      ASC_KEY_PATH: staged("apns.p8"),
+      ASC_KEY_P8: ""
+    });
+    assert.ok(server.seen.length > 0, "the consumer never reached App Store Connect");
+    assert.equal(jwtKeyId(server.seen[0].authorization), "SYNTHETICKEYID1",
+      "the request was not signed with the staged key");
+    assert.doesNotMatch(result.stdout + result.stderr, /BEGIN PRIVATE KEY/,
+      "the key reached the consumer's output");
+  } finally {
+    server.close();
+  }
+});
+
+test("the key never reaches argv and never reaches the environment file", async () => {
+  const needle = keyPem.split("\n").find((line) => line.length > 32);
+  const envFile = join(root, "github-env");
+  writeFileSync(envFile, "");
+  const home = join(root, "home-argv");
+  mkdirSync(home, { recursive: true });
+  const server = await localServer({ holdFirst: 1500 });
+  const env = {
+    PATH: safePath,
+    HOME: home,
+    ASC_API_BASE: server.base,
+    ASC_KEY_ID: "SYNTHETICKEYID1",
+    ASC_ISSUER_ID: "synthetic-issuer",
+    ASC_KEY_PATH: staged("argv.p8"),
+    ASC_KEY_P8: "",
+    GITHUB_ENV: envFile
+  };
+  const runs = [
+    spawnNode([apnsScript], env),
+    spawnBash([profilesScript], env)
+  ];
+  try {
+    //  While the consumers are waiting on App Store Connect, no process may
+    //  carry the key in its command line.
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    const table = execFileSync("ps", ["-A", "-o", "args="], { encoding: "utf8", maxBuffer: 8 * 1024 * 1024 });
+    assert.ok(!table.includes(needle), "the key reached a command line");
+    const results = await Promise.all(runs);
+    //  Both consumers signed their requests with the staged key, so the
+    //  handoff is what put the credential in front of the client.
+    const signed = server.seen.filter((entry) => jwtKeyId(entry.authorization) === "SYNTHETICKEYID1");
+    assert.ok(signed.length >= 2, `only ${signed.length} of the requests carried the staged key`);
+    assert.ok(server.seen.some((entry) => entry.url.startsWith("/v1/profiles?")),
+      "the profile consumer never reached App Store Connect");
+    assert.ok(server.seen.some((entry) => entry.url.startsWith("/v1/bundleIds?")),
+      "the APNs consumer never reached App Store Connect");
+    for (const result of results) {
+      assert.doesNotMatch(result.stdout + result.stderr, /BEGIN PRIVATE KEY/,
+        "the key reached a consumer's output");
+    }
+    assert.ok(!readFileSync(envFile, "utf8").includes(needle), "the key reached the environment file");
+  } finally {
+    server.close();
+  }
 });
