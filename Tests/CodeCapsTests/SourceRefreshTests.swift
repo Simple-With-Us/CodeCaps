@@ -197,6 +197,37 @@ final class SourceRefreshTests: XCTestCase {
         XCTAssertEqual(windows.filter { $0.id == "anthropic:5h" }.count, 1)
     }
 
+    func testNewerCodexSessionPreservesSameAccountProviderDetails() throws {
+        let instant = Date(timeIntervalSince1970: 1_700_000_000)
+        var http = codex(60, at: instant, source: "Codex")
+        http.planName = "prolite"
+        http.usageDetails = .init(accountEmail: "active@example.test", creditBalance: 0)
+        let session = codex(45, at: instant.addingTimeInterval(60))
+        let selected = try XCTUnwrap(MonitorModel.reconcileLocalWindows(provider: [http], session: [session]).first)
+        XCTAssertEqual(selected.remainingPercent, session.remainingPercent)
+        XCTAssertEqual(selected.occurredAt, session.occurredAt)
+        XCTAssertEqual(selected.source, session.source)
+        XCTAssertEqual(selected.planName, "prolite")
+        XCTAssertEqual(selected.usageDetails, http.usageDetails)
+    }
+
+    func testUnknownProviderQuotaCannotTransferMetadataAcrossAccounts() throws {
+        let instant = Date(timeIntervalSince1970: 1_700_000_000)
+        for account: String? in ["account-b", nil] {
+            var http = codex(60, at: instant, source: "Codex")
+            http.remainingPercent = nil
+            http.remainingUnknown = true
+            http.accountKey = account
+            http.planName = "wrong-account-plan"
+            http.usageDetails = .init(accountEmail: "wrong@example.test", creditBalance: 100)
+            let session = codex(45, at: instant.addingTimeInterval(60))
+            let selected = try XCTUnwrap(MonitorModel.reconcileLocalWindows(provider: [http], session: [session]).first)
+            XCTAssertEqual(selected.remainingPercent, session.remainingPercent)
+            XCTAssertNil(selected.planName)
+            XCTAssertNil(selected.usageDetails)
+        }
+    }
+
     func testCodexReconciliationRequiresAccountAndNewerEvent() {
         let instant = Date(timeIntervalSince1970: 1_700_000_000)
         let http = codex(60, at: instant, source: "Codex")

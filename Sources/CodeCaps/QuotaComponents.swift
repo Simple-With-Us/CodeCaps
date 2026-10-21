@@ -501,7 +501,7 @@ enum Metrics {
     ///
     /// This is the contract `glanceWidth` has to honour.  It is computed rather
     /// than restated so a column change cannot silently overflow the popover —
-    /// a wider row inside a fixed frame is what truncated "Open CodeCaps ⌘1"
+    /// a wider row inside a fixed frame is what truncated "Dashboard ⌘1"
     /// in the footer once already.
     static let glanceRowIntrinsicWidth: CGFloat = glanceAlarmBellWidth + glanceLogoGap
         + glanceLogoWidth + glanceLogoGap
@@ -769,7 +769,48 @@ struct Eyebrow: View {
     }
 }
 
+struct ProviderDetailRow: Identifiable, Equatable {
+    let label: String
+    let value: String
+    var id: String { label }
+}
+
+struct ProviderDetailsView: View {
+    let rows: [ProviderDetailRow]
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(rows) { row in
+                HStack(alignment: .firstTextBaseline) {
+                    Text(row.label).foregroundStyle(.secondary)
+                    Spacer(minLength: 8)
+                    Text(row.value).textSelection(.enabled)
+                }
+                .font(.system(size: 11))
+            }
+        }
+    }
+}
+
 extension QuotaPlatformSection {
+    var automaticPlanName: String? {
+        windows.compactMap(\.window.planName).first { !$0.isEmpty }
+    }
+
+    /// Details are textual so a credit balance cannot become a quota meter.
+    var providerDetailRows: [ProviderDetailRow] {
+        var rows: [ProviderDetailRow] = []
+        if let plan = automaticPlanName { rows.append(.init(label: "Detected Plan", value: plan)) }
+        guard let details = windows.compactMap(\.window.usageDetails).first else { return rows }
+        if let email = details.accountEmail { rows.append(.init(label: "Account", value: email)) }
+        if let balance = details.creditBalance {
+            rows.append(.init(label: "Credits", value: "\(balance.formatted(.number.precision(.fractionLength(0...2)))) left"))
+        }
+        if let enabled = details.extraUsageEnabled {
+            rows.append(.init(label: "Extra Usage", value: enabled ? "enabled" : "disabled"))
+        }
+        return rows
+    }
+
     /// The single subtitle rule, replacing three near-identical copies that
     /// disagreed about the Antigravity fallback.
     func displaySubtitle(customInfo: PlatformCustomInfo?) -> String? {
@@ -780,7 +821,7 @@ extension QuotaPlatformSection {
             return detail
         }
         if via == "antigravity" { return "Antigravity subscription" }
-        if let plan = windows.compactMap(\.window.planName).first, !plan.isEmpty { return plan }
+        if let plan = automaticPlanName { return plan }
         return nil
     }
 
@@ -793,7 +834,7 @@ extension QuotaPlatformSection {
         let renewal = custom.renewalDateText.isEmpty
             ? (BillingRenewal.text(for: windows.map(\.window)) ?? "")
             : custom.renewalDateText
-        let parts = [custom.planName,
+        let parts = [custom.planName.isEmpty ? (automaticPlanName ?? "") : custom.planName,
                      custom.costUsd,
                      renewal.isEmpty ? "" : "Renews \(renewal)"]
             .filter { !$0.isEmpty }
@@ -802,7 +843,10 @@ extension QuotaPlatformSection {
 
     /// The window a one-line row speaks for: whichever is closest to its cap.
     var drivingWindow: QuotaWindowSnapshot? {
-        let eligible = windows.filter { !$0.window.isSupplementaryVideoQuota }
+        // Scoped Codex pools sit beside the subscription and never cap it
+        // (`atCapWindow`), so they cannot speak for the row either: the
+        // headline and the cap verdict come from one window set.
+        let eligible = windows.filter { !$0.window.isSupplementaryVideoQuota && !$0.window.isScopedPoolAllowance }
         let primary = eligible.filter { !$0.window.isSubModelLimit }
         let pool = primary.isEmpty ? eligible : primary
         return pool.filter { $0.remainingPercent != nil }
@@ -812,7 +856,7 @@ extension QuotaPlatformSection {
 
     /// The lowest remaining percentage across the windows a sidebar row summarises.
     var minimumRemainingPercent: Double? {
-        let fresh = windows.filter { $0.isFresh && !$0.window.isSupplementaryVideoQuota }
+        let fresh = windows.filter { $0.isFresh && !$0.window.isSupplementaryVideoQuota && !$0.window.isScopedPoolAllowance }
         let primary = fresh.filter { !$0.window.isSubModelLimit }
         let pool = primary.isEmpty ? fresh : primary
         return pool
@@ -868,6 +912,16 @@ enum QuotaGlanceMetrics {
 
     @MainActor
     static func popoverHeight(for model: MonitorModel, on screen: NSScreen? = nil) -> CGFloat {
+        let total = uncappedPopoverHeight(for: model)
+        return min(Metrics.glanceMaxHeight(on: screen), max(Metrics.glanceMinHeight, total))
+    }
+
+    /// The popover height before the screen cap and the minimum are applied.
+    /// Layout tests measure against this: capping to a small screen is a
+    /// separate, deliberate behavior (the list scrolls), so pinning the
+    /// budget arithmetic must not depend on the host's display size.
+    @MainActor
+    static func uncappedPopoverHeight(for model: MonitorModel) -> CGFloat {
         let actualRows = model.displaySections.count
         let rows = actualRows > 0 ? actualRows : expectedLocalRows(for: model)
         let showsSetupCard = !model.syncEnabled && !model.serverEnabled
@@ -888,8 +942,7 @@ enum QuotaGlanceMetrics {
         // Both lists are still measured, because a mode switch resizes through
         // the same path and must not have to wait for that view's rows to load.
         let active: CGFloat = model.glanceView == .fromFleet ? max(local, fleet) : local
-        let total = popoverHeight(forListHeight: active)
-        return min(Metrics.glanceMaxHeight(on: screen), max(Metrics.glanceMinHeight, total))
+        return popoverHeight(forListHeight: active)
     }
 }
 
@@ -939,7 +992,7 @@ struct PlatformCard: View {
     /// alarms are picked per provider; under All there is nothing to pick.
     var isAlarmArmed: Bool = false
     var onToggleAlarm: (() -> Void)? = nil
-    /// Set only when the issue is one the owner can actually fix in Settings —
+    /// Set only when the issue is one the owner can actually fix in the Dashboard —
     /// today, the one-time Allow Access To Claude Code step.  The card then
     /// carries the same deep link the fleet banner uses.
     var onOpenSettings: (() -> Void)? = nil
@@ -988,6 +1041,9 @@ struct PlatformCard: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 windowsBody
+                if origin == .local && !section.providerDetailRows.isEmpty {
+                    ProviderDetailsView(rows: section.providerDetailRows)
+                }
             }
         }
         .padding(compact ? 12 : 16)
@@ -1135,10 +1191,10 @@ struct PlatformCard: View {
     @ViewBuilder
     private var openSettingsButton: some View {
         if let onOpenSettings {
-            Button("Open Settings", action: onOpenSettings)
+            Button("Open Dashboard", action: onOpenSettings)
                 .controlSize(.small)
-                .help("Open Settings")
-                .accessibilityLabel("Open Settings")
+                .help("Open Dashboard")
+                .accessibilityLabel("Open Dashboard")
                 .padding(.top, 2)
         }
     }

@@ -8,7 +8,7 @@ struct QuickSettingsCommands: View {
     var openSettings: () -> Void
 
     var body: some View {
-        Button("Settings...", action: openSettings)
+        Button("Dashboard…", action: openSettings)
             .keyboardShortcut(",", modifiers: .command)
         Divider()
         LaunchAtLoginToggle()

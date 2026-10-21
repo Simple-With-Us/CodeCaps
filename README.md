@@ -24,12 +24,12 @@ Engineered with the proactive safeguards you'll come to rely on:
 
 CodeCaps has two surfaces.  Nothing renders in both.
 
-**Glance** is the menu bar popover — the two-second check.  One row per platform, each with its short and long quota windows side by side: a caption (`5h`, `7d`, `1m`), a usage bar, the percentage remaining, and the reset countdown.  A two-box switch beside the name shows either `From Mac` or `From Fleet`, one set at a time, and remembers the choice across launches; `From Fleet` groups rows under a heading band per reporting source.  On the right of the header, the **All** bell turns reset alarms on for every provider; turn it off and a faint bell appears at the left of each row, so providers can be picked one by one.  Countdowns show their two largest units (`4d 2h`, `2h 42m`); hover one for the full value and the reset time.  A row with more windows than its two meters opens to show only the rest, as more meters in the same columns.  Read-only aside from those switches, Refresh, Settings, and Open CodeCaps.
+**Glance** is the menu bar popover — the two-second check.  One row per platform, each with its short and long quota windows side by side: a caption (`5h`, `7d`, `1m`), a usage bar, the percentage remaining, and the reset countdown.  A two-box switch beside the name shows either `From Mac` or `From Fleet`, one set at a time, and remembers the choice across launches; `From Fleet` groups rows under a heading band per reporting source.  On the right of the header, the **All** bell turns reset alarms on for every provider; turn it off and a faint bell appears at the left of each row, so providers can be picked one by one.  Countdowns show their two largest units (`4d 2h`, `2h 42m`); hover one for the full value and the reset time.  A row with more windows than its two meters opens to show only the rest, as more meters in the same columns.  Read-only aside from those switches, Refresh, the Dashboard gear menu, and Dashboard in the footer.
 
 <img src="docs/screenshots/glance-light.png" width="760" alt="Glance, light">
 <img src="docs/screenshots/glance-dark.png" width="760" alt="Glance, dark">
 
-**Console** is a resizable window, sidebar split into Quotas and Settings: Quotas is an all-platforms overview plus a per-platform drill-down with search; Settings holds the five pages below.
+**Console** is a resizable window, sidebar split into Quotas and Dashboard: Quotas is an all-platforms overview plus a per-platform drill-down with search; Dashboard holds the pages below.  The window title reads **CodeCaps Dashboard** while a Dashboard page is showing.
 
 <img src="docs/screenshots/console-light.png" width="760" alt="Console, light">
 <img src="docs/screenshots/console-dark.png" width="760" alt="Console, dark">
@@ -48,7 +48,7 @@ Antigravity sells two independent model pools, shown as two rows, **Gemini** (th
 
 ## Reset Alarms
 
-A reset alarm is a notification, with the sound picked in Settings → Alerts & Alarms, when a quota window starts a new period:
+A reset alarm is a notification, with the sound picked in Dashboard → Alerts & Alarms, when a quota window starts a new period:
 
 - A provider's **largest** window — the weekly or monthly one — alarms every time it resets, even if usage never came near the cap, so you know a new week or month began.
 - A **smaller** window — the 5-hour one — alarms on reset only if, during the period that just ended, it hit its cap or came within 20% of it.
@@ -70,11 +70,11 @@ Each reset alarms once.  The state behind it is saved on every refresh, so a res
 
 None of the above ever asks for a typed credential — every reader reuses a session or file the CLI already created.
 
-CodeCaps reads Claude Code's saved login through macOS's own `security` tool, so a fresh install needs no setup and never raises a Keychain panel of its own.  The **Allow Access To Claude Code** button on the Claude row (Console → Settings → Sources & Fleet) appears only if macOS explicitly refuses that read; press it and choose **Always Allow** in the panel macOS puts up.  On a heavily loaded Mac the Claude row may briefly read "temporarily unavailable" and recover on the next refresh.  CodeCaps only ever reads Claude Code's saved login: it never writes to, re-permissions, or removes it.
+CodeCaps reads Claude Code's saved login through macOS's own `security` tool, so a fresh install needs no setup and never raises a Keychain panel of its own.  The **Allow Access To Claude Code** button on the Claude row (Console → Dashboard → Sources & Fleet) appears only if macOS explicitly refuses that read; press it and choose **Always Allow** in the panel macOS puts up.  On a heavily loaded Mac the Claude row may briefly read "temporarily unavailable" and recover on the next refresh.  CodeCaps only ever reads Claude Code's saved login: it never writes to, re-permissions, or removes it.
 
 ## Fleet Push And Pull
 
-Both off by default, configured on Console → Settings → Sources & Fleet.
+Both off by default, configured on Console → Dashboard → Sources & Fleet.
 
 **Push formats** — two, chosen when pushing.  The producer id is `codecaps` (with `agent-bar` retained as a recognized legacy alias for seamless backwards compatibility).
 
@@ -169,7 +169,7 @@ Grab the signed and notarized `CodeCaps.dmg` from the [latest release](https://g
 
 **Updates**
 
-CodeCaps updates itself.  Every change merged to `main` becomes a signed, notarized release, and an installed copy checks hourly, downloads it in the background, and installs it the next time CodeCaps is not in front.  Settings ▸ About has **Check For Updates…** for the impatient.  How it works, and how to roll a release back: [`docs/AUTO-UPDATE.md`](docs/AUTO-UPDATE.md).
+CodeCaps updates itself.  Every change merged to `main` becomes a signed, notarized release, and an installed copy checks hourly, downloads it in the background, and installs it the next time CodeCaps is not in front.  Dashboard ▸ About has **Check For Updates…** for the impatient.  How it works, and how to roll a release back: [`docs/AUTO-UPDATE.md`](docs/AUTO-UPDATE.md).
 
 **Build From Source**
 
@@ -193,14 +193,17 @@ Other modes: `--install` (same, no relaunch); `--dev` (separate `.dev` identifie
 
 **Icon.**  The master in `assets/` is a full-bleed square, and stays that way.  macOS before 26 does not mask an app icon, so `script/make_icon.swift` derives the macOS shape at build time — the master drawn inside an 824x824 rounded rectangle on a 1024 canvas, with the standard drop shadow — and the `.icns` is built from that.  The master files are only ever read.
 
-## Settings
+## Dashboard
 
-Console's sidebar has five Settings pages.
+Console's sidebar has eight Dashboard pages.
 
-- **Menu Bar** — where the icon shows (menu bar, Dock, or both), plus its Displayed Quota picker (above).
+- **Menu Bar & PiP** — where the icon shows (menu bar, Dock, or both), plus its Displayed Quota picker (above).
 - **Platforms** — platform list order, shared by Glance, Console, and the menu bar.
+- **Logo Style** — the brand mark variant used across Glance, Console, and the menu bar.
 - **Sources & Fleet** — three groups: **This Mac** (readers on/off, one status row per platform), **Share This Mac** (push: Push Endpoint, Push Token, Payload Format, Save & Push Now), **Pull The Fleet** (pull: Quota Endpoint, Read Token, Save & Fetch Now).  Both fleet groups also offer Forget Token and, only when a saved token can't be read back, Re-Authorize Saved Token.
+- **Alerts & Alarms** — runaway and cap notifications, alert thresholds, and the reset-alarm sound.
 - **Appearance** — Light, Dark, or System; System follows your Mac's setting and is the default.
+- **Infisical Sync** — the Infisical project and environment that supply shared settings.
 - **About** — version, push/pull/local-reader status, and a project page link.
 
 <img src="docs/screenshots/settings-sources-fleet.png" width="760" alt="Sources and Fleet">

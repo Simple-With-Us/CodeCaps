@@ -2,14 +2,14 @@ import AppKit
 import XCTest
 @testable import CodeCaps
 
-/// CC-26: Settings/Console must layer above the Glance popover when elevated.
+/// CC-26: Dashboard/Console must layer above the Glance popover when elevated.
 @MainActor
 final class GlanceWindowLevelsTests: XCTestCase {
     func testConsoleElevatedAboveGlancePopover() {
         XCTAssertGreaterThan(
             GlanceWindowLevels.consoleAboveGlance.rawValue,
             GlanceWindowLevels.glancePopover.rawValue,
-            "Settings/Console opened from Glance must not sit behind the popover"
+            "Dashboard/Console opened from Glance must not sit behind the popover"
         )
         XCTAssertGreaterThan(
             GlanceWindowLevels.glancePopover.rawValue,
