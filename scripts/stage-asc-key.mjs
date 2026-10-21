@@ -223,9 +223,15 @@ export async function run({
    *  `if: always()`, so a key-bearing entry that stays in the file is a key
    *  that reaches them.  The entry is removed, bytes and all; a blank
    *  assignment would leave the earlier bytes in the file for the runner to
-   *  read. */
-  const sanitize = () => {
-    removeEnvironmentEntries(envPath, KEY_ENTRIES);
+   *  read.
+   *
+   *  A malformed entry for a name this script publishes is removed as well.
+   *  An unterminated block swallows everything the runner reads after it, so
+   *  the identifier a later step needs would never arrive.  The fresh value
+   *  is written after the cleanup, which is why only the malformed entries
+   *  go and the values this script publishes stay. */
+  const sanitize = (alsoRemove = []) => {
+    removeEnvironmentEntries(envPath, new Set([...KEY_ENTRIES, ...alsoRemove]));
     if (env.ASC_KEY_P8 !== undefined) delete env.ASC_KEY_P8;
   };
 
@@ -244,27 +250,32 @@ export async function run({
     // memory only: once the read is done, the key leaves the file.
     const { values: fromFile, malformed } = readEnvironmentFile(envPath);
     const fromProcess = new Map(CREDENTIALS.map((name) => [name, env[name]]));
-    sanitize();
+    // The malformed entries for the names this script publishes are removed
+    // before it writes its own values, so an unterminated block cannot
+    // shadow the identifiers the later steps need.
+    sanitize(CREDENTIALS.filter((name) => malformed.has(name)));
 
     /** Environment first, then the approved fallback: `fleet-secrets get`,
      *  captured and never echoed.  The result says where the value came
-     *  from, because the verdict on a malformed job environment file only
-     *  belongs to a value that file actually supplied. */
+     *  from and whether the job's environment file carries an entry for the
+     *  name.  The verdict on a malformed file belongs to a name the file
+     *  supplied, and an empty truncated entry counts as the file having
+     *  supplied it, so a corrupted file never passes as a clean one. */
     const resolve = async (name) => {
       const named = fromProcess.get(name);
-      if (typeof named === 'string' && named.trim() !== '') return { value: named, fromFile: false };
+      if (typeof named === 'string' && named.trim() !== '') return { value: named, malformedEntry: false };
       const written = fromFile.get(name);
-      if (typeof written === 'string' && written.trim() !== '') return { value: written, fromFile: true };
+      if (typeof written === 'string' && written.trim() !== '') return { value: written, malformedEntry: malformed.has(name) };
       const fetched = await getSecret(name, SECRET_FOLDER);
-      return { value: typeof fetched === 'string' ? fetched : '', fromFile: false };
+      return { value: typeof fetched === 'string' ? fetched : '', malformedEntry: malformed.has(name) };
     };
 
     const keyIdSrc = await resolve('ASC_KEY_ID');
     const issuerIdSrc = await resolve('ASC_ISSUER_ID');
     const keySrc = await resolve('ASC_KEY_P8');
-    const keyId = checkCredential(log, 'ASC_KEY_ID', keyIdSrc.value, keyIdSrc.fromFile && malformed.has('ASC_KEY_ID'));
-    const issuerId = checkCredential(log, 'ASC_ISSUER_ID', issuerIdSrc.value, issuerIdSrc.fromFile && malformed.has('ASC_ISSUER_ID'));
-    const key = checkCredential(log, 'ASC_KEY_P8', keySrc.value, keySrc.fromFile && malformed.has('ASC_KEY_P8'));
+    const keyId = checkCredential(log, 'ASC_KEY_ID', keyIdSrc.value, keyIdSrc.malformedEntry);
+    const issuerId = checkCredential(log, 'ASC_ISSUER_ID', issuerIdSrc.value, issuerIdSrc.malformedEntry);
+    const key = checkCredential(log, 'ASC_KEY_P8', keySrc.value, keySrc.malformedEntry);
 
     // The identifiers cross into the later steps, so they are masked first: a
     // tool that echoes them leaves nothing behind in the public job log.  The

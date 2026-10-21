@@ -23,9 +23,9 @@ name: iOS TestFlight ship (GitHub-hosted macOS)
 #     copy that App Store Connect answers with HTTP 401 (CC-163), so they are
 #     deliberately not read here and there is no fallback to them.
 #   * The multiline key never enters the step environment.
-#     The tooling install and scripts/stage-asc-key.mjs run in one step, so
-#     the key goes from the fleet's reader straight into a mode-600 file, and
-#     only that file's path and the two identifiers cross a step boundary.
+#     The tooling and scripts/stage-asc-key.mjs run in one step, so the key
+#     goes from the fleet's reader straight into a mode-600 file, and only
+#     that file's path and the two identifiers cross a step boundary.
 #   * IOS_DIST_P12_BASE64 / IOS_DIST_P12_PASSWORD (Apple Distribution identity)
 #     stay repository secrets.
 #   * SENTRY_DSN and SENTRY_AUTH_TOKEN are best-effort: an inert Sentry beats a
@@ -76,6 +76,7 @@ on:
       - '.github/workflows/ios-ship.yml'
       - '.github/actions/infisical-secrets/**'
       - 'scripts/infisical-fetch.mjs'
+      - 'scripts/install-release-secrets-tooling.sh'
       - 'scripts/stage-asc-key*'
       - 'scripts/ios-fleet/**'
       - '!scripts/ios-fleet/test-*.sh'
@@ -216,12 +217,14 @@ jobs:
       # single-line and go to GITHUB_ENV; the multiline private key is staged
       # to a mode-600 file and only ASC_KEY_PATH is exported.
       #
-      # The tooling install and the staging script run in ONE step on purpose.
-      # The install brings the Infisical CLI and the fleet's reader onto the
-      # runner and mints the access token they use; the staging script is
-      # what resolves the three ASC values, and it writes the private key to
-      # a mode-600 file.  The key is never an environment variable of a step:
-      # only that file's path and the two identifiers cross a step boundary.
+      # The tooling and the staging script run in ONE step on purpose.  The
+      # tooling installs the Infisical CLI and the fleet's reader onto the
+      # runner, mints the access token they use, and runs the staging script
+      # in the same process tree, so the token never touches a file.  The
+      # staging script is what resolves the three ASC values, and it writes
+      # the private key to a mode-600 file: the key is never an environment
+      # variable of a step, and only that file's path and the two identifiers
+      # cross a step boundary.
       #
       # The staging script runs even when the install fails, because it is
       # what removes any key-bearing entry from the job's environment file,
@@ -234,20 +237,7 @@ jobs:
         run: |
           set +o xtrace
           set -euo pipefail
-          loader_rc=0
-          bash scripts/install-release-secrets-tooling.sh || loader_rc=$?
-          # The tooling hands the minted session to the rest of this step:
-          # the access token, the project id the reader resolves and the
-          # tools directory on PATH.  The token is never printed and never
-          # written to $GITHUB_ENV.
-          if [ -f "${RUNNER_TEMP}/release-secrets-env.sh" ]; then
-            . "${RUNNER_TEMP}/release-secrets-env.sh"
-          fi
-          stage_rc=0
-          node scripts/stage-asc-key.mjs || stage_rc=$?
-          rm -f -- "${RUNNER_TEMP}/release-secrets-env.sh"
-          if [ "$loader_rc" -ne 0 ]; then exit "$loader_rc"; fi
-          exit "$stage_rc"
+          bash scripts/install-release-secrets-tooling.sh
 
       - name: Check the ASC credentials arrived
         run: |

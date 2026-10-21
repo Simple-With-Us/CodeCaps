@@ -19,7 +19,6 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import { run } from './stage-asc-key.mjs';
-import { run as loaderRun } from './infisical-fetch.mjs';
 
 // A synthetic fixture, not a credential.  It stands in for the private key
 // so the test can tell a leak from a clean run.
@@ -157,18 +156,18 @@ test('the key never survives into a later step', async () => {
   }
 });
 
-test("the loader's key entry is removed from the environment file, not blanked", async () => {
+test('a key-bearing entry in the environment file is removed, not blanked', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'asc-stage-'));
   try {
     const env = baseEnv(dir);
-    // The approved loader writes the three values into the job's environment
-    // file before this script runs.
+    // A step wrote the three values into the job's environment file before
+    // this script runs.
     writeEnvEntry(env.GITHUB_ENV, 'ASC_KEY_ID', 'FILEKEYID');
     writeEnvEntry(env.GITHUB_ENV, 'ASC_ISSUER_ID', 'FILEISSUER');
     writeEnvEntry(env.GITHUB_ENV, 'ASC_KEY_P8', KEY);
 
     const before = readFileSync(env.GITHUB_ENV, 'utf8');
-    assert.ok(before.includes(KEY_MARKER), 'the loader wrote the key into the environment file');
+    assert.ok(before.includes(KEY_MARKER), 'the key was written into the environment file');
 
     await run({ env, getSecret: stubGetter(), log: () => {} });
 
@@ -180,59 +179,23 @@ test("the loader's key entry is removed from the environment file, not blanked",
   }
 });
 
-test('the loader-then-staging sequence leaves no key behind when the loader fails', async () => {
+test('the seeded environment and the reader fallback leave no key behind', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'asc-stage-'));
   try {
-    const env = baseEnv(dir);
-    // The vault answers with the private key and nothing for the identifier,
-    // which is the shape of a partial read.  The loader writes every value it
-    // does have into the job's environment file and only then fails on the
-    // one that is missing, so the key is already in the file when the step
-    // dies.
-    const stubFetch = async (url) => {
-      const u = String(url);
-      if (u.includes('/api/v1/auth/universal-auth/login')) {
-        return { ok: true, json: async () => ({ accessToken: 'test-token', expiresIn: 3600 }) };
-      }
-      if (u.includes('/api/v3/secrets/raw')) {
-        return {
-          ok: true,
-          json: async () => ({
-            secrets: [{ secretKey: 'ASC_KEY_P8', secretValue: KEY }],
-          }),
-        };
-      }
-      throw new Error(`stubFetch: unexpected URL ${u}`);
-    };
+    // The environment carries the identifiers and the approved reader carries
+    // the key: that is the composition the workflow runs.  The reader is
+    // stubbed at its seam, so nothing here reaches the vault.
+    const env = baseEnv(dir, { ASC_KEY_ID: 'ENVKEYID', ASC_ISSUER_ID: 'ENVISSUER' });
+    const getSecret = stubGetter();
 
-    await assert.rejects(
-      loaderRun({
-        env: {
-          ...env,
-          INFISICAL_NAMES: 'ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8',
-          INFISICAL_REQUIRED: 'ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8',
-          INFISICAL_PROJECT_ID: 'project',
-          INFISICAL_CLIENT_ID: 'client',
-          INFISICAL_CLIENT_SECRET: 'secret',
-        },
-        fetchImpl: stubFetch,
-        log: () => {},
-      }),
-      /Missing required Infisical name/,
-    );
+    await run({ env, getSecret, log: () => {} });
 
-    // The loader wrote the key before it failed: this is the state the
-    // staging script has to clean up, and the state the workflow leaves
-    // behind when the fetch fails.
-    assert.ok(
-      readFileSync(env.GITHUB_ENV, 'utf8').includes(KEY_MARKER),
-      'the loader wrote the key into the environment file before it failed',
-    );
-
-    // Now the staging script runs, exactly as the workflow runs it.
-    await run({ env, getSecret: stubGetter(), log: () => {} });
-
-    assertNoKeySurvives(env.GITHUB_ENV);
+    const imported = assertNoKeySurvives(env.GITHUB_ENV);
+    assert.equal(imported.ASC_KEY_ID, 'ENVKEYID', 'the identifier the environment carried is the one that crosses forward');
+    assert.equal(imported.ASC_ISSUER_ID, 'ENVISSUER');
+    assert.ok(imported.ASC_KEY_PATH, 'the path of the mode-600 key file crosses forward');
+    // The reader is asked only for the name the environment did not carry.
+    assert.deepEqual(getSecret.calls, ['ASC_KEY_P8']);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -302,8 +265,32 @@ test('a malformed entry does not reject a credential the environment carries', a
       !lines.some((l) => l.includes('malformed')),
       'the verdict on the file must not reject a credential the environment carries',
     );
-    const written = readFileSync(env.GITHUB_ENV, 'utf8');
-    assert.match(written, /ENVKEYID/, 'the credential the environment carried is the one that crosses forward');
+    // The truncated block is removed before the fresh value is written, so a
+    // later step is handed the identifier instead of a file it cannot read
+    // past.
+    const imported = importEnvironmentFile(env.GITHUB_ENV);
+    assert.equal(imported.ASC_KEY_ID, 'ENVKEYID', 'a later step is handed the identifier the environment carried');
+    assert.equal(imported.ASC_ISSUER_ID, 'STUBISSUER');
+    assert.ok(imported.ASC_KEY_PATH, 'the path of the mode-600 key file crosses forward');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('an empty truncated entry fails closed instead of passing as a clean file', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'asc-stage-'));
+  try {
+    const env = baseEnv(dir);
+    // The block is truncated and empty: the file carries an entry for the
+    // name, but no usable value.  The reader can supply one, and the file is
+    // still corrupt, so the step fails closed.
+    writeFileSync(env.GITHUB_ENV, 'ASC_KEY_ID<<INFISICAL_TESTDELIMITER\n');
+    const lines = [];
+    await assert.rejects(
+      run({ env, getSecret: stubGetter(), log: (l) => lines.push(l) }),
+      /malformed in the job environment file/,
+    );
+    assertNoKeySurvives(env.GITHUB_ENV);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

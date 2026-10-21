@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Install the credential tooling the release workflows read Fleet-OPS with, and
-# mint the Infisical access token that tooling uses.
+# Install the credential tooling the release workflows read Fleet-OPS with,
+# mint the Infisical access token that tooling uses, and run the consumer that
+# resolves the credentials.
 #
-# Two things are installed:
+# It installs two things:
 #
 #   * the Infisical CLI, pinned to version 0.44.4.  The release tarball is
 #     checked against the pinned SHA-256 of the asset before it is unpacked,
@@ -12,10 +13,14 @@
 #     public AI-Fleet-Coordinator repository and installed with the upstream
 #     installer, so the runner ends up with the layout every fleet Mac has.
 #
-# The token is minted with universal auth and exported as INFISICAL_TOKEN for
-# the rest of the step.  It is never printed, never echoed and never written
-# to $GITHUB_ENV: the workflow reads it back from a mode-600 file of shell
-# assignments and removes that file when the step ends.
+# It then mints an Infisical access token with universal auth and runs
+# scripts/stage-asc-key.mjs, the only thing in the release that reads a
+# credential.
+#
+# The token never touches a file.  It is minted into a shell variable, it is
+# exported into the environment of the consumer, and the consumer runs in this
+# same process tree.  It is never echoed, never printed, never written to
+# $GITHUB_ENV and never written to disk.
 #
 # The names the workflow already uses are mapped here onto the names the
 # reader and the CLI expect:
@@ -23,9 +28,6 @@
 #   INFISICAL_PROJECT_ID     ->  INFISICAL_FLEET_OPS_PROJECT_ID
 #   INFISICAL_CLIENT_ID      ->  INFISICAL_UNIVERSAL_AUTH_CLIENT_ID
 #   INFISICAL_CLIENT_SECRET  ->  INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET
-#
-# Nothing here reads a credential.  The ASC material is read by
-# scripts/stage-asc-key.mjs, through the reader this script installs.
 #
 # Run: bash scripts/install-release-secrets-tooling.sh
 set +o xtrace
@@ -44,9 +46,7 @@ FLEET_SECRETS_MODULES="__init__.py __main__.py cli.py core.py linux-entrypoint.p
 # The reader lands in the fleet's own tools directory, which the reader knows
 # about: it looks there when PATH does not carry it.
 TOOLS_DIR="${HOME}/.local/bin"
-# The workflow reads the minted session back from this file.  The name is the
-# one the workflows use, so the two never drift apart.
-ENV_FILE="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/release-secrets-env.sh"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/release-secrets.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
@@ -55,9 +55,12 @@ say() {
   printf '%s\n' "$*"
 }
 
-die() {
+# Every fallible step names its own failure, because the consumer has to run
+# even when the install did not: it is what removes any key-bearing entry
+# from the job's environment file.
+fail() {
   printf 'install-release-secrets-tooling: %s\n' "$*" >&2
-  exit 1
+  return 1
 }
 
 # The SHA-256 of a file, with the two tools a runner may have.
@@ -95,99 +98,103 @@ install_infisical_cli() {
       expected="$INFISICAL_CLI_SHA256_x86_64"
       ;;
     *)
-      die "the runner architecture $(uname -m) has no pinned Infisical CLI build"
+      fail "the runner architecture $(uname -m) has no pinned Infisical CLI build"
+      return 1
       ;;
   esac
   base="https://github.com/infisical/cli/releases/download/v${INFISICAL_CLI_VERSION}"
   curl -fsSL "$base/$asset" -o "$work/$asset" \
-    || die "the Infisical CLI $asset could not be downloaded"
+    || { fail "the Infisical CLI $asset could not be downloaded"; return 1; }
   actual="$(sha256_of "$work/$asset")"
   [ "$actual" = "$expected" ] \
-    || die "the Infisical CLI $asset does not match the pinned checksum"
+    || { fail "the Infisical CLI $asset does not match the pinned checksum"; return 1; }
   # The release publishes the same checksum in its own list.  A disagreement
   # means the asset moved, and the step fails rather than installing it.
   if curl -fsSL "$base/checksums-darwin.txt" -o "$work/checksums.txt" 2>/dev/null; then
     published="$(awk -v a="$asset" '$2 == a { print $1 }' "$work/checksums.txt")"
     if [ -n "$published" ] && [ "$published" != "$expected" ]; then
-      die "the Infisical CLI release publishes a different checksum for $asset"
+      fail "the Infisical CLI release publishes a different checksum for $asset"
+      return 1
     fi
   fi
   tar xzf "$work/$asset" -C "$work" infisical \
-    || die "the Infisical CLI archive could not be unpacked"
-  mkdir -p "$TOOLS_DIR"
+    || { fail "the Infisical CLI archive could not be unpacked"; return 1; }
+  mkdir -p "$TOOLS_DIR" || { fail "the tools directory could not be created"; return 1; }
   install -m 0755 "$work/infisical" "$TOOLS_DIR/infisical" \
-    || die "the Infisical CLI could not be installed"
+    || { fail "the Infisical CLI could not be installed"; return 1; }
   say "installed: Infisical CLI $INFISICAL_CLI_VERSION -> $TOOLS_DIR/infisical"
 }
 
 install_fleet_secrets() {
   local raw module
   raw="https://raw.githubusercontent.com/$FLEET_SECRETS_REPO/$FLEET_READER_COMMIT/scripts"
-  mkdir -p "$work/scripts/fleet_secrets"
+  mkdir -p "$work/scripts/fleet_secrets" \
+    || { fail "the fleet-secrets staging directory could not be created"; return 1; }
   for module in $FLEET_SECRETS_MODULES; do
     curl -fsSL "$raw/fleet_secrets/$module" -o "$work/scripts/fleet_secrets/$module" \
-      || die "the fleet-secrets module $module could not be downloaded"
+      || { fail "the fleet-secrets module $module could not be downloaded"; return 1; }
   done
   curl -fsSL "$raw/fleet-secrets" -o "$work/scripts/fleet-secrets" \
-    || die "the fleet-secrets entry point could not be downloaded"
+    || { fail "the fleet-secrets entry point could not be downloaded"; return 1; }
   curl -fsSL "$raw/install-fleet-secrets.sh" -o "$work/scripts/install-fleet-secrets.sh" \
-    || die "the fleet-secrets installer could not be downloaded"
+    || { fail "the fleet-secrets installer could not be downloaded"; return 1; }
   # The upstream installer lays the package out the way every fleet Mac has
   # it, so the runner and the Mac read the vault the same way.
   bash "$work/scripts/install-fleet-secrets.sh" >/dev/null \
-    || die "the fleet-secrets installer failed"
+    || { fail "the fleet-secrets installer failed"; return 1; }
   say "installed: fleet-secrets ($FLEET_READER_COMMIT) -> $TOOLS_DIR/fleet-secrets"
 }
 
 mint_token() {
   local status token project_id
   project_id="${INFISICAL_PROJECT_ID:-}"
-  [ -n "$project_id" ] || die "the Fleet-OPS Infisical project id is not set"
+  [ -n "$project_id" ] || { fail "the Fleet-OPS Infisical project id is not set"; return 1; }
   [ -n "${INFISICAL_CLIENT_ID:-}" ] \
-    || die "the Infisical universal auth client id is not set"
+    || { fail "the Infisical universal auth client id is not set"; return 1; }
   [ -n "${INFISICAL_CLIENT_SECRET:-}" ] \
-    || die "the Infisical universal auth client secret is not set"
+    || { fail "the Infisical universal auth client secret is not set"; return 1; }
 
   export INFISICAL_UNIVERSAL_AUTH_CLIENT_ID="$INFISICAL_CLIENT_ID"
   export INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET="$INFISICAL_CLIENT_SECRET"
   export INFISICAL_DISABLE_UPDATE_CHECK="true"
 
-  # The token is captured, never echoed: it is read from the command's output
-  # and never reaches the log.
+  # The token is minted into a shell variable and stays there.  It is read
+  # from the command's output, which never reaches the log, and it is never
+  # written to a file.
   status=0
   token="$("$TOOLS_DIR/infisical" login --method=universal-auth --plain --silent 2>"$work/login.err")" || status=$?
   if [ "$status" -ne 0 ]; then
     say "the Infisical CLI refused the universal auth login (exit $status): $(scrub "$(cat "$work/login.err")")"
-    die "no Infisical access token was minted"
+    fail "no Infisical access token was minted"
+    return 1
   fi
   case "$token" in
-    "") die "the Infisical CLI returned no access token" ;;
-    *[[:space:]]*) die "the Infisical CLI returned an access token that is not a single line" ;;
+    "") fail "the Infisical CLI returned no access token"; return 1 ;;
+    *[[:space:]]*) fail "the Infisical CLI returned an access token that is not a single line"; return 1 ;;
   esac
 
+  # The token and the project id are the session the consumer inherits.  The
+  # client secret stays out of it: the token is the identity from here on.
   export INFISICAL_TOKEN="$token"
   export INFISICAL_FLEET_OPS_PROJECT_ID="$project_id"
   export PATH="$TOOLS_DIR:$PATH"
-
-  # The session the workflow reads back.  It carries the token and the
-  # project id, never the client secret: the token is the identity the
-  # reader uses from here on.
-  umask 077
-  {
-    printf 'export INFISICAL_FLEET_OPS_PROJECT_ID=%s\n' "$(printf '%q' "$project_id")"
-    printf 'export INFISICAL_TOKEN=%s\n' "$(printf '%q' "$token")"
-    printf 'export PATH=%s\n' "$(printf '%q' "$PATH")"
-  } >"$ENV_FILE"
-  chmod 600 "$ENV_FILE"
-  say "minted: an Infisical access token for the rest of this step ($ENV_FILE, mode 600)"
+  say "minted: an Infisical access token for the consumer"
 }
 
-install_infisical_cli
-install_fleet_secrets
-mint_token
+install_tooling() {
+  install_infisical_cli || return 1
+  install_fleet_secrets || return 1
+  mint_token || return 1
+}
 
-# The reader is proven against the vault before the staging script runs.
-# `names` prints key names only, never a value, and its output is dropped.
-"$TOOLS_DIR/fleet-secrets" names --path /asc >/dev/null \
-  || die "the fleet reader could not read Fleet-OPS prod /asc with the minted token"
-say "verified: the fleet reader reads Fleet-OPS prod /asc"
+# The install is allowed to fail and the consumer still runs: the consumer is
+# what removes any key-bearing entry from the job's environment file, and the
+# step reports the status of the command that actually failed.
+install_rc=0
+install_tooling || install_rc=$?
+
+stage_rc=0
+node "$repo_root/scripts/stage-asc-key.mjs" || stage_rc=$?
+
+if [ "$install_rc" -ne 0 ]; then exit "$install_rc"; fi
+exit "$stage_rc"

@@ -63,19 +63,29 @@ test('Sparkle reads the ASC credentials through the fleet reader, never reposito
   }
   assert.match(loader, /INFISICAL_PROJECT_ID: \$\{\{ secrets\.INFISICAL_FLEET_OPS_PROJECT_ID \}\}/);
   assert.doesNotMatch(loader, /echo .*\$\{ASC_INFISICAL_PROJECT_ID\}/);
-  // The key material must not enter the job environment.  The tooling
-  // install and the staging script run in ONE step: the install brings the
-  // fleet's reader onto the runner and the staging script writes the private
-  // key to a mode-600 file.  Split across two steps the key would be an
-  // environment variable of the second one, where every later step, every
-  // process listing and every environment dump can read it.
+  // The key material must not enter the job environment.  The tooling and the
+  // staging script run in ONE step: the tooling brings the fleet's reader
+  // onto the runner and the staging script writes the private key to a
+  // mode-600 file.  Split across two steps the key would be an environment
+  // variable of the second one, where every later step, every process
+  // listing and every environment dump can read it.
   assert.doesNotMatch(loader, /infisical-secrets/);
   assert.doesNotMatch(loader, /uses: \.\/\.github\/actions/);
   // No workflow step reads the vault.  The reader is the fleet's own, and
   // the staging script is the only thing that resolves a credential, so the
   // direct loader must not be called from a workflow at all.
   assert.doesNotMatch(loader, /node scripts\/infisical-fetch\.mjs/);
-  assert.match(loader, /run: \|[\s\S]*bash scripts\/install-release-secrets-tooling\.sh[\s\S]*node scripts\/stage-asc-key\.mjs/);
+  // The step is a single call to the tooling, and the tooling runs the
+  // consumer in the same process tree, so the minted token reaches it
+  // through its environment and never through a file.
+  assert.match(loader, /run: \|[\s\S]*bash scripts\/install-release-secrets-tooling\.sh/);
+  const tooling = read('scripts/install-release-secrets-tooling.sh');
+  assert.match(tooling, /node "\$repo_root\/scripts\/stage-asc-key\.mjs"/);
+  assert.doesNotMatch(tooling, /release-secrets-env\.sh/);
+  assert.doesNotMatch(tooling, /printf[^\n]*\$(token|\{token\})/);
+  assert.doesNotMatch(loader, /release-secrets-env\.sh/);
+  assert.match(tooling, /export INFISICAL_TOKEN="\$token"/);
+  assert.match(tooling, /export INFISICAL_FLEET_OPS_PROJECT_ID="\$project_id"/);
   // The staging script resolves every credential environment-first, so a
   // value in the job's own environment always wins over the vault.
   const stage = read('scripts/stage-asc-key.mjs');
@@ -84,13 +94,18 @@ test('Sparkle reads the ASC credentials through the fleet reader, never reposito
     stage.indexOf('fromProcess.get(name)') < stage.indexOf('getSecret(name'),
     'the environment must be looked up before the approved reader',
   );
-  // The staging script runs even when the tooling install fails, so a
-  // key-bearing entry can never wait in the job's environment file, and the
-  // step reports the status of the command that actually failed.
-  assert.match(loader, /bash scripts\/install-release-secrets-tooling\.sh \|\| loader_rc=\$\?/);
-  assert.match(loader, /node scripts\/stage-asc-key\.mjs \|\| stage_rc=\$\?/);
-  assert.match(loader, /if \[ "\$loader_rc" -ne 0 \]; then exit "\$loader_rc"; fi/);
-  assert.match(loader, /exit "\$stage_rc"/);
+  // The consumer runs even when the tooling install fails, so a key-bearing
+  // entry can never wait in the job's environment file, and the step reports
+  // the status of the command that actually failed.
+  assert.match(tooling, /install_rc=0[\s\S]*install_tooling \|\| install_rc=\$\?/);
+  assert.match(tooling, /stage_rc=0[\s\S]*stage-asc-key\.mjs"? \|\| stage_rc=\$\?/);
+  assert.match(tooling, /if \[ "\$install_rc" -ne 0 \]; then exit "\$install_rc"; fi/);
+  assert.match(tooling, /exit "\$stage_rc"/);
+  // The tooling is part of the release, so a change to it runs the contract
+  // test and the release the same way a change to any other release script
+  // does.
+  assert.match(code, /'scripts\/install-release-secrets-tooling\.sh'/);
+  assert.match(iosCode, /'scripts\/install-release-secrets-tooling\.sh'/);
   // The repository's stale signing secrets are never read.  The three
   // signing credentials are named on purpose: a blanket `secrets.ASC_` would
   // also catch ASC_STANDING_TESTERS, which is a list of TestFlight tester
@@ -117,7 +132,7 @@ test('Sparkle reads the ASC credentials through the fleet reader, never reposito
     assert.doesNotMatch(file, /infisical secrets get/);
     assert.doesNotMatch(file, /infisical\/get-cli/);
   }
-  assert.match(loader, /node scripts\/stage-asc-key\.mjs/);
+  assert.match(tooling, /stage-asc-key\.mjs/);
   assert.match(loader, /Missing \$name in Fleet-OPS prod \/asc; verify the CI identity has read access to Fleet-OPS prod \/asc\./);
   assert.match(loader, /Missing ASC key material in Fleet-OPS prod \/asc; verify the CI identity has read access to Fleet-OPS prod \/asc\./);
   assert.match(code, /NOTARY_KEY_PATH: \$\{\{ env.ASC_KEY_PATH \}\}/);
