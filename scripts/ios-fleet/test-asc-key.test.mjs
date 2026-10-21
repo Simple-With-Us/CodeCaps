@@ -272,7 +272,14 @@ function processArgs(pid) {
 // The environment of one process, the way another process of the same user
 // can read it on this platform.
 function processEnvironment(pid) {
-  return execFileSync("ps", ["-E", "-p", String(pid), "-o", "args="], { encoding: "utf8" });
+  if (process.platform === "darwin") {
+    // macOS's ps prints the environment with -E.
+    return execFileSync("ps", ["-E", "-p", String(pid), "-o", "args="], { encoding: "utf8" });
+  }
+  // Linux's ps has no such flag and keeps the environment in a file the owner
+  // of the process can read.  The contract job runs on Linux,  so the probe
+  // has to work there too.
+  return readFileSync(`/proc/${pid}/environ`, "utf8").replace(/\0/g, "\n");
 }
 
 // The children of one process.
