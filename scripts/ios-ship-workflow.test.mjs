@@ -187,7 +187,11 @@ test("ASC credentials come from Fleet-OPS /asc, never the stale repository secre
   assert.match(code, /INFISICAL_NAMES: ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8/);
   assert.match(code, /INFISICAL_REQUIRED: ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8/);
   assert.match(readFileSync(join(ROOT, "scripts/stage-asc-key.mjs"), "utf8"), /ios-stage-asc-key\.sh/);
-  assert.match(readFileSync(join(ROOT, "scripts/stage-asc-key.mjs"), "utf8"), /appendFileSync\(env\.GITHUB_ENV, 'ASC_KEY_P8=/);
+  // The key leaves the environment file with the entry itself removed, not
+  // with a blank assignment that leaves the earlier bytes in the file for the
+  // runner to import into a later step.
+  assert.match(readFileSync(join(ROOT, "scripts/stage-asc-key.mjs"), "utf8"), /removeEnvironmentEntries/);
+  assert.doesNotMatch(readFileSync(join(ROOT, "scripts/stage-asc-key.mjs"), "utf8"), /appendFileSync\(env\.GITHUB_ENV, 'ASC_KEY_P8=/);
   assert.doesNotMatch(code, /for name in .*ASC_KEY_P8/);
   assert.doesNotMatch(code, /printf '%s=%s\\n' "ASC_KEY_P8"/);
   // The workflow never writes the key into an environment entry itself.

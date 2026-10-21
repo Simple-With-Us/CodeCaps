@@ -17,8 +17,9 @@
  *
  * The private key never crosses a step boundary.  It is streamed over
  * stdin into scripts/ios-stage-asc-key.sh, which writes a mode-600 file
- * and publishes only its path, and the ASC_KEY_P8 entry is then blanked so
- * that no later step can read the key from the environment.  Only the two
+ * and publishes only its path.  The ASC_KEY_P8 entry is removed from the
+ * job's environment file -- the bytes, not a blank assignment -- so that
+ * no later step can read the key from the environment.  Only the two
  * identifiers are published, and they are masked before they are written.
  *
  * This script does not talk to the vault.  The approved loader
@@ -32,7 +33,7 @@
  * Run: node scripts/stage-asc-key.mjs
  */
 import { spawn, execFileSync } from 'node:child_process';
-import { appendFileSync, existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -43,6 +44,12 @@ const here = dirname(fileURLToPath(import.meta.url));
 const STAGING_SCRIPT = join(here, 'ios-stage-asc-key.sh');
 const SECRET_FOLDER = '/asc';
 const CREDENTIALS = ['ASC_KEY_ID', 'ASC_ISSUER_ID', 'ASC_KEY_P8'];
+
+/** The entries that must never survive in the job's environment file.  The
+ *  private key is the only secret among them; the two identifiers are masked
+ *  and are published deliberately, because the ship and notarize steps need
+ *  them. */
+const KEY_ENTRIES = new Set(['ASC_KEY_P8']);
 
 /** The environment the staging script needs, and nothing else.  Neither the
  * key nor the vault credentials reach the child process, so it appears in
@@ -61,27 +68,97 @@ function childEnv(env) {
  * $GITHUB_ENV, which the runner applies to the steps that follow.  Both
  * the single-line form (`NAME=value`) and the multiline form
  * (`NAME<<delimiter` ... `delimiter`) are understood, because the approved
- * loader writes the multiline form for a value that carries newlines. */
+ * loader writes the multiline form for a value that carries newlines.
+ *
+ * A multiline block whose delimiter never arrives is malformed: the file was
+ * truncated, or a step that was writing it was interrupted.  The name is
+ * reported separately, because a value read out of such a block is not the
+ * value that was written. */
 function readEnvironmentFile(path) {
   const values = new Map();
-  if (!path || !existsSync(path)) return values;
+  const malformed = new Set();
+  if (!path || !existsSync(path)) return { values, malformed };
   const lines = readFileSync(path, 'utf8').split(/\r?\n/);
   for (let i = 0; i < lines.length; i += 1) {
     const heredoc = /^([A-Za-z_][A-Za-z0-9_]*)<<(.+)$/.exec(lines[i]);
     if (heredoc) {
       const body = [];
-      i += 1;
-      while (i < lines.length && lines[i] !== heredoc[2]) {
-        body.push(lines[i]);
-        i += 1;
+      let j = i + 1;
+      while (j < lines.length && lines[j] !== heredoc[2]) {
+        body.push(lines[j]);
+        j += 1;
+      }
+      if (j >= lines.length) {
+        malformed.add(heredoc[1]);
+        values.set(heredoc[1], '');
+        i = lines.length;
+        continue;
       }
       values.set(heredoc[1], body.join('\n'));
+      i = j;
       continue;
     }
     const single = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(lines[i]);
     if (single) values.set(single[1], single[2]);
   }
-  return values;
+  return { values, malformed };
+}
+
+/**
+ * Remove every entry for `names` from the job's environment file.
+ *
+ * The runner imports this file into the environment of every later step in
+ * the job, including the steps that run `if: always()`.  A key-bearing line
+ * that stays in the file is a key that reaches those steps.  Writing a blank
+ * assignment for the same name does not help: the earlier bytes are still in
+ * the file, and the runner reads the file line by line.  The entry itself is
+ * removed instead, in the single-line form and in the heredoc form the
+ * approved loader writes for a value that carries newlines.
+ *
+ * A heredoc block whose delimiter never arrives is dropped to the end of the
+ * file.  The end of the key material cannot be known in that case, so the
+ * only safe reading is that everything after the header belongs to it.
+ */
+export function removeEnvironmentEntries(path, names) {
+  if (!path || !names || names.size === 0 || !existsSync(path)) return false;
+  const lines = readFileSync(path, 'utf8').split(/\r?\n/);
+  const kept = [];
+  let removed = false;
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    const heredoc = /^([A-Za-z_][A-Za-z0-9_]*)<<(.+)$/.exec(line);
+    if (heredoc) {
+      const body = [];
+      let j = i + 1;
+      while (j < lines.length && lines[j] !== heredoc[2]) {
+        body.push(lines[j]);
+        j += 1;
+      }
+      const closed = j < lines.length;
+      if (names.has(heredoc[1])) {
+        removed = true;
+        i = closed ? j + 1 : lines.length;
+        continue;
+      }
+      kept.push(line);
+      for (const entry of body) kept.push(entry);
+      if (closed) kept.push(lines[j]);
+      i = closed ? j + 1 : lines.length;
+      continue;
+    }
+    const single = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(line);
+    if (single && names.has(single[1])) {
+      removed = true;
+      i += 1;
+      continue;
+    }
+    kept.push(line);
+    i += 1;
+  }
+  if (!removed) return false;
+  writeFileSync(path, kept.join('\n'));
+  return true;
 }
 
 /** The approved fallback: `fleet-secrets get <name> --path <folder>` reads
@@ -118,7 +195,10 @@ function fail(log, message) {
  * string as if it were the credential, and the failure would surface much
  * later as an opaque parse error.
  */
-function checkCredential(log, name, value) {
+function checkCredential(log, name, value, malformed = false) {
+  if (malformed) {
+    fail(log, `${name} is malformed in the job environment file: its multiline block is not terminated, so the file was truncated or a step that was writing it was interrupted; verify the CI identity can read Fleet-OPS prod /asc.`);
+  }
   if (typeof value !== 'string' || value.trim() === '') {
     fail(log, `Missing ${name} in Fleet-OPS prod /asc; verify the CI identity has read access to Fleet-OPS prod /asc.`);
   }
@@ -132,55 +212,92 @@ export async function run({
   env = process.env,
   getSecret = fleetSecretsGet,
   log = (line) => console.log(line),
+  stagingScript = STAGING_SCRIPT,
 } = {}) {
-  const fromFile = readEnvironmentFile(env.GITHUB_ENV);
+  const envPath = env.GITHUB_ENV;
 
-  /** Environment first, then the approved fallback. */
-  const resolve = async (name) => {
-    const named = env[name];
-    if (typeof named === 'string' && named.trim() !== '') return named;
-    const written = fromFile.get(name);
-    if (typeof written === 'string' && written.trim() !== '') return written;
-    const fetched = await getSecret(name, SECRET_FOLDER);
-    return typeof fetched === 'string' ? fetched : '';
+  /** The private key must not survive in the job's environment file, whatever
+   *  happens below.  The runner imports that file into the environment of
+   *  every later step in the job, including the steps that run
+   *  `if: always()`, so a key-bearing entry that stays in the file is a key
+   *  that reaches them.  The entry is removed, bytes and all; a blank
+   *  assignment would leave the earlier bytes in the file for the runner to
+   *  read. */
+  const sanitize = () => {
+    removeEnvironmentEntries(envPath, KEY_ENTRIES);
+    if (env.ASC_KEY_P8 !== undefined) delete env.ASC_KEY_P8;
   };
 
-  const keyId = checkCredential(log, 'ASC_KEY_ID', await resolve('ASC_KEY_ID'));
-  const issuerId = checkCredential(log, 'ASC_ISSUER_ID', await resolve('ASC_ISSUER_ID'));
-  const key = checkCredential(log, 'ASC_KEY_P8', await resolve('ASC_KEY_P8'));
+  /** An interruption is a failure path like any other: the key is removed
+   *  before the process leaves.  The default handling of these signals would
+   *  leave the process without running the cleanup below. */
+  const onSignal = () => {
+    sanitize();
+    process.exit(1);
+  };
+  process.on('SIGTERM', onSignal);
+  process.on('SIGINT', onSignal);
 
-  // The identifiers cross into the later steps, so they are masked first: a
-  // tool that echoes them leaves nothing behind in the public job log.  The
-  // key is not masked, because it never reaches the log at all -- it is
-  // written straight to the mode-600 file below.
-  maskValue(keyId, log);
-  maskValue(issuerId, log);
+  try {
+    // The values are read before the file is sanitized, and they are held in
+    // memory only: once the read is done, the key leaves the file.
+    const { values: fromFile, malformed } = readEnvironmentFile(envPath);
+    const fromProcess = new Map(CREDENTIALS.map((name) => [name, env[name]]));
+    sanitize();
 
-  // The key is streamed over stdin, so it appears in no process listing and
-  // in no environment entry.  The staging script writes the mode-600 file
-  // and publishes only its path.
-  await new Promise((resolvePromise, rejectPromise) => {
-    const child = spawn('bash', [STAGING_SCRIPT], {
-      stdio: ['pipe', 'inherit', 'inherit'],
-      env: childEnv(env),
+    /** Environment first, then the approved fallback. */
+    const resolve = async (name) => {
+      const named = fromProcess.get(name);
+      if (typeof named === 'string' && named.trim() !== '') return named;
+      const written = fromFile.get(name);
+      if (typeof written === 'string' && written.trim() !== '') return written;
+      const fetched = await getSecret(name, SECRET_FOLDER);
+      return typeof fetched === 'string' ? fetched : '';
+    };
+
+    const keyId = checkCredential(log, 'ASC_KEY_ID', await resolve('ASC_KEY_ID'), malformed.has('ASC_KEY_ID'));
+    const issuerId = checkCredential(log, 'ASC_ISSUER_ID', await resolve('ASC_ISSUER_ID'), malformed.has('ASC_ISSUER_ID'));
+    const key = checkCredential(log, 'ASC_KEY_P8', await resolve('ASC_KEY_P8'), malformed.has('ASC_KEY_P8'));
+
+    // The identifiers cross into the later steps, so they are masked first: a
+    // tool that echoes them leaves nothing behind in the public job log.  The
+    // key is not masked, because it never reaches the log at all -- it is
+    // written straight to the mode-600 file below.
+    maskValue(keyId, log);
+    maskValue(issuerId, log);
+
+    // The key is streamed over stdin, so it appears in no process listing and
+    // in no environment entry.  The staging script writes the mode-600 file
+    // and publishes only its path.
+    await new Promise((resolvePromise, rejectPromise) => {
+      const child = spawn('bash', [stagingScript], {
+        stdio: ['pipe', 'inherit', 'inherit'],
+        env: childEnv(env),
+      });
+      child.on('error', rejectPromise);
+      child.on('close', (code) => {
+        if (code === 0) resolvePromise();
+        else rejectPromise(new Error(`The ASC key staging script exited ${code}.`));
+      });
+      child.stdin.on('error', rejectPromise);
+      child.stdin.end(key);
     });
-    child.on('error', rejectPromise);
-    child.on('close', (code) => {
-      if (code === 0) resolvePromise();
-      else rejectPromise(new Error(`The ASC key staging script exited ${code}.`));
-    });
-    child.stdin.on('error', rejectPromise);
-    child.stdin.end(key);
-  });
 
-  // Only the identifiers and the path cross into the later steps.  The key
-  // does not: the entry is blanked, and the runner applies the entries in
-  // order, so a later step sees an empty value rather than the key.
-  writeGithubEnvValue(env.GITHUB_ENV, 'ASC_KEY_ID', keyId);
-  writeGithubEnvValue(env.GITHUB_ENV, 'ASC_ISSUER_ID', issuerId);
-  if (env.GITHUB_ENV) appendFileSync(env.GITHUB_ENV, 'ASC_KEY_P8=\n');
+    // Only the identifiers and the path cross into the later steps.  The key
+    // does not: its entry was removed from the environment file when the
+    // values were read, so a later step sees no value for it at all.
+    writeGithubEnvValue(envPath, 'ASC_KEY_ID', keyId);
+    writeGithubEnvValue(envPath, 'ASC_ISSUER_ID', issuerId);
 
-  log(`::notice::Staged the ASC private key from Fleet-OPS prod ${SECRET_FOLDER}; only ASC_KEY_PATH, ASC_KEY_ID and ASC_ISSUER_ID cross into the later steps.`);
+    log(`::notice::Staged the ASC private key from Fleet-OPS prod ${SECRET_FOLDER}; only ASC_KEY_PATH, ASC_KEY_ID and ASC_ISSUER_ID cross into the later steps.`);
+  } finally {
+    process.removeListener('SIGTERM', onSignal);
+    process.removeListener('SIGINT', onSignal);
+    // Every failure path lands here: a missing credential, a rejected
+    // reference, malformed multiline data, a staging failure, an
+    // interruption.  The key leaves the environment file in all of them.
+    sanitize();
+  }
 }
 
 const invokedDirectly = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];

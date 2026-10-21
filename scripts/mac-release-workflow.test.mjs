@@ -35,7 +35,12 @@ function allSteps(s, name) {
 const iosShip = read('.github/workflows/ios-ship.yml');
 const iosCode = iosShip.split('\n').filter(l => !/^\s*#/.test(l)).join('\n');
 test('Sparkle uses the existing fleet ASC loader, never repository ASC secrets', () => {
-  assert.doesNotMatch(code, /secrets\.ASC_/);
+  // The three signing credentials are named on purpose.  A blanket
+  // `secrets.ASC_` would also catch ASC_STANDING_TESTERS, which is a list of
+  // TestFlight tester addresses and is read from the repository on purpose.
+  for (const name of ['ASC_KEY_ID', 'ASC_ISSUER_ID', 'ASC_KEY_P8']) {
+    assert.doesNotMatch(code, new RegExp(`secrets\\.${name}`));
+  }
   // One loader, two workflows.  The release path and the iOS ship path must
   // carry the same text, so a fix to one is a fix to the other.
   for (const name of LOADERS) {
@@ -74,9 +79,14 @@ test('Sparkle uses the existing fleet ASC loader, never repository ASC secrets',
   // required, so a vault that cannot serve them fails the step by name.
   assert.match(loader, /INFISICAL_NAMES: ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8/);
   assert.match(loader, /INFISICAL_REQUIRED: ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8/);
-  // The repository's stale ASC_* secrets are never read.
+  // The repository's stale signing secrets are never read.  The three
+  // signing credentials are named on purpose: a blanket `secrets.ASC_` would
+  // also catch ASC_STANDING_TESTERS, which is a list of TestFlight tester
+  // addresses and is read from the repository on purpose.
   for (const file of [code, iosCode]) {
-    assert.doesNotMatch(file, /secrets\.ASC_/);
+    for (const name of ['ASC_KEY_ID', 'ASC_ISSUER_ID', 'ASC_KEY_P8']) {
+      assert.doesNotMatch(file, new RegExp(`secrets\\.${name}`));
+    }
     assert.doesNotMatch(file, /ASC_KEY_P8: \$\{\{/);
   }
   // The loader is told where the vault is, and only where.
@@ -139,7 +149,12 @@ test('PRs cannot notarize or publish, and icon-only changes trigger releases', (
   const stage = read('scripts/stage-asc-key.mjs');
   assert.match(stage, /env\[name\]/);
   assert.match(stage, /getSecret = fleetSecretsGet/);
-  assert.match(stage, /appendFileSync\(env\.GITHUB_ENV, 'ASC_KEY_P8=/);
+  // The key leaves the environment file with the entry itself removed, not
+  // with a blank assignment that leaves the earlier bytes in the file for the
+  // runner to import into a later step.
+  assert.match(stage, /removeEnvironmentEntries/);
+  assert.match(stage, /KEY_ENTRIES = new Set\(\['ASC_KEY_P8'\]\)/);
+  assert.doesNotMatch(stage, /appendFileSync\(env\.GITHUB_ENV, 'ASC_KEY_P8=/);
   assert.match(stage, /isUnresolvedReference/);
   assert.match(stage, /maskValue\(keyId, log\)/);
   assert.match(stage, /maskValue\(issuerId, log\)/);

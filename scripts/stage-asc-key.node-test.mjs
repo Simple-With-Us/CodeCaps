@@ -7,8 +7,12 @@
 // approved fallback, so the test stubs that fallback -- the injected getter
 // -- rather than a network endpoint.  Nothing here reaches the vault.
 //
+// Every fixture is synthetic.  The private key in these tests is a marker
+// string, not a credential.
+//
 // Run: node --test scripts/stage-asc-key.node-test.mjs
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -61,6 +65,52 @@ function writeEnvEntry(path, name, value) {
   writeFileSync(path, `${name}<<${delimiter}\n${value}\n${delimiter}\n`, { flag: 'a' });
 }
 
+/** The runner imports the job's environment file into the environment of
+ * every later step in the job: a `NAME=value` line sets the variable, and a
+ * `NAME<<delimiter` block sets it to the body between the delimiters.  This
+ * mirrors that reading, so a test can assert what a later step would actually
+ * be handed. */
+function importEnvironmentFile(path) {
+  const imported = {};
+  if (!existsSync(path)) return imported;
+  const lines = readFileSync(path, 'utf8').split(/\r?\n/);
+  for (let i = 0; i < lines.length; i += 1) {
+    const heredoc = /^([A-Za-z_][A-Za-z0-9_]*)<<(.+)$/.exec(lines[i]);
+    if (heredoc) {
+      const body = [];
+      let j = i + 1;
+      while (j < lines.length && lines[j] !== heredoc[2]) {
+        body.push(lines[j]);
+        j += 1;
+      }
+      if (j >= lines.length) {
+        // An unterminated block: the runner cannot import it either.
+        imported[heredoc[1]] = undefined;
+        i = lines.length;
+        continue;
+      }
+      imported[heredoc[1]] = body.join('\n');
+      i = j;
+      continue;
+    }
+    const single = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(lines[i]);
+    if (single) imported[single[1]] = single[2];
+  }
+  return imported;
+}
+
+/** The assertion that matters after every path: the file carries no
+ * key-bearing entry, and a later step is handed no key. */
+function assertNoKeySurvives(envPath) {
+  const written = readFileSync(envPath, 'utf8');
+  assert.ok(!written.includes(KEY_MARKER), 'the key bytes must not survive in the environment file');
+  assert.doesNotMatch(written, /ASC_KEY_P8/, 'the ASC_KEY_P8 entry must be removed, not blanked');
+  const imported = importEnvironmentFile(envPath);
+  assert.ok(!('ASC_KEY_P8' in imported), 'a later step must not be handed the key');
+  assert.equal(imported.ASC_KEY_P8, undefined, 'a later step must see no value for the key');
+  return imported;
+}
+
 test('the key is staged to a mode-600 file and only its path is published', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'asc-stage-'));
   try {
@@ -93,12 +143,140 @@ test('the key never survives into a later step', async () => {
     await run({ env, getSecret: stubGetter(), log: () => {} });
     const written = readFileSync(env.GITHUB_ENV, 'utf8');
     assert.ok(!written.includes(KEY_MARKER), 'the key must never reach GITHUB_ENV');
-    // The entry is blanked, so the runner hands a later step an empty
-    // value rather than the key.
-    assert.match(written, /^ASC_KEY_P8=$/m, 'the ASC_KEY_P8 entry must be blanked');
+    // The entry is removed from the file, not blanked: the earlier bytes are
+    // gone, so the runner has nothing to import into a later step.
+    assert.doesNotMatch(written, /ASC_KEY_P8/, 'the ASC_KEY_P8 entry must be removed from the environment file');
+    const imported = importEnvironmentFile(env.GITHUB_ENV);
+    assert.ok(!('ASC_KEY_P8' in imported), 'a later step must not be handed the key');
     // The identifiers do cross, because the ship and notarize steps need them.
     assert.match(written, /ASC_KEY_ID/);
     assert.match(written, /ASC_ISSUER_ID/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the loader's key entry is removed from the environment file, not blanked", async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'asc-stage-'));
+  try {
+    const env = baseEnv(dir);
+    // The approved loader writes the three values into the job's environment
+    // file before this script runs.
+    writeEnvEntry(env.GITHUB_ENV, 'ASC_KEY_ID', 'FILEKEYID');
+    writeEnvEntry(env.GITHUB_ENV, 'ASC_ISSUER_ID', 'FILEISSUER');
+    writeEnvEntry(env.GITHUB_ENV, 'ASC_KEY_P8', KEY);
+
+    const before = readFileSync(env.GITHUB_ENV, 'utf8');
+    assert.ok(before.includes(KEY_MARKER), 'the loader wrote the key into the environment file');
+
+    await run({ env, getSecret: stubGetter(), log: () => {} });
+
+    const imported = assertNoKeySurvives(env.GITHUB_ENV);
+    assert.equal(imported.ASC_KEY_ID, 'FILEKEYID', 'the identifiers still cross into the later steps');
+    assert.equal(imported.ASC_ISSUER_ID, 'FILEISSUER');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a staging failure leaves no key-bearing entry behind', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'asc-stage-'));
+  try {
+    const env = baseEnv(dir);
+    writeEnvEntry(env.GITHUB_ENV, 'ASC_KEY_ID', 'FILEKEYID');
+    writeEnvEntry(env.GITHUB_ENV, 'ASC_ISSUER_ID', 'FILEISSUER');
+    writeEnvEntry(env.GITHUB_ENV, 'ASC_KEY_P8', KEY);
+
+    const failing = join(dir, 'failing-staging.sh');
+    writeFileSync(failing, '#!/usr/bin/env bash\nexit 3\n');
+
+    await assert.rejects(
+      run({ env, getSecret: stubGetter(), log: () => {}, stagingScript: failing }),
+      /staging script exited 3/,
+    );
+
+    // The step failed, so the key must not be waiting in the environment file
+    // for the runner to hand to the next step.
+    assertNoKeySurvives(env.GITHUB_ENV);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('malformed multiline data fails closed and leaves no key-bearing entry', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'asc-stage-'));
+  try {
+    const env = baseEnv(dir);
+    // A heredoc block whose delimiter never arrives: the file was truncated,
+    // or the step that wrote it was interrupted.
+    writeFileSync(env.GITHUB_ENV, `ASC_KEY_P8<<INFISICAL_TESTDELIMITER\n${KEY}\n`);
+
+    const lines = [];
+    await assert.rejects(
+      run({ env, getSecret: stubGetter(), log: (l) => lines.push(l) }),
+      (err) => {
+        assert.match(err.message, /malformed in the job environment file/);
+        return true;
+      },
+    );
+    assert.ok(lines.some((l) => l.includes('ASC_KEY_P8')), 'the error names the secret');
+    assert.ok(lines.some((l) => l.includes('Fleet-OPS prod /asc')), 'the error names the path');
+
+    assertNoKeySurvives(env.GITHUB_ENV);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('an interruption leaves no key-bearing entry behind', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'asc-stage-'));
+  try {
+    const env = baseEnv(dir);
+    writeEnvEntry(env.GITHUB_ENV, 'ASC_KEY_ID', 'FILEKEYID');
+    writeEnvEntry(env.GITHUB_ENV, 'ASC_ISSUER_ID', 'FILEISSUER');
+    writeEnvEntry(env.GITHUB_ENV, 'ASC_KEY_P8', KEY);
+
+    // A staging script that announces itself and then waits, so the test can
+    // interrupt the run while it is in flight.
+    const stalling = join(dir, 'stalling-staging.sh');
+    writeFileSync(stalling, '#!/usr/bin/env bash\nset -euo pipefail\ntouch "$ASC_STAGING_ROOT/ready"\nsleep 10\n');
+    const ready = join(dir, 'staging', 'ready');
+
+    const driver = join(dir, 'driver.mjs');
+    writeFileSync(driver, [
+      `import { run } from ${JSON.stringify(new URL('./stage-asc-key.mjs', import.meta.url).href)};`,
+      `const env = { GITHUB_ENV: ${JSON.stringify(env.GITHUB_ENV)}, ASC_STAGING_ROOT: ${JSON.stringify(env.ASC_STAGING_ROOT)} };`,
+      `await run({ env, getSecret: async () => '', stagingScript: ${JSON.stringify(stalling)} });`,
+    ].join('\n'));
+
+    // stdio is ignored so the orphaned staging shell holds no pipe open and
+    // the test does not wait for it.
+    const child = spawn(process.execPath, [driver], { stdio: 'ignore' });
+    const exited = new Promise((resolve) => child.on('exit', (code) => resolve(code)));
+
+    const deadline = Date.now() + 10000;
+    while (!existsSync(ready) && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    assert.ok(existsSync(ready), 'the staging script must have started');
+
+    child.kill('SIGTERM');
+    const code = await exited;
+    assert.notEqual(code, 0, 'an interrupted run must fail the step');
+
+    assertNoKeySurvives(env.GITHUB_ENV);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the key does not survive in the process environment', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'asc-stage-'));
+  try {
+    const env = baseEnv(dir, { ASC_KEY_P8: KEY });
+    await run({ env, getSecret: stubGetter(), log: () => {} });
+    assert.equal(env.ASC_KEY_P8, undefined, 'the key must not stay in the process environment');
+    assertNoKeySurvives(env.GITHUB_ENV);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
