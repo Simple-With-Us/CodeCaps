@@ -64,12 +64,18 @@ function maskKeyPreview(value) {
 // refused.
 const REQUIRED_SCREENSHOT_FAMILIES = ["iphone", "ipad"];
 
+//  The same requirement for a macOS version, which carries desktop
+//  screenshots and no iPhone or iPad set at all.  A macOS submission asked
+//  for the iOS families would never be ready.
+const REQUIRED_SCREENSHOT_FAMILIES_MAC = ["desktop"];
+
 // Which device family a screenshot display type belongs to.
 const DISPLAY_TYPE_FAMILY = {
   APP_IPHONE_67: "iphone",
   APP_IPHONE_65: "iphone",
   APP_IPAD_PRO_129: "ipad",
-  APP_IPAD_PRO_3GEN_129: "ipad"
+  APP_IPAD_PRO_3GEN_129: "ipad",
+  APP_DESKTOP: "desktop"
 };
 
 // The App Store Connect host.
@@ -702,7 +708,9 @@ async function main() {
       if (!family) continue;
       familyCounts.set(family, (familyCounts.get(family) || 0) + count);
     }
-    const missing = REQUIRED_SCREENSHOT_FAMILIES.filter(
+    const missing = (platform === "MAC_OS"
+      ? REQUIRED_SCREENSHOT_FAMILIES_MAC
+      : REQUIRED_SCREENSHOT_FAMILIES).filter(
       (family) => (familyCounts.get(family) || 0) < 1
     );
     if (missing.length > 0) {
@@ -750,11 +758,32 @@ async function main() {
     }
 
     const withPreRelease = await api("GET", `/v1/builds/${build.id}?include=preReleaseVersion`);
-    const included = withPreRelease.ok ? requireArray(withPreRelease.parsed?.included, "build include") : [];
-    const preReleaseId = withPreRelease.ok
-      ? (withPreRelease.parsed?.data?.relationships?.preReleaseVersion?.data?.id)
+    if (!withPreRelease.ok) {
+      //  A read that failed is not an absent pre-release version:  treating
+      //  it as absent would let an irreversible submission go out on a check
+      //  that never ran, and it would swallow the one failure that matters
+      //  most here, a rejected key.
+      console.error(`submit-review: ${describeError(withPreRelease)}`);
+      process.exitCode = 2;
+      return;
+    }
+    const included = withPreRelease.parsed?.included;
+    const preReleaseId = withPreRelease.parsed?.data?.relationships?.preReleaseVersion?.data?.id;
+    const hasPreRelease = typeof preReleaseId === "string" && preReleaseId.length > 0;
+    //  A build with no pre-release version carries no include:  JSON:API
+    //  leaves the member out rather than sending an empty list, and there is
+    //  nothing to compare in that case.  An include that is missing while the
+    //  build names one is a read that could not be understood.
+    if (hasPreRelease && !Array.isArray(included)) {
+      console.error(
+        `submit-review: not submitting, the build names pre-release ${preReleaseId} and the read returns no include for it`
+      );
+      process.exitCode = 2;
+      return;
+    }
+    const preRelease = hasPreRelease
+      ? included.find((item) => isPlainObject(item) && item.id === preReleaseId)
       : null;
-    const preRelease = included.find((item) => isPlainObject(item) && item.id === preReleaseId);
     const marketing = preRelease && isPlainObject(preRelease.attributes)
       ? preRelease.attributes.versionString
       : null;

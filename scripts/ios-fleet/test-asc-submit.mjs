@@ -30,7 +30,13 @@ const SUBMISSION_ID = "sub-1";
 //
 // `options` says what the server should report:
 //   iphoneScreens / ipadScreens: the count in each display type's set
+//   desktopScreens: the count in the macOS display type's set; the set is
+//     only served when this is given, so a server that does not name it is a
+//     version that carries no desktop screenshot at all
 //   setsFail: the screenshot-set read answers 401
+//   preReleaseFails: the build read answers 401
+//   preReleaseMissing: the build read names no pre-release version, so the
+//     document carries no `included` member
 //   boundTo: the version the review submission is bound to
 //   platform: the platform the submission answers with
 function serve(options) {
@@ -62,7 +68,7 @@ function serve(options) {
         if (options.setsFail) {
           return json(401, { errors: [{ title: "unauthorized" }] });
         }
-        return json(200, { data: [
+        const sets = [
           {
             id: "set-1",
             attributes: { screenshotDisplayType: "APP_IPHONE_67", screenshotCount: options.iphoneScreens }
@@ -71,12 +77,29 @@ function serve(options) {
             id: "set-2",
             attributes: { screenshotDisplayType: "APP_IPAD_PRO_129", screenshotCount: options.ipadScreens }
           }
-        ] });
+        ];
+        if (options.desktopScreens !== undefined) {
+          sets.push({
+            id: "set-3",
+            attributes: { screenshotDisplayType: "APP_DESKTOP", screenshotCount: options.desktopScreens }
+          });
+        }
+        return json(200, { data: sets });
       }
       if (url === `/v1/appStoreVersions/${VERSION_ID}/build`) {
         return json(200, { data: { type: "builds", id: "build-1", attributes: { version: "243" } } });
       }
       if (url === `/v1/builds/build-1`) {
+        if (options.preReleaseFails) {
+          return json(401, { errors: [{ title: "unauthorized" }] });
+        }
+        if (options.preReleaseMissing) {
+          //  A build that names no pre-release version, so the document
+          //  carries no `included` member at all.
+          return json(200, {
+            data: { type: "builds", id: "build-1", attributes: { version: "243" } }
+          });
+        }
         return json(200, {
           data: {
             type: "builds",
@@ -125,8 +148,12 @@ function serve(options) {
 function submit(base, args = []) {
   return new Promise((resolve) => {
     const child = spawn("node", [script, "submit-review", VERSION_ID, ...args], {
+      //  The child is given the values it needs and nothing else:  a wholesale
+      //  copy of the parent environment would hand every credential on this
+      //  machine to the command under test.
       env: {
-        ...process.env,
+        PATH: process.env.PATH,
+        HOME: process.env.HOME,
         ASC_API_BASE: base,
         ASC_KEY_ID: "SYNTHETICKEYID1",
         ASC_ISSUER_ID: "synthetic-issuer",
@@ -222,6 +249,33 @@ test("a version whose version string does not match the build is not submitted",
   });
 });
 
+test("a failed build read stops the submission", async () => {
+  //  The build read carries the version-string comparison.  A read that
+  //  failed is not a build with no pre-release version:  submitting on it
+  //  would send the build to review without the check that would have caught
+  //  a mismatched version.
+  await withServer({ ...READY, preReleaseFails: true }, async (base, patched) => {
+    const { code, stderr } = await submit(base);
+    assert.equal(code, 2, `expected a refusal, got ${code}: ${stderr}`);
+    assert.ok(
+      /submit-review: .*rejected the key/.test(stderr),
+      `the failed read was not reported as one:\n${stderr}`
+    );
+    assert.equal(patched.length, 0, "the submission was patched after a failed build read");
+  });
+});
+
+test("a build with no pre-release version is submitted", async () => {
+  //  JSON:API leaves `included` out when the document has no included
+  //  resources, so a build with no pre-release version must not be refused
+  //  for the absence of a comparison it could not have made.
+  await withServer({ ...READY, preReleaseMissing: true }, async (base, patched) => {
+    const { code, stderr } = await submit(base);
+    assert.equal(code, 0, `expected a clean run, got ${code}: ${stderr}`);
+    assert.equal(patched.length, 1, "the submission was not patched");
+  });
+});
+
 test("a ready version is submitted, and only the report is on stdout", async () => {
   await withServer(READY, async (base, patched) => {
     const { code, stdout, stderr } = await submit(base);
@@ -240,12 +294,25 @@ test("a ready version is submitted, and only the report is on stdout", async () 
 });
 
 test("the platform can be chosen, and a bad one is refused", async () => {
-  await withServer(READY, async (base, patched) => {
+  //  A macOS version carries desktop screenshots, so it is submitted against
+  //  a server that serves them rather than the iPhone and iPad sets.
+  await withServer({ ...READY, iphoneScreens: 0, ipadScreens: 0, desktopScreens: 3 }, async (base, patched) => {
     const { code, stdout } = await submit(base, [SUBMISSION_ID, "MAC_OS"]);
     assert.equal(code, 0, "the macOS platform was not accepted");
     const report = JSON.parse(stdout.trim());
     assert.equal(report.platform, "MAC_OS");
     assert.equal(patched[0].body?.data?.attributes?.platform, "MAC_OS");
+  });
+  await withServer(READY, async (base, patched) => {
+    //  The iPhone and iPad sets a macOS version does not carry are not
+    //  enough for it, and submitting it anyway is the failure to catch.
+    const { code, stderr } = await submit(base, [SUBMISSION_ID, "MAC_OS"]);
+    assert.equal(code, 2, `expected a refusal, got ${code}: ${stderr}`);
+    assert.ok(
+      /no screenshot for desktop/.test(stderr),
+      `the refusal did not say what was missing:\n${stderr}`
+    );
+    assert.equal(patched.length, 0, "the macOS submission was patched with no desktop screenshot");
   });
   await withServer(READY, async (base) => {
     const { code, stderr } = await submit(base, [SUBMISSION_ID, "WINDOWS"]);
