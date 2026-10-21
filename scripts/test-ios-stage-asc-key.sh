@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Offline test for the ASC key handoff in .github/workflows/ios-ship.yml:
-# scripts/ios-stage-asc-key.sh itself, then the real "Load ASC credentials"
-# run block driven by a fake Infisical CLI.  No Apple or Infisical credential
-# is used; every key below is a synthetic fixture.
+# scripts/ios-stage-asc-key.sh itself, then the real fetch script driven by a
+# stubbed Infisical.  No Apple or Infisical credential is used; every key
+# below is a synthetic fixture.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -66,92 +66,39 @@ fi
 cmp "$GITHUB_ENV" "$tmp_dir/before-empty-env"
 [[ "$(find "$ASC_STAGING_ROOT" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" == 2 ]]
 
-# Exercise the actual workflow run block using a fake Infisical CLI.
-python3 - "$workflow" "$tmp_dir/workflow-load.sh" <<'PYTHON'
-import pathlib, sys
-text = pathlib.Path(sys.argv[1]).read_text()
-section = text.split('      - name: Load ASC credentials (Fleet-OPS prod /asc)\n', 1)[1]
-section = section.split('\n      - name:', 1)[0]
-run = section.split('        run: |\n', 1)[1]
-pathlib.Path(sys.argv[2]).write_text('\n'.join(line[10:] for line in run.splitlines() if line.startswith('          ')) + '\n')
-PYTHON
-mkdir "$tmp_dir/bin" "$tmp_dir/workspace" "$tmp_dir/workspace/scripts"
-ln -s "$repo_root/scripts/ios-stage-asc-key.sh" "$tmp_dir/workspace/scripts/ios-stage-asc-key.sh"
-cat > "$tmp_dir/bin/infisical" <<'CLI'
-#!/usr/bin/env bash
-# Fake CLI.  Records the project and path of every read so the test can prove
-# the ASC trio comes from Fleet-OPS /asc and nowhere else.
-case "${1:-}" in
-  login) printf '%s\n' synthetic-session-token ;;
-  secrets)
-    printf '%s\n' "$*" >> "$ASC_TEST_CALLS"
-    if [[ -n "${ASC_TEST_EMPTY:-}" && "${3:-}" == "$ASC_TEST_EMPTY" ]]; then
-      exit 0
-    fi
-    if [[ "${3:-}" == ASC_KEY_P8 ]]; then
-      cat "$ASC_TEST_FIXTURE"
-    else
-      printf 'synthetic-%s\n' "${3:-value}"
-    fi
-    ;;
-  *) exit 1 ;;
-esac
-CLI
-chmod 700 "$tmp_dir/bin/infisical"
-: > "$tmp_dir/workflow-env"
-: > "$tmp_dir/calls"
-env PATH="$tmp_dir/bin:$PATH" \
-  GITHUB_WORKSPACE="$tmp_dir/workspace" GITHUB_ENV="$tmp_dir/workflow-env" \
-  ASC_STAGING_ROOT="$tmp_dir/staging" \
-  ASC_INFISICAL_PROJECT_ID=synthetic-fleet-project \
-  INFISICAL_UNIVERSAL_AUTH_CLIENT_ID=synthetic-client \
-  INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET=synthetic-secret \
-  INFISICAL_CLIENT_ID= INFISICAL_CLIENT_SECRET= \
-  ASC_TEST_FIXTURE="$tmp_dir/fixture" ASC_TEST_CALLS="$tmp_dir/calls" \
-  bash "$tmp_dir/workflow-load.sh" > "$tmp_dir/workflow-stdout" 2> "$tmp_dir/workflow-stderr"
-if grep -Fq -f "$tmp_dir/fixture" "$tmp_dir/workflow-env" "$tmp_dir/workflow-stdout" "$tmp_dir/workflow-stderr"; then
-  echo 'workflow leaked multiline key material' >&2
+# Guard the workflow handoff itself, not only the staging script.
+workflow="$repo_root/.github/workflows/ios-ship.yml"
+if grep -Eq 'for name in .*ASC_KEY_P8' "$workflow"; then
+  echo 'workflow still propagates the multiline key through an environment mask' >&2
   exit 1
 fi
-[[ "$(grep -c '^ASC_KEY_PATH=' "$tmp_dir/workflow-env")" == 1 ]]
-grep -q '^ASC_KEY_ID=synthetic-ASC_KEY_ID$' "$tmp_dir/workflow-env"
-grep -q '^ASC_ISSUER_ID=synthetic-ASC_ISSUER_ID$' "$tmp_dir/workflow-env"
-if grep -q '^ASC_KEY_P8=' "$tmp_dir/workflow-env"; then
-  echo 'the private key was exported through the environment' >&2
+if ! grep -Fq 'scripts/stage-asc-key.mjs' "$workflow"; then
+  echo 'workflow does not use the protected key-file handoff' >&2
   exit 1
 fi
-workflow_key="$(sed -n 's/^ASC_KEY_PATH=//p' "$tmp_dir/workflow-env")"
-cmp "$tmp_dir/fixture" "$workflow_key"
-[[ "$(file_mode "$workflow_key")" == 600 ]]
-[[ ! -s "$tmp_dir/workflow-stderr" ]]
-# Exactly three reads, all from the Fleet-OPS project at /asc.
-[[ "$(wc -l < "$tmp_dir/calls" | tr -d ' ')" == 3 ]]
-if grep -v -e '--projectId=synthetic-fleet-project' "$tmp_dir/calls" | grep -q .; then
-  echo 'an ASC value was read from a project other than Fleet-OPS' >&2
+if grep -Eq 'infisical secrets get|infisical/get-cli' "$workflow"; then
+  echo 'workflow reads a secret through the bare Infisical CLI' >&2
   exit 1
 fi
-if grep -v -e '--path=/asc' "$tmp_dir/calls" | grep -q .; then
-  echo 'an ASC value was read from a path other than /asc' >&2
+if grep -Fq '8dae6d03' "$workflow"; then
+  echo 'workflow hard-codes the Infisical project id' >&2
+  exit 1
+fi
+# No new code may talk to the vault directly: the values come from the
+# approved composite action.
+if grep -Eq 'listSecretsRaw|loginUniversalAuth' "$workflow"; then
+  echo 'workflow reads the vault directly instead of through the approved action' >&2
+  exit 1
+fi
+# The staging script is what hands the key to the protected handoff.
+if ! grep -Fq 'ios-stage-asc-key.sh' "$repo_root/scripts/stage-asc-key.mjs"; then
+  echo 'the fetch script does not hand the key to the staging script' >&2
   exit 1
 fi
 
-# A missing value must fail the step and name Fleet-OPS /asc, not fall back.
-for missing in ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8; do
-  : > "$tmp_dir/missing-env"
-  if env PATH="$tmp_dir/bin:$PATH" \
-    GITHUB_WORKSPACE="$tmp_dir/workspace" GITHUB_ENV="$tmp_dir/missing-env" \
-    ASC_STAGING_ROOT="$tmp_dir/staging" \
-    ASC_INFISICAL_PROJECT_ID=synthetic-fleet-project \
-    INFISICAL_UNIVERSAL_AUTH_CLIENT_ID=synthetic-client \
-    INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET=synthetic-secret \
-    INFISICAL_CLIENT_ID= INFISICAL_CLIENT_SECRET= \
-    ASC_TEST_FIXTURE="$tmp_dir/fixture" ASC_TEST_CALLS="$tmp_dir/calls" \
-    ASC_TEST_EMPTY="$missing" bash "$tmp_dir/workflow-load.sh" \
-    > "$tmp_dir/missing-stdout" 2> "$tmp_dir/missing-stderr"; then
-    echo "missing $missing was accepted" >&2
-    exit 1
-  fi
-  grep -q 'Fleet-OPS prod /asc' "$tmp_dir/missing-stdout" "$tmp_dir/missing-stderr"
-done
+# The end-to-end handoff: a stubbed Infisical, the real fetch script and the
+# real staging script.  The key is staged to a mode-600 file, only its path
+# is published, and the value never reaches the environment or the log.
+node --test "$repo_root/scripts/stage-asc-key.node-test.mjs" > /dev/null
 
 echo 'ios-stage-asc-key: all tests passed'
