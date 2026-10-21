@@ -130,6 +130,46 @@ public enum QuotaWindowVocabulary {
         }
     }
 
+    /// The cadence in the words an at-cap line uses: "7-day", "5-hour".
+    ///
+    /// A window that already carries the canonical cadence keeps it; anything
+    /// else is re-derived from its own label, so an at-cap line never says
+    /// "Other limit" when the window meant something narrower.
+    public static func atCapCadence(cadence: String, resetAt: Date? = nil) -> String {
+        let known = [fiveHour, oneDay, sevenDay, oneMonth]
+        if known.contains(cadence) { return cadence }
+        return standardCadence(windowToken: nil, label: cadence, resetAt: resetAt, monthlyHint: false)
+    }
+
+    /// The countdown an at-cap line quotes: the two largest non-zero units of
+    /// "1d 13h", "2h 42m", "45m".  A unit that is zero is skipped rather than
+    /// shown, so a countdown never reads "1d 0h".
+    ///
+    /// Empty when the window has no reset clock, and "due" when the reset has
+    /// already passed and a fresh reading has not arrived yet.
+    public static func resetCountdown(_ resetAt: Date?, now: Date = Date()) -> String {
+        guard let resetAt else { return "" }
+        let seconds = Int(resetAt.timeIntervalSince(now).rounded())
+        guard seconds > 0 else { return "due" }
+        guard seconds >= 60 else { return "<1m" }
+        let minutes = seconds / 60
+        let units = [(minutes / 1_440, "d"), ((minutes % 1_440) / 60, "h"), (minutes % 60, "m")]
+        return units.filter { $0.0 > 0 }.prefix(2).map { "\($0.0)\($0.1)" }.joined(separator: " ")
+    }
+
+    /// The line a capped plan says instead of its bars: "7-day cap resets in
+    /// 1d 13h".
+    ///
+    /// Shared by the Mac's menu-bar window, its PiP and the phone companion, so
+    /// one plan reads the same on every surface.  Owner 2026-10-21: the phone
+    /// said nothing at all when a provider was at its cap, so a capped Codex
+    /// or Antigravity plan looked like any other.
+    public static func atCapSummary(cadence: String, resetAt: Date?, now: Date = Date()) -> String {
+        let countdown = resetCountdown(resetAt, now: now)
+        guard !countdown.isEmpty, countdown != "due" else { return "\(cadence) cap" }
+        return "\(cadence) cap resets in \(countdown)"
+    }
+
     public static func isExtraAllowanceLabel(_ label: String) -> Bool {
         let lower = label.lowercased()
         return lower.contains("additional additional")

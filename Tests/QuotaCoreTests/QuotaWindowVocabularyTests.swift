@@ -90,4 +90,46 @@ final class QuotaWindowVocabularyTests: XCTestCase {
             label: "Weekly"
         ))
     }
+
+    // MARK: - The line a capped plan says
+
+    /// The cap line is shared by the Mac's menu-bar window, its PiP and the
+    /// phone companion, so one plan reads the same on every surface.
+    func testAtCapSummaryNamesTheCapAndCountsDownToItsReset() {
+        let now = Date(timeIntervalSince1970: 1_760_000_000)
+        let reset = now.addingTimeInterval(37 * 3_600 + 30 * 60)
+        XCTAssertEqual(QuotaWindowVocabulary.atCapSummary(cadence: "7-day", resetAt: reset, now: now),
+                       "7-day cap resets in 1d 13h")
+        XCTAssertEqual(QuotaWindowVocabulary.atCapSummary(cadence: "5-hour", resetAt: now.addingTimeInterval(3_600), now: now),
+                       "5-hour cap resets in 1h")
+    }
+
+    /// A cap with no clock still says so, and a reset that has already passed
+    /// does not become "resets in due".
+    func testAtCapSummaryWithoutAUsableCountdownJustNamesTheCap() {
+        let now = Date(timeIntervalSince1970: 1_760_000_000)
+        XCTAssertEqual(QuotaWindowVocabulary.atCapSummary(cadence: "7-day", resetAt: nil, now: now),
+                       "7-day cap")
+        XCTAssertEqual(QuotaWindowVocabulary.atCapSummary(cadence: "7-day", resetAt: now.addingTimeInterval(-60), now: now),
+                       "7-day cap")
+    }
+
+    /// The countdown skips a unit that is zero, so it never reads "1d 0h".
+    func testResetCountdownSkipsZeroUnits() {
+        let now = Date(timeIntervalSince1970: 1_760_000_000)
+        XCTAssertEqual(QuotaWindowVocabulary.resetCountdown(now.addingTimeInterval(86_400), now: now), "1d")
+        XCTAssertEqual(QuotaWindowVocabulary.resetCountdown(now.addingTimeInterval(2 * 3_600 + 42 * 60), now: now), "2h 42m")
+        XCTAssertEqual(QuotaWindowVocabulary.resetCountdown(now.addingTimeInterval(45 * 60), now: now), "45m")
+        XCTAssertEqual(QuotaWindowVocabulary.resetCountdown(now.addingTimeInterval(30), now: now), "<1m")
+        XCTAssertEqual(QuotaWindowVocabulary.resetCountdown(nil, now: now), "")
+    }
+
+    /// A window that already carries the canonical cadence keeps it; anything
+    /// else is re-derived, so an at-cap line never says "Other limit" when the
+    /// window meant something narrower.
+    func testAtCapCadenceKeepsTheCanonicalName() {
+        XCTAssertEqual(QuotaWindowVocabulary.atCapCadence(cadence: "7-day"), "7-day")
+        XCTAssertEqual(QuotaWindowVocabulary.atCapCadence(cadence: "5-hour"), "5-hour")
+        XCTAssertEqual(QuotaWindowVocabulary.atCapCadence(cadence: "weekly"), "7-day")
+    }
 }

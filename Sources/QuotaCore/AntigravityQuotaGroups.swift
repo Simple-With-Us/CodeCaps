@@ -156,12 +156,23 @@ public enum AntigravityQuotaGroups {
             let driving = counted.min {
                 ($0.boundedRemainingPercent ?? 100) < ($1.boundedRemainingPercent ?? 100)
             }
+            // A pool whose weekly cap is spent is at its cap even when the
+            // provider reports no number for that weekly — it says the
+            // allowance is gone in words and leaves the figure out.  The
+            // weekly then drives the pool at zero, so the row names the cap
+            // that binds instead of offering a number the owner cannot act
+            // on, and its reset is the one worth counting down to.
+            let spentWeekly = weeklyExhausted
+                ? ordered.first { !$0.isSubModelLimit && cadence($0) == "weekly" }
+                : nil
+            let headline = driving ?? spentWeekly
             result.append(Pool(key: key,
                                windows: ordered,
-                               remainingPercent: driving?.boundedRemainingPercent,
+                               remainingPercent: headline?.boundedRemainingPercent
+                                   ?? (weeklyExhausted ? 0 : nil),
                                weeklyExhausted: weeklyExhausted,
-                               drivingWindowId: driving?.id,
-                               resetAt: driving?.resetDate,
+                               drivingWindowId: headline?.id,
+                               resetAt: headline?.resetDate,
                                maskedWindowIds: masked))
         }
         return result

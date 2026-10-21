@@ -52,6 +52,22 @@ public struct AntigravitySummaryReader: Sendable {
                     let label = modelId == "argon"
                         ? "Gemini 4 Argon · \(cadenceName)"
                         : "\(family) · \(cadenceName)"
+                    // A bucket that reports no fraction means none remains —
+                    // it does not mean the reading is unknown.  Owner 2026-09-04:
+                    // an omitted remaining value (N/A in the provider's table)
+                    // means the allowance is spent, so "treat as exhausted 0%,
+                    // not 'unknown' and not 100%".  The rest of the fleet says
+                    // the same thing: the Usage Monitor collector turns a
+                    // missing fraction into `isExhausted` with 0% remaining,
+                    // and BotFleet's `isAntigravityModelCapped` counts a
+                    // missing percentage as capped while `remainingPercentDisplay`
+                    // shows 0% for it.
+                    //
+                    // Reading it as unknown here is what let the Mac offer quota
+                    // that was not there.  An unknown weekly window drops out of
+                    // its pool's count, so the five-hour window drove the pool's
+                    // headline instead, and the row showed a number the owner
+                    // could not act on while the pool was at its cap.
                     windows.append(QuotaWindow(
                         id: "local-mac:antigravity-summary:\(bucketID)",
                         provider: "Antigravity",
@@ -62,8 +78,9 @@ public struct AntigravitySummaryReader: Sendable {
                         modelId: modelId,
                         modelType: modelId,
                         label: label,
-                        remainingPercent: fraction.map { $0 * 100 },
-                        remainingUnknown: fraction == nil,
+                        remainingPercent: fraction.map { $0 * 100 } ?? 0,
+                        remainingUnknown: false,
+                        isExhausted: fraction == nil,
                         resetAt: reset,
                         window: period,
                         occurredAt: iso8601(observed),

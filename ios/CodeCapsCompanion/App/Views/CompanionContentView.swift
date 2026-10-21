@@ -382,6 +382,32 @@ public struct CompanionContentView: View {
                 }
             }
 
+            // The cap line.  The Mac's menu-bar window and PiP say which
+            // allowance ran out and when it lifts; the phone said nothing, so
+            // a capped Codex or Antigravity plan looked like any other.
+            if let atCapSummary = item.atCapSummary(scope: model.sourceScope) {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(CompanionTheme.danger)
+                    Text(atCapSummary)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(CompanionTheme.danger)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.85)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 9)
+                .padding(.vertical, 5)
+                .background(CompanionTheme.danger.opacity(0.14), in: RoundedRectangle(cornerRadius: 6))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(CompanionTheme.danger.opacity(0.28), lineWidth: 0.5)
+                )
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("At cap. \(atCapSummary)")
+            }
+
             // Quota Bars side by side
             HStack(spacing: 12) {
                 if let short {
@@ -467,8 +493,8 @@ public struct CompanionContentView: View {
             Spacer(minLength: 8)
 
             CompanionUsageBar(
-                remainingPercent: win.remainingPercent,
-                elapsedFraction: win.elapsedFraction(),
+                remainingPercent: win.isMasked ? nil : win.remainingPercent,
+                elapsedFraction: win.isMasked ? nil : win.elapsedFraction(),
                 height: 7
             )
             .frame(width: 52)
@@ -942,8 +968,8 @@ public struct CompanionMeterView: View {
                 .frame(width: 52, alignment: .trailing)
 
             CompanionUsageBar(
-                remainingPercent: window.remainingPercent,
-                elapsedFraction: window.elapsedFraction(),
+                remainingPercent: window.isMasked ? nil : window.remainingPercent,
+                elapsedFraction: window.isMasked ? nil : window.elapsedFraction(),
                 height: 7
             )
             .frame(minWidth: 35, maxWidth: .infinity)

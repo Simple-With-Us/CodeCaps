@@ -179,6 +179,13 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
         )
     }
 
+    /// The cadence in the words an at-cap line uses: "7-day", "5-hour".  The
+    /// window already carries the canonical cadence, so this only re-derives it
+    /// when a window arrived with something else.
+    public var atCapCadenceLabel: String {
+        QuotaWindowVocabulary.atCapCadence(cadence: cadence, resetAt: resetAt)
+    }
+
     public var displayPercent: String {
         if isMasked { return "n/a" }
         guard let remainingPercent else { return "—" }
@@ -449,8 +456,17 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
         return resolved.first(where: { $0.window.id != short?.id })
     }
 
+    /// The card's headline percentage: the lowest honest reading on the card.
+    ///
+    /// A masked window is left out, because its reading is a number that must
+    /// not be believed.  The five-hour window of a pool whose weekly cap is
+    /// spent reports whatever it last saw, and the card put that on its
+    /// headline while the label beside it said "n/a".
     public func cardRemainingPercent(scope: CompanionSourceScope, now: Date = Date()) -> Double? {
-        cardWindows(scope: scope, now: now).compactMap(\.remainingPercent).min()
+        cardWindows(scope: scope, now: now)
+            .filter { !$0.isMasked }
+            .compactMap(\.remainingPercent)
+            .min()
     }
 
     public func cardDisplayPercent(scope: CompanionSourceScope, now: Date = Date()) -> String {
@@ -533,6 +549,38 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
         if remainingPercent <= 0 { return CompanionTheme.danger }
         if remainingPercent < 20 { return CompanionTheme.warning }
         return CompanionTheme.accent
+    }
+
+    /// The window that binds this provider's cap: a spent allowance, and among
+    /// the spent ones the one that resets last, because the plan stays capped
+    /// until that window recovers.
+    ///
+    /// Mirrors the Mac's `QuotaPlatformSection.atCapWindow()`, with two
+    /// differences the phone needs.  A masked window is skipped, because a
+    /// masked reading is a real number that must not be believed and only the
+    /// Antigravity pool knows that.  And a window the provider calls exhausted
+    /// counts even when it carries no percentage, because the provider's word
+    /// is authoritative: a source that reports a window exhausted knows
+    /// something the percentage does not.
+    ///
+    /// The windows are the card's own, resolved for the scope in view, so the
+    /// cap line can never contradict the meters and the headline beside it.
+    ///
+    /// Owner 2026-10-21: the phone said nothing when a provider was at its
+    /// cap, so a capped Codex or Antigravity plan looked like any other.
+    public func atCapWindow(scope: CompanionSourceScope = .allSources, now: Date = Date()) -> CompanionWindowItem? {
+        let eligible = cardWindows(scope: scope, now: now).filter { !$0.isMasked }
+        let spent = eligible.filter { $0.isExhausted || ($0.remainingPercent ?? 100) <= 0 }
+        return spent.max { ($0.resetAt ?? .distantPast) < ($1.resetAt ?? .distantPast) }
+    }
+
+    /// "7-day cap resets in 1d 13h" — the same wording the Mac's menu-bar
+    /// window and PiP use, so one plan reads the same on both surfaces.
+    public func atCapSummary(scope: CompanionSourceScope = .allSources, now: Date = Date()) -> String? {
+        guard let window = atCapWindow(scope: scope, now: now) else { return nil }
+        return QuotaWindowVocabulary.atCapSummary(cadence: window.atCapCadenceLabel,
+                                                  resetAt: window.resetAt,
+                                                  now: now)
     }
 
     public var elapsedFraction: Double? {
@@ -1741,6 +1789,16 @@ public final class CompanionQuotaModel: ObservableObject {
         )
     }
 
+    /// The level a weekly cap has to reach before the pool counts as spent.
+    ///
+    /// The Mac groups Antigravity's pools with `AntigravityQuotaGroups.weeklySpentThreshold`,
+    /// which is 0.5: the interface rounds 0.4% to 0%, so a cap that reads "at
+    /// cap" on one surface can carry a number that is not exactly zero.  The
+    /// phone used to test for exactly zero, so the same pool was capped on the
+    /// Mac and not on the phone, and each surface told the owner a different
+    /// thing about the same account.
+    public static let weeklySpentThreshold: Double = 0.5
+
     private func consolidateAntigravityPool(
         poolKey: String,
         title: String,
@@ -1760,7 +1818,7 @@ public final class CompanionQuotaModel: ObservableObject {
         }
 
         let weeklyPct = weeklyWin?.remainingPercent
-        let weeklyExhausted = (weeklyPct ?? 100) <= 0 || (weeklyWin?.isExhausted ?? false)
+        let weeklyExhausted = (weeklyPct ?? 100) <= Self.weeklySpentThreshold || (weeklyWin?.isExhausted ?? false)
 
         let controllingPct: Double?
         let isExhausted: Bool

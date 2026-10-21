@@ -1577,11 +1577,13 @@ func glanceAtCapCadenceLabel(_ snapshot: QuotaWindowSnapshot) -> String {
 }
 
 /// One-line cap summary: "7-day cap resets in 1d 13h".
+///
+/// The wording lives in `QuotaWindowVocabulary.atCapSummary` so the phone
+/// companion says the same thing as the Mac.
 func glanceAtCapSummary(_ snapshot: QuotaWindowSnapshot, now: Date) -> String {
-    let cadence = glanceAtCapCadenceLabel(snapshot)
-    let countdown = glanceResetCountdown(snapshot.resetAt, now: now)
-    guard !countdown.isEmpty else { return "\(cadence) cap" }
-    return "\(cadence) cap resets in \(countdown)"
+    QuotaWindowVocabulary.atCapSummary(cadence: glanceAtCapCadenceLabel(snapshot),
+                                       resetAt: snapshot.resetAt,
+                                       now: now)
 }
 
 /// Short weekday + time for the reset, e.g. "Tue 4:15 PM".

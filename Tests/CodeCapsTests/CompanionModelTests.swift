@@ -280,6 +280,62 @@ final class CompanionModelTests: XCTestCase {
         )
     }
 
+    // MARK: - The phone says when a provider is at its cap
+
+    /// Owner 2026-10-21: the phone showed no message for Codex or Antigravity
+    /// being at its cap, while the Mac's menu-bar window and PiP said so
+    /// clearly.  The card carries the same line now.
+    func testTheCompanionCardShowsTheAtCapLine() throws {
+        let view = try readCompanionContentViewSource()
+        XCTAssertTrue(
+            view.contains("item.atCapSummary(scope: model.sourceScope)"),
+            "the quota card must show the cap line"
+        )
+        XCTAssertTrue(
+            view.contains("At cap. \\(atCapSummary)"),
+            "the cap line must be announced to VoiceOver"
+        )
+    }
+
+    /// The model must be able to say which window binds the cap, and it must
+    /// use the shared wording so the phone and the Mac cannot drift.
+    func testTheCompanionModelComputesTheAtCapLine() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(source.contains("public func atCapSummary(scope: CompanionSourceScope"))
+        XCTAssertTrue(source.contains("public func atCapWindow(scope: CompanionSourceScope"))
+        XCTAssertTrue(
+            source.contains("QuotaWindowVocabulary.atCapSummary(cadence: window.atCapCadenceLabel"),
+            "the phone must use the shared cap wording, not a copy of it"
+        )
+    }
+
+    /// A masked window's reading must not be believed: it fed the card's
+    /// headline and the meter bar, so the phone drew a figure that the label
+    /// beside it called "n/a".
+    func testMaskedWindowsNeverFeedTheHeadlineOrTheBar() throws {
+        let model = try readCompanionModelSource()
+        XCTAssertTrue(
+            model.contains(".filter { !$0.isMasked }"),
+            "the card headline must leave masked windows out"
+        )
+        XCTAssertFalse(
+            model.contains("cardWindows(scope: scope, now: now).compactMap(\\.remainingPercent).min()"),
+            "the old headline counted masked windows"
+        )
+        let view = try readCompanionContentViewSource()
+        XCTAssertTrue(view.contains("remainingPercent: win.isMasked ? nil : win.remainingPercent"))
+        XCTAssertTrue(view.contains("remainingPercent: window.isMasked ? nil : window.remainingPercent"))
+    }
+
+    /// The Mac masks a pool's five-hour window at 0.5% remaining, because the
+    /// interface rounds that to 0%.  The phone tested for exactly zero, so the
+    /// same pool was capped on one surface and not on the other.
+    func testThePhoneAndTheMacAgreeOnWhenAWeeklyCapCountsAsSpent() throws {
+        let model = try readCompanionModelSource()
+        XCTAssertTrue(model.contains("public static let weeklySpentThreshold: Double = 0.5"))
+        XCTAssertTrue(model.contains("(weeklyPct ?? 100) <= Self.weeklySpentThreshold"))
+    }
+
     // MARK: - Local Snapshot Caching and Pull-to-Refresh Parity
 
     func testLocalSnapshotPersistenceMethods() throws {
