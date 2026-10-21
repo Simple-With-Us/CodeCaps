@@ -489,50 +489,68 @@ test('an unresolved Infisical reference is rejected before anything is staged', 
  * failed, so a failed install is never reported as a clean run.
  *
  * The install is made to fail with a stub `curl` on PATH, so nothing here
- * reaches the network and the pinned download cannot succeed.  The credential
- * the consumer needs is already in the job's environment file, which is the
- * case this path exists for:  a key was written by an earlier step, the
- * tooling could not be installed, and the key must still not survive.
+ * reaches the network and the pinned download cannot succeed.
+ *
+ * The state is the one the release workflows reach after a failed install.
+ * No step before the installer writes ASC_KEY_ID or ASC_ISSUER_ID into the
+ * job's environment file, and with the install failed there is no working
+ * reader and no minted token, so the consumer cannot resolve the identifiers
+ * and fails on the first one.  Only the key is seeded, because a key-bearing
+ * entry is what the consumer has to remove even when it fails:  the key must
+ * not survive into the steps that follow.
  */
 test('an installer failure still runs the consumer and clears the key', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'asc-install-'));
   try {
     const envFile = join(dir, 'env');
-    writeEnvEntry(envFile, 'ASC_KEY_ID', 'FILEKEYID');
-    writeEnvEntry(envFile, 'ASC_ISSUER_ID', 'FILEISSUER');
     writeEnvEntry(envFile, 'ASC_KEY_P8', KEY);
 
     // A stub curl that always fails:  the pinned download cannot succeed.
+    // A stub reader that fails the way a reader with no token fails (exit 4),
+    // so the consumer's fallback never reaches a reader this machine happens
+    // to have installed.
     const stubDir = join(dir, 'stub');
     mkdirSync(stubDir, { recursive: true });
     writeFileSync(join(stubDir, 'curl'), '#!/usr/bin/env bash\nexit 22\n', { mode: 0o755 });
+    const reader = join(stubDir, 'fleet-secrets');
+    writeFileSync(reader, '#!/usr/bin/env bash\nexit 4\n', { mode: 0o755 });
 
     const home = join(dir, 'home');
     mkdirSync(home, { recursive: true });
     const staging = join(dir, 'staging');
     mkdirSync(staging, { recursive: true });
 
-    const result = await runScript(fileURLToPath(new URL('install-release-secrets-tooling.sh', import.meta.url)), {
-      env: {
-        ...process.env,
-        HOME: home,
-        PATH: `${stubDir}:${process.env.PATH}`,
-        GITHUB_ENV: envFile,
-        ASC_STAGING_ROOT: staging,
-        INFISICAL_PROJECT_ID: 'test-project-id',
-        INFISICAL_CLIENT_ID: 'test-client-id',
-        INFISICAL_CLIENT_SECRET: 'test-client-secret',
-      },
-    });
+    const env = {
+      ...process.env,
+      HOME: home,
+      PATH: `${stubDir}:${process.env.PATH}`,
+      FLEET_SECRETS: reader,
+      GITHUB_ENV: envFile,
+      ASC_STAGING_ROOT: staging,
+      INFISICAL_PROJECT_ID: 'test-project-id',
+      INFISICAL_CLIENT_ID: 'test-client-id',
+      INFISICAL_CLIENT_SECRET: 'test-client-secret',
+    };
+    // Nothing from the shell that runs the suite may stand in for the
+    // credentials or the token the failed install never produced.
+    for (const name of ['ASC_KEY_ID', 'ASC_ISSUER_ID', 'ASC_KEY_P8', 'INFISICAL_TOKEN']) delete env[name];
+
+    const result = await runScript(fileURLToPath(new URL('install-release-secrets-tooling.sh', import.meta.url)), { env });
 
     // The install failed, and the step says so instead of reporting success.
     assert.notEqual(result.code, 0, 'a failed install must fail the step');
     assert.match(result.stderr, /could not be downloaded/, 'the failure must name what failed');
 
-    // The consumer ran anyway:  it staged the key, so the path crossed
-    // forward, and the key-bearing entry is out of the environment file.
+    // The consumer ran anyway:  it could not resolve the identifiers, so it
+    // said which one was missing, and it still took the key-bearing entry out
+    // of the environment file on its way out.
+    assert.match(
+      result.stderr,
+      /Missing ASC_KEY_ID in Fleet-OPS prod \/asc/,
+      'the consumer has to run, and it fails on the identifier the workflow never supplied',
+    );
     const imported = assertNoKeySurvives(envFile);
-    assert.ok(imported.ASC_KEY_PATH, 'the consumer has to run, so the key was staged');
+    assert.equal(imported.ASC_KEY_PATH, undefined, 'nothing was staged, so no key path crosses forward');
 
     // And the key never reached the log.
     assert.ok(!result.stdout.includes(KEY_MARKER), 'the key bytes must not reach stdout');
