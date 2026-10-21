@@ -166,14 +166,44 @@ function inspectProductionProfile(encoded) {
     && xml.includes(`.${bundleIdentifier}</string>`);
 }
 
+// The App Store Connect client takes the key from the environment, because a
+// path on disk is not an approved secret source (Kody rule 42).  The hosted
+// runner stages the key to a mode-600 file and publishes only its path, so a
+// staged key is read here, with the hardened reader, and handed to the child
+// in the child's environment.
+//
+// The key never reaches a command line, a log, the environment file, or a
+// temporary file:  the reader prints it on stdout, the caller captures it,
+// and only the child process receives it.
+//
+// A path that names nothing is not a credential:  the run falls through and
+// the client resolves the credential the way it does today, from an exported
+// ASC_KEY_P8 or from fleet-secrets.
+export function stagedKeyEnvironment(env = process.env) {
+  const keyPath = env.ASC_KEY_PATH;
+  if (!keyPath) return {};
+  const reader = fileURLToPath(new URL('./ios-fleet/asc-key.mjs', import.meta.url));
+  try {
+    const pem = execFileSync(process.execPath, [reader, 'read', keyPath], {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], maxBuffer: 64 * 1024
+    });
+    return pem ? { ASC_KEY_P8: pem } : {};
+  } catch {
+    return {};
+  }
+}
+
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const client = fileURLToPath(new URL('./ios-fleet/asc-api.mjs', import.meta.url));
+  // The child gets the staged key in its environment, so the credential
+  // survives the hop without the client ever reading a file.
+  const childEnv = { ...process.env, ...stagedKeyEnvironment() };
   const request = async (method, path, body) => {
     const args = [client, method, path];
     if (body) args.push(JSON.stringify(body));
     try {
       return JSON.parse(execFileSync(process.execPath, args, {
-        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 8 * 1024 * 1024
+        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 8 * 1024 * 1024, env: childEnv
       }));
     } catch (error) {
       let codes = '';

@@ -8,6 +8,7 @@ umask 077
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAP="${ROOT}/ios/CodeCapsCompanion/appstore-profiles.json"
 CLIENT="${ROOT}/scripts/ios-fleet/asc-api.mjs"
+KEY_READER="${ROOT}/scripts/ios-fleet/asc-key.mjs"
 DEST="${HOME}/Library/MobileDevice/Provisioning Profiles"
 WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/cc-profiles.XXXXXX")"
 trap 'rm -rf "$WORKDIR"' EXIT
@@ -19,7 +20,34 @@ chmod 700 "$DEST"
   exit 1
 }
 
-node "$CLIENT" GET '/v1/profiles?filter[profileType]=IOS_APP_STORE&limit=200&include=bundleId' \
+# The client takes the key from the environment, because a path on disk is not
+# an approved secret source (Kody rule 42).  The hosted runner stages the key
+# to a mode-600 file and publishes only its path, so the staged key is read
+# here, with the hardened reader, and handed to the child in the child's
+# environment.  The key never reaches a command line, a log, the environment
+# file, or a temporary file.
+#
+# A path that names nothing is not a credential:  the run falls through and the
+# client resolves the credential the way it does today, from an exported
+# ASC_KEY_P8 or from fleet-secrets.
+staged_key=""
+if [[ -n "${ASC_KEY_PATH:-}" ]]; then
+  read_rc=0
+  staged_key="$(node "$KEY_READER" read "$ASC_KEY_PATH")" || read_rc=$?
+  if [[ "$read_rc" -ne 0 ]]; then
+    staged_key=""
+  fi
+fi
+
+run_client() {
+  if [[ -n "$staged_key" ]]; then
+    ASC_KEY_P8="$staged_key" node "$CLIENT" "$@"
+  else
+    node "$CLIENT" "$@"
+  fi
+}
+
+run_client GET '/v1/profiles?filter[profileType]=IOS_APP_STORE&limit=200&include=bundleId' \
   >"$WORKDIR/profiles.json"
 python3 - "$MAP" "$DEST" "$WORKDIR/profiles.json" <<'PY'
 import base64, json, os, plistlib, subprocess, sys
