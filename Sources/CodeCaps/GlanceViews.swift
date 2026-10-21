@@ -353,15 +353,15 @@ struct GlancePopover: View {
             openConsole(model.displaySections.first.map { .platform($0.id) } ?? .settingsSourcesFleet)
         } label: {
             HStack(spacing: 5) {
-                Text("Dashboard")
+                Text("Open CodeCaps")
                 Text("⌘1")
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(colorScheme == .dark ? Color.black.opacity(0.55) : Color.white.opacity(0.75))
             }
         }
         .buttonStyle(GlanceFooterProminentButtonStyle(model: model))
-        .help("Open Dashboard")
-        .accessibilityLabel("Open Dashboard")
+        .help("Open CodeCaps")
+        .accessibilityLabel("Open CodeCaps")
     }
 
     private var runawayFooterItems: [String] {
@@ -1043,6 +1043,7 @@ struct GlanceHeaderBar: View {
 /// itself.  Never re-cut, re-exported or substituted.
 struct GlanceBrandMark: View {
     static let asset: NSImage? = BrandMarkImage.asset
+    @Environment(\.colorScheme) private var colorScheme
 
     /// The frame is applied to EACH branch, not to the Group around them.
     /// A `.resizable()` image proposes its natural size, and the brand
@@ -1057,6 +1058,15 @@ struct GlanceBrandMark: View {
                     .renderingMode(.original)
                     .interpolation(.high)
                     .frame(width: Metrics.glanceBrandMarkSize, height: Metrics.glanceBrandMarkSize)
+                    .background {
+                        // The needle and the dots are dark, so dark
+                        // appearance needs a light ground for them or the
+                        // mark reads as two empty rings.
+                        if colorScheme == .dark {
+                            RoundedRectangle(cornerRadius: Metrics.glanceBrandMarkSize * 0.22, style: .continuous)
+                                .fill(BrandMarkImage.lightGround)
+                        }
+                    }
             } else {
                 // Only if the owner's artwork is ever missing from the bundle.
                 Image(systemName: "gauge.with.dots.needle.50percent")
