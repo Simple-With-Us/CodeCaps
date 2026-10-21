@@ -153,7 +153,7 @@ final class ConsoleState: ObservableObject {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        // A Settings page is a destination, never a place to resume.
+        // A Dashboard page is a destination, never a place to resume.
         let stored = defaults.string(forKey: "consoleLastPage").flatMap(ConsolePage.fromStorageKey)
         page = (stored?.isSettings == false ? stored : nil) ?? .settingsSourcesFleet
         if case .platform(let key) = page { pendingStoredKey = key }
@@ -547,7 +547,7 @@ struct ConsoleSidebar: View {
                         }
                     }
                 } header: {
-                    Eyebrow("SETTINGS")
+                    Eyebrow("DASHBOARD")
                 }
             }
             .listStyle(.sidebar)
@@ -606,7 +606,7 @@ struct ConsoleSidebar: View {
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
     }
 
-    /// Quotas rows carry a trailing value; Settings rows do not.  Two different
+    /// Quotas rows carry a trailing value; Dashboard rows do not.  Two different
     /// row views is what stops `.listStyle(.sidebar)` aligning them identically.
     private func quotaRow(_ row: DisplaySection) -> some View {
         HStack(spacing: 6) {
@@ -669,7 +669,7 @@ struct ConsoleSidebar: View {
 
     /// The sidebar footer exists only for a problem worth interrupting for:
     /// BotFleet quota sharing is unavailable and nothing else says so.  The
-    /// owner had this pinned here as a second copy of a Settings switch that is
+    /// owner had this pinned here as a second copy of a Dashboard switch that is
     /// on for almost everyone (2026-10-05), so a status line that never changes
     /// was removed with it; the footer now appears only when there is an error
     /// to show.
@@ -785,9 +785,9 @@ struct AllPlatformsPage: View {
                 Text(error).font(.system(size: 11)).foregroundStyle(.secondary)
             }
             Spacer()
-            Button("Open Settings") { state.page = .settingsSourcesFleet }
-                .help("Open Settings")
-                .accessibilityLabel("Open Settings")
+            Button("Open Dashboard") { state.page = .settingsSourcesFleet }
+                .help("Open Dashboard")
+                .accessibilityLabel("Open Dashboard")
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -936,7 +936,7 @@ struct PlatformDetailPage: View {
     }
 
     /// Editing a platform's presentation happens on that platform's own page,
-    /// which is why Settings ▸ Platforms needs no row selection and no flush.
+    /// which is why Dashboard ▸ Platforms needs no row selection and no flush.
     private var displaySection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Eyebrow("DISPLAY")

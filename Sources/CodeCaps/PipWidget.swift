@@ -313,7 +313,7 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
     /// The console window while it sits elevated above the Glance popover
     /// (`popUpMenuWindow + 1`), or nil once it has been lowered.  Remembered
     /// rather than applied once: the panel is torn down and recreated at
-    /// `.floating` whenever the PiP toggle on the elevated Settings page is
+    /// `.floating` whenever the PiP toggle on the elevated Dashboard page is
     /// flipped, and the HUD or the console can be moved while elevated.
     private weak var elevatedConsole: NSWindow?
 
@@ -370,7 +370,7 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
         )
         p.isFloatingPanel = true
         // Start at `.floating`; `applyLevel()` below lifts the HUD again if it
-        // is recreated (Settings toggle) while the console is still elevated
+        // is recreated (Dashboard toggle) while the console is still elevated
         // and its frame overlaps the console.
         p.level = .floating
         p.isMovableByWindowBackground = true
@@ -742,8 +742,8 @@ struct PipWidgetView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("Open Settings")
-        .accessibilityLabel("Open Settings")
+        .help("Open Dashboard")
+        .accessibilityLabel("Open Dashboard")
     }
 
     private var closeButton: some View {
