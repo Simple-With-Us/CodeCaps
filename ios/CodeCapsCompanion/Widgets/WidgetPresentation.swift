@@ -63,13 +63,22 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
     /// token (e.g. two "7d" bars).  "Free weekly limit" reads "weekly",
     /// "Additional tokens" reads "additional".  Empty when the window label
     /// carries no such qualifier.
+    ///
+    /// Owner 2026-10-21: the qualifier previously returned the hyphenated
+    /// cadence form ("7-day", "5-hour", "1-month") and sat beside the
+    /// cadence token in the same caption row — a `7d 7-day` duplicate on the
+    /// Antigravity weekly row.  Short nouns that do not repeat the cadence
+    /// are kept here, so two 7-day bars read "weekly" / "additional" (owner,
+    /// 2026-10-21).
     public var barQualifier: String {
-        if QuotaWindowVocabulary.isExtraAllowanceLabel(label) { return QuotaWindowVocabulary.otherLimit }
+        if QuotaWindowVocabulary.isExtraAllowanceLabel(label) {
+            return QuotaWindowVocabulary.barQualifierAdditional
+        }
         let text = label.lowercased()
-        if text.contains("weekly") { return QuotaWindowVocabulary.sevenDay }
-        if text.contains("monthly") || text.contains("billing") { return QuotaWindowVocabulary.oneMonth }
-        if text.contains("daily") { return "daily" }
-        if text.contains("hourly") { return QuotaWindowVocabulary.fiveHour }
+        if text.contains("weekly") { return QuotaWindowVocabulary.barQualifierWeekly }
+        if text.contains("monthly") || text.contains("billing") { return QuotaWindowVocabulary.barQualifierMonthly }
+        if text.contains("daily") { return QuotaWindowVocabulary.barQualifierDaily }
+        if text.contains("hourly") { return QuotaWindowVocabulary.barQualifierHourly }
         return ""
     }
 
