@@ -48,6 +48,16 @@ final class BrandAssetTests: XCTestCase {
     /// its opaque pixels, so the share is a long way above this.
     private static let templateInkShare = 0.95
 
+    /// How much of the two silhouettes has to agree.
+    ///
+    /// The shipped template and the shipped colour mark agree on 94 percent
+    /// of their shape, so this leaves room for a re-rasterisation of the same
+    /// vector while still rejecting a filled shape or an unrelated mark.
+    private static let silhouetteOverlap = 0.85
+
+    /// The grid each silhouette is reduced to before the two are compared.
+    private static let silhouetteCells = 48
+
     /// The repository root, found from this file's own path so the test reads
     /// the committed palette rather than a copy the build happened to make.
     private static var repositoryRoot: URL {
@@ -120,8 +130,8 @@ final class BrandAssetTests: XCTestCase {
             let closest = sampled.map { Self.distance($0, target) }.min() ?? .greatestFiniteMagnitude
             XCTAssertLessThanOrEqual(closest, Self.colourTolerance, """
                 the \(role) ring is missing from \(Self.colourMark).png:  the closest sampled \
-                pixel is \(Int(closest)) units away, so the bundled artwork is not the owner's \
-                mark.
+                pixel is \(Self.describe(closest)) units away, so the bundled artwork is not the \
+                owner's mark.
                 """)
         }
     }
@@ -160,6 +170,28 @@ final class BrandAssetTests: XCTestCase {
             \(Self.templateMark).png is a filled block rather than a silhouette:  its transparent \
             pixels do not outnumber its opaque ones, so a black square would pass as the owner's \
             mark.
+            """)
+
+        // The dark ink and the transparency both hold for any dark shape, so
+        // the shape itself is checked too:  the template has to be the same
+        // mark the About and Settings pages draw, or the menu bar and the two
+        // floating headers show a different artwork from the rest of the app.
+        let colourURL = try XCTUnwrap(bundle.url(forResource: Self.colourMark, withExtension: "png"),
+                                      "\(Self.colourMark).png is missing from the CodeCaps resource bundle")
+        let colourRaster = try XCTUnwrap(Self.rawSamples(of: colourURL),
+                                         "\(Self.colourMark).png could not be read as a bitmap")
+        let templateGrid = Self.silhouetteGrid(of: raster)
+        let colourGrid = Self.silhouetteGrid(of: colourRaster)
+        XCTAssertFalse(templateGrid.isEmpty, "\(Self.templateMark).png has no opaque silhouette")
+        XCTAssertFalse(colourGrid.isEmpty, "\(Self.colourMark).png has no opaque silhouette")
+        let overlap = zip(templateGrid, colourGrid).reduce(0.0) { $0 + min($1.0, $1.1) }
+        let union = zip(templateGrid, colourGrid).reduce(0.0) { $0 + max($1.0, $1.1) }
+        let agreement = union > 0 ? overlap / union : 0
+        XCTAssertGreaterThanOrEqual(agreement, Self.silhouetteOverlap, """
+            \(Self.templateMark).png is not the same silhouette as \(Self.colourMark).png:  the two \
+            agree on only \(Int(agreement * 100)) percent of their shape, so the menu bar, the PiP \
+            widget header and the Glance popover header would draw a different artwork from the \
+            one the About and Settings pages show.
             """)
     }
 
@@ -281,5 +313,50 @@ final class BrandAssetTests: XCTestCase {
         let dg = (a.1 - b.1) * 255.0
         let db = (a.2 - b.2) * 255.0
         return (dr * dr + dg * dg + db * db).squareRoot()
+    }
+
+    /// A distance in plain words.
+    ///
+    /// `Int()` traps on a value this large, and a test that crashes while it
+    /// is reporting a failure reports nothing at all, so the distance is
+    /// formatted rather than converted.
+    private static func describe(_ distance: Double) -> String {
+        distance < 1_000_000 ? "\(Int(distance))" : "no comparable pixel"
+    }
+
+    /// The mark's opaque silhouette, normalised by its own bounding box and
+    /// reduced to a grid of coverage fractions.
+    ///
+    /// Normalising by the bounding box is what lets a cropped black template
+    /// and a 512px colour raster be compared at all:  the artwork lands in
+    /// the same place in the grid even though the canvases differ.
+    private static func silhouetteGrid(of raster: Raster) -> [Double] {
+        let width = raster.width
+        let height = raster.height
+        let bytes = raster.bytes
+        var minX = width, maxX = -1, minY = height, maxY = -1
+        for y in 0..<height {
+            for x in 0..<width where bytes[(y * width + x) * 4 + 3] >= 253 {
+                if x < minX { minX = x }
+                if x > maxX { maxX = x }
+                if y < minY { minY = y }
+                if y > maxY { maxY = y }
+            }
+        }
+        guard maxX >= minX, maxY >= minY else { return [] }
+        let boxWidth = maxX - minX + 1
+        let boxHeight = maxY - minY + 1
+        let cells = silhouetteCells
+        var grid = [Double](repeating: 0, count: cells * cells)
+        for y in 0..<height {
+            for x in 0..<width where bytes[(y * width + x) * 4 + 3] >= 253 {
+                let cellX = min(cells - 1, (x - minX) * cells / boxWidth)
+                let cellY = min(cells - 1, (y - minY) * cells / boxHeight)
+                grid[cellY * cells + cellX] += 1.0
+            }
+        }
+        let perCell = Double(boxWidth) * Double(boxHeight) / Double(cells * cells)
+        for index in grid.indices { grid[index] = min(1.0, grid[index] / perCell) }
+        return grid
     }
 }
