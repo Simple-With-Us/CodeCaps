@@ -115,6 +115,11 @@ public enum QuotaWindowVocabulary {
     /// (Kody rule 40, binding 2026-10-21).  A label resolves a group only
     /// through whole lexical tokens, below.
     ///
+    /// The canonical forms the widget renders — "7-day window", "5-hour
+    /// window", "1-day window", "1-month window" — name their period through
+    /// whole tokens too, so a bar whose own cadence does not resolve still
+    /// groups with the sibling that prints the same caption token.
+    ///
     /// An extra allowance is extra capacity of the period it doubles, so it
     /// groups with that window rather than standing alone.  It carries no
     /// cadence of its own, so its label is left out of the lookup rather
@@ -129,6 +134,11 @@ public enum QuotaWindowVocabulary {
             label: ""
         )
         if canonical != otherLimit { return canonical }
+        //  An extra allowance names no period of its own, and its label is
+        //  left out of the lookup:  it joins the group of the one sibling
+        //  that has a period, which is what makes the owner-approved pair
+        //  ("weekly" / "additional") reachable.
+        if isExtraAllowance { return otherLimit }
         //  The label resolves a group only through whole lexical tokens:
         //  "weekly" names the weekly group, "notweekly" names no group at all.
         let tokens = lexicalTokens(label)
@@ -136,6 +146,19 @@ public enum QuotaWindowVocabulary {
         if tokens.contains("monthly") || tokens.contains("billing") { return oneMonth }
         if tokens.contains("daily") { return oneDay }
         if tokens.contains("hourly") { return fiveHour }
+        //  The canonical forms the widget renders still name their period:
+        //  "7-day window", "5-hour window", "1-day window", "1-month window".
+        //  The caption token beside the bar resolves the same form through
+        //  the prose matcher, so the group has to resolve it too, or a bar
+        //  that prints "7d" is grouped as "Other limit" and split from the
+        //  sibling that prints the same token.
+        let hasDay = tokens.contains("day") || tokens.contains("days")
+        let hasHour = tokens.contains("hour") || tokens.contains("hours")
+        let hasMonth = tokens.contains("month") || tokens.contains("months")
+        if tokens.contains("7"), hasDay { return sevenDay }
+        if tokens.contains("1"), hasDay { return oneDay }
+        if tokens.contains("5"), hasHour { return fiveHour }
+        if tokens.contains("1"), hasMonth { return oneMonth }
         return canonical
     }
 

@@ -476,4 +476,54 @@ final class WidgetPresentationVocabularyTests: XCTestCase {
         ])
         XCTAssertEqual(qualifiers, [""])
     }
+
+    /// An extra allowance names no period of its own, so its label is left out
+    /// of the group lookup:  a label that happens to name a period must not
+    /// give the extra allowance a group of its own, or it stops joining the
+    /// sibling it doubles (Kody review 2026-10-21).
+    func testExtraAllowanceLabelIsLeftOutOfTheGroupLookup() {
+        XCTAssertEqual(
+            QuotaWindowVocabulary.barCadenceGroup(
+                cadence: QuotaWindowVocabulary.otherLimit,
+                label: "7-day window",
+                isExtraAllowance: true
+            ),
+            QuotaWindowVocabulary.otherLimit,
+            "an extra allowance carries no period of its own, so its label does not name one."
+        )
+        // The same label on a bar that is not an extra allowance does name the
+        // period:  the rule is about the extra allowance, not about the label.
+        XCTAssertEqual(
+            QuotaWindowVocabulary.barCadenceGroup(
+                cadence: QuotaWindowVocabulary.otherLimit,
+                label: "7-day window"
+            ),
+            QuotaWindowVocabulary.sevenDay
+        )
+    }
+
+    /// The group a bar belongs to and the caption token beside it have to name
+    /// the same period:  a bar that prints "7d" is grouped as the 7-day group
+    /// and not as "Other limit", so it is not split from the sibling that
+    /// prints the same token (Kody review 2026-10-21).
+    func testTheGroupAndTheCaptionTokenNameTheSamePeriod() {
+        let cases: [(label: String, group: String, token: String)] = [
+            ("7-day window", QuotaWindowVocabulary.sevenDay, "7d"),
+            ("5-hour window", QuotaWindowVocabulary.fiveHour, "5h"),
+            ("1-day window", QuotaWindowVocabulary.oneDay, "1d"),
+            ("1-month window", QuotaWindowVocabulary.oneMonth, "1m")
+        ]
+        for testCase in cases {
+            XCTAssertEqual(
+                QuotaWindowVocabulary.barCadenceGroup(cadence: "", label: testCase.label),
+                testCase.group,
+                "the canonical label '\(testCase.label)' names its period."
+            )
+            XCTAssertEqual(
+                QuotaWindowVocabulary.popoverCaption(windowToken: "", label: testCase.label),
+                testCase.token,
+                "the caption token beside '\(testCase.label)' names the same period."
+            )
+        }
+    }
 }

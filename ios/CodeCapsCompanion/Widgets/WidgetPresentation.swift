@@ -84,6 +84,19 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
         WidgetPresentation.shortCadence(cadence: cadence, label: label)
     }
 
+    /// The caption this window's bar prints.
+    ///
+    /// The caption carries the qualifier,  so a surface that renders it cannot leave
+    /// the qualifier out:  a caption built from the window and a caption built
+    /// without it are different values,  and only the first one names the sibling.
+    public var caption: QuotaWindowCaption {
+        QuotaWindowCaption(
+            token: cadenceToken,
+            qualifier: barQualifier,
+            resetCaption: resetCaption()
+        )
+    }
+
     /// A copy of this window that prints the given qualifier in its caption
     /// row.  The platform item calls this once it knows the sibling windows.
     func withBarQualifier(_ qualifier: String) -> WidgetWindowItem {
