@@ -197,13 +197,13 @@ Other modes: `--install` (same, no relaunch); `--dev` (separate `.dev` identifie
 
 Console's sidebar has eight Dashboard pages.
 
-- **Menu Bar & PiP** — where the icon shows (menu bar, Dock, or both), plus its Displayed Quota picker (above).
+- **Menu Bar & PiP** — where the icon shows (menu bar, Dock, or both), plus its Displayed Quota picker (above) and the Picture-in-Picture HUD.
 - **Platforms** — platform list order, shared by Glance, Console, and the menu bar.
-- **Logo Style** — the brand mark variant used across Glance, Console, and the menu bar.
+- **Logo Style** — per-platform logo rendering (Standard, Light/Dark, or Custom).
 - **Sources & Fleet** — three groups: **This Mac** (readers on/off, one status row per platform), **Share This Mac** (push: Push Endpoint, Push Token, Payload Format, Save & Push Now), **Pull The Fleet** (pull: Quota Endpoint, Read Token, Save & Fetch Now).  Both fleet groups also offer Forget Token and, only when a saved token can't be read back, Re-Authorize Saved Token.
 - **Alerts & Alarms** — runaway and cap notifications, alert thresholds, and the reset-alarm sound.
 - **Appearance** — Light, Dark, or System; System follows your Mac's setting and is the default.
-- **Infisical Sync** — the Infisical project and environment that supply shared settings.
+- **Infisical Sync** — the Infisical client identity and the managed keys it syncs.
 - **About** — version, push/pull/local-reader status, and a project page link.
 
 <img src="docs/screenshots/settings-sources-fleet.png" width="760" alt="Sources and Fleet">
