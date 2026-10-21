@@ -85,10 +85,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
-      # actions: write lets this gate dispatch a replacement compile run
-      # when the one it is waiting on is cancelled before it finishes.  A
-      # cancelled run carries no verdict about the code, and the release
-      # window is too short to wait for a run that will never arrive.
+      # actions: write lets this gate re-run the compile workflow when the
+      # run it is waiting on is cancelled before it finishes.  A cancelled
+      # run carries no verdict about the code, and the release window is
+      # too short to wait for a run that will never arrive.  The re-run
+      # keeps the commit exact, which a fresh dispatch cannot:  the
+      # dispatch endpoint takes a branch or tag name and rejects a commit
+      # sha with "No ref found".
       actions: write
       checks: read
       contents: read
