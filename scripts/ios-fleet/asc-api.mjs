@@ -922,7 +922,8 @@ async function main() {
     // that size belongs to, so the display type cannot be mis-specified.
     // App Store Connect has no APP_IPHONE_69 or APP_IPAD_PRO_13: the 6.9-inch
     // iPhone size lives in APP_IPHONE_67 and the 13-inch iPad size in
-    // APP_IPAD_PRO_129.  The sizes are Apple's own list, at
+    // APP_IPAD_PRO_129.  The Mac sizes are Apple's own list, all 16:10, and
+    // they belong to the desktop set.  The sizes are Apple's list, at
     // developer.apple.com/help/app-store-connect/reference/screenshot-specifications
     const sizeToDisplayType = {
       "1320x2868": "APP_IPHONE_67",
@@ -930,7 +931,11 @@ async function main() {
       "1284x2778": "APP_IPHONE_65",
       "1242x2688": "APP_IPHONE_65",
       "2064x2752": "APP_IPAD_PRO_129",
-      "2048x2732": "APP_IPAD_PRO_3GEN_129"
+      "2048x2732": "APP_IPAD_PRO_3GEN_129",
+      "1280x800": "APP_DESKTOP",
+      "1440x900": "APP_DESKTOP",
+      "2560x1600": "APP_DESKTOP",
+      "2880x1800": "APP_DESKTOP"
     };
     // Every file has to belong to the same screenshot set.  A capture run
     // produces iPhone and iPad files together and they belong in different

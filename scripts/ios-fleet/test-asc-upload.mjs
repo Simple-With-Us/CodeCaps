@@ -38,6 +38,13 @@ ihdr.writeUInt32BE(1320, 16);
 ihdr.writeUInt32BE(2868, 20);
 writeFileSync(pngPath, ihdr);
 
+// The same stub at one of Apple's Mac sizes, all of which are 16:10.
+const macPath = join(root, "mac.png");
+const macIhdr = Buffer.alloc(24);
+macIhdr.writeUInt32BE(1440, 16);
+macIhdr.writeUInt32BE(900, 20);
+writeFileSync(macPath, macIhdr);
+
 // A string the server puts in a body that the script must never echo.
 const SECRET_MARKER = "leaked-token-marker-do-not-echo";
 
@@ -46,7 +53,7 @@ const SET_ID = "set-xyz-789";
 
 // Run asc-api.mjs upload-screenshots against a local server and collect what
 // happened.  `behaviour` picks which step, if any, fails.
-function upload(behaviour) {
+function upload(behaviour, file = pngPath) {
   return new Promise((resolve) => {
     const calls = [];
     // The pre-signed upload URL Apple hands out is absolute, so the port has to
@@ -74,6 +81,15 @@ function upload(behaviour) {
           type: "appScreenshotSets",
           attributes: { screenshotDisplayType: "APP_IPHONE_67" }
         }] });
+      }
+      if (req.url === "/v1/appScreenshotSets" && req.method === "POST") {
+        //  A set for a display type the server does not have yet.
+        const wanted = JSON.parse(body || "{}")?.data?.attributes?.screenshotDisplayType;
+        return json(201, { data: {
+          id: `set-${wanted}`,
+          type: "appScreenshotSets",
+          attributes: { screenshotDisplayType: wanted }
+        } });
       }
       if (req.url === "/v1/appScreenshots" && req.method === "POST") {
         return json(201, {
@@ -122,7 +138,7 @@ function upload(behaviour) {
 
     server.listen(0, "127.0.0.1", () => {
       apiBase = `http://127.0.0.1:${server.address().port}`;
-      const child = spawn("node", [script, "upload-screenshots", "loc-1", "auto", pngPath], {
+      const child = spawn("node", [script, "upload-screenshots", "loc-1", "auto", file], {
         env: {
           ...process.env,
           ASC_API_BASE: apiBase,
@@ -153,6 +169,14 @@ const deletesFor = (calls) => calls
 // request count the wrong thing to assert on: the reported outcome is the part
 // that distinguishes a cleaned-up reservation from a silent orphan.
 const reportsDropped = (stderr) => stderr.includes(`dropped the reservation ${SCREENSHOT_ID}`);
+
+test("a Mac screenshot goes to the desktop set", async () => {
+  //  Apple's Mac sizes are all 16:10, and they belong to the desktop set.
+  //  Without them in the map the upload would refuse a file it should
+  //  accept.
+  const { code, stderr } = await upload({}, macPath);
+  assert.equal(code, 0, `expected a clean run, got ${code}: ${stderr}`);
+});
 
 test("a successful upload commits the reservation and leaves nothing open", async () => {
   const { code, stderr, calls } = await upload({ putFails: false, commitFails: false });
