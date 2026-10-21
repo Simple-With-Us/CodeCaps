@@ -137,24 +137,7 @@ final class GlanceHeightTests: XCTestCase {
         guard let scroll = scrollView(in: host), let document = scroll.documentView else {
             throw XCTSkip("SwiftUI did not build an NSScrollView in this session")
         }
-        // TEMP DIAGNOSTICS (runner probe, revert before merge)
-        let budgetLocal = QuotaGlanceMetrics.localListHeight(
-            rows: model.displaySections.count,
-            showsSetupCard: !model.syncEnabled && !model.serverEnabled,
-            isEmpty: !(model.localEnabled || !model.displaySections.isEmpty))
-        print("DIAG rows=\(model.displaySections.count) budgetPopover=\(height) budgetLocalList=\(budgetLocal)")
-        print("DIAG document=\(document.frame.height) content=\(scroll.contentSize.height)")
-        let card = NSHostingView(rootView: FleetSetupRow {}.padding(.horizontal, Metrics.glanceGutter))
-        card.frame = NSRect(x: 0, y: 0, width: Metrics.glanceWidth, height: 2000)
-        card.layoutSubtreeIfNeeded()
-        print("DIAG cardFitting=\(card.fittingSize) cardFrame=\(card.frame)")
-        dumpFrames(document, indent: "")
         return document.frame.height - scroll.contentSize.height
-    }
-
-    private func dumpFrames(_ view: NSView, indent: String) {
-        print("DIAG \(indent)\(type(of: view)) \(view.frame)")
-        for child in view.subviews { dumpFrames(child, indent: indent + "  ") }
     }
 
     func testFromMacListFitsItsScrollAreaWithoutScrolling() throws {
