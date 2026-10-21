@@ -18,6 +18,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
+  isUnresolvedReference,
   listSecretsRaw,
   loginUniversalAuth,
   maskValue,
@@ -65,13 +66,35 @@ export async function run({
   }
 
   const token = await loginUniversalAuth({ siteUrl, clientId, clientSecret, fetchImpl });
-  const secrets = await listSecretsRaw({
+  const rawSecrets = await listSecretsRaw({
     siteUrl, token, projectId, environment, secretPath, fetchImpl,
   });
+
+  // The vault response crosses a trust boundary: it is external data shaped
+  // as a Map of strings.  zod is not vendored in this dependency-free
+  // scripts tree, so validate the shape by hand and fail closed rather
+  // than letting a malformed entry flow into credential handling.
+  if (!(rawSecrets instanceof Map)) {
+    fail(log, 'The Infisical secrets response had an unexpected shape; refusing to stage ASC credentials.');
+  }
+  for (const [name, value] of rawSecrets) {
+    if (typeof name !== 'string' || typeof value !== 'string') {
+      fail(log, 'The Infisical secrets response had an unexpected shape; refusing to stage ASC credentials.');
+    }
+  }
+  const secrets = rawSecrets;
 
   const keyId = secrets.get('ASC_KEY_ID') || '';
   const issuerId = secrets.get('ASC_ISSUER_ID') || '';
   const key = secrets.get('ASC_KEY_P8') || '';
+
+  // A value that is still a bare ${...} reference means Infisical did not
+  // expand it (missing target or the CI identity cannot read the referenced
+  // folder).  Staging it would defer a clear access failure until notarytool
+  // reports an opaque parse error, so fail here with the actionable cause.
+  if ([keyId, issuerId, key].some(isUnresolvedReference)) {
+    fail(log, 'An ASC value in Fleet-OPS prod /asc is still an unresolved Infisical secret reference; check the target exists and the CI identity can read the referenced folder.');
+  }
 
   if (!key.trim()) {
     fail(log, 'Missing ASC_KEY_P8 in Fleet-OPS prod /asc; verify the CI identity has read access to Fleet-OPS prod /asc.');
@@ -80,8 +103,12 @@ export async function run({
     fail(log, 'Missing ASC_KEY_ID or ASC_ISSUER_ID in Fleet-OPS prod /asc; verify the CI identity has read access to Fleet-OPS prod /asc.');
   }
 
-  // Mask every line of the key, so the runner scrubs it from the log from
-  // this point on even if something later prints it.
+  // Mask every line of every value that crosses into later steps, so the
+  // runner scrubs them from the log from this point on even if something
+  // later prints them.  The key is the sensitive material; the identifiers
+  // are masked too so a later notarytool or altool echo cannot expose them.
+  maskValue(keyId, log);
+  maskValue(issuerId, log);
   maskValue(key, log);
 
   // Stream the key into the staging script over its standard input, so it
