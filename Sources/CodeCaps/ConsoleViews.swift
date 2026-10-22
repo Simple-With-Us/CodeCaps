@@ -998,14 +998,14 @@ struct PlatformDetailPage: View {
            (planName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || planMismatch) {
             HStack(spacing: 10) {
                 Text("").frame(width: 150, alignment: .leading).accessibilityHidden(true)
-                Button("Use detected") {
+                Button("Use Detected") {
                     planName = detected
                     save()
                 }
                 .help("Replace the plan name with what the provider reports.")
                 .accessibilityLabel("Use detected plan name")
                 if planMismatch {
-                    Button("Keep mine — don't warn") {
+                    Button("Keep Mine") {
                         PlanMismatchSuppression.accept(providerKey: row?.providerKey ?? customInfoKey,
                                                        entered: planName, detected: detected)
                     }

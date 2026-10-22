@@ -310,6 +310,10 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
     /// unguarded String?/Bundle? write can tear.
     private static let stateLock = NSLock()
     private static var cachedBundle: Bundle? = nil
+    /// Bumped by every invalidation.  A resolve that started before an
+    /// invalidation must not pin its result afterwards, or the clear is
+    /// silently undone.
+    private static var bundleGeneration: UInt64 = 0
     /// A latch that only remembers success is a latch that can be poisoned
     /// before the bundle is reachable: the first call can land while the
     /// resource bundle is not yet resolvable, and every later call would then
@@ -323,12 +327,13 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
     private static func currentBundle() -> Bundle? {
         stateLock.lock()
         if let cached = cachedBundle { stateLock.unlock(); return cached }
+        let generation = bundleGeneration
         stateLock.unlock()
         //  Resolution is kept outside the lock:  it runs arbitrary bundle
         //  code and only the pin needs guarding.
         if let b = ResourceBundle.resolved ?? ResourceBundle.resolveBundle() {
             stateLock.lock()
-            cachedBundle = b
+            if generation == bundleGeneration { cachedBundle = b }
             stateLock.unlock()
             return b
         }
@@ -356,6 +361,7 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
     /// that appears after the first lookup.
     public static func invalidateCaches() {
         stateLock.lock()
+        bundleGeneration &+= 1
         cachedBundle = nil
         stateLock.unlock()
         standardCache.removeAllObjects()
@@ -681,6 +687,7 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
         // the bundle existed, and that stale pin is what leaves every bundled
         // mark drawing as a fallback for the rest of the process.
         stateLock.lock()
+        bundleGeneration &+= 1
         cachedBundle = nil
         stateLock.unlock()
         standardCache.removeObject(forKey: key as NSString)
