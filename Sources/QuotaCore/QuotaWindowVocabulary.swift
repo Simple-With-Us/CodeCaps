@@ -333,7 +333,13 @@ public enum QuotaWindowVocabulary {
     public static func atCapCadence(cadence: String, resetAt: Date? = nil) -> String {
         let known = [fiveHour, oneDay, sevenDay, oneMonth]
         if known.contains(cadence) { return cadence }
-        return standardCadence(windowToken: cadence, label: "", resetAt: resetAt, monthlyHint: false)
+        // The cadence is a token, so the trailing " window" a caller may still
+        // carry is stripped before the token is resolved:  "7-day window" names
+        // the same period as "7-day".
+        return standardCadence(windowToken: stripTrailingWindowSuffix(cadence),
+                               label: "",
+                               resetAt: resetAt,
+                               monthlyHint: false)
     }
 
     /// The countdown an at-cap line quotes: the two largest non-zero units of
@@ -676,6 +682,38 @@ public enum QuotaCapRule {
     public static func isAtCap(remainingPercent: Double?) -> Bool {
         guard let bounded = bounded(remainingPercent) else { return false }
         return bounded <= spentThreshold
+    }
+
+    /// Whether an allowance is spent, when the provider's own word and its
+    /// reading can disagree.
+    ///
+    /// The reading decides whenever there is one:  the Mac's export never
+    /// clears `isExhausted`, so a provider that still carries the flag long
+    /// after the allowance came back would otherwise keep reporting a spent
+    /// allowance, and the Mac and the phone would tell the owner different
+    /// things about one account.  With no reading at all the provider's word is
+    /// the only evidence there is, so it counts.
+    ///
+    /// This is the one place that decides, so no surface can carry its own
+    /// version of the question.
+    public static func isExhausted(remainingPercent: Double?, providerSaysExhausted: Bool) -> Bool {
+        guard remainingPercent != nil else { return providerSaysExhausted }
+        return isAtCap(remainingPercent: remainingPercent)
+    }
+
+    /// The reading a row publishes for an allowance.
+    ///
+    /// An allowance the provider reports as gone without a figure still has to
+    /// publish a reading, because the cap rule only binds a window that
+    /// carries one:  a row with no percentage reports no cap at all, so the
+    /// cap line never appears beside it and the countdown it should quote is
+    /// lost.  A spent allowance publishes zero.
+    ///
+    /// The Mac's Antigravity pool grouper and the phone's own row synthesis
+    /// both do this, and both do it through here, so the two cannot drift.
+    public static func publishedReading(remainingPercent: Double?, allowanceSpent: Bool) -> Double? {
+        if let remainingPercent { return remainingPercent }
+        return allowanceSpent ? 0 : nil
     }
 
     /// Whether this window is a supplementary video allowance beside

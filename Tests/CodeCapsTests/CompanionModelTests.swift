@@ -372,7 +372,49 @@ final class CompanionModelTests: XCTestCase {
             model.contains("public static let weeklySpentThreshold: Double = 0.5"),
             "the phone must not keep its own copy of the threshold"
         )
-        XCTAssertTrue(model.contains("(weeklyPct ?? 100) <= Self.weeklySpentThreshold"))
+        XCTAssertTrue(
+            model.contains("let weeklyExhausted = QuotaCapRule.isExhausted(remainingPercent: weeklyPct,"),
+            "the phone must decide the weekly through the shared rule, so a reading outranks the provider's exhausted word"
+        )
+    }
+
+    /// The phone must let a reading outrank the provider's exhausted word.
+    ///
+    /// The wire never clears `isExhausted`, so a stale flag kept the phone
+    /// calling a live Antigravity pool exhausted while the Mac kept it live,
+    /// and the two surfaces told the owner different things about one account
+    /// (Kody review 2026-10-21).  Every place the phone decides "is this
+    /// spent" now asks the shared rule.
+    func testThePhoneLetsAReadingOutrankTheProvidersExhaustedWord() throws {
+        let model = try readCompanionModelSource()
+        XCTAssertTrue(
+            model.contains("QuotaCapRule.isExhausted(remainingPercent: pct,"),
+            "a window row must decide through the shared rule"
+        )
+        XCTAssertFalse(
+            model.contains("|| (weeklyWin?.isExhausted ?? false)"),
+            "the wire's exhausted word must not outvote a weekly reading that reports room left"
+        )
+        XCTAssertFalse(
+            model.contains("(?? 100) <= 0"),
+            "the phone must not carry its own zero test beside the shared rule"
+        )
+    }
+
+    /// An exhausted weekly that reports no figure still has to publish a
+    /// reading, or the shared cap rule cannot bind it and the phone's cap line
+    /// never appears (Kody review 2026-10-21).  The Mac does the same in its
+    /// Antigravity pool grouper.
+    func testAnExhaustedWeeklyWithNoFigureStillPublishesAReading() throws {
+        let model = try readCompanionModelSource()
+        XCTAssertTrue(
+            model.contains("QuotaCapRule.publishedReading("),
+            "the phone must publish its reading through the shared rule"
+        )
+        XCTAssertTrue(
+            model.contains("allowanceSpent: weeklyExhausted && period == \"weekly\""),
+            "an exhausted weekly with no figure must publish zero"
+        )
     }
 
     // MARK: - Local Snapshot Caching and Pull-to-Refresh Parity

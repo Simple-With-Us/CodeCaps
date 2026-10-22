@@ -117,10 +117,8 @@ public enum AntigravityQuotaGroups {
     /// is spent at or below the rounding threshold; one that reports no number
     /// falls back to the provider's own word for it.
     private static func weeklyIsSpent(_ window: QuotaWindow) -> Bool {
-        if let remaining = window.boundedRemainingPercent {
-            return remaining <= weeklySpentThreshold
-        }
-        return window.isExhausted
+        QuotaCapRule.isExhausted(remainingPercent: window.boundedRemainingPercent,
+                                 providerSaysExhausted: window.isExhausted)
     }
 
     /// Splits Antigravity windows into their two pools.  Windows that belong to
@@ -171,8 +169,9 @@ public enum AntigravityQuotaGroups {
             let headline = driving ?? spentWeekly
             result.append(Pool(key: key,
                                windows: ordered,
-                               remainingPercent: headline?.boundedRemainingPercent
-                                   ?? (weeklyExhausted ? 0 : nil),
+                               remainingPercent: QuotaCapRule.publishedReading(
+                                   remainingPercent: headline?.boundedRemainingPercent,
+                                   allowanceSpent: weeklyExhausted),
                                weeklyExhausted: weeklyExhausted,
                                drivingWindowId: headline?.id,
                                resetAt: headline?.resetDate,

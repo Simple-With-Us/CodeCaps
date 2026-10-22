@@ -301,6 +301,84 @@ final class QuotaCapRuleTests: XCTestCase {
         }
     }
 
+    // MARK: - A reading decides, and the provider's word is the fallback
+
+    /// The shared decision, tested where both surfaces can reach it.
+    ///
+    /// The Mac's export never clears `isExhausted`, so a provider that still
+    /// carries the flag long after the allowance came back would keep
+    /// reporting a spent allowance.  The phone used to let that flag outvote
+    /// a reading that said there was room left (Kody review 2026-10-21).
+    func testAReadingOutranksTheProvidersExhaustedWord() {
+        XCTAssertTrue(QuotaCapRule.isExhausted(remainingPercent: 0, providerSaysExhausted: false))
+        XCTAssertTrue(QuotaCapRule.isExhausted(remainingPercent: 0.4, providerSaysExhausted: false))
+        XCTAssertFalse(QuotaCapRule.isExhausted(remainingPercent: 50, providerSaysExhausted: true))
+        XCTAssertFalse(QuotaCapRule.isExhausted(remainingPercent: 100, providerSaysExhausted: true))
+    }
+
+    /// With no reading at all, the provider's word is the only evidence there
+    /// is, so it counts.
+    func testWithNoReadingTheProvidersWordIsTheOnlyEvidence() {
+        XCTAssertTrue(QuotaCapRule.isExhausted(remainingPercent: nil, providerSaysExhausted: true))
+        XCTAssertFalse(QuotaCapRule.isExhausted(remainingPercent: nil, providerSaysExhausted: false))
+    }
+
+    /// A spent allowance with no figure still publishes a reading, so the cap
+    /// rule has something to bind and the cap line can quote its countdown.
+    func testASpentAllowanceWithNoFigureStillPublishesAReading() {
+        XCTAssertEqual(QuotaCapRule.publishedReading(remainingPercent: nil, allowanceSpent: true), 0)
+        XCTAssertNil(QuotaCapRule.publishedReading(remainingPercent: nil, allowanceSpent: false))
+        XCTAssertEqual(QuotaCapRule.publishedReading(remainingPercent: 42, allowanceSpent: true), 42)
+        XCTAssertEqual(QuotaCapRule.publishedReading(remainingPercent: 42, allowanceSpent: false), 42)
+    }
+
+    /// The phone's missing cap line, in the rule both surfaces share.
+    ///
+    /// The phone's Antigravity row synthesis published a weekly row with no
+    /// percentage when the provider reported the allowance as gone without a
+    /// figure, and the rule only binds a window that carries a reading, so
+    /// the cap line never appeared (Kody review 2026-10-21).  A published zero
+    /// binds it.
+    func testASpentAllowanceThatPublishedZeroBindsTheCap() {
+        let windows = [
+            facts(
+                id: "weekly",
+                percent: QuotaCapRule.publishedReading(remainingPercent: nil, allowanceSpent: true),
+                resetsIn: 86_400
+            )
+        ]
+        XCTAssertEqual(QuotaCapRule.bindingWindowIndex(in: windows), 0)
+        XCTAssertEqual(QuotaCapRule.bindingWindow(in: windows)?.id, "weekly")
+    }
+
+    // MARK: - The binding window is found by position
+
+    /// One list can carry two snapshots of the same window id, the same window
+    /// reported by two sources, so the window the rule binds is carried by
+    /// position rather than re-found by id afterwards (Kody review 2026-10-21).
+    func testADuplicateIdStillBindsTheWindowThatResetsLast() {
+        let windows = [
+            facts(id: "weekly", percent: 0, resetsIn: 3_600),
+            facts(id: "weekly", percent: 0, resetsIn: 86_400)
+        ]
+        XCTAssertEqual(QuotaCapRule.bindingWindowIndex(in: windows), 1)
+        XCTAssertEqual(QuotaCapRule.bindingWindow(in: windows)?.resetAt, windows[1].resetAt)
+    }
+
+    // MARK: - A cadence is a token, never prose
+
+    /// The at-cap line resolves a cadence through whole lexical tokens, so a
+    /// value such as "notweekly" names no period at all (Kody rule 40,
+    /// binding 2026-10-21).
+    func testACadenceNamesItsPeriodThroughWholeTokensOnly() {
+        XCTAssertEqual(QuotaWindowVocabulary.atCapCadence(cadence: "7-day"), "7-day")
+        XCTAssertEqual(QuotaWindowVocabulary.atCapCadence(cadence: "5-hour"), "5-hour")
+        XCTAssertEqual(QuotaWindowVocabulary.atCapCadence(cadence: "weekly"), "7-day")
+        XCTAssertEqual(QuotaWindowVocabulary.atCapCadence(cadence: "7-day window"), "7-day")
+        XCTAssertEqual(QuotaWindowVocabulary.atCapCadence(cadence: "notweekly"), "Other limit")
+        XCTAssertEqual(QuotaWindowVocabulary.atCapCadence(cadence: "notdaily"), "Other limit")
+    }
+
     private func snapshot(
         id: String,
         remaining: Double?,
