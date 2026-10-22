@@ -1067,6 +1067,7 @@ async function main() {
     }
     const locs = requireArray(localizations.parsed?.data, "version localization list");
     const byDisplayType = new Map();
+    const locDisplayTypes = new Map();
     for (const loc of locs) {
       if (!isPlainObject(loc) || typeof loc.id !== "string") continue;
       const sets = await api("GET", `/v1/appStoreVersionLocalizations/${loc.id}/appScreenshotSets`);
@@ -1075,6 +1076,7 @@ async function main() {
         process.exitCode = 2;
         return;
       }
+      const typesHere = new Set();
       for (const set of requireArray(sets.parsed?.data, "screenshot set list")) {
         const displayType = isPlainObject(set) ? set.attributes?.screenshotDisplayType : null;
         if (typeof displayType !== "string") continue;
@@ -1092,7 +1094,9 @@ async function main() {
         }
         const count = requireArray(shots.parsed?.data, "screenshot list").length;
         byDisplayType.set(displayType, (byDisplayType.get(displayType) || 0) + count);
+        if (count > 0) typesHere.add(displayType);
       }
+      if (typesHere.size > 0) locDisplayTypes.set(loc.id, typesHere);
     }
     const breakdown = [...byDisplayType.entries()]
       .sort((a, b) => a[0].localeCompare(b[0]))
@@ -1133,6 +1137,26 @@ async function main() {
         console.error(
           `submit-review: not submitting, the version has no screenshot for the required display type ${missingTypes.join(" and ")}`
         );
+        process.exitCode = 2;
+        return;
+      }
+      //  The same requirement per localization, because App Store Connect
+      //  validates screenshots per localization:  a version whose 13-inch
+      //  set exists only for en-US passes the pooled count above and is
+      //  still refused for every other locale.  A localization carrying no
+      //  screenshot set at all falls back to the primary locale, so only
+      //  localizations that carry at least one set are judged.
+      const localesMissing = [];
+      for (const [locId, typesHere] of locDisplayTypes) {
+        const missingForLoc = REQUIRED_SCREENSHOT_DISPLAY_TYPES_IOS.filter((type) => !typesHere.has(type));
+        if (missingForLoc.length > 0) {
+          localesMissing.push(
+            `localization ${locId} has no screenshot for the required display type ${missingForLoc.join(" and ")}`
+          );
+        }
+      }
+      if (localesMissing.length > 0) {
+        console.error(`submit-review: not submitting, ${localesMissing.join("; ")}`);
         process.exitCode = 2;
         return;
       }
@@ -1621,11 +1645,19 @@ async function main() {
     // size table point in opposite directions.  Apple's own table at
     // developer.apple.com/help/app-store-connect/reference/screenshot-specifications
     // says the 13-inch display accepts 2064 x 2752 AND 2048 x 2732, and the
-    // 12.9-inch display accepts only 2048 x 2732.  The enum that takes the
-    // 13-inch resolution is APP_IPAD_PRO_3GEN_129, because the iPad Pro of
-    // the 3rd generation and everything after it, the 13-inch M4 and M5
-    // included, all render at 2064 x 2752.  APP_IPAD_PRO_129 is the 12.9-inch
-    // Pro of the 2nd generation, whose only accepted size is 2048 x 2732.
+    // 12.9-inch display accepts only 2048 x 2732.  Only the 13-inch M4 and
+    // M5 render at 2064 x 2752;  every 12.9-inch iPad Pro, the 3rd
+    // generation included, renders at 2048 x 2732, and the capture script
+    // falls back to those 12.9-inch simulators when no 13-inch one is
+    // installed.
+    //
+    // Both iPad sizes therefore map to APP_IPAD_PRO_3GEN_129:  it is the
+    // display profile App Store Connect requires (IPAD_13_PROFILE), and
+    // routing 2048 x 2732 to the legacy set would leave the required set
+    // empty on any runner that used the fallback, so the submission would
+    // be refused.  APP_IPAD_PRO_129 stays reachable by naming the display
+    // type explicitly instead of "auto", for a version that also ships the
+    // legacy 12.9-inch set.
     //
     // Putting 2064 x 2752 in APP_IPAD_PRO_129 is therefore a spec mismatch,
     // and App Store Connect says so on the asset:  SPEC_MISMATCH, and every
@@ -1637,7 +1669,7 @@ async function main() {
       "1284x2778": "APP_IPHONE_65",
       "1242x2688": "APP_IPHONE_65",
       "2064x2752": "APP_IPAD_PRO_3GEN_129",
-      "2048x2732": "APP_IPAD_PRO_129",
+      "2048x2732": "APP_IPAD_PRO_3GEN_129",
       "1280x800": "APP_DESKTOP",
       "1440x900": "APP_DESKTOP",
       "2560x1600": "APP_DESKTOP",

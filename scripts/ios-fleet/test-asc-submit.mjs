@@ -37,6 +37,11 @@ const SUBMISSION_ID = "sub-1";
 //   ipad129Screens: the count in the 12.9-inch set, APP_IPAD_PRO_129.  The
 //     set is only served when this is given, so a server that does not name
 //     it is a version that carries no 12.9-inch screenshot at all.
+//   iphone65Only: the iPhone set is APP_IPHONE_65 instead of APP_IPHONE_67,
+//     so the 6.7-inch profile the gate requires is absent
+//   secondLocaleWithoutIpad: a second localization carries an iPhone set but
+//     no 13-inch iPad set, so the pooled count passes and only the
+//     per-localization check can refuse the submission
 //   desktopScreens: the count in the macOS display type's set; the set is
 //     only served when this is given, so a server that does not name it is a
 //     version that carries no desktop screenshot at all
@@ -106,7 +111,8 @@ function serve(options) {
       //  count is read from the screenshots the set holds.
       const shotCounts = {
         "set-1": options.iphoneScreens,
-        "set-2": options.ipadScreens
+        "set-2": options.ipadScreens,
+        "set-9": 2
       };
       if (options.ipad129Screens !== undefined) shotCounts["set-4"] = options.ipad129Screens;
       if (options.desktopScreens !== undefined) shotCounts["set-3"] = options.desktopScreens;
@@ -215,7 +221,19 @@ function serve(options) {
         });
       }
       if (url === `/v1/appStoreVersions/${VERSION_ID}/appStoreVersionLocalizations`) {
-        return json(200, { data: [{ type: "appStoreVersionLocalizations", id: "loc-1" }] });
+        const data = [{ type: "appStoreVersionLocalizations", id: "loc-1" }];
+        if (options.secondLocaleWithoutIpad) {
+          data.push({ type: "appStoreVersionLocalizations", id: "loc-2" });
+        }
+        return json(200, { data });
+      }
+      if (url === "/v1/appStoreVersionLocalizations/loc-2/appScreenshotSets") {
+        return json(200, { data: [
+          {
+            id: "set-9",
+            attributes: { screenshotDisplayType: "APP_IPHONE_67" }
+          }
+        ] });
       }
       if (url === "/v1/appStoreVersionLocalizations/loc-1/appScreenshotSets") {
         if (options.setsFail) {
@@ -227,7 +245,10 @@ function serve(options) {
         //  the invented field is exactly what made the production read come
         //  back empty.
         const sets = [
-          { id: "set-1", attributes: { screenshotDisplayType: "APP_IPHONE_67" } },
+          {
+            id: "set-1",
+            attributes: { screenshotDisplayType: options.iphone65Only ? "APP_IPHONE_65" : "APP_IPHONE_67" }
+          },
           { id: "set-2", attributes: { screenshotDisplayType: "APP_IPAD_PRO_3GEN_129" } }
         ];
         if (options.ipad129Screens !== undefined) {
@@ -615,6 +636,37 @@ test("the 12.9-inch iPad set does not stand in for the 13-inch one", async () =>
       assert.equal(patched.length, 0, "the submission was patched without a 13-inch iPad screenshot");
     }
   );
+});
+
+test("the 6.5-inch iPhone set does not stand in for the 6.7-inch one", async () => {
+  //  REQUIRED_SCREENSHOT_DISPLAY_TYPES_IOS names APP_IPHONE_67, and the mock
+  //  otherwise always serves it:  without this scenario, removing it from
+  //  the required list would leave every test green and silently drop the
+  //  iPhone half of the release gate.
+  await withServer({ ...READY, iphone65Only: true }, async (base, patched) => {
+    const { code, stderr } = await submit(base);
+    assert.equal(code, 2, `expected a refusal, got ${code}: ${stderr}`);
+    assert.ok(
+      /no screenshot for the required display type APP_IPHONE_67/.test(stderr),
+      `the refusal did not name the missing display type:\n${stderr}`
+    );
+    assert.equal(patched.length, 0, "the submission was patched without a 6.7-inch iPhone screenshot");
+  });
+});
+
+test("a localization missing a required display type stops the submission", async () => {
+  //  App Store Connect validates screenshots per localization, so a version
+  //  whose 13-inch set exists only for one locale is refused for the other.
+  //  The pooled count cannot see that; the per-localization check has to.
+  await withServer({ ...READY, secondLocaleWithoutIpad: true }, async (base, patched) => {
+    const { code, stderr } = await submit(base);
+    assert.equal(code, 2, `expected a refusal, got ${code}: ${stderr}`);
+    assert.ok(
+      /localization loc-2 has no screenshot for the required display type APP_IPAD_PRO_3GEN_129/.test(stderr),
+      `the refusal did not name the localization and the missing display type:\n${stderr}`
+    );
+    assert.equal(patched.length, 0, "the submission was patched with a locale missing the 13-inch set");
+  });
 });
 
 test("a screenshot set that could not be read stops the submission", async () => {
