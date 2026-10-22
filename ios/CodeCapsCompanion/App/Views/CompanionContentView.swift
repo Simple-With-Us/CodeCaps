@@ -42,8 +42,6 @@ public struct CompanionContentView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 16) {
-                    headerCard
-
                     if let error = model.lastError {
                         errorBanner(error)
                     }
@@ -190,19 +188,6 @@ public struct CompanionContentView: View {
         .accessibilityLabel("Fleet Status, \(model.items.count) platforms monitored")
     }
 
-    // MARK: - Source scope
-
-    private var headerCard: some View {
-        Picker("Source scope", selection: $model.sourceScope) {
-            ForEach(CompanionSourceScope.allCases) { scope in
-                Text(scope.displayTitle).tag(scope)
-            }
-        }
-        .pickerStyle(.segmented)
-        .padding(14)
-        .background(cardBackground, in: RoundedRectangle(cornerRadius: 12))
-    }
-
     // MARK: - Error Banner
 
     private func errorBanner(_ message: String) -> some View {
@@ -305,14 +290,17 @@ public struct CompanionContentView: View {
     }
 
     private func quotaCard(_ item: CompanionQuotaItem) -> some View {
+        // One canonical reading per allowance, the same resolution the Mac
+        // app leads with.  Source detail lives in Settings, for debugging;
+        // the main list just shows quotas.
+        let scope: CompanionSourceScope = .allSources
         let isExpanded = expandedIds.contains(item.id) && item.isExpandable
-        let short = item.cardShortWindow(scope: model.sourceScope)
-        let long = item.cardLongWindow(scope: model.sourceScope)
-        let cardWindows = item.cardWindows(scope: model.sourceScope)
+        let short = item.cardShortWindow(scope: scope)
+        let long = item.cardLongWindow(scope: scope)
+        let cardWindows = item.cardWindows(scope: scope)
         let extraWindows = cardWindows.filter {
             $0.id != short?.window.id && $0.id != long?.window.id
         }
-        let headlineUpdatedLabel = [short?.updatedLabel, long?.updatedLabel].compactMap { $0 }.first
 
         return VStack(alignment: .leading, spacing: 12) {
             // Main clickable row
@@ -323,22 +311,6 @@ public struct CompanionContentView: View {
                     HStack(spacing: 6) {
                         Text(item.title)
                             .font(.system(size: 15, weight: .semibold))
-
-                        if model.sourceScope == .allSources, item.sourceCount > 1 {
-                            Text("\(item.sourceCount) sources")
-                                .font(.system(size: 10, weight: .semibold))
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Color.secondary.opacity(0.14), in: Capsule())
-                        }
-
-                        if model.sourceScope == .allSources, item.sourceCount > 1,
-                           item.hasSourceDiscrepancy(scope: model.sourceScope) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(.orange)
-                                .accessibilityLabel("Warning: sources disagree on this allowance")
-                        }
                     }
 
                     if let sub = item.subtitle {
@@ -366,15 +338,9 @@ public struct CompanionContentView: View {
                     }
 
                     VStack(alignment: .trailing, spacing: 2) {
-                        Text(item.cardDisplayPercent(scope: model.sourceScope))
+                        Text(item.cardDisplayPercent(scope: scope))
                             .font(.system(size: 17, weight: .bold, design: .rounded).monospacedDigit())
-                            .foregroundStyle(item.cardStatusColor(scope: model.sourceScope))
-                        if let headlineUpdatedLabel {
-                            Text(headlineUpdatedLabel)
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
+                            .foregroundStyle(item.cardStatusColor(scope: scope))
                     }
 
                     if item.isExpandable {
@@ -391,7 +357,7 @@ public struct CompanionContentView: View {
             // The cap line.  The Mac's menu-bar window and PiP say which
             // allowance ran out and when it lifts; the phone said nothing, so
             // a capped Codex or Antigravity plan looked like any other.
-            if let atCapSummary = item.atCapSummary(scope: model.sourceScope) {
+            if let atCapSummary = item.atCapSummary(scope: scope) {
                 HStack(spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 11, weight: .semibold))
@@ -419,43 +385,19 @@ public struct CompanionContentView: View {
                 if let short {
                     CompanionMeterView(
                         caption: short.window.caption,
-                        window: short.window,
-                        updatedLabel: short.updatedLabel
+                        window: short.window
                     )
                 }
                 if let long, long.window.id != short?.window.id {
                     CompanionMeterView(
                         caption: long.window.caption,
-                        window: long.window,
-                        updatedLabel: long.updatedLabel
+                        window: long.window
                     )
                 } else if short == nil {
                     if let first = cardWindows.first {
                         CompanionMeterView(caption: first.caption, window: first)
                     }
                 }
-            }
-
-            if model.sourceScope == .allSources, item.sourceCount > 1,
-               item.hasSourceDiscrepancy(scope: model.sourceScope) {
-                HStack(spacing: 6) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.orange)
-                    Text(item.sourceDiscrepancies(scope: model.sourceScope).first?.description ?? "Sources differ")
-                        .font(.system(size: 11.5, weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
-                    Spacer()
-                }
-                .padding(.horizontal, 9)
-                .padding(.vertical, 5)
-                .background(Color.orange.opacity(0.14), in: RoundedRectangle(cornerRadius: 6))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(Color.orange.opacity(0.28), lineWidth: 0.5)
-                )
             }
 
             // Multiple time periods / windows when expanded (only extra allowances not already displayed on the card)
@@ -664,8 +606,8 @@ public struct CompanionContentView: View {
                                     Text(item.title)
                                         .font(.system(size: 14, weight: .semibold))
                                     Spacer()
-                                    if model.sourceScope == .allSources, item.sourceCount > 1,
-                                       item.hasSourceDiscrepancy(scope: model.sourceScope) {
+                                    if item.sourceCount > 1,
+                                       item.hasSourceDiscrepancy(scope: .allSources) {
                                         Label("Sources differ ≥ 10 pts", systemImage: "exclamationmark.triangle.fill")
                                             .font(.system(size: 11, weight: .medium))
                                             .foregroundStyle(.orange)
@@ -686,7 +628,7 @@ public struct CompanionContentView: View {
                                                         .padding(.vertical, 1.5)
                                                         .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 4))
                                                 }
-                                                if item.isStaleInSourceDetail(reading, scope: model.sourceScope) {
+                                                if item.isStaleInSourceDetail(reading, scope: .allSources) {
                                                     Text("Stale")
                                                         .font(.system(size: 10, weight: .semibold))
                                                         .foregroundStyle(.secondary)
@@ -707,12 +649,12 @@ public struct CompanionContentView: View {
                                             .foregroundStyle(reading.statusColor)
                                     }
                                     .padding(.vertical, 2)
-                                    .opacity(item.isStaleInSourceDetail(reading, scope: model.sourceScope) ? 0.72 : 1)
+                                    .opacity(item.isStaleInSourceDetail(reading, scope: .allSources) ? 0.72 : 1)
                                 }
 
-                                if model.sourceScope == .allSources, item.sourceCount > 1,
-                                   item.hasSourceDiscrepancy(scope: model.sourceScope) {
-                                    ForEach(item.sourceDiscrepancies(scope: model.sourceScope)) { disc in
+                                if item.sourceCount > 1,
+                                   item.hasSourceDiscrepancy(scope: .allSources) {
+                                    ForEach(item.sourceDiscrepancies(scope: .allSources)) { disc in
                                         HStack(spacing: 5) {
                                             Image(systemName: "exclamationmark.triangle.fill")
                                                 .font(.system(size: 10, weight: .semibold))
@@ -730,8 +672,8 @@ public struct CompanionContentView: View {
                 } header: {
                     Text("Data Sources & Mirrors")
                 } footer: {
-                    Text("CodeCaps monitors primary and mirror feeds for each platform." + sentenceGap
-                         + "In All Sources, when a card lists two or more feeds reported within 20 minutes that disagree by 10 points or more, a warning appears on the card (hostnames are ignored). Otherwise the newest reading is shown and older feeds are marked Stale here.")
+                    Text("Per-feed detail for debugging." + sentenceGap
+                         + "When two or more feeds reported within 20 minutes disagree by 10 points or more, the difference is listed here (hostnames are ignored). The main list always shows the newest canonical reading.")
                 }
                 .id("dataSourcesMirrorsSection")
                 .accessibilityIdentifier("dataSourcesMirrorsSection")
@@ -954,24 +896,24 @@ public struct CompanionContentView: View {
 public struct CompanionMeterView: View {
     public let caption: String
     public let window: CompanionWindowItem
-    public let updatedLabel: String?
 
-    public init(caption: String, window: CompanionWindowItem, updatedLabel: String? = nil) {
+    public init(caption: String, window: CompanionWindowItem) {
         self.caption = caption
         self.window = window
-        self.updatedLabel = updatedLabel
     }
 
     public var body: some View {
-        VStack(alignment: .trailing, spacing: 2) {
+        // Fixed columns so the percent sits in the same place on every card:
+        // caption, bar, percent, countdown.  No per-window timestamps — the
+        // header already carries the last-updated time.
         HStack(spacing: 4) {
             Text(caption)
                 .font(.system(size: 11, weight: .bold))
                 .foregroundStyle(.primary)
-                .lineLimit(2)
+                .lineLimit(1)
                 .minimumScaleFactor(0.75)
                 .multilineTextAlignment(.trailing)
-                .frame(width: 52, alignment: .trailing)
+                .frame(width: 32, alignment: .trailing)
 
             CompanionUsageBar(
                 remainingPercent: window.isMasked ? nil : window.remainingPercent,
@@ -985,25 +927,16 @@ public struct CompanionMeterView: View {
                 .foregroundStyle(window.statusColor)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
-                .frame(width: 36, alignment: .trailing)
+                .frame(width: 40, alignment: .trailing)
 
             Text(window.meterCountdown())
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(.primary.opacity(0.85))
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
-                .frame(width: 44, alignment: .center)
+                .frame(width: 46, alignment: .leading)
         }
-        .minimumScaleFactor(0.85)
-        if let updatedLabel {
-            Text(updatedLabel)
-                .font(.system(size: 9, weight: .medium))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-        }
-        }
-        .frame(maxWidth: .infinity, alignment: .trailing)
+        .frame(maxWidth: .infinity)
     }
 }
 

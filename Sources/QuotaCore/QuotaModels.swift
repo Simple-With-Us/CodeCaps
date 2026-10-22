@@ -603,6 +603,28 @@ public extension QuotaResponse {
         return copy
     }
 
+    /// The Grok subscription credits pool is reported twice: the local CLI
+    /// reader files it under `grok`, while the fleet collector buckets the
+    /// same payload as `xai:subscription`.  When both carry a subscription
+    /// window, keep the fresher reading and drop the staler duplicate, so
+    /// the two rows can never disagree about one pool.  Any other xAI
+    /// window (API usage, a different cadence) is untouched.
+    static func dedupedGrokSubscription(_ windows: [QuotaWindow]) -> [QuotaWindow] {
+        func subscriptionIndex(_ key: String) -> Int? {
+            windows.firstIndex { window in
+                window.canonicalProviderKey == key
+                    && (window.id.hasSuffix(":subscription") || window.id == "xai:subscription")
+            }
+        }
+        guard let grokIndex = subscriptionIndex("grok"),
+              let xaiIndex = subscriptionIndex("xai") else { return windows }
+        let grokDate = windows[grokIndex].occurredDate ?? .distantPast
+        let xaiDate = windows[xaiIndex].occurredDate ?? .distantPast
+        var copy = windows
+        copy.remove(at: grokDate >= xaiDate ? xaiIndex : grokIndex)
+        return copy
+    }
+
     /// Returns the stable native dashboard order, followed by future provider
     /// keys supplied by the server.  Missing expected providers are explicit.
     ///
@@ -612,7 +634,7 @@ public extension QuotaResponse {
     /// offline fallback / pre-manifest backend path.  That branch is kept as a
     /// safety net for first-launch installs before a sync has completed.
     func platformSections(now: Date = Date()) -> [QuotaPlatformSection] {
-        let normalizedWindows = windows.map { $0.normalized() }
+        let normalizedWindows = Self.dedupedGrokSubscription(windows.map { $0.normalized() })
         var grouped = Dictionary<String, [QuotaWindow]>(minimumCapacity: normalizedWindows.count)
         for window in normalizedWindows {
             grouped[window.canonicalProviderKey, default: []].append(window)

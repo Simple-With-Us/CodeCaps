@@ -217,13 +217,9 @@ MAC_TARGETS: list[Target] = [
     Target("Sources/CodeCaps/Resources/ProviderMarks/gemini-light.png", repo_svg("gemini.svg"), "svg", "own"),
     # Muse -- owner raster with 840px of art.
     Target("Sources/CodeCaps/Resources/ProviderMarks/muse.png", MUSE, "png", "owner"),
-    Target("Sources/CodeCaps/Resources/ProviderMarks/muse-assist.png", MUSE, "png", "owner"),
     Target("Sources/CodeCaps/Resources/ProviderMarks/muse-color.png", MUSE, "png", "owner"),
     Target("Sources/CodeCaps/Resources/ProviderMarks/muse-dark.png", MUSE, "png", "owner"),
     Target("Sources/CodeCaps/Resources/ProviderMarks/muse-light.png", MUSE, "png", "owner"),
-    Target("Sources/CodeCaps/Resources/ProviderMarks/muse-assist-color.png", MUSE, "png", "owner"),
-    Target("Sources/CodeCaps/Resources/ProviderMarks/muse-assist-dark.png", MUSE, "png", "owner"),
-    Target("Sources/CodeCaps/Resources/ProviderMarks/muse-assist-light.png", MUSE, "png", "owner"),
     # Muse Code -- own vector.
     Target("Sources/CodeCaps/Resources/ProviderMarks/muse-code.png", repo_svg("muse-code.svg"), "svg", "own"),
     Target("Sources/CodeCaps/Resources/ProviderMarks/muse-code-color.png", repo_svg("muse-code.svg"), "svg", "own"),

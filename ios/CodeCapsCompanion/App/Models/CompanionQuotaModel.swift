@@ -1857,9 +1857,7 @@ public final class CompanionQuotaModel: ObservableObject {
         let futureResets = primaryWindows.compactMap(\.resetAt).filter { $0 > now }
         let nearestReset = futureResets.min() ?? primaryWindows.compactMap(\.resetAt).min()
 
-        let sourceCount = Set(primaryWindows.compactMap(\.source) + duplicateWindows.compactMap(\.source)).count
-        let sourceSuffix = sourceCount > 1 ? "  (\(sourceCount) sources)" : ""
-        let subtitle = Self.subtitlePhrase(for: primaryWindows, fallback: title) + sourceSuffix
+        let subtitle = Self.subtitlePhrase(for: primaryWindows, fallback: title)
         let displayTitle = WidgetPlatformDisplay.title(
             canonicalKey: providerKey,
             manifestProviderLabel: title,
@@ -1917,25 +1915,23 @@ public final class CompanionQuotaModel: ObservableObject {
 
         let controllingPct: Double?
         let isExhausted: Bool
-        let sourceCount = Set(windows.compactMap(\.source)).count
-        let sourceSuffix = sourceCount > 1 ? "  (\(sourceCount) sources)" : ""
         let subtitle: String
 
         if weeklyExhausted && weeklyWin != nil {
             controllingPct = weeklyPct ?? 0
             isExhausted = true
-            subtitle = "\(QuotaWindowVocabulary.sevenDay) limit exhausted\(sourceSuffix)"
+            subtitle = "\(QuotaWindowVocabulary.sevenDay) limit exhausted"
         } else {
             let validPercents = [fiveHourWin?.remainingPercent, weeklyWin?.remainingPercent].compactMap { $0 }
             if validPercents.isEmpty {
                 let allPcts = windows.compactMap { $0.remainingPercent }
                 controllingPct = allPcts.min()
                 isExhausted = (controllingPct ?? 100) <= 0
-                subtitle = "\(QuotaWindowVocabulary.fiveHour) & \(QuotaWindowVocabulary.sevenDay)\(sourceSuffix)"
+                subtitle = "\(QuotaWindowVocabulary.fiveHour) & \(QuotaWindowVocabulary.sevenDay)"
             } else {
                 controllingPct = validPercents.min()
                 isExhausted = (controllingPct ?? 100) <= 0
-                subtitle = "\(QuotaWindowVocabulary.fiveHour) & \(QuotaWindowVocabulary.sevenDay)\(sourceSuffix)"
+                subtitle = "\(QuotaWindowVocabulary.fiveHour) & \(QuotaWindowVocabulary.sevenDay)"
             }
         }
 

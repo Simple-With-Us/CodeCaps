@@ -341,9 +341,70 @@ public struct LocalQuotaReader: Sendable {
         var request = URLRequest(url: URL(string: "https://cli-chat-proxy.grok.com/v1/billing?format=credits")!)
         request.httpMethod = "GET"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("xai-grok-cli", forHTTPHeaderField: "x-xai-token-auth")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
         let payload = try await requestJSON(request)
-        let windows = parseGrok(payload, observedAt: now())
+        var windows = parseGrok(payload, observedAt: now())
+        // The credits payload carries no plan name; the settings endpoint
+        // names the tier (`SuperGrok Heavy` vs `SuperGrok`).  Best-effort
+        // enrichment on a short budget, exactly as CodexBar documents: a
+        // failure here drops the overlay, never the usage reading.
+        if let tier = await grokSettingsTier(token: token) {
+            windows = windows.map { window in
+                var window = window
+                if window.planName == nil { window.planName = tier }
+                return window
+            }
+        }
+        // Best-effort grok.com gRPC fallback: only when the proxy answer
+        // published no percentage.  Its percent fills the subscription
+        // window; the proxy's period bounds stay authoritative.
+        if windows.first?.remainingPercent == nil,
+           let grpc = await grokGrpcReading(token: token),
+           let index = windows.firstIndex(where: { $0.id.hasSuffix(":subscription") || $0.remainingPercent == nil }) {
+            var window = windows[index]
+            window.remainingPercent = 100 - grpc.usedPercent
+            window.remainingUnknown = false
+            if window.resetAt == nil, let end = grpc.periodEnd {
+                window.resetAt = Self.isoString(end)
+            }
+            if window.periodStart == nil, let start = grpc.periodStart {
+                window.periodStart = Self.isoString(start)
+            }
+            windows[index] = window
+        }
         return ProviderRead(provider: provider, windows: windows, issue: windows.first?.remainingPercent == nil ? "Grok returned no readable quota percentage." : nil)
+    }
+
+    /// `subscription_tier_display` from the CLI-proxy settings endpoint.
+    private func grokSettingsTier(token: String) async -> String? {
+        var request = URLRequest(url: URL(string: "https://cli-chat-proxy.grok.com/v1/settings")!)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 2
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("xai-grok-cli", forHTTPHeaderField: "x-xai-token-auth")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        guard let payload = try? await requestJSON(request) else { return nil }
+        let tier = firstString(payload, ["subscription_tier_display", "subscriptionTierDisplay"])
+        return tier?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? tier : nil
+    }
+
+    /// The grok.com gRPC-web credits fallback (see `GrokGrpcCredits`).
+    private func grokGrpcReading(token: String) async -> GrokGrpcCredits.Reading? {
+        var request = URLRequest(url: URL(string: "https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig")!)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 6
+        request.httpBody = GrokGrpcCredits.requestFrame
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/grpc-web+proto", forHTTPHeaderField: "Content-Type")
+        request.setValue("1", forHTTPHeaderField: "X-Grpc-Web")
+        guard let (data, response) = try? await fetchJSON(request),
+              (200..<300).contains(response.statusCode) else { return nil }
+        return GrokGrpcCredits.parse(data, now: now())
+    }
+
+    private static func isoString(_ date: Date) -> String {
+        ISO8601DateFormatter().string(from: date)
     }
 
     private func readMiniMax() async throws -> ProviderRead {
