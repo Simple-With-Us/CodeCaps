@@ -1471,6 +1471,20 @@ struct SettingsNotificationsPage: View {
             }
 
             Section {
+                Toggle("Plan Mismatch Warnings", isOn: Binding(
+                    get: { !PlanMismatchSuppression.isSuppressed },
+                    set: { PlanMismatchSuppression.isSuppressed = !$0 }))
+                    .help("Warn when an entered plan name does not match what the provider reports.  Turning this back on resumes the popup for mismatches that were silenced with Don't show this again, at most once an hour.")
+                    .accessibilityLabel("Plan mismatch warnings")
+            } footer: {
+                Text("An explicit Keep Mine choice on a platform's page stays silent regardless of this switch." + sentenceGap
+                     + "A new plan name on either side always warns again.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Section {
                 Toggle("Reset Alarms For All Providers", isOn: $model.alarmsAll)
                     .help("The same switch as the All bell at the top of the Docked Bar.")
                     .accessibilityLabel("Reset Alarms For All Providers")

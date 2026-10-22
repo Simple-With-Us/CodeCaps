@@ -153,7 +153,7 @@ final class ConsoleState: ObservableObject {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        // A Dashboard page is a destination, never a place to resume.
+        // A Settings page is a destination, never a place to resume.
         let stored = defaults.string(forKey: "consoleLastPage").flatMap(ConsolePage.fromStorageKey)
         page = (stored?.isSettings == false ? stored : nil) ?? .settingsSourcesFleet
         if case .platform(let key) = page { pendingStoredKey = key }
@@ -547,7 +547,7 @@ struct ConsoleSidebar: View {
                         }
                     }
                 } header: {
-                    Eyebrow("DASHBOARD")
+                    Eyebrow("SETTINGS")
                 }
             }
             .listStyle(.sidebar)
@@ -606,7 +606,7 @@ struct ConsoleSidebar: View {
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
     }
 
-    /// Quotas rows carry a trailing value; Dashboard rows do not.  Two different
+    /// Quotas rows carry a trailing value; Settings rows do not.  Two different
     /// row views is what stops `.listStyle(.sidebar)` aligning them identically.
     private func quotaRow(_ row: DisplaySection) -> some View {
         HStack(spacing: 6) {
@@ -669,7 +669,7 @@ struct ConsoleSidebar: View {
 
     /// The sidebar footer exists only for a problem worth interrupting for:
     /// BotFleet quota sharing is unavailable and nothing else says so.  The
-    /// owner had this pinned here as a second copy of a Dashboard switch that is
+    /// owner had this pinned here as a second copy of a Settings switch that is
     /// on for almost everyone (2026-10-05), so a status line that never changes
     /// was removed with it; the footer now appears only when there is an error
     /// to show.
@@ -936,7 +936,7 @@ struct PlatformDetailPage: View {
     }
 
     /// Editing a platform's presentation happens on that platform's own page,
-    /// which is why Dashboard ▸ Platforms needs no row selection and no flush.
+    /// which is why Settings ▸ Platforms needs no row selection and no flush.
     private var displaySection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Eyebrow("DISPLAY")
@@ -946,7 +946,9 @@ struct PlatformDetailPage: View {
                 Divider()
                 Toggle("Display Plan, Cost and Renewal", isOn: $showCostAndRenewal)
                     .onChange(of: showCostAndRenewal) { _, _ in save() }
-                field("Plan Name", "e.g. Max 20x, Pro", $planName, disabled: !showCostAndRenewal)
+                field("Plan Name", "e.g. Max 20x, Pro", $planName,
+                      caption: planNameCaption, disabled: !showCostAndRenewal)
+                planOverrideRow
                 field("Cost", "e.g. $20/mo", $costUsd, disabled: !showCostAndRenewal)
                 field("Renewal Date", "e.g. Oct 12 or Monthly", renewalField,
                       caption: renewalDate.isEmpty && !suggestedRenewal.isEmpty
@@ -957,6 +959,72 @@ struct PlatformDetailPage: View {
             .padding(16)
             .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10))
             .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Theme.hairline))
+        }
+    }
+
+    /// The provider-reported plan beside the owner's typed one, so a mismatch
+    /// can be resolved where the name is set instead of only in the popup.
+    private var detectedPlan: String? {
+        let key = row?.providerKey ?? customInfoKey
+        let entered = planName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let candidates = model.detectedPlanWindows
+            .filter { $0.canonicalProviderKey == key }
+            .compactMap { $0.planName?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        //  The page must name the same plan the popup warns about:  prefer
+        //  the window that actually disagrees with the entered value, as
+        //  PlanWarningCycle.warnings does.
+        return candidates.first(where: {
+            PlanComparison.disagrees(detected: $0, entered: entered, providerKey: key)
+        }) ?? candidates.first
+    }
+
+    private var planMismatch: Bool {
+        guard let detected = detectedPlan else { return false }
+        let entered = planName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !entered.isEmpty else { return false }
+        let key = row?.providerKey ?? customInfoKey
+        //  An accepted pair is resolved, not a live mismatch:  the page
+        //  stops offering a resolution for a choice the owner already made.
+        guard !PlanMismatchSuppression.isAccepted(providerKey: key, entered: entered, detected: detected)
+        else { return false }
+        return PlanComparison.disagrees(detected: detected, entered: entered,
+                                        providerKey: key)
+    }
+
+    private var planNameCaption: String? {
+        guard let detected = detectedPlan else { return nil }
+        if planMismatch {
+            return "Detected: \(detected)." + sentenceGap + "Does not match — fix the name or the popup keeps appearing."
+        }
+        return "Detected: \(detected)."
+    }
+
+    /// One-click resolution where the name is typed.  "Use detected" fills
+    /// the field; "Keep mine" records the exact pair so an explicit choice
+    /// never warns again.  Either edit re-arms the warning for new values.
+    @ViewBuilder
+    private var planOverrideRow: some View {
+        if let detected = detectedPlan, showCostAndRenewal,
+           (planName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || planMismatch) {
+            HStack(spacing: 10) {
+                Text("").frame(width: 150, alignment: .leading).accessibilityHidden(true)
+                Button("Use Detected") {
+                    planName = detected
+                    save()
+                }
+                .help("Replace the plan name with what the provider reports.")
+                .accessibilityLabel("Use detected plan name")
+                if planMismatch {
+                    Button("Keep Mine") {
+                        PlanMismatchSuppression.accept(providerKey: row?.providerKey ?? customInfoKey,
+                                                       entered: planName, detected: detected)
+                    }
+                    .help("Keep the entered name and stop warning about this exact mismatch.")
+                    .accessibilityLabel("Keep my plan name, stop warning")
+                }
+                Spacer(minLength: 0)
+            }
         }
     }
 

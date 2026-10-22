@@ -290,6 +290,8 @@ private static let resourceNames: [String: String] = [
     "muse-assist": "muse-assist",
     "muse-code": "muse-code",
     "cursor": "cursor",
+    "github-copilot": "copilot",
+    "copilot": "copilot",
 ]
 
 /// The file a style and appearance ask for, or `nil` when the mark is absent.
@@ -303,7 +305,15 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
     /// Return the bundled asset for `providerKey`, or `nil` if no artwork ships.
     /// The standard cache preserves brand colors; the template cache marks the
     /// image as a template so it adapts to Light/Dark and menu bar selection.
+    /// Guards cachedBundle and lastFailure:  preloadBundledMarks() warms the
+    /// caches on a background queue while the main thread reads, and an
+    /// unguarded String?/Bundle? write can tear.
+    private static let stateLock = NSLock()
     private static var cachedBundle: Bundle? = nil
+    /// Bumped by every invalidation.  A resolve that started before an
+    /// invalidation must not pin its result afterwards, or the clear is
+    /// silently undone.
+    private static var bundleGeneration: UInt64 = 0
     /// A latch that only remembers success is a latch that can be poisoned
     /// before the bundle is reachable: the first call can land while the
     /// resource bundle is not yet resolvable, and every later call would then
@@ -315,19 +325,45 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
     /// anything in the PiP, which looked like a broken artwork cache but was a
     /// bundle that resolved and could not deliver.
     private static func currentBundle() -> Bundle? {
-        if let cached = cachedBundle { return cached }
+        stateLock.lock()
+        if let cached = cachedBundle { stateLock.unlock(); return cached }
+        let generation = bundleGeneration
+        stateLock.unlock()
+        //  Resolution is kept outside the lock:  it runs arbitrary bundle
+        //  code and only the pin needs guarding.
         if let b = ResourceBundle.resolved ?? ResourceBundle.resolveBundle() {
-            cachedBundle = b
+            stateLock.lock()
+            if generation == bundleGeneration { cachedBundle = b }
+            stateLock.unlock()
             return b
         }
         return nil
+    }
+
+    /// Decode every bundled mark once, on a background queue, so the first
+    /// draw of every surface finds a warm cache instead of paying per-row
+    /// filesystem probes while the window is already on screen.  Custom
+    /// marks load from disk and were never slow; this closes that gap for
+    /// the bundled set.
+    public static func preloadBundledMarks() {
+        for key in resourceNames.keys {
+            for style in [MarkStyle.standard, .template] {
+                for isDark in [false, true] {
+                    _ = bundledImage(providerKey: key, style: style, isDark: isDark)
+                }
+            }
+        }
+        _ = BrandMarkImage.asset
     }
 
     /// Forget every cached bundle and mark.  Called when something changes that
     /// could have invalidated them — a custom mark import, or a resource bundle
     /// that appears after the first lookup.
     public static func invalidateCaches() {
+        stateLock.lock()
+        bundleGeneration &+= 1
         cachedBundle = nil
+        stateLock.unlock()
         standardCache.removeAllObjects()
         templateCache.removeAllObjects()
         menuBarCache.removeAllObjects()
@@ -340,8 +376,10 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
     private static var lastFailure: String? = nil
 
     private static func noteFailure(_ reason: String) {
-        guard lastFailure != reason else { return }
+        stateLock.lock()
+        guard lastFailure != reason else { stateLock.unlock(); return }
         lastFailure = reason
+        stateLock.unlock()
         NSLog("CodeCaps: provider mark unavailable — %@", reason)
     }
 
@@ -351,10 +389,7 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
         // previously cached mark for the same provider key, and appearance must
         // never serve a Light silhouette onto a Dark surface (or the reverse).
         let hintName = iconHint?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let stem = (hintName?.isEmpty == false) ? "\(key)|\(hintName!)" : (key as String)
-        let cacheKey = "\(stem)|v2|\(style.rawValue)|\(isDark ? "dark" : "light")" as NSString
         let cache = (style == .standard) ? standardCache : templateCache
-        if let cached = cache.object(forKey: cacheKey) { return cached }
         // Server-first: try the manifest-supplied hint name first; fall back to
         // the built-in map when the hint does not resolve to a file, so a bad
         // hint can never blank a mark the map would have found.
@@ -363,6 +398,12 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
             return resourceNames[name] ?? name
         }
         let mappedBase = resourceNames[key as String] ?? resourceNames[platformKey(of: key as String)]
+        // A hint that resolves to the same artwork as the built-in map shares
+        // the map's cache entry, so launch preloading (which cannot know the
+        // manifest's hints) still warms the first draw.
+        let stem = (hintBase != nil && hintBase != mappedBase) ? "\(key)|\(hintName!)" : (key as String)
+        let cacheKey = "\(stem)|v2|\(style.rawValue)|\(isDark ? "dark" : "light")" as NSString
+        if let cached = cache.object(forKey: cacheKey) { return cached }
         var filenames: [String] = []
         for base in [hintBase, mappedBase].compactMap({ $0 }) {
             for filename in bundledFilenames(base: base, style: style, isDark: isDark) where !filenames.contains(filename) {
@@ -462,7 +503,9 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
     /// Claude and the colour Gemini star keep their brand colour.
     public static func isMonochromeMark(_ providerKey: String) -> Bool {
         let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return monochromeKeys.contains(key)
+        // Pool-scoped keys ("github-copilot:premium") classify by platform,
+        // matching the artwork lookup below.
+        return monochromeKeys.contains(key) || monochromeKeys.contains(platformKey(of: key))
     }
 
     /// Marks that must always render in brand colour (orange Claude starburst,
@@ -484,8 +527,8 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
     private static let solidToneKeys: Set<String> = ["google-antigravity:third-party"]
 
     private static let monochromeKeys: Set<String> = [
-        "grok-bot",
-        "openai", "codex", "cursor", "xai", "x-ai", "grok", "grok-cli",
+        "grok-bot", "openai", "codex", "cursor", "xai", "x-ai", "grok", "grok-cli",
+        "github-copilot", "copilot",
     ]
 
     /// Presentation mode for a user-supplied custom mark.  Defaults to `.color`
@@ -648,7 +691,10 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
         // pinned bundle gets re-resolved too: it may have been resolved before
         // the bundle existed, and that stale pin is what leaves every bundled
         // mark drawing as a fallback for the rest of the process.
+        stateLock.lock()
+        bundleGeneration &+= 1
         cachedBundle = nil
+        stateLock.unlock()
         standardCache.removeObject(forKey: key as NSString)
         templateCache.removeObject(forKey: key as NSString)
         for style in MarkStyle.allCases {
@@ -698,11 +744,14 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
     }
 
     /// Delay before re-probing a mark that failed to load, by attempt number:
-    /// five seconds for the first dozen attempts (covers install and update
-    /// windows), then once a minute so a mark that appears later -- a custom
-    /// import, a late-mounted bundle -- still heals without a relaunch.
+    /// the first three tries come fast (a bundle that lands seconds after the
+    /// first draw should not leave placeholder glyphs lingering), then five
+    /// seconds for the install/update window, then once a minute so a mark
+    /// that appears later — a custom import, a late-mounted bundle — still
+    /// heals without a relaunch.
     public static func missingMarkRetryDelay(forAttempt attempt: Int) -> UInt64 {
-        attempt < 12 ? 5_000_000_000 : 60_000_000_000
+        if attempt < 3 { return 1_000_000_000 }
+        return attempt < 12 ? 5_000_000_000 : 60_000_000_000
     }
 }
 

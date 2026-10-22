@@ -29,6 +29,25 @@ final class PlanComparisonTests: XCTestCase {
         XCTAssertFalse(PlanComparison.disagrees(detected: "chatgpt-plus", entered: "Plus", providerKey: "openai"))
     }
 
+    func testOwnerDirectedSubstringAliases() {
+        // Anything with "pro lite"/"prolite" is Codex Pro Lite (owner 2026-10-22).
+        XCTAssertFalse(PlanComparison.disagrees(detected: "prolite", entered: "ChatGPT Pro Lite (5x)", providerKey: "openai"))
+        XCTAssertFalse(PlanComparison.disagrees(detected: "Pro Lite", entered: "prolite", providerKey: "openai"))
+        XCTAssertTrue(PlanComparison.disagrees(detected: "prolite", entered: "Plus", providerKey: "openai"))
+        // Anything with "ultra" is Cursor's unified_ultra allowance.
+        XCTAssertFalse(PlanComparison.disagrees(detected: "unified_ultra", entered: "Ultra", providerKey: "cursor"))
+        XCTAssertFalse(PlanComparison.disagrees(detected: "Ultra", entered: "unified_ultra", providerKey: "cursor"))
+        XCTAssertTrue(PlanComparison.disagrees(detected: "unified_ultra", entered: "Pro", providerKey: "cursor"))
+    }
+
+    func testGenericGrokBotPlanNeverMismatches() {
+        // The Grok Bot feed reports "Grok Bot Plan" for every plan, so it can
+        // never contradict an entered value (owner 2026-10-22).
+        XCTAssertFalse(PlanComparison.disagrees(detected: "Grok Bot Plan", entered: "Ultra", providerKey: "grok-bot"))
+        XCTAssertFalse(PlanComparison.disagrees(detected: "Grok Bot Plan", entered: "inherit from Cursor & xAI", providerKey: "grok-bot"))
+        XCTAssertFalse(PlanComparison.disagrees(detected: "Grok Bot Plan", entered: "Grok Bot Plan", providerKey: "grok-bot"))
+    }
+
     func testRealTierDifferencesStayDifferent() {
         XCTAssertTrue(PlanComparison.disagrees(detected: "Max 20x", entered: "Max 5x", providerKey: "anthropic"))
         XCTAssertTrue(PlanComparison.disagrees(detected: "Pro+", entered: "Pro", providerKey: "github-copilot"))

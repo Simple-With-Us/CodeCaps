@@ -195,6 +195,10 @@ MAC_TARGETS: list[Target] = [
     Target("Sources/CodeCaps/Resources/ProviderMarks/cursor-color.png", repo_svg("cursor.svg"), "svg", "own"),
     Target("Sources/CodeCaps/Resources/ProviderMarks/cursor-dark.png", repo_svg("cursor.svg"), "svg", "own"),
     Target("Sources/CodeCaps/Resources/ProviderMarks/cursor-light.png", repo_svg("cursor.svg"), "svg", "own"),
+    # Copilot -- own vector (official outline, owner-supplied).
+    Target("Sources/CodeCaps/Resources/ProviderMarks/copilot-color.png", repo_svg("copilot.svg"), "svg", "own"),
+    Target("Sources/CodeCaps/Resources/ProviderMarks/copilot-dark.png", repo_svg("copilot.svg"), "svg", "own"),
+    Target("Sources/CodeCaps/Resources/ProviderMarks/copilot-light.png", repo_svg("copilot.svg"), "svg", "own"),
     # OpenAI -- own vector.
     # Grok -- own vector.
     Target("Sources/CodeCaps/Resources/ProviderMarks/grok-color.png", repo_svg("grok.svg"), "svg", "own"),

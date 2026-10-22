@@ -59,7 +59,7 @@ final class ProviderMarkResolutionTests: XCTestCase {
         let keys = ["anthropic", "claude", "openai", "codex", "xai", "grok",
                     "grok-cli", "grok-bot", "cursor", "gemini", "antigravity",
                     "google-antigravity", "minimax", "muse", "muse-assist",
-                    "muse-code"]
+                    "muse-code", "github-copilot", "copilot"]
         for key in keys {
             for style in [MarkStyle.standard, .template] {
                 XCTAssertNotNil(PlatformLogoImage.load(providerKey: key, style: style),
