@@ -126,6 +126,29 @@ final class AntigravityPoolsTests: XCTestCase {
         XCTAssertEqual(gemini.windows.count, 3)
     }
 
+    /// A provider that says an allowance is gone and leaves the figure out
+    /// means the pool is at its cap.  Reading that as unknown let the
+    /// five-hour window drive the pool's headline, which is how the Mac came
+    /// to offer quota that was not there.
+    func testAWeeklyWithNoReadingButAnExhaustedWordStillCapsThePool() throws {
+        let weekly = QuotaWindow(
+            id: "claude-sonnet-weekly",
+            provider: "Antigravity", via: "antigravity", sourceApp: "local-mac",
+            modelId: "claude-sonnet", label: "claude-sonnet",
+            remainingPercent: nil, remainingUnknown: true, isExhausted: true,
+            resetAt: "2026-09-20T10:00:00Z", window: "weekly", occurredAt: observedAt)
+        let fiveHour = report("claude-sonnet", 100, period: "5h")
+        let pools = AntigravityQuotaGroups.pools(from: [fiveHour, weekly], now: now)
+        let thirdParty = try XCTUnwrap(pools.first { $0.key == "third-party" })
+
+        XCTAssertTrue(thirdParty.weeklyExhausted)
+        XCTAssertEqual(thirdParty.maskedWindowIds, [fiveHour.id])
+        XCTAssertEqual(thirdParty.remainingPercent, 0,
+                       "a pool at its cap reports zero, never the five-hour window's figure")
+        XCTAssertEqual(thirdParty.drivingWindowId, weekly.id)
+        XCTAssertEqual(thirdParty.resetAt, ISO8601DateFormatter().date(from: "2026-09-20T10:00:00Z"))
+    }
+
     private func report(_ model: String, _ percent: Double, period: String? = nil) -> QuotaWindow {
         QuotaWindow(id: model + (period ?? ""), provider: "Antigravity", via: "antigravity", sourceApp: "local-mac",
                     modelId: model, label: model, remainingPercent: percent, resetAt: "2026-09-13T15:00:00Z",

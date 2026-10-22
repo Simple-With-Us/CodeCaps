@@ -88,6 +88,18 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
     public let isDuplicateSource: Bool
     public let isExhausted: Bool
     public let isMasked: Bool
+    /// Whether this window is a supplementary video allowance beside the
+    /// subscription rather than inside it.
+    ///
+    /// Computed with the shared `QuotaCapRule`, so the phone skips exactly the
+    /// windows the Mac skips and the two surfaces cannot disagree about which
+    /// window is allowed to stand in for a plan hitting its cap.
+    public let isSupplementaryVideoQuota: Bool
+    /// Whether this window is a scoped pool allowance beside the subscription.
+    public let isScopedPoolAllowance: Bool
+    /// Whether this window is a model-specific sub-quota rather than the
+    /// platform's primary shared pool quota.
+    public let isSubModelLimit: Bool
     public let absoluteRemaining: Double?
     public let absoluteLimit: Double?
     public let quotaUnit: String?
@@ -108,6 +120,9 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
         isDuplicateSource: Bool = false,
         isExhausted: Bool = false,
         isMasked: Bool = false,
+        isSupplementaryVideoQuota: Bool = false,
+        isScopedPoolAllowance: Bool = false,
+        isSubModelLimit: Bool = false,
         absoluteRemaining: Double? = nil,
         absoluteLimit: Double? = nil,
         quotaUnit: String? = nil,
@@ -125,6 +140,9 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
         self.isDuplicateSource = isDuplicateSource
         self.isExhausted = isExhausted
         self.isMasked = isMasked
+        self.isSupplementaryVideoQuota = isSupplementaryVideoQuota
+        self.isScopedPoolAllowance = isScopedPoolAllowance
+        self.isSubModelLimit = isSubModelLimit
         self.absoluteRemaining = absoluteRemaining
         self.absoluteLimit = absoluteLimit
         self.quotaUnit = quotaUnit
@@ -146,6 +164,7 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case id, label, cadence, remainingPercent, resetAt, source, via
         case isDuplicateSource, isExhausted, isMasked
+        case isSupplementaryVideoQuota, isScopedPoolAllowance, isSubModelLimit
         case absoluteRemaining, absoluteLimit, quotaUnit
         case reportedAt, observedAt, normalizedWindowKey, producerInstanceId
     }
@@ -163,6 +182,9 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
         isDuplicateSource = try container.decodeIfPresent(Bool.self, forKey: .isDuplicateSource) ?? false
         isExhausted = try container.decodeIfPresent(Bool.self, forKey: .isExhausted) ?? false
         isMasked = try container.decodeIfPresent(Bool.self, forKey: .isMasked) ?? false
+        isSupplementaryVideoQuota = try container.decodeIfPresent(Bool.self, forKey: .isSupplementaryVideoQuota) ?? false
+        isScopedPoolAllowance = try container.decodeIfPresent(Bool.self, forKey: .isScopedPoolAllowance) ?? false
+        isSubModelLimit = try container.decodeIfPresent(Bool.self, forKey: .isSubModelLimit) ?? false
         absoluteRemaining = try container.decodeIfPresent(Double.self, forKey: .absoluteRemaining)
         absoluteLimit = try container.decodeIfPresent(Double.self, forKey: .absoluteLimit)
         quotaUnit = try container.decodeIfPresent(String.self, forKey: .quotaUnit)
@@ -186,6 +208,9 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
         try container.encode(isDuplicateSource, forKey: .isDuplicateSource)
         try container.encode(isExhausted, forKey: .isExhausted)
         try container.encode(isMasked, forKey: .isMasked)
+        try container.encode(isSupplementaryVideoQuota, forKey: .isSupplementaryVideoQuota)
+        try container.encode(isScopedPoolAllowance, forKey: .isScopedPoolAllowance)
+        try container.encode(isSubModelLimit, forKey: .isSubModelLimit)
         try container.encodeIfPresent(absoluteRemaining, forKey: .absoluteRemaining)
         try container.encodeIfPresent(absoluteLimit, forKey: .absoluteLimit)
         try container.encodeIfPresent(quotaUnit, forKey: .quotaUnit)
@@ -211,6 +236,13 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
             resetAt: resetAt,
             monthlyHint: label.lowercased().contains("plan") || cadence.lowercased().contains("plan")
         )
+    }
+
+    /// The cadence in the words an at-cap line uses: "7-day", "5-hour".  The
+    /// window already carries the canonical cadence, so this only re-derives it
+    /// when a window arrived with something else.
+    public var atCapCadenceLabel: String {
+        QuotaWindowVocabulary.atCapCadence(cadence: cadence, resetAt: resetAt)
     }
 
     public var displayPercent: String {
@@ -483,8 +515,17 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
         return resolved.first(where: { $0.window.id != short?.id })
     }
 
+    /// The card's headline percentage: the lowest honest reading on the card.
+    ///
+    /// A masked window is left out, because its reading is a number that must
+    /// not be believed.  The five-hour window of a pool whose weekly cap is
+    /// spent reports whatever it last saw, and the card put that on its
+    /// headline while the label beside it said "n/a".
     public func cardRemainingPercent(scope: CompanionSourceScope, now: Date = Date()) -> Double? {
-        cardWindows(scope: scope, now: now).compactMap(\.remainingPercent).min()
+        cardWindows(scope: scope, now: now)
+            .filter { !$0.isMasked }
+            .compactMap(\.remainingPercent)
+            .min()
     }
 
     public func cardDisplayPercent(scope: CompanionSourceScope, now: Date = Date()) -> String {
@@ -567,6 +608,55 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
         if remainingPercent <= 0 { return CompanionTheme.danger }
         if remainingPercent < 20 { return CompanionTheme.warning }
         return CompanionTheme.accent
+    }
+
+    /// The window that binds this provider's cap: a spent allowance, and among
+    /// the spent ones the one that resets last, because the plan stays capped
+    /// until that window recovers.
+    ///
+    /// Mirrors the Mac's `QuotaPlatformSection.atCapWindow()`, through the
+    /// shared `QuotaCapRule`, so the two surfaces cannot disagree:
+    ///
+    /// - A window with no reading reports no cap.  When there is a reading it
+    ///   decides, so a provider's exhausted word cannot override a reading that
+    ///   says there is room left.  The phone used to let it, and could announce
+    ///   a cap directly above a meter that read 50%.
+    /// - A supplementary video allowance and a scoped pool allowance are
+    ///   skipped:  they sit beside the subscription rather than inside it.
+    /// - A primary window beats a sub-model window, so a plan with a window of
+    ///   its own is capped by that one.
+    /// - A masked window is skipped, because a masked reading is a real number
+    ///   that must not be believed and only the Antigravity pool knows that.
+    ///
+    /// The windows are the card's own, resolved for the scope in view, so the
+    /// cap line can never contradict the meters and the headline beside it.
+    ///
+    /// Owner 2026-10-21: the phone said nothing when a provider was at its
+    /// cap, so a capped Codex or Antigravity plan looked like any other.
+    public func atCapWindow(scope: CompanionSourceScope = .allSources, now: Date = Date()) -> CompanionWindowItem? {
+        let windows = cardWindows(scope: scope, now: now)
+        let facts = windows.map {
+            QuotaCapRule.WindowFacts(
+                id: $0.id,
+                remainingPercent: $0.remainingPercent,
+                resetAt: $0.resetAt,
+                isMasked: $0.isMasked,
+                isSupplementaryVideoQuota: $0.isSupplementaryVideoQuota,
+                isScopedPoolAllowance: $0.isScopedPoolAllowance,
+                isSubModelLimit: $0.isSubModelLimit
+            )
+        }
+        guard let bindingIndex = QuotaCapRule.bindingWindowIndex(in: facts) else { return nil }
+        return windows[bindingIndex]
+    }
+
+    /// "7-day cap resets in 1d 13h" — the same wording the Mac's menu-bar
+    /// window and PiP use, so one plan reads the same on both surfaces.
+    public func atCapSummary(scope: CompanionSourceScope = .allSources, now: Date = Date()) -> String? {
+        guard let window = atCapWindow(scope: scope, now: now) else { return nil }
+        return QuotaWindowVocabulary.atCapSummary(cadence: window.atCapCadenceLabel,
+                                                  resetAt: window.resetAt,
+                                                  now: now)
     }
 
     public var elapsedFraction: Double? {
@@ -1691,6 +1781,19 @@ public final class CompanionQuotaModel: ObservableObject {
 
             let isDuplicate = seenCadenceKeys.contains(cadenceKey)
 
+            // The shared cap rule needs the window's own label, not the
+            // display label:  the Mac reads the reader's own label, and that is
+            // where the "argon" and "video" signals live.
+            let capFlags = Self.capRuleFlags(
+                provider: w.provider,
+                providerKey: w.providerKey,
+                via: w.via,
+                id: w.id,
+                modelId: w.modelId,
+                modelType: w.modelType,
+                label: w.label
+            )
+
             let windowItem = CompanionWindowItem(
                 id: w.id,
                 label: displayLabel,
@@ -1702,6 +1805,9 @@ public final class CompanionQuotaModel: ObservableObject {
                 isDuplicateSource: isDuplicate,
                 isExhausted: exhausted,
                 isMasked: false,
+                isSupplementaryVideoQuota: capFlags.isSupplementaryVideoQuota,
+                isScopedPoolAllowance: capFlags.isScopedPoolAllowance,
+                isSubModelLimit: capFlags.isSubModelLimit,
                 absoluteRemaining: w.absoluteRemaining,
                 absoluteLimit: w.absoluteLimit,
                 quotaUnit: w.quotaUnit,
@@ -1775,6 +1881,19 @@ public final class CompanionQuotaModel: ObservableObject {
         )
     }
 
+    /// The level a weekly cap has to reach before the pool counts as spent.
+    ///
+    /// The Mac groups Antigravity's pools with `AntigravityQuotaGroups.weeklySpentThreshold`,
+    /// which is 0.5: the interface rounds 0.4% to 0%, so a cap that reads "at
+    /// cap" on one surface can carry a number that is not exactly zero.  The
+    /// phone used to test for exactly zero, so the same pool was capped on the
+    /// Mac and not on the phone, and each surface told the owner a different
+    /// thing about the same account.
+    ///
+    /// The number now comes from the shared rule rather than being written out
+    /// here, so the phone, the Mac and the widget all read one threshold.
+    public static let weeklySpentThreshold: Double = QuotaCapRule.spentThreshold
+
     private func consolidateAntigravityPool(
         poolKey: String,
         title: String,
@@ -1794,7 +1913,7 @@ public final class CompanionQuotaModel: ObservableObject {
         }
 
         let weeklyPct = weeklyWin?.remainingPercent
-        let weeklyExhausted = (weeklyPct ?? 100) <= 0 || (weeklyWin?.isExhausted ?? false)
+        let weeklyExhausted = (weeklyPct ?? 100) <= Self.weeklySpentThreshold || (weeklyWin?.isExhausted ?? false)
 
         let controllingPct: Double?
         let isExhausted: Bool
@@ -1924,6 +2043,15 @@ public final class CompanionQuotaModel: ObservableObject {
                 existingLabel: cadenceToken,
                 resetAt: parsedReset
             )
+            let capFlags = Self.capRuleFlags(
+                provider: driving.provider,
+                providerKey: driving.providerKey,
+                via: driving.via,
+                id: driving.id,
+                modelId: driving.modelId,
+                modelType: driving.modelType,
+                label: driving.label
+            )
 
             return CompanionWindowItem(
                 id: canonicalID,
@@ -1939,6 +2067,9 @@ public final class CompanionQuotaModel: ObservableObject {
                 // spent, so it is reported as not applicable rather than as a
                 // number the owner cannot act on.
                 isMasked: period == "5h" && weeklyExhausted,
+                isSupplementaryVideoQuota: capFlags.isSupplementaryVideoQuota,
+                isScopedPoolAllowance: capFlags.isScopedPoolAllowance,
+                isSubModelLimit: capFlags.isSubModelLimit,
                 absoluteRemaining: nil,
                 absoluteLimit: nil,
                 quotaUnit: nil,
@@ -2022,10 +2153,15 @@ public final class CompanionQuotaModel: ObservableObject {
     /// Mirror of `QuotaProviders.canonicalKey` for the wire manifest.  Kept
     /// local because the iOS bundle cannot import the Mac-side helpers; the
     /// aliases match.
-    static func canonicalManifestKey(provider: String, via: String?) -> String {
+    ///
+    /// The provider key is preferred over the provider name, exactly as the
+    /// Mac prefers it, so a window canonicalises to the same key on both
+    /// surfaces.
+    static func canonicalManifestKey(provider: String, providerKey: String? = nil, via: String?) -> String {
         let trimmedVia = via?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
         if trimmedVia == "antigravity" { return "google-antigravity" }
-        let raw = provider.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let preferred = providerKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let raw = (preferred.isEmpty ? provider : preferred).lowercased()
         let aliases: [String: String] = [
             "anthropic": "anthropic", "claude": "anthropic", "claude-code": "anthropic", "claude.ai": "anthropic",
             "openai": "openai", "openai-codex": "openai", "codex": "openai",
@@ -2040,6 +2176,31 @@ public final class CompanionQuotaModel: ObservableObject {
             "windsurf": "windsurf", "codeium": "windsurf",
         ]
         return aliases[raw] ?? raw
+    }
+
+    /// The three window kinds the shared cap rule needs, for one wire window.
+    ///
+    /// The provider key is canonicalised the way the Mac canonicalises a
+    /// window's own provider, so the phone asks `QuotaCapRule` the same
+    /// question the Mac asks and the two surfaces skip the same windows.
+    static func capRuleFlags(
+        provider: String,
+        providerKey: String?,
+        via: String?,
+        id: String,
+        modelId: String?,
+        modelType: String?,
+        label: String
+    ) -> (isSupplementaryVideoQuota: Bool, isScopedPoolAllowance: Bool, isSubModelLimit: Bool) {
+        let canonical = canonicalManifestKey(provider: provider, providerKey: providerKey, via: via)
+        return (
+            isSupplementaryVideoQuota: QuotaCapRule.isSupplementaryVideoQuota(
+                providerKey: canonical, modelId: modelId, modelType: modelType, label: label),
+            isScopedPoolAllowance: QuotaCapRule.isScopedPoolAllowance(
+                providerKey: canonical, id: id, modelId: modelId, modelType: modelType, label: label),
+            isSubModelLimit: QuotaCapRule.isSubModelLimit(
+                providerKey: canonical, id: id, modelId: modelId, modelType: modelType, label: label)
+        )
     }
 
     /// The manifest's `iconHint` for the canonicalized key, if any.

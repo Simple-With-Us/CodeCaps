@@ -81,8 +81,14 @@ final class AtCapTests: XCTestCase {
 
     func testAWindowWithHeadroomIsNotAtItsCap() {
         XCTAssertFalse(makeWindow(id: "w", label: "Weekly", remaining: 100).isAtCap)
-        XCTAssertFalse(makeWindow(id: "w", label: "Weekly", remaining: 0.4).isAtCap,
-                       "a rounding artefact above zero is not a spent allowance")
+        XCTAssertFalse(makeWindow(id: "w", label: "Weekly", remaining: 0.6).isAtCap)
+    }
+
+    /// A reading of 0.4% is drawn as 0%, so the rule has to call it spent:
+    /// telling the owner a plan is not capped while its meter reads 0% is the
+    /// drift the reviewer found between the pool's weekly test and this rule.
+    func testAWindowThatRoundsToZeroIsAtItsCap() {
+        XCTAssertTrue(makeWindow(id: "w", label: "Weekly", remaining: 0.4).isAtCap)
     }
 
     func testAnUnknownReadingIsNotACap() {

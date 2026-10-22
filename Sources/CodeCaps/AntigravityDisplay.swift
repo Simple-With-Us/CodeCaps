@@ -101,14 +101,19 @@ struct DisplaySection: Identifiable, Equatable {
     /// the rule; this only adds the mask filter, because a masked reading is a
     /// real number that must not be believed and only the pool knows it.
     var atCapWindow: QuotaWindowSnapshot? {
-        let eligible = section.windows
-            .filter { !$0.window.isSupplementaryVideoQuota && !$0.window.isScopedPoolAllowance && !isMasked($0) }
-            .filter { $0.remainingPercent != nil }
-        let primary = eligible.filter { !$0.window.isSubModelLimit }
-        let pool = primary.isEmpty ? eligible : primary
-        return pool
-            .filter(\.isAtCap)
-            .max { ($0.resetAt ?? .distantPast) < ($1.resetAt ?? .distantPast) }
+        let facts = section.windows.map {
+            QuotaCapRule.WindowFacts(
+                id: $0.window.id,
+                remainingPercent: $0.remainingPercent,
+                resetAt: $0.resetAt,
+                isMasked: isMasked($0),
+                isSupplementaryVideoQuota: $0.window.isSupplementaryVideoQuota,
+                isScopedPoolAllowance: $0.window.isScopedPoolAllowance,
+                isSubModelLimit: $0.window.isSubModelLimit
+            )
+        }
+        guard let bindingIndex = QuotaCapRule.bindingWindowIndex(in: facts) else { return nil }
+        return section.windows[bindingIndex]
     }
 
     /// Whether this row is at its cap, so every surface can ask the same

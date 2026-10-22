@@ -1581,11 +1581,13 @@ func glanceAtCapCadenceLabel(_ snapshot: QuotaWindowSnapshot) -> String {
 }
 
 /// One-line cap summary: "7-day cap resets in 1d 13h".
+///
+/// The wording lives in `QuotaWindowVocabulary.atCapSummary` so the phone
+/// companion says the same thing as the Mac.
 func glanceAtCapSummary(_ snapshot: QuotaWindowSnapshot, now: Date) -> String {
-    let cadence = glanceAtCapCadenceLabel(snapshot)
-    let countdown = glanceResetCountdown(snapshot.resetAt, now: now)
-    guard !countdown.isEmpty else { return "\(cadence) cap" }
-    return "\(cadence) cap resets in \(countdown)"
+    QuotaWindowVocabulary.atCapSummary(cadence: glanceAtCapCadenceLabel(snapshot),
+                                       resetAt: snapshot.resetAt,
+                                       now: now)
 }
 
 /// Short weekday + time for the reset, e.g. "Tue 4:15 PM".
@@ -1639,10 +1641,20 @@ struct GlanceAtCap: View {
 
     /// What VoiceOver reads: the cap, then when it lifts.  Public so the row
     /// can speak the same words its own collapsed view shows.
+    ///
+    /// The countdown is the shared one, so the spoken value, the collapsed
+    /// view and the phone companion quote the same figure.  The old helpers
+    /// put a second and a third wording on one cap:  the spoken value carried
+    /// every unit ("4d 2h 42m") while the view and the phone carried the two
+    /// largest ("4d 2h"), and once the reset had passed the spoken value told
+    /// the owner the cap "resets in due".  The full value is still one hover
+    /// away, in the help text.
     var spokenDescription: String {
-        let countdown = glanceResetCountdown(snapshot.resetAt, now: now)
-        guard !countdown.isEmpty else { return "\(glanceAtCapCadenceLabel(snapshot)) cap, quota exhausted" }
-        var parts = ["\(glanceAtCapCadenceLabel(snapshot)) cap, resets in \(glanceResetFullCountdown(snapshot.resetAt, now: now))"]
+        let countdown = QuotaWindowVocabulary.resetCountdown(snapshot.resetAt, now: now)
+        guard !countdown.isEmpty, countdown != "due" else {
+            return "\(glanceAtCapCadenceLabel(snapshot)) cap, quota exhausted"
+        }
+        var parts = ["\(glanceAtCapCadenceLabel(snapshot)) cap, resets in \(countdown)"]
         if !exactTime.isEmpty { parts.append("on \(exactTime)") }
         return parts.joined(separator: ", ")
     }

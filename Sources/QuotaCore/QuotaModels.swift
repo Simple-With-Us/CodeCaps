@@ -189,9 +189,12 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
 
     /// Video allowances are supplementary to MiniMax's coding subscription.
     public var isSupplementaryVideoQuota: Bool {
-        guard canonicalProviderKey == "minimax" else { return false }
-        let identity = [modelId, modelType, label].compactMap { $0 }.joined(separator: " ").lowercased()
-        return identity.contains("video") || identity.contains("hailuo")
+        QuotaCapRule.isSupplementaryVideoQuota(
+            providerKey: canonicalProviderKey,
+            modelId: modelId,
+            modelType: modelType,
+            label: label
+        )
     }
 
     /// Extraneous weekly video quotas (e.g. 35/35) are omitted because the daily/interval allowance (5/5)
@@ -209,24 +212,13 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
     /// Whether this window represents a model-specific sub-quota (e.g. Gemini 4 Argon or Claude Fable/Sonnet)
     /// rather than the platform's primary shared account/pool quota.
     public var isSubModelLimit: Bool {
-        if canonicalProviderKey == "openai" {
-            return ["local-mac:openai:code-review", "openai:code-review", "code-review"].contains(id)
-                || id.hasPrefix("local-mac:openai:additional:") || id.hasPrefix("local-mac:openai:code-review:")
-                || id.hasPrefix("openai:additional:") || id.hasPrefix("openai:code-review:")
-                || id.hasPrefix("additional:") || id.hasPrefix("code-review:")
-        }
-        if canonicalProviderKey == "google-antigravity" {
-            if let modelId = modelId?.lowercased(), modelId.contains("argon") { return true }
-            if let modelType = modelType?.lowercased(), modelType.contains("argon") { return true }
-            if label.localizedCaseInsensitiveContains("argon") { return true }
-            return false
-        }
-        if canonicalProviderKey == "anthropic" {
-            if let model = modelId?.lowercased(), !model.isEmpty { return true }
-            let lower = label.lowercased()
-            return lower.contains("fable") || lower.contains("sonnet") || lower.contains("opus") || lower.contains("haiku")
-        }
-        return false
+        QuotaCapRule.isSubModelLimit(
+            providerKey: canonicalProviderKey,
+            id: id,
+            modelId: modelId,
+            modelType: modelType,
+            label: label
+        )
     }
 
     /// Whether this window is a scoped allowance that sits beside the
@@ -237,7 +229,13 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
     /// does: that fallback exists so a plan whose windows are all sub-model
     /// quotas is not silently reported as never capped.
     public var isScopedPoolAllowance: Bool {
-        canonicalProviderKey == "openai" && isSubModelLimit
+        QuotaCapRule.isScopedPoolAllowance(
+            providerKey: canonicalProviderKey,
+            id: id,
+            modelId: modelId,
+            modelType: modelType,
+            label: label
+        )
     }
 
     /// A bounded value suitable for display.  NaN and infinities are unknown.
@@ -281,7 +279,7 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
         let bounded = boundedRemainingPercent
         copy.remainingPercent = bounded
         copy.remainingUnknown = bounded == nil
-        copy.isExhausted = isExhausted || bounded == 0
+        copy.isExhausted = isExhausted || QuotaCapRule.isAtCap(remainingPercent: bounded)
         if copy.isExhausted {
             copy.status = .exhausted
         } else if status == .unknown, bounded != nil {
@@ -490,7 +488,7 @@ public struct QuotaWindowSnapshot: Equatable, Sendable {
     /// an explicit exhausted flag still counts.  With neither, the window is
     /// unreadable rather than spent, and it keeps the neutral track.
     public var isAtCap: Bool {
-        if let remainingPercent { return remainingPercent <= 0 }
+        if let remainingPercent { return QuotaCapRule.isAtCap(remainingPercent: remainingPercent) }
         return window.isExhausted
     }
 
@@ -574,13 +572,18 @@ public struct QuotaPlatformSection: Equatable, Sendable {
     /// Antigravity pool grouper knows about — are filtered by the caller, in
     /// `DisplaySection.atCapWindow()`.
     public func atCapWindow() -> QuotaWindowSnapshot? {
-        let eligible = windows
-            .filter { !$0.window.isSupplementaryVideoQuota && !$0.window.isScopedPoolAllowance && $0.remainingPercent != nil }
-        let primary = eligible.filter { !$0.window.isSubModelLimit }
-        let pool = primary.isEmpty ? eligible : primary
-        return pool
-            .filter(\.isAtCap)
-            .max { ($0.resetAt ?? .distantPast) < ($1.resetAt ?? .distantPast) }
+        let facts = windows.map {
+            QuotaCapRule.WindowFacts(
+                id: $0.window.id,
+                remainingPercent: $0.remainingPercent,
+                resetAt: $0.resetAt,
+                isSupplementaryVideoQuota: $0.window.isSupplementaryVideoQuota,
+                isScopedPoolAllowance: $0.window.isScopedPoolAllowance,
+                isSubModelLimit: $0.window.isSubModelLimit
+            )
+        }
+        guard let bindingIndex = QuotaCapRule.bindingWindowIndex(in: facts) else { return nil }
+        return windows[bindingIndex]
     }
 
     /// Whether this plan is at its cap on any window it reports honestly.
