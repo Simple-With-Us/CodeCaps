@@ -313,22 +313,22 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
 /// Pure presentation logic and parser for WidgetKit widgets.
 public enum WidgetPresentation {
 
-    /// Whether a window's allowance is spent.  Mirrors
-    /// `QuotaWindowSnapshot.isAtCap` in QuotaCore, which the widget target
-    /// cannot import as a module (it includes QuotaCore files by path rather
-    /// than as a module), so the rule is stated twice on purpose:  one owner
-    /// ruling, two spellings.
+    /// Whether a window's allowance is spent.
     ///
-    /// The threshold itself is not restated.  The widget target compiles
-    /// `QuotaWindowVocabulary.swift`, so `QuotaCapRule` is in scope here and
-    /// the number is read from the one place that owns it.
+    /// The widget target cannot import QuotaCore as a module (it compiles its
+    /// files by path rather than linking them), but the decision is not
+    /// restated here anyway:  the target compiles `QuotaWindowVocabulary.swift`,
+    /// so `QuotaCapRule` is in scope and this asks the one rule that owns the
+    /// question.
     ///
-    /// The reading wins whenever there is one, because QuotaCore only ever sets
-    /// `isExhausted` and never clears it; believing the flag over a fresh
-    /// positive reading would report a cap that no longer exists.
+    /// It used to spell the comparison out here, and then the app and the
+    /// widget answered differently about one payload:  the app let a healthy
+    /// weekly reading outrank the export's stale `isExhausted`, while the
+    /// widget still let the flag win and masked the five-hour row as "n/a"
+    /// (Sentry 18329264, Kody review 2026-10-22).  Asking the rule is what
+    /// keeps them in step.
     public static func isAtCap(percent: Double?, isExhausted: Bool) -> Bool {
-        if let percent { return percent <= QuotaCapRule.spentThreshold }
-        return isExhausted
+        QuotaCapRule.isExhausted(remainingPercent: percent, providerSaysExhausted: isExhausted)
     }
 
     public static func displayPercent(percent: Double?, isMasked: Bool) -> String {
@@ -650,7 +650,11 @@ public enum WidgetPresentation {
             let cadence = formatCadence(w.label, window: w.window, resetAt: parsedReset)
             let observed = parseDate(from: w.occurredAt)
             let pct = w.remainingPercent
-            let exhausted = (pct ?? 100) <= 0 || (w.isExhausted ?? false)
+            // The one shared rule decides, as it does on the phone and on the
+            // Mac:  a reading outranks the export's stale exhausted word, and
+            // the word is the fallback for a window that reports no figure.
+            let exhausted = QuotaCapRule.isExhausted(remainingPercent: pct,
+                                                      providerSaysExhausted: w.isExhausted ?? false)
             let displayLabel = QuotaWindowVocabulary.windowLabel(
                 windowToken: w.window,
                 existingLabel: w.label.isEmpty ? cadence : w.label,
@@ -758,17 +762,24 @@ public enum WidgetPresentation {
         }
 
         let weeklyPct = weeklyWin?.remainingPercent
-        let weeklyExhausted = (weeklyPct ?? 100) <= 0 || (weeklyWin?.isExhausted ?? false)
+        let weeklyExhausted = QuotaCapRule.isExhausted(remainingPercent: weeklyPct,
+                                                        providerSaysExhausted: weeklyWin?.isExhausted ?? false)
 
         if let f = fiveHourWin {
             let reset = parseDate(from: f.resetAt)
+            let fiveHourSpent = QuotaCapRule.isExhausted(remainingPercent: f.remainingPercent,
+                                                          providerSaysExhausted: f.isExhausted ?? false)
             childWindows.append(WidgetWindowItem(
                 id: f.id,
                 label: "5-hour window",
                 cadence: "5h",
-                remainingPercent: f.remainingPercent,
+                // The reading the phone would publish for the same window, so
+                // a spent allowance the payload left without a figure still
+                // carries one here and its cap line survives.
+                remainingPercent: QuotaCapRule.publishedReading(remainingPercent: f.remainingPercent,
+                                                                allowanceSpent: fiveHourSpent),
                 resetAt: reset,
-                isExhausted: (f.remainingPercent ?? 100) <= 0,
+                isExhausted: fiveHourSpent,
                 isMasked: weeklyExhausted
             ))
         }
@@ -779,7 +790,11 @@ public enum WidgetPresentation {
                 id: w.id,
                 label: "Weekly cap",
                 cadence: "Weekly",
-                remainingPercent: w.remainingPercent,
+                // A weekly the provider reports as gone without a figure
+                // publishes zero here too, so the widget carries the same
+                // reading as the phone and the Mac for one account.
+                remainingPercent: QuotaCapRule.publishedReading(remainingPercent: w.remainingPercent,
+                                                                allowanceSpent: weeklyExhausted),
                 resetAt: reset,
                 isExhausted: weeklyExhausted,
                 isMasked: false
@@ -788,7 +803,11 @@ public enum WidgetPresentation {
 
         let validPercents = [fiveHourWin?.remainingPercent, weeklyWin?.remainingPercent].compactMap { $0 }
         let controllingPct = validPercents.min() ?? windows.compactMap(\.remainingPercent).min()
-        let isExhausted = (controllingPct ?? 100) <= 0
+        // The pool rule the phone applies:  a weekly the provider reports as
+        // spent spends the pool even when the five-hour window beside it still
+        // reports a healthy reading, and the controlling reading decides every
+        // other case.
+        let isExhausted = weeklyExhausted || QuotaCapRule.isAtCap(remainingPercent: controllingPct)
 
         let nearestReset = childWindows.compactMap(\.resetAt).filter { $0 > now }.min()
             ?? childWindows.compactMap(\.resetAt).min()

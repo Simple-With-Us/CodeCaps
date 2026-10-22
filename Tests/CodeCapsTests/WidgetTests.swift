@@ -79,20 +79,60 @@ final class WidgetTests: XCTestCase {
         )
     }
 
-    /// The widget spells the cap rule out rather than importing the module, so
-    /// its threshold is the one place a copy of the number could creep back in.
-    /// The widget target compiles `QuotaWindowVocabulary.swift` by path, so
-    /// `QuotaCapRule` is in scope and the number is read from the rule that
-    /// owns it.
+    /// The widget target cannot import QuotaCore as a module, but it compiles
+    /// `QuotaWindowVocabulary.swift` by path, so the rule that owns the number
+    /// is in scope.  The widget asks that rule now instead of restating the
+    /// comparison, which is what stops a copy of the question creeping back in
+    /// here where no test would see it.
     func testWidgetReadsTheSharedSpentThreshold() throws {
         let source = try readSource(at: Self.widgetPresentationURL)
         XCTAssertTrue(
-            source.contains("percent <= QuotaCapRule.spentThreshold"),
-            "the widget must read the shared threshold, not carry a number of its own"
+            source.contains("QuotaCapRule.isExhausted(remainingPercent: percent, providerSaysExhausted: isExhausted)"),
+            "the widget must ask the shared rule, not carry a number of its own"
         )
         XCTAssertFalse(
             source.contains("if let percent { return percent <= 0 }"),
             "the widget must not keep the old exact-zero test"
+        )
+        XCTAssertFalse(
+            source.contains("percent <= QuotaCapRule.spentThreshold"),
+            "the widget must not restate the threshold comparison beside the rule"
+        )
+    }
+
+    /// The widget and the phone have to answer the same question the same way
+    /// about one payload.
+    ///
+    /// The phone moved to the shared rule while the widget kept its own copy of
+    /// `(pct ?? 100) <= 0 || flag`, so the widget still believed the export's
+    /// stale exhausted word over a healthy reading and masked the five-hour row
+    /// as "n/a" while the app showed live figures (Sentry 18329264, Kody review
+    /// 2026-10-22).  Every copy of that expression has to be gone.
+    func testWidgetDecidesExhaustionThroughTheSharedRule() throws {
+        let source = try readSource(at: Self.widgetPresentationURL)
+        XCTAssertFalse(
+            source.contains("<= 0 || (w.isExhausted ?? false)"),
+            "the widget must not keep the old per-window exhaustion test beside the shared rule"
+        )
+        XCTAssertFalse(
+            source.contains("<= 0 || (weeklyWin?.isExhausted ?? false)"),
+            "the widget's weekly must be decided through the shared rule too"
+        )
+        XCTAssertFalse(
+            source.contains("isExhausted: (f.remainingPercent ?? 100) <= 0"),
+            "the widget's five-hour row must not keep its own zero test"
+        )
+        XCTAssertTrue(
+            source.contains("let weeklyExhausted = QuotaCapRule.isExhausted(remainingPercent: weeklyPct,"),
+            "the widget's weekly must be decided through the shared rule"
+        )
+        XCTAssertTrue(
+            source.contains("let isExhausted = weeklyExhausted || QuotaCapRule.isAtCap(remainingPercent: controllingPct)"),
+            "a spent weekly must spend the pool even when the five-hour window still reports headroom"
+        )
+        XCTAssertTrue(
+            source.contains("QuotaCapRule.publishedReading(remainingPercent: w.remainingPercent,"),
+            "the widget must publish the same bounded reading the phone publishes"
         )
     }
 

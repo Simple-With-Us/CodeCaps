@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 @testable import QuotaCore
 
@@ -11,6 +12,20 @@ import XCTest
 /// surfaces call it.
 final class QuotaCapRuleTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_700_000_000)
+
+    /// Reads a shipped source file by its path from the repository root, so a
+    /// test can pin what a surface still spells out for itself.
+    private func readRepoSource(_ relativePath: String) throws -> String {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()  // Tests/QuotaCoreTests
+            .deletingLastPathComponent()  // Tests
+            .deletingLastPathComponent()  // repo root
+            .appendingPathComponent(relativePath)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw XCTSkip("\(relativePath) is not present at \(url.path)")
+        }
+        return try String(contentsOf: url, encoding: .utf8)
+    }
 
     private func facts(
         id: String,
@@ -60,13 +75,23 @@ final class QuotaCapRuleTests: XCTestCase {
     ///
     /// The Antigravity grouper and this rule used to carry the threshold
     /// separately, one of them at 0.5 and the other at 0, and the owner saw
-    /// two different answers about one account.
-    func testEverySurfaceReadsTheSameSpentThreshold() {
-        XCTAssertEqual(
-            AntigravityQuotaGroups.weeklySpentThreshold,
-            QuotaCapRule.spentThreshold,
-            "the Antigravity pool and the shared cap rule must use one threshold"
-        )
+    /// two different answers about one account.  Both copies are gone:  the
+    /// weekly decision reads `QuotaCapRule.isExhausted`, which owns the
+    /// number.  A constant nobody reads is a question nobody keeps in step,
+    /// and the assertion that used to keep one alive could not catch a live
+    /// copy of the same question appearing somewhere else (Kody review
+    /// 2026-10-22).
+    func testNoSurfaceCarriesItsOwnWeeklySpentThreshold() throws {
+        for relativePath in [
+            "Sources/QuotaCore/AntigravityQuotaGroups.swift",
+            "ios/CodeCapsCompanion/App/Models/CompanionQuotaModel.swift"
+        ] {
+            let source = try readRepoSource(relativePath)
+            XCTAssertFalse(
+                source.contains("weeklySpentThreshold"),
+                "\(relativePath) must not declare a weekly spent threshold of its own; the shared rule owns the number"
+            )
+        }
     }
 
     func testNoReadingIsNotTheCap() {
@@ -299,6 +324,121 @@ final class QuotaCapRuleTests: XCTestCase {
                 "the Mac and the shared rule disagree for \(testCase.name)"
             )
         }
+    }
+
+    // MARK: - A reading decides, and the provider's word is the fallback
+
+    /// The shared decision, tested where both surfaces can reach it.
+    ///
+    /// The Mac's export never clears `isExhausted`, so a provider that still
+    /// carries the flag long after the allowance came back would keep
+    /// reporting a spent allowance.  The phone used to let that flag outvote
+    /// a reading that said there was room left (Kody review 2026-10-21).
+    func testAReadingOutranksTheProvidersExhaustedWord() {
+        XCTAssertTrue(QuotaCapRule.isExhausted(remainingPercent: 0, providerSaysExhausted: false))
+        XCTAssertTrue(QuotaCapRule.isExhausted(remainingPercent: 0.4, providerSaysExhausted: false))
+        XCTAssertFalse(QuotaCapRule.isExhausted(remainingPercent: 50, providerSaysExhausted: true))
+        XCTAssertFalse(QuotaCapRule.isExhausted(remainingPercent: 100, providerSaysExhausted: true))
+    }
+
+    /// With no reading at all, the provider's word is the only evidence there
+    /// is, so it counts.
+    func testWithNoReadingTheProvidersWordIsTheOnlyEvidence() {
+        XCTAssertTrue(QuotaCapRule.isExhausted(remainingPercent: nil, providerSaysExhausted: true))
+        XCTAssertFalse(QuotaCapRule.isExhausted(remainingPercent: nil, providerSaysExhausted: false))
+    }
+
+    /// A spent allowance with no figure still publishes a reading, so the cap
+    /// rule has something to bind and the cap line can quote its countdown.
+    func testASpentAllowanceWithNoFigureStillPublishesAReading() {
+        XCTAssertEqual(QuotaCapRule.publishedReading(remainingPercent: nil, allowanceSpent: true), 0)
+        XCTAssertNil(QuotaCapRule.publishedReading(remainingPercent: nil, allowanceSpent: false))
+        XCTAssertEqual(QuotaCapRule.publishedReading(remainingPercent: 42, allowanceSpent: true), 42)
+        XCTAssertEqual(QuotaCapRule.publishedReading(remainingPercent: 42, allowanceSpent: false), 42)
+    }
+
+    /// A reading that is not a number is not a reading at all.
+    ///
+    /// The rule decided that a reading existed with `remainingPercent != nil`
+    /// and then judged it through `bounded`, which calls a non-finite value no
+    /// reading.  So a NaN window passed the existence check, was reported as
+    /// headroom, and the provider's exhausted word -- the only evidence there
+    /// was -- was dropped.  The phone's previous `(pct ?? 100) <= 0 || flag`
+    /// never did that (Kody review 2026-10-22).
+    func testANonFiniteReadingFallsBackToTheProvidersWord() {
+        XCTAssertTrue(QuotaCapRule.isExhausted(remainingPercent: .nan, providerSaysExhausted: true))
+        XCTAssertFalse(QuotaCapRule.isExhausted(remainingPercent: .nan, providerSaysExhausted: false))
+        XCTAssertTrue(QuotaCapRule.isExhausted(remainingPercent: .infinity, providerSaysExhausted: true))
+        XCTAssertFalse(QuotaCapRule.isExhausted(remainingPercent: -.infinity, providerSaysExhausted: false))
+    }
+
+    /// A reading outside 0...100 is judged as what it can actually mean:  a
+    /// negative one is a spent allowance, an impossible one is headroom, and
+    /// neither one lets a stale flag overrule it.
+    func testAnOutOfRangeReadingIsJudgedAsItsBoundedValue() {
+        XCTAssertTrue(QuotaCapRule.isExhausted(remainingPercent: -5, providerSaysExhausted: false))
+        XCTAssertFalse(QuotaCapRule.isExhausted(remainingPercent: 150, providerSaysExhausted: true))
+    }
+
+    /// Every surface publishes the same bounded percentage.
+    ///
+    /// The Mac's grouper passes an already-clamped value and the phone passes
+    /// the raw wire value, so an unbounded helper published "150%" on the
+    /// phone while the rule judged that window at 100 -- two readings for one
+    /// window, which is the drift this helper exists to prevent
+    /// (Kody review 2026-10-22).
+    func testAPublishedReadingIsBoundedForEveryCaller() {
+        XCTAssertEqual(QuotaCapRule.publishedReading(remainingPercent: 150, allowanceSpent: false), 100)
+        XCTAssertEqual(QuotaCapRule.publishedReading(remainingPercent: -5, allowanceSpent: false), 0)
+        XCTAssertNil(QuotaCapRule.publishedReading(remainingPercent: .nan, allowanceSpent: false))
+        XCTAssertEqual(QuotaCapRule.publishedReading(remainingPercent: .nan, allowanceSpent: true), 0)
+    }
+
+    /// The phone's missing cap line, in the rule both surfaces share.
+    ///
+    /// The phone's Antigravity row synthesis published a weekly row with no
+    /// percentage when the provider reported the allowance as gone without a
+    /// figure, and the rule only binds a window that carries a reading, so
+    /// the cap line never appeared (Kody review 2026-10-21).  A published zero
+    /// binds it.
+    func testASpentAllowanceThatPublishedZeroBindsTheCap() {
+        let windows = [
+            facts(
+                id: "weekly",
+                percent: QuotaCapRule.publishedReading(remainingPercent: nil, allowanceSpent: true),
+                resetsIn: 86_400
+            )
+        ]
+        XCTAssertEqual(QuotaCapRule.bindingWindowIndex(in: windows), 0)
+        XCTAssertEqual(QuotaCapRule.bindingWindow(in: windows)?.id, "weekly")
+    }
+
+    // MARK: - The binding window is found by position
+
+    /// One list can carry two snapshots of the same window id, the same window
+    /// reported by two sources, so the window the rule binds is carried by
+    /// position rather than re-found by id afterwards (Kody review 2026-10-21).
+    func testADuplicateIdStillBindsTheWindowThatResetsLast() {
+        let windows = [
+            facts(id: "weekly", percent: 0, resetsIn: 3_600),
+            facts(id: "weekly", percent: 0, resetsIn: 86_400)
+        ]
+        XCTAssertEqual(QuotaCapRule.bindingWindowIndex(in: windows), 1)
+        XCTAssertEqual(QuotaCapRule.bindingWindow(in: windows)?.resetAt, windows[1].resetAt)
+    }
+
+    // MARK: - A cadence is a token, never prose
+
+    /// The at-cap line resolves a cadence through whole lexical tokens, so a
+    /// value such as "notweekly" names no period at all (Kody rule 40,
+    /// binding 2026-10-21).
+    func testACadenceNamesItsPeriodThroughWholeTokensOnly() {
+        XCTAssertEqual(QuotaWindowVocabulary.atCapCadence(cadence: "7-day"), "7-day")
+        XCTAssertEqual(QuotaWindowVocabulary.atCapCadence(cadence: "5-hour"), "5-hour")
+        XCTAssertEqual(QuotaWindowVocabulary.atCapCadence(cadence: "weekly"), "7-day")
+        XCTAssertEqual(QuotaWindowVocabulary.atCapCadence(cadence: "7-day window"), "7-day")
+        XCTAssertEqual(QuotaWindowVocabulary.atCapCadence(cadence: "notweekly"), "Other limit")
+        XCTAssertEqual(QuotaWindowVocabulary.atCapCadence(cadence: "notdaily"), "Other limit")
     }
 
     private func snapshot(
