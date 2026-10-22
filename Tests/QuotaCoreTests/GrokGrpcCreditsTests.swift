@@ -154,7 +154,7 @@ final class GrokGrpcCreditsTests: XCTestCase {
     /// The same holds when the published value is not finite.
     func testNonFinitePercentIsNotReadAsZeroUsage() {
         let start: UInt64 = 1_760_400_000
-        let nanBits = Float.nan.bitPattern
+        var nanBits = Float.nan.bitPattern
         let config = field(4, wire: 5, payload: withUnsafeBytes(of: &nanBits) { Array($0) })
             + periodField(6, start: start, end: start + week)
         let reading = GrokGrpcCredits.parse(Data(lenField(1, Array(config))), now: now)
