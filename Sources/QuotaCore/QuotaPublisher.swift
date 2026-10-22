@@ -255,7 +255,13 @@ public actor QuotaPublisher {
 
             var meta: [String: Any] = [
                 "bucketId": bucketId,
-                "isExhausted": window.isExhausted || QuotaCapRule.isAtCap(remainingPercent: clampedRemaining),
+                //  The shared cap rule decides, as it does on every surface:  a
+                //  reading at or below the threshold is a spent allowance, and
+                //  the provider's own exhausted word is the fallback for a
+                //  window that reports no figure at all.  A local zero test
+                //  here left the wire disagreeing with the at-cap line the
+                //  owner reads (Kody review 2026-10-21).
+                "isExhausted": clampedRemaining.map { QuotaCapRule.isAtCap(remainingPercent: $0) } ?? window.isExhausted,
                 "remainingUnknown": clampedRemaining == nil,
                 "scale": "percent_0_100",
                 "source": Self.producerId,

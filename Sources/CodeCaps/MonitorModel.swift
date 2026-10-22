@@ -2644,7 +2644,11 @@ final class MonitorModel: ObservableObject {
             let previous = exhaustionObservationState[key]
             guard previous == nil || observedAt > previous!.observedAt else { continue }
             changed = true
-            if remaining > 0 {
+            //  The shared cap rule decides, so the Mac's exhausted alert fires
+            //  at the same threshold as the "At cap" line and as the phone's:
+            //  a reading at or below the threshold is a spent allowance, and a
+            //  reading above it is headroom (Kody review 2026-10-21).
+            if !QuotaCapRule.isAtCap(remainingPercent: remaining) {
                 exhaustionObservationState[key] = ExhaustionObservationState(observedAt: observedAt, alert: nil)
                 activeExhaustionAlerts.removeValue(forKey: key)
                 continue
@@ -2654,7 +2658,7 @@ final class MonitorModel: ObservableObject {
                 continue
             }
             let title = "Quota Exhausted: " + window.provider
-            let body = window.label + " has no quota remaining."
+            let body = window.label + " has reached its limit."
             let payload = LocalQuotaSnapshot.AlertPayload(
                 id: "quotaExhaustion|" + key + "|" + String(observedAt.timeIntervalSince1970),
                 kind: "quotaExhaustion", providerKey: window.canonicalProviderKey,

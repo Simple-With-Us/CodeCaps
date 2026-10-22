@@ -1764,7 +1764,16 @@ public final class CompanionQuotaModel: ObservableObject {
                 resetAt: parsedReset
             )
             let pct = w.remainingPercent
-            let exhausted = (pct ?? 100) <= 0 || (w.isExhausted ?? false)
+            // A reading decides, as it does on every surface:  the export never
+            // clears `isExhausted`, so a stale word must not outvote a reading
+            // that says there is room left.  The provider's word is the fallback
+            // for a window that reports no figure at all.
+            let exhausted: Bool
+            if let pct {
+                exhausted = QuotaCapRule.isAtCap(remainingPercent: pct)
+            } else {
+                exhausted = w.isExhausted ?? false
+            }
 
             let modelQualifier = (w.modelId ?? "").lowercased()
             let isMiniMax = providerKey.lowercased().contains("minimax") || id.lowercased().contains("minimax")
@@ -1850,7 +1859,8 @@ public final class CompanionQuotaModel: ObservableObject {
         // Controlling percentage is the minimum among primary non-masked windows
         let validPercents = primaryWindows.compactMap(\.remainingPercent)
         let controllingPct = validPercents.min()
-        let isExhausted = (controllingPct ?? 100) <= 0 || primaryWindows.contains(where: \.isExhausted)
+        let isExhausted = controllingPct.map { QuotaCapRule.isAtCap(remainingPercent: $0) }
+            ?? primaryWindows.contains(where: \.isExhausted)
 
         // Nearest future reset time
         let now = Date()
@@ -1913,7 +1923,18 @@ public final class CompanionQuotaModel: ObservableObject {
         }
 
         let weeklyPct = weeklyWin?.remainingPercent
-        let weeklyExhausted = (weeklyPct ?? 100) <= Self.weeklySpentThreshold || (weeklyWin?.isExhausted ?? false)
+        // A reading decides, exactly as the Mac's `AntigravityQuotaGroups.weeklyIsSpent`
+        // and the shared `QuotaCapRule.isAtCap` do:  the export never clears
+        // `isExhausted`, so letting the wire's exhausted word override a healthy
+        // reading made the phone call a live pool exhausted while the Mac kept
+        // it live, and the two surfaces told the owner different things about
+        // one account.
+        let weeklyExhausted: Bool
+        if let weeklyPct {
+            weeklyExhausted = QuotaCapRule.isAtCap(remainingPercent: weeklyPct)
+        } else {
+            weeklyExhausted = weeklyWin?.isExhausted ?? false
+        }
 
         let controllingPct: Double?
         let isExhausted: Bool
@@ -1930,11 +1951,11 @@ public final class CompanionQuotaModel: ObservableObject {
             if validPercents.isEmpty {
                 let allPcts = windows.compactMap { $0.remainingPercent }
                 controllingPct = allPcts.min()
-                isExhausted = (controllingPct ?? 100) <= 0
+                isExhausted = QuotaCapRule.isAtCap(remainingPercent: controllingPct)
                 subtitle = "\(QuotaWindowVocabulary.fiveHour) & \(QuotaWindowVocabulary.sevenDay)\(sourceSuffix)"
             } else {
                 controllingPct = validPercents.min()
-                isExhausted = (controllingPct ?? 100) <= 0
+                isExhausted = QuotaCapRule.isAtCap(remainingPercent: controllingPct)
                 subtitle = "\(QuotaWindowVocabulary.fiveHour) & \(QuotaWindowVocabulary.sevenDay)\(sourceSuffix)"
             }
         }
@@ -2034,8 +2055,19 @@ public final class CompanionQuotaModel: ObservableObject {
                 }
             guard let driving else { return nil }
 
-            let pct = driving.remainingPercent
-            let exhausted = (pct ?? 100) <= 0 || (driving.isExhausted ?? false)
+            // A weekly the provider reports as gone without a figure still has to
+            // publish a reading:  the shared cap rule only binds a window that
+            // carries one, so without it the phone's cap line never appears.
+            // The Mac does the same in `AntigravityQuotaGroups.pools`.
+            let pct = driving.remainingPercent ?? (weeklyExhausted && period == "weekly" ? 0 : nil)
+            // A reading decides, as it does on every surface;  the provider's
+            // exhausted word is the fallback for a window with no figure.
+            let exhausted: Bool
+            if let pct {
+                exhausted = QuotaCapRule.isAtCap(remainingPercent: pct)
+            } else {
+                exhausted = driving.isExhausted ?? false
+            }
             let parsedReset = CompanionDateFormatter.date(from: driving.resetAt)
             let cadenceToken = period == "5h" ? QuotaWindowVocabulary.fiveHour : QuotaWindowVocabulary.sevenDay
             let displayLabel = QuotaWindowVocabulary.windowLabel(
@@ -2294,7 +2326,18 @@ public final class CompanionQuotaModel: ObservableObject {
                       observedAt <= Date(),
                       observedAt > (exhaustionObservedAt[key] ?? .distantPast) else { continue }
                 exhaustionObservedAt[key] = observedAt
-                let exhausted = window.isExhausted || (window.remainingPercent ?? 100) <= 0
+                //  The shared cap rule decides, exactly as the Mac's own
+                //  exhaustion path does:  the reading decides when there is
+                //  one, and the provider's own exhausted word is the fallback
+                //  for a window that reports no figure at all.  A local zero
+                //  test here left the phone quiet while the card said "At cap"
+                //  (Kody review 2026-10-21).
+                let exhausted: Bool
+                if let reading = window.remainingPercent {
+                    exhausted = QuotaCapRule.isAtCap(remainingPercent: reading)
+                } else {
+                    exhausted = window.isExhausted
+                }
                 let previous = exhaustionState[key]
                 exhaustionState[key] = exhausted
                 let eventKey = Self.quotaEventKey(kind: .quotaExhaustion, provider: item.providerKey, label: window.cadence,
