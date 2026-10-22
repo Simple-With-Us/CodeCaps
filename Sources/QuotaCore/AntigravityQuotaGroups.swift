@@ -98,21 +98,6 @@ public enum AntigravityQuotaGroups {
     /// The pool keys, in display order.
     public static let poolKeys = ["gemini", "third-party"]
 
-    /// The level a weekly cap has to reach before the pool counts as spent.
-    ///
-    /// The provider reports a fractional remaining, 0.4% is ordinary, and the
-    /// interface rounds that to 0%, so a cap that reads "at cap" on screen can
-    /// carry a number that is not exactly zero.  An exact-zero test let those
-    /// through, and the five-hour window under them was then believed when its
-    /// percentage must not be believed: owner 2026-10-19, "Antigravity is
-    /// saying vendor reset 5h quota early while the 7d is still at cap and
-    /// unchanged".  Half a point is where the interface rounds, so the mask
-    /// and the interface agree on what "at cap" means.
-    ///
-    /// The number itself lives in `QuotaCapRule.spentThreshold`, so the pool's
-    /// own weekly test and the shared cap rule cannot drift apart.
-    public static let weeklySpentThreshold: Double = QuotaCapRule.spentThreshold
-
     /// Whether a pool's weekly cap is spent.  A weekly that reports a number
     /// is spent at or below the rounding threshold; one that reports no number
     /// falls back to the provider's own word for it.

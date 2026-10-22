@@ -696,9 +696,15 @@ public enum QuotaCapRule {
     ///
     /// This is the one place that decides, so no surface can carry its own
     /// version of the question.
+    ///
+    /// A reading that is not a number is not a reading:  `bounded` treats it
+    /// as unknown, so the provider's word is the fallback for it too.  A nil
+    /// check alone let a value that is not a number through as a reading, and
+    /// then the rule called it headroom while the provider said the allowance
+    /// was gone.
     public static func isExhausted(remainingPercent: Double?, providerSaysExhausted: Bool) -> Bool {
-        guard remainingPercent != nil else { return providerSaysExhausted }
-        return isAtCap(remainingPercent: remainingPercent)
+        guard let reading = bounded(remainingPercent) else { return providerSaysExhausted }
+        return reading <= spentThreshold
     }
 
     /// The reading a row publishes for an allowance.
@@ -709,11 +715,21 @@ public enum QuotaCapRule {
     /// cap line never appears beside it and the countdown it should quote is
     /// lost.  A spent allowance publishes zero.
     ///
+    /// A spent allowance publishes zero even when a figure is beside it:  the
+    /// pool's weekly cap is one allowance, so a pool that is spent publishes
+    /// zero rather than the figure of a sibling observation, and the row and
+    /// the pool headline cannot tell the owner different things about it.
+    ///
+    /// The published figure is bounded, so a value from the wire outside
+    /// 0...100 cannot be published as it arrived while the cap rule bounds
+    /// the same value, and the two surfaces cannot show different numbers for
+    /// one window.
+    ///
     /// The Mac's Antigravity pool grouper and the phone's own row synthesis
     /// both do this, and both do it through here, so the two cannot drift.
     public static func publishedReading(remainingPercent: Double?, allowanceSpent: Bool) -> Double? {
-        if let remainingPercent { return remainingPercent }
-        return allowanceSpent ? 0 : nil
+        if allowanceSpent { return 0 }
+        return bounded(remainingPercent)
     }
 
     /// Whether this window is a supplementary video allowance beside

@@ -1856,13 +1856,12 @@ public final class CompanionQuotaModel: ObservableObject {
         // Controlling percentage is the minimum among primary non-masked windows
         let validPercents = primaryWindows.compactMap(\.remainingPercent)
         let controllingPct = validPercents.min()
-        //  A reading decides, as it does on every surface:  the pool is
-        //  exhausted when its controlling reading says so, and the
-        //  provider's own words are the fallback for a pool that reports
-        //  no figure at all.
-        let isExhausted = QuotaCapRule.isExhausted(
-            remainingPercent: controllingPct,
-            providerSaysExhausted: primaryWindows.contains(where: \.isExhausted))
+        //  Every window in the pool has already decided "is this spent"
+        //  through the shared rule, so the pool is exhausted when one of its
+        //  windows is.  Deciding it from the pool's lowest reading instead let
+        //  a window that reports no figure be masked by a healthy sibling, so
+        //  an exhausted plan looked usable.
+        let isExhausted = primaryWindows.contains(where: \.isExhausted)
 
         // Nearest future reset time
         let now = Date()
@@ -1893,19 +1892,16 @@ public final class CompanionQuotaModel: ObservableObject {
         )
     }
 
-    /// The level a weekly cap has to reach before the pool counts as spent.
+    /// The pool's weekly cap is one allowance, so every observation of it is
+    /// asked, the same way the Mac's `AntigravityQuotaGroups` asks them.
     ///
-    /// The Mac groups Antigravity's pools with `AntigravityQuotaGroups.weeklySpentThreshold`,
-    /// which is 0.5: the interface rounds 0.4% to 0%, so a cap that reads "at
-    /// cap" on one surface can carry a number that is not exactly zero.  The
-    /// phone used to test for exactly zero, so the same pool was capped on the
-    /// Mac and not on the phone, and each surface told the owner a different
-    /// thing about the same account.
-    ///
-    /// The number now comes from the shared rule rather than being written out
-    /// here, so the phone, the Mac and the widget all read one threshold.
-    public static let weeklySpentThreshold: Double = QuotaCapRule.spentThreshold
-
+    /// A reading decides, exactly as the Mac's `weeklyIsSpent` and the shared
+    /// rule do:  the export never clears `isExhausted`, so letting the wire's
+    /// exhausted word override a healthy reading made the phone call a live
+    /// pool exhausted while the Mac kept it live, and the two surfaces told
+    /// the owner different things about one account.  Asking one window alone
+    /// went the other way:  a weekly that reports no figure was masked by a
+    /// healthy sibling, so a spent allowance looked usable.
     private func consolidateAntigravityPool(
         poolKey: String,
         title: String,
@@ -1915,23 +1911,21 @@ public final class CompanionQuotaModel: ObservableObject {
         guard !windows.isEmpty else { return nil }
 
         let itemId = "antigravity:\(poolKey)"
-        let weeklyWin = windows.first {
-            let s = ($0.id + " " + $0.label).lowercased()
-            return s.contains("weekly") || s.contains("1w") || s.contains("7d")
-        }
-        let fiveHourWin = windows.first {
-            let s = ($0.id + " " + $0.label).lowercased()
-            return s.contains("5h") || s.contains("5-hour") || s.contains("interval")
-        }
+        // The pool's periods are found the way the rows find them and the way
+        // the Mac's grouper finds them, so the pool, its rows and the Mac all
+        // talk about the same windows.  Picking a different window for the
+        // pool than for the rows is how a row and its own pool headline came
+        // to tell the owner different things about one allowance.
+        let weeklyWindows = windows.filter { Self.antigravityPeriod(of: $0) == "weekly" }
+        let fiveHourWindows = windows.filter { Self.antigravityPeriod(of: $0) == "5h" }
 
-        let weeklyPct = weeklyWin?.remainingPercent
-        // A reading decides, exactly as the Mac's `AntigravityQuotaGroups.weeklyIsSpent`
-        // and the shared rule do:  the export never clears `isExhausted`, so
-        // letting the wire's exhausted word override a healthy reading made
-        // the phone call a live pool exhausted while the Mac kept it live, and
-        // the two surfaces told the owner different things about one account.
-        let weeklyExhausted = QuotaCapRule.isExhausted(remainingPercent: weeklyPct,
-                                                        providerSaysExhausted: weeklyWin?.isExhausted ?? false)
+        // Every observation of the pool's weekly cap is asked, through the
+        // shared rule, so a weekly that reports no figure cannot be masked by
+        // a healthy sibling.  The Mac's grouper asks them all the same way.
+        let weeklyExhausted = weeklyWindows.contains {
+            QuotaCapRule.isExhausted(remainingPercent: $0.remainingPercent,
+                                     providerSaysExhausted: $0.isExhausted ?? false)
+        }
 
         let controllingPct: Double?
         let isExhausted: Bool
@@ -1939,22 +1933,22 @@ public final class CompanionQuotaModel: ObservableObject {
         let sourceSuffix = sourceCount > 1 ? "  (\(sourceCount) sources)" : ""
         let subtitle: String
 
-        if weeklyExhausted && weeklyWin != nil {
-            controllingPct = weeklyPct ?? 0
+        if weeklyExhausted {
+            // The weekly cap is spent, so the pool is at its cap and the
+            // weekly drives the headline, the way the Mac's grouper drives
+            // it:  the lowest weekly figure there is, or zero when there is
+            // none.
+            controllingPct = weeklyWindows.compactMap { QuotaCapRule.bounded($0.remainingPercent) }.min() ?? 0
             isExhausted = true
             subtitle = "\(QuotaWindowVocabulary.sevenDay) limit exhausted\(sourceSuffix)"
         } else {
-            let validPercents = [fiveHourWin?.remainingPercent, weeklyWin?.remainingPercent].compactMap { $0 }
-            if validPercents.isEmpty {
-                let allPcts = windows.compactMap { $0.remainingPercent }
-                controllingPct = allPcts.min()
-                isExhausted = QuotaCapRule.isAtCap(remainingPercent: controllingPct)
-                subtitle = "\(QuotaWindowVocabulary.fiveHour) & \(QuotaWindowVocabulary.sevenDay)\(sourceSuffix)"
-            } else {
-                controllingPct = validPercents.min()
-                isExhausted = QuotaCapRule.isAtCap(remainingPercent: controllingPct)
-                subtitle = "\(QuotaWindowVocabulary.fiveHour) & \(QuotaWindowVocabulary.sevenDay)\(sourceSuffix)"
-            }
+            let fiveHourPct = fiveHourWindows.compactMap { $0.remainingPercent }.min()
+            let weeklyPct = weeklyWindows.compactMap { $0.remainingPercent }.min()
+            let validPercents = [fiveHourPct, weeklyPct].compactMap { $0 }
+            let allPcts = validPercents.isEmpty ? windows.compactMap { $0.remainingPercent } : validPercents
+            controllingPct = allPcts.min()
+            isExhausted = QuotaCapRule.isAtCap(remainingPercent: controllingPct)
+            subtitle = "\(QuotaWindowVocabulary.fiveHour) & \(QuotaWindowVocabulary.sevenDay)\(sourceSuffix)"
         }
 
         // Collapse the pool's observations into one row per period.
@@ -2056,9 +2050,17 @@ public final class CompanionQuotaModel: ObservableObject {
             // publish a reading:  the shared cap rule only binds a window that
             // carries one, so without it the phone's cap line never appears.
             // The Mac does the same in `AntigravityQuotaGroups.pools`.
+            //
+            // The row's own window decides, and so does the pool's weekly cap:
+            // a row whose own window reports the allowance gone has to publish
+            // zero, or the cap rule cannot bind it and the phone's cap line
+            // stays missing beside a pool that says the allowance is spent.
+            let rowSaysSpent = QuotaCapRule.isExhausted(
+                remainingPercent: driving.remainingPercent,
+                providerSaysExhausted: driving.isExhausted ?? false)
             let pct = QuotaCapRule.publishedReading(
                 remainingPercent: driving.remainingPercent,
-                allowanceSpent: weeklyExhausted && period == "weekly")
+                allowanceSpent: period == "weekly" && (weeklyExhausted || rowSaysSpent))
             let exhausted = QuotaCapRule.isExhausted(remainingPercent: pct,
                                                       providerSaysExhausted: driving.isExhausted ?? false)
             let parsedReset = CompanionDateFormatter.date(from: driving.resetAt)
