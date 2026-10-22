@@ -345,10 +345,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         alert.addButton(withTitle: "Open Settings")
         alert.addButton(withTitle: "Continue")
         alert.showsSuppressionButton = true
-        alert.suppressionButton.title = "Don't show this again"
+        alert.suppressionButton?.title = "Don't show this again"
         NSApp.activate(ignoringOtherApps: true)
         let response = alert.runModal()
-        if alert.suppressionButton.state == .on { PlanMismatchSuppression.isSuppressed = true }
+        if alert.suppressionButton?.state == .on { PlanMismatchSuppression.isSuppressed = true }
         PlanMismatchSuppression.record(warnings)
         navigatingPlanWarning = true
         planWarningCycle.finishPresentation()
