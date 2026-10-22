@@ -210,9 +210,9 @@ function serve(options) {
         });
       }
       if (url === `/v1/appStoreVersions/${VERSION_ID}/appStoreVersionLocalizations`) {
-        const data = [{ type: "appStoreVersionLocalizations", id: "loc-1" }];
+        const data = [{ type: "appStoreVersionLocalizations", id: "loc-1", attributes: { locale: "en-US" } }];
         if (options.secondLocaleWithoutIpad) {
-          data.push({ type: "appStoreVersionLocalizations", id: "loc-2" });
+          data.push({ type: "appStoreVersionLocalizations", id: "loc-2", attributes: { locale: "en-GB" } });
         }
         return json(200, { data });
       }
@@ -615,7 +615,7 @@ test("a localization missing a required display type stops the submission", asyn
     const { code, stderr } = await submit(base);
     assert.equal(code, 2, `expected a refusal, got ${code}: ${stderr}`);
     assert.ok(
-      /localization loc-2 has no screenshot for the required display type APP_IPAD_PRO_3GEN_129/.test(stderr),
+      /localization en-GB \(loc-2\) has no screenshot for the required display type APP_IPAD_PRO_3GEN_129/.test(stderr),
       `the refusal did not name the localization and the missing display type:\n${stderr}`
     );
     assert.equal(patched.length, 0, "the submission was patched with a locale missing the 13-inch set");
