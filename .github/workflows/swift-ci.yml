@@ -17,12 +17,14 @@ on:
 
 concurrency:
   # A pull request keeps one group, so a new push cancels the run it
-  # replaces.  A push to main gets one group per commit instead:  GitHub
-  # cancels a run that is still PENDING when a new run joins its group, so a
+  # replaces.  Everything else gets one group per commit and per event:  a
   # single shared group made every later merge cancel the compile run that
-  # the release gate was waiting on.  One group per commit means a merge
-  # never cancels another merge's compile run.
-  group: swift-ci-${{ github.event_name == 'pull_request' && github.ref || format('{0}-{1}', github.ref, github.sha) }}
+  # the release gate was waiting on, because GitHub cancels a run that is
+  # still PENDING when a new run joins its group.  One group per commit
+  # means a merge never cancels another merge's compile run.  The event is
+  # in the group as well, so two runs at the same commit that were started
+  # by different events do not cancel one another.
+  group: swift-ci-${{ github.event_name == 'pull_request' && github.ref || format('{0}-{1}-{2}', github.event_name, github.ref, github.sha) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:

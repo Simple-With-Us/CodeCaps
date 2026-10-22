@@ -169,6 +169,11 @@ test("ASC credentials come from Fleet-OPS /asc, never the stale repository secre
   assert.doesNotMatch(code, /ASC_INFISICAL_PROJECT_ID/);
   assert.match(code, /INFISICAL_PROJECT_ID: \$\{\{ secrets\.INFISICAL_FLEET_OPS_PROJECT_ID \}\}/);
   assert.match(code, /uses: \.\/\.github\/actions\/infisical-secrets/);
+  // The Sentry step names the org secret that exists.  The repository has no
+  // secret called INFISICAL_PROJECT_ID, so the vault leg resolved nothing and
+  // the step fell through to the repository copies without saying so.
+  assert.doesNotMatch(code, /project-id: \$\{\{ secrets\.INFISICAL_PROJECT_ID \}\}/);
+  assert.match(code, /project-id: \$\{\{ secrets\.INFISICAL_FLEET_OPS_PROJECT_ID \}\}/);
   assert.match(code, /secrets\.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID/);
   assert.doesNotMatch(code, /infisical secrets get/);
   assert.doesNotMatch(code, /infisical\/get-cli/);
