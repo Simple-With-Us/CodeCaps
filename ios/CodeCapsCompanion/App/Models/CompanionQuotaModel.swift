@@ -1856,13 +1856,13 @@ public final class CompanionQuotaModel: ObservableObject {
         // Controlling percentage is the minimum among primary non-masked windows
         let validPercents = primaryWindows.compactMap(\.remainingPercent)
         let controllingPct = validPercents.min()
-        //  A reading decides, as it does on every surface:  the pool is
-        //  exhausted when its controlling reading says so, and the
-        //  provider's own words are the fallback for a pool that reports
-        //  no figure at all.
-        let isExhausted = QuotaCapRule.isExhausted(
-            remainingPercent: controllingPct,
-            providerSaysExhausted: primaryWindows.contains(where: \.isExhausted))
+        //  Each window above already decided through the shared rule, so the
+        //  pool is exhausted when any of them is.  Evaluating the provider's
+        //  word against `controllingPct` instead would compare a reading that
+        //  belongs to a *different* window with the word of the window that
+        //  has no reading at all:  a weekly the provider reports as gone,
+        //  beside a healthy five-hour reading, would report the plan live.
+        let isExhausted = primaryWindows.contains(where: \.isExhausted)
 
         // Nearest future reset time
         let now = Date()
@@ -1892,19 +1892,6 @@ public final class CompanionQuotaModel: ObservableObject {
             iconHint: iconHint
         )
     }
-
-    /// The level a weekly cap has to reach before the pool counts as spent.
-    ///
-    /// The Mac groups Antigravity's pools with `AntigravityQuotaGroups.weeklySpentThreshold`,
-    /// which is 0.5: the interface rounds 0.4% to 0%, so a cap that reads "at
-    /// cap" on one surface can carry a number that is not exactly zero.  The
-    /// phone used to test for exactly zero, so the same pool was capped on the
-    /// Mac and not on the phone, and each surface told the owner a different
-    /// thing about the same account.
-    ///
-    /// The number now comes from the shared rule rather than being written out
-    /// here, so the phone, the Mac and the widget all read one threshold.
-    public static let weeklySpentThreshold: Double = QuotaCapRule.spentThreshold
 
     private func consolidateAntigravityPool(
         poolKey: String,
@@ -2056,11 +2043,21 @@ public final class CompanionQuotaModel: ObservableObject {
             // publish a reading:  the shared cap rule only binds a window that
             // carries one, so without it the phone's cap line never appears.
             // The Mac does the same in `AntigravityQuotaGroups.pools`.
+            //
+            // The row's own provider word counts as well as the pool's:
+            // `weeklyExhausted` is keyed off `weeklyWin`, chosen by scanning
+            // ids and labels, while this row is built from `driving`, chosen
+            // from the period buckets.  When the two pick different windows a
+            // weekly the provider reports as gone would publish no reading and
+            // never bind, or would publish a healthy reading under a headline
+            // that says the weekly is exhausted.  A reading still outranks the
+            // word, so this only decides the reading-less case.
+            let providerSaysSpent = driving.isExhausted ?? false
             let pct = QuotaCapRule.publishedReading(
                 remainingPercent: driving.remainingPercent,
-                allowanceSpent: weeklyExhausted && period == "weekly")
+                allowanceSpent: period == "weekly" && (weeklyExhausted || providerSaysSpent))
             let exhausted = QuotaCapRule.isExhausted(remainingPercent: pct,
-                                                      providerSaysExhausted: driving.isExhausted ?? false)
+                                                      providerSaysExhausted: providerSaysSpent)
             let parsedReset = CompanionDateFormatter.date(from: driving.resetAt)
             let cadenceToken = period == "5h" ? QuotaWindowVocabulary.fiveHour : QuotaWindowVocabulary.sevenDay
             let displayLabel = QuotaWindowVocabulary.windowLabel(

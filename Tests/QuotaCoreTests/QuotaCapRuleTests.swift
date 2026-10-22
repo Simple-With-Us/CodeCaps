@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 @testable import QuotaCore
 
@@ -11,6 +12,20 @@ import XCTest
 /// surfaces call it.
 final class QuotaCapRuleTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_700_000_000)
+
+    /// Reads a shipped source file by its path from the repository root, so a
+    /// test can pin what a surface still spells out for itself.
+    private func readRepoSource(_ relativePath: String) throws -> String {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()  // Tests/QuotaCoreTests
+            .deletingLastPathComponent()  // Tests
+            .deletingLastPathComponent()  // repo root
+            .appendingPathComponent(relativePath)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw XCTSkip("\(relativePath) is not present at \(url.path)")
+        }
+        return try String(contentsOf: url, encoding: .utf8)
+    }
 
     private func facts(
         id: String,
@@ -60,13 +75,23 @@ final class QuotaCapRuleTests: XCTestCase {
     ///
     /// The Antigravity grouper and this rule used to carry the threshold
     /// separately, one of them at 0.5 and the other at 0, and the owner saw
-    /// two different answers about one account.
-    func testEverySurfaceReadsTheSameSpentThreshold() {
-        XCTAssertEqual(
-            AntigravityQuotaGroups.weeklySpentThreshold,
-            QuotaCapRule.spentThreshold,
-            "the Antigravity pool and the shared cap rule must use one threshold"
-        )
+    /// two different answers about one account.  Both copies are gone:  the
+    /// weekly decision reads `QuotaCapRule.isExhausted`, which owns the
+    /// number.  A constant nobody reads is a question nobody keeps in step,
+    /// and the assertion that used to keep one alive could not catch a live
+    /// copy of the same question appearing somewhere else (Kody review
+    /// 2026-10-22).
+    func testNoSurfaceCarriesItsOwnWeeklySpentThreshold() throws {
+        for relativePath in [
+            "Sources/QuotaCore/AntigravityQuotaGroups.swift",
+            "ios/CodeCapsCompanion/App/Models/CompanionQuotaModel.swift"
+        ] {
+            let source = try readRepoSource(relativePath)
+            XCTAssertFalse(
+                source.contains("weeklySpentThreshold"),
+                "\(relativePath) must not declare a weekly spent threshold of its own; the shared rule owns the number"
+            )
+        }
     }
 
     func testNoReadingIsNotTheCap() {
@@ -330,6 +355,43 @@ final class QuotaCapRuleTests: XCTestCase {
         XCTAssertNil(QuotaCapRule.publishedReading(remainingPercent: nil, allowanceSpent: false))
         XCTAssertEqual(QuotaCapRule.publishedReading(remainingPercent: 42, allowanceSpent: true), 42)
         XCTAssertEqual(QuotaCapRule.publishedReading(remainingPercent: 42, allowanceSpent: false), 42)
+    }
+
+    /// A reading that is not a number is not a reading at all.
+    ///
+    /// The rule decided that a reading existed with `remainingPercent != nil`
+    /// and then judged it through `bounded`, which calls a non-finite value no
+    /// reading.  So a NaN window passed the existence check, was reported as
+    /// headroom, and the provider's exhausted word -- the only evidence there
+    /// was -- was dropped.  The phone's previous `(pct ?? 100) <= 0 || flag`
+    /// never did that (Kody review 2026-10-22).
+    func testANonFiniteReadingFallsBackToTheProvidersWord() {
+        XCTAssertTrue(QuotaCapRule.isExhausted(remainingPercent: .nan, providerSaysExhausted: true))
+        XCTAssertFalse(QuotaCapRule.isExhausted(remainingPercent: .nan, providerSaysExhausted: false))
+        XCTAssertTrue(QuotaCapRule.isExhausted(remainingPercent: .infinity, providerSaysExhausted: true))
+        XCTAssertFalse(QuotaCapRule.isExhausted(remainingPercent: -.infinity, providerSaysExhausted: false))
+    }
+
+    /// A reading outside 0...100 is judged as what it can actually mean:  a
+    /// negative one is a spent allowance, an impossible one is headroom, and
+    /// neither one lets a stale flag overrule it.
+    func testAnOutOfRangeReadingIsJudgedAsItsBoundedValue() {
+        XCTAssertTrue(QuotaCapRule.isExhausted(remainingPercent: -5, providerSaysExhausted: false))
+        XCTAssertFalse(QuotaCapRule.isExhausted(remainingPercent: 150, providerSaysExhausted: true))
+    }
+
+    /// Every surface publishes the same bounded percentage.
+    ///
+    /// The Mac's grouper passes an already-clamped value and the phone passes
+    /// the raw wire value, so an unbounded helper published "150%" on the
+    /// phone while the rule judged that window at 100 -- two readings for one
+    /// window, which is the drift this helper exists to prevent
+    /// (Kody review 2026-10-22).
+    func testAPublishedReadingIsBoundedForEveryCaller() {
+        XCTAssertEqual(QuotaCapRule.publishedReading(remainingPercent: 150, allowanceSpent: false), 100)
+        XCTAssertEqual(QuotaCapRule.publishedReading(remainingPercent: -5, allowanceSpent: false), 0)
+        XCTAssertNil(QuotaCapRule.publishedReading(remainingPercent: .nan, allowanceSpent: false))
+        XCTAssertEqual(QuotaCapRule.publishedReading(remainingPercent: .nan, allowanceSpent: true), 0)
     }
 
     /// The phone's missing cap line, in the rule both surfaces share.

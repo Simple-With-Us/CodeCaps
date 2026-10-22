@@ -360,21 +360,62 @@ final class CompanionModelTests: XCTestCase {
     /// interface rounds that to 0%.  The phone tested for exactly zero, so the
     /// same pool was capped on one surface and not on the other.
     ///
-    /// The phone now reads the shared rule's threshold instead of carrying its
-    /// own number, so the two surfaces cannot drift again.
+    /// The phone now asks the shared rule for the answer rather than carrying a
+    /// threshold of its own.  The constant it used to keep is deleted:  once
+    /// the weekly decision moved into the rule, nothing read it, and a test
+    /// that pinned a dead symbol still passed while a live copy of the same
+    /// question sat in the widget -- so the guarantee it claimed was false
+    /// (Kody review 2026-10-22).
     func testThePhoneAndTheMacAgreeOnWhenAWeeklyCapCountsAsSpent() throws {
         let model = try readCompanionModelSource()
-        XCTAssertTrue(
-            model.contains("public static let weeklySpentThreshold: Double = QuotaCapRule.spentThreshold"),
-            "the phone must read the shared threshold, not carry a number of its own"
-        )
         XCTAssertFalse(
-            model.contains("public static let weeklySpentThreshold: Double = 0.5"),
-            "the phone must not keep its own copy of the threshold"
+            model.contains("weeklySpentThreshold"),
+            "the phone must not keep a weekly spent threshold of its own; the shared rule owns the number"
         )
         XCTAssertTrue(
             model.contains("let weeklyExhausted = QuotaCapRule.isExhausted(remainingPercent: weeklyPct,"),
             "the phone must decide the weekly through the shared rule, so a reading outranks the provider's exhausted word"
+        )
+    }
+
+    /// A pool is spent when any of its windows is.
+    ///
+    /// The pool decision evaluated the provider's word against `controllingPct`,
+    /// the lowest reading across the pool -- a reading that belongs to a
+    /// different window than the one the provider reports as gone.  A weekly
+    /// the provider reported as spent without a figure, beside a healthy
+    /// five-hour reading, therefore reported the plan live and the owner saw a
+    /// usable plan whose weekly allowance was gone (Kody review 2026-10-22).
+    /// Each window's own decision already went through the shared rule, so the
+    /// pool ORs those.
+    func testAPoolIsSpentWhenAnyOfItsWindowsIs() throws {
+        let model = try readCompanionModelSource()
+        XCTAssertTrue(
+            model.contains("let isExhausted = primaryWindows.contains(where: \\.isExhausted)"),
+            "the pool must be spent when any of its windows is"
+        )
+        XCTAssertFalse(
+            model.contains("remainingPercent: controllingPct,\n            providerSaysExhausted: primaryWindows"),
+            "the provider's word must not be weighed against another window's reading"
+        )
+    }
+
+    /// The weekly row and its own provider word have to agree.
+    ///
+    /// `weeklyExhausted` is keyed off `weeklyWin`, picked by scanning ids and
+    /// labels, while the row is built from `driving`, picked from the period
+    /// buckets.  When the two pick different windows, a weekly the provider
+    /// reports as gone published no reading, so the cap rule could not bind it
+    /// and the cap line never appeared (Kody review 2026-10-22).
+    func testTheWeeklyRowAlsoPublishesZeroForItsOwnProviderWord() throws {
+        let model = try readCompanionModelSource()
+        XCTAssertTrue(
+            model.contains("let providerSaysSpent = driving.isExhausted ?? false"),
+            "the row must consider the exhausted word of the window it is actually built from"
+        )
+        XCTAssertTrue(
+            model.contains("allowanceSpent: period == \"weekly\" && (weeklyExhausted || providerSaysSpent)"),
+            "a weekly the provider reports as gone must publish zero even when the pool's other weekly window differs"
         )
     }
 
@@ -412,7 +453,7 @@ final class CompanionModelTests: XCTestCase {
             "the phone must publish its reading through the shared rule"
         )
         XCTAssertTrue(
-            model.contains("allowanceSpent: weeklyExhausted && period == \"weekly\""),
+            model.contains("allowanceSpent: period == \"weekly\" && (weeklyExhausted || providerSaysSpent)"),
             "an exhausted weekly with no figure must publish zero"
         )
     }

@@ -696,9 +696,15 @@ public enum QuotaCapRule {
     ///
     /// This is the one place that decides, so no surface can carry its own
     /// version of the question.
+    ///
+    /// A reading exists when `bounded` can make one.  A value that is not a
+    /// finite number is no reading at all, so it falls back to the provider's
+    /// word rather than passing the existence check and then being judged as
+    /// headroom, which is what the phone's previous `(pct ?? 100) <= 0 || flag`
+    /// never did.
     public static func isExhausted(remainingPercent: Double?, providerSaysExhausted: Bool) -> Bool {
-        guard remainingPercent != nil else { return providerSaysExhausted }
-        return isAtCap(remainingPercent: remainingPercent)
+        guard let reading = bounded(remainingPercent) else { return providerSaysExhausted }
+        return reading <= spentThreshold
     }
 
     /// The reading a row publishes for an allowance.
@@ -711,8 +717,13 @@ public enum QuotaCapRule {
     ///
     /// The Mac's Antigravity pool grouper and the phone's own row synthesis
     /// both do this, and both do it through here, so the two cannot drift.
+    ///
+    /// A published reading is bounded here, so every caller publishes the same
+    /// valid percentage:  the phone passes the raw wire value, and an
+    /// out-of-range one would otherwise render as "150%" while the cap rule
+    /// judged the same window at 100.
     public static func publishedReading(remainingPercent: Double?, allowanceSpent: Bool) -> Double? {
-        if let remainingPercent { return remainingPercent }
+        if let reading = bounded(remainingPercent) { return reading }
         return allowanceSpent ? 0 : nil
     }
 
