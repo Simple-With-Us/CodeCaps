@@ -1,0 +1,11 @@
+fix(release): remove the ASC key entry from the environment file
+
+The staging script blanked ASC_KEY_P8 in the job's environment file after staging, which left the loader's own key-bearing entry in place.  The runner imports that file into every later step in the job, including the ones that run `if: always()`, so the earlier bytes were still a key for those steps to read.  The entry is now removed, bytes and all, in the single-line form and in the heredoc form the approved loader writes for a value that carries newlines.
+
+The removal happens as soon as the values are read, and again in a finally block.  A SIGTERM or SIGINT handler removes it before the process leaves, because the default handling of those signals would not run the cleanup.  A staging failure, malformed multiline data and an interruption all therefore leave no key-bearing entry behind.  A multiline block whose delimiter never arrives now fails closed by name instead of reading the rest of the file as the value.
+
+Six cases prove it with synthetic credentials, never a live signing secret.  The loader's entry is removed and not blanked, a staging failure leaves nothing behind, malformed data fails closed, an interruption leaves nothing behind, the key does not stay in the process environment, and a later step reading the file the way the runner imports it is handed no key.
+
+Merging main also broke the contract test, because main reads ASC_STANDING_TESTERS from the repository secrets.  That is a list of TestFlight tester addresses and not a signing credential, so the blanket `secrets.ASC_` assertion was too broad.  It now names the three signing credentials, which is what the rule was about.
+
+Verified locally:  46 node tests across the contract suites, the shell credential test, and 492 Swift tests with 5 skipped and 0 failures.
