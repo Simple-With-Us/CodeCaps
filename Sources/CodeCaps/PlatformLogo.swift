@@ -305,6 +305,10 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
     /// Return the bundled asset for `providerKey`, or `nil` if no artwork ships.
     /// The standard cache preserves brand colors; the template cache marks the
     /// image as a template so it adapts to Light/Dark and menu bar selection.
+    /// Guards cachedBundle and lastFailure:  preloadBundledMarks() warms the
+    /// caches on a background queue while the main thread reads, and an
+    /// unguarded String?/Bundle? write can tear.
+    private static let stateLock = NSLock()
     private static var cachedBundle: Bundle? = nil
     /// A latch that only remembers success is a latch that can be poisoned
     /// before the bundle is reachable: the first call can land while the
@@ -317,9 +321,15 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
     /// anything in the PiP, which looked like a broken artwork cache but was a
     /// bundle that resolved and could not deliver.
     private static func currentBundle() -> Bundle? {
-        if let cached = cachedBundle { return cached }
+        stateLock.lock()
+        if let cached = cachedBundle { stateLock.unlock(); return cached }
+        stateLock.unlock()
+        //  Resolution is kept outside the lock:  it runs arbitrary bundle
+        //  code and only the pin needs guarding.
         if let b = ResourceBundle.resolved ?? ResourceBundle.resolveBundle() {
+            stateLock.lock()
             cachedBundle = b
+            stateLock.unlock()
             return b
         }
         return nil
@@ -345,7 +355,9 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
     /// could have invalidated them — a custom mark import, or a resource bundle
     /// that appears after the first lookup.
     public static func invalidateCaches() {
+        stateLock.lock()
         cachedBundle = nil
+        stateLock.unlock()
         standardCache.removeAllObjects()
         templateCache.removeAllObjects()
         menuBarCache.removeAllObjects()
@@ -358,8 +370,10 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
     private static var lastFailure: String? = nil
 
     private static func noteFailure(_ reason: String) {
-        guard lastFailure != reason else { return }
+        stateLock.lock()
+        guard lastFailure != reason else { stateLock.unlock(); return }
         lastFailure = reason
+        stateLock.unlock()
         NSLog("CodeCaps: provider mark unavailable — %@", reason)
     }
 
@@ -666,7 +680,9 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
         // pinned bundle gets re-resolved too: it may have been resolved before
         // the bundle existed, and that stale pin is what leaves every bundled
         // mark drawing as a fallback for the rest of the process.
+        stateLock.lock()
         cachedBundle = nil
+        stateLock.unlock()
         standardCache.removeObject(forKey: key as NSString)
         templateCache.removeObject(forKey: key as NSString)
         for style in MarkStyle.allCases {

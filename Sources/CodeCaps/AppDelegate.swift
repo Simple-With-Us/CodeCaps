@@ -316,7 +316,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                                                           entered: $0.enteredPlan,
                                                           detected: $0.detectedPlan) }
         if model.lastChecked != nil { planWarningCheckPending = false }
-        guard !warnings.isEmpty else { planWarningCycle.finishPresentation(); return }
+        //  A model change can re-enter while the modal is up:  warnings()
+        //  returns [] for a cycle already presenting, and finishing here
+        //  would clear isPresenting under the visible alert and let a
+        //  second modal stack.  Only finish a cycle this call did not open.
+        guard !warnings.isEmpty else {
+            if !planWarningCycle.isPresenting { planWarningCycle.finishPresentation() }
+            return
+        }
         // At most once an hour, no matter how often the app opens.
         if let last = PlanMismatchSuppression.lastPresentedAt,
            Date().timeIntervalSince(last) < 3600 {
@@ -349,6 +356,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         NSApp.activate(ignoringOtherApps: true)
         let response = alert.runModal()
         if alert.suppressionButton?.state == .on { PlanMismatchSuppression.isSuppressed = true }
+        //  The hourly throttle reads this stamp;  it only engages if the
+        //  presentation actually writes it.
+        PlanMismatchSuppression.lastPresentedAt = Date()
         PlanMismatchSuppression.record(warnings)
         navigatingPlanWarning = true
         planWarningCycle.finishPresentation()
