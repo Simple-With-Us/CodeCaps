@@ -106,6 +106,17 @@ function serve(options) {
       };
       const url = req.url.split("?")[0];
 
+      //  How many screenshots each display type's set holds.  A set carries
+      //  no count of its own:  App Store Connect does not expose one, so the
+      //  count is read from the screenshots the set holds.
+      const shotCounts = {
+        "set-1": options.iphoneScreens,
+        "set-2": options.ipadScreens,
+        "set-9": 2
+      };
+      if (options.ipad129Screens !== undefined) shotCounts["set-4"] = options.ipad129Screens;
+      if (options.desktopScreens !== undefined) shotCounts["set-3"] = options.desktopScreens;
+
       if (req.method === "PATCH" && url.startsWith("/v1/reviewSubmissions/")) {
         //  The body is untrusted input, so it is parsed in a try block and
         //  validated before anything is stored.  The shape is checked by
@@ -220,7 +231,7 @@ function serve(options) {
         return json(200, { data: [
           {
             id: "set-9",
-            attributes: { screenshotDisplayType: "APP_IPHONE_67", screenshotCount: 2 }
+            attributes: { screenshotDisplayType: "APP_IPHONE_67" }
           }
         ] });
       }
@@ -228,29 +239,39 @@ function serve(options) {
         if (options.setsFail) {
           return json(401, { errors: [{ title: "unauthorized" }] });
         }
+        //  A set carries NO count of its own:  App Store Connect does not
+        //  expose one, so the count is read from the screenshots the set
+        //  holds.  The mock used to invent a screenshotCount attribute, and
+        //  the invented field is exactly what made the production read come
+        //  back empty.
         const sets = [
           {
             id: "set-1",
-            attributes: { screenshotDisplayType: options.iphone65Only ? "APP_IPHONE_65" : "APP_IPHONE_67", screenshotCount: options.iphoneScreens }
+            attributes: { screenshotDisplayType: options.iphone65Only ? "APP_IPHONE_65" : "APP_IPHONE_67" }
           },
-          {
-            id: "set-2",
-            attributes: { screenshotDisplayType: "APP_IPAD_PRO_3GEN_129", screenshotCount: options.ipadScreens }
-          }
+          { id: "set-2", attributes: { screenshotDisplayType: "APP_IPAD_PRO_3GEN_129" } }
         ];
         if (options.ipad129Screens !== undefined) {
-          sets.push({
-            id: "set-4",
-            attributes: { screenshotDisplayType: "APP_IPAD_PRO_129", screenshotCount: options.ipad129Screens }
-          });
+          sets.push({ id: "set-4", attributes: { screenshotDisplayType: "APP_IPAD_PRO_129" } });
         }
         if (options.desktopScreens !== undefined) {
-          sets.push({
-            id: "set-3",
-            attributes: { screenshotDisplayType: "APP_DESKTOP", screenshotCount: options.desktopScreens }
-          });
+          sets.push({ id: "set-3", attributes: { screenshotDisplayType: "APP_DESKTOP" } });
         }
         return json(200, { data: sets });
+      }
+      const shots = url.match(/^\/v1\/appScreenshotSets\/([^/]+)\/appScreenshots$/);
+      if (shots) {
+        if (options.shotsFail) {
+          return json(401, { errors: [{ title: "unauthorized" }] });
+        }
+        const count = shotCounts[shots[1]] === undefined ? 0 : shotCounts[shots[1]];
+        return json(200, {
+          data: Array.from({ length: count }, (_unused, i) => ({
+            type: "appScreenshots",
+            id: `shot-${shots[1]}-${i}`,
+            attributes: { fileSize: 1000 }
+          }))
+        });
       }
       if (url === `/v1/appStoreVersions/${VERSION_ID}/build`) {
         return json(200, { data: { type: "builds", id: "build-1", attributes: { version: "243" } } });
@@ -544,6 +565,32 @@ async function withServer(options, fn) {
 }
 
 const READY = { iphoneScreens: 3, ipadScreens: 3, boundTo: VERSION_ID };
+
+test("the screenshot count is read from the screenshots, not from the set", async () => {
+  //  A set carries no count of its own:  App Store Connect does not expose
+  //  one.  The count is read from the screenshots the set holds, and the
+  //  breakdown it produces names the display type with its count.
+  await withServer(READY, async (base, patched) => {
+    const { code, stderr } = await submit(base);
+    assert.equal(code, 0, `expected the submission to go out, got ${code}: ${stderr}`);
+    assert.match(
+      stderr,
+      /screenshots by display type: APP_IPAD_PRO_3GEN_129 3, APP_IPHONE_67 3/,
+      `the breakdown did not carry the real counts:\n${stderr}`
+    );
+  });
+});
+
+test("a screenshot read that fails stops the run instead of counting nothing", async () => {
+  //  A set that could not be read is a failure, not an empty set:  treating
+  //  it as empty would let an irreversible submission go out on a read that
+  //  never happened.
+  await withServer({ ...READY, shotsFail: true }, async (base, patched) => {
+    const { code, stderr } = await submit(base);
+    assert.equal(code, 2, `expected a refusal, got ${code}: ${stderr}`);
+    assert.equal(patched.length, 0, "the submission was patched even though the screenshots could not be read");
+  });
+});
 
 test("a version with no screenshots is not submitted", async () => {
   await withServer({ ...READY, iphoneScreens: 0, ipadScreens: 0 }, async (base, patched) => {
