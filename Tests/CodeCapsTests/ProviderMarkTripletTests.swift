@@ -31,6 +31,18 @@ final class ProviderMarkTripletTests: XCTestCase {
         PlatformLogoImage.invalidateCaches()
     }
 
+    /// The companion's asset catalog must carry every provider the model can
+    /// name, Copilot included: a missing imageset draws the dashed fallback.
+    func testCompanionCatalogCarriesCopilotMark() {
+        let catalog = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("ios/CodeCapsCompanion/Assets.xcassets/provider-copilot.imageset")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: catalog.appendingPathComponent("provider-copilot.svg").path),
+                      "provider-copilot.imageset is missing its SVG")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: catalog.appendingPathComponent("Contents.json").path),
+                      "provider-copilot.imageset is missing Contents.json")
+    }
+
     func testEveryProviderResolvesInEveryStyleAndAppearance() {
         var unresolved: [String] = []
         for key in Self.providerKeys {

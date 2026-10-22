@@ -389,10 +389,7 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
         // previously cached mark for the same provider key, and appearance must
         // never serve a Light silhouette onto a Dark surface (or the reverse).
         let hintName = iconHint?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let stem = (hintName?.isEmpty == false) ? "\(key)|\(hintName!)" : (key as String)
-        let cacheKey = "\(stem)|v2|\(style.rawValue)|\(isDark ? "dark" : "light")" as NSString
         let cache = (style == .standard) ? standardCache : templateCache
-        if let cached = cache.object(forKey: cacheKey) { return cached }
         // Server-first: try the manifest-supplied hint name first; fall back to
         // the built-in map when the hint does not resolve to a file, so a bad
         // hint can never blank a mark the map would have found.
@@ -401,6 +398,12 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
             return resourceNames[name] ?? name
         }
         let mappedBase = resourceNames[key as String] ?? resourceNames[platformKey(of: key as String)]
+        // A hint that resolves to the same artwork as the built-in map shares
+        // the map's cache entry, so launch preloading (which cannot know the
+        // manifest's hints) still warms the first draw.
+        let stem = (hintBase != nil && hintBase != mappedBase) ? "\(key)|\(hintName!)" : (key as String)
+        let cacheKey = "\(stem)|v2|\(style.rawValue)|\(isDark ? "dark" : "light")" as NSString
+        if let cached = cache.object(forKey: cacheKey) { return cached }
         var filenames: [String] = []
         for base in [hintBase, mappedBase].compactMap({ $0 }) {
             for filename in bundledFilenames(base: base, style: style, isDark: isDark) where !filenames.contains(filename) {
@@ -500,7 +503,9 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
     /// Claude and the colour Gemini star keep their brand colour.
     public static func isMonochromeMark(_ providerKey: String) -> Bool {
         let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return monochromeKeys.contains(key)
+        // Pool-scoped keys ("github-copilot:premium") classify by platform,
+        // matching the artwork lookup below.
+        return monochromeKeys.contains(key) || monochromeKeys.contains(platformKey(of: key))
     }
 
     /// Marks that must always render in brand colour (orange Claude starburst,

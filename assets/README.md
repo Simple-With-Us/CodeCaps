@@ -4,6 +4,27 @@ One brand mark, many deliveries.  The vector sources live here; everything
 else is generated from them or checked in for a target that cannot run a
 generator.  Do not add a new logo file without a row in this table.
 
+## The copy rule — read before duplicating anything
+
+One source per artwork, referenced everywhere, duplicated nowhere —
+**except where tooling forces a copy**:
+
+- Xcode `.imageset` folders must contain their own file.  The iOS provider
+  SVGs mirror `Sources/CodeCaps/Resources/ProviderMarks/*.svg`, and
+  `codecaps-mark.imageset/codecaps-mark.png` mirrors the menu-bar icon.
+  Same bytes on purpose; the catalog cannot point outside itself.
+- The iOS `AppIcon.appiconset` manifest references distinct filenames that
+  share pixels at different point sizes.  Same bytes on purpose; the
+  manifest needs the names.
+- A `-color` variant that equals its base file (e.g. `gemini-color-color.png`
+  next to `gemini-color.png`) is the loader's Standard-variant lookup, not
+  a spare copy.  Leave it.
+
+Copies are caught by hash in review; the tests below are the enforcement.
+Yes, this file lists files — that is unusual on purpose.  The layout is
+still converging (SWU-22), and until it does, an explicit map beats
+archaeology.
+
 ## Brand sources (`assets/brand/`)
 
 | File | For |
@@ -34,3 +55,12 @@ generator.  Do not add a new logo file without a row in this table.
 | File | For |
 | ---- | --- |
 | `assets/marketing/` | Owner screenshots filed for website use.  Not logos; never edit. |
+
+## Enforcement (not this file)
+
+`Tests/CodeCapsTests/ProviderMarkTripletTests.swift` requires every mapped
+provider to resolve in every style and appearance as a real bitmap.
+`ProviderMarkResolutionTests` requires the same without any custom file
+present.  `ProviderMarkDetailTests` caps silhouette softness for Mac and
+companion marks.  If an asset change breaks any of those, the asset is
+wrong — not the test.
