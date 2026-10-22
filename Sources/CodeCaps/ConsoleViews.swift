@@ -966,19 +966,30 @@ struct PlatformDetailPage: View {
     /// can be resolved where the name is set instead of only in the popup.
     private var detectedPlan: String? {
         let key = row?.providerKey ?? customInfoKey
-        let raw = model.detectedPlanWindows
-            .first(where: { $0.canonicalProviderKey == key })?.planName?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let raw, !raw.isEmpty else { return nil }
-        return raw
+        let entered = planName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let candidates = model.detectedPlanWindows
+            .filter { $0.canonicalProviderKey == key }
+            .compactMap { $0.planName?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        //  The page must name the same plan the popup warns about:  prefer
+        //  the window that actually disagrees with the entered value, as
+        //  PlanWarningCycle.warnings does.
+        return candidates.first(where: {
+            PlanComparison.disagrees(detected: $0, entered: entered, providerKey: key)
+        }) ?? candidates.first
     }
 
     private var planMismatch: Bool {
         guard let detected = detectedPlan else { return false }
         let entered = planName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !entered.isEmpty else { return false }
+        let key = row?.providerKey ?? customInfoKey
+        //  An accepted pair is resolved, not a live mismatch:  the page
+        //  stops offering a resolution for a choice the owner already made.
+        guard !PlanMismatchSuppression.isAccepted(providerKey: key, entered: entered, detected: detected)
+        else { return false }
         return PlanComparison.disagrees(detected: detected, entered: entered,
-                                        providerKey: row?.providerKey ?? customInfoKey)
+                                        providerKey: key)
     }
 
     private var planNameCaption: String? {

@@ -36,6 +36,10 @@ struct PlanWarningCycle {
             // Do not interrupt an edit with a warning about a partial value.
             // The next explicit open compares the completed entered value.
             if let enteredAtOpen, enteredAtOpen[key] != customInfo[key]?.planName { continue }
+            // An accepted (provider, entered, detected) triple is resolved,
+            // never a warning:  the check lives here so every consumer of
+            // the list gets it, not just one call site's filter.
+            if PlanMismatchSuppression.isAccepted(providerKey: key, entered: entered, detected: detected) { continue }
             shown.insert(key)
             warnings.append(.init(providerKey: key, providerLabel: window.providerLabel ?? window.provider,
                                   detectedPlan: detected, enteredPlan: entered))

@@ -308,13 +308,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private func checkPlanMismatches() {
         guard !navigatingPlanWarning,
               planWarningCheckPending || popover.isShown || consoleWindow?.isVisible == true || floatingGlance?.isVisible == true else { return }
+        //  Accepted overrides are filtered inside warnings(), so an
+        //  explicit choice never warns again no matter the caller.
         let warnings = planWarningCycle.warnings(windows: model.detectedPlanWindows,
                                                   customInfo: model.platformCustomInfo, now: Date())
-            // An explicit override wins over every throttle: a choice the
-            // owner already made never warns again.
-            .filter { !PlanMismatchSuppression.isAccepted(providerKey: $0.providerKey,
-                                                          entered: $0.enteredPlan,
-                                                          detected: $0.detectedPlan) }
         if model.lastChecked != nil { planWarningCheckPending = false }
         //  A model change can re-enter while the modal is up:  warnings()
         //  returns [] for a cycle already presenting, and finishing here
