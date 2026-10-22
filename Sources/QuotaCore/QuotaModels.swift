@@ -285,8 +285,13 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
         } else if status == .unknown, bounded != nil {
             copy.status = QuotaWindowStatus.derived(remainingPercent: bounded)
         }
-        copy.skip = skip || copy.isExhausted
-        copy.skipReason = skipReason ?? (copy.isExhausted ? "quota exhausted" : nil)
+        // `skip` still means "a reading that must not be believed", so it keeps
+        // the provider's own flag and an exact zero:  a window at 0.3% is at
+        // its cap, but it is not a reading to hide, and hiding it took the
+        // window and its cap line out of the picture in picture while the
+        // menu bar still announced the cap (Kody review 2026-10-22).
+        copy.skip = skip || isExhausted || bounded == 0
+        copy.skipReason = skipReason ?? (isExhausted || bounded == 0 ? "quota exhausted" : nil)
         let monthlyHint = copy.canonicalProviderKey == "cursor"
             && copy.label.lowercased().contains("plan")
         if let rewritten = QuotaWindowVocabulary.sanitizeLabelIfNeeded(
