@@ -271,6 +271,32 @@ test("the legacy 12.9-inch set stays reachable by naming its display type", asyn
   );
 });
 
+test("an unknown display type is refused before anything is sent", async () => {
+  //  This guard is the only thing keeping an arbitrary string out of the
+  //  screenshotDisplayType Apple is asked to create.
+  const { code, stderr, calls, createdSets } = await upload({}, pngPath, "APP_IPAD_PRO_129_TYPO");
+  assert.equal(code, 2, `expected a refusal, got ${code}: ${stderr}`);
+  assert.ok(
+    /is not a display type this script knows/.test(stderr),
+    `the refusal did not name the unknown display type:\n${stderr}`
+  );
+  assert.deepEqual(calls, [], "the script talked to App Store Connect with an unknown display type");
+  assert.deepEqual(createdSets, [], "a screenshot set was created for an unknown display type");
+});
+
+test("an inherited member name is refused like any unknown display type", async () => {
+  //  "constructor" resolves through Object.prototype on a plain table, so
+  //  an inherited lookup would pass the guard and crash with a TypeError
+  //  and exit code 1 instead of refusing with exit code 2.
+  const { code, stderr, createdSets } = await upload({}, pngPath, "constructor");
+  assert.equal(code, 2, `expected a refusal, got ${code}: ${stderr}`);
+  assert.ok(
+    /is not a display type this script knows/.test(stderr),
+    `the refusal did not name the inherited member:\n${stderr}`
+  );
+  assert.deepEqual(createdSets, [], "a screenshot set was created for an inherited member name");
+});
+
 test("an explicit display type refuses a size it does not accept", async () => {
   //  A 2064 x 2752 capture can never go in the legacy 12.9-inch set:
   //  Apple calls that a spec mismatch and fails every image in the set.

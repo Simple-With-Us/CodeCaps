@@ -1714,7 +1714,10 @@ async function main() {
     };
     if (displayType === "auto") {
       displayType = fileSizes.get(files[0]).type;
-    } else if (!displayTypeSizes[displayType]) {
+    } else if (!Object.hasOwn(displayTypeSizes, displayType)) {
+      //  Own-property test:  an inherited member such as "constructor" is
+      //  not a display type either, and reading it would pass the guard
+      //  and crash on the .includes below instead of refusing cleanly.
       console.error(`upload-screenshots: ${displayType} is not a display type this script knows`);
       process.exitCode = 2;
       return;
