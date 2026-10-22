@@ -326,12 +326,32 @@ public enum QuotaWindowVocabulary {
     /// The cadence in the words an at-cap line uses: "7-day", "5-hour".
     ///
     /// A window that already carries the canonical cadence keeps it; anything
-    /// else is re-derived from its own label, so an at-cap line never says
+    /// else is re-derived from the cadence itself, so an at-cap line never says
     /// "Other limit" when the window meant something narrower.
+    ///
+    /// The cadence is a canonical token, never prose:  it resolves through whole
+    /// lexical tokens, so a value such as "notweekly" names no period at all
+    /// instead of being read as a weekly window (Kody rule 40, binding
+    /// 2026-10-21 — the rule `barCadenceGroup` already follows).
     public static func atCapCadence(cadence: String, resetAt: Date? = nil) -> String {
         let known = [fiveHour, oneDay, sevenDay, oneMonth]
         if known.contains(cadence) { return cadence }
-        return standardCadence(windowToken: nil, label: cadence, resetAt: resetAt, monthlyHint: false)
+        let stripped = stripTrailingWindowSuffix(cadence)
+        let canonical = standardCadence(windowToken: stripped, label: "", resetAt: resetAt, monthlyHint: false)
+        if canonical != otherLimit { return canonical }
+        let tokens = lexicalTokens(stripped)
+        if tokens.contains("weekly") { return sevenDay }
+        if tokens.contains("monthly") || tokens.contains("billing") { return oneMonth }
+        if tokens.contains("daily") { return oneDay }
+        if tokens.contains("hourly") { return fiveHour }
+        let hasDay = tokens.contains("day") || tokens.contains("days")
+        let hasHour = tokens.contains("hour") || tokens.contains("hours")
+        let hasMonth = tokens.contains("month") || tokens.contains("months")
+        if tokens.contains("7"), hasDay { return sevenDay }
+        if tokens.contains("1"), hasDay { return oneDay }
+        if tokens.contains("5"), hasHour { return fiveHour }
+        if tokens.contains("1"), hasMonth { return oneMonth }
+        return canonical
     }
 
     /// The countdown an at-cap line quotes: the two largest non-zero units of
@@ -630,17 +650,31 @@ public enum QuotaCapRule {
     /// - Among the spent ones, the one that resets last binds, because the plan
     ///   stays capped until that window recovers.
     public static func bindingWindow(in windows: [WindowFacts]) -> WindowFacts? {
-        let eligible = windows.filter {
-            !$0.isMasked
-                && !$0.isSupplementaryVideoQuota
-                && !$0.isScopedPoolAllowance
-                && $0.remainingPercent != nil
+        guard let index = bindingWindowIndex(in: windows) else { return nil }
+        return windows[index]
+    }
+
+    /// The index of the window that binds a plan's cap.
+    ///
+    /// The index, not the id:  one list can carry two snapshots of the same
+    /// window id — the same window reported by two sources — and re-finding the
+    /// window by id afterwards can pick the other one, so the cap line can
+    /// name the wrong reset countdown (Kody review 2026-10-21).  A caller that
+    /// has the windows in the same order as the facts maps the answer straight
+    /// back to its own type.
+    public static func bindingWindowIndex(in windows: [WindowFacts]) -> Int? {
+        let eligible = windows.enumerated().filter {
+            !$0.element.isMasked
+                && !$0.element.isSupplementaryVideoQuota
+                && !$0.element.isScopedPoolAllowance
+                && $0.element.remainingPercent != nil
         }
-        let primary = eligible.filter { !$0.isSubModelLimit }
+        let primary = eligible.filter { !$0.element.isSubModelLimit }
         let pool = primary.isEmpty ? eligible : primary
         return pool
-            .filter { isAtCap(remainingPercent: $0.remainingPercent) }
-            .max { ($0.resetAt ?? .distantPast) < ($1.resetAt ?? .distantPast) }
+            .filter { isAtCap(remainingPercent: $0.element.remainingPercent) }
+            .max { ($0.element.resetAt ?? .distantPast) < ($1.element.resetAt ?? .distantPast) }?
+            .offset
     }
 
     /// A reading bounded for display:  nil when there is no reading or it

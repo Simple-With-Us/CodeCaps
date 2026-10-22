@@ -314,9 +314,14 @@ final class CompanionModelTests: XCTestCase {
     /// The phone's model is not compiled into the macOS test target, so its
     /// half of the contract cannot be exercised here.  What can be checked is
     /// that it holds no copy of the rule:  it maps its windows onto
-    /// `QuotaCapRule.WindowFacts` and calls `QuotaCapRule.bindingWindow`, so
-    /// the Mac's menu-bar window, the picture in picture and the phone all
+    /// `QuotaCapRule.WindowFacts` and calls `QuotaCapRule.bindingWindowIndex`,
+    /// so the Mac's menu-bar window, the picture in picture and the phone all
     /// answer "is this plan capped, and by which window" the same way.
+    ///
+    /// The index, and not the window itself, is what the phone asks for:  the
+    /// rule's answer is a position, so the caller can map it back to its own
+    /// type without re-finding the window by id, which a duplicate id can get
+    /// wrong (Kody review 2026-10-21).
     ///
     /// The rule's own behaviour is pinned by `QuotaCapRuleTests`, and
     /// `QuotaCapRuleTests.testTheMacAndTheSharedRulePickTheSameWindow` proves
@@ -324,7 +329,7 @@ final class CompanionModelTests: XCTestCase {
     func testThePhoneAsksTheSharedRuleWhichWindowBindsTheCap() throws {
         let source = try readCompanionModelSource()
         XCTAssertTrue(
-            source.contains("QuotaCapRule.bindingWindow(in: facts)"),
+            source.contains("QuotaCapRule.bindingWindowIndex(in: facts)"),
             "the phone must call the shared rule, not keep its own copy of it"
         )
         XCTAssertTrue(
@@ -371,7 +376,72 @@ final class CompanionModelTests: XCTestCase {
             model.contains("public static let weeklySpentThreshold: Double = 0.5"),
             "the phone must not keep its own copy of the threshold"
         )
-        XCTAssertTrue(model.contains("(weeklyPct ?? 100) <= Self.weeklySpentThreshold"))
+        XCTAssertTrue(
+            model.contains("weeklyExhausted = QuotaCapRule.isAtCap(remainingPercent: weeklyPct)"),
+            "a weekly reading decides whether the Antigravity pool is spent"
+        )
+        XCTAssertTrue(
+            model.contains("weeklyExhausted = weeklyWin?.isExhausted ?? false"),
+            "the provider's exhausted word is the fallback when the weekly reports no figure"
+        )
+    }
+
+    /// The phone's Antigravity pool must agree with the Mac about one account.
+    ///
+    /// The pool used to let the wire's exhausted word override a healthy
+    /// weekly reading, so the phone called a live pool exhausted while the Mac
+    /// kept it live (Kody review 2026-10-21).  A reading decides, and the
+    /// provider's word is the fallback for a window with no figure.
+    func testThePhoneLetsAWeeklyReadingOutrankTheProvidersExhaustedWord() throws {
+        let model = try readCompanionModelSource()
+        XCTAssertFalse(
+            model.contains("|| (weeklyWin?.isExhausted ?? false)"),
+            "the wire's exhausted word must not outvote a weekly reading that reports room left"
+        )
+    }
+
+    /// An exhausted weekly that reports no figure still has to publish a
+    /// reading, or the shared cap rule cannot bind it and the phone's cap line
+    /// never appears (Kody review 2026-10-21).
+    func testAnExhaustedWeeklyWithNoFigureStillPublishesAReading() throws {
+        let model = try readCompanionModelSource()
+        XCTAssertTrue(
+            model.contains("let pct = driving.remainingPercent ?? (weeklyExhausted && period == \"weekly\" ? 0 : nil)"),
+            "an exhausted weekly with no figure must publish 0, the way the Mac's pool grouper does"
+        )
+    }
+
+    /// The phone must bind the window the rule chose by position, not by
+    /// re-finding it by id:  two snapshots of one window id can sit in the same
+    /// list (Kody review 2026-10-21).
+    func testThePhoneBindsTheCapWindowByPositionAndNotById() throws {
+        let model = try readCompanionModelSource()
+        XCTAssertTrue(
+            model.contains("guard let index = QuotaCapRule.bindingWindowIndex(in: facts) else { return nil }"),
+            "the phone must bind by position"
+        )
+        XCTAssertFalse(
+            model.contains("return windows.first { $0.id == binding.id }"),
+            "the phone must not re-find the window by id, which can pick the wrong snapshot"
+        )
+    }
+
+    /// The phone's exhausted alert must fire on the shared cap rule.
+    ///
+    /// A window reading 0.4% draws "At cap" on the card, so the phone's
+    /// "Quota Exhausted" notification has to fire at the same threshold:  the
+    /// alert path used its own zero test, and the owner saw the cap line with
+    /// no notification ever arriving (Kody review 2026-10-21).
+    func testThePhoneAlertFiresOnTheSharedRuleRatherThanOnZero() throws {
+        let model = try readCompanionModelSource()
+        XCTAssertTrue(
+            model.contains("exhausted = QuotaCapRule.isAtCap(remainingPercent: reading)"),
+            "the phone's exhausted alert must read the shared cap rule"
+        )
+        XCTAssertFalse(
+            model.contains("let exhausted = window.isExhausted || (window.remainingPercent ?? 100) <= 0"),
+            "a local zero test here left the phone quiet while the card said 'At cap'"
+        )
     }
 
     // MARK: - Local Snapshot Caching and Pull-to-Refresh Parity

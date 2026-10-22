@@ -582,8 +582,8 @@ public struct QuotaPlatformSection: Equatable, Sendable {
                 isSubModelLimit: $0.window.isSubModelLimit
             )
         }
-        guard let binding = QuotaCapRule.bindingWindow(in: facts) else { return nil }
-        return windows.first { $0.window.id == binding.id }
+        guard let index = QuotaCapRule.bindingWindowIndex(in: facts) else { return nil }
+        return windows[index]
     }
 
     /// Whether this plan is at its cap on any window it reports honestly.
