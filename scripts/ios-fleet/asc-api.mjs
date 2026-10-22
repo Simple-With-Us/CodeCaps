@@ -1077,8 +1077,20 @@ async function main() {
       }
       for (const set of requireArray(sets.parsed?.data, "screenshot set list")) {
         const displayType = isPlainObject(set) ? set.attributes?.screenshotDisplayType : null;
-        const count = isPlainObject(set) ? set.attributes?.screenshotCount : null;
-        if (typeof displayType !== "string" || typeof count !== "number") continue;
+        if (typeof displayType !== "string") continue;
+        const setId = typeof set.id === "string" ? set.id : null;
+        if (!setId) continue;
+        //  A set carries no count of its own:  App Store Connect does not
+        //  expose one, so the count is read from the screenshots the set
+        //  actually holds.  A set that exists and holds nothing is an empty
+        //  set, which is the case a pooled total lets through.
+        const shots = await api("GET", `/v1/appScreenshotSets/${setId}/appScreenshots`);
+        if (!shots.ok) {
+          console.error(`submit-review: ${describeError(shots)}`);
+          process.exitCode = 2;
+          return;
+        }
+        const count = requireArray(shots.parsed?.data, "screenshot list").length;
         byDisplayType.set(displayType, (byDisplayType.get(displayType) || 0) + count);
       }
     }
