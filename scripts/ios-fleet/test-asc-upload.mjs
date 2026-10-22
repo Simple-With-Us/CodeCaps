@@ -49,8 +49,8 @@ writeFileSync(macPath, macIhdr);
 
 // A stub at the 13-inch iPad size and one at the 12.9-inch size.  Apple's
 // table says the 13-inch display takes 2064 x 2752 and 2048 x 2732, and the
-// 12.9-inch display takes only 2048 x 2732, so the two sizes are not the same
-// size and they are not the same set.
+// 12.9-inch display takes only 2048 x 2732, so both iPad sizes land in the
+// 13-inch set, the one the submit gate requires.
 const ipad13Path = join(root, "ipad13.png");
 const ipad13Ihdr = Buffer.alloc(24);
 ipad13Ihdr.writeUInt32BE(2064, 16);
@@ -242,14 +242,18 @@ test("the 13-inch iPad size goes to the 13-inch set", async () => {
   );
 });
 
-test("the 12.9-inch iPad size goes to the 12.9-inch set", async () => {
-  //  2048 x 2732 is the only size the 12.9-inch display accepts, and the
-  //  13-inch display accepts it as well, so the size alone does not name
-  //  the set:  the capture picks the device, and the device names the set.
+test("the 12.9-inch iPad size goes to the required 13-inch set", async () => {
+  //  2048 x 2732 is the only size the legacy 12.9-inch display accepts, and
+  //  the 13-inch display accepts it as well.  The 13-inch set is the profile
+  //  App Store Connect requires, and the capture falls back to 12.9-inch
+  //  simulators when no 13-inch one is installed, so an automatic mapping
+  //  that sent this size to the legacy set would leave the required set
+  //  empty and the submission refused.  The legacy set stays reachable by
+  //  naming APP_IPAD_PRO_129 explicitly instead of "auto".
   const { code, stderr, createdSets } = await upload({}, ipad129Path);
   assert.equal(code, 0, `expected a clean run, got ${code}: ${stderr}`);
   assert.deepEqual(
-    createdSets, ["APP_IPAD_PRO_129"],
+    createdSets, ["APP_IPAD_PRO_3GEN_129"],
     `the 12.9-inch iPad size was mapped to the wrong set: ${JSON.stringify(createdSets)}`
   );
 });

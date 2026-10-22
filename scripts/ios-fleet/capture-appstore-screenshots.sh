@@ -81,12 +81,17 @@ mkdir -p "$DERIVED_ROOT"
 #   iPhone 6.7"    1290 x 2796   (iPhone 16 Plus and friends)
 #   iPhone 6.5"    1284 x 2778   (iPhone 13 Pro Max and friends)
 #   iPhone 6.5"    1242 x 2688   (iPhone 12 Pro Max and friends)
-#   iPad    13"    2064 x 2752   (iPad Pro 13-inch M4 and M5, and the 12.9-inch
-#                                    Pro of the 3rd generation and later)
-#   iPad    12.9"  2048 x 2732   (iPad Pro 12.9-inch, 2nd generation)
+#   iPad    13"    2064 x 2752   (iPad Pro 13-inch M4 and M5)
+#   iPad    13"    2048 x 2732   (every 12.9-inch iPad Pro;  the 13-inch set
+#                                    accepts this size too)
+#   iPad    12.9"  2048 x 2732   (the legacy set, only reachable by naming
+#                                    APP_IPAD_PRO_129 explicitly)
 #
-# The iPad Pro 12.9-inch of the 2nd generation is the only iPad that renders at
-# 2048 x 2732.  There is no 2000 x 2664 device.
+# Every 12.9-inch iPad Pro renders at 2048 x 2732, not only the 2nd
+# generation:  the fallback entries in IPAD_PREFERRED below are 12.9-inch
+# devices of the 3rd, 5th and 6th generation, and their captures land in the
+# 13-inch set, the profile App Store Connect requires.  There is no
+# 2000 x 2664 device.
 #
 # The first entry for each display class is the one the App Store Connect
 # screenshot set expects, and the upload step maps a captured file to its set
@@ -143,7 +148,7 @@ class_for_size() {
     1320x2868|1290x2796) echo "APP_IPHONE_67|iphone" ;;
     1284x2778|1242x2688) echo "APP_IPHONE_65|iphone" ;;
     2064x2752) echo "APP_IPAD_PRO_3GEN_129|ipad" ;;
-    2048x2732) echo "APP_IPAD_PRO_129|ipad" ;;
+    2048x2732) echo "APP_IPAD_PRO_3GEN_129|ipad" ;;
   esac
 }
 
