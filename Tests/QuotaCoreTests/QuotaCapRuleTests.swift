@@ -301,6 +301,71 @@ final class QuotaCapRuleTests: XCTestCase {
         }
     }
 
+    // MARK: - The binding window is found by position
+
+    /// A duplicate id must not make the cap line name the wrong window.
+    ///
+    /// One list can carry two snapshots of the same window id, the same window
+    /// reported by two sources.  The rule picks the one that resets last, and
+    /// the caller used to re-find the window by id afterwards, which returned
+    /// the first snapshot carrying that id instead, so the countdown named the
+    /// wrong window (Kody review 2026-10-21).
+    func testADuplicateIdStillBindsTheWindowThatResetsLast() throws {
+        let windows = [
+            snapshot(id: "weekly", remaining: 0, resetIn: 3_600),
+            snapshot(id: "weekly", remaining: 0, resetIn: 86_400)
+        ]
+        let facts = windows.map {
+            QuotaCapRule.WindowFacts(
+                id: $0.window.id,
+                remainingPercent: $0.remainingPercent,
+                resetAt: $0.resetAt,
+                isSupplementaryVideoQuota: $0.window.isSupplementaryVideoQuota,
+                isScopedPoolAllowance: $0.window.isScopedPoolAllowance,
+                isSubModelLimit: $0.window.isSubModelLimit
+            )
+        }
+
+        XCTAssertEqual(
+            QuotaCapRule.bindingWindowIndex(in: facts),
+            1,
+            "the rule must bind the spent window that resets last"
+        )
+        XCTAssertEqual(
+            QuotaCapRule.bindingWindow(in: facts)?.resetAt,
+            facts[1].resetAt,
+            "the rule's answer must be the window it bound, not the first one with that id"
+        )
+
+        let section = QuotaPlatformSection(
+            providerKey: "anthropic",
+            providerLabel: "Claude",
+            via: nil,
+            expected: true,
+            windows: windows
+        )
+        XCTAssertEqual(
+            section.atCapWindow()?.resetAt,
+            windows[1].resetAt,
+            "the Mac must name the window the rule bound, not the first snapshot with that id"
+        )
+    }
+
+    // MARK: - A cadence is a token, never prose
+
+    /// The at-cap line used to re-derive the cadence from its text with a
+    /// substring matcher, so a value such as "notweekly" was read as a weekly
+    /// window (Kody rule 40, binding 2026-10-21).  A cadence names its period
+    /// through whole tokens, exactly as the widget's own grouping rule does.
+    func testACadenceNamesItsPeriodThroughWholeTokensOnly() {
+        XCTAssertEqual(QuotaWindowVocabulary.atCapCadence(cadence: "7-day"), "7-day")
+        XCTAssertEqual(QuotaWindowVocabulary.atCapCadence(cadence: "5-hour"), "5-hour")
+        XCTAssertEqual(QuotaWindowVocabulary.atCapCadence(cadence: "weekly"), "7-day")
+        XCTAssertEqual(QuotaWindowVocabulary.atCapCadence(cadence: "notweekly"), "Other limit")
+        XCTAssertEqual(QuotaWindowVocabulary.atCapCadence(cadence: "notdaily"), "Other limit")
+        XCTAssertEqual(QuotaWindowVocabulary.atCapCadence(cadence: "notamonth"), "Other limit")
+    }
+
     private func snapshot(
         id: String,
         remaining: Double?,
