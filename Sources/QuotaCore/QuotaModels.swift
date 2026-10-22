@@ -610,15 +610,17 @@ public extension QuotaResponse {
     /// the two rows can never disagree about one pool.  Any other xAI
     /// window (API usage, a different cadence) is untouched.
     static func dedupedGrokSubscription(_ windows: [QuotaWindow]) -> [QuotaWindow] {
-        // The one Grok credits pool, named by canonical identity.  Window ids
-        // carry a source prefix (`local-mac:grok:subscription`), so identity is
-        // built from the window's own canonical provider key and compared by
-        // equality against this exact set — never by suffix, which would let
-        // an unrelated `grok:legacy:subscription` stand in for the pool and
-        // drop the wrong row.
-        let poolIdentities: Set<String> = ["grok:subscription", "xai:subscription"]
+        // The one Grok credits pool, identified by exact component equality on the
+        // window id.  Ids carry an optional source prefix
+        // (`local-mac:grok:subscription`), so the canonical form is the last
+        // two components: `<providerKey>:<token>`, each compared in full.
+        // `grok:legacy:subscription` names a different window and is not the
+        // pool; `xai:api-monthly` is not the pool either.
         func isPool(_ window: QuotaWindow) -> Bool {
-            poolIdentities.contains("\(window.canonicalProviderKey):subscription")
+            let parts = window.id.split(separator: ":")
+            guard parts.count >= 2 else { return false }
+            return parts[parts.count - 2] == Substring(window.canonicalProviderKey)
+                && parts[parts.count - 1] == "subscription"
         }
         guard let grokIndex = windows.firstIndex(where: { isPool($0) && $0.canonicalProviderKey == "grok" }),
               let xaiIndex = windows.firstIndex(where: { isPool($0) && $0.canonicalProviderKey == "xai" })
