@@ -23,6 +23,36 @@ final class PipInteractionTests: XCTestCase {
         }
     }
 
+    /// A window that is at its cap is still a window the panel shows.
+    ///
+    /// The shared cap rule calls any reading at or under 0.5% spent, because
+    /// the interface rounds a reading to the nearest whole percent.  When the
+    /// export also hid such a window, the picture in picture dropped it and
+    /// its cap line while the menu bar still announced the cap, so the same
+    /// window was live in one place and gone in the other.
+    func testANearZeroReadingStaysVisibleInThePictureInPicture() throws {
+        let (model, defaults, suite) = GlanceFixtures.makeModel(view: .fromMac, alarmsAll: false, fleet: false)
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let window = GlanceFixtures.window("anthropic:5h", provider: "anthropic",
+            label: "5h", token: "5h", remaining: 0.3, resetIn: 18_000)
+        model.injectForTests(sections: QuotaResponse(generatedAt: "", windows: [window])
+            .platformSections(now: GlanceFixtures.now), now: GlanceFixtures.now)
+        let row = try XCTUnwrap(model.displaySections.first { $0.id == "anthropic" })
+
+        let current = PipWidgetController.currentWindows(for: row, now: model.now)
+        XCTAssertEqual(current.count, 1, "a window at 0.3% is at its cap, not a reading to hide")
+        XCTAssertEqual(current.first?.remainingPercent, 0.3)
+        XCTAssertNil(PipWidgetController.readingStatus(for: row, now: model.now))
+
+        // The cap line is built from the same filtered list, so it has to be
+        // there too:  a spent window that is visible still says it is spent.
+        let section = QuotaPlatformSection(providerKey: row.providerKey,
+                                           providerLabel: row.section.providerLabel,
+                                           expected: row.section.expected,
+                                           windows: current)
+        XCTAssertNotNil(section.atCapWindow(), "the cap line still reads the shared cap rule")
+    }
+
     func testBodyDragIncludesLogosBarsAndTextButNotResizeEdgesOrControls() {
         let size = NSSize(width: 400, height: 180)
         for point in [NSPoint(x: 18, y: 70), NSPoint(x: 160, y: 110), NSPoint(x: 310, y: 40)] {
