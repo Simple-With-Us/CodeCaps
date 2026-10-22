@@ -71,7 +71,7 @@ const SET_ID = "set-xyz-789";
 
 // Run asc-api.mjs upload-screenshots against a local server and collect what
 // happened.  `behaviour` picks which step, if any, fails.
-function upload(behaviour, file = pngPath) {
+function upload(behaviour, file = pngPath, displayType = "auto") {
   return new Promise((resolve) => {
     const calls = [];
     const createdSets = [];
@@ -182,7 +182,7 @@ function upload(behaviour, file = pngPath) {
 
     server.listen(0, "127.0.0.1", () => {
       apiBase = `http://127.0.0.1:${server.address().port}`;
-      const child = spawn("node", [script, "upload-screenshots", "loc-1", "auto", file], {
+      const child = spawn("node", [script, "upload-screenshots", "loc-1", displayType, file], {
         env: {
           ...process.env,
           ASC_API_BASE: apiBase,
@@ -255,6 +255,56 @@ test("the 12.9-inch iPad size goes to the required 13-inch set", async () => {
   assert.deepEqual(
     createdSets, ["APP_IPAD_PRO_3GEN_129"],
     `the 12.9-inch iPad size was mapped to the wrong set: ${JSON.stringify(createdSets)}`
+  );
+});
+
+test("the legacy 12.9-inch set stays reachable by naming its display type", async () => {
+  //  The auto map sends 2048 x 2732 to the required 13-inch set, and Apple
+  //  accepts that size in both iPad sets, so an explicit APP_IPAD_PRO_129
+  //  upload of the same size is valid - without it the legacy set could
+  //  never be populated.
+  const { code, stderr, createdSets } = await upload({}, ipad129Path, "APP_IPAD_PRO_129");
+  assert.equal(code, 0, `expected a clean run, got ${code}: ${stderr}`);
+  assert.deepEqual(
+    createdSets, ["APP_IPAD_PRO_129"],
+    `the explicit legacy display type was not honored: ${JSON.stringify(createdSets)}`
+  );
+});
+
+test("an unknown display type is refused before anything is sent", async () => {
+  //  This guard is the only thing keeping an arbitrary string out of the
+  //  screenshotDisplayType Apple is asked to create.
+  const { code, stderr, calls, createdSets } = await upload({}, pngPath, "APP_IPAD_PRO_129_TYPO");
+  assert.equal(code, 2, `expected a refusal, got ${code}: ${stderr}`);
+  assert.ok(
+    /is not a display type this script knows/.test(stderr),
+    `the refusal did not name the unknown display type:\n${stderr}`
+  );
+  assert.deepEqual(calls, [], "the script talked to App Store Connect with an unknown display type");
+  assert.deepEqual(createdSets, [], "a screenshot set was created for an unknown display type");
+});
+
+test("an inherited member name is refused like any unknown display type", async () => {
+  //  "constructor" resolves through Object.prototype on a plain table, so
+  //  an inherited lookup would pass the guard and crash with a TypeError
+  //  and exit code 1 instead of refusing with exit code 2.
+  const { code, stderr, createdSets } = await upload({}, pngPath, "constructor");
+  assert.equal(code, 2, `expected a refusal, got ${code}: ${stderr}`);
+  assert.ok(
+    /is not a display type this script knows/.test(stderr),
+    `the refusal did not name the inherited member:\n${stderr}`
+  );
+  assert.deepEqual(createdSets, [], "a screenshot set was created for an inherited member name");
+});
+
+test("an explicit display type refuses a size it does not accept", async () => {
+  //  A 2064 x 2752 capture can never go in the legacy 12.9-inch set:
+  //  Apple calls that a spec mismatch and fails every image in the set.
+  const { code, stderr } = await upload({}, ipad13Path, "APP_IPAD_PRO_129");
+  assert.equal(code, 2, `expected a refusal, got ${code}: ${stderr}`);
+  assert.ok(
+    /APP_IPAD_PRO_129 does not accept/.test(stderr),
+    `the refusal did not name the display type and the size:\n${stderr}`
   );
 });
 

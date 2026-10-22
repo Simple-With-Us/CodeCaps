@@ -1084,7 +1084,12 @@ async function main() {
         byDisplayType.set(displayType, (byDisplayType.get(displayType) || 0) + count);
         if (count > 0) typesHere.add(displayType);
       }
-      if (typesHere.size > 0) locDisplayTypes.set(loc.id, typesHere);
+      //  The locale is what the operator fixes, so the refusal names it
+      //  alongside the resource id;  the id alone is the fallback.
+      const locale = isPlainObject(loc.attributes) && typeof loc.attributes.locale === "string"
+        ? `${loc.attributes.locale} (${loc.id})`
+        : loc.id;
+      if (typesHere.size > 0) locDisplayTypes.set(locale, typesHere);
     }
     const breakdown = [...byDisplayType.entries()]
       .sort((a, b) => a[0].localeCompare(b[0]))
@@ -1694,13 +1699,33 @@ async function main() {
       }
       fileSizes.set(file, { size, type });
     }
+    // The sizes every display type accepts, from Apple's table.  "auto"
+    // maps a size to the set the submit gate requires, but an explicitly
+    // named display type is checked against the sizes IT accepts:  2048 x
+    // 2732 is accepted by both iPad sets, and the legacy 12.9-inch set
+    // would otherwise be unreachable now that the size maps to the
+    // required 13-inch one.
+    const displayTypeSizes = {
+      APP_IPHONE_67: ["1320x2868", "1290x2796"],
+      APP_IPHONE_65: ["1284x2778", "1242x2688"],
+      APP_IPAD_PRO_3GEN_129: ["2064x2752", "2048x2732"],
+      APP_IPAD_PRO_129: ["2048x2732"],
+      APP_DESKTOP: ["1280x800", "1440x900", "2560x1600", "2880x1800"]
+    };
     if (displayType === "auto") {
       displayType = fileSizes.get(files[0]).type;
+    } else if (!Object.hasOwn(displayTypeSizes, displayType)) {
+      //  Own-property test:  an inherited member such as "constructor" is
+      //  not a display type either, and reading it would pass the guard
+      //  and crash on the .includes below instead of refusing cleanly.
+      console.error(`upload-screenshots: ${displayType} is not a display type this script knows`);
+      process.exitCode = 2;
+      return;
     }
     for (const file of files) {
       const { size, type } = fileSizes.get(file);
-      if (type !== displayType) {
-        console.error(`upload-screenshots: ${file} is ${size}, which belongs to ${type}, not ${displayType}`);
+      if (!displayTypeSizes[displayType].includes(size)) {
+        console.error(`upload-screenshots: ${file} is ${size}, which ${displayType} does not accept (the size belongs to ${type})`);
         console.error(`upload-screenshots: run the ${type} files on their own`);
         process.exitCode = 2;
         return;
