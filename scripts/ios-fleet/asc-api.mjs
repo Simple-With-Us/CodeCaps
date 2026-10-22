@@ -1059,6 +1059,10 @@ async function main() {
     //  still be refused.  A set that could not be read is a failure, not an
     //  absent set:  treating it as absent would let an irreversible
     //  submission go out on a read that never happened.
+    //
+    //  Only a delivered screenshot is counted, and a localization is judged
+    //  when it carries a set at all, so neither a leftover reservation nor
+    //  an empty set can pass the gate.
     const localizations = await api("GET", `/v1/appStoreVersions/${versionId}/appStoreVersionLocalizations`);
     if (!localizations.ok) {
       console.error(`submit-review: ${describeError(localizations)}`);
@@ -1068,28 +1072,83 @@ async function main() {
     const locs = requireArray(localizations.parsed?.data, "version localization list");
     const byDisplayType = new Map();
     const locDisplayTypes = new Map();
-    for (const loc of locs) {
-      if (!isPlainObject(loc) || typeof loc.id !== "string") continue;
-      const sets = await api("GET", `/v1/appStoreVersionLocalizations/${loc.id}/appScreenshotSets`);
+    //  The reads are issued together rather than one after another.  Each
+    //  one is a full round trip to App Store Connect, and this gate runs
+    //  immediately before an irreversible submit, so the serial latency is
+    //  both wasted time and another chance of a 429 that aborts the run.
+    const locReads = await Promise.all(
+      locs
+        .filter((loc) => isPlainObject(loc) && typeof loc.id === "string")
+        .map(async (loc) => {
+          const sets = await api("GET", `/v1/appStoreVersionLocalizations/${loc.id}/appScreenshotSets`);
+          const entries = sets.ok
+            ? requireArray(sets.parsed?.data, "screenshot set list")
+              .filter((set) => isPlainObject(set)
+                && typeof set.id === "string"
+                && typeof set.attributes?.screenshotDisplayType === "string")
+              .map((set) => ({
+                displayType: set.attributes.screenshotDisplayType,
+                setId: set.id
+              }))
+            : [];
+          const shots = await Promise.all(
+            entries.map(async (entry) => {
+              const res = await api("GET", `/v1/appScreenshotSets/${entry.setId}/appScreenshots`);
+              return { ...entry, res };
+            })
+          );
+          return { loc, sets, shots };
+        })
+    );
+    for (const { loc, sets, shots } of locReads) {
       if (!sets.ok) {
         console.error(`submit-review: ${describeError(sets)}`);
         process.exitCode = 2;
         return;
       }
       const typesHere = new Set();
-      for (const set of requireArray(sets.parsed?.data, "screenshot set list")) {
-        const displayType = isPlainObject(set) ? set.attributes?.screenshotDisplayType : null;
-        const count = isPlainObject(set) ? set.attributes?.screenshotCount : null;
-        if (typeof displayType !== "string" || typeof count !== "number") continue;
+      //  How many sets the localization carries.  A localization is judged
+      //  on that, and not on whether it happens to hold a screenshot.
+      let setsHere = 0;
+      for (const { displayType, res } of shots) {
+        if (!res.ok) {
+          console.error(`submit-review: ${describeError(res)}`);
+          process.exitCode = 2;
+          return;
+        }
+        //  A set carries no count of its own:  App Store Connect does not
+        //  expose one, so the count is read from the screenshots the set
+        //  actually holds.  A set that exists and holds nothing is an empty
+        //  set, which is the case a pooled total lets through.
+        //
+        //  Only a delivered screenshot counts.  A reservation left behind by
+        //  an upload that never finished is still in the set's list, and
+        //  counting it would inflate the gate and send an irreversible
+        //  submission that App Store Connect refuses.  The delivery state is
+        //  the field the read endpoint returns;  `uploaded` is not returned
+        //  at all, so it cannot be required, only respected when it is there.
+        const delivered = requireArray(res.parsed?.data, "screenshot list").filter(
+          (shot) => isPlainObject(shot)
+            && isPlainObject(shot.attributes)
+            && shot.attributes.uploaded !== false
+            && shot.attributes.assetDeliveryState?.state === "COMPLETE"
+        );
+        const count = delivered.length;
         byDisplayType.set(displayType, (byDisplayType.get(displayType) || 0) + count);
         if (count > 0) typesHere.add(displayType);
+        setsHere += 1;
       }
       //  The locale is what the operator fixes, so the refusal names it
       //  alongside the resource id;  the id alone is the fallback.
       const locale = isPlainObject(loc.attributes) && typeof loc.attributes.locale === "string"
         ? `${loc.attributes.locale} (${loc.id})`
         : loc.id;
-      if (typesHere.size > 0) locDisplayTypes.set(locale, typesHere);
+      //  The locale is judged when it carries a set, and not when it holds
+      //  a screenshot:  App Store Connect validates screenshots per
+      //  localization, so a localization whose sets are all empty has to be
+      //  reported rather than skipped, and a localization carrying no set
+      //  at all falls back to the primary locale.
+      if (setsHere > 0) locDisplayTypes.set(locale, typesHere);
     }
     const breakdown = [...byDisplayType.entries()]
       .sort((a, b) => a[0].localeCompare(b[0]))

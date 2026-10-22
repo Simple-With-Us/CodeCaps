@@ -96,6 +96,11 @@ function serve(options) {
   //  after it are the same call, so what changed in between is what tells
   //  them apart.
   const sent = new Set();
+  //  How many screenshot-set reads were open at the same time.  A run that
+  //  reads the sets one after another never has more than one open, so the
+  //  high-water mark is what tells the two shapes apart.
+  let inFlightShotReads = 0;
+  let maxInFlightShotReads = 0;
   const server = createServer((req, res) => {
     let raw = "";
     req.on("data", (chunk) => { raw += chunk; });
@@ -105,6 +110,26 @@ function serve(options) {
         res.end(JSON.stringify(payload));
       };
       const url = req.url.split("?")[0];
+
+      //  How many screenshots each display type's set holds.  A set carries
+      //  no count of its own:  App Store Connect does not expose one, so the
+      //  count is read from the screenshots the set holds.
+      const shotCounts = {
+        "set-1": options.iphoneScreens,
+        "set-2": options.ipadScreens,
+        "set-9": options.secondLocaleEmpty ? 0 : 2
+      };
+      if (options.ipad129Screens !== undefined) shotCounts["set-4"] = options.ipad129Screens;
+      if (options.desktopScreens !== undefined) shotCounts["set-3"] = options.desktopScreens;
+      //  Reservations that were never delivered.  They sit in the same list
+      //  as the screenshots, and they are not screenshots:  the read
+      //  endpoint returns no `uploaded` field at all, so the delivery state
+      //  is the only thing that tells them apart.
+      const undeliveredCounts = {
+        "set-1": options.iphoneUndelivered || 0,
+        "set-2": options.ipadUndelivered || 0,
+        "set-9": options.secondLocaleUndelivered || 0
+      };
 
       if (req.method === "PATCH" && url.startsWith("/v1/reviewSubmissions/")) {
         //  The body is untrusted input, so it is parsed in a try block and
@@ -220,7 +245,7 @@ function serve(options) {
         return json(200, { data: [
           {
             id: "set-9",
-            attributes: { screenshotDisplayType: "APP_IPHONE_67", screenshotCount: 2 }
+            attributes: { screenshotDisplayType: "APP_IPHONE_67" }
           }
         ] });
       }
@@ -228,29 +253,65 @@ function serve(options) {
         if (options.setsFail) {
           return json(401, { errors: [{ title: "unauthorized" }] });
         }
+        //  A set carries NO count of its own:  App Store Connect does not
+        //  expose one, so the count is read from the screenshots the set
+        //  holds.  The mock used to invent a screenshotCount attribute, and
+        //  the invented field is exactly what made the production read come
+        //  back empty.
         const sets = [
           {
             id: "set-1",
-            attributes: { screenshotDisplayType: options.iphone65Only ? "APP_IPHONE_65" : "APP_IPHONE_67", screenshotCount: options.iphoneScreens }
+            attributes: { screenshotDisplayType: options.iphone65Only ? "APP_IPHONE_65" : "APP_IPHONE_67" }
           },
-          {
-            id: "set-2",
-            attributes: { screenshotDisplayType: "APP_IPAD_PRO_3GEN_129", screenshotCount: options.ipadScreens }
-          }
+          { id: "set-2", attributes: { screenshotDisplayType: "APP_IPAD_PRO_3GEN_129" } }
         ];
         if (options.ipad129Screens !== undefined) {
-          sets.push({
-            id: "set-4",
-            attributes: { screenshotDisplayType: "APP_IPAD_PRO_129", screenshotCount: options.ipad129Screens }
-          });
+          sets.push({ id: "set-4", attributes: { screenshotDisplayType: "APP_IPAD_PRO_129" } });
         }
         if (options.desktopScreens !== undefined) {
-          sets.push({
-            id: "set-3",
-            attributes: { screenshotDisplayType: "APP_DESKTOP", screenshotCount: options.desktopScreens }
-          });
+          sets.push({ id: "set-3", attributes: { screenshotDisplayType: "APP_DESKTOP" } });
         }
         return json(200, { data: sets });
+      }
+      const shots = url.match(/^\/v1\/appScreenshotSets\/([^/]+)\/appScreenshots$/);
+      if (shots) {
+        if (options.shotsFail) {
+          return json(401, { errors: [{ title: "unauthorized" }] });
+        }
+        const count = shotCounts[shots[1]] === undefined ? 0 : shotCounts[shots[1]];
+        const undelivered = undeliveredCounts[shots[1]] === undefined ? 0 : undeliveredCounts[shots[1]];
+        //  The delivered screenshots carry the delivery state the read
+        //  endpoint returns;  the reservations carry a state that says the
+        //  bytes never arrived.
+        const delivered = Array.from({ length: count }, (_unused, i) => ({
+          type: "appScreenshots",
+          id: `shot-${shots[1]}-${i}`,
+          attributes: {
+            fileSize: 1000,
+            assetDeliveryState: { state: "COMPLETE", errors: [], warnings: null }
+          }
+        }));
+        const reserved = Array.from({ length: undelivered }, (_unused, i) => ({
+          type: "appScreenshots",
+          id: `reservation-${shots[1]}-${i}`,
+          attributes: {
+            fileSize: 1000,
+            assetDeliveryState: { state: "AWAITING_UPLOAD", errors: [], warnings: null }
+          }
+        }));
+        const payload = { data: [...delivered, ...reserved] };
+        if (options.slowShotReads) {
+          //  The response is held briefly, so a read that overlaps another
+          //  one is visible in the high-water mark.
+          inFlightShotReads += 1;
+          if (inFlightShotReads > maxInFlightShotReads) maxInFlightShotReads = inFlightShotReads;
+          setTimeout(() => {
+            inFlightShotReads -= 1;
+            json(200, payload);
+          }, 25);
+          return;
+        }
+        return json(200, payload);
       }
       if (url === `/v1/appStoreVersions/${VERSION_ID}/build`) {
         return json(200, { data: { type: "builds", id: "build-1", attributes: { version: "243" } } });
@@ -505,7 +566,7 @@ function serve(options) {
       return json(404, { errors: [{ title: "not found" }] });
     });
   });
-  return { server, patched, bound, created, order };
+  return { server, patched, bound, created, order, shotReadConcurrency: () => maxInFlightShotReads };
 }
 
 function submit(base, args = []) {
@@ -533,17 +594,43 @@ function submit(base, args = []) {
 }
 
 async function withServer(options, fn) {
-  const { server, patched, bound, created, order } = serve(options);
+  const { server, patched, bound, created, order, shotReadConcurrency } = serve(options);
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
   try {
-    return await fn(base, patched, bound, created, order);
+    return await fn(base, patched, bound, created, order, shotReadConcurrency);
   } finally {
     server.close();
   }
 }
 
 const READY = { iphoneScreens: 3, ipadScreens: 3, boundTo: VERSION_ID };
+
+test("the screenshot count is read from the screenshots, not from the set", async () => {
+  //  A set carries no count of its own:  App Store Connect does not expose
+  //  one.  The count is read from the screenshots the set holds, and the
+  //  breakdown it produces names the display type with its count.
+  await withServer(READY, async (base, patched) => {
+    const { code, stderr } = await submit(base);
+    assert.equal(code, 0, `expected the submission to go out, got ${code}: ${stderr}`);
+    assert.match(
+      stderr,
+      /screenshots by display type: APP_IPAD_PRO_3GEN_129 3, APP_IPHONE_67 3/,
+      `the breakdown did not carry the real counts:\n${stderr}`
+    );
+  });
+});
+
+test("a screenshot read that fails stops the run instead of counting nothing", async () => {
+  //  A set that could not be read is a failure, not an empty set:  treating
+  //  it as empty would let an irreversible submission go out on a read that
+  //  never happened.
+  await withServer({ ...READY, shotsFail: true }, async (base, patched) => {
+    const { code, stderr } = await submit(base);
+    assert.equal(code, 2, `expected a refusal, got ${code}: ${stderr}`);
+    assert.equal(patched.length, 0, "the submission was patched even though the screenshots could not be read");
+  });
+});
 
 test("a version with no screenshots is not submitted", async () => {
   await withServer({ ...READY, iphoneScreens: 0, ipadScreens: 0 }, async (base, patched) => {
@@ -620,6 +707,59 @@ test("a localization missing a required display type stops the submission", asyn
     );
     assert.equal(patched.length, 0, "the submission was patched with a locale missing the 13-inch set");
   });
+});
+
+test("a screenshot that was reserved but never delivered does not count", async () => {
+  //  A reservation left behind by an upload that never finished is still in
+  //  the set's list.  Counting it would inflate the gate and send an
+  //  irreversible submission that App Store Connect refuses, so only a
+  //  delivered screenshot is counted.
+  await withServer(
+    { ...READY, iphoneScreens: 0, ipadScreens: 3, iphoneUndelivered: 3 },
+    async (base, patched) => {
+      const { code, stderr } = await submit(base);
+      assert.equal(code, 2, `expected a refusal, got ${code}: ${stderr}`);
+      assert.ok(
+        /no screenshot for iphone/.test(stderr),
+        `the reservations were counted as screenshots:\n${stderr}`
+      );
+      assert.equal(patched.length, 0, "the submission was patched with no delivered iPhone screenshot");
+    }
+  );
+});
+
+test("a localization whose sets hold no delivered screenshot is judged", async () => {
+  //  A localization that carries a set but holds nothing is still judged,
+  //  because App Store Connect validates per localization.  A locale that
+  //  carries no set at all falls back to the primary locale and is skipped.
+  await withServer(
+    { ...READY, secondLocaleWithoutIpad: true, secondLocaleEmpty: true },
+    async (base, patched) => {
+      const { code, stderr } = await submit(base);
+      assert.equal(code, 2, `expected a refusal, got ${code}: ${stderr}`);
+      assert.ok(
+        /localization en-GB \(loc-2\) has no screenshot for the required display type/.test(stderr),
+        `the empty localization was not judged:\n${stderr}`
+      );
+      assert.equal(patched.length, 0, "the submission was patched with an empty localization");
+    }
+  );
+});
+
+test("the screenshot sets are read together rather than one after another", async () => {
+  //  Every read is a round trip to App Store Connect, and this gate runs
+  //  right before an irreversible submit, so the reads are issued together.
+  await withServer(
+    { ...READY, slowShotReads: true },
+    async (base, patched, bound, created, order, shotReadConcurrency) => {
+      const { code, stderr } = await submit(base);
+      assert.equal(code, 0, `expected the submission to go out, got ${code}: ${stderr}`);
+      assert.ok(
+        shotReadConcurrency() > 1,
+        `the set reads did not overlap, so they were issued one after another: ${shotReadConcurrency()}`
+      );
+    }
+  );
 });
 
 test("a screenshot set that could not be read stops the submission", async () => {
