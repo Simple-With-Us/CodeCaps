@@ -285,8 +285,34 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
         } else if status == .unknown, bounded != nil {
             copy.status = QuotaWindowStatus.derived(remainingPercent: bounded)
         }
-        copy.skip = skip || copy.isExhausted
-        copy.skipReason = skipReason ?? (copy.isExhausted ? "quota exhausted" : nil)
+        // `skip` means "a reading that must not be believed", which is not the
+        // same question as "is the allowance spent".  The shared cap rule
+        // answers the second one for any reading at or under the threshold,
+        // and a spent window is still a window with a reading in it:  when
+        // `skip` followed the rule, a window at 0.3% was dropped from the
+        // picture in picture along with its cap line, while the menu bar still
+        // announced the cap, so the same window was live in one place and
+        // gone in the other (Kody review 2026-10-22).
+        //
+        // The provider's own exhausted word is believed only when the reading
+        // disagrees with it, because only the provider knows why (a rejected
+        // session, a suspended plan) and the reading cannot say.  It is also
+        // the answer when there is no reading at all.  An exact zero is the
+        // one reading that is never shown as a meter.
+        //
+        // The reading is what makes this rule safe to apply twice, which the
+        // display path does:  the picture in picture rebuilds a snapshot from
+        // an already derived window, and a rule that read the derived
+        // `isExhausted` back as the provider's word would hide the window
+        // again on the second pass.
+        let providerWordCounts: Bool
+        if let bounded {
+            providerWordCounts = isExhausted && bounded > QuotaCapRule.spentThreshold
+        } else {
+            providerWordCounts = isExhausted
+        }
+        copy.skip = skip || bounded == 0 || providerWordCounts
+        copy.skipReason = skipReason ?? (copy.skip ? "quota exhausted" : nil)
         let monthlyHint = copy.canonicalProviderKey == "cursor"
             && copy.label.lowercased().contains("plan")
         if let rewritten = QuotaWindowVocabulary.sanitizeLabelIfNeeded(
