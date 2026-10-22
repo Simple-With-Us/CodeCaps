@@ -255,7 +255,7 @@ public actor QuotaPublisher {
 
             var meta: [String: Any] = [
                 "bucketId": bucketId,
-                "isExhausted": window.isExhausted || (clampedRemaining.map { $0 <= 0 } ?? false),
+                "isExhausted": window.isExhausted || QuotaCapRule.isAtCap(remainingPercent: clampedRemaining),
                 "remainingUnknown": clampedRemaining == nil,
                 "scale": "percent_0_100",
                 "source": Self.producerId,

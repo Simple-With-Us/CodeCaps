@@ -646,8 +646,8 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
                 isSubModelLimit: $0.isSubModelLimit
             )
         }
-        guard let binding = QuotaCapRule.bindingWindow(in: facts) else { return nil }
-        return windows.first { $0.id == binding.id }
+        guard let bindingIndex = QuotaCapRule.bindingWindowIndex(in: facts) else { return nil }
+        return windows[bindingIndex]
     }
 
     /// "7-day cap resets in 1d 13h" — the same wording the Mac's menu-bar

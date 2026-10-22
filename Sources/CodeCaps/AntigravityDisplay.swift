@@ -112,8 +112,8 @@ struct DisplaySection: Identifiable, Equatable {
                 isSubModelLimit: $0.window.isSubModelLimit
             )
         }
-        guard let binding = QuotaCapRule.bindingWindow(in: facts) else { return nil }
-        return section.windows.first { $0.window.id == binding.id }
+        guard let bindingIndex = QuotaCapRule.bindingWindowIndex(in: facts) else { return nil }
+        return section.windows[bindingIndex]
     }
 
     /// Whether this row is at its cap, so every surface can ask the same

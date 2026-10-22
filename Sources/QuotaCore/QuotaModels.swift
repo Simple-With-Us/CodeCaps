@@ -279,7 +279,7 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
         let bounded = boundedRemainingPercent
         copy.remainingPercent = bounded
         copy.remainingUnknown = bounded == nil
-        copy.isExhausted = isExhausted || bounded == 0
+        copy.isExhausted = isExhausted || QuotaCapRule.isAtCap(remainingPercent: bounded)
         if copy.isExhausted {
             copy.status = .exhausted
         } else if status == .unknown, bounded != nil {
@@ -582,8 +582,8 @@ public struct QuotaPlatformSection: Equatable, Sendable {
                 isSubModelLimit: $0.window.isSubModelLimit
             )
         }
-        guard let binding = QuotaCapRule.bindingWindow(in: facts) else { return nil }
-        return windows.first { $0.window.id == binding.id }
+        guard let bindingIndex = QuotaCapRule.bindingWindowIndex(in: facts) else { return nil }
+        return windows[bindingIndex]
     }
 
     /// Whether this plan is at its cap on any window it reports honestly.

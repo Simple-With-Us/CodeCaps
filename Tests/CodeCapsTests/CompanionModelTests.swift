@@ -314,9 +314,10 @@ final class CompanionModelTests: XCTestCase {
     /// The phone's model is not compiled into the macOS test target, so its
     /// half of the contract cannot be exercised here.  What can be checked is
     /// that it holds no copy of the rule:  it maps its windows onto
-    /// `QuotaCapRule.WindowFacts` and calls `QuotaCapRule.bindingWindow`, so
-    /// the Mac's menu-bar window, the picture in picture and the phone all
-    /// answer "is this plan capped, and by which window" the same way.
+    /// `QuotaCapRule.WindowFacts` and calls `QuotaCapRule.bindingWindowIndex`,
+    /// carrying the rule's choice back by position rather than re-finding by
+    /// id, so the Mac's menu-bar window, the picture in picture and the phone
+    /// all answer "is this plan capped, and by which window" the same way.
     ///
     /// The rule's own behaviour is pinned by `QuotaCapRuleTests`, and
     /// `QuotaCapRuleTests.testTheMacAndTheSharedRulePickTheSameWindow` proves
@@ -324,7 +325,7 @@ final class CompanionModelTests: XCTestCase {
     func testThePhoneAsksTheSharedRuleWhichWindowBindsTheCap() throws {
         let source = try readCompanionModelSource()
         XCTAssertTrue(
-            source.contains("QuotaCapRule.bindingWindow(in: facts)"),
+            source.contains("QuotaCapRule.bindingWindowIndex(in: facts)"),
             "the phone must call the shared rule, not keep its own copy of it"
         )
         XCTAssertTrue(
