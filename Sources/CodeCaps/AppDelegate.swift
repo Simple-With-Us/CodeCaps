@@ -101,6 +101,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         // Read before anything can open a window: the launch Sparkle performs
         // after installing an update stays in the background.
         let relaunchedForUpdate = UpdateRelaunchMarker().consume()
+        // Warm the provider-mark cache off the main thread: custom marks read
+        // from disk and were always instant, while bundled marks sometimes
+        // drew placeholders first.  The retry still covers a bundle that
+        // arrives after this runs.
+        DispatchQueue.global(qos: .utility).async {
+            PlatformLogoImage.preloadBundledMarks()
+        }
         UNUserNotificationCenter.current().delegate = self
         AppUpdater.shared.start()
         configureMenu()

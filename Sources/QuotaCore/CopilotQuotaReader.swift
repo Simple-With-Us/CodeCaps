@@ -60,6 +60,7 @@ public struct CopilotQuotaReader: Sendable {
                     id: "local-mac:github-copilot:\(key)", provider: "GitHub Copilot",
                     providerKey: "github-copilot", providerLabel: "GitHub Copilot", via: "gh",
                     sourceApp: "local-mac", label: unlimited ? "\(label) (unlimited)" : label,
+                    window: "monthly",
                     remainingPercent: percent, absoluteRemaining: remaining, absoluteLimit: limit,
                     quotaUnit: unlimited ? nil : "requests", planName: plan,
                     remainingUnknown: percent == nil, isExhausted: exhausted,
@@ -75,6 +76,7 @@ public struct CopilotQuotaReader: Sendable {
                     id: "local-mac:github-copilot:plan", provider: "GitHub Copilot",
                     providerKey: "github-copilot", providerLabel: "GitHub Copilot", via: "gh",
                     sourceApp: "local-mac", label: "Copilot plan", planName: plan,
+                    window: "monthly",
                     remainingUnknown: true, resetAt: reset, status: .unknown,
                     occurredAt: observed, source: "copilot"
                 )]

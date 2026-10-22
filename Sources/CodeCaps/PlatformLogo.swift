@@ -325,6 +325,22 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
         return nil
     }
 
+    /// Decode every bundled mark once, on a background queue, so the first
+    /// draw of every surface finds a warm cache instead of paying per-row
+    /// filesystem probes while the window is already on screen.  Custom
+    /// marks load from disk and were never slow; this closes that gap for
+    /// the bundled set.
+    public static func preloadBundledMarks() {
+        for key in resourceNames.keys {
+            for style in [MarkStyle.standard, .template] {
+                for isDark in [false, true] {
+                    _ = bundledImage(providerKey: key, style: style, isDark: isDark)
+                }
+            }
+        }
+        _ = BrandMarkImage.asset
+    }
+
     /// Forget every cached bundle and mark.  Called when something changes that
     /// could have invalidated them — a custom mark import, or a resource bundle
     /// that appears after the first lookup.
