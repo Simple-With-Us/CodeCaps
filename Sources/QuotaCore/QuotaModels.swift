@@ -610,14 +610,19 @@ public extension QuotaResponse {
     /// the two rows can never disagree about one pool.  Any other xAI
     /// window (API usage, a different cadence) is untouched.
     static func dedupedGrokSubscription(_ windows: [QuotaWindow]) -> [QuotaWindow] {
-        func subscriptionIndex(_ key: String) -> Int? {
-            windows.firstIndex { window in
-                window.canonicalProviderKey == key
-                    && (window.id.hasSuffix(":subscription") || window.id == "xai:subscription")
-            }
+        // The one Grok credits pool, named by canonical identity.  Window ids
+        // carry a source prefix (`local-mac:grok:subscription`), so identity is
+        // built from the window's own canonical provider key and compared by
+        // equality against this exact set — never by suffix, which would let
+        // an unrelated `grok:legacy:subscription` stand in for the pool and
+        // drop the wrong row.
+        let poolIdentities: Set<String> = ["grok:subscription", "xai:subscription"]
+        func isPool(_ window: QuotaWindow) -> Bool {
+            poolIdentities.contains("\(window.canonicalProviderKey):subscription")
         }
-        guard let grokIndex = subscriptionIndex("grok"),
-              let xaiIndex = subscriptionIndex("xai") else { return windows }
+        guard let grokIndex = windows.firstIndex(where: { isPool($0) && $0.canonicalProviderKey == "grok" }),
+              let xaiIndex = windows.firstIndex(where: { isPool($0) && $0.canonicalProviderKey == "xai" })
+        else { return windows }
         let grokDate = windows[grokIndex].occurredDate ?? .distantPast
         let xaiDate = windows[xaiIndex].occurredDate ?? .distantPast
         var copy = windows
@@ -634,19 +639,24 @@ public extension QuotaResponse {
     /// offline fallback / pre-manifest backend path.  That branch is kept as a
     /// safety net for first-launch installs before a sync has completed.
     func platformSections(now: Date = Date()) -> [QuotaPlatformSection] {
-        let normalizedWindows = Self.dedupedGrokSubscription(windows.map { $0.normalized() })
+        // Collect every reading the response carries, then dedupe once over
+        // the whole collection.  Dedupe before the provider groups are
+        // merged would drop the fleet `xai:subscription` only for a group to
+        // hand back the same duplicate moments later — the one disagreement
+        // this dedupe exists to remove, reached by the additive manifest path.
+        var collected = windows.map { $0.normalized() }
+        // Older responses may not have top-level windows but do have the
+        // additive provider groups.  Fill only absent IDs to avoid duplicates.
+        var seen = Set(collected.map { "\($0.canonicalProviderKey):\($0.id)" })
+        for group in providerGroups {
+            for window in group.windows.map({ $0.normalized() }) where seen.insert("\(window.canonicalProviderKey):\(window.id)").inserted {
+                collected.append(window)
+            }
+        }
+        let normalizedWindows = Self.dedupedGrokSubscription(collected)
         var grouped = Dictionary<String, [QuotaWindow]>(minimumCapacity: normalizedWindows.count)
         for window in normalizedWindows {
             grouped[window.canonicalProviderKey, default: []].append(window)
-        }
-
-        // Older responses may not have top-level windows but do have the
-        // additive provider groups.  Fill only absent IDs to avoid duplicates.
-        var seen = Set(normalizedWindows.map { "\($0.canonicalProviderKey):\($0.id)" })
-        for group in providerGroups {
-            for window in group.windows.map({ $0.normalized() }) where seen.insert("\(window.canonicalProviderKey):\(window.id)").inserted {
-                grouped[window.canonicalProviderKey, default: []].append(window)
-            }
         }
 
         // Build the manifest view: key, label, via, expected, iconHint, and

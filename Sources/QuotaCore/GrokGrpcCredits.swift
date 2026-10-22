@@ -31,10 +31,17 @@ public enum GrokGrpcCredits {
     /// The exact request frame bytes for the fallback call.
     public static let requestFrame = Data([0x00, 0x00, 0x00, 0x00, 0x02, 0x08, 0x00])
 
+    /// Field 6 of the config is the current period, a `{start, end}` pair of
+    /// Timestamps.  Period decoding is pinned to this number rather than to
+    /// "any length-delimited field that happens to hold two Timestamps", so
+    /// an unrelated submessage can never invent bounds for the window.
+    static let currentPeriodField = 6
+
     /// Parse a gRPC-web (framed) or raw protobuf reply.  `now` bounds the
-    /// implicit-zero rule: a complete active period with no percentage on
-    /// the wire reads as zero usage, matching grok.com's own web client,
-    /// whose descriptor declares the percent an implicit-presence float.
+    /// implicit-zero rule: a complete active period with no percentage field
+    /// anywhere on the wire reads as zero usage, matching grok.com's own web
+    /// client, whose descriptor declares the percent an implicit-presence
+    /// float.
     public static func parse(_ data: Data, now: Date) -> Reading? {
         guard let message = unwrapFrames(data) else { return nil }
         // Reply form: field 1 is the config.  Raw form: the reply IS the
@@ -49,6 +56,7 @@ public enum GrokGrpcCredits {
         guard let fields = try? ProtobufScanner.fields(config) else { return nil }
 
         var percent: Double?
+        var sawPercentField = false
         var periodStart: Date?
         var periodEnd: Date?
         for field in fields {
@@ -56,15 +64,23 @@ public enum GrokGrpcCredits {
             case .fixed32:
                 // The only top-level floats in the config are usage
                 // percentages; product shares nest inside field 7 entries.
-                if percent == nil, let value = field.floatValue,
-                   value.isFinite, (0...100).contains(value) {
+                guard let value = field.floatValue else { continue }
+                // Presence is tracked apart from the accepted value.  A
+                // published percentage that is out of range or non-finite is
+                // still a published percentage, and must not reach the
+                // implicit-zero rule below as if nothing had been published.
+                sawPercentField = true
+                if percent == nil, value.isFinite, (0...100).contains(value) {
                     percent = value
                 }
             case .bytes:
-                if let period = timestampPair(field.bytes) {
-                    periodStart = period.start
-                    periodEnd = period.end
-                }
+                // First match wins: a later field-6 submessage is not allowed
+                // to overwrite bounds an earlier one already supplied.
+                guard field.number == Self.currentPeriodField, periodStart == nil,
+                      let period = timestampPair(field.bytes),
+                      Self.isRecognizedPeriod(period.start, period.end) else { continue }
+                periodStart = period.start
+                periodEnd = period.end
             case .varint, .fixed64:
                 continue
             }
@@ -73,11 +89,45 @@ public enum GrokGrpcCredits {
         if let percent {
             return Reading(usedPercent: percent, periodStart: periodStart, periodEnd: periodEnd)
         }
-        // Implicit zero: complete active period, no percentage anywhere.
-        if let start = periodStart, let end = periodEnd, start <= now, now <= end {
+        // Implicit zero: complete active period, and no percentage field on
+        // the wire at all.  A rejected percentage is not an absent one.
+        if !sawPercentField, let start = periodStart, let end = periodEnd,
+           start <= now, now <= end {
             return Reading(usedPercent: 0, periodStart: start, periodEnd: end)
         }
         return nil
+    }
+
+    /// The credits pool is billed weekly or monthly.  A Timestamp pair of any
+    /// other length is not this field's subscription period, whatever its
+    /// shape, and is left uncaptured rather than used as a reset bound.
+    private static func isRecognizedPeriod(_ start: Date, _ end: Date) -> Bool {
+        let days = end.timeIntervalSince(start) / 86_400
+        return (6.5...8).contains(days) || (27...32).contains(days)
+    }
+
+    /// Whether the reply's gRPC-web trailer frame reports status 16
+    /// (`UNAUTHENTICATED`).  grok.com answers a probe it will not serve with
+    /// a framed 200 and a `grpc-status: 16` trailer, so an HTTP status check
+    /// alone reads a refused credential as an empty payload.  Only the trailer
+    /// carries the status, which is why this lives beside the frame parser.
+    public static func isUnauthenticated(_ data: Data) -> Bool {
+        let bytes = [UInt8](data)
+        var offset = 0
+        var trailer = [UInt8]()
+        while offset + 5 <= bytes.count {
+            let flag = bytes[offset]
+            guard flag == 0x00 || flag == 0x80 else { break }
+            let length = Int(bytes[offset + 1]) << 24 | Int(bytes[offset + 2]) << 16
+                | Int(bytes[offset + 3]) << 8 | Int(bytes[offset + 4])
+            guard offset + 5 + length <= bytes.count else { break }
+            if flag == 0x80 { trailer.append(contentsOf: bytes[(offset + 5)..<(offset + 5 + length)]) }
+            offset += 5 + length
+        }
+        guard !trailer.isEmpty else { return false }
+        let text = String(decoding: trailer, as: UTF8.self).lowercased()
+        guard let marker = text.range(of: "grpc-status:") else { return false }
+        return text[marker.upperBound...].prefix(while: \.isNumber) == "16"
     }
 
     /// A `{start: Timestamp, end: Timestamp}` submessage, when the bytes

@@ -4,12 +4,15 @@ import XCTest
 
 /// Fixtures for the grok.com gRPC-web fallback parser, built byte-by-byte
 /// from the documented wire contract (CodexBar docs/grok.md): config is
-/// field 1 of the reply, a top-level fixed32 is the used percent, the
-/// current period is a `{start, end}` Timestamp pair, and product shares
-/// nest inside repeated field 7 entries so they must not be mistaken for
-/// the headline percent.
+/// field 1 of the reply, a top-level fixed32 is the used percent, field 6
+/// is the current period as a `{start, end}` Timestamp pair on a weekly or
+/// monthly cadence, and product shares nest inside repeated field 7 entries
+/// so they must not be mistaken for the headline percent.
 final class GrokGrpcCreditsTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_761_000_000)
+    /// Seven days.  The credits pool is billed weekly or monthly, so a
+    /// recognized period is one of those two spans and nothing else.
+    private let week: UInt64 = 604_800
 
     private func varint(_ value: UInt64) -> [UInt8] {
         var value = value
@@ -56,7 +59,7 @@ final class GrokGrpcCreditsTests: XCTestCase {
 
     func testWrappedFramedReplyYieldsPercentAndPeriod() {
         let start: UInt64 = 1_760_400_000
-        let end: UInt64 = 1_761_408_000
+        let end = start + week
         let config = fixed32Field(4, 37.5) + periodField(6, start: start, end: end)
         let reply = lenField(1, config)
         let reading = GrokGrpcCredits.parse(framed(Array(reply), trailer: true), now: now)
@@ -80,16 +83,82 @@ final class GrokGrpcCreditsTests: XCTestCase {
     }
 
     func testImplicitZeroForActivePeriodWithoutPercent() {
-        let config = periodField(6, start: 1_760_400_000, end: 1_761_408_000)
+        let start: UInt64 = 1_760_400_000
+        let config = periodField(6, start: start, end: start + week)
         let reading = GrokGrpcCredits.parse(Data(lenField(1, Array(config))), now: now)
         XCTAssertEqual(reading?.usedPercent, 0)
     }
 
     func testNoPercentAndNoActivePeriodIsNil() {
-        let config = periodField(6, start: 1_700_000_000, end: 1_701_000_000)
-        XCTAssertNil(GrokGrpcCredits.parse(Data(lenField(1, Array(config))), now: now))
+        let start: UInt64 = 1_700_000_000
+        XCTAssertNil(GrokGrpcCredits.parse(Data(lenField(1, Array(periodField(6, start: start, end: start + week)))), now: now))
         XCTAssertNil(GrokGrpcCredits.parse(Data([0xFF, 0xFF, 0xFF]), now: now))
         XCTAssertNil(GrokGrpcCredits.parse(Data(), now: now))
+    }
+
+    // MARK: - Only the documented field may set the period
+
+    /// An unrelated length-delimited field that happens to hold two Timestamps
+    /// must not be read as the subscription period: a previous-period or
+    /// trial-window submessage would otherwise invent the window's bounds.
+    func testAnUnrelatedBytesFieldCannotInventPeriodBounds() {
+        let start: UInt64 = 1_760_400_000
+        // Field 9 is not the current period, but it decodes as a valid pair.
+        let decoy = periodField(9, start: start, end: start + week)
+        let config = decoy + fixed32Field(4, 42)
+        let reading = GrokGrpcCredits.parse(Data(lenField(1, Array(config))), now: now)
+        XCTAssertEqual(reading?.usedPercent, 42)
+        XCTAssertNil(reading?.periodStart, "a non-period field must not supply bounds")
+        XCTAssertNil(reading?.periodEnd)
+    }
+
+    /// A decoy must not be able to open the implicit-zero branch either.
+    func testAnUnrelatedBytesFieldCannotOpenTheImplicitZeroBranch() {
+        let start: UInt64 = 1_760_400_000
+        let decoy = periodField(9, start: start, end: start + week)
+        XCTAssertNil(GrokGrpcCredits.parse(Data(lenField(1, Array(decoy))), now: now))
+    }
+
+    /// When the current-period field repeats, the first entry is the period;
+    /// a later one must not overwrite bounds already captured.
+    func testTheFirstPeriodFieldWins() {
+        let first: UInt64 = 1_760_400_000
+        let second: UInt64 = 1_760_800_000
+        let config = periodField(6, start: first, end: first + week)
+            + periodField(6, start: second, end: second + week)
+        let reading = GrokGrpcCredits.parse(Data(lenField(1, Array(config))), now: now)
+        XCTAssertEqual(reading?.usedPercent, 0)
+        XCTAssertEqual(reading?.periodStart, Date(timeIntervalSince1970: TimeInterval(first)))
+    }
+
+    /// A Timestamp pair on no billing cadence is not this field's period.
+    func testAnUnrecognizedPeriodLengthIsNotCaptured() {
+        let start: UInt64 = 1_760_400_000
+        let config = periodField(6, start: start, end: start + 1_008_000) // ~11.7 days
+        let reading = GrokGrpcCredits.parse(Data(lenField(1, Array(config))), now: now)
+        XCTAssertNil(reading, "a span that is neither weekly nor monthly is not the credits period")
+    }
+
+    // MARK: - A rejected percentage is still a published percentage
+
+    /// A percentage that arrived but could not be accepted must not fall
+    /// through to the implicit-zero rule, which would report the pool as
+    /// untouched when the wire said otherwise.
+    func testOutOfRangePercentIsNotReadAsZeroUsage() {
+        let start: UInt64 = 1_760_400_000
+        let config = fixed32Field(4, 150) + periodField(6, start: start, end: start + week)
+        let reading = GrokGrpcCredits.parse(Data(lenField(1, Array(config))), now: now)
+        XCTAssertNil(reading, "150% is not a reading, and not a licence to infer 0% used")
+    }
+
+    /// The same holds when the published value is not finite.
+    func testNonFinitePercentIsNotReadAsZeroUsage() {
+        let start: UInt64 = 1_760_400_000
+        let nanBits = Float.nan.bitPattern
+        let config = field(4, wire: 5, payload: withUnsafeBytes(of: &nanBits) { Array($0) })
+            + periodField(6, start: start, end: start + week)
+        let reading = GrokGrpcCredits.parse(Data(lenField(1, Array(config))), now: now)
+        XCTAssertNil(reading)
     }
 
     func testRequestFrameMatchesDocumentedBytes() {

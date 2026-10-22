@@ -345,39 +345,77 @@ public struct LocalQuotaReader: Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         let payload = try await requestJSON(request)
         var windows = parseGrok(payload, observedAt: now())
-        // The credits payload carries no plan name; the settings endpoint
-        // names the tier (`SuperGrok Heavy` vs `SuperGrok`).  Best-effort
-        // enrichment on a short budget, exactly as CodexBar documents: a
-        // failure here drops the overlay, never the usage reading.
-        if let tier = await grokSettingsTier(token: token) {
+        // Two best-effort enrichments, neither on the critical path, so they
+        // are issued together instead of one after the other: run serially
+        // they added up to eight seconds to every Grok refresh, and each was
+        // paid for even when it had nothing to contribute.
+        //
+        //  - `/v1/settings` names the tier (`SuperGrok Heavy` vs `SuperGrok`),
+        //    so it is only worth a request when a window has no plan name.
+        //  - the grok.com gRPC fallback fills a percentage the proxy answer
+        //    did not publish, so with no window at all there is nothing to
+        //    fill and the request is skipped entirely.
+        let needsTier = windows.contains { $0.planName == nil }
+        let needsCredits = !windows.isEmpty && windows.first?.remainingPercent == nil
+        async let tierRequest = grokSettingsTier(token: token, onlyIf: needsTier)
+        async let creditsRequest = grokGrpcReading(token: token, onlyIf: needsCredits)
+        let (tier, credits) = await (tierRequest, creditsRequest)
+        if let tier {
             windows = windows.map { window in
                 var window = window
                 if window.planName == nil { window.planName = tier }
                 return window
             }
         }
-        // Best-effort grok.com gRPC fallback: only when the proxy answer
-        // published no percentage.  Its percent fills the subscription
-        // window; the proxy's period bounds stay authoritative.
-        if windows.first?.remainingPercent == nil,
-           let grpc = await grokGrpcReading(token: token),
-           let index = windows.firstIndex(where: { $0.id.hasSuffix(":subscription") || $0.remainingPercent == nil }) {
-            var window = windows[index]
-            window.remainingPercent = 100 - grpc.usedPercent
-            window.remainingUnknown = false
-            if window.resetAt == nil, let end = grpc.periodEnd {
-                window.resetAt = Self.isoString(end)
+        var authRejected = false
+        switch credits {
+        case .authRejected:
+            // grok.com answered, and what it said was that this credential is
+            // not accepted.  That is reported; it is never folded into the
+            // "no readable percentage" miss below.
+            authRejected = true
+        case .unavailable:
+            break
+        case .reading(let grpc):
+            // The proxy's period bounds stay authoritative; the fallback only
+            // supplies the percentage the proxy did not publish.
+            if let index = windows.firstIndex(where: { $0.id.hasSuffix(":subscription") || $0.remainingPercent == nil }) {
+                var window = windows[index]
+                window.remainingPercent = 100 - grpc.usedPercent
+                window.remainingUnknown = false
+                if window.resetAt == nil, let end = grpc.periodEnd {
+                    window.resetAt = Self.isoString(end)
+                }
+                if window.periodStart == nil, let start = grpc.periodStart {
+                    window.periodStart = Self.isoString(start)
+                }
+                // This window was normalized when it was still percentage-less,
+                // so `status`, `isExhausted`, `skip` and `skipReason` still
+                // describe the empty value.  Re-derive them from the number
+                // just filled in, or a pool the fallback alone could read
+                // publishes as "unknown" and is never drawn as spent.
+                windows[index] = window.normalizedForExport()
             }
-            if window.periodStart == nil, let start = grpc.periodStart {
-                window.periodStart = Self.isoString(start)
-            }
-            windows[index] = window
         }
-        return ProviderRead(provider: provider, windows: windows, issue: windows.first?.remainingPercent == nil ? "Grok returned no readable quota percentage." : nil)
+        let issue = authRejected
+            ? "GROK_TOKEN was rejected by grok.com (\(Self.maskedTokenPreview(token))). Sign in again."
+            : (windows.first?.remainingPercent == nil ? "Grok returned no readable quota percentage." : nil)
+        return ProviderRead(provider: provider, windows: windows, issue: issue)
     }
 
-    /// `subscription_tier_display` from the CLI-proxy settings endpoint.
-    private func grokSettingsTier(token: String) async -> String? {
+    /// First 8 / last 4 of a credential, for a rejection message: enough to
+    /// tell two sign-ins apart on one Mac, never enough to replay.  A value
+    /// too short to mask safely is reported as a fixed label, never echoed.
+    private static func maskedTokenPreview(_ token: String) -> String {
+        guard token.count > 16 else { return "(hidden)" }
+        return "\(token.prefix(8))…\(token.suffix(4))"
+    }
+
+    /// `subscription_tier_display` from the CLI-proxy settings endpoint.  Skipped
+    /// outright when every window already carries a plan name: there is
+    /// nothing for the tier to name, and the request costs up to two seconds.
+    private func grokSettingsTier(token: String, onlyIf: Bool = true) async -> String? {
+        guard onlyIf else { return nil }
         var request = URLRequest(url: URL(string: "https://cli-chat-proxy.grok.com/v1/settings")!)
         request.httpMethod = "GET"
         request.timeoutInterval = 2
@@ -389,8 +427,22 @@ public struct LocalQuotaReader: Sendable {
         return tier?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? tier : nil
     }
 
-    /// The grok.com gRPC-web credits fallback (see `GrokGrpcCredits`).
-    private func grokGrpcReading(token: String) async -> GrokGrpcCredits.Reading? {
+    /// The grok.com gRPC-web credits fallback (see `GrokGrpcCredits`), and the
+/// one outcome that is not a fallback miss.  A rejected credential is a
+/// different fact from absent credits data, so it has its own case and is
+/// reported instead of being silently skipped.
+private enum GrokGrpcOutcome {
+    case reading(GrokGrpcCredits.Reading)
+    case authRejected
+    case unavailable
+}
+
+/// The grok.com gRPC-web credits fallback (see `GrokGrpcCredits`).
+    private func grokGrpcReading(token: String, onlyIf: Bool = true) async -> GrokGrpcOutcome {
+        // No window at all, or one that already carries a percentage, leaves
+        // this fallback with nothing to fill — so no request is made and the
+        // six-second budget is not spent on an answer nobody would use.
+        guard onlyIf else { return .unavailable }
         var request = URLRequest(url: URL(string: "https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig")!)
         request.httpMethod = "POST"
         request.timeoutInterval = 6
@@ -398,9 +450,18 @@ public struct LocalQuotaReader: Sendable {
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/grpc-web+proto", forHTTPHeaderField: "Content-Type")
         request.setValue("1", forHTTPHeaderField: "X-Grpc-Web")
-        guard let (data, response) = try? await fetchJSON(request),
-              (200..<300).contains(response.statusCode) else { return nil }
-        return GrokGrpcCredits.parse(data, now: now())
+        guard let (data, response) = try? await fetchJSON(request) else { return .unavailable }
+        // HTTP 401/403 and gRPC status 16 (`UNAUTHENTICATED`, which grok.com
+        // returns for a bearer-only probe with no browser-held WKE keypair)
+        // both mean the token was refused.  Anything else non-2xx is a plain
+        // miss and keeps the fallback best-effort.
+        if response.statusCode == 401 || response.statusCode == 403 {
+            return .authRejected
+        }
+        guard (200..<300).contains(response.statusCode) else { return .unavailable }
+        if GrokGrpcCredits.isUnauthenticated(data) { return .authRejected }
+        guard let reading = GrokGrpcCredits.parse(data, now: now()) else { return .unavailable }
+        return .reading(reading)
     }
 
     private static func isoString(_ date: Date) -> String {
