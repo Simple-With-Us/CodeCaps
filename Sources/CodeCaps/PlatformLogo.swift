@@ -290,6 +290,8 @@ private static let resourceNames: [String: String] = [
     "muse-assist": "muse-assist",
     "muse-code": "muse-code",
     "cursor": "cursor",
+    "github-copilot": "copilot",
+    "copilot": "copilot",
 ]
 
 /// The file a style and appearance ask for, or `nil` when the mark is absent.
@@ -484,8 +486,8 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
     private static let solidToneKeys: Set<String> = ["google-antigravity:third-party"]
 
     private static let monochromeKeys: Set<String> = [
-        "grok-bot",
-        "openai", "codex", "cursor", "xai", "x-ai", "grok", "grok-cli",
+        "grok-bot", "openai", "codex", "cursor", "xai", "x-ai", "grok", "grok-cli",
+        "github-copilot", "copilot",
     ]
 
     /// Presentation mode for a user-supplied custom mark.  Defaults to `.color`
@@ -698,11 +700,14 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
     }
 
     /// Delay before re-probing a mark that failed to load, by attempt number:
-    /// five seconds for the first dozen attempts (covers install and update
-    /// windows), then once a minute so a mark that appears later -- a custom
-    /// import, a late-mounted bundle -- still heals without a relaunch.
+    /// the first three tries come fast (a bundle that lands seconds after the
+    /// first draw should not leave placeholder glyphs lingering), then five
+    /// seconds for the install/update window, then once a minute so a mark
+    /// that appears later — a custom import, a late-mounted bundle — still
+    /// heals without a relaunch.
     public static func missingMarkRetryDelay(forAttempt attempt: Int) -> UInt64 {
-        attempt < 12 ? 5_000_000_000 : 60_000_000_000
+        if attempt < 3 { return 1_000_000_000 }
+        return attempt < 12 ? 5_000_000_000 : 60_000_000_000
     }
 }
 

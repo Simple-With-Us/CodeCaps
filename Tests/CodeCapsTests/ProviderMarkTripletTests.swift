@@ -23,6 +23,7 @@ final class ProviderMarkTripletTests: XCTestCase {
         "google-antigravity:gemini", "google-antigravity:third-party", "gemini",
         "xai", "grok", "grok-cli", "grok-bot",
         "minimax", "muse", "muse-assist", "muse-code", "cursor",
+        "github-copilot", "copilot",
     ]
 
     override func setUp() {

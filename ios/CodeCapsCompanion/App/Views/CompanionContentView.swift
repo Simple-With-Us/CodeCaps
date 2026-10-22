@@ -1126,7 +1126,7 @@ public struct CompanionProviderLogo: View {
     /// Antigravity's supplied arch and Gemini's star keep their color here.
     private var isMonochrome: Bool {
         guard let name = resolvedLogoName else { return false }
-        return ["provider-openai", "provider-cursor", "provider-grok", "provider-grok-bot"]
+        return ["provider-openai", "provider-cursor", "provider-grok", "provider-grok-bot", "provider-copilot"]
             .contains(name)
     }
 
