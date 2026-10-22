@@ -156,8 +156,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         // above others but left the app an accessory with no Dock icon, so
         // the owner could not switch to CodeCaps at all.  Dock + activate is
         // what they actually wanted..store(in: &subscriptions)
-        consoleState.$page.removeDuplicates().sink { [weak self] page in
-            self?.consoleWindow?.title = page.isSettings ? "CodeCaps Dashboard" : "CodeCaps"
+        consoleState.$page.removeDuplicates().sink { [weak self] _ in
+            self?.consoleWindow?.title = "CodeCaps Dashboard"
         }.store(in: &subscriptions)
         model.$glanceView.removeDuplicates().sink { [weak self] _ in
             DispatchQueue.main.async {
@@ -303,21 +303,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
               planWarningCheckPending || popover.isShown || consoleWindow?.isVisible == true || floatingGlance?.isVisible == true else { return }
         let warnings = planWarningCycle.warnings(windows: model.detectedPlanWindows,
                                                   customInfo: model.platformCustomInfo, now: Date())
+            // An explicit override wins over every throttle: a choice the
+            // owner already made never warns again.
+            .filter { !PlanMismatchSuppression.isAccepted(providerKey: $0.providerKey,
+                                                          entered: $0.enteredPlan,
+                                                          detected: $0.detectedPlan) }
         if model.lastChecked != nil { planWarningCheckPending = false }
-        guard !warnings.isEmpty else { return }
+        guard !warnings.isEmpty else { planWarningCycle.finishPresentation(); return }
+        // At most once an hour, no matter how often the app opens.
+        if let last = PlanMismatchSuppression.lastPresentedAt,
+           Date().timeIntervalSince(last) < 3600 {
+            planWarningCycle.finishPresentation()
+            return
+        }
+        // "Don't show this again" silences repeats, never first sightings: a
+        // mismatch with a new provider or a changed detected plan still shows.
+        if PlanMismatchSuppression.isSuppressed, PlanMismatchSuppression.isRepeat(warnings) {
+            planWarningCycle.finishPresentation()
+            return
+        }
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "Plan Information Mismatch"
+        // The transparent colour mark, as on the About page, with CodeCaps
+        // beside it — not the app icon.  NSAlert draws messageText bold to
+        // the right of the icon, which is exactly the requested lockup.
+        if let brandMark = BrandMarkImage.asset { alert.icon = brandMark }
+        alert.messageText = "CodeCaps"
         let values = warnings.map {
             "\($0.providerLabel): entered “\($0.enteredPlan)”; provider reports “\($0.detectedPlan)”."
         }.joined(separator: "\n")
-        alert.informativeText = values + "\n\n"
+        alert.informativeText = "Plan Information Mismatch\n\n" + values + "\n\n"
             + "Your entered values have been kept." + sentenceGap
             + "Review the plan fields in Settings to resolve the difference."
         alert.addButton(withTitle: "Open Settings")
         alert.addButton(withTitle: "Continue")
+        alert.showsSuppressionButton = true
+        alert.suppressionButton.title = "Don't show this again"
         NSApp.activate(ignoringOtherApps: true)
         let response = alert.runModal()
+        if alert.suppressionButton.state == .on { PlanMismatchSuppression.isSuppressed = true }
+        PlanMismatchSuppression.record(warnings)
         navigatingPlanWarning = true
         planWarningCycle.finishPresentation()
         if response == .alertFirstButtonReturn { showSettings() }
@@ -595,7 +620,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             window.setFrameAutosaveName("CodeCapsConsoleWindow")
             consoleWindow = window
         }
-        consoleWindow?.title = consoleState.page.isSettings ? "CodeCaps Dashboard" : "CodeCaps"
+        // The window is the Dashboard: it holds every platform alongside the
+        // settings pages, so the title never depends on the selected page.
+        consoleWindow?.title = "CodeCaps Dashboard"
         // Derive the level unconditionally on every call.  The old branch
         // only ever raised and left a stale popUpMenuWindow + 1 in place when
         // the popover had been dismissed by a path that does not also resign

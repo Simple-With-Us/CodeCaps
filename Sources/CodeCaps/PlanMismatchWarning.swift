@@ -46,3 +46,66 @@ struct PlanWarningCycle {
 
     mutating func finishPresentation() { isPresenting = false }
 }
+
+/// "Don't show this again" for the mismatch popup.  Suppression is sticky,
+/// but a mismatch the owner has never seen still interrupts: only a repeat
+/// of an already-recorded (provider, detected plan) pair stays silent.
+enum PlanMismatchSuppression {
+    private static let suppressedKey = "planMismatchWarningsSuppressed"
+    private static let knownKey = "planMismatchKnownDetections"
+
+    static var isSuppressed: Bool {
+        get { UserDefaults.standard.bool(forKey: suppressedKey) }
+        set { UserDefaults.standard.set(newValue, forKey: suppressedKey) }
+    }
+
+    /// Detected plans the owner has already been shown, by provider key.
+    static var knownDetections: [String: String] {
+        get { (UserDefaults.standard.dictionary(forKey: knownKey) as? [String: String]) ?? [:] }
+        set { UserDefaults.standard.set(newValue, forKey: knownKey) }
+    }
+
+    /// When the popup last appeared.  It fires at most once an hour no matter
+    /// how often the app opens, while a never-seen mismatch still breaks
+    /// through suppression immediately.
+    static var lastPresentedAt: Date? {
+        get {
+            let epoch = UserDefaults.standard.double(forKey: "planMismatchLastPresentedAt")
+            return epoch > 0 ? Date(timeIntervalSince1970: epoch) : nil
+        }
+        set { UserDefaults.standard.set(newValue?.timeIntervalSince1970 ?? 0, forKey: "planMismatchLastPresentedAt") }
+    }
+
+    /// Owner-accepted (provider, entered, detected) triples.  Choosing "keep
+    /// mine" records the exact pair, so the popup stays silent for it — while
+    /// any new entered value or any changed detected plan warns again.
+    static var acceptedOverrides: [String: [String]] {
+        get { (UserDefaults.standard.dictionary(forKey: "planMismatchAcceptedOverrides") as? [String: [String]]) ?? [:] }
+        set { UserDefaults.standard.set(newValue, forKey: "planMismatchAcceptedOverrides") }
+    }
+
+    static func accept(providerKey: String, entered: String, detected: String) {
+        var accepted = acceptedOverrides
+        accepted[providerKey] = [entered.trimmingCharacters(in: .whitespacesAndNewlines),
+                                detected.trimmingCharacters(in: .whitespacesAndNewlines)]
+        acceptedOverrides = accepted
+    }
+
+    static func isAccepted(providerKey: String, entered: String, detected: String) -> Bool {
+        guard let pair = acceptedOverrides[providerKey], pair.count == 2 else { return false }
+        return pair[0] == entered.trimmingCharacters(in: .whitespacesAndNewlines)
+            && pair[1] == detected.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// True when every current warning repeats an already-recorded pair.
+    static func isRepeat(_ warnings: [PlanMismatchWarning]) -> Bool {
+        let known = knownDetections
+        return !warnings.isEmpty && warnings.allSatisfy { known[$0.providerKey] == $0.detectedPlan }
+    }
+
+    static func record(_ warnings: [PlanMismatchWarning]) {
+        var known = knownDetections
+        for warning in warnings { known[warning.providerKey] = warning.detectedPlan }
+        knownDetections = known
+    }
+}
