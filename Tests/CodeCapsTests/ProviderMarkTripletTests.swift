@@ -23,11 +23,24 @@ final class ProviderMarkTripletTests: XCTestCase {
         "google-antigravity:gemini", "google-antigravity:third-party", "gemini",
         "xai", "grok", "grok-cli", "grok-bot",
         "minimax", "muse", "muse-assist", "muse-code", "cursor",
+        "github-copilot", "copilot",
     ]
 
     override func setUp() {
         super.setUp()
         PlatformLogoImage.invalidateCaches()
+    }
+
+    /// The companion's asset catalog must carry every provider the model can
+    /// name, Copilot included: a missing imageset draws the dashed fallback.
+    func testCompanionCatalogCarriesCopilotMark() {
+        let catalog = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("ios/CodeCapsCompanion/Assets.xcassets/provider-copilot.imageset")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: catalog.appendingPathComponent("provider-copilot.svg").path),
+                      "provider-copilot.imageset is missing its SVG")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: catalog.appendingPathComponent("Contents.json").path),
+                      "provider-copilot.imageset is missing Contents.json")
     }
 
     func testEveryProviderResolvesInEveryStyleAndAppearance() {

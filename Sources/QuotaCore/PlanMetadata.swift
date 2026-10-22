@@ -70,6 +70,9 @@ public enum PlanComparison {
            [detected, entered].allSatisfy({ $0 == "max" || $0.range(of: #"^max[1-9][0-9]*x$"#, options: .regularExpression) != nil }) {
             return false
         }
+        // The Grok Bot feed reports the generic "Grok Bot Plan" for every plan,
+        // so it can never contradict an entered value (owner, 2026-10-22).
+        if providerKey == "grok-bot", detected == "grokbotplan" { return false }
         return true
     }
 
@@ -95,6 +98,14 @@ public enum PlanComparison {
         text = text.replacingOccurrences(of: "×", with: "x")
         let key = text.unicodeScalars.filter { (CharacterSet.alphanumerics.contains($0) || $0 == "+") }.map(String.init).joined()
         guard !key.isEmpty, !["unknown", "unavailable", "notreported"].contains(key) else { return nil }
+        // Owner-directed substring aliases (2026-10-22): anything reading
+        // "pro lite"/"prolite" is the Codex Pro Lite tier, and anything with
+        // "ultra" in it is Cursor's unified_ultra allowance.  Applied after
+        // provider-name stripping so "ChatGPT Pro Lite (5x)" and "Ultra" stop
+        // warning against the provider-reported slugs.
+        if let rules = substringAliases[providerKey] {
+            for rule in rules where key.contains(rule.fragment) { return rule.canonical }
+        }
         // Raw Copilot API plan tokens (for example `individual_pro`) name
         // the same tiers users type; alias them to the user-facing forms so
         // a standard entry is not a false mismatch (Sentry on #277).
@@ -109,5 +120,10 @@ public enum PlanComparison {
         "individualproplus": "pro+",
         "copilotpro": "pro",
         "copilotproplus": "pro+",
+    ]
+
+    private static let substringAliases: [String: [(fragment: String, canonical: String)]] = [
+        "openai": [("prolite", "prolite")],
+        "cursor": [("ultra", "unifiedultra")],
     ]
 }

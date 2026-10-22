@@ -63,7 +63,8 @@ public struct CopilotQuotaReader: Sendable {
                     remainingPercent: percent, absoluteRemaining: remaining, absoluteLimit: limit,
                     quotaUnit: unlimited ? nil : "requests", planName: plan,
                     remainingUnknown: percent == nil, isExhausted: exhausted,
-                    resetAt: Self.timestamp(quota["quota_reset_date"]) ?? reset, window: "monthly",
+                    resetAt: Self.timestamp(quota["quota_reset_date"]) ?? reset,
+                    window: "monthly",
                     status: percent.map { QuotaWindowStatus.derived(remainingPercent: $0) } ?? .unknown,
                     skip: exhausted, skipReason: exhausted ? "quota exhausted" : nil,
                     occurredAt: observed, source: "copilot"
@@ -75,7 +76,8 @@ public struct CopilotQuotaReader: Sendable {
                     id: "local-mac:github-copilot:plan", provider: "GitHub Copilot",
                     providerKey: "github-copilot", providerLabel: "GitHub Copilot", via: "gh",
                     sourceApp: "local-mac", label: "Copilot plan", planName: plan,
-                    remainingUnknown: true, resetAt: reset, window: "monthly", status: .unknown,
+                    remainingUnknown: true, resetAt: reset,
+                    window: "monthly", status: .unknown,
                     occurredAt: observed, source: "copilot"
                 )]
             }
