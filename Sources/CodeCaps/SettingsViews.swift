@@ -408,7 +408,7 @@ struct SettingsSourcesFleetPage: View {
             HStack(spacing: 8) {
                 Image(systemName: "laptopcomputer")
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(Theme.accent)
+                    .foregroundStyle(Color.secondary)
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Machine Identity: \(QuotaPublisher.machineName)")
                         .font(.system(size: 12, weight: .semibold))
@@ -421,8 +421,8 @@ struct SettingsSourcesFleetPage: View {
                     .font(.system(size: 10, weight: .medium))
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
-                    .background(Theme.accent.opacity(0.12), in: Capsule())
-                    .foregroundStyle(Theme.accent)
+                    .background(Color.secondary.opacity(0.14), in: Capsule())
+                    .foregroundStyle(Color.secondary)
             }
             .padding(.vertical, 2)
 
@@ -493,7 +493,7 @@ struct SettingsSourcesFleetPage: View {
                 Spacer(minLength: 8)
                 Image(systemName: healthy ? "checkmark.circle" : "exclamationmark.triangle")
                     .font(.system(size: 12))
-                    .foregroundStyle(healthy ? Theme.accent : Theme.warning)
+                    .foregroundStyle(healthy ? Theme.success : Theme.warning)
                     .accessibilityHidden(true)
             }
             if let issue {
@@ -546,7 +546,7 @@ struct SettingsSourcesFleetPage: View {
             if let claudeConsentMessage {
                 Text(claudeConsentMessage)
                     .font(.system(size: 11))
-                    .foregroundStyle(claudeConsentSucceeded ? Theme.accent : Theme.warning)
+                    .foregroundStyle(claudeConsentSucceeded ? Theme.success : Theme.warning)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -746,7 +746,7 @@ private struct ReauthorizeCaption: View {
             if let pushMessage {
                 Text(pushMessage)
                     .font(.system(size: 11))
-                    .foregroundStyle(pushSucceeded ? Theme.accent : Theme.danger)
+                    .foregroundStyle(pushSucceeded ? Theme.success : Theme.danger)
                     .fixedSize(horizontal: false, vertical: true)
             }
         } header: {
@@ -866,7 +866,7 @@ private struct ReauthorizeCaption: View {
             if let pullMessage {
                 Text(pullMessage)
                     .font(.system(size: 11))
-                    .foregroundStyle(pullSucceeded ? Theme.accent : Theme.danger)
+                    .foregroundStyle(pullSucceeded ? Theme.success : Theme.danger)
                     .fixedSize(horizontal: false, vertical: true)
             }
         } header: {
@@ -1765,7 +1765,7 @@ struct SettingsInfisicalPage: View {
                 if let message {
                     Text(message)
                         .font(.system(size: 11))
-                        .foregroundStyle(succeeded ? Theme.accent : Theme.danger)
+                        .foregroundStyle(succeeded ? Theme.success : Theme.danger)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             } header: {
@@ -1816,7 +1816,7 @@ struct SettingsInfisicalPage: View {
                 if let keyMessage = keyMessage {
                     Text(keyMessage)
                         .font(.system(size: 11))
-                        .foregroundStyle(keySucceeded ? Theme.accent : Theme.danger)
+                        .foregroundStyle(keySucceeded ? Theme.success : Theme.danger)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             } header: {

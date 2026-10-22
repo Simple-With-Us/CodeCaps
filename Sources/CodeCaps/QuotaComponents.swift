@@ -69,13 +69,13 @@ enum AccentChoice: String, CaseIterable, Identifiable {
         case .violet: return 0x5B3FBF
         case .orange: return 0xA85C05
         case .green: return 0x2E6B2E
-        case .magenta: return 0xA3225E
+        case .magenta: return 0xDB2777
         // The light four are light options by design, carrying dark text
         // via Theme.onAccent.
         case .rose: return 0xFBB6CE
-        case .lemon: return 0xF6E05E
-        case .sky: return 0x90CDF4
-        case .lime: return 0xB7EB8F
+        case .lemon: return 0xFBBF24
+        case .sky: return 0x0EA5E9
+        case .lime: return 0x84CC16
         }
     }
 
@@ -87,11 +87,11 @@ enum AccentChoice: String, CaseIterable, Identifiable {
         case .violet: return 0xB49BF5
         case .orange: return 0xF0B45A
         case .green: return 0x7FD07F
-        case .magenta: return 0xF07AAF
+        case .magenta: return 0xF472B6
         case .rose: return 0xF687B3
-        case .lemon: return 0xF6E05E
-        case .sky: return 0x76E4F7
-        case .lime: return 0x9AE6B4
+        case .lemon: return 0xFACC15
+        case .sky: return 0x38BDF8
+        case .lime: return 0xA3E635
         }
     }
 
@@ -198,6 +198,10 @@ enum Theme {
 
     static let warning = dyn(hex(0xA85C05), hex(0xF0B45A))
     static let danger = dyn(hex(0xBF3339), hex(0xFF6B6B))
+    /// A fixed, readable green for success marks.  It must not follow the
+    /// owner's accent choice: a pale accent (lemon, sky, lime) as small text or
+    /// a checkmark on a light surface fails contrast.
+    static let success = dyn(hex(0x1E7B3A), hex(0x6EE7A0))
     static let background: Color = highContrastBackground
     static let surface: Color = highContrastSurface
     static let hairline: Color = highContrast

@@ -443,9 +443,9 @@ sign_app_bundle() {
 # The marketing version lives in one file so a release is a one-line edit, and
 # the build number is the commit count so it is monotonic without bookkeeping.
 short_version() {
-  local version=""
-  [[ ! -f "$VERSION_FILE" ]] || version="$(/usr/bin/sed -e 's/[[:space:]]//g' -e '/^$/d' "$VERSION_FILE" | /usr/bin/head -n 1)"
-  printf '%s\n' "${version:-0.0.0}"
+  local count=""
+  count="$(bundle_version)"
+  printf '1.0.%s\n' "$count"
 }
 
 bundle_version() {
