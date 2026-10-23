@@ -1401,7 +1401,8 @@ public final class CompanionQuotaModel: ObservableObject {
             return Set(stored)
         }
         set {
-            UserDefaults.standard.set(Array(newValue).suffix(200), forKey: "announcedAlertIds")
+            // Preferences require a property-list array, not an ArraySlice.
+            UserDefaults.standard.set(Array(Array(newValue).suffix(200)), forKey: "announcedAlertIds")
         }
     }
 
