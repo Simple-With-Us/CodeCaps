@@ -2407,13 +2407,9 @@ final class MonitorModel: ObservableObject {
             // app's live one and read every provider as spent (owner,
             // Oct-22-2026).
             //
-            // The fallback rule above already says which providers the fleet
-            // may fill in:  the ones this Mac cannot read locally.  The widget
-            // gets those, and the local rows, and nothing else.
-            let fleetWindowsForProvidersThisMacCannotRead = split.groups.flatMap(\.windows).filter {
-                !localProviders.contains($0.canonicalProviderKey)
-            }
-            self.publishWidgetSnapshot(candidates: merged + fleetWindowsForProvidersThisMacCannotRead)
+            // `publishWidgetSnapshot` holds the rule that drops it, so all
+            // three call sites publish the same set.
+            self.publishWidgetSnapshot(candidates: merged + split.groups.flatMap(\.windows))
             self.refreshRunawayUsageState(recordSamples: local != nil)
             self.refreshExhaustionWarnings(windows: merged + split.groups.flatMap(\.windows), now: self.now)
             self.alarmManager.evaluate(observations: self.resetAlarmObservationsForCurrentReadings(), now: self.now)
@@ -2710,12 +2706,28 @@ final class MonitorModel: ObservableObject {
     }
 
     private func publishWidgetSnapshot(candidates: [QuotaWindow]) {
+        // The snapshot publishes what the app's own rows publish.  Every fleet
+        // group carries a second copy of the providers, and for a provider this
+        // Mac reads itself that copy is the stale one:  it is days old and
+        // reads zero, so the widget showed a fleet reading beside the app's
+        // live one and read every provider as spent (owner, Oct-22-2026).
+        //
+        // The rule lives here rather than at the call sites, so a caller that
+        // forgets it cannot publish the stale copy again.
+        let localProviders = Set(self.localWindows.map(\.canonicalProviderKey))
+        let publishable = candidates.filter { candidate in
+            guard localProviders.contains(candidate.canonicalProviderKey) else { return true }
+            // This Mac reads the provider, so only its own window may be
+            // published:  never somebody else's copy of the same provider.
+            return self.localWindows.contains(candidate)
+                || FleetOrigin.isOwnPush(candidate, localWindows: self.localWindows)
+        }
         // Fleet-fallback windows already sit in `merged`, and the caller also
         // appends every fleet group.  The widget cache stores this array
         // verbatim, so an equal window is published once.
         var unique: [QuotaWindow] = []
-        unique.reserveCapacity(candidates.count)
-        for window in candidates where !unique.contains(window) {
+        unique.reserveCapacity(publishable.count)
+        for window in publishable where !unique.contains(window) {
             unique.append(window)
         }
         let visibleProviderKeys = Set(QuotaResponse(generatedAt: "", windows: unique)
