@@ -121,9 +121,22 @@ public enum FleetOrigin {
     ) -> (ownPush: [QuotaWindow], groups: [(id: String, title: String, windows: [QuotaWindow])]) {
         var own: [QuotaWindow] = []
         var grouped: [String: [QuotaWindow]] = [:]
+        // This Mac's own push is exempt from the dead-copy rule only while
+        // this Mac still reads that provider:  the local window is what greys
+        // out an ended period, so the copy of it coming back from the fleet is
+        // redundant.  A provider this Mac no longer reads has no local window
+        // to grey out, and its own copy of an ended period is a copy like any
+        // other (owner, 2026-10-23:  the xAI row read two ended windows
+        // instead of the live reading).
+        let localReaders = QuotaLocalScope.providers(withReadings: localWindows)
         for window in windows {
             if isOwnPush(window, host: host, localWindows: localWindows) {
-                own.append(window)
+                if localReaders.contains(window.canonicalProviderKey)
+                    || !QuotaFreshnessRule.isDeadCopy(observedAt: window.occurredDate,
+                                                      resetAt: window.resetDate,
+                                                      now: now) {
+                    own.append(window)
+                }
             } else if !QuotaFreshnessRule.isDeadCopy(observedAt: window.occurredDate,
                                                      resetAt: window.resetDate,
                                                      now: now) {

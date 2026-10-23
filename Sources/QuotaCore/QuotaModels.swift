@@ -395,6 +395,25 @@ public struct QuotaProviderGroup: Codable, Equatable, Sendable {
     }
 }
 
+/// The providers this Mac reads locally.
+///
+/// A local window that carries no reading (a plan-details window, or any
+/// window whose percentage is unknown) does not mean this Mac reads that
+/// provider.  Counting it as one dropped the fleet's live reading for the
+/// provider and left the row with no reading at all:  the xAI row read
+/// "unavailable" while the fleet carried this Mac's own live SuperGrok Heavy
+/// reading for it (owner, 2026-10-23).
+public enum QuotaLocalScope {
+    /// The provider keys this Mac has a local reading for.
+    ///
+    /// The local window is what greys out an ended period, so a provider
+    /// without one has nothing to show for an expired reading, and a copy of
+    /// that ended period must not stand in for a reading either.
+    public static func providers(withReadings windows: [QuotaWindow]) -> Set<String> {
+        Set(windows.filter { $0.boundedRemainingPercent != nil }.map(\.canonicalProviderKey))
+    }
+}
+
 /// Response from GET /api/quota-windows.  `providerGroups` is additive and is
 /// optional on decode so this remains compatible with the original response.
 public struct QuotaResponse: Codable, Equatable, Sendable {

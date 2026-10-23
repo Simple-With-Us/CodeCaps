@@ -2370,7 +2370,13 @@ final class MonitorModel: ObservableObject {
             }
             if !useServer { self.serverWindows = [] }
             self.serverError = failure
-            let localProviders = Set(self.localWindows.map(\.canonicalProviderKey))
+            // A local window that carries no reading (a plan-details window,
+            // or any window whose percentage is unknown) does not mean this Mac
+            // reads that provider, and it must not hold the fleet's live
+            // reading out of the row.  Counting it as one left the xAI row
+            // with no reading at all, while the fleet carried this Mac's own
+            // live SuperGrok Heavy reading for it (owner, 2026-10-23).
+            let localProviders = QuotaLocalScope.providers(withReadings: self.localWindows)
 
             // A pulled window is either this Mac's own push coming back, or
             // somebody else's reading.  Every window of the second kind is
