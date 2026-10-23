@@ -300,6 +300,48 @@ final class SourceRefreshTests: XCTestCase {
                       "the publisher keeps this Mac's own window")
     }
 
+    /// Owner 2026-10-23: the xAI row showed two 7-day windows at 0% with a
+    /// "due" caption while the live weekly allowance read 91% with a reset on
+    /// 2026-10-29.  This Mac reads no xAI quota locally, so the fleet
+    /// fallback filled the xAI row with copies of a period that ended days
+    /// earlier.
+    ///
+    /// Those copies reached the widget's cache as well, so the publisher has
+    /// to drop the same ones the app's rows drop.
+    func testTheWidgetSnapshotDropsACopyOfAPeriodThatEnded() async throws {
+        let settings = defaults()
+        settings.set(true, forKey: "serverEnabled")
+        let model = MonitorModel(defaults: settings, burnRateHistoryURL: historyURL())
+        model.skipsSnapshotIOForTesting = true
+        let iso = ISO8601DateFormatter()
+        let now = Date()
+        let live = QuotaWindow(id: "xai:subscription", provider: "xAI", providerKey: "xai",
+                               label: "7-day window", remainingPercent: 91,
+                               resetAt: iso.string(from: now.addingTimeInterval(6 * 86_400)), window: "weekly",
+                               occurredAt: iso.string(from: now.addingTimeInterval(-60)),
+                               source: "CodeCaps")
+        let dead = QuotaWindow(id: "xai-subscription", provider: "xAI", providerKey: "xai",
+                               label: "7-day window", remainingPercent: 0,
+                               resetAt: iso.string(from: now.addingTimeInterval(-86_400)), window: "weekly",
+                               occurredAt: iso.string(from: now.addingTimeInterval(-6 * 86_400)),
+                               source: "CodeCaps")
+        model.localResultForTesting = LocalQuotaResult(windows: [])
+        model.serverFetchForTesting = {
+            QuotaResponse(generatedAt: "test", windows: [live, dead])
+        }
+        var published: [[QuotaWindow]] = []
+        model.widgetWriteForTesting = { published.append($0) }
+
+        model.refresh()
+        await model.refreshTaskForTesting?.value
+
+        let windows = try XCTUnwrap(published.last)
+        XCTAssertEqual(windows.filter { $0.id == "xai:subscription" }.count, 1,
+                       "the widget's cache holds the live weekly copy")
+        XCTAssertEqual(windows.filter { $0.id == "xai-subscription" }.count, 0,
+                       "a copy of a period that ended must not reach the widget's cache")
+    }
+
     func testNewerCodexSessionPreservesSameAccountProviderDetails() throws {
         let instant = Date(timeIntervalSince1970: 1_700_000_000)
         var http = codex(60, at: instant, source: "Codex")

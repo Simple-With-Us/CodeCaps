@@ -777,4 +777,31 @@ final class CompanionModelTests: XCTestCase {
             "The Alarms tab must still exist as a tab of the settings sheet"
         )
     }
+
+    // MARK: - A copy of a period that ended is not a reading
+
+    /// Owner 2026-10-23: the xAI row showed two 7-day windows at 0% with a
+    /// "due" caption while Grok, Cursor and Grok Bot showed the same weekly
+    /// allowance at 91% with a reset on 2026-10-29.  This Mac reads no xAI
+    /// quota locally, so the fleet fallback filled the xAI row with copies of
+    /// a period that ended days earlier.
+    ///
+    /// The phone pulls the same fleet payload, so it has to drop the same
+    /// copies.  Its model is not in the macOS test target, so the rule is
+    /// pinned here by reading the source.
+    func testTheCompanionDropsACopyOfAPeriodThatEnded() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains("QuotaFreshnessRule.isDeadCopy(observedAt: parsedReportedAt,"),
+            "the phone must ask the shared rule about a window whose period already ended"
+        )
+        XCTAssertTrue(
+            source.contains("QuotaFreshnessRule.isDeadCopy(observedAt: Self.reportedAt(from: $0),"),
+            "the phone's Antigravity pool must ask the same rule"
+        )
+        XCTAssertFalse(
+            source.contains("private static let staleAfter"),
+            "the phone must not carry a stale threshold of its own"
+        )
+    }
 }

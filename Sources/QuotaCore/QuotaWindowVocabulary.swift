@@ -603,6 +603,31 @@ public enum QuotaFreshnessRule {
         if let resetAt, resetAt <= now { return false }
         return true
     }
+
+    /// Whether a window is a dead copy of a period that has already ended.
+    ///
+    /// Owner 2026-10-23: the xAI row showed two 7-day windows at 0% with a
+    /// "due" caption while Grok, Cursor and Grok Bot showed the same weekly
+    /// allowance at 91% with a reset on 2026-10-29.  This Mac reads no xAI
+    /// quota locally, so the fleet fallback filled the xAI row with copies of
+    /// a period that ended days earlier, and the app printed them as live
+    /// readings.
+    ///
+    /// A window whose reset has already passed and whose reading is no longer
+    /// recent carries no live information:  it says how the plan looked before
+    /// the last refresh, so no surface may present it as a reading of the
+    /// plan now.
+    ///
+    /// It deliberately changes nothing else.  A window whose reset passed
+    /// moments ago was observed moments ago as well, so it stays and keeps
+    /// its `due` caption, because a period that rolls over must not blank the
+    /// row beside it.  A window with no reset clock has not expired, so it
+    /// stays too, and a window that is still inside its period is a reading
+    /// whatever its age.
+    public static func isDeadCopy(observedAt: Date?, resetAt: Date?, now: Date) -> Bool {
+        guard let resetAt, resetAt <= now else { return false }
+        return !isReadingRecent(observedAt: observedAt, now: now)
+    }
 }
 
 /// The one rule for "may this window stand in for a plan hitting its cap",

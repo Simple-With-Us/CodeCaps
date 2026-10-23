@@ -2743,6 +2743,13 @@ final class MonitorModel: ObservableObject {
             visibleProviderKeys.contains($0.canonicalProviderKey)
                 && !disabledSources.contains($0.source ?? "")
                 && !$0.isSupplementaryVideoQuota
+                // A copy of a period that ended before the last refresh is not
+                // a reading, so the widget's cache does not carry it.  The
+                // rule is the shared one, so the widget, the phone and the Mac
+                // drop the same copies.
+                && !QuotaFreshnessRule.isDeadCopy(observedAt: $0.occurredDate,
+                                                  resetAt: $0.resetDate,
+                                                  now: now)
         }
         if let writeForTesting = widgetWriteForTesting {
             writeForTesting(windows)

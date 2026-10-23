@@ -672,8 +672,15 @@ public enum WidgetPresentation {
 
         for w in rawWindows {
             let parsedReset = parseDate(from: w.resetAt)
-            let cadence = formatCadence(w.label, window: w.window, resetAt: parsedReset)
             let observed = parseDate(from: w.occurredAt)
+            // A copy of a period that ended before the last refresh is not a
+            // reading, so it never becomes a row here either.  The rule is the
+            // shared one, the same the Mac and the phone ask, so the three
+            // surfaces cannot drift apart.
+            if QuotaFreshnessRule.isDeadCopy(observedAt: observed, resetAt: parsedReset, now: now) {
+                continue
+            }
+            let cadence = formatCadence(w.label, window: w.window, resetAt: parsedReset)
             let pct = w.remainingPercent
             // The one shared rule decides, as it does on the phone and on the
             // Mac:  a reading outranks the export's stale exhausted word, and
@@ -787,6 +794,14 @@ public enum WidgetPresentation {
         iconHint: String? = nil,
         defaultLabel: String? = nil
     ) -> WidgetPlatformItem? {
+        guard !windows.isEmpty else { return nil }
+        // A copy of a period that ended before the last refresh is not a
+        // reading, so it never joins the pool.  The rule is the shared one.
+        let windows = windows.filter {
+            !QuotaFreshnessRule.isDeadCopy(observedAt: parseDate(from: $0.occurredAt),
+                                           resetAt: parseDate(from: $0.resetAt),
+                                           now: now)
+        }
         guard !windows.isEmpty else { return nil }
 
         var childWindows: [WidgetWindowItem] = []

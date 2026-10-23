@@ -249,4 +249,51 @@ final class QuotaWindowVocabularyTests: XCTestCase {
             source: "xai")
         XCTAssertFalse(QuotaWindowSnapshot(window: stale, now: now).isFresh)
     }
+
+    // MARK: - The dead copy rule
+
+    /// Owner 2026-10-23: the xAI row showed two 7-day windows at 0% with a
+    /// "due" caption while Grok, Cursor and Grok Bot showed the same weekly
+    /// allowance at 91% with a reset on 2026-10-29.  This Mac reads no xAI
+    /// quota locally, so the fleet fallback filled the xAI row with copies of
+    /// a period that ended days earlier, and the app printed them as live
+    /// readings.
+    ///
+    /// A copy whose period has ended and whose reading is no longer recent
+    /// carries no live information, so it is a dead copy.
+    func testACopyOfAPeriodThatEndedIsADeadCopy() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        // The live copy of the same pool:  observed a minute ago, with its
+        // reset still ahead.
+        XCTAssertFalse(QuotaFreshnessRule.isDeadCopy(observedAt: now.addingTimeInterval(-60),
+                                                      resetAt: now.addingTimeInterval(6 * 86_400),
+                                                      now: now))
+        // The dead copy:  the reset passed days ago and the reading is old.
+        XCTAssertTrue(QuotaFreshnessRule.isDeadCopy(observedAt: now.addingTimeInterval(-6 * 86_400),
+                                                     resetAt: now.addingTimeInterval(-86_400),
+                                                     now: now))
+        // A reading with no timestamp cannot be believed either, so a copy
+        // with no timestamp is a dead copy as well.
+        XCTAssertTrue(QuotaFreshnessRule.isDeadCopy(observedAt: nil,
+                                                     resetAt: now.addingTimeInterval(-86_400),
+                                                     now: now))
+        // A window with no reset clock has not expired, so it stays.
+        XCTAssertFalse(QuotaFreshnessRule.isDeadCopy(observedAt: now.addingTimeInterval(-6 * 86_400),
+                                                      resetAt: nil,
+                                                      now: now))
+        // A window still inside its period is a reading whatever its age.
+        XCTAssertFalse(QuotaFreshnessRule.isDeadCopy(observedAt: now.addingTimeInterval(-6 * 86_400),
+                                                      resetAt: now.addingTimeInterval(6 * 86_400),
+                                                      now: now))
+    }
+
+    /// A period that rolls over must not blank the row beside it:  a window
+    /// whose reset passed moments ago was observed moments ago as well, so it
+    /// is still a reading and it keeps its `due` caption.
+    func testAWindowWhoseResetJustPassedIsNotADeadCopy() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        XCTAssertFalse(QuotaFreshnessRule.isDeadCopy(observedAt: now.addingTimeInterval(-5),
+                                                      resetAt: now.addingTimeInterval(-1),
+                                                      now: now))
+    }
 }

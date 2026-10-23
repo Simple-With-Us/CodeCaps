@@ -126,6 +126,26 @@ final class WidgetTests: XCTestCase {
         )
     }
 
+    /// Owner 2026-10-23: the xAI row showed two 7-day windows at 0% with a
+    /// "due" caption while the live weekly allowance read 91% with a reset on
+    /// 2026-10-29.  The fleet copies of a period that ended days earlier
+    /// reached the widget's cache as well.
+    ///
+    /// The widget reads the same payload the app does, so it has to drop the
+    /// same copies, through the same shared rule.  The widget target compiles
+    /// `QuotaWindowVocabulary.swift` by path, so the rule is in scope here.
+    func testWidgetDropsACopyOfAPeriodThatEnded() throws {
+        let source = try readSource(at: Self.widgetPresentationURL)
+        XCTAssertTrue(
+            source.contains("QuotaFreshnessRule.isDeadCopy(observedAt: observed, resetAt: parsedReset, now: now)"),
+            "the widget must ask the shared rule about a window whose period already ended"
+        )
+        XCTAssertTrue(
+            source.contains("QuotaFreshnessRule.isDeadCopy(observedAt: parseDate(from: $0.occurredAt),"),
+            "the widget's Antigravity pool must ask the same rule"
+        )
+    }
+
     /// Only a fresh window may cap a plan in the widget.  A stale window said
     /// how the plan looked when the reading was taken.
     func testWidgetOnlyLetsAFreshWindowCapAPlan() throws {

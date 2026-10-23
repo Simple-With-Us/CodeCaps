@@ -228,6 +228,65 @@ final class QuotaCoreTests: XCTestCase {
         XCTAssertEqual(section.windows.map(\.remainingPercent), [5, 80, nil])
     }
 
+    /// Owner 2026-10-23: the xAI row showed two 7-day windows at 0% with a
+    /// "due" caption while Grok, Cursor and Grok Bot showed the same weekly
+    /// allowance at 91% with a reset on 2026-10-29.  This Mac reads no xAI
+    /// quota locally, so the fleet fallback filled the xAI row with copies of
+    /// a period that ended days earlier, and the section printed them as live
+    /// readings.
+    ///
+    /// The live copy of the same pool stays, and the dead copy goes.
+    func testAProviderSectionDropsACopyOfAPeriodThatEnded() {
+        let iso = ISO8601DateFormatter()
+        let live = QuotaWindow(
+            id: "xai:subscription",
+            provider: "xAI",
+            providerKey: "xai",
+            label: "7-day window",
+            remainingPercent: 91,
+            resetAt: iso.string(from: now.addingTimeInterval(6 * 86_400)),
+            window: "weekly",
+            occurredAt: iso.string(from: now.addingTimeInterval(-60))
+        )
+        let dead = QuotaWindow(
+            id: "xai-subscription",
+            provider: "xAI",
+            providerKey: "xai",
+            label: "7-day window",
+            remainingPercent: 0,
+            resetAt: iso.string(from: now.addingTimeInterval(-86_400)),
+            window: "weekly",
+            occurredAt: iso.string(from: now.addingTimeInterval(-6 * 86_400))
+        )
+        let section = QuotaResponse(generatedAt: "now", windows: [live, dead])
+            .platformSections(now: now).first(where: { $0.providerKey == "xai" })!
+        XCTAssertEqual(section.windows.count, 1,
+                       "a copy of a period that ended is not a reading, so it never becomes a row")
+        XCTAssertEqual(section.windows.first?.remainingPercent, 91,
+                       "the live weekly copy of the same pool stays")
+    }
+
+    /// A period that rolls over must not blank the row:  a window whose reset
+    /// passed moments ago was observed moments ago as well, so it stays and
+    /// keeps its `due` caption.
+    func testAProviderSectionKeepsAWindowWhoseResetJustPassed() {
+        let iso = ISO8601DateFormatter()
+        let rolling = QuotaWindow(
+            id: "xai:subscription",
+            provider: "xAI",
+            providerKey: "xai",
+            label: "5-hour window",
+            remainingPercent: 0,
+            resetAt: iso.string(from: now.addingTimeInterval(-1)),
+            window: "5h",
+            occurredAt: iso.string(from: now.addingTimeInterval(-5))
+        )
+        let section = QuotaResponse(generatedAt: "now", windows: [rolling])
+            .platformSections(now: now).first(where: { $0.providerKey == "xai" })!
+        XCTAssertEqual(section.windows.count, 1,
+                       "a window whose reset just passed was observed just now, so the row keeps it")
+    }
+
     func testEndpointRestrictions() {
         XCTAssertTrue(QuotaClient.isAllowedEndpoint(URL(string: "https://usage.example/api/quota-windows")!))
         XCTAssertTrue(QuotaClient.isAllowedEndpoint(URL(string: "http://localhost:3000/api/quota-windows")!))

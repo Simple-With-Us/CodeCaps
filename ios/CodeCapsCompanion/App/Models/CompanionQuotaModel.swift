@@ -1767,9 +1767,20 @@ public final class CompanionQuotaModel: ObservableObject {
         var primaryWindows: [CompanionWindowItem] = []
         var duplicateWindows: [CompanionWindowItem] = []
         var seenCadenceKeys: Set<String> = []
+        let now = Date()
 
         for w in rawWindows {
             let parsedReset = CompanionDateFormatter.date(from: w.resetAt)
+            let parsedReportedAt = Self.reportedAt(from: w)
+            // A copy of a period that ended before the last refresh carries no
+            // live reading, so it never becomes a row here either.  The rule
+            // is the shared one, the same the Mac and the widget ask, so the
+            // three surfaces cannot drift apart.
+            if QuotaFreshnessRule.isDeadCopy(observedAt: parsedReportedAt,
+                                             resetAt: parsedReset,
+                                             now: now) {
+                continue
+            }
             let cadence = Self.formatCadence(w.label, window: w.window, resetAt: parsedReset)
             let displayLabel = QuotaWindowVocabulary.windowLabel(
                 windowToken: w.window,
@@ -1795,7 +1806,6 @@ public final class CompanionQuotaModel: ObservableObject {
             let cadenceKey = effectiveQualifier.isEmpty
                 ? baseAllowanceKey
                 : "\(effectiveQualifier):\(baseAllowanceKey)"
-            let parsedReportedAt = Self.reportedAt(from: w)
 
             let isDuplicate = seenCadenceKeys.contains(cadenceKey)
 
@@ -1891,7 +1901,6 @@ public final class CompanionQuotaModel: ObservableObject {
         }
 
         // Nearest future reset time
-        let now = Date()
         let futureResets = primaryWindows.compactMap(\.resetAt).filter { $0 > now }
         let nearestReset = futureResets.min() ?? primaryWindows.compactMap(\.resetAt).min()
 
@@ -1925,6 +1934,15 @@ public final class CompanionQuotaModel: ObservableObject {
         defaultSubtitle: String,
         windows: [WireRawWindow]
     ) -> CompanionQuotaItem? {
+        guard !windows.isEmpty else { return nil }
+        let now = Date()
+        // A copy of a period that ended before the last refresh is not a
+        // reading, so it never joins the pool.  The rule is the shared one.
+        let windows = windows.filter {
+            !QuotaFreshnessRule.isDeadCopy(observedAt: Self.reportedAt(from: $0),
+                                           resetAt: CompanionDateFormatter.date(from: $0.resetAt),
+                                           now: now)
+        }
         guard !windows.isEmpty else { return nil }
 
         let itemId = "antigravity:\(poolKey)"
@@ -1985,7 +2003,6 @@ public final class CompanionQuotaModel: ObservableObject {
             weeklyExhausted: weeklyExhausted
         )
 
-        let now = Date()
         let nearestReset = childWindows.compactMap(\.resetAt).filter { $0 > now }.min()
             ?? childWindows.compactMap(\.resetAt).min()
 
