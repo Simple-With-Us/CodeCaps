@@ -23,6 +23,7 @@ enum PipMetrics {
     static let rowSpacing: CGFloat = 4
     static let meterSpacing: CGFloat = 3
     static let providerLogoSize: CGFloat = 14
+    static let titleFontSize: CGFloat = 11
     static let titleWidth: CGFloat = 150
     static let cadenceWidth: CGFloat = 18
     static let cadenceExpandedWidth: CGFloat = 40
@@ -34,6 +35,17 @@ enum PipMetrics {
     static let countdownCompactWidth: CGFloat = 28
     static let barMinWidth: CGFloat = 20
     static let barHeight: CGFloat = 4
+
+    /// Reserve only the width the pinned names use, up to the existing title
+    /// limit.  The same column drives both rendering and the responsive ladder.
+    @MainActor
+    static func titleColumnWidth(for titles: [String]) -> CGFloat {
+        let font = NSFont.systemFont(ofSize: titleFontSize, weight: .medium)
+        guard let widest = titles.map({ ($0 as NSString).size(withAttributes: [.font: font]).width }).max() else {
+            return titleWidth
+        }
+        return min(titleWidth, ceil(widest))
+    }
 
     // MARK: Floating controls
 
@@ -169,18 +181,15 @@ enum PipMetrics {
 
     /// The richest level whose content fits `width`, content width being what
     /// survives the panel's own padding.
-    static func detail(forWidth width: CGFloat) -> Detail {
+    static func detail(forWidth width: CGFloat, titleWidth: CGFloat = PipMetrics.titleWidth,
+                       hasFlame: Bool = false) -> Detail {
         let available = width - padding * 2
-        switch available {
-        case fullMinWidth...: return .full
-        case logoWithCountdownMinWidth...: return .logoWithFullCountdown
-        case logoWithCompactCountdownMinWidth...: return .logoWithCompactCountdown
-        case logoOnlyMinWidth...: return .logoOnly
-        case minimalMinWidth...: return .minimal
-        case singleMeterMinWidth...: return .singleMeter
-        case barsOnlyMinWidth...: return .barsOnly
-        default: return .singleBar
+        for detail in Detail.allCases where detail != .singleBar {
+            if available >= rowWidth(for: detail, hasFlame: hasFlame, titleWidth: titleWidth) {
+                return detail
+            }
         }
+        return .singleBar
     }
 
     // MARK: Horizontal rows
@@ -197,10 +206,11 @@ enum PipMetrics {
     /// row: the same number drives `fitSize` and `applyFit`, so leaving it out
     /// both clipped the icon in the vertical list and let it overflow the
     /// fixed frame in the horizontal one.
-    static func rowWidth(for detail: Detail, hasFlame: Bool = false) -> CGFloat {
+    static func rowWidth(for detail: Detail, hasFlame: Bool = false,
+                         titleWidth: CGFloat = PipMetrics.titleWidth) -> CGFloat {
         let base: CGFloat
         switch detail {
-        case .full: base = fullMinWidth
+        case .full: base = fullMinWidth - Self.titleWidth + titleWidth
         case .logoWithFullCountdown: base = logoWithCountdownMinWidth
         case .logoWithCompactCountdown: base = logoWithCompactCountdownMinWidth
         case .logoOnly: base = logoOnlyMinWidth
@@ -214,7 +224,8 @@ enum PipMetrics {
 
     /// The flame's own width plus its gap from the logo.  Fixed so the row
     /// arithmetic above can be exact rather than approximate.
-    static let flameWidth: CGFloat = rowSpacing + 10
+    static let flameIconWidth: CGFloat = 10
+    static let flameWidth: CGFloat = rowSpacing + flameIconWidth
 
     /// Whether the panel is wide enough to scroll its rows sideways.
     ///
@@ -227,13 +238,14 @@ enum PipMetrics {
     /// that matters is the row's own width at the detail level in force, which
     /// moves when any bar metric changes.  The result lands in his range: the
     /// squeeze point is around 222pt, and this is roughly 90pt past it.
-    static func rowsScrollHorizontally(forWidth width: CGFloat) -> Bool {
+    static func rowsScrollHorizontally(forWidth width: CGFloat, titleWidth: CGFloat = PipMetrics.titleWidth,
+                                      hasFlame: Bool = false) -> Bool {
         // The threshold uses the richest row width so it is monotonic in panel
         // width: deriving it from the detail level in force flipped the strip
         // on and off as a resize crossed the detail ladder (owner 2026-10-16:
         // "as you stretch it out it alternates between showing correctly or
         // not").
-        width >= padding * 2 + rowWidth(for: .full) + horizontalPeek
+        width >= padding * 2 + rowWidth(for: .full, hasFlame: hasFlame, titleWidth: titleWidth) + horizontalPeek
     }
 
     /// How many rows fit in `height` without clipping, never fewer than one.
@@ -591,7 +603,7 @@ struct PipWidgetView: View {
     private func horizontalRows(detail: PipMetrics.Detail) -> some View {
         // Wide enough for the widest pinned row, including a flame if any row
         // has one, so no row is clipped by the frame below.
-        let rowWidth = PipMetrics.rowWidth(for: detail, hasFlame: anyRowSpiking)
+        let rowWidth = PipMetrics.rowWidth(for: detail, hasFlame: anyRowSpiking, titleWidth: providerTitleWidth)
         return ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: PipMetrics.rowSpacing * 2) {
                 ForEach(targetRows) { row in
@@ -619,11 +631,18 @@ struct PipWidgetView: View {
     /// the whole strip: rows are a uniform width by design, so one spiking row
     /// widens them all rather than each row being a different size.
     private var anyRowSpiking: Bool {
-        targetRows.contains { model.hasActiveRunawayAnomaly(for: $0) }
+        targetRows.contains { row in
+            PipWidgetController.readingStatus(for: row, now: model.now, issue: model.issues[row.providerKey],
+                disabledSources: model.disabledSources) == nil && model.hasActiveRunawayAnomaly(for: row)
+        }
     }
 
     private var targetRows: [DisplaySection] {
         PipWidgetController.targetRows(for: model)
+    }
+
+    private var providerTitleWidth: CGFloat {
+        PipMetrics.titleColumnWidth(for: targetRows.map(\.title))
     }
 
     /// The chosen background, resolved once and passed down.
@@ -663,7 +682,8 @@ struct PipWidgetView: View {
 
     var body: some View {
         GeometryReader { geo in
-            let detail = PipMetrics.detail(forWidth: geo.size.width)
+            let detail = PipMetrics.detail(forWidth: geo.size.width, titleWidth: providerTitleWidth,
+                                           hasFlame: anyRowSpiking)
             ZStack(alignment: .topTrailing) {
                 VStack(spacing: 0) {
                     dragStrip
@@ -805,7 +825,8 @@ struct PipWidgetView: View {
         // that").  Wide enough for one full row and a peek of the next, the
         // rows become a horizontal strip, each keeping its own logo at its
         // left edge.
-        if overflows && PipMetrics.rowsScrollHorizontally(forWidth: width) {
+        if overflows && PipMetrics.rowsScrollHorizontally(forWidth: width, titleWidth: providerTitleWidth,
+                                                       hasFlame: anyRowSpiking) {
             horizontalRows(detail: detail)
         } else {
             verticalRows(detail: detail, visible: visible, overflows: overflows)
@@ -872,6 +893,7 @@ struct PipWidgetView: View {
                 if spiking {
                     Image(systemName: "flame.fill")
                         .font(.system(size: PipMetrics.providerLogoSize * 0.7))
+                        .frame(width: PipMetrics.flameIconWidth)
                         .foregroundStyle(Theme.warning)
                         .help("Usage spike detected on this platform")
                         .accessibilityLabel("Usage spike detected on this platform")
@@ -880,14 +902,11 @@ struct PipWidgetView: View {
 
             if detail.showsTitle {
                 Text(row.title)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(size: PipMetrics.titleFontSize, weight: .medium))
                     .foregroundStyle(background.ink)
                     .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .frame(width: PipMetrics.titleWidth, alignment: .leading)
+                    .frame(width: providerTitleWidth, alignment: .leading)
             }
-
-            if atCap == nil { Spacer(minLength: 0) }
 
             if let status {
                 Text(status)
