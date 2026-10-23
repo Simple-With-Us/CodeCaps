@@ -1576,6 +1576,9 @@ final class MonitorModel: ObservableObject {
             } catch { handoffError = "BotFleet quota sharing is unavailable." }
         }
         // Same candidate set as the refresh paths, so a Settings edit never drops the fleet rows.
+        // `publishWidgetSnapshot` holds the rule that drops the stale fleet copy
+        // of a provider this Mac reads itself, so this path publishes the same
+        // set as the others.
         publishWidgetSnapshot(candidates: response.windows + fleetWindowGroups.flatMap(\.windows))
         if syncEnabled && !windows.isEmpty {
             Task { [weak self] in _ = await self?.pushQuotasIfEnabled(windows: windows) }
@@ -2570,6 +2573,10 @@ final class MonitorModel: ObservableObject {
                 handoffError = "BotFleet quota sharing is unavailable."
             }
         }
+        // The widget publishes what the app's own rows publish: local rows
+        // plus the fleet rows.  `publishWidgetSnapshot` holds the rule that
+        // drops the stale fleet copy of a provider this Mac reads itself, so
+        // this path publishes the same set as the others.
         publishWidgetSnapshot(candidates: merged + split.groups.flatMap(\.windows))
         refreshRunawayUsageState(recordSamples: recordSamples)
         refreshExhaustionWarnings(windows: merged + split.groups.flatMap(\.windows), now: now)
