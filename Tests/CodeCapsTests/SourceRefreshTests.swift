@@ -192,9 +192,112 @@ final class SourceRefreshTests: XCTestCase {
         let windows = try XCTUnwrap(published.last)
         XCTAssertEqual(windows.filter { $0.canonicalProviderKey == "muse-assist" }.count, 1,
                        "a fleet-fallback window is already in the merged list and must not be written again")
-        XCTAssertEqual(windows.filter { $0.id == "other:anthropic:5h" }.count, 1,
-                       "a real other-Mac window is not the fallback duplicate and stays in the cache")
+        XCTAssertEqual(windows.filter { $0.id == "other:anthropic:5h" }.count, 0,
+                       "another Mac's copy of a provider this Mac reads itself is not published: "
+                           + "the widget showed that stale copy beside the local reading")
         XCTAssertEqual(windows.filter { $0.id == "anthropic:5h" }.count, 1)
+    }
+
+    /// Owner 2026-10-22: the desktop widget showed MiniMax at 62% and 86% while
+    /// the app showed 90% and 24%.  The widget's cache carried a fleet copy of
+    /// MiniMax beside the local window, and the widget took the first window
+    /// per cadence in payload order.
+    ///
+    /// The cache now carries what the app's own rows publish:  the local
+    /// reading, and the fleet reading only for a provider this Mac cannot read
+    /// itself.
+    func testTheWidgetSnapshotCarriesTheLocalReadingNotTheFleetCopy() async throws {
+        let settings = defaults()
+        settings.set(true, forKey: "serverEnabled")
+        let model = MonitorModel(defaults: settings, burnRateHistoryURL: historyURL())
+        model.skipsSnapshotIOForTesting = true
+        let iso = ISO8601DateFormatter().string(from: Date())
+        let local = QuotaWindow(id: "local-mac:minimax:general:interval", provider: "MiniMax",
+                                providerKey: "minimax", label: "5-hour window",
+                                remainingPercent: 90, window: "5h",
+                                occurredAt: iso, source: "MiniMax")
+        let fleetCopy = QuotaWindow(id: "other:minimax:general:interval", provider: "MiniMax",
+                                    providerKey: "minimax", label: "5-hour window",
+                                    remainingPercent: 62, window: "5h",
+                                    occurredAt: ISO8601DateFormatter().string(
+                                        from: Date().addingTimeInterval(-3 * 86_400)),
+                                    source: "CodeCaps",
+                                    producerInstanceId: "other-mac-instance", machine: "kitchen-mac")
+        model.localResultForTesting = LocalQuotaResult(windows: [local])
+        model.serverFetchForTesting = {
+            QuotaResponse(generatedAt: "test", windows: [fleetCopy])
+        }
+        var published: [[QuotaWindow]] = []
+        model.widgetWriteForTesting = { published.append($0) }
+
+        model.refresh()
+        await model.refreshTaskForTesting?.value
+
+        let windows = try XCTUnwrap(published.last)
+        let minimax = windows.filter { $0.canonicalProviderKey == "minimax" }
+        XCTAssertEqual(minimax.count, 1, "the widget's cache holds one MiniMax window")
+        XCTAssertEqual(minimax.first?.remainingPercent, 90,
+                       "the widget's cache holds the reading the app publishes")
+        XCTAssertEqual(model.response.windows.first { $0.canonicalProviderKey == "minimax" }?.remainingPercent, 90)
+    }
+
+    /// Sentry, on #310:  the plan-metadata path republished the snapshot with
+    /// unfiltered fleet windows, so a Settings edit put the stale copy of a
+    /// provider this Mac reads itself back into the widget's cache.
+    func testThePlanMetadataPathDoesNotRepublishTheStaleFleetCopy() async throws {
+        let settings = defaults()
+        settings.set(true, forKey: "serverEnabled")
+        let model = MonitorModel(defaults: settings, burnRateHistoryURL: historyURL())
+        model.skipsSnapshotIOForTesting = true
+        let iso = ISO8601DateFormatter().string(from: Date())
+        let local = QuotaWindow(id: "local-mac:anthropic:5h", provider: "Claude", providerKey: "anthropic",
+                                label: "5h", remainingPercent: 80, occurredAt: iso, source: "Claude")
+        let fleetCopy = QuotaWindow(id: "other:anthropic:5h", provider: "Claude", providerKey: "anthropic",
+                                    label: "5h", remainingPercent: 22, occurredAt: iso, source: "CodeCaps",
+                                    producerInstanceId: "other-mac-instance", machine: "kitchen-mac")
+        model.localResultForTesting = LocalQuotaResult(windows: [local])
+        model.serverFetchForTesting = {
+            QuotaResponse(generatedAt: "test", windows: [fleetCopy])
+        }
+        var published: [[QuotaWindow]] = []
+        model.widgetWriteForTesting = { published.append($0) }
+
+        model.refresh()
+        await model.refreshTaskForTesting?.value
+
+        // A Settings edit:  the plan metadata export republishes the snapshot.
+        model.setCustomInfo(for: "anthropic", info: PlatformCustomInfo(customSubtitle: "Team"))
+        try await Task.sleep(nanoseconds: 700_000_000)
+
+        let windows = try XCTUnwrap(published.last)
+        XCTAssertEqual(windows.filter { $0.id == "other:anthropic:5h" }.count, 0,
+                       "a Settings edit must not put another Mac's stale copy of a provider this Mac reads itself back")
+        XCTAssertEqual(windows.filter { $0.id == "local-mac:anthropic:5h" }.count, 1,
+                       "the widget's cache holds this Mac's own reading")
+    }
+
+    /// The rule that keeps a stale fleet copy out of the widget's cache lives
+    /// inside the snapshot publisher, not at its call sites.
+    ///
+    /// Sentry, on #310:  two of the three call sites still passed unfiltered
+    /// fleet windows, so a Settings edit republished the stale copy.  The rule
+    /// moved into the publisher, so a caller that forgets it cannot put the
+    /// stale copy back.
+    func testTheStaleFleetCopyRuleLivesInsideTheSnapshotPublisher() throws {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()  // Tests/CodeCapsTests
+            .deletingLastPathComponent()  // Tests
+            .deletingLastPathComponent()  // repo root
+            .appendingPathComponent("Sources/CodeCaps/MonitorModel.swift")
+        let source = try String(contentsOf: url, encoding: .utf8)
+        let start = try XCTUnwrap(source.range(of: "private func publishWidgetSnapshot"))
+        let rest = source[start.upperBound...]
+        let end = try XCTUnwrap(rest.range(of: "\n    private func "))
+        let body = rest[rest.startIndex..<end.lowerBound]
+        XCTAssertTrue(body.contains("localProviders"),
+                      "the publisher drops a fleet copy of a provider this Mac reads itself")
+        XCTAssertTrue(body.contains("isOwnPush"),
+                      "the publisher keeps this Mac's own window")
     }
 
     func testNewerCodexSessionPreservesSameAccountProviderDetails() throws {

@@ -1477,43 +1477,42 @@ func glanceMeterCaption(_ snapshot: QuotaWindowSnapshot) -> String {
     if isMuseAssistExtra(snapshot) {
         return "+"
     }
-    // MiniMax has NO 4hr window: its coding plan is 5 hours.
-    let key = snapshot.window.canonicalProviderKey
-    if key == "minimax", !snapshot.window.isSupplementaryVideoQuota {
-        let tok = (snapshot.window.window ?? "").lowercased()
-        let lbl = snapshot.window.label.lowercased()
-        if tok.contains("4h") || tok.contains("4-hour") || lbl.contains("4h") || lbl.contains("4-hour") || lbl.contains("4 hour") {
-            return "5h"
-        }
+    // The shared resolver, the same one the elapsed-time marker beside this
+    // caption asks, so the two cannot read one window as two different periods.
+    let period = glanceWindowPeriod(snapshot)
+    switch period {
+    case .fixed(let seconds): return glanceDurationTag(seconds)
+    case .calendarMonths: return "1m"
+    case nil: break
     }
-    let token = (snapshot.window.window ?? "")
-        .lowercased()
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-    if let seconds = glanceDurationSeconds(token) {
-        return glanceDurationTag(seconds)
-    }
-    if glanceIsMonthly(snapshot) { return "1m" }
-    let named = token + " " + snapshot.window.label.lowercased()
-    if named.contains("weekly") || named.contains("7-day") { return "7d" }
-    if named.contains("5-hour") || named.contains("5 hour") { return "5h" }
-    if named.contains("daily") { return "24h" }
+    let named = ((snapshot.window.window ?? "") + " " + snapshot.window.label).lowercased()
     if named.contains("plan") || named.contains("quota") { return "Plan" }
     return "Quota"
+}
+
+/// The period one window covers, by the shared resolver.
+///
+/// The resolver lives in `ResetAlarmCadence`, which the Mac app, the iOS app
+/// and the widget all compile, so the caption here, the marker beside it, the
+/// phone and the widget all read the same window the same way.
+func glanceWindowPeriod(_ snapshot: QuotaWindowSnapshot) -> ResetAlarmCadence.Period? {
+    ResetAlarmCadence.resolve(
+        token: snapshot.window.window,
+        label: snapshot.window.label,
+        providerKey: snapshot.window.canonicalProviderKey,
+        isSupplementaryVideoQuota: snapshot.window.isSupplementaryVideoQuota
+    )
 }
 
 /// Whether a window resets once a month: a monthly token or label, a billing
 /// cycle, a 28-31 day duration, or Cursor's included plan, which resets with
 /// Cursor's monthly billing cycle and carries no cadence of its own.
 func glanceIsMonthly(_ snapshot: QuotaWindowSnapshot) -> Bool {
-    let token = (snapshot.window.window ?? "")
-        .lowercased()
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-    if let seconds = glanceDurationSeconds(token) {
-        return (27 * 86_400...31 * 86_400).contains(seconds)
+    switch glanceWindowPeriod(snapshot) {
+    case .calendarMonths: return true
+    case .fixed(let seconds): return (27 * 86_400...31 * 86_400).contains(seconds)
+    case nil: return false
     }
-    let named = token + " " + snapshot.window.label.lowercased()
-    if named.contains("month") || named.contains("billing") || named.contains("cycle") { return true }
-    return snapshot.window.canonicalProviderKey == "cursor" && named.contains("plan")
 }
 
 /// Reads a duration token such as "5h", "300m", "168h" or "1w" into seconds.
@@ -2033,16 +2032,10 @@ private func glanceModelName(_ name: String) -> String {
 /// How long a window's period is, for putting a group's shorter cadence in the
 /// first column.  Unknown lengths sort last.
 private func glanceWindowLength(_ snapshot: QuotaWindowSnapshot, now: Date) -> TimeInterval {
-    let token = (snapshot.window.window ?? "")
-        .lowercased()
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-    if let seconds = glanceDurationSeconds(token) { return seconds }
-    if glanceIsMonthly(snapshot) { return 30 * 86_400 }
-    switch glanceMeterCaption(snapshot) {
-    case "5h": return 5 * 3_600
-    case "24h": return 86_400
-    case "7d": return 7 * 86_400
-    default: break
+    switch glanceWindowPeriod(snapshot) {
+    case .fixed(let seconds): return seconds
+    case .calendarMonths: return 30 * 86_400
+    case nil: break
     }
     if let reset = snapshot.resetAt, reset > now { return reset.timeIntervalSince(now) }
     return .greatestFiniteMagnitude

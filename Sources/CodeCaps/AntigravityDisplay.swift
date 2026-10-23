@@ -106,6 +106,7 @@ struct DisplaySection: Identifiable, Equatable {
                 id: $0.window.id,
                 remainingPercent: $0.remainingPercent,
                 resetAt: $0.resetAt,
+                isFresh: $0.isFresh,
                 isMasked: isMasked($0),
                 isSupplementaryVideoQuota: $0.window.isSupplementaryVideoQuota,
                 isScopedPoolAllowance: $0.window.isScopedPoolAllowance,

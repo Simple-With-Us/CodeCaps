@@ -1576,6 +1576,9 @@ final class MonitorModel: ObservableObject {
             } catch { handoffError = "BotFleet quota sharing is unavailable." }
         }
         // Same candidate set as the refresh paths, so a Settings edit never drops the fleet rows.
+        // `publishWidgetSnapshot` holds the rule that drops the stale fleet copy
+        // of a provider this Mac reads itself, so this path publishes the same
+        // set as the others.
         publishWidgetSnapshot(candidates: response.windows + fleetWindowGroups.flatMap(\.windows))
         if syncEnabled && !windows.isEmpty {
             Task { [weak self] in _ = await self?.pushQuotasIfEnabled(windows: windows) }
@@ -2400,6 +2403,15 @@ final class MonitorModel: ObservableObject {
             self.originByProvider = origins
             if newServer != nil { self.lastPullTime = self.now }
             self.response = QuotaResponse(generatedAt: ISO8601DateFormatter().string(from: self.now), windows: merged)
+            // The widget publishes what the app's own rows publish.  The fleet
+            // groups carry a second copy of every provider, and for a provider
+            // this Mac reads itself that copy is the stale one:  it is days old
+            // and reads zero, so the widget showed a fleet reading beside the
+            // app's live one and read every provider as spent (owner,
+            // Oct-22-2026).
+            //
+            // `publishWidgetSnapshot` holds the rule that drops it, so all
+            // three call sites publish the same set.
             self.publishWidgetSnapshot(candidates: merged + split.groups.flatMap(\.windows))
             self.refreshRunawayUsageState(recordSamples: local != nil)
             self.refreshExhaustionWarnings(windows: merged + split.groups.flatMap(\.windows), now: self.now)
@@ -2561,6 +2573,10 @@ final class MonitorModel: ObservableObject {
                 handoffError = "BotFleet quota sharing is unavailable."
             }
         }
+        // The widget publishes what the app's own rows publish: local rows
+        // plus the fleet rows.  `publishWidgetSnapshot` holds the rule that
+        // drops the stale fleet copy of a provider this Mac reads itself, so
+        // this path publishes the same set as the others.
         publishWidgetSnapshot(candidates: merged + split.groups.flatMap(\.windows))
         refreshRunawayUsageState(recordSamples: recordSamples)
         refreshExhaustionWarnings(windows: merged + split.groups.flatMap(\.windows), now: now)
@@ -2697,12 +2713,28 @@ final class MonitorModel: ObservableObject {
     }
 
     private func publishWidgetSnapshot(candidates: [QuotaWindow]) {
+        // The snapshot publishes what the app's own rows publish.  Every fleet
+        // group carries a second copy of the providers, and for a provider this
+        // Mac reads itself that copy is the stale one:  it is days old and
+        // reads zero, so the widget showed a fleet reading beside the app's
+        // live one and read every provider as spent (owner, Oct-22-2026).
+        //
+        // The rule lives here rather than at the call sites, so a caller that
+        // forgets it cannot publish the stale copy again.
+        let localProviders = Set(self.localWindows.map(\.canonicalProviderKey))
+        let publishable = candidates.filter { candidate in
+            guard localProviders.contains(candidate.canonicalProviderKey) else { return true }
+            // This Mac reads the provider, so only its own window may be
+            // published:  never somebody else's copy of the same provider.
+            return self.localWindows.contains(candidate)
+                || FleetOrigin.isOwnPush(candidate, localWindows: self.localWindows)
+        }
         // Fleet-fallback windows already sit in `merged`, and the caller also
         // appends every fleet group.  The widget cache stores this array
         // verbatim, so an equal window is published once.
         var unique: [QuotaWindow] = []
-        unique.reserveCapacity(candidates.count)
-        for window in candidates where !unique.contains(window) {
+        unique.reserveCapacity(publishable.count)
+        for window in publishable where !unique.contains(window) {
             unique.append(window)
         }
         let visibleProviderKeys = Set(QuotaResponse(generatedAt: "", windows: unique)

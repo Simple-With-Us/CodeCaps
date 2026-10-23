@@ -558,6 +558,53 @@ public enum QuotaWindowVocabulary {
     }
 }
 
+/// The one rule for "is this reading recent enough to believe", shared by
+/// every surface.
+///
+/// The Mac's dashboard number filtered on freshness while the cap rule beside
+/// it did not, so one account could read 96% in the sidebar and "7-day cap" in
+/// the row next to it:  a stale window that reported an exhausted allowance
+/// days ago still bound the cap (owner, Oct-22-2026).  The widget believed
+/// stale windows for the same reason, and read every provider as spent.
+///
+/// The rule lives here, in plain Foundation, because this file is compiled
+/// into the Mac app, the iOS app and the widget, and a rule the surfaces
+/// share cannot drift apart.
+public enum QuotaFreshnessRule {
+    /// How old a reading may be before it is stale.
+    ///
+    /// Half an hour is the Mac's own long standing answer, and the widget's
+    /// copy of it was the same number, so one threshold covers every surface.
+    public static let staleAfter: TimeInterval = 30 * 60
+
+    /// How far ahead of the clock a reading may sit before it is not believed
+    /// either:  a timestamp from the future says nothing about how old the
+    /// reading is.
+    public static let maximumFutureSkew: TimeInterval = 5 * 60
+
+    /// Whether a reading observed at `observedAt` is recent enough to believe
+    /// at `now`.
+    ///
+    /// A reading with no timestamp is never fresh:  there is nothing to date
+    /// it by, so nothing says it is current.
+    public static func isReadingRecent(observedAt: Date?, now: Date) -> Bool {
+        guard let observedAt else { return false }
+        let age = now.timeIntervalSince(observedAt)
+        return age < staleAfter && age >= -maximumFutureSkew
+    }
+
+    /// Whether a window is fresh:  its reading is recent and its period has
+    /// not already run out.
+    ///
+    /// A window whose reset has passed is waiting for a fresh reading, so its
+    /// old number says nothing about the plan now, and it cannot bind a cap.
+    public static func isFresh(observedAt: Date?, resetAt: Date?, now: Date) -> Bool {
+        guard isReadingRecent(observedAt: observedAt, now: now) else { return false }
+        if let resetAt, resetAt <= now { return false }
+        return true
+    }
+}
+
 /// The one rule for "may this window stand in for a plan hitting its cap",
 /// shared by the Mac and the phone.
 ///
@@ -593,6 +640,15 @@ public enum QuotaCapRule {
         public let id: String
         public let remainingPercent: Double?
         public let resetAt: Date?
+        /// Whether the reading is recent enough to believe, by
+        /// `QuotaFreshnessRule`.  A stale window never binds a cap:  an
+        /// exhausted allowance that was reported days ago says nothing about
+        /// the plan now, and believing it put a "7-day cap" caption beside a
+        /// sidebar that read 96% (owner, Oct-22-2026).
+        ///
+        /// There is no default, so a caller that has not stated the freshness
+        /// of its window cannot compile.
+        public let isFresh: Bool
         /// A reading that must not be believed, which only the Antigravity
         /// pool grouper knows about.
         public let isMasked: Bool
@@ -604,6 +660,7 @@ public enum QuotaCapRule {
             id: String,
             remainingPercent: Double?,
             resetAt: Date?,
+            isFresh: Bool,
             isMasked: Bool = false,
             isSupplementaryVideoQuota: Bool = false,
             isScopedPoolAllowance: Bool = false,
@@ -612,6 +669,7 @@ public enum QuotaCapRule {
             self.id = id
             self.remainingPercent = remainingPercent
             self.resetAt = resetAt
+            self.isFresh = isFresh
             self.isMasked = isMasked
             self.isSupplementaryVideoQuota = isSupplementaryVideoQuota
             self.isScopedPoolAllowance = isScopedPoolAllowance
@@ -630,6 +688,8 @@ public enum QuotaCapRule {
     /// - A window with no reading reports no cap.  When there is a reading it
     ///   decides, so a provider's exhausted word cannot override a reading that
     ///   says there is room left.
+    /// - A stale window reports no cap either.  Its reading says how the plan
+    ///   looked when it was taken, not how it looks now.
     /// - An allowance that sits beside the subscription rather than inside it
     ///   is skipped, and so is a masked reading.
     /// - A primary window beats a sub-model window, so a plan with a window of
@@ -649,7 +709,8 @@ public enum QuotaCapRule {
     /// section carries two snapshots with the same id.
     public static func bindingWindowIndex(in windows: [WindowFacts]) -> Int? {
         let eligible = windows.indices.filter {
-            !windows[$0].isMasked
+            windows[$0].isFresh
+                && !windows[$0].isMasked
                 && !windows[$0].isSupplementaryVideoQuota
                 && !windows[$0].isScopedPoolAllowance
                 && windows[$0].remainingPercent != nil

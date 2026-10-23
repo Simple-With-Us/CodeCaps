@@ -28,6 +28,7 @@ final class AtCapTests: XCTestCase {
         token: String? = nil,
         remaining: Double? = 50,
         resetIn: TimeInterval? = nil,
+        observedIn: TimeInterval = 0,
         provider: String = "anthropic",
         model: String? = nil
     ) -> QuotaWindowSnapshot {
@@ -43,7 +44,7 @@ final class AtCapTests: XCTestCase {
             remainingUnknown: remaining == nil,
             resetAt: resetIn.map { iso.string(from: now.addingTimeInterval($0)) },
             window: token,
-            occurredAt: iso.string(from: now),
+            occurredAt: iso.string(from: now.addingTimeInterval(observedIn)),
             source: provider), now: now)
     }
 
@@ -135,6 +136,25 @@ final class AtCapTests: XCTestCase {
         ])
         XCTAssertFalse(row.isAtCap)
         XCTAssertNil(row.atCapWindow)
+    }
+
+    /// Owner 2026-10-22, with a screenshot of the xAI row:  it read "7-day cap"
+    /// while the sidebar beside it read 96%.
+    ///
+    /// The section carried a fresh 96% window beside two windows that reported
+    /// an exhausted allowance days ago.  The sidebar's number filtered on
+    /// freshness and the cap rule beside it did not, so one account read 96% in
+    /// one place and "7-day cap" in the other.
+    func testAStaleExhaustedWindowDoesNotCapTheRow() {
+        let row = makeRow([
+            makeWindow(id: "fresh", label: "7-day window", token: "weekly", remaining: 96, resetIn: 5 * day),
+            makeWindow(id: "stale", label: "1w window", token: "1w", remaining: 0,
+                       resetIn: -hour, observedIn: -5 * day),
+        ])
+        XCTAssertFalse(row.isAtCap, "a stale window must not cap the row")
+        XCTAssertNil(row.atCapWindow)
+        XCTAssertEqual(row.section.minimumRemainingPercent, 96,
+                       "the sidebar's number reads the fresh window")
     }
 
     func testAMaskedWindowIsNotEvidenceOfACap() {
