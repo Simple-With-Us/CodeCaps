@@ -17,8 +17,12 @@ executes it in a child Swift process against an isolated preferences suite.
 It checks first insertion, duplicate insertion, overflow retention, reading
 the history through a new instance, and clearing the history.  A preferences
 exception fails the child process without killing the package test runner.
-The companion model is outside the Mac package target, so this executes its
-persistence code without copying the implementation into a test double.
+The companion model is outside the Mac package target, so the test extracts
+the property source and recompiles it inside a synthetic `History` type.
+The model type itself is not compiled or exercised by this regression test.
+The child uses `BoundedQuotaProcess` with null input, bounded output, a
+120-second deadline and termination escalation.  Source extraction skips a
+checkout without the iOS source and reports explicit marker diagnostics.
 
 Local validation: `git diff --check`.  Swift and Xcode are unavailable on
 this Linux host; package tests and iOS compile/launch validation run through
