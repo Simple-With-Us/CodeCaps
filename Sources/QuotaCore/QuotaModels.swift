@@ -721,15 +721,6 @@ public extension QuotaResponse {
         let reports = (key == "google-antigravity"
             ? AntigravityQuotaGroups.normalize(grouped[key] ?? [], includeMissing: true)
             : grouped[key] ?? [])
-            // A copy of a period that ended before the last refresh is not a
-            // reading, so it never reaches a row.  The rule is the shared one
-            // in the vocabulary file, so the widget and the phone ask the same
-            // question this asks.
-            .filter {
-                !QuotaFreshnessRule.isDeadCopy(observedAt: $0.occurredDate,
-                                               resetAt: $0.resetDate,
-                                               now: now)
-            }
         let snapshots = reports.map { QuotaWindowSnapshot(window: $0, now: now) }
             .sorted { left, right in
                 if key == "google-antigravity" { return left.window.id < right.window.id }

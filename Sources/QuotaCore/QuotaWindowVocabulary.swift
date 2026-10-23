@@ -556,6 +556,42 @@ public enum QuotaWindowVocabulary {
         let token = (windowToken ?? "").lowercased()
         return lower.contains("weekly") || token.contains("weekly") || lower.contains("free")
     }
+
+    // MARK: - Whose reading is this
+
+    /// The id prefix a window carries when it is this device's own reading.
+    /// The fleet copy of a Mac reading keeps the prefix, so every surface can
+    /// tell an own reading from a copy of another machine's.
+    public static let localDeviceWindowPrefix = "local-mac:"
+
+    /// The producer id this app stamps its own windows with.
+    public static let localProducerId = "codecaps"
+
+    /// The producer ids this app and its legacy names stamp on their own
+    /// windows.
+    public static let localProducerIds = [localProducerId, "agent-bar", "local-mac"]
+
+    /// Whether a window is this device's own reading rather than a copy of
+    /// another machine's.
+    ///
+    /// A window that names a producer instance or a machine belongs to
+    /// somebody, so it is a copy.  A window that names neither, and whose
+    /// source is this app's own producer, is this device's own push coming
+    /// back from the server.
+    public static func isOwnDeviceWindow(
+        id: String,
+        source: String?,
+        machine: String?,
+        producerInstanceId: String?
+    ) -> Bool {
+        if id.hasPrefix(localDeviceWindowPrefix) { return true }
+        let instance = (producerInstanceId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !instance.isEmpty { return false }
+        let named = (machine ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !named.isEmpty { return false }
+        let src = (source ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return localProducerIds.contains(src)
+    }
 }
 
 /// The one rule for "is this reading recent enough to believe", shared by
@@ -624,8 +660,14 @@ public enum QuotaFreshnessRule {
     /// row beside it.  A window with no reset clock has not expired, so it
     /// stays too, and a window that is still inside its period is a reading
     /// whatever its age.
+    ///
+    /// A window with no observation is unverified, not dead.  The Mac's
+    /// decoder maps an absent `occurredAt` to "", and the phone's wire window
+    /// may carry no timestamp either, so a payload without one must keep its
+    /// row:  an unverified reading is not the same thing as a reading of a
+    /// period that has ended.
     public static func isDeadCopy(observedAt: Date?, resetAt: Date?, now: Date) -> Bool {
-        guard let resetAt, resetAt <= now else { return false }
+        guard let observedAt, let resetAt, resetAt <= now else { return false }
         return !isReadingRecent(observedAt: observedAt, now: now)
     }
 }

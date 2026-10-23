@@ -789,15 +789,28 @@ final class CompanionModelTests: XCTestCase {
     /// The phone pulls the same fleet payload, so it has to drop the same
     /// copies.  Its model is not in the macOS test target, so the rule is
     /// pinned here by reading the source.
+    ///
+    /// The phone asks the shared rule with the reading's own observation time,
+    /// the same field the Mac and the widget ask with, so the same payload
+    /// cannot read live on the phone and stale on the Mac.  It only judges
+    /// copies:  this Mac's own reading keeps its row.
     func testTheCompanionDropsACopyOfAPeriodThatEnded() throws {
         let source = try readCompanionModelSource()
         XCTAssertTrue(
-            source.contains("QuotaFreshnessRule.isDeadCopy(observedAt: parsedReportedAt,"),
+            source.contains("QuotaFreshnessRule.isDeadCopy(observedAt: CompanionDateFormatter.date(from: w.occurredAt),"),
             "the phone must ask the shared rule about a window whose period already ended"
         )
+        XCTAssertFalse(
+            source.contains("QuotaFreshnessRule.isDeadCopy(observedAt: parsedReportedAt,"),
+            "the phone must ask the shared rule with the reading's own observation time, not the feed's reported time"
+        )
+        XCTAssertFalse(
+            source.contains("QuotaFreshnessRule.isDeadCopy(observedAt: Self.reportedAt(from:"),
+            "the phone's Antigravity pool must ask the shared rule with the reading's own observation time too"
+        )
         XCTAssertTrue(
-            source.contains("QuotaFreshnessRule.isDeadCopy(observedAt: Self.reportedAt(from: $0),"),
-            "the phone's Antigravity pool must ask the same rule"
+            source.contains("QuotaWindowVocabulary.isOwnDeviceWindow("),
+            "the phone must only judge copies, so this Mac's own reading keeps its row"
         )
         XCTAssertFalse(
             source.contains("private static let staleAfter"),

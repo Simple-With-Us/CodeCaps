@@ -272,11 +272,14 @@ final class QuotaWindowVocabularyTests: XCTestCase {
         XCTAssertTrue(QuotaFreshnessRule.isDeadCopy(observedAt: now.addingTimeInterval(-6 * 86_400),
                                                      resetAt: now.addingTimeInterval(-86_400),
                                                      now: now))
-        // A reading with no timestamp cannot be believed either, so a copy
-        // with no timestamp is a dead copy as well.
-        XCTAssertTrue(QuotaFreshnessRule.isDeadCopy(observedAt: nil,
-                                                     resetAt: now.addingTimeInterval(-86_400),
-                                                     now: now))
+        // A reading with no timestamp cannot be believed, but it is not a dead
+        // copy either:  a window with no observation is unverified, and an
+        // unverified window is never thrown away.  The Mac's decoder maps an
+        // absent `occurredAt` to "", so a payload without a timestamp must keep
+        // its row.
+        XCTAssertFalse(QuotaFreshnessRule.isDeadCopy(observedAt: nil,
+                                                      resetAt: now.addingTimeInterval(-86_400),
+                                                      now: now))
         // A window with no reset clock has not expired, so it stays.
         XCTAssertFalse(QuotaFreshnessRule.isDeadCopy(observedAt: now.addingTimeInterval(-6 * 86_400),
                                                       resetAt: nil,
@@ -295,5 +298,44 @@ final class QuotaWindowVocabularyTests: XCTestCase {
         XCTAssertFalse(QuotaFreshnessRule.isDeadCopy(observedAt: now.addingTimeInterval(-5),
                                                       resetAt: now.addingTimeInterval(-1),
                                                       now: now))
+    }
+
+    // MARK: - Whose reading is this
+
+    /// The one test every surface asks to tell this device's own reading from
+    /// a copy of another machine's.  The phone and the widget get their
+    /// windows straight from the server, so they have no other way to ask.
+    func testTheOwnDeviceWindowTestTellsAnOwnReadingFromACopy() {
+        // The prefix this Mac's own windows carry.
+        XCTAssertTrue(QuotaWindowVocabulary.isOwnDeviceWindow(id: "local-mac:xai:subscription",
+                                                              source: nil,
+                                                              machine: nil,
+                                                              producerInstanceId: nil),
+                      "a window this Mac read is its own reading")
+        // A window that names a producer instance belongs to somebody.
+        XCTAssertFalse(QuotaWindowVocabulary.isOwnDeviceWindow(id: "xai:subscription",
+                                                               source: "CodeCaps",
+                                                               machine: nil,
+                                                               producerInstanceId: "other-mac"),
+                       "a window that names a producer instance is a copy")
+        // A window that names a machine belongs to somebody.
+        XCTAssertFalse(QuotaWindowVocabulary.isOwnDeviceWindow(id: "xai:subscription",
+                                                               source: "CodeCaps",
+                                                               machine: "Other Mac",
+                                                               producerInstanceId: nil),
+                       "a window that names a machine is a copy")
+        // A window that names neither and comes from this app is this device's
+        // own push coming back from the server.
+        XCTAssertTrue(QuotaWindowVocabulary.isOwnDeviceWindow(id: "xai:subscription",
+                                                             source: "CodeCaps",
+                                                             machine: nil,
+                                                             producerInstanceId: nil),
+                      "a window that names neither and comes from this app is its own push")
+        // Somebody else's reader is a copy.
+        XCTAssertFalse(QuotaWindowVocabulary.isOwnDeviceWindow(id: "xai:subscription",
+                                                               source: "antigravity-usage",
+                                                               machine: nil,
+                                                               producerInstanceId: nil),
+                       "a window from another reader is a copy")
     }
 }

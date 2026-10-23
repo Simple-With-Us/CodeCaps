@@ -1769,18 +1769,27 @@ public final class CompanionQuotaModel: ObservableObject {
         var seenCadenceKeys: Set<String> = []
         let now = Date()
 
-        for w in rawWindows {
+        // A copy of a period that ended before the last refresh carries no
+        // live reading, so it never becomes a row here either.  The rule is
+        // the shared one, the same the Mac and the widget ask, so the three
+        // surfaces cannot drift apart, and it is asked with the reading's own
+        // observation time.  It only judges copies:  this Mac's own reading
+        // keeps its row, so an expired one greys out instead of vanishing.
+        let liveWindows = rawWindows.filter { w in
+            if QuotaWindowVocabulary.isOwnDeviceWindow(id: w.id,
+                                                        source: w.source,
+                                                        machine: w.machine,
+                                                        producerInstanceId: w.producerInstanceId) {
+                return true
+            }
+            return !QuotaFreshnessRule.isDeadCopy(observedAt: CompanionDateFormatter.date(from: w.occurredAt),
+                                                  resetAt: CompanionDateFormatter.date(from: w.resetAt),
+                                                  now: now)
+        }
+
+        for w in liveWindows {
             let parsedReset = CompanionDateFormatter.date(from: w.resetAt)
             let parsedReportedAt = Self.reportedAt(from: w)
-            // A copy of a period that ended before the last refresh carries no
-            // live reading, so it never becomes a row here either.  The rule
-            // is the shared one, the same the Mac and the widget ask, so the
-            // three surfaces cannot drift apart.
-            if QuotaFreshnessRule.isDeadCopy(observedAt: parsedReportedAt,
-                                             resetAt: parsedReset,
-                                             now: now) {
-                continue
-            }
             let cadence = Self.formatCadence(w.label, window: w.window, resetAt: parsedReset)
             let displayLabel = QuotaWindowVocabulary.windowLabel(
                 windowToken: w.window,
@@ -1937,12 +1946,24 @@ public final class CompanionQuotaModel: ObservableObject {
         guard !windows.isEmpty else { return nil }
         let now = Date()
         // A copy of a period that ended before the last refresh is not a
-        // reading, so it never joins the pool.  The rule is the shared one.
-        let windows = windows.filter {
-            !QuotaFreshnessRule.isDeadCopy(observedAt: Self.reportedAt(from: $0),
-                                           resetAt: CompanionDateFormatter.date(from: $0.resetAt),
-                                           now: now)
+        // reading, so it never joins the pool.  The rule is the shared one,
+        // asked with the reading's own observation time, and it only judges
+        // copies:  this Mac's own reading keeps the pool alive, so an expired
+        // one greys out instead of vanishing.
+        let liveWindows = windows.filter { w in
+            if QuotaWindowVocabulary.isOwnDeviceWindow(id: w.id,
+                                                        source: w.source,
+                                                        machine: w.machine,
+                                                        producerInstanceId: w.producerInstanceId) {
+                return true
+            }
+            return !QuotaFreshnessRule.isDeadCopy(observedAt: CompanionDateFormatter.date(from: w.occurredAt),
+                                                  resetAt: CompanionDateFormatter.date(from: w.resetAt),
+                                                  now: now)
         }
+        // A pool whose copies have all expired still renders:  it keeps the
+        // windows it had, so the row survives rather than disappearing.
+        let windows = liveWindows.isEmpty ? windows : liveWindows
         guard !windows.isEmpty else { return nil }
 
         let itemId = "antigravity:\(poolKey)"

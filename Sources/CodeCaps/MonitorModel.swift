@@ -2377,7 +2377,13 @@ final class MonitorModel: ObservableObject {
             // rendered under FLEET, grouped by its origin — the previous
             // "supplemental" filter dropped all of them on a Mac that reads
             // every provider locally, so a working pull showed nothing at all.
-            let split = FleetOrigin.split(self.serverWindows, localWindows: self.localWindows)
+            //
+            // The split is where another machine's window enters this Mac's
+            // data, so it is where the shared dead-copy rule is asked:  a copy
+            // of a period that ended before the last refresh is not a reading,
+            // and it is dropped here rather than in a section builder, so this
+            // Mac's own expired reading survives and greys out.
+            let split = FleetOrigin.split(self.serverWindows, localWindows: self.localWindows, now: self.now)
             let ownPush = split.ownPush
             self.fleetWindowGroups = split.groups.map {
                 FleetWindowGroup(id: $0.id, title: $0.title, windows: $0.windows)
@@ -2540,7 +2546,7 @@ final class MonitorModel: ObservableObject {
         localWindows = AntigravityQuotaGroups.normalize(local?.windows ?? [])
         hasCurrentLocalRead = local != nil
         let localProviders = Set(localWindows.map(\.canonicalProviderKey))
-        let split = FleetOrigin.split(serverWindows)
+        let split = FleetOrigin.split(serverWindows, now: now)
         let ownPush = split.ownPush
         let adopted = ownPush.filter { !localProviders.contains($0.canonicalProviderKey) }
         let adoptedKeys = Set(adopted.map(\.canonicalProviderKey))
@@ -2712,6 +2718,18 @@ final class MonitorModel: ObservableObject {
             .label ?? providerKey
     }
 
+    /// Whether a window is this Mac's own reading rather than a copy of
+    /// another machine's.
+    ///
+    /// The fleet's copies of this Mac's readings carry the same identity, so
+    /// the only way to tell them apart is to ask the two questions the model
+    /// already knows:  is this one of the windows this Mac read, and is it
+    /// this Mac's own push coming back from the server?
+    private func isOwnDeviceWindow(_ window: QuotaWindow) -> Bool {
+        if self.localWindows.contains(window) { return true }
+        return FleetOrigin.isOwnPush(window, localWindows: self.localWindows)
+    }
+
     private func publishWidgetSnapshot(candidates: [QuotaWindow]) {
         // The snapshot publishes what the app's own rows publish.  Every fleet
         // group carries a second copy of the providers, and for a provider this
@@ -2723,6 +2741,17 @@ final class MonitorModel: ObservableObject {
         // forgets it cannot publish the stale copy again.
         let localProviders = Set(self.localWindows.map(\.canonicalProviderKey))
         let publishable = candidates.filter { candidate in
+            // A copy of another machine's reading whose period ended before the
+            // last refresh is not a reading, so the widget's cache does not
+            // carry it.  The rule is the shared one, so the widget, the phone
+            // and the Mac drop the same copies.  This Mac's own windows stay:
+            // an expired own reading greys out in the row instead of vanishing.
+            if !self.isOwnDeviceWindow(candidate),
+               QuotaFreshnessRule.isDeadCopy(observedAt: candidate.occurredDate,
+                                             resetAt: candidate.resetDate,
+                                             now: now) {
+                return false
+            }
             guard localProviders.contains(candidate.canonicalProviderKey) else { return true }
             // This Mac reads the provider, so only its own window may be
             // published:  never somebody else's copy of the same provider.
@@ -2743,13 +2772,6 @@ final class MonitorModel: ObservableObject {
             visibleProviderKeys.contains($0.canonicalProviderKey)
                 && !disabledSources.contains($0.source ?? "")
                 && !$0.isSupplementaryVideoQuota
-                // A copy of a period that ended before the last refresh is not
-                // a reading, so the widget's cache does not carry it.  The
-                // rule is the shared one, so the widget, the phone and the Mac
-                // drop the same copies.
-                && !QuotaFreshnessRule.isDeadCopy(observedAt: $0.occurredDate,
-                                                  resetAt: $0.resetDate,
-                                                  now: now)
         }
         if let writeForTesting = widgetWriteForTesting {
             writeForTesting(windows)

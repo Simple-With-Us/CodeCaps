@@ -134,15 +134,23 @@ final class WidgetTests: XCTestCase {
     /// The widget reads the same payload the app does, so it has to drop the
     /// same copies, through the same shared rule.  The widget target compiles
     /// `QuotaWindowVocabulary.swift` by path, so the rule is in scope here.
+    ///
+    /// The widget asks the shared rule with the reading's own observation time,
+    /// the same field the Mac and the phone ask with, and it only judges
+    /// copies:  this Mac's own reading keeps its row.
     func testWidgetDropsACopyOfAPeriodThatEnded() throws {
         let source = try readSource(at: Self.widgetPresentationURL)
         XCTAssertTrue(
-            source.contains("QuotaFreshnessRule.isDeadCopy(observedAt: observed, resetAt: parsedReset, now: now)"),
+            source.contains("QuotaFreshnessRule.isDeadCopy(observedAt: parseDate(from: w.occurredAt),"),
             "the widget must ask the shared rule about a window whose period already ended"
         )
+        XCTAssertFalse(
+            source.contains("QuotaFreshnessRule.isDeadCopy(observedAt: observed,"),
+            "the widget must ask the shared rule with the reading's own observation time"
+        )
         XCTAssertTrue(
-            source.contains("QuotaFreshnessRule.isDeadCopy(observedAt: parseDate(from: $0.occurredAt),"),
-            "the widget's Antigravity pool must ask the same rule"
+            source.contains("QuotaWindowVocabulary.isOwnDeviceWindow("),
+            "the widget must only judge copies, so this Mac's own reading keeps its row"
         )
     }
 

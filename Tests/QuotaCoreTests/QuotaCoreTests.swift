@@ -235,18 +235,25 @@ final class QuotaCoreTests: XCTestCase {
     /// a period that ended days earlier, and the section printed them as live
     /// readings.
     ///
-    /// The live copy of the same pool stays, and the dead copy goes.
-    func testAProviderSectionDropsACopyOfAPeriodThatEnded() {
+    /// A copy of a period that ended is not a reading, so it is dropped where
+    /// the fleet copies enter, before the section is built.  The rule belongs
+    /// there and nowhere else:  a section builder that drops expired windows
+    /// also drops this Mac's own expired reading, and a pool whose copies have
+    /// all expired loses its row instead of getting its missing window back.
+    func testTheFleetMergeDropsACopyOfAPeriodThatEnded() {
         let iso = ISO8601DateFormatter()
+        let clock = Date()
         let live = QuotaWindow(
             id: "xai:subscription",
             provider: "xAI",
             providerKey: "xai",
             label: "7-day window",
             remainingPercent: 91,
-            resetAt: iso.string(from: now.addingTimeInterval(6 * 86_400)),
+            resetAt: iso.string(from: clock.addingTimeInterval(6 * 86_400)),
             window: "weekly",
-            occurredAt: iso.string(from: now.addingTimeInterval(-60))
+            occurredAt: iso.string(from: clock.addingTimeInterval(-60)),
+            producerInstanceId: "other-mac",
+            machine: "Other Mac"
         )
         let dead = QuotaWindow(
             id: "xai-subscription",
@@ -254,16 +261,87 @@ final class QuotaCoreTests: XCTestCase {
             providerKey: "xai",
             label: "7-day window",
             remainingPercent: 0,
+            resetAt: iso.string(from: clock.addingTimeInterval(-86_400)),
+            window: "weekly",
+            occurredAt: iso.string(from: clock.addingTimeInterval(-6 * 86_400)),
+            producerInstanceId: "other-mac",
+            machine: "Other Mac"
+        )
+        let split = FleetOrigin.split([live, dead], host: "this-mac")
+        XCTAssertEqual(split.groups.flatMap { $0.windows }.map(\.id), ["xai:subscription"],
+                       "a copy of a period that ended is not a reading, so it never reaches a row")
+        XCTAssertEqual(split.ownPush.count, 0,
+                       "neither copy is this Mac's own push, so both are the fleet's to judge")
+    }
+
+    /// This Mac's own expired reading keeps its row.  The row greys the last
+    /// reading out and waits for a refresh instead of dropping to a dash, which
+    /// is what `QuotaWindowSnapshot.freshness == .awaitingRefresh` is for.
+    func testAProviderSectionKeepsThisMacsOwnExpiredWindow() {
+        let iso = ISO8601DateFormatter()
+        let expired = QuotaWindow(
+            id: "local-mac:xai:subscription",
+            provider: "xAI",
+            providerKey: "xai",
+            label: "7-day window",
+            remainingPercent: 91,
             resetAt: iso.string(from: now.addingTimeInterval(-86_400)),
             window: "weekly",
             occurredAt: iso.string(from: now.addingTimeInterval(-6 * 86_400))
         )
-        let section = QuotaResponse(generatedAt: "now", windows: [live, dead])
+        let section = QuotaResponse(generatedAt: "now", windows: [expired])
             .platformSections(now: now).first(where: { $0.providerKey == "xai" })!
-        XCTAssertEqual(section.windows.count, 1,
-                       "a copy of a period that ended is not a reading, so it never becomes a row")
+        XCTAssertFalse(section.windows.isEmpty,
+                       "this Mac's own expired reading keeps its row rather than going missing")
+        XCTAssertFalse(section.isMissing,
+                       "the row is present, so it is not a missing section")
+        XCTAssertEqual(section.windows.first?.freshness, .awaitingRefresh,
+                       "the expired reading waits for a refresh instead of being thrown away")
         XCTAssertEqual(section.windows.first?.remainingPercent, 91,
-                       "the live weekly copy of the same pool stays")
+                       "the last reading is still what the row shows")
+    }
+
+    /// An Antigravity pool whose copies have all expired still gets its
+    /// missing window back, so the pool row survives and its weekly state is
+    /// not lost.  The copies are dropped before the Antigravity groups are
+    /// normalized, which is what lets the placeholder be regenerated.
+    func testAnAntigravityPoolWhoseCopiesAllExpiredKeepsItsMissingWindow() {
+        let iso = ISO8601DateFormatter()
+        let clock = Date()
+        func poolWindow(_ id: String, _ family: String, _ period: String, percent: Double,
+                        resetIn: TimeInterval, observedAgo: TimeInterval) -> QuotaWindow {
+            QuotaWindow(
+                id: id,
+                provider: "Antigravity",
+                providerKey: "google-antigravity",
+                modelType: family,
+                label: "\(family) Models · \(period)",
+                remainingPercent: percent,
+                resetAt: iso.string(from: clock.addingTimeInterval(resetIn)),
+                window: period,
+                occurredAt: iso.string(from: clock.addingTimeInterval(-observedAgo)),
+                producerInstanceId: "other-mac",
+                machine: "Other Mac"
+            )
+        }
+        let expiredGemini5h = poolWindow("ag:gemini:5h", "gemini", "5h", percent: 0,
+                                         resetIn: -86_400, observedAgo: 6 * 86_400)
+        let expiredGeminiWeekly = poolWindow("ag:gemini:weekly", "gemini", "weekly", percent: 0,
+                                             resetIn: -86_400, observedAgo: 6 * 86_400)
+        let liveThirdParty = poolWindow("ag:third-party:weekly", "third-party", "weekly", percent: 40,
+                                        resetIn: 6 * 86_400, observedAgo: 60)
+
+        let split = FleetOrigin.split([expiredGemini5h, expiredGeminiWeekly, liveThirdParty],
+                                      host: "this-mac")
+        let merged = split.ownPush + split.groups.flatMap { $0.windows }
+        let section = QuotaResponse(generatedAt: "now", windows: merged)
+            .platformSections(now: clock).first(where: { $0.providerKey == "google-antigravity" })!
+        let pools = AntigravityQuotaGroups.pools(from: section.windows.map(\.window), now: clock)
+        let gemini = pools.first(where: { $0.key == "gemini" })
+        XCTAssertNotNil(gemini,
+                        "a pool whose copies all expired still gets its missing window back, so the row survives")
+        XCTAssertTrue(gemini?.windows.contains(where: { $0.window == "weekly" }) == true,
+                      "the pool keeps its weekly window, so its weekly state is not lost")
     }
 
     /// A period that rolls over must not blank the row:  a window whose reset
