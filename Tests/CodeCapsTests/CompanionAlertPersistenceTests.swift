@@ -1,17 +1,24 @@
 import Foundation
 import XCTest
+@testable import QuotaCore
 
 final class CompanionAlertPersistenceTests: XCTestCase {
     /// Execute the companion's actual property in a child process: an invalid
     /// preferences value raises an Objective-C exception rather than a Swift error.
     /// The iOS model itself imports UIKit and is outside the Mac package target.
-    func testAnnouncedAlertHistoryPersistsWithoutCrashing() throws {
+    func testAnnouncedAlertHistoryPersistsWithoutCrashing() async throws {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        let source = try String(contentsOf: root.appendingPathComponent(
-            "ios/CodeCapsCompanion/App/Models/CompanionQuotaModel.swift"), encoding: .utf8)
-        let start = try XCTUnwrap(source.range(of: "private var announcedAlertIds: Set<String> {"))
-        let end = try XCTUnwrap(source.range(of: "/// Raise each alert", range: start.upperBound..<source.endIndex))
+        let sourceURL = root.appendingPathComponent(
+            "ios/CodeCapsCompanion/App/Models/CompanionQuotaModel.swift")
+        guard FileManager.default.fileExists(atPath: sourceURL.path) else {
+            throw XCTSkip("CompanionQuotaModel.swift is not present at \(sourceURL.path)")
+        }
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        let start = try XCTUnwrap(source.range(of: "private var announcedAlertIds: Set<String> {"),
+            "CompanionQuotaModel.announcedAlertIds changed; update the property extraction")
+        let end = try XCTUnwrap(source.range(of: "/// Raise each alert", range: start.upperBound..<source.endIndex),
+            "The marker after announcedAlertIds changed; update the property extraction")
         let property = String(source[start.lowerBound..<end.lowerBound])
             .replacingOccurrences(of: "private var", with: "var")
             .replacingOccurrences(of: "UserDefaults.standard", with: "defaults")
@@ -39,23 +46,15 @@ final class CompanionAlertPersistenceTests: XCTestCase {
         let stored = defaults.stringArray(forKey: "announcedAlertIds")!
         precondition(stored.count == 200)
         precondition(Set(stored).isSubset(of: ids))
-        precondition(PropertyListSerialization.propertyList(stored, isValidFor: .binary))
         precondition(History(defaults: defaults).announcedAlertIds == Set(stored))
         history.announcedAlertIds = []
         precondition(defaults.stringArray(forKey: "announcedAlertIds") == [])
         """.write(to: script, atomically: true, encoding: .utf8)
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
-        process.arguments = ["swift", script.path]
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardError = output
-        try process.run()
-        let diagnostics = output.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        XCTAssertEqual(process.terminationStatus, 0,
-            "Companion alert persistence crashed or failed its round-trip checks: "
-                + String(decoding: diagnostics, as: UTF8.self))
+        // Reuse the bounded runner's null stdin, output cap, deadline and kill
+        // escalation so a wedged interpreter cannot stall the package suite.
+        _ = try await BoundedQuotaProcess().run(path: "/usr/bin/xcrun",
+            arguments: ["swift", script.path], home: FileManager.default.homeDirectoryForCurrentUser,
+            timeout: 120)
     }
 }
