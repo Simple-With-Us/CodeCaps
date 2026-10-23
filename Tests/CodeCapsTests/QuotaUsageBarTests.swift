@@ -17,12 +17,14 @@ final class QuotaUsageBarTests: XCTestCase {
         token: String?,
         remaining: Double? = 85,
         resetIn: TimeInterval?,
-        observedAgo: TimeInterval = 0
+        observedAgo: TimeInterval = 0,
+        provider: String = "Cursor",
+        providerKey: String = "cursor"
     ) -> QuotaWindowSnapshot {
         QuotaWindowSnapshot(window: QuotaWindow(
             id: label,
-            provider: "Cursor",
-            providerKey: "cursor",
+            provider: provider,
+            providerKey: providerKey,
             label: label,
             remainingPercent: remaining,
             remainingUnknown: remaining == nil,
@@ -44,8 +46,20 @@ final class QuotaUsageBarTests: XCTestCase {
     }
 
     func testGlanceDrawsNoMarkerForAWindowWithNoDerivablePeriod() {
-        let plan = makeWindow(label: "Included plan", token: "plan", resetIn: 15 * 86_400)
+        let plan = makeWindow(label: "Usage window", token: "opaque", resetIn: 15 * 86_400,
+                              provider: "Anthropic", providerKey: "anthropic")
         XCTAssertNil(plan.elapsedFraction(now: now))
+    }
+
+    /// Cursor's included plan resets with Cursor's monthly billing cycle, so
+    /// the marker beside the caption that names "1m" is drawn for that month.
+    ///
+    /// The caption and the marker resolve one period now, so a window whose
+    /// caption names a month draws a month.
+    func testGlanceDrawsTheMonthMarkerForCursorsIncludedPlan() throws {
+        let plan = makeWindow(label: "Included plan", token: "plan", resetIn: 15 * 86_400)
+        let fraction = try XCTUnwrap(plan.elapsedFraction(now: now))
+        XCTAssertEqual(fraction, 0.5, accuracy: 0.05)
     }
 
     func testGlanceReadsTokensTheOldParserMisread() throws {
@@ -64,8 +78,9 @@ final class QuotaUsageBarTests: XCTestCase {
     }
 
     func testMeterSpeechForAWindowWithNoMarkerOmitsElapsed() {
-        let plan = makeWindow(label: "Included plan", token: "plan", remaining: 85, resetIn: 15 * 86_400)
-        XCTAssertEqual(glanceMeterSpeech(plan, now: now), "1m 85 percent remaining, 15 percent used")
+        let plan = makeWindow(label: "Usage window", token: "opaque", remaining: 85, resetIn: 15 * 86_400,
+                              provider: "Anthropic", providerKey: "anthropic")
+        XCTAssertEqual(glanceMeterSpeech(plan, now: now), "Quota 85 percent remaining, 15 percent used")
     }
 
     func testMeterSpeechForAnUnknownReading() {

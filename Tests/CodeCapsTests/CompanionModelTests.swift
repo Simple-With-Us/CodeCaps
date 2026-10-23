@@ -338,6 +338,49 @@ final class CompanionModelTests: XCTestCase {
         )
     }
 
+    /// Owner 2026-10-22: the xAI row read "7-day cap" while the sidebar beside
+    /// it read 96%, because the cap rule believed a window that reported an
+    /// exhausted allowance days ago.
+    ///
+    /// The phone's windows come from a live pull of the same feed the Mac
+    /// reads, and they carry the same timestamp, so the phone asks the shared
+    /// freshness rule with the shared threshold and the two surfaces answer
+    /// the same question about one account the same way.
+    func testThePhoneAgesItsReadingsByTheSharedRule() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains("QuotaFreshnessRule.isFresh(observedAt: reportedAt, resetAt: resetAt, now: now)"),
+            "the phone must ask the shared freshness rule, not carry a threshold of its own"
+        )
+        XCTAssertTrue(
+            source.contains("isFresh: $0.isFresh(now: now)"),
+            "the phone must state each window's freshness to the shared cap rule"
+        )
+        XCTAssertFalse(
+            source.contains("30 * 60"),
+            "the phone must not restate the shared threshold beside the rule"
+        )
+    }
+
+    /// The marker on the phone's bar is drawn for the same period the Mac's
+    /// caption names, so the phone cannot keep its own copy of the words that
+    /// name a period.
+    func testThePhoneResolvesItsPeriodThroughTheSharedResolver() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains("ResetAlarmCadence.resolve(token: cadence, label: label)"),
+            "the phone must ask the shared period resolver"
+        )
+        XCTAssertFalse(
+            source.contains("words.contains(\"5h\")"),
+            "the phone must not keep its own copy of the words that name a period"
+        )
+        XCTAssertFalse(
+            source.contains("words.contains(\"7d\")"),
+            "the phone must not keep its own copy of the words that name a period"
+        )
+    }
+
     /// A masked window's reading must not be believed: it fed the card's
     /// headline and the meter bar, so the phone drew a figure that the label
     /// beside it called "n/a".

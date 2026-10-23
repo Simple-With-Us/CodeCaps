@@ -2400,7 +2400,20 @@ final class MonitorModel: ObservableObject {
             self.originByProvider = origins
             if newServer != nil { self.lastPullTime = self.now }
             self.response = QuotaResponse(generatedAt: ISO8601DateFormatter().string(from: self.now), windows: merged)
-            self.publishWidgetSnapshot(candidates: merged + split.groups.flatMap(\.windows))
+            // The widget publishes what the app's own rows publish.  The fleet
+            // groups carry a second copy of every provider, and for a provider
+            // this Mac reads itself that copy is the stale one:  it is days old
+            // and reads zero, so the widget showed a fleet reading beside the
+            // app's live one and read every provider as spent (owner,
+            // Oct-22-2026).
+            //
+            // The fallback rule above already says which providers the fleet
+            // may fill in:  the ones this Mac cannot read locally.  The widget
+            // gets those, and the local rows, and nothing else.
+            let fleetWindowsForProvidersThisMacCannotRead = split.groups.flatMap(\.windows).filter {
+                !localProviders.contains($0.canonicalProviderKey)
+            }
+            self.publishWidgetSnapshot(candidates: merged + fleetWindowsForProvidersThisMacCannotRead)
             self.refreshRunawayUsageState(recordSamples: local != nil)
             self.refreshExhaustionWarnings(windows: merged + split.groups.flatMap(\.windows), now: self.now)
             self.alarmManager.evaluate(observations: self.resetAlarmObservationsForCurrentReadings(), now: self.now)

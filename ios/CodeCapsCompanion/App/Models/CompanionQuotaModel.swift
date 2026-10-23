@@ -274,21 +274,29 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
             if let pct = remainingPercent, pct >= 100 { return 0.0 }
             return nil
         }
-        let token = cadence.isEmpty ? label : cadence
-        let words = "\(token) \(label)".lowercased()
-        let durationSeconds: TimeInterval? = {
-            if words.contains("7d") || words.contains("7-day") || words.contains("weekly") || words.contains("1w") || words.contains("org") || words.contains("quota") { return 7 * 86400 }
-            if words.contains("5h") || words.contains("5-hour") || words.contains("five_hour") || words.contains("coding plan") || words.contains("coding_plan") || words.contains("interval") { return 5 * 3600 }
-            if words.contains("4h") || words.contains("4-hour") || words.contains("four_hour") { return 4 * 3600 }
-            if words.contains("1d") || words.contains("daily") || words.contains("24h") { return 86400 }
-            if words.contains("billing") || words.contains("cycle") || words.contains("monthly") || words.contains("month") { return 30 * 86400 }
-            return nil
-        }()
-        guard let duration = durationSeconds, duration > 0 else { return nil }
-        let start = resetAt.addingTimeInterval(-duration)
+        // The shared resolver, the same one the Mac's caption and the Mac's
+        // marker ask, so the marker on the phone is drawn for the period the
+        // caption beside it names.
+        guard let period = ResetAlarmCadence.resolve(token: cadence, label: label),
+              let start = ResetAlarmCadence.start(of: period, endingAt: resetAt) else { return nil }
+        let duration = resetAt.timeIntervalSince(start)
+        guard duration > 0 else { return nil }
         let elapsed = now.timeIntervalSince(start)
-        guard elapsed >= 0 else { return 0.0 }
         return min(1.0, max(0.0, elapsed / duration))
+    }
+
+    /// Whether this window's reading is recent enough to believe.
+    ///
+    /// The phone's windows come from a live pull of the same feed the Mac
+    /// reads, and they carry the same timestamp:  the wire's `reportedAt` when
+    /// it has one, else the reading's own `occurredAt`, which is the field the
+    /// Mac calls `occurredAt` too.  So the phone asks the shared rule, with the
+    /// shared threshold, and the two surfaces answer the same question about
+    /// one account the same way.  A window whose reset has already passed is
+    /// waiting for a fresh reading, so its old number says nothing about the
+    /// plan now and it cannot bind a cap.
+    public func isFresh(now: Date = Date()) -> Bool {
+        QuotaFreshnessRule.isFresh(observedAt: reportedAt, resetAt: resetAt, now: now)
     }
 
     public var caption: String { meterCaption }
@@ -621,6 +629,8 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
     ///   decides, so a provider's exhausted word cannot override a reading that
     ///   says there is room left.  The phone used to let it, and could announce
     ///   a cap directly above a meter that read 50%.
+    /// - A stale window reports no cap.  A reading taken days ago says how the
+    ///   plan looked then, not how it looks now.
     /// - A supplementary video allowance and a scoped pool allowance are
     ///   skipped:  they sit beside the subscription rather than inside it.
     /// - A primary window beats a sub-model window, so a plan with a window of
@@ -640,6 +650,7 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
                 id: $0.id,
                 remainingPercent: $0.remainingPercent,
                 resetAt: $0.resetAt,
+                isFresh: $0.isFresh(now: now),
                 isMasked: $0.isMasked,
                 isSupplementaryVideoQuota: $0.isSupplementaryVideoQuota,
                 isScopedPoolAllowance: $0.isScopedPoolAllowance,

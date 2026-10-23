@@ -500,13 +500,7 @@ public struct QuotaWindowSnapshot: Equatable, Sendable {
         self.remainingPercent = normalized.boundedRemainingPercent
         self.status = normalized.status
 
-        let observedIsFresh: Bool
-        if let observedAt {
-            let age = now.timeIntervalSince(observedAt)
-            observedIsFresh = age < QuotaPolicy.staleAfter && age >= -QuotaPolicy.maximumFutureSkew
-        } else {
-            observedIsFresh = false
-        }
+        let observedIsFresh = QuotaFreshnessRule.isReadingRecent(observedAt: observedAt, now: now)
 
         if let resetAt, resetAt <= now {
             freshness = .awaitingRefresh
@@ -577,6 +571,7 @@ public struct QuotaPlatformSection: Equatable, Sendable {
                 id: $0.window.id,
                 remainingPercent: $0.remainingPercent,
                 resetAt: $0.resetAt,
+                isFresh: $0.isFresh,
                 isSupplementaryVideoQuota: $0.window.isSupplementaryVideoQuota,
                 isScopedPoolAllowance: $0.window.isScopedPoolAllowance,
                 isSubModelLimit: $0.window.isSubModelLimit
@@ -767,11 +762,6 @@ private extension QuotaWindow {
     }
 }
 
-private enum QuotaPolicy {
-    static let staleAfter: TimeInterval = 30 * 60
-    static let maximumFutureSkew: TimeInterval = 5 * 60
-}
-
 private enum ISO8601Date {
     private static let fractional: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
@@ -896,6 +886,8 @@ public struct WindowPacing: Equatable, Sendable {
         remainingPercent: Double?,
         now: Date = Date(),
         periodStart: Date? = nil,
+        providerKey: String? = nil,
+        isSupplementaryVideoQuota: Bool = false,
         calendar: Calendar = QuotaPeriod.billingCalendar
     ) -> WindowPacing? {
         guard let resetAt, let remainingPercent else { return nil }
@@ -907,6 +899,8 @@ public struct WindowPacing: Equatable, Sendable {
             label: windowLabel,
             resetAt: resetAt,
             explicitStart: periodStart,
+            providerKey: providerKey,
+            isSupplementaryVideoQuota: isSupplementaryVideoQuota,
             calendar: calendar
         ) else {
             return nil
@@ -973,36 +967,15 @@ public struct WindowPacing: Equatable, Sendable {
         )
     }
 
+    /// The loose parser's answer, in seconds.
+    ///
+    /// It comes from the shared resolver, `ResetAlarmCadence.resolve`, so the
+    /// prose that names a period reads the same way here as it does beside the
+    /// Mac's caption, the phone's marker and the widget's marker (owner,
+    /// Oct-22-2026).
     public static func parseDurationSeconds(token: String?, label: String) -> TimeInterval? {
-        let combined = "\(token ?? "") \(label)".lowercased()
-        if combined.contains("weekly") || combined.contains("7-day") || combined.contains("7d") || combined.contains("7 day") {
-            return 7 * 86400
-        }
-        if combined.contains("monthly") || combined.contains("30d") || combined.contains("30-day") || combined.contains("month") {
-            return 30 * 86400
-        }
-        if combined.contains("daily") || combined.contains("24h") || combined.contains("24-hour") || combined.contains("1d") || combined.contains("day") {
-            return 86400
-        }
-        if combined.contains("5-hour") || combined.contains("5h") || combined.contains("5 hour") {
-            return 5 * 3600
-        }
-        if combined.contains("1-hour") || combined.contains("1h") || combined.contains("1 hour") {
-            return 3600
-        }
-        if combined.contains("2-hour") || combined.contains("2h") {
-            return 2 * 3600
-        }
-        if combined.contains("3-hour") || combined.contains("3h") {
-            return 3 * 3600
-        }
-        if combined.contains("6-hour") || combined.contains("6h") {
-            return 6 * 3600
-        }
-        if combined.contains("12-hour") || combined.contains("12h") {
-            return 12 * 3600
-        }
-        return nil
+        guard let period = ResetAlarmCadence.resolve(token: token, label: label) else { return nil }
+        return ResetAlarmCadence.seconds(for: period)
     }
 }
 
@@ -1015,6 +988,8 @@ public extension QuotaWindowSnapshot {
             remainingPercent: remainingPercent,
             now: now,
             periodStart: window.periodStartDate,
+            providerKey: window.canonicalProviderKey,
+            isSupplementaryVideoQuota: window.isSupplementaryVideoQuota,
             calendar: calendar
         )
     }
