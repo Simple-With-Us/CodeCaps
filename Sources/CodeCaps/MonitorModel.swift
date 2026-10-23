@@ -1576,7 +1576,13 @@ final class MonitorModel: ObservableObject {
             } catch { handoffError = "BotFleet quota sharing is unavailable." }
         }
         // Same candidate set as the refresh paths, so a Settings edit never drops the fleet rows.
-        publishWidgetSnapshot(candidates: response.windows + fleetWindowGroups.flatMap(\.windows))
+        // Fleet rows for providers this Mac reads itself are the stale copy,
+        // so only fleet windows for locally-unread providers join the widget.
+        let localProviders = Set(localWindows.map(\.canonicalProviderKey))
+        let fleetWindowsForProvidersThisMacCannotRead = fleetWindowGroups.flatMap(\.windows).filter {
+            !localProviders.contains($0.canonicalProviderKey)
+        }
+        publishWidgetSnapshot(candidates: response.windows + fleetWindowsForProvidersThisMacCannotRead)
         if syncEnabled && !windows.isEmpty {
             Task { [weak self] in _ = await self?.pushQuotasIfEnabled(windows: windows) }
         }
@@ -2574,7 +2580,13 @@ final class MonitorModel: ObservableObject {
                 handoffError = "BotFleet quota sharing is unavailable."
             }
         }
-        publishWidgetSnapshot(candidates: merged + split.groups.flatMap(\.windows))
+        // The widget publishes what the app's own rows publish: local rows
+        // plus fleet windows only for providers this Mac cannot read itself.
+        // Unfiltered fleet windows are the stale copy and read as extra bars.
+        let fleetWindowsForProvidersThisMacCannotRead = split.groups.flatMap(\.windows).filter {
+            !localProviders.contains($0.canonicalProviderKey)
+        }
+        publishWidgetSnapshot(candidates: merged + fleetWindowsForProvidersThisMacCannotRead)
         refreshRunawayUsageState(recordSamples: recordSamples)
         refreshExhaustionWarnings(windows: merged + split.groups.flatMap(\.windows), now: now)
         alarmManager.evaluate(observations: resetAlarmObservationsForCurrentReadings(), now: now)
