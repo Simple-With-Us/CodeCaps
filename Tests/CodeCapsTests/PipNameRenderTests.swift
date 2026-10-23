@@ -23,6 +23,7 @@ final class PipNameRenderTests: XCTestCase {
         XCTAssertEqual(Set(pinnedRows.map(\.providerKey)), providerKeys,
                        "the render fixture must include each screenshot provider")
         model.isPipEnabled = true
+        model.pipAutoAddedRowIds = []
         model.pipPinnedRowIds = Set(pinnedRows.map(\.id))
 
         for width in [CGFloat(425), CGFloat(435), CGFloat(300)] {
@@ -30,6 +31,17 @@ final class PipNameRenderTests: XCTestCase {
                 of: PipWidgetView(model: model), size: CGSize(width: width, height: 250), dark: false))
             XCTAssertFalse(png.isEmpty, "PiP render at \(width)pt must produce PNG data")
             try png.write(to: directory.appendingPathComponent("pip-provider-names-\(Int(width)).png"))
+        }
+
+        for (provider, widths) in [("minimax", [CGFloat(330), CGFloat(375)]), ("openai", [CGFloat(240)])] {
+            let row = try XCTUnwrap(pinnedRows.first { $0.providerKey == provider })
+            model.pipPinnedRowIds = [row.id]
+            for width in widths {
+                let png = try XCTUnwrap(GlanceFixtures.png(
+                    of: PipWidgetView(model: model), size: CGSize(width: width, height: 100), dark: false))
+                XCTAssertFalse(png.isEmpty)
+                try png.write(to: directory.appendingPathComponent("pip-single-\(provider)-\(Int(width)).png"))
+            }
         }
     }
 }

@@ -84,4 +84,78 @@ final class PipNameFitTests: XCTestCase {
                 "horizontal rows must stay enabled beyond the full-row-plus-peek boundary")
         }
     }
+
+    func testTwoMeterSingleProviderBudgetIncludesExpandedCadenceAtFullBoundary() {
+        let titleWidth = PipMetrics.titleColumnWidth(for: screenshotTitles)
+        let compactRowWidth = PipMetrics.rowWidth(
+            for: .full, titleWidth: titleWidth, meterCount: 2, expandedCadence: false)
+        let expandedRowWidth = PipMetrics.rowWidth(
+            for: .full, titleWidth: titleWidth, meterCount: 2, expandedCadence: true)
+        let compactBoundary = PipMetrics.padding * 2 + compactRowWidth
+        let expandedBoundary = PipMetrics.padding * 2 + expandedRowWidth
+
+        XCTAssertEqual(expandedRowWidth - compactRowWidth, 44,
+                       "two expanded 40pt cadence captions reserve 22pt each")
+        XCTAssertEqual(PipMetrics.detail(
+            forWidth: compactBoundary, titleWidth: titleWidth, meterCount: 2,
+            expandedCadence: false), .full)
+
+        let expandedAtCompactBoundary = PipMetrics.detail(
+            forWidth: compactBoundary, titleWidth: titleWidth, meterCount: 2,
+            expandedCadence: true)
+        XCTAssertEqual(expandedAtCompactBoundary, .logoWithFullCountdown)
+        XCTAssertFalse(expandedAtCompactBoundary.showsTitle)
+        XCTAssertTrue(expandedAtCompactBoundary.showsCountdown)
+        XCTAssertEqual(PipMetrics.detail(
+            forWidth: expandedBoundary, titleWidth: titleWidth, meterCount: 2,
+            expandedCadence: true), .full)
+        XCTAssertEqual(PipMetrics.detail(
+            forWidth: expandedBoundary - 1, titleWidth: titleWidth, meterCount: 2,
+            expandedCadence: true), .logoWithFullCountdown)
+    }
+
+    func testSingleMeterProviderKeepsItsNameBelowTheDualMeterBoundary() {
+        let titleWidth = PipMetrics.titleColumnWidth(for: screenshotTitles)
+        let singleMeterBoundary = PipMetrics.padding * 2 + PipMetrics.rowWidth(
+            for: .full, titleWidth: titleWidth, meterCount: 1, expandedCadence: true)
+        let dualMeterBoundary = PipMetrics.padding * 2 + PipMetrics.rowWidth(
+            for: .full, titleWidth: titleWidth, meterCount: 2, expandedCadence: true)
+
+        XCTAssertLessThan(singleMeterBoundary, dualMeterBoundary)
+        XCTAssertEqual(PipMetrics.detail(
+            forWidth: singleMeterBoundary, titleWidth: titleWidth, meterCount: 1,
+            expandedCadence: true), .full)
+        XCTAssertEqual(PipMetrics.detail(
+            forWidth: dualMeterBoundary - 1, titleWidth: titleWidth, meterCount: 1,
+            expandedCadence: true), .full,
+            "one pinned meter should keep its provider name below the two-meter threshold")
+        XCTAssertFalse(PipMetrics.detail(
+            forWidth: singleMeterBoundary - 1, titleWidth: titleWidth, meterCount: 1,
+            expandedCadence: true).showsTitle)
+    }
+
+    func testMeterCountClampsToDisplayedRangeAndHorizontalBudgetUsesSameInputs() {
+        let titleWidth = PipMetrics.titleColumnWidth(for: screenshotTitles)
+
+        XCTAssertEqual(
+            PipMetrics.rowWidth(for: .full, titleWidth: titleWidth, meterCount: 0),
+            PipMetrics.rowWidth(for: .full, titleWidth: titleWidth, meterCount: 1))
+        XCTAssertEqual(
+            PipMetrics.rowWidth(for: .full, titleWidth: titleWidth, meterCount: 3),
+            PipMetrics.rowWidth(for: .full, titleWidth: titleWidth, meterCount: 2))
+        XCTAssertEqual(
+            PipMetrics.rowWidth(for: .singleMeter, titleWidth: titleWidth, meterCount: 3),
+            PipMetrics.rowWidth(for: .singleMeter, titleWidth: titleWidth, meterCount: 1))
+
+        let rowWidth = PipMetrics.rowWidth(
+            for: .full, hasFlame: true, titleWidth: titleWidth, meterCount: 1,
+            expandedCadence: true)
+        let horizontalBoundary = PipMetrics.padding * 2 + rowWidth + PipMetrics.horizontalPeek
+        XCTAssertFalse(PipMetrics.rowsScrollHorizontally(
+            forWidth: horizontalBoundary - 1, titleWidth: titleWidth, hasFlame: true,
+            meterCount: 1, expandedCadence: true))
+        XCTAssertTrue(PipMetrics.rowsScrollHorizontally(
+            forWidth: horizontalBoundary, titleWidth: titleWidth, hasFlame: true,
+            meterCount: 1, expandedCadence: true))
+    }
 }

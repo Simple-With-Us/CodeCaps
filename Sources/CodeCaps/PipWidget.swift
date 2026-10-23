@@ -182,10 +182,11 @@ enum PipMetrics {
     /// The richest level whose content fits `width`, content width being what
     /// survives the panel's own padding.
     static func detail(forWidth width: CGFloat, titleWidth: CGFloat = PipMetrics.titleWidth,
-                       hasFlame: Bool = false) -> Detail {
+                       hasFlame: Bool = false, meterCount: Int = 2, expandedCadence: Bool = false) -> Detail {
         let available = width - padding * 2
         for detail in Detail.allCases where detail != .singleBar {
-            if available >= rowWidth(for: detail, hasFlame: hasFlame, titleWidth: titleWidth) {
+            if available >= rowWidth(for: detail, hasFlame: hasFlame, titleWidth: titleWidth,
+                                     meterCount: meterCount, expandedCadence: expandedCadence) {
                 return detail
             }
         }
@@ -207,18 +208,33 @@ enum PipMetrics {
     /// both clipped the icon in the vertical list and let it overflow the
     /// fixed frame in the horizontal one.
     static func rowWidth(for detail: Detail, hasFlame: Bool = false,
-                         titleWidth: CGFloat = PipMetrics.titleWidth) -> CGFloat {
-        let base: CGFloat
+                         titleWidth: CGFloat = PipMetrics.titleWidth,
+                         meterCount: Int = 2, expandedCadence: Bool = false) -> CGFloat {
+        let count = max(1, min(meterCount, detail.maxMeters))
+        let identityWidth: CGFloat
+        let meterWidth: CGFloat
         switch detail {
-        case .full: base = fullMinWidth - Self.titleWidth + titleWidth
-        case .logoWithFullCountdown: base = logoWithCountdownMinWidth
-        case .logoWithCompactCountdown: base = logoWithCompactCountdownMinWidth
-        case .logoOnly: base = logoOnlyMinWidth
-        case .minimal: base = minimalMinWidth
-        case .singleMeter: base = singleMeterMinWidth
-        case .barsOnly: base = barsOnlyMinWidth
-        case .singleBar: base = singleMeterMinWidth
+        case .full:
+            identityWidth = providerLogoSize + rowSpacing + titleWidth + rowSpacing
+            meterWidth = meterMinWidthWithCountdown
+                + (expandedCadence ? cadenceExpandedWidth - cadenceWidth : 0)
+        case .logoWithFullCountdown, .singleMeter:
+            identityWidth = providerLogoSize + rowSpacing
+            meterWidth = meterMinWidthWithCountdown
+        case .logoWithCompactCountdown:
+            identityWidth = providerLogoSize + rowSpacing
+            meterWidth = meterMinWidthWithCompactCountdown
+        case .logoOnly:
+            identityWidth = providerLogoSize + rowSpacing
+            meterWidth = meterMinWidth
+        case .minimal:
+            identityWidth = 0
+            meterWidth = meterMinWidth
+        case .barsOnly, .singleBar:
+            identityWidth = 0
+            meterWidth = bareMeterMinWidth
         }
+        let base = identityWidth + CGFloat(count) * meterWidth + CGFloat(count - 1) * rowSpacing
         return hasFlame && detail.showsProviderLogo ? base + flameWidth : base
     }
 
@@ -239,13 +255,15 @@ enum PipMetrics {
     /// moves when any bar metric changes.  The result lands in his range: the
     /// squeeze point is around 222pt, and this is roughly 90pt past it.
     static func rowsScrollHorizontally(forWidth width: CGFloat, titleWidth: CGFloat = PipMetrics.titleWidth,
-                                      hasFlame: Bool = false) -> Bool {
+                                      hasFlame: Bool = false, meterCount: Int = 2,
+                                      expandedCadence: Bool = false) -> Bool {
         // The threshold uses the richest row width so it is monotonic in panel
         // width: deriving it from the detail level in force flipped the strip
         // on and off as a resize crossed the detail ladder (owner 2026-10-16:
         // "as you stretch it out it alternates between showing correctly or
         // not").
-        width >= padding * 2 + rowWidth(for: .full, hasFlame: hasFlame, titleWidth: titleWidth) + horizontalPeek
+        width >= padding * 2 + rowWidth(for: .full, hasFlame: hasFlame, titleWidth: titleWidth,
+                                       meterCount: meterCount, expandedCadence: expandedCadence) + horizontalPeek
     }
 
     /// How many rows fit in `height` without clipping, never fewer than one.
@@ -603,7 +621,8 @@ struct PipWidgetView: View {
     private func horizontalRows(detail: PipMetrics.Detail) -> some View {
         // Wide enough for the widest pinned row, including a flame if any row
         // has one, so no row is clipped by the frame below.
-        let rowWidth = PipMetrics.rowWidth(for: detail, hasFlame: anyRowSpiking, titleWidth: providerTitleWidth)
+        let rowWidth = PipMetrics.rowWidth(for: detail, hasFlame: anyRowSpiking, titleWidth: providerTitleWidth,
+                                          meterCount: maximumMeterCount, expandedCadence: isSingleModel)
         return ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: PipMetrics.rowSpacing * 2) {
                 ForEach(targetRows) { row in
@@ -643,6 +662,13 @@ struct PipWidgetView: View {
 
     private var providerTitleWidth: CGFloat {
         PipMetrics.titleColumnWidth(for: targetRows.map(\.title))
+    }
+
+    private var maximumMeterCount: Int {
+        max(1, targetRows.map { row in
+            PipWidgetController.meterCount(for: row, now: model.now, issue: model.issues[row.providerKey],
+                                            disabledSources: model.disabledSources)
+        }.max() ?? 1)
     }
 
     /// The chosen background, resolved once and passed down.
@@ -689,7 +715,8 @@ struct PipWidgetView: View {
                         detailPanel(detailRow, detail: PipMetrics.detail(forWidth: geo.size.width))
                     } else {
                         let detail = PipMetrics.detail(forWidth: geo.size.width, titleWidth: providerTitleWidth,
-                                                       hasFlame: anyRowSpiking)
+                                                       hasFlame: anyRowSpiking, meterCount: maximumMeterCount,
+                                                       expandedCadence: isSingleModel)
                         rowsPanel(detail: detail, height: geo.size.height, width: geo.size.width)
                     }
                 }
@@ -826,7 +853,8 @@ struct PipWidgetView: View {
         // rows become a horizontal strip, each keeping its own logo at its
         // left edge.
         if overflows && PipMetrics.rowsScrollHorizontally(forWidth: width, titleWidth: providerTitleWidth,
-                                                       hasFlame: anyRowSpiking) {
+                                                       hasFlame: anyRowSpiking, meterCount: maximumMeterCount,
+                                                       expandedCadence: isSingleModel) {
             horizontalRows(detail: detail)
         } else {
             verticalRows(detail: detail, visible: visible, overflows: overflows)

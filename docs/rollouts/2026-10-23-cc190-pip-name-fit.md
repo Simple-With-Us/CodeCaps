@@ -16,6 +16,10 @@ the existing maximum.  A spare spacer before the meters is removed so bars
 can use available width.  Only visible spike flames contribute to the width
 budget, with the icon frame matching the measured reservation.
 
+The budget also uses the actual maximum meter count in the pinned rows and
+reserves expanded cadence widths when a single provider is shown.  The
+open provider-detail panel retains its existing width-only presentation.
+
 The existing degradation order remains: names disappear before countdowns,
 countdowns shorten to one rounded unit before disappearing, and logos
 survive until the narrowest identity-free levels.
