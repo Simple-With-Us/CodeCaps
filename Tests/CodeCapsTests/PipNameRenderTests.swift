@@ -1,4 +1,5 @@
 import AppKit
+import QuotaCore
 import SwiftUI
 import XCTest
 @testable import CodeCaps
@@ -34,7 +35,12 @@ final class PipNameRenderTests: XCTestCase {
         }
 
         for (provider, widths) in [("minimax", [CGFloat(330), CGFloat(375)]), ("openai", [CGFloat(240)])] {
-            let row = try XCTUnwrap(pinnedRows.first { $0.providerKey == provider })
+            let windows = GlanceFixtures.localWindows.filter {
+                $0.providerKey == provider && (provider != "openai" || $0.id == "codex-7d")
+            }
+            model.injectForTests(sections: QuotaResponse(generatedAt: "", windows: windows)
+                .platformSections(now: GlanceFixtures.now), now: GlanceFixtures.now)
+            let row = try XCTUnwrap(model.displaySections.first { $0.providerKey == provider })
             model.pipPinnedRowIds = [row.id]
             for width in widths {
                 let png = try XCTUnwrap(GlanceFixtures.png(

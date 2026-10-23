@@ -134,6 +134,26 @@ final class PipNameFitTests: XCTestCase {
             expandedCadence: true).showsTitle)
     }
 
+    func testSingleProviderShortensCadenceBeforeHidingItsName() {
+        let titleWidth = PipMetrics.titleColumnWidth(for: ["MiniMax"])
+        let compactBoundary = PipMetrics.padding * 2
+            + PipMetrics.rowWidth(for: .full, titleWidth: titleWidth, meterCount: 2)
+        let expandedBoundary = PipMetrics.padding * 2
+            + PipMetrics.rowWidth(for: .full, titleWidth: titleWidth, meterCount: 2, expandedCadence: true)
+
+        for width in [compactBoundary, expandedBoundary - 1] {
+            let expanded = PipMetrics.expandedCadenceFits(
+                forWidth: width, titleWidth: titleWidth, hasFlame: false, meterCount: 2)
+            XCTAssertFalse(expanded)
+            XCTAssertTrue(PipMetrics.detail(forWidth: width, titleWidth: titleWidth,
+                meterCount: 2, expandedCadence: expanded).showsTitle)
+        }
+        XCTAssertTrue(PipMetrics.expandedCadenceFits(
+            forWidth: expandedBoundary, titleWidth: titleWidth, hasFlame: false, meterCount: 2))
+        XCTAssertFalse(PipMetrics.detail(forWidth: compactBoundary - 1, titleWidth: titleWidth,
+            meterCount: 2).showsTitle)
+    }
+
     func testMeterCountClampsToDisplayedRangeAndHorizontalBudgetUsesSameInputs() {
         let titleWidth = PipMetrics.titleColumnWidth(for: screenshotTitles)
 
@@ -157,5 +177,25 @@ final class PipNameFitTests: XCTestCase {
         XCTAssertTrue(PipMetrics.rowsScrollHorizontally(
             forWidth: horizontalBoundary, titleWidth: titleWidth, hasFlame: true,
             meterCount: 1, expandedCadence: true))
+    }
+
+    func testSingleProviderCadenceChoiceKeepsResizingMonotonic() {
+        let titleWidth = PipMetrics.titleColumnWidth(for: ["MiniMax"])
+        for count in [1, 2] {
+            var previousDetail = Int.max
+            var wasHorizontal = false
+            for width in stride(from: PipMetrics.minWidth, through: PipMetrics.maxWidth, by: 1) {
+                let expanded = PipMetrics.expandedCadenceFits(
+                    forWidth: width, titleWidth: titleWidth, hasFlame: true, meterCount: count)
+                let detail = PipMetrics.detail(forWidth: width, titleWidth: titleWidth,
+                    hasFlame: true, meterCount: count, expandedCadence: expanded)
+                let horizontal = PipMetrics.rowsScrollHorizontally(forWidth: width, titleWidth: titleWidth,
+                    hasFlame: true, meterCount: count, expandedCadence: expanded)
+                XCTAssertLessThanOrEqual(detail.rawValue, previousDetail)
+                if wasHorizontal { XCTAssertTrue(horizontal) }
+                previousDetail = detail.rawValue
+                wasHorizontal = horizontal
+            }
+        }
     }
 }

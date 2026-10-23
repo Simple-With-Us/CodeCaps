@@ -19,6 +19,8 @@ budget, with the icon frame matching the measured reservation.
 The budget also uses the actual maximum meter count in the pinned rows and
 reserves expanded cadence widths when a single provider is shown.  The
 open provider-detail panel retains its existing width-only presentation.
+If expanded cadence words do not fit, compact captions retain the provider
+name until the compact form itself runs out of space.
 
 The existing degradation order remains: names disappear before countdowns,
 countdowns shorten to one rounded unit before disappearing, and logos
