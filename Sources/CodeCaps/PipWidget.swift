@@ -682,14 +682,14 @@ struct PipWidgetView: View {
 
     var body: some View {
         GeometryReader { geo in
-            let detail = PipMetrics.detail(forWidth: geo.size.width, titleWidth: providerTitleWidth,
-                                           hasFlame: anyRowSpiking)
             ZStack(alignment: .topTrailing) {
                 VStack(spacing: 0) {
                     dragStrip
                     if let detailRow {
-                        detailPanel(detailRow, detail: detail)
+                        detailPanel(detailRow, detail: PipMetrics.detail(forWidth: geo.size.width))
                     } else {
+                        let detail = PipMetrics.detail(forWidth: geo.size.width, titleWidth: providerTitleWidth,
+                                                       hasFlame: anyRowSpiking)
                         rowsPanel(detail: detail, height: geo.size.height, width: geo.size.width)
                     }
                 }
