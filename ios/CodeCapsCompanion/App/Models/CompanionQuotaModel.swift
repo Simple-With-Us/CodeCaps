@@ -1862,7 +1862,21 @@ public final class CompanionQuotaModel: ObservableObject {
         //  belongs to a *different* window with the word of the window that
         //  has no reading at all:  a weekly the provider reports as gone,
         //  beside a healthy five-hour reading, would report the plan live.
-        let isExhausted = primaryWindows.contains(where: \.isExhausted)
+        //
+        //  The window kinds the shared rule excludes are excluded here too.
+        //  `QuotaCapRule.bindingWindowIndex` never binds a sub model limit, a
+        //  scoped pool allowance or a supplementary video quota, so the
+        //  phone's own `atCapWindow()` and the Mac's
+        //  `QuotaPlatformSection.atCapWindow()` both ignore them.  Counting
+        //  them here let one of those windows report the whole plan spent
+        //  while the two surfaces that answer the owner's question said the
+        //  plan still had headroom.
+        let isExhausted = primaryWindows.contains {
+            !$0.isSupplementaryVideoQuota
+                && !$0.isScopedPoolAllowance
+                && !$0.isSubModelLimit
+                && $0.isExhausted
+        }
 
         // Nearest future reset time
         let now = Date()
@@ -2053,9 +2067,17 @@ public final class CompanionQuotaModel: ObservableObject {
             // that says the weekly is exhausted.  A reading still outranks the
             // word, so this only decides the reading-less case.
             let providerSaysSpent = driving.isExhausted ?? false
+            //  A spent allowance publishes zero, whichever period it belongs
+            //  to.  The row's own provider word counts, not only the weekly
+            //  pool's:  a spent five hour allowance that carries no figure
+            //  used to publish nothing here while the widget published zero
+            //  for the same window, so one payload showed a zero bar on one
+            //  surface and a dash on the other.  The reading still outranks
+            //  the word, so this only decides the reading less case.
+            let allowanceSpent = providerSaysSpent || (period == "weekly" && weeklyExhausted)
             let pct = QuotaCapRule.publishedReading(
                 remainingPercent: driving.remainingPercent,
-                allowanceSpent: period == "weekly" && (weeklyExhausted || providerSaysSpent))
+                allowanceSpent: allowanceSpent)
             let exhausted = QuotaCapRule.isExhausted(remainingPercent: pct,
                                                       providerSaysExhausted: providerSaysSpent)
             let parsedReset = CompanionDateFormatter.date(from: driving.resetAt)

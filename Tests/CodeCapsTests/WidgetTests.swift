@@ -136,6 +136,28 @@ final class WidgetTests: XCTestCase {
         )
     }
 
+    /// A spent five hour allowance has to publish the same figure here as it
+    /// does on the phone.
+    ///
+    /// The widget published the fallback zero for a spent five hour allowance
+    /// that carried no figure, while the phone published nothing for the same
+    /// window, so one payload showed a zero bar on one surface and a dash on
+    /// the other (Kody review 2026-10-22).  The phone now publishes the zero
+    /// for every spent row, and this pins the widget's half of that pair: it
+    /// decides the window through the shared rule and publishes through the
+    /// shared rule, so neither surface can drift from the other again.
+    func testTheWidgetPublishesASpentFiveHourWindowTheWayThePhoneDoes() throws {
+        let source = try readSource(at: Self.widgetPresentationURL)
+        XCTAssertTrue(
+            source.contains("let fiveHourSpent = QuotaCapRule.isExhausted(remainingPercent: f.remainingPercent,"),
+            "the widget must decide the five-hour window through the shared rule"
+        )
+        XCTAssertTrue(
+            source.contains("remainingPercent: QuotaCapRule.publishedReading(remainingPercent: f.remainingPercent,"),
+            "the widget must publish the five-hour reading through the shared rule"
+        )
+    }
+
     func testProjectYmlDeclaresWidgetTargets() throws {
         let yml = try readSource(at: Self.projectYmlURL)
         XCTAssertTrue(
