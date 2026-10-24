@@ -857,7 +857,59 @@ private extension QuotaWindow {
     }
 }
 
-private enum ISO8601Date {
+/// Memoizes parsed ISO-8601 instants.
+///
+/// Parsing one instant is not cheap.  `ISO8601DateFormatter` builds a fresh
+/// ICU calendar for every call, and ICU loads — then tears down — its
+/// date-format symbol tables from resources each time, which is what a hang
+/// capture shows as `icu::DateFormatSymbols::loadAllSymbols` underneath
+/// `udat_parseCalendar`.
+///
+/// Every window is parsed four times per `platformSections` call: twice for
+/// the snapshot, and twice more in `normalizedForExport`.  `displaySections`
+/// is a computed property, so each of its readers recomputed the whole set,
+/// and the main thread paid that cost thousands of times per view update.
+/// That is what pushed it past two seconds and produced the "App hanging for
+/// at least 2000 ms" reports.
+///
+/// The same instants are parsed over and over, so the results are memoized.
+/// The cache is bounded, and the lock also keeps the two shared formatters
+/// off concurrent callers, because `ISO8601DateFormatter` is not itself
+/// thread-safe.
+final class ISO8601DateMemo: @unchecked Sendable {
+    static let shared = ISO8601DateMemo()
+
+    private let lock = NSLock()
+    private var cache: [String: Date] = [:]
+    /// Bounded, so a long-lived menu bar app cannot grow the cache forever.
+    private let cacheLimit = 1024
+
+    /// How many instants were actually parsed.  A test reads this to prove
+    /// the memo works rather than trusting the comment above it.
+    private(set) var parseCount = 0
+
+    func date(from value: String) -> Date? {
+        guard !value.isEmpty else { return nil }
+        lock.lock()
+        defer { lock.unlock() }
+        if let hit = cache[value] { return hit }
+        let parsed = ISO8601DateMemo.fractional.date(from: value)
+            ?? ISO8601DateMemo.standard.date(from: value)
+        parseCount += 1
+        if let parsed {
+            if cache.count >= cacheLimit { cache.removeAll(keepingCapacity: true) }
+            cache[value] = parsed
+        }
+        return parsed
+    }
+
+    /// Test hook: drops every memoized instant.
+    func removeAll() {
+        lock.lock()
+        defer { lock.unlock() }
+        cache.removeAll()
+    }
+
     private static let fractional: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -868,9 +920,11 @@ private enum ISO8601Date {
         formatter.formatOptions = [.withInternetDateTime]
         return formatter
     }()
+}
 
+private enum ISO8601Date {
     static func parse(_ value: String) -> Date? {
-        fractional.date(from: value) ?? standard.date(from: value)
+        ISO8601DateMemo.shared.date(from: value)
     }
 }
 
