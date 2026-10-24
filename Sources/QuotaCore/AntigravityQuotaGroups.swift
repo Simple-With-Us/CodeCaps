@@ -136,9 +136,18 @@ public enum AntigravityQuotaGroups {
                 if leftWeekly != rightWeekly { return !leftWeekly }
                 return left.id < right.id
             }
-            let weeklyExhausted = ordered.contains {
+            // Only a fresh window may spend the pool.  A copy of a period that
+            // ended carries no live information, so it must not claim the
+            // allowance is gone, and the shared cap rule beside it is
+            // percentage-level, so it cannot tell the two apart.  The phone
+            // and the widget already ask the shared freshness rule here;  the
+            // Mac did not, so one pool read live on one surface and spent on
+            // another.
+            let spentWeekly = ordered.first {
                 !$0.isSubModelLimit && cadence($0) == "weekly" && weeklyIsSpent($0)
+                    && QuotaWindowSnapshot(window: $0, now: now).isFresh
             }
+            let weeklyExhausted = spentWeekly != nil
             let masked: Set<String> = weeklyExhausted
                 ? Set(ordered.filter { !$0.isSubModelLimit && cadence($0) == "5h" }.map(\.id))
                 : []
@@ -160,9 +169,6 @@ public enum AntigravityQuotaGroups {
             // weekly then drives the pool at zero, so the row names the cap
             // that binds instead of offering a number the owner cannot act
             // on, and its reset is the one worth counting down to.
-            let spentWeekly = weeklyExhausted
-                ? ordered.first { !$0.isSubModelLimit && cadence($0) == "weekly" }
-                : nil
             let headline = driving ?? spentWeekly
             result.append(Pool(key: key,
                                windows: ordered,

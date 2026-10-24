@@ -2398,7 +2398,12 @@ final class MonitorModel: ObservableObject {
             // This Mac's own push fills in only a provider no local reader
             // produced — with local readers off, that is every provider.
             let adopted = ownPush.filter { !localProviders.contains($0.canonicalProviderKey) }
-            let adoptedKeys = Set(adopted.map(\.canonicalProviderKey))
+            // A window that carries no reading does not claim its provider.
+            // This Mac's plan details are its own push coming back, and they
+            // named the Antigravity key, so the fleet's live reading for
+            // Antigravity was held out of the row and the row read
+            // "unavailable" while the fleet carried a fresh reading for it.
+            let adoptedReadingKeys = Set(adopted.filter { $0.hasReading }.map(\.canonicalProviderKey))
             // A provider this Mac can never read locally still deserves its
             // server reading in the local list instead of "no report": the
             // Muse Assist collector runs on the VM, so its windows are never
@@ -2406,7 +2411,7 @@ final class MonitorModel: ObservableObject {
             // fleet-only keys don't sprout local rows.
             let fleetFallback = split.groups.flatMap(\.windows).filter {
                 let key = $0.canonicalProviderKey
-                return !localProviders.contains(key) && !adoptedKeys.contains(key)
+                return !localProviders.contains(key) && !adoptedReadingKeys.contains(key)
                     && expectedQuotaProviderKeys.contains(key)
             }
             let merged = self.localWindows + adopted + fleetFallback
@@ -2562,13 +2567,18 @@ final class MonitorModel: ObservableObject {
         let split = FleetOrigin.split(serverWindows, now: now)
         let ownPush = split.ownPush
         let adopted = ownPush.filter { !localProviders.contains($0.canonicalProviderKey) }
-        let adoptedKeys = Set(adopted.map(\.canonicalProviderKey))
+        // A window that carries no reading does not claim its provider, the
+        // same rule the refresh path uses:  the file poll overwrites the
+        // merged response, so a plan-details window that held the fleet's
+        // live reading out of the row here would empty it a minute after the
+        // refresh filled it.
+        let adoptedReadingKeys = Set(adopted.filter { $0.hasReading }.map(\.canonicalProviderKey))
         // Same fleet fallback as the refresh path: providers this Mac can
         // never read locally (e.g. Muse Assist, collected on the VM) show
         // their server reading instead of "no report".
         let fleetFallback = split.groups.flatMap(\.windows).filter {
             let key = $0.canonicalProviderKey
-            return !localProviders.contains(key) && !adoptedKeys.contains(key)
+            return !localProviders.contains(key) && !adoptedReadingKeys.contains(key)
                 && expectedQuotaProviderKeys.contains(key)
         }
         let merged = localWindows + adopted + fleetFallback

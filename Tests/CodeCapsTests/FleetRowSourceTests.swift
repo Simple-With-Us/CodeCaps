@@ -341,4 +341,90 @@ final class FleetRowSourceTests: XCTestCase {
         XCTAssertFalse(xai.contains { $0.remainingPercent == 0 },
                        "a copy of a period that ended is not in the widget's cache")
     }
+
+    /// A window that carries no reading does not claim its provider.
+    ///
+    /// This Mac's plan details are its own push coming back, and they named the
+    /// provider key, so the provider key was taken out of the fleet fallback
+    /// and the row was left with no reading at all while the fleet carried a
+    /// live one.  Owner 2026-10-23: the Antigravity rows read "unavailable"
+    /// beside a live fleet reading for the same provider.
+    func testTheFleetsLiveReadingReachesARowThisMacHoldsOnlyPlanDetailsFor() async throws {
+        let iso = ISO8601DateFormatter()
+        let now = Date()
+        let producer = QuotaPublisher.producerInstanceId
+        let machine = QuotaPublisher.machineName
+
+        // This Mac's only Antigravity window:  the plan details, which carry
+        // no reading, so it does not make this Mac a reader of Antigravity.
+        let planDetails = QuotaWindow(
+            id: "local-mac:google-antigravity:plan-metadata",
+            provider: "Antigravity",
+            providerKey: "google-antigravity",
+            label: "Plan Details",
+            remainingUnknown: true,
+            occurredAt: iso.string(from: now.addingTimeInterval(-60)),
+            source: "CodeCaps Settings",
+            producerInstanceId: producer,
+            machine: machine
+        )
+        // The same plan details coming back from the fleet:  this Mac's own
+        // push, with no reading, under the same provider key.
+        let planDetailsCopy = QuotaWindow(
+            id: "google-antigravity:plan-metadata",
+            provider: "Antigravity",
+            providerKey: "google-antigravity",
+            label: "Plan Details",
+            remainingUnknown: true,
+            occurredAt: iso.string(from: now.addingTimeInterval(-60)),
+            source: "codecaps",
+            producerInstanceId: producer,
+            machine: machine
+        )
+        // Another machine's live reading of the same provider.
+        let fleetReading = QuotaWindow(
+            id: "google-antigravity:weekly",
+            provider: "Antigravity",
+            providerKey: "google-antigravity",
+            label: "7-day window",
+            remainingPercent: 100,
+            resetAt: iso.string(from: now.addingTimeInterval(6 * 86_400)),
+            window: "weekly",
+            occurredAt: iso.string(from: now.addingTimeInterval(-60)),
+            source: "cli-chat-proxy.grok.com",
+            producerInstanceId: "grok-bot-box",
+            machine: "grok-bot-box"
+        )
+
+        let defaults = defaults()
+        let model = MonitorModel(defaults: defaults)
+        model.skipsSnapshotIOForTesting = true
+        model.localReadForTesting = { LocalQuotaResult(windows: [planDetails]) }
+        model.serverFetchForTesting = {
+            QuotaResponse(generatedAt: iso.string(from: now),
+                          windows: [planDetailsCopy, fleetReading])
+        }
+
+        model.refresh()
+        await model.refreshTaskForTesting?.value
+
+        let merged = model.response.windows.filter { $0.canonicalProviderKey == "google-antigravity" }
+        let readings = merged.filter { $0.remainingPercent != nil }
+        XCTAssertEqual(readings.count, 1,
+                       "the fleet's live reading reaches the row")
+        XCTAssertEqual(readings.first?.remainingPercent, 100,
+                       "the reading is the fleet's live one")
+        XCTAssertEqual(readings.first?.producerInstanceId, "grok-bot-box",
+                       "the reading is the fleet's, not this Mac's plan details")
+
+        // The file poll rebuilds the row and overwrites the merged response, so
+        // the same rule has to hold on that path too.
+        model.sessionFileReadForTesting = { LocalQuotaResult(windows: [planDetails]) }
+        model.refreshSessionFiles()
+        await model.sessionFileTaskForTesting?.value
+
+        let rebuilt = model.response.windows.filter { $0.canonicalProviderKey == "google-antigravity" }
+        XCTAssertEqual(rebuilt.filter { $0.remainingPercent != nil }.count, 1,
+                       "the file poll keeps the fleet's live reading in the row")
+    }
 }
