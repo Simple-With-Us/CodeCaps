@@ -1,0 +1,51 @@
+name: Version plan contract
+
+# The version-numbering rules behind the iOS TestFlight ship (owner directive
+# 2026-10-24, AFC-517).  scripts/ios-fleet/version-plan.mjs is the pure,
+# unit-tested copy of the rules; scripts/ios-fleet/ship-testflight.sh and
+# scripts/ios-fleet/asc-api.mjs implement the same rules against App Store
+# Connect.  This workflow runs the unit test, so a change to the rules cannot
+# land untested.
+#
+# It is a workflow of its own on purpose:  the workflows that can upload to
+# TestFlight are the ship workflows, and a rule change must never travel with
+# an edit to one of them.  Nothing here reaches App Store Connect, xcodebuild
+# or the network:  the test is pure, and the two syntax checks are parser
+# runs.  So it is safe to run on every pull request that touches the rules.
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/ios-fleet/version-plan.mjs'
+      - 'scripts/ios-fleet/version-plan.test.mjs'
+      - 'scripts/ios-fleet/ship-testflight.sh'
+      - 'scripts/ios-fleet/asc-api.mjs'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/ios-fleet/version-plan.mjs'
+      - 'scripts/ios-fleet/version-plan.test.mjs'
+      - 'scripts/ios-fleet/ship-testflight.sh'
+      - 'scripts/ios-fleet/asc-api.mjs'
+  workflow_dispatch:
+
+concurrency:
+  group: version-plan-contract-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  rules:
+    name: Version numbering rules
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Version-numbering rules (AFC-517)
+        run: |
+          node --check scripts/ios-fleet/version-plan.mjs
+          node --check scripts/ios-fleet/asc-api.mjs
+          bash -n scripts/ios-fleet/ship-testflight.sh
+          node --test scripts/ios-fleet/version-plan.test.mjs

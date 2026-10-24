@@ -8,9 +8,12 @@
 #   bash /Users/jay/apps/ios-fleet/publish-ios-versions.sh \
 #     --bundle-id trade.socratic.app \
 #     --version 1.0.68 \
-#     [--build 202608211800] \
+#     [--build 2360] \
 #     [--apple-id 6799238379] \
 #     [--display-name "Socratic.Trade"]
+#
+# The marketing version and the build number are independent (AFC-517), so
+# both are passed separately and neither is derived from the other.
 #
 # Writes:
 #   /Users/jay/apps/ios-fleet/ios-app-versions.json
