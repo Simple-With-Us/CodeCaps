@@ -100,6 +100,66 @@ final class WidgetTests: XCTestCase {
         )
     }
 
+    /// Owner 2026-10-22: the desktop widget read "At Cap" for six providers and
+    /// showed figures the app had already replaced.
+    ///
+    /// The widget believed stale windows, so the shared freshness rule has to
+    /// reach it.  It cannot carry a threshold of its own, because the Mac's
+    /// dashboard, the cap rule and the phone all age a reading the same way.
+    func testWidgetAgesItsReadingsByTheSharedRule() throws {
+        let source = try readSource(at: Self.widgetPresentationURL)
+        XCTAssertTrue(
+            source.contains("QuotaFreshnessRule.isFresh(observedAt: observedAt, resetAt: resetAt, now: now)"),
+            "the widget must ask the shared freshness rule about a window"
+        )
+        XCTAssertTrue(
+            source.contains("QuotaFreshnessRule.isReadingRecent(observedAt: observedAt, now: now)"),
+            "the widget must age a reading by the shared rule"
+        )
+        XCTAssertFalse(
+            source.contains("private static let staleAfter"),
+            "the widget must not carry a stale threshold of its own"
+        )
+        XCTAssertFalse(
+            source.contains("30 * 60"),
+            "the widget must not restate the shared threshold beside the rule"
+        )
+    }
+
+    /// Only a fresh window may cap a plan in the widget.  A stale window said
+    /// how the plan looked when the reading was taken.
+    func testWidgetOnlyLetsAFreshWindowCapAPlan() throws {
+        let source = try readSource(at: Self.widgetPresentationURL)
+        XCTAssertTrue(
+            source.contains(".filter { $0.isFresh(now: now) }"),
+            "the widget's cap window must be chosen from the fresh windows"
+        )
+        XCTAssertTrue(
+            source.contains("let atCap = freshWindows.first {"),
+            "the widget's cap line must be decided from the fresh windows"
+        )
+    }
+
+    /// The marker on a widget bar is drawn for the same period the Mac's
+    /// caption names, so the widget cannot keep its own copy of the words that
+    /// name a period.  Its old copy had no three hour branch, so a three hour
+    /// window drew a marker for a different period than the one it named.
+    func testWidgetResolvesItsPeriodThroughTheSharedResolver() throws {
+        let source = try readSource(at: Self.widgetPresentationURL)
+        XCTAssertTrue(
+            source.contains("ResetAlarmCadence.resolve(token: cadence, label: label)"),
+            "the widget must ask the shared period resolver"
+        )
+        XCTAssertFalse(
+            source.contains("words.contains(\"5h\")"),
+            "the widget must not keep its own copy of the words that name a period"
+        )
+        XCTAssertFalse(
+            source.contains("words.contains(\"7d\")"),
+            "the widget must not keep its own copy of the words that name a period"
+        )
+    }
+
     /// The widget and the phone have to answer the same question the same way
     /// about one payload.
     ///
@@ -123,16 +183,43 @@ final class WidgetTests: XCTestCase {
             "the widget's five-hour row must not keep its own zero test"
         )
         XCTAssertTrue(
-            source.contains("let weeklyExhausted = QuotaCapRule.isExhausted(remainingPercent: weeklyPct,"),
-            "the widget's weekly must be decided through the shared rule"
+            source.contains("let weeklyExhausted = isFresh(weeklyWin)"),
+            "the widget's weekly must be decided through the shared rule, and only a fresh reading may spend it"
         )
         XCTAssertTrue(
-            source.contains("let isExhausted = weeklyExhausted || QuotaCapRule.isAtCap(remainingPercent: controllingPct)"),
-            "a spent weekly must spend the pool even when the five-hour window still reports headroom"
+            source.contains("let isExhausted = weeklyExhausted || QuotaCapRule.isAtCap(remainingPercent: freshPercents.min())"),
+            "a spent weekly must spend the pool even when the five-hour window still reports headroom, "
+                + "and only a fresh reading may spend it"
         )
         XCTAssertTrue(
             source.contains("QuotaCapRule.publishedReading(remainingPercent: w.remainingPercent,"),
             "the widget must publish the same bounded reading the phone publishes"
+        )
+    }
+
+    /// A spent five hour allowance has to publish the same figure here as it
+    /// does on the phone.
+    ///
+    /// The widget published the fallback zero for a spent five hour allowance
+    /// that carried no figure, while the phone published nothing for the same
+    /// window, so one payload showed a zero bar on one surface and a dash on
+    /// the other (Kody review 2026-10-22).  The phone now publishes the zero
+    /// for every spent row, and this pins the widget's half of that pair: it
+    /// decides the window through the shared rule and publishes through the
+    /// shared rule, so neither surface can drift from the other again.
+    func testTheWidgetPublishesASpentFiveHourWindowTheWayThePhoneDoes() throws {
+        let source = try readSource(at: Self.widgetPresentationURL)
+        XCTAssertTrue(
+            source.contains("let fiveHourSpent = isFresh(fiveHourWin)"),
+            "the widget must decide the five-hour window through the shared rule, and only a fresh reading may spend it"
+        )
+        XCTAssertTrue(
+            source.contains("&& QuotaCapRule.isExhausted(remainingPercent: f.remainingPercent,"),
+            "the widget's five-hour window must be judged by the shared rule"
+        )
+        XCTAssertTrue(
+            source.contains("remainingPercent: QuotaCapRule.publishedReading(remainingPercent: f.remainingPercent,"),
+            "the widget must publish the five-hour reading through the shared rule"
         )
     }
 

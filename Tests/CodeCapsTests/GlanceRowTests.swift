@@ -859,6 +859,49 @@ final class GlanceMeterTests: XCTestCase {
         XCTAssertEqual(glanceMeterCaption(makeWindow(id: "y", label: "Gemini Models · 5-hour", token: "shared")), "5h")
     }
 
+    /// Owner 2026-10-22: the Muse Code five hour marker sat at about nine tenths
+    /// of the bar and looked like it was in the wrong place.
+    ///
+    /// The marker is the elapsed fraction of the window, which is the meaning
+    /// the Mac's own copy states:  "time elapsed · day 1 of 7" under a seven
+    /// day window.  A five hour window with 28 minutes to reset has 4h32m of its
+    /// five hours gone, so 90.7% is where the marker belongs, and the small red
+    /// segment at the left is the one percent of the allowance that was used.
+    ///
+    /// The real defect was that the caption and the marker were two different
+    /// resolvers, so a label naming both a five hour window and a day took a
+    /// "5h" caption beside a marker drawn for a whole day.  One resolver answers
+    /// for both now, and these tests pin that.
+    func testTheMuseCodeFiveHourMarkerSitsWhereTheElapsedFractionPutsIt() {
+        let snapshot = makeWindow(id: "muse-code", label: "5h window", token: "5h",
+                                  remaining: 99, resetIn: 28 * 60)
+        XCTAssertEqual(glanceMeterCaption(snapshot), "5h")
+        let fraction = try? XCTUnwrap(snapshot.elapsedFraction(now: now))
+        XCTAssertEqual(fraction ?? 0, 16320.0 / 18000.0, accuracy: 0.0001,
+                       "4h32m of a five hour window is 90.7% elapsed")
+    }
+
+    /// The caption and the marker resolve one period, so they cannot disagree
+    /// about the same window.
+    func testTheCaptionAndTheMarkerResolveTheSamePeriod() {
+        let cases: [(label: String, caption: String, seconds: TimeInterval)] = [
+            ("5-hour window", "5h", 5 * 3_600),
+            ("3h window", "3h", 3 * 3_600),
+            ("5-hour daily limit", "5h", 5 * 3_600),
+            ("7-day window", "7d", 7 * 86_400),
+            ("weekly window", "7d", 7 * 86_400),
+        ]
+        for testCase in cases {
+            let snapshot = makeWindow(id: testCase.label, label: testCase.label, token: "shared",
+                                      remaining: 50, resetIn: 3_600)
+            XCTAssertEqual(glanceMeterCaption(snapshot), testCase.caption,
+                           "the caption for '\(testCase.label)'")
+            let span = try? XCTUnwrap(snapshot.periodSpan())
+            XCTAssertEqual(span?.duration ?? 0, testCase.seconds, accuracy: 1,
+                           "the marker period for '\(testCase.label)'")
+        }
+    }
+
     func testMuseAssistNonStandardCadenceWindowIsNotAnExtraAllowance() {
         // An 8-hour Muse Assist window resolves to the vocabulary's "Other
         // limit" catch-all, but it is a real meter, not extra usage: captioning

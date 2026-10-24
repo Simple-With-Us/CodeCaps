@@ -31,6 +31,7 @@ final class QuotaCapRuleTests: XCTestCase {
         id: String,
         percent: Double?,
         resetsIn: TimeInterval? = 3600,
+        isFresh: Bool = true,
         isMasked: Bool = false,
         isSupplementaryVideoQuota: Bool = false,
         isScopedPoolAllowance: Bool = false,
@@ -40,11 +41,36 @@ final class QuotaCapRuleTests: XCTestCase {
             id: id,
             remainingPercent: percent,
             resetAt: resetsIn.map { now.addingTimeInterval($0) },
+            isFresh: isFresh,
             isMasked: isMasked,
             isSupplementaryVideoQuota: isSupplementaryVideoQuota,
             isScopedPoolAllowance: isScopedPoolAllowance,
             isSubModelLimit: isSubModelLimit
         )
+    }
+
+    // MARK: - A stale window never binds the cap
+
+    /// Owner 2026-10-22: the xAI row read "7-day cap" while the sidebar beside
+    /// it read 96%.  The xAI section carried a fresh 96% window beside two
+    /// windows that reported an exhausted allowance days ago, and the cap rule
+    /// believed one of those stale windows while the number rule beside it
+    /// filtered on freshness.
+    func testAStaleWindowNeverBindsTheCap() {
+        let windows = [
+            facts(id: "fresh", percent: 96),
+            facts(id: "stale", percent: 0, resetsIn: -86_400, isFresh: false),
+        ]
+        XCTAssertNil(QuotaCapRule.bindingWindow(in: windows),
+                     "a stale window must not bind a plan's cap")
+    }
+
+    func testAFreshWindowStillBindsTheCap() {
+        let windows = [
+            facts(id: "fresh", percent: 96),
+            facts(id: "spent", percent: 0),
+        ]
+        XCTAssertEqual(QuotaCapRule.bindingWindow(in: windows)?.id, "spent")
     }
 
     // MARK: - The reading decides
@@ -311,6 +337,7 @@ final class QuotaCapRuleTests: XCTestCase {
                     id: $0.window.id,
                     remainingPercent: $0.remainingPercent,
                     resetAt: $0.resetAt,
+                    isFresh: $0.isFresh,
                     isSupplementaryVideoQuota: $0.window.isSupplementaryVideoQuota,
                     isScopedPoolAllowance: $0.window.isScopedPoolAllowance,
                     isSubModelLimit: $0.window.isSubModelLimit

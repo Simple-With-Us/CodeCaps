@@ -793,23 +793,16 @@ public final class ResetAlarmManager: ObservableObject {
 /// or — for Cursor's plan, which carries neither — its provider.  `nil` when
 /// nothing says, which the tracker treats as "not the largest window" unless
 /// the provider has nothing better.
+///
+/// The shared resolver answers, so the tracker's period is the same period the
+/// row's caption names and the row's marker is drawn for.
 func quotaWindowPeriodSeconds(_ snapshot: QuotaWindowSnapshot) -> TimeInterval? {
-    if snapshot.window.canonicalProviderKey == "minimax", !snapshot.window.isSupplementaryVideoQuota {
-        let token = (snapshot.window.window ?? "").lowercased()
-        let label = snapshot.window.label.lowercased()
-        if !token.contains("week") && !token.contains("7d") && !label.contains("week") && !label.contains("7d") {
-            return 5 * 3_600
-        }
+    if let period = glanceWindowPeriod(snapshot) {
+        return ResetAlarmCadence.seconds(for: period)
     }
     let token = (snapshot.window.window ?? "").lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-    if let seconds = glanceDurationSeconds(token) { return seconds }
-    if glanceIsMonthly(snapshot) { return 30 * 86_400 }
-    if let parsed = WindowPacing.parseDurationSeconds(token: snapshot.window.window, label: snapshot.window.label) {
-        return parsed
-    }
     switch token {
     case "session": return 5 * 3_600
-    case "daily", "day": return 86_400
     default: return nil
     }
 }

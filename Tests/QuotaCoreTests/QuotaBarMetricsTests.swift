@@ -25,13 +25,15 @@ final class QuotaBarMetricsTests: XCTestCase {
         remaining: Double? = 50,
         reset: String?,
         periodStart: String? = nil,
+        provider: String = "Cursor",
+        providerKey: String = "cursor",
         now: Date
     ) -> QuotaWindowSnapshot {
         let iso = ISO8601DateFormatter()
         return QuotaWindowSnapshot(window: QuotaWindow(
             id: "w",
-            provider: "Cursor",
-            providerKey: "cursor",
+            provider: provider,
+            providerKey: providerKey,
             label: label,
             remainingPercent: remaining,
             remainingUnknown: remaining == nil,
@@ -493,9 +495,23 @@ final class QuotaBarMetricsTests: XCTestCase {
 
     func testNoDerivablePeriodMeansNoMarker() {
         let now = date("2026-09-30T12:00:00Z")
-        let plan = snapshot(token: "plan", label: "Included plan", reset: "2026-10-15T00:00:00Z", now: now)
+        let plan = snapshot(token: "opaque", label: "Usage window", reset: "2026-10-15T00:00:00Z",
+                            provider: "Anthropic", providerKey: "anthropic", now: now)
         XCTAssertNil(plan.elapsedFraction(now: now))
         XCTAssertNil(QuotaBarMetrics(snapshot: plan, now: now).elapsedFraction)
+    }
+
+    /// Cursor's included plan resets with Cursor's monthly billing cycle, so
+    /// the marker beside the caption that names "1m" is drawn for that month.
+    ///
+    /// The caption and the marker resolve one period now, so a window whose
+    /// caption names a month draws a month.
+    func testCursorsIncludedPlanDrawsItsMonthMarker() throws {
+        let now = date("2026-09-30T12:00:00Z")
+        let plan = snapshot(token: "weekly", label: "Included plan",
+                            reset: "2026-10-15T00:00:00Z", now: now)
+        let fraction = try XCTUnwrap(plan.elapsedFraction(now: now))
+        XCTAssertEqual(fraction, 15.5 / 30.0, accuracy: 1e-6)
     }
 
     func testAnAbsurdlyLongPeriodIsNotDrawn() {

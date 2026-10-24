@@ -338,6 +338,49 @@ final class CompanionModelTests: XCTestCase {
         )
     }
 
+    /// Owner 2026-10-22: the xAI row read "7-day cap" while the sidebar beside
+    /// it read 96%, because the cap rule believed a window that reported an
+    /// exhausted allowance days ago.
+    ///
+    /// The phone's windows come from a live pull of the same feed the Mac
+    /// reads, and they carry the same timestamp, so the phone asks the shared
+    /// freshness rule with the shared threshold and the two surfaces answer
+    /// the same question about one account the same way.
+    func testThePhoneAgesItsReadingsByTheSharedRule() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains("QuotaFreshnessRule.isFresh(observedAt: reportedAt, resetAt: resetAt, now: now)"),
+            "the phone must ask the shared freshness rule, not carry a threshold of its own"
+        )
+        XCTAssertTrue(
+            source.contains("isFresh: $0.isFresh(now: now)"),
+            "the phone must state each window's freshness to the shared cap rule"
+        )
+        XCTAssertFalse(
+            source.contains("30 * 60"),
+            "the phone must not restate the shared threshold beside the rule"
+        )
+    }
+
+    /// The marker on the phone's bar is drawn for the same period the Mac's
+    /// caption names, so the phone cannot keep its own copy of the words that
+    /// name a period.
+    func testThePhoneResolvesItsPeriodThroughTheSharedResolver() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains("ResetAlarmCadence.resolve(token: cadence, label: label)"),
+            "the phone must ask the shared period resolver"
+        )
+        XCTAssertFalse(
+            source.contains("words.contains(\"5h\")"),
+            "the phone must not keep its own copy of the words that name a period"
+        )
+        XCTAssertFalse(
+            source.contains("words.contains(\"7d\")"),
+            "the phone must not keep its own copy of the words that name a period"
+        )
+    }
+
     /// A masked window's reading must not be believed: it fed the card's
     /// headline and the meter bar, so the phone drew a figure that the label
     /// beside it called "n/a".
@@ -391,12 +434,51 @@ final class CompanionModelTests: XCTestCase {
     func testAPoolIsSpentWhenAnyOfItsWindowsIs() throws {
         let model = try readCompanionModelSource()
         XCTAssertTrue(
-            model.contains("let isExhausted = primaryWindows.contains(where: \\.isExhausted)"),
+            model.contains("let isExhausted = primaryWindows.contains {"),
             "the pool must be spent when any of its windows is"
         )
         XCTAssertFalse(
             model.contains("remainingPercent: controllingPct,\n            providerSaysExhausted: primaryWindows"),
             "the provider's word must not be weighed against another window's reading"
+        )
+    }
+
+    /// The plan level exhaustion flag must not count the windows the shared
+    /// rule refuses to bind.
+    ///
+    /// `QuotaCapRule.bindingWindowIndex` never binds a sub model limit, a
+    /// scoped pool allowance or a supplementary video quota, and the phone's
+    /// own `atCapWindow()` and the Mac's `QuotaPlatformSection.atCapWindow()`
+    /// both go through it.  The plan level flag ORed every primary window, so
+    /// one of those windows reported the whole plan spent while the two
+    /// surfaces that answer the owner's question said the plan still had
+    /// headroom (Kody review 2026-10-22).
+    func testThePlanLevelExhaustionExcludesTheWindowKindsTheRuleExcludes() throws {
+        let model = try readCompanionModelSource()
+        for excluded in ["!$0.isSupplementaryVideoQuota", "!$0.isScopedPoolAllowance", "!$0.isSubModelLimit"] {
+            XCTAssertTrue(
+                model.contains(excluded),
+                "the plan level exhaustion must exclude the window kind marked by \(excluded): the shared rule never binds it"
+            )
+        }
+    }
+
+    /// A spent allowance publishes zero, whichever period it belongs to.
+    ///
+    /// The phone published the fallback zero for a weekly row only, while the
+    /// widget published one for a spent five hour allowance that carried no
+    /// figure, so one payload showed a zero bar on one surface and a dash on
+    /// the other (Kody review 2026-10-22).  The row's own provider word now
+    /// decides for every period, and the reading still outranks it.
+    func testASpentRowPublishesZeroWhicheverPeriodItIs() throws {
+        let model = try readCompanionModelSource()
+        XCTAssertTrue(
+            model.contains("let allowanceSpent = providerSaysSpent || (period == \"weekly\" && weeklyExhausted)"),
+            "a spent row must publish zero whichever period it belongs to"
+        )
+        XCTAssertFalse(
+            model.contains("allowanceSpent: period == \"weekly\" && (weeklyExhausted || providerSaysSpent)"),
+            "the fallback zero must not be gated on the weekly period alone"
         )
     }
 
@@ -414,7 +496,7 @@ final class CompanionModelTests: XCTestCase {
             "the row must consider the exhausted word of the window it is actually built from"
         )
         XCTAssertTrue(
-            model.contains("allowanceSpent: period == \"weekly\" && (weeklyExhausted || providerSaysSpent)"),
+            model.contains("let allowanceSpent = providerSaysSpent || (period == \"weekly\" && weeklyExhausted)"),
             "a weekly the provider reports as gone must publish zero even when the pool's other weekly window differs"
         )
     }
@@ -453,7 +535,7 @@ final class CompanionModelTests: XCTestCase {
             "the phone must publish its reading through the shared rule"
         )
         XCTAssertTrue(
-            model.contains("allowanceSpent: period == \"weekly\" && (weeklyExhausted || providerSaysSpent)"),
+            model.contains("let allowanceSpent = providerSaysSpent || (period == \"weekly\" && weeklyExhausted)"),
             "an exhausted weekly with no figure must publish zero"
         )
     }

@@ -60,11 +60,32 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
         self.isExtraAllowance = isExtraAllowance
     }
 
-    private static let staleAfter: TimeInterval = 30 * 60
-
+    /// Whether the reading is old enough that the widget says when it was
+    /// taken instead of pretending it is current.
+    ///
+    /// The rule is the shared one, `QuotaFreshnessRule`, so the widget ages a
+    /// reading the way the Mac's dashboard and the cap rule do.
     public func isStale(now: Date = Date()) -> Bool {
-        guard let observedAt else { return false }
-        return now.timeIntervalSince(observedAt) > Self.staleAfter
+        guard observedAt != nil else { return false }
+        return !QuotaFreshnessRule.isReadingRecent(observedAt: observedAt, now: now)
+    }
+
+    /// Whether this window's reading is recent enough to believe, by the shared
+    /// rule the Mac's dashboard number and the cap rule use.
+    ///
+    /// A window whose reset has already passed is waiting for a fresh reading,
+    /// so its old number says nothing about the plan now.
+    public func isFresh(now: Date = Date()) -> Bool {
+        QuotaFreshnessRule.isFresh(observedAt: observedAt, resetAt: resetAt, now: now)
+    }
+
+    /// Whether this window's reading is newer than another's, so the fresher
+    /// one wins the place in a row.
+    public func isFresher(than other: WidgetWindowItem, now: Date = Date()) -> Bool {
+        let mineFresh = isFresh(now: now)
+        let theirsFresh = other.isFresh(now: now)
+        if mineFresh != theirsFresh { return mineFresh }
+        return (observedAt ?? .distantPast) > (other.observedAt ?? .distantPast)
     }
 
     public var displayPercent: String {
@@ -119,22 +140,19 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
         WidgetPresentation.resetCaption(resetAt: resetAt, now: now)
     }
 
+    /// How far through its period the window is, 0...1, or nil when the period
+    /// is unknown.
+    ///
+    /// The shared resolver answers, the same one the Mac's caption and the
+    /// Mac's marker ask, so the marker on a widget bar is drawn for the period
+    /// the caption beside it names.
     public func elapsedFraction(now: Date = Date()) -> Double? {
         guard let resetAt else { return nil }
-        let token = cadence.isEmpty ? label : cadence
-        let words = "\(token) \(label)".lowercased()
-        let durationSeconds: TimeInterval? = {
-            if words.contains("5h") || words.contains("5-hour") || words.contains("five_hour") { return 5 * 3600 }
-            if words.contains("4h") || words.contains("4-hour") || words.contains("four_hour") { return 4 * 3600 }
-            if words.contains("7d") || words.contains("7-day") || words.contains("weekly") || words.contains("1w") { return 7 * 86400 }
-            if words.contains("1d") || words.contains("daily") { return 86400 }
-            if words.contains("billing") || words.contains("cycle") || words.contains("monthly") { return 30 * 86400 }
-            return nil
-        }()
-        guard let duration = durationSeconds, duration > 0 else { return nil }
-        let start = resetAt.addingTimeInterval(-duration)
+        guard let period = ResetAlarmCadence.resolve(token: cadence, label: label),
+              let start = ResetAlarmCadence.start(of: period, endingAt: resetAt) else { return nil }
+        let duration = resetAt.timeIntervalSince(start)
+        guard duration > 0 else { return nil }
         let elapsed = now.timeIntervalSince(start)
-        guard elapsed >= 0 else { return 0.0 }
         return min(1.0, max(0.0, elapsed / duration))
     }
 }
@@ -245,8 +263,14 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
     /// windows, with the soonest reset winning because that is the one that
     /// answers "when can I work again".  Mirrors
     /// `QuotaPlatformSection.atCapWindow()`.
-    public func atCapWindow() -> WidgetWindowItem? {
+    ///
+    /// Only a fresh window may cap the plan.  A stale window said how the plan
+    /// looked when the reading was taken, and the widget believed it:  every
+    /// provider read "At Cap" beside bars the app had already recovered (owner,
+    /// Oct-22-2026).
+    public func atCapWindow(now: Date = Date()) -> WidgetWindowItem? {
         windows
+            .filter { $0.isFresh(now: now) }
             .filter { !$0.isMasked && $0.remainingPercent != nil }
             .filter { WidgetPresentation.isAtCap(percent: $0.remainingPercent, isExhausted: $0.isExhausted) }
             .min { ($0.resetAt ?? .distantFuture) < ($1.resetAt ?? .distantFuture) }
@@ -642,8 +666,9 @@ public enum WidgetPresentation {
         rawWindows: [WireRawWindow],
         now: Date
     ) -> WidgetPlatformItem {
+        var windowByCadence: [String: WidgetWindowItem] = [:]
+        var cadenceOrder: [String] = []
         var childWindows: [WidgetWindowItem] = []
-        var seenCadenceKeys: Set<String> = []
 
         for w in rawWindows {
             let parsedReset = parseDate(from: w.resetAt)
@@ -671,22 +696,34 @@ public enum WidgetPresentation {
                 windowToken: w.window
             )
 
+            let item = WidgetWindowItem(
+                id: w.id,
+                label: displayLabel,
+                cadence: cadence,
+                remainingPercent: pct,
+                resetAt: parsedReset,
+                isExhausted: exhausted,
+                isMasked: false,
+                observedAt: observed,
+                isExtraAllowance: isExtraAllowance
+            )
+
+            // One window per cadence, and the freshest one.  The payload
+            // carries a fleet copy beside the local window, and the fleet copy
+            // is often days old, so taking the first one in payload order let a
+            // stale copy win and the widget show figures the app had already
+            // replaced (owner, Oct-22-2026).
             let cadenceKey = cadence.lowercased()
-            if !seenCadenceKeys.contains(cadenceKey) {
-                seenCadenceKeys.insert(cadenceKey)
-                childWindows.append(WidgetWindowItem(
-                    id: w.id,
-                    label: displayLabel,
-                    cadence: cadence,
-                    remainingPercent: pct,
-                    resetAt: parsedReset,
-                    isExhausted: exhausted,
-                    isMasked: false,
-                    observedAt: observed,
-                    isExtraAllowance: isExtraAllowance
-                ))
+            if let current = windowByCadence[cadenceKey] {
+                if item.isFresher(than: current, now: now) {
+                    windowByCadence[cadenceKey] = item
+                }
+            } else {
+                cadenceOrder.append(cadenceKey)
+                windowByCadence[cadenceKey] = item
             }
         }
+        childWindows = cadenceOrder.compactMap { windowByCadence[$0] }
 
         // Standardize cadence order: shorter periods (e.g. 5-hour) precede longer periods (e.g. weekly).
         childWindows.sort { left, right in
@@ -698,12 +735,20 @@ public enum WidgetPresentation {
             return left.id < right.id
         }
 
-        let validPercents = childWindows.compactMap(\.remainingPercent)
-        let atCap = childWindows.first {
+        // The headline reads the fresh windows, the way the Mac's dashboard row
+        // does:  a stale reading says how the plan looked when it was taken.
+        // The last known reading stands in when nothing is fresh, so a row with
+        // no live reading still shows what it last knew, beside the time it
+        // was taken.
+        let freshWindows = childWindows.filter { $0.isFresh(now: now) }
+        let freshPercent = freshWindows.compactMap(\.remainingPercent).min()
+        let lastKnownPercent = childWindows.compactMap(\.remainingPercent).min()
+        // Only a fresh window may cap the plan.
+        let atCap = freshWindows.first {
             WidgetPresentation.isAtCap(percent: $0.remainingPercent, isExhausted: $0.isExhausted)
         }
-        let controllingPct = atCap?.remainingPercent ?? validPercents.min()
-        let isExhausted = atCap != nil || (controllingPct ?? 100) <= 0
+        let controllingPct = atCap?.remainingPercent ?? freshPercent ?? lastKnownPercent
+        let isExhausted = atCap != nil
         let nearestReset = childWindows.compactMap(\.resetAt).filter { $0 > now }.min()
             ?? childWindows.compactMap(\.resetAt).min()
 
@@ -748,27 +793,53 @@ public enum WidgetPresentation {
         var fiveHourWin: WireRawWindow?
         var weeklyWin: WireRawWindow?
 
+        /// Whether a window's reading is recent enough to believe, by the
+        /// shared rule.
+        func isFresh(_ window: WireRawWindow?) -> Bool {
+            guard let window else { return false }
+            return QuotaFreshnessRule.isFresh(observedAt: parseDate(from: window.occurredAt),
+                                              resetAt: parseDate(from: window.resetAt),
+                                              now: now)
+        }
+
+        /// The freshest window wins, not the smallest reading.  The payload
+        /// carries pool copies that are days old and read zero, and taking the
+        /// smallest reading picked those, so the widget said the pool was spent
+        /// while the app had already recovered it (owner, Oct-22-2026).
+        func isFresher(_ candidate: WireRawWindow, than current: WireRawWindow?) -> Bool {
+            guard let current else { return true }
+            let candidateFresh = isFresh(candidate)
+            let currentFresh = isFresh(current)
+            if candidateFresh != currentFresh { return candidateFresh }
+            return (parseDate(from: candidate.occurredAt) ?? .distantPast)
+                > (parseDate(from: current.occurredAt) ?? .distantPast)
+        }
+
         for w in windows {
             let label = (w.label + " " + (w.window ?? "")).lowercased()
             if label.contains("5h") || label.contains("5-hour") {
-                if fiveHourWin == nil || (w.remainingPercent ?? 100) < (fiveHourWin?.remainingPercent ?? 100) {
+                if isFresher(w, than: fiveHourWin) {
                     fiveHourWin = w
                 }
             } else if label.contains("7d") || label.contains("weekly") || label.contains("1w") {
-                if weeklyWin == nil || (w.remainingPercent ?? 100) < (weeklyWin?.remainingPercent ?? 100) {
+                if isFresher(w, than: weeklyWin) {
                     weeklyWin = w
                 }
             }
         }
 
         let weeklyPct = weeklyWin?.remainingPercent
-        let weeklyExhausted = QuotaCapRule.isExhausted(remainingPercent: weeklyPct,
-                                                        providerSaysExhausted: weeklyWin?.isExhausted ?? false)
+        // Only a fresh window may spend the pool.  A pool copy that is days old
+        // is not evidence about the pool now.
+        let weeklyExhausted = isFresh(weeklyWin)
+            && QuotaCapRule.isExhausted(remainingPercent: weeklyPct,
+                                        providerSaysExhausted: weeklyWin?.isExhausted ?? false)
 
         if let f = fiveHourWin {
             let reset = parseDate(from: f.resetAt)
-            let fiveHourSpent = QuotaCapRule.isExhausted(remainingPercent: f.remainingPercent,
-                                                          providerSaysExhausted: f.isExhausted ?? false)
+            let fiveHourSpent = isFresh(fiveHourWin)
+                && QuotaCapRule.isExhausted(remainingPercent: f.remainingPercent,
+                                            providerSaysExhausted: f.isExhausted ?? false)
             childWindows.append(WidgetWindowItem(
                 id: f.id,
                 label: "5-hour window",
@@ -780,7 +851,8 @@ public enum WidgetPresentation {
                                                                 allowanceSpent: fiveHourSpent),
                 resetAt: reset,
                 isExhausted: fiveHourSpent,
-                isMasked: weeklyExhausted
+                isMasked: weeklyExhausted,
+                observedAt: parseDate(from: f.occurredAt)
             ))
         }
 
@@ -797,17 +869,24 @@ public enum WidgetPresentation {
                                                                 allowanceSpent: weeklyExhausted),
                 resetAt: reset,
                 isExhausted: weeklyExhausted,
-                isMasked: false
+                isMasked: false,
+                observedAt: parseDate(from: w.occurredAt)
             ))
         }
 
         let validPercents = [fiveHourWin?.remainingPercent, weeklyWin?.remainingPercent].compactMap { $0 }
-        let controllingPct = validPercents.min() ?? windows.compactMap(\.remainingPercent).min()
+        // The headline reads the fresh windows, the way the Mac's dashboard row
+        // does, and falls back to the last known reading when nothing is fresh.
+        let freshPercents = [
+            fiveHourWin.flatMap { isFresh($0) ? $0.remainingPercent : nil },
+            weeklyWin.flatMap { isFresh($0) ? $0.remainingPercent : nil }
+        ].compactMap { $0 }
+        let controllingPct = freshPercents.min() ?? validPercents.min() ?? windows.compactMap(\.remainingPercent).min()
         // The pool rule the phone applies:  a weekly the provider reports as
         // spent spends the pool even when the five-hour window beside it still
         // reports a healthy reading, and the controlling reading decides every
         // other case.
-        let isExhausted = weeklyExhausted || QuotaCapRule.isAtCap(remainingPercent: controllingPct)
+        let isExhausted = weeklyExhausted || QuotaCapRule.isAtCap(remainingPercent: freshPercents.min())
 
         let nearestReset = childWindows.compactMap(\.resetAt).filter { $0 > now }.min()
             ?? childWindows.compactMap(\.resetAt).min()

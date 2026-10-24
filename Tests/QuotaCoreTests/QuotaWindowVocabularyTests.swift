@@ -173,4 +173,80 @@ final class QuotaWindowVocabularyTests: XCTestCase {
         XCTAssertEqual(QuotaWindowVocabulary.atCapCadence(cadence: "5-hour"), "5-hour")
         XCTAssertEqual(QuotaWindowVocabulary.atCapCadence(cadence: "weekly"), "7-day")
     }
+
+    // MARK: - The freshness rule
+
+    /// Owner 2026-10-22: the xAI row read "7-day cap" while the sidebar beside
+    /// it read 96%.  The number rule filtered on freshness and the cap rule did
+    /// not, so a window that reported an exhausted allowance days ago still
+    /// bound the cap.
+    ///
+    /// These tests pin the one threshold every surface uses, so the Mac's
+    /// dashboard, the cap rule, the widget and the phone age a reading the same
+    /// way.
+    func testAReadingYoungerThanHalfAnHourIsFresh() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        XCTAssertTrue(QuotaFreshnessRule.isReadingRecent(observedAt: now.addingTimeInterval(-60), now: now))
+        XCTAssertTrue(QuotaFreshnessRule.isReadingRecent(observedAt: now, now: now))
+    }
+
+    func testAReadingOlderThanHalfAnHourIsNotFresh() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let stale = now.addingTimeInterval(-(QuotaFreshnessRule.staleAfter + 1))
+        XCTAssertFalse(QuotaFreshnessRule.isReadingRecent(observedAt: stale, now: now))
+    }
+
+    func testAReadingWithNoTimestampIsNotFresh() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        XCTAssertFalse(QuotaFreshnessRule.isReadingRecent(observedAt: nil, now: now))
+    }
+
+    func testAReadingFromBeyondTheFutureSkewIsNotFresh() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let ahead = now.addingTimeInterval(QuotaFreshnessRule.maximumFutureSkew + 60)
+        XCTAssertFalse(QuotaFreshnessRule.isReadingRecent(observedAt: ahead, now: now))
+    }
+
+    /// A window whose reset has passed is waiting for a fresh reading, so its
+    /// old number says nothing about the plan now.
+    func testAWindowWhoseResetHasPassedIsNotFresh() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        XCTAssertFalse(QuotaFreshnessRule.isFresh(observedAt: now.addingTimeInterval(-60),
+                                                  resetAt: now.addingTimeInterval(-1),
+                                                  now: now))
+        XCTAssertTrue(QuotaFreshnessRule.isFresh(observedAt: now.addingTimeInterval(-60),
+                                                 resetAt: now.addingTimeInterval(3600),
+                                                 now: now))
+    }
+
+    /// The Mac's own snapshot asks the shared rule, so the dashboard and the cap
+    /// rule can never read one window differently.
+    func testTheMacSnapshotAsksTheSharedRule() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let iso = ISO8601DateFormatter()
+        let window = QuotaWindow(
+            id: "xai:subscription",
+            provider: "xAI",
+            providerKey: "xai",
+            providerLabel: "xAI",
+            label: "7-day window",
+            remainingPercent: 96,
+            window: "weekly",
+            occurredAt: iso.string(from: now.addingTimeInterval(-60)),
+            source: "xai")
+        XCTAssertTrue(QuotaWindowSnapshot(window: window, now: now).isFresh)
+
+        let stale = QuotaWindow(
+            id: "xai:subscription",
+            provider: "xAI",
+            providerKey: "xai",
+            providerLabel: "xAI",
+            label: "1w window",
+            remainingPercent: 0,
+            isExhausted: true,
+            window: "1w",
+            occurredAt: iso.string(from: now.addingTimeInterval(-5 * 86_400)),
+            source: "xai")
+        XCTAssertFalse(QuotaWindowSnapshot(window: stale, now: now).isFresh)
+    }
 }

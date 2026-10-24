@@ -23,6 +23,7 @@ enum PipMetrics {
     static let rowSpacing: CGFloat = 4
     static let meterSpacing: CGFloat = 3
     static let providerLogoSize: CGFloat = 14
+    static let titleFontSize: CGFloat = 11
     static let titleWidth: CGFloat = 150
     static let cadenceWidth: CGFloat = 18
     static let cadenceExpandedWidth: CGFloat = 40
@@ -34,6 +35,17 @@ enum PipMetrics {
     static let countdownCompactWidth: CGFloat = 28
     static let barMinWidth: CGFloat = 20
     static let barHeight: CGFloat = 4
+
+    /// Reserve only the width the pinned names use, up to the existing title
+    /// limit.  The same column drives both rendering and the responsive ladder.
+    @MainActor
+    static func titleColumnWidth(for titles: [String]) -> CGFloat {
+        let font = NSFont.systemFont(ofSize: titleFontSize, weight: .medium)
+        guard let widest = titles.map({ ($0 as NSString).size(withAttributes: [.font: font]).width }).max() else {
+            return titleWidth
+        }
+        return min(titleWidth, ceil(widest))
+    }
 
     // MARK: Floating controls
 
@@ -169,18 +181,16 @@ enum PipMetrics {
 
     /// The richest level whose content fits `width`, content width being what
     /// survives the panel's own padding.
-    static func detail(forWidth width: CGFloat) -> Detail {
+    static func detail(forWidth width: CGFloat, titleWidth: CGFloat = PipMetrics.titleWidth,
+                       hasFlame: Bool = false, meterCount: Int = 2, expandedCadence: Bool = false) -> Detail {
         let available = width - padding * 2
-        switch available {
-        case fullMinWidth...: return .full
-        case logoWithCountdownMinWidth...: return .logoWithFullCountdown
-        case logoWithCompactCountdownMinWidth...: return .logoWithCompactCountdown
-        case logoOnlyMinWidth...: return .logoOnly
-        case minimalMinWidth...: return .minimal
-        case singleMeterMinWidth...: return .singleMeter
-        case barsOnlyMinWidth...: return .barsOnly
-        default: return .singleBar
+        for detail in Detail.allCases where detail != .singleBar {
+            if available >= rowWidth(for: detail, hasFlame: hasFlame, titleWidth: titleWidth,
+                                     meterCount: meterCount, expandedCadence: expandedCadence) {
+                return detail
+            }
         }
+        return .singleBar
     }
 
     // MARK: Horizontal rows
@@ -194,27 +204,50 @@ enum PipMetrics {
     ///
     /// `hasFlame` widens the row when a usage spike puts the flame beside the
     /// logo.  It has to be part of this and not just an extra padding on the
-    /// row: the same number drives `fitSize` and `applyFit`, so leaving it out
-    /// both clipped the icon in the vertical list and let it overflow the
-    /// fixed frame in the horizontal one.
-    static func rowWidth(for detail: Detail, hasFlame: Bool = false) -> CGFloat {
-        let base: CGFloat
+    /// row.  Responsive selection and the horizontal frame use the same
+    /// budget, so the icon cannot consume width the layout did not reserve.
+    static func rowWidth(for detail: Detail, hasFlame: Bool = false,
+                         titleWidth: CGFloat = PipMetrics.titleWidth,
+                         meterCount: Int = 2, expandedCadence: Bool = false) -> CGFloat {
+        let count = max(1, min(meterCount, detail.maxMeters))
+        let identityWidth: CGFloat
+        let meterWidth: CGFloat
         switch detail {
-        case .full: base = fullMinWidth
-        case .logoWithFullCountdown: base = logoWithCountdownMinWidth
-        case .logoWithCompactCountdown: base = logoWithCompactCountdownMinWidth
-        case .logoOnly: base = logoOnlyMinWidth
-        case .minimal: base = minimalMinWidth
-        case .singleMeter: base = singleMeterMinWidth
-        case .barsOnly: base = barsOnlyMinWidth
-        case .singleBar: base = singleMeterMinWidth
+        case .full:
+            identityWidth = providerLogoSize + rowSpacing + titleWidth + rowSpacing
+            meterWidth = meterMinWidthWithCountdown
+                + (expandedCadence ? cadenceExpandedWidth - cadenceWidth : 0)
+        case .logoWithFullCountdown, .singleMeter:
+            identityWidth = providerLogoSize + rowSpacing
+            meterWidth = meterMinWidthWithCountdown
+        case .logoWithCompactCountdown:
+            identityWidth = providerLogoSize + rowSpacing
+            meterWidth = meterMinWidthWithCompactCountdown
+        case .logoOnly:
+            identityWidth = providerLogoSize + rowSpacing
+            meterWidth = meterMinWidth
+        case .minimal:
+            identityWidth = 0
+            meterWidth = meterMinWidth
+        case .barsOnly, .singleBar:
+            identityWidth = 0
+            meterWidth = bareMeterMinWidth
         }
+        let base = identityWidth + CGFloat(count) * meterWidth + CGFloat(count - 1) * rowSpacing
         return hasFlame && detail.showsProviderLogo ? base + flameWidth : base
+    }
+
+    /// Shorten cadence words before sacrificing the provider name.
+    static func expandedCadenceFits(forWidth width: CGFloat, titleWidth: CGFloat,
+                                    hasFlame: Bool, meterCount: Int) -> Bool {
+        width >= padding * 2 + rowWidth(for: .full, hasFlame: hasFlame, titleWidth: titleWidth,
+                                       meterCount: meterCount, expandedCadence: true)
     }
 
     /// The flame's own width plus its gap from the logo.  Fixed so the row
     /// arithmetic above can be exact rather than approximate.
-    static let flameWidth: CGFloat = rowSpacing + 10
+    static let flameIconWidth: CGFloat = 10
+    static let flameWidth: CGFloat = rowSpacing + flameIconWidth
 
     /// Whether the panel is wide enough to scroll its rows sideways.
     ///
@@ -225,15 +258,17 @@ enum PipMetrics {
     ///
     /// Derived rather than hardcoded to his 80-100 figure, because the number
     /// that matters is the row's own width at the detail level in force, which
-    /// moves when any bar metric changes.  The result lands in his range: the
-    /// squeeze point is around 222pt, and this is roughly 90pt past it.
-    static func rowsScrollHorizontally(forWidth width: CGFloat) -> Bool {
+    /// moves when names, meter count or caption style change.
+    static func rowsScrollHorizontally(forWidth width: CGFloat, titleWidth: CGFloat = PipMetrics.titleWidth,
+                                      hasFlame: Bool = false, meterCount: Int = 2,
+                                      expandedCadence: Bool = false) -> Bool {
         // The threshold uses the richest row width so it is monotonic in panel
         // width: deriving it from the detail level in force flipped the strip
         // on and off as a resize crossed the detail ladder (owner 2026-10-16:
         // "as you stretch it out it alternates between showing correctly or
         // not").
-        width >= padding * 2 + rowWidth(for: .full) + horizontalPeek
+        width >= padding * 2 + rowWidth(for: .full, hasFlame: hasFlame, titleWidth: titleWidth,
+                                       meterCount: meterCount, expandedCadence: expandedCadence) + horizontalPeek
     }
 
     /// How many rows fit in `height` without clipping, never fewer than one.
@@ -588,14 +623,15 @@ struct PipWidgetView: View {
     /// The same rows laid end to end.  Every row keeps its logo at its own left
     /// edge, so scrolling never hides which platform you are looking at —
     /// which was the whole point of the owner's request.
-    private func horizontalRows(detail: PipMetrics.Detail) -> some View {
+    private func horizontalRows(detail: PipMetrics.Detail, expandedCadence: Bool) -> some View {
         // Wide enough for the widest pinned row, including a flame if any row
         // has one, so no row is clipped by the frame below.
-        let rowWidth = PipMetrics.rowWidth(for: detail, hasFlame: anyRowSpiking)
+        let rowWidth = PipMetrics.rowWidth(for: detail, hasFlame: anyRowSpiking, titleWidth: providerTitleWidth,
+                                          meterCount: maximumMeterCount, expandedCadence: expandedCadence)
         return ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: PipMetrics.rowSpacing * 2) {
                 ForEach(targetRows) { row in
-                    pipRow(row, detail: detail)
+                    pipRow(row, detail: detail, expandedCadence: expandedCadence)
                         .frame(width: rowWidth, alignment: .leading)
                 }
             }
@@ -619,11 +655,25 @@ struct PipWidgetView: View {
     /// the whole strip: rows are a uniform width by design, so one spiking row
     /// widens them all rather than each row being a different size.
     private var anyRowSpiking: Bool {
-        targetRows.contains { model.hasActiveRunawayAnomaly(for: $0) }
+        targetRows.contains { row in
+            PipWidgetController.readingStatus(for: row, now: model.now, issue: model.issues[row.providerKey],
+                disabledSources: model.disabledSources) == nil && model.hasActiveRunawayAnomaly(for: row)
+        }
     }
 
     private var targetRows: [DisplaySection] {
         PipWidgetController.targetRows(for: model)
+    }
+
+    private var providerTitleWidth: CGFloat {
+        PipMetrics.titleColumnWidth(for: targetRows.map(\.title))
+    }
+
+    private var maximumMeterCount: Int {
+        max(1, targetRows.map { row in
+            PipWidgetController.meterCount(for: row, now: model.now, issue: model.issues[row.providerKey],
+                                            disabledSources: model.disabledSources)
+        }.max() ?? 1)
     }
 
     /// The chosen background, resolved once and passed down.
@@ -663,14 +713,20 @@ struct PipWidgetView: View {
 
     var body: some View {
         GeometryReader { geo in
-            let detail = PipMetrics.detail(forWidth: geo.size.width)
             ZStack(alignment: .topTrailing) {
                 VStack(spacing: 0) {
                     dragStrip
                     if let detailRow {
-                        detailPanel(detailRow, detail: detail)
+                        detailPanel(detailRow, detail: PipMetrics.detail(forWidth: geo.size.width))
                     } else {
-                        rowsPanel(detail: detail, height: geo.size.height, width: geo.size.width)
+                        let expandedCadence = isSingleModel && PipMetrics.expandedCadenceFits(
+                            forWidth: geo.size.width, titleWidth: providerTitleWidth,
+                            hasFlame: anyRowSpiking, meterCount: maximumMeterCount)
+                        let detail = PipMetrics.detail(forWidth: geo.size.width, titleWidth: providerTitleWidth,
+                                                       hasFlame: anyRowSpiking, meterCount: maximumMeterCount,
+                                                       expandedCadence: expandedCadence)
+                        rowsPanel(detail: detail, height: geo.size.height, width: geo.size.width,
+                                  expandedCadence: expandedCadence)
                     }
                 }
                 floatingControl
@@ -794,7 +850,8 @@ struct PipWidgetView: View {
     /// The rows panel: every pinned row, or the ones that fit, or the lot
     /// scrolled if the owner has made the window shorter than its content.
     @ViewBuilder
-    private func rowsPanel(detail: PipMetrics.Detail, height: CGFloat, width: CGFloat) -> some View {
+    private func rowsPanel(detail: PipMetrics.Detail, height: CGFloat, width: CGFloat,
+                           expandedCadence: Bool) -> some View {
         let visible = PipMetrics.visibleRowCount(total: targetRows.count, height: height)
         let overflows = visible < targetRows.count
 
@@ -805,18 +862,21 @@ struct PipWidgetView: View {
         // that").  Wide enough for one full row and a peek of the next, the
         // rows become a horizontal strip, each keeping its own logo at its
         // left edge.
-        if overflows && PipMetrics.rowsScrollHorizontally(forWidth: width) {
-            horizontalRows(detail: detail)
+        if overflows && PipMetrics.rowsScrollHorizontally(forWidth: width, titleWidth: providerTitleWidth,
+                                                       hasFlame: anyRowSpiking, meterCount: maximumMeterCount,
+                                                       expandedCadence: expandedCadence) {
+            horizontalRows(detail: detail, expandedCadence: expandedCadence)
         } else {
-            verticalRows(detail: detail, visible: visible, overflows: overflows)
+            verticalRows(detail: detail, visible: visible, overflows: overflows, expandedCadence: expandedCadence)
         }
     }
 
-    private func verticalRows(detail: PipMetrics.Detail, visible: Int, overflows: Bool) -> some View {
+    private func verticalRows(detail: PipMetrics.Detail, visible: Int, overflows: Bool,
+                              expandedCadence: Bool) -> some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(spacing: 0) {
                 ForEach(Array(targetRows.prefix(max(1, visible)))) { row in
-                    pipRow(row, detail: detail)
+                    pipRow(row, detail: detail, expandedCadence: expandedCadence)
                 }
                 if overflows {
                     // Say so, rather than letting a pinned row look absent.
@@ -837,7 +897,7 @@ struct PipWidgetView: View {
 
     /// One row.  The whole row is the tap target for opening that platform's
     /// detail.
-    private func pipRow(_ row: DisplaySection, detail: PipMetrics.Detail) -> some View {
+    private func pipRow(_ row: DisplaySection, detail: PipMetrics.Detail, expandedCadence: Bool) -> some View {
         let issue = model.issues[row.providerKey]
         let status = PipWidgetController.readingStatus(for: row, now: model.now, issue: issue,
                                                        disabledSources: model.disabledSources)
@@ -872,6 +932,7 @@ struct PipWidgetView: View {
                 if spiking {
                     Image(systemName: "flame.fill")
                         .font(.system(size: PipMetrics.providerLogoSize * 0.7))
+                        .frame(width: PipMetrics.flameIconWidth)
                         .foregroundStyle(Theme.warning)
                         .help("Usage spike detected on this platform")
                         .accessibilityLabel("Usage spike detected on this platform")
@@ -880,14 +941,11 @@ struct PipWidgetView: View {
 
             if detail.showsTitle {
                 Text(row.title)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(size: PipMetrics.titleFontSize, weight: .medium))
                     .foregroundStyle(background.ink)
                     .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .frame(width: PipMetrics.titleWidth, alignment: .leading)
+                    .frame(width: providerTitleWidth, alignment: .leading)
             }
-
-            if atCap == nil { Spacer(minLength: 0) }
 
             if let status {
                 Text(status)
@@ -903,7 +961,7 @@ struct PipWidgetView: View {
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    pipMeter(extra, detail: detail)
+                    pipMeter(extra, detail: detail, expandedCadence: expandedCadence)
                         .frame(maxWidth: .infinity)
                 }
                 .frame(maxWidth: .infinity)
@@ -912,7 +970,7 @@ struct PipWidgetView: View {
             } else {
                 HStack(spacing: PipMetrics.meterSpacing) {
                     ForEach(Array(meters.enumerated()), id: \.offset) { _, snapshot in
-                        pipMeter(snapshot, detail: detail)
+                        pipMeter(snapshot, detail: detail, expandedCadence: expandedCadence)
                     }
                 }
                 .fixedSize(horizontal: false, vertical: true)
@@ -1041,7 +1099,8 @@ struct PipWidgetView: View {
         .accessibilityLabel(cap.spokenDescription)
     }
 
-    private func pipMeter(_ snapshot: QuotaWindowSnapshot, detail: PipMetrics.Detail) -> some View {
+    private func pipMeter(_ snapshot: QuotaWindowSnapshot, detail: PipMetrics.Detail,
+                          expandedCadence: Bool) -> some View {
         let metrics = QuotaBarMetrics(snapshot: snapshot, now: model.now)
         let isExtra = isMuseAssistExtra(snapshot)
         let cd: String
@@ -1053,7 +1112,7 @@ struct PipWidgetView: View {
             cd = glanceResetCountdown(snapshot.resetAt, now: model.now)
         }
         let remaining = snapshot.remainingPercent
-        let showExpanded = isSingleModel && detail == .full
+        let showExpanded = expandedCadence && detail == .full
         let cadenceCaption = showExpanded ? singleModelCadenceExpanded(snapshot) : glanceMeterCaption(snapshot)
         let countdownWidth = detail.usesCompactCountdown ? PipMetrics.countdownCompactWidth : PipMetrics.countdownWidth
 
