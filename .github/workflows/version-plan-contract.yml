@@ -31,7 +31,9 @@ on:
 
 concurrency:
   group: version-plan-contract-${{ github.ref }}
-  cancel-in-progress: true
+  # Only a pull request's superseded run is cancelled.  A push to main is queued,
+  # so every merge commit keeps its own finished check.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read

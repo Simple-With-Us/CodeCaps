@@ -376,3 +376,38 @@ test("a symlinked key path is never followed", async () => {
   assert.match(result.stderr, /asc-auth: using ASC_KEY_P8 environment/);
   assert.doesNotMatch(result.stderr, /is not a regular file/);
 });
+//  A stub that answers the app lookup and then pages builds with whatever
+//  next link `nextFor(page)` returns, so the build-floor loops can be driven.
+async function buildFloorAgainst(nextFor) {
+  let page = 0;
+  const server = createServer((req, res) => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    if (req.url.startsWith("/v1/apps")) {
+      res.end(JSON.stringify({ data: [{ id: "1", type: "apps", attributes: { bundleId: "com.example.app" } }] }));
+      return;
+    }
+    page += 1;
+    res.end(JSON.stringify({ data: [], links: { next: nextFor(page, base) } }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    return { ...(await run(["build-floor", "com.example.app", "1.0.237"], { ASC_API_BASE: base })), pages: page };
+  } finally {
+    server.close();
+  }
+}
+
+test("build-floor never follows a next link to another host", async () => {
+  const result = await buildFloorAgainst(() => "https://not-the-real-host.example.com/v1/builds?cursor=x");
+  assert.equal(result.code, 2, `expected a failed lookup, got ${result.code}: ${result.stderr}`);
+  assert.ok(/next link leaves App Store Connect/.test(result.stderr), `the off-host link was not refused:\n${result.stderr}`);
+  assert.equal(result.pages, 1, "only the first page on the stub was read");
+});
+
+test("build-floor fails instead of answering from a list cut off at 10 pages", async () => {
+  const result = await buildFloorAgainst((page, base) => `${base}/v1/builds?cursor=${page}`);
+  assert.equal(result.code, 2, `expected a failed lookup, got ${result.code}: ${result.stderr}`);
+  assert.ok(/more than 10 pages of train builds/.test(result.stderr), `the cut-off list was not refused:\n${result.stderr}`);
+  assert.equal(result.stdout.trim(), "", "no floor is printed for a cut-off list");
+});

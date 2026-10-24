@@ -2093,6 +2093,24 @@ async function main() {
   // 5xx or network-failed answer is retried with backoff, because these
   // queries gate every ship and one rate-limit blip must not fail it.
   async function ascGet(url) {
+    // An absolute url (a `links.next`) is followed only when it is on the
+    // same origin as the API base api() talks to:  api() sends the bearer
+    // token to any absolute url, so a next link naming another host must
+    // never be followed.  Every paginated read below goes through here, so
+    // this is the guard ascAllRows applies.  A relative path goes to the
+    // base as before.
+    if (String(url).startsWith("http")) {
+      let origin = "";
+      try {
+        origin = new URL(String(url)).origin;
+      } catch {
+        origin = "";
+      }
+      if (origin !== new URL(apiBase).origin) {
+        console.error(`asc: refused a next link to ${origin || "an invalid url"}; only ${new URL(apiBase).origin} is followed`);
+        return { ok: false, status: "next link leaves App Store Connect", parsed: {} };
+      }
+    }
     // A dropped connection or DNS failure makes fetch throw rather than
     // return a status, so a throw counts as a retryable failure too; the last
     // one is re-thrown.
@@ -2344,6 +2362,14 @@ async function main() {
       }
       url = res.parsed.links?.next || "";
     }
+    // The train list is not sorted, so a cut-off list can drop its newest
+    // builds and understate the floor:  a list still going after the last
+    // page is not an authoritative answer.
+    if (url) {
+      console.error("build-floor: more than 10 pages of train builds");
+      process.exitCode = 2;
+      return;
+    }
 
     const appBuilds = [];
     url =
@@ -2366,6 +2392,11 @@ async function main() {
         appBuilds.push(b.attributes.version);
       }
       url = res.parsed.links?.next || "";
+    }
+    if (url) {
+      console.error("build-floor: more than 10 pages of app builds");
+      process.exitCode = 2;
+      return;
     }
 
     const floor = buildFloor({ trainBuilds, appBuilds, platform });

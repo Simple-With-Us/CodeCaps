@@ -31,6 +31,9 @@
 #       A TestFlight train that holds a build named after its own patch (the
 #       "1.0.2358 (2358)" drift trains) is IGNORED, so those uploads no longer
 #       push the version forward.  App Store versions are never ignored.
+#       When P+1 is itself already held by an App Store version or a TestFlight
+#       train (a drift train included), the patch moves up to the next one nothing holds, so the
+#       shipped version is always new (nextMarketingPatch in version-plan.mjs).
 #   CURRENT_PROJECT_VERSION = the repo commit count (git rev-list --count
 #       HEAD), raised when needed so that it is strictly greater than every
 #       build already in the TARGET marketing train (old 12-digit UTC stamps
@@ -619,13 +622,7 @@ asc_build_floor() {
   # can name them; fall back to the combined floor when they are missing.
   train="$(printf '%s' "$err" | sed -n 's/.*[^a-z]train=\([0-9][0-9]*\).*/\1/p' | tail -n 1)"
   app="$(printf '%s' "$err" | sed -n 's/.*[^a-z]app=\([0-9][0-9]*\).*/\1/p' | tail -n 1)"
-  # The client's own diagnostics carry Apple's HTTP status and error code,
-  # which is the only thing that explains a failed lookup.
-  while IFS= read -r line; do
-    case "$line" in
-      build-floor:*) logerr "asc-floor: ${line}" ;;
-    esac
-  done <<<"$err"
+  # The client's build-floor lines were already forwarded once, above.
   printf '%s %s %s' "$out" "${train:-$out}" "${app:-$out}"
 }
 
