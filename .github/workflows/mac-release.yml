@@ -142,6 +142,7 @@ jobs:
           GH_FALLBACK_MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
           GH_FALLBACK_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           GH_FALLBACK_SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          GH_FALLBACK_SENTRY_AUTH_TOKEN_FULLSCOPE: ${{ secrets.SENTRY_AUTH_TOKEN_FULLSCOPE }}
 
       # The tooling and the staging script run in ONE step on purpose.  The
       # tooling installs the Infisical CLI and the fleet's reader onto the
@@ -282,58 +283,83 @@ jobs:
       #     project since 2026-10-22 -- while this step uploaded to `codecaps`.
       #     A dSYM in a project the events do not land in never matches them.
       #
-      # The upload goes to both projects, and every failure is an `::error::`
-      # annotation rather than a warning: telemetry must not block a release,
-      # but it must not be possible to miss one either.
+      # The upload goes to both projects.  Any miss -- no token, no
+      # sentry-cli, no app dSYM, a refused upload -- exits nonzero with an
+      # `::error::` annotation, so the step shows red on the run.  The step is
+      # `continue-on-error`, so telemetry still never blocks a release.
+      #
+      # The macOS app is a SwiftPM product, and SwiftPM never runs dsymutil, so
+      # the step makes the app's dSYM itself from the shipped executable.  The
+      # widget extension's dSYMs from the xcodebuild under ios/ go up too,
+      # because that appex ships inside the app, but they never stand in for
+      # the app's own dSYM.
       - name: Upload Sentry debug files
         if: steps.gate.outputs.publish == 'true'
+        continue-on-error: true
         env:
           SENTRY_ORG: simple-with-us
         run: |
           set -uo pipefail
           export SENTRY_ORG="${SENTRY_ORG:-simple-with-us}"
-          TOKEN="${SENTRY_AUTH_TOKEN_FULLSCOPE:-}"
-          if [ -z "$TOKEN" ]; then
-            echo "::error::no Sentry API token (SENTRY_AUTH_TOKEN_FULLSCOPE); no dSYM was uploaded"
-            exit 0
-          fi
-          case "$TOKEN" in
-            *://*|*@*)
-              echo "::error::the Sentry API token looks like a DSN, not an API token; no dSYM was uploaded"
-              exit 0
-              ;;
-          esac
-          export SENTRY_AUTH_TOKEN="$TOKEN"
+          # Install sentry-cli first, in an empty environment, so the
+          # downloaded installer never inherits the job's secrets.
           if ! command -v sentry-cli >/dev/null 2>&1; then
-            curl -sL https://sentry.io/get-cli/ | SENTRY_CLI_VERSION="" bash >/dev/null 2>&1 || true
-            export PATH="${HOME}/.sentry-cli:${PATH}:/opt/homebrew/bin"
+            cli_dir="$RUNNER_TEMP/sentry-cli-bin"
+            mkdir -p "$cli_dir"
+            curl -fsSL https://sentry.io/get-cli/ \
+              | env -i HOME="$HOME" PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
+                  INSTALL_DIR="$cli_dir" SENTRY_CLI_VERSION="" sh >/dev/null 2>&1 || true
+            export PATH="$cli_dir:$PATH:/opt/homebrew/bin"
           fi
           if ! command -v sentry-cli >/dev/null 2>&1; then
             echo "::error::sentry-cli is missing; no dSYM was uploaded"
-            exit 0
+            exit 1
           fi
-          DSYM_PATHS="$(find .build dist ios -maxdepth 10 -name '*.dSYM' -type d 2>/dev/null | grep -v 'sentry-cocoa' | head -40 || true)"
-          if [ -z "$DSYM_PATHS" ]; then
-            echo "::error::no dSYM bundle was found under .build, dist or ios; no dSYM was uploaded"
-            exit 0
+          # The token stays a shell variable and is handed only to sentry-cli.
+          TOKEN="${SENTRY_AUTH_TOKEN_FULLSCOPE:-}"
+          if [ -z "$TOKEN" ]; then
+            echo "::error::SENTRY_AUTH_TOKEN_FULLSCOPE is missing; no dSYM was uploaded"
+            exit 1
           fi
+          case "$TOKEN" in
+            *://*|*@*)
+              echo "::error::SENTRY_AUTH_TOKEN_FULLSCOPE looks like a DSN, not an API token; no dSYM was uploaded"
+              exit 1
+              ;;
+          esac
+          app_bin="dist/CodeCaps.app/Contents/MacOS/CodeCaps"
+          app_dsym="$RUNNER_TEMP/dsym/CodeCaps.dSYM"
+          mkdir -p "$RUNNER_TEMP/dsym"
+          if [ ! -f "$app_bin" ] || ! xcrun dsymutil "$app_bin" -o "$app_dsym"; then
+            echo "::error::could not build the app dSYM from $app_bin; no dSYM was uploaded"
+            exit 1
+          fi
+          UPLOADS=("$app_dsym")
+          while IFS= read -r d; do
+            if [ -n "$d" ]; then UPLOADS+=("$d"); fi
+          done < <(find ios/CodeCapsCompanion/build -name 'CodeCapsWidgets*.dSYM' -type d 2>/dev/null | grep -v 'sentry-cocoa')
+          echo "debug files: ${UPLOADS[*]}"
           # The project the events land in is the one in the DSN.  The app's
           # own project is uploaded too, because the DSN is a shared fleet key
-          # and it can move.
-          DSN_PROJECT="${SENTRY_DSN##*/}"
-          if [ -z "$SENTRY_DSN" ] || [ "$DSN_PROJECT" = "$SENTRY_DSN" ]; then DSN_PROJECT=""; fi
-          PROJECTS="codecaps"
-          if [ -n "$DSN_PROJECT" ]; then PROJECTS="$DSN_PROJECT $PROJECTS"; fi
-          echo "uploading dSYM bundles to project(s): $PROJECTS"
-          for project in $PROJECTS; do
-            for d in $DSYM_PATHS; do
-              echo "uploading $d to project=$project"
-              if ! SENTRY_PROJECT="$project" sentry-cli debug-files upload --include-sources "$d"; then
-                echo "::error::sentry debug-files upload failed for project=$project ($d)"
-              fi
-            done
+          # and it can move.  Sources go only to the first project.
+          raw_dsn="${SENTRY_DSN:-}"
+          DSN_PROJECT="${raw_dsn##*/}"
+          if [ -z "$raw_dsn" ] || [ "$DSN_PROJECT" = "$raw_dsn" ]; then DSN_PROJECT=""; fi
+          PROJECTS=()
+          if [ -n "$DSN_PROJECT" ] && [ "$DSN_PROJECT" != "codecaps" ]; then PROJECTS+=("$DSN_PROJECT"); fi
+          PROJECTS+=("codecaps")
+          failed=0
+          sources=(--include-sources)
+          for project in "${PROJECTS[@]}"; do
+            echo "uploading ${#UPLOADS[@]} debug file(s) to project=$project"
+            if ! SENTRY_AUTH_TOKEN="$TOKEN" SENTRY_PROJECT="$project" \
+              sentry-cli debug-files upload ${sources[@]+"${sources[@]}"} "${UPLOADS[@]}"; then
+              echo "::error::sentry debug-files upload failed for project=$project"
+              failed=1
+            fi
+            sources=()
           done
-          exit 0
+          exit "$failed"
 
       - name: Name the release
         if: steps.gate.outputs.publish == 'true'
