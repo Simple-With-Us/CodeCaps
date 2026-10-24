@@ -496,8 +496,13 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
     public func cardWindowRows(scope: CompanionSourceScope, now: Date = Date()) -> [CardWindow] {
         windows.map { primary in
             let key = Self.allowanceKey(for: primary)
-            // This iPhone: only this device's primary windows. All Sources: fold
+            // This device: only this device's primary windows. All Sources: fold
             // in mirror feeds so Mac/fleet readings can win when fresher.
+            //
+            // The Mac's own copy of a period is one of those mirrors, and the
+            // shared rule asks the folded pool which reading is the Mac's, so
+            // the card shows the Mac's reading rather than whichever copy came
+            // first in the payload (owner, 2026-10-23).
             let mirrors: [CompanionWindowItem]
             if scope == .allSources {
                 mirrors = duplicateWindows.filter { Self.allowanceKey(for: $0) == key }
@@ -843,7 +848,18 @@ public final class CompanionQuotaModel: ObservableObject {
     }
 
     @Published public var items: [CompanionQuotaItem] = []
-    @Published public var sourceScope: CompanionSourceScope = .thisIPhone
+    /// Which readings the cards show.
+    ///
+    /// The default folds the mirrors in, because the Mac's own copy of a
+    /// period is a mirror:  the Mac's reading is not always the one that came
+    /// first in the payload, so the main screen has to ask the shared rule
+    /// which reading is the Mac's, and that is what the folded pool is for
+    /// (owner, 2026-10-23:  "make the iOS app have the main info shown from
+    /// the Mac's info").
+    ///
+    /// The scope's other job is the multi-source chrome, and the extra sources
+    /// themselves live in Settings, where they are kept for debugging.
+    @Published public var sourceScope: CompanionSourceScope = .allSources
     @Published public var isRefreshing: Bool = false
     @Published public var lastUpdated: Date?
     /// Last failure worth telling the owner about.

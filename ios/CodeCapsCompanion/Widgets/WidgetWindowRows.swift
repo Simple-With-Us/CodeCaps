@@ -252,6 +252,7 @@ struct PlanBarRow: View {
 
                 MiniProgressBar(
                     fraction: fraction,
+                    hasReading: percent != nil,
                     color: statusColor,
                     elapsedFraction: shown.window?.elapsedFraction(),
                     height: barHeight
@@ -333,6 +334,7 @@ struct PlanDualBarRow: View {
             HStack(spacing: columnSpacing) {
                 MiniProgressBar(
                     fraction: fraction1,
+                    hasReading: window1.remainingPercent != nil,
                     color: window1.statusColor,
                     elapsedFraction: window1.elapsedFraction(),
                     height: barHeight
@@ -341,6 +343,7 @@ struct PlanDualBarRow: View {
 
                 MiniProgressBar(
                     fraction: fraction2,
+                    hasReading: window2.remainingPercent != nil,
                     color: window2.statusColor,
                     elapsedFraction: window2.elapsedFraction(),
                     height: barHeight

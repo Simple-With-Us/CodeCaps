@@ -155,6 +155,14 @@ struct ProviderMarkView: View {
 
 struct MiniProgressBar: View {
     let fraction: Double
+    /// Whether the window carries a reading at all.
+    ///
+    /// The red part of the bar is the used part, so a window with no reading
+    /// drew the whole bar red and it read as "spent" when the truth is
+    /// "nothing was read" (owner, 2026-10-23:  the iPhone widget's rows show a
+    /// full red bar beside a dash).  With no reading the bar stays empty, and
+    /// the pacing marker still says how much of the period has gone.
+    var hasReading: Bool = true
     var color: Color = Color(red: 0.10, green: 0.70, blue: 0.45)
     var elapsedFraction: Double? = nil
     var height: CGFloat = 4
@@ -166,7 +174,7 @@ struct MiniProgressBar: View {
             let totalW = proxy.size.width
             let safeFrac = min(1.0, max(0.0, fraction))
             let remW = CGFloat(safeFrac) * totalW
-            let usedW = totalW - remW
+            let usedW = hasReading ? totalW - remW : 0
 
             ZStack(alignment: .leading) {
                 Capsule()
@@ -662,6 +670,7 @@ struct ProviderFocusView: View {
                                 }
                                 MiniProgressBar(
                                     fraction: max(0.0, min(1.0, (win.remainingPercent ?? 0.0) / 100.0)),
+                                    hasReading: win.remainingPercent != nil,
                                     color: win.statusColor,
                                     elapsedFraction: win.elapsedFraction(),
                                     height: 3.5
@@ -764,12 +773,14 @@ struct AccessoryView: View {
                         HStack(spacing: 4) {
                             MiniProgressBar(
                                 fraction: max(0.0, min(1.0, (pair.window1.remainingPercent ?? 0.0) / 100.0)),
+                                hasReading: pair.window1.remainingPercent != nil,
                                 color: .primary,
                                 elapsedFraction: pair.window1.elapsedFraction(),
                                 height: 3.5
                             )
                             MiniProgressBar(
                                 fraction: max(0.0, min(1.0, (pair.window2.remainingPercent ?? 0.0) / 100.0)),
+                                hasReading: pair.window2.remainingPercent != nil,
                                 color: .primary,
                                 elapsedFraction: pair.window2.elapsedFraction(),
                                 height: 3.5
@@ -799,7 +810,7 @@ struct AccessoryView: View {
                             Text(platform.displayPercent)
                                 .font(.system(size: 12, weight: .bold, design: .rounded))
                         }
-                        MiniProgressBar(fraction: platform.progressFraction, color: .primary, elapsedFraction: platform.elapsedFraction, height: 4)
+                        MiniProgressBar(fraction: platform.progressFraction, hasReading: platform.remainingPercent != nil, color: .primary, elapsedFraction: platform.elapsedFraction, height: 4)
                         WindowCaptionRow(
                             caption: platform.controllingWindow(entry.windowPick)?.caption
                                 ?? .withoutQualifier(

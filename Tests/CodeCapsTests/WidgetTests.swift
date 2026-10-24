@@ -17,6 +17,14 @@ final class WidgetTests: XCTestCase {
         repoRoot.appendingPathComponent("ios/CodeCapsCompanion/Widgets/WidgetPresentation.swift")
     }
 
+    private static var widgetViewsURL: URL {
+        repoRoot.appendingPathComponent("ios/CodeCapsCompanion/Widgets/WidgetViews.swift")
+    }
+
+    private static var widgetWindowRowsURL: URL {
+        repoRoot.appendingPathComponent("ios/CodeCapsCompanion/Widgets/WidgetWindowRows.swift")
+    }
+
     private static var projectYmlURL: URL {
         repoRoot.appendingPathComponent("ios/CodeCapsCompanion/project.yml")
     }
@@ -195,6 +203,36 @@ final class WidgetTests: XCTestCase {
         XCTAssertTrue(
             source.contains("func isFresher(_ candidate: WireRawWindow, than current: WireRawWindow?) -> Bool {"),
             "the widget must pick the freshest window of a pool period"
+        )
+    }
+
+    /// A window with no reading must not draw as a spent one.
+    ///
+    /// The red part of a quota bar is the used part, so a window with no
+    /// reading drew the whole bar red and it read as "spent" when the truth
+    /// is "nothing was read" (owner, 2026-10-23:  the iPhone widget's rows
+    /// show a full red bar beside a dash).
+    ///
+    /// `WidgetViews.swift` is not in the macOS test target, so the rule is
+    /// pinned here by reading the source.
+    func testTheWidgetDoesNotDrawAMissingReadingAsASpentBar() throws {
+        let views = try readSource(at: Self.widgetViewsURL)
+        let rows = try readSource(at: Self.widgetWindowRowsURL)
+        XCTAssertTrue(
+            views.contains("var hasReading: Bool = true"),
+            "the bar must know whether the window carries a reading"
+        )
+        XCTAssertTrue(
+            views.contains("let usedW = hasReading ? totalW - remW : 0"),
+            "a window with no reading must not draw the used part of the bar"
+        )
+        XCTAssertTrue(
+            rows.contains("hasReading: percent != nil"),
+            "a row's bar must know whether its window carries a reading"
+        )
+        XCTAssertTrue(
+            rows.contains("hasReading: window1.remainingPercent != nil"),
+            "a dual row's first bar must know whether its window carries a reading"
         )
     }
 

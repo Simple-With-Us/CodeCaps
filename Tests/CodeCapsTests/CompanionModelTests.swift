@@ -753,6 +753,59 @@ final class CompanionModelTests: XCTestCase {
         )
     }
 
+    // MARK: - The main screen shows the Mac's reading
+
+    /// The main screen shows one reading per platform, the Mac's, and the
+    /// extra sources are debugging information that lives in Settings.
+    ///
+    /// Owner 2026-10-23:  the phone showed a reading another machine had
+    /// published hours earlier, while the Mac's own reading sat beside it, and
+    /// the scope switch and the multi-source chips crowded the main screen.
+    ///
+    /// The phone's model is not in the macOS test target, so the rule is
+    /// pinned here by reading the source.
+    func testTheCompanionShowsTheMacsReadingAndKeepsTheExtraSourcesInSettings() throws {
+        let source = try readCompanionModelSource()
+        let view = try readCompanionContentViewSource()
+        XCTAssertTrue(
+            source.contains("@Published public var sourceScope: CompanionSourceScope = .allSources"),
+            "the cards must read the folded pool, so the card shows the Mac's reading"
+        )
+        XCTAssertTrue(
+            source.contains("FleetMacReading.pickCardDisplay"),
+            "the shared rule must pick the Mac's reading out of the folded pool"
+        )
+        XCTAssertFalse(
+            view.contains("headerCard"),
+            "the main screen must not carry the source-scope picker"
+        )
+        XCTAssertTrue(
+            view.contains("private var sourceScopePicker: some View"),
+            "the scope picker belongs in Settings, beside the sources it explains"
+        )
+        XCTAssertEqual(
+            Self.scopePickerOccurrences(in: view), 2,
+            "the scope picker must be declared once and drawn in Settings"
+        )
+        XCTAssertFalse(
+            view.contains("item.sourceCount) sources"),
+            "the main screen must not carry the multi-source chip; the sources live in Settings"
+        )
+        XCTAssertTrue(
+            view.contains("Text(\"Data Sources & Mirrors\")"),
+            "the extra sources must still be listed in Settings"
+        )
+    }
+
+    /// How many times the scope picker's own name appears as a whole word, so
+    /// the declaration and the drawing are told apart.
+    private static func scopePickerOccurrences(in source: String) -> Int {
+        let pattern = "(?<![A-Za-z0-9_])sourceScopePicker(?![A-Za-z0-9_])"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return 0 }
+        let range = NSRange(source.startIndex..., in: source)
+        return regex.numberOfMatches(in: source, range: range)
+    }
+
     // MARK: - A launch argument opens the alarms tab
 
     func testAlarmsLaunchArgumentOpensTheAlarmsTab() throws {

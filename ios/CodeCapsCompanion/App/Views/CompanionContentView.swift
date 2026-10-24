@@ -42,8 +42,6 @@ public struct CompanionContentView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 16) {
-                    headerCard
-
                     if let error = model.lastError {
                         errorBanner(error)
                     }
@@ -192,15 +190,21 @@ public struct CompanionContentView: View {
 
     // MARK: - Source scope
 
-    private var headerCard: some View {
+    /// The source-scope picker, which lives in Settings.
+    ///
+    /// The main screen shows one reading per platform, the Mac's, and the
+    /// extra sources are debugging information, so the switch that changes
+    /// what the cards read moved next to the sources it explains
+    /// (owner, 2026-10-23:  "make the iOS app have the main info shown from
+    /// the Mac's info and just show the extra sources in settings with that
+    /// extra info for debugging").
+    private var sourceScopePicker: some View {
         Picker("Source scope", selection: $model.sourceScope) {
             ForEach(CompanionSourceScope.allCases) { scope in
                 Text(scope.displayTitle).tag(scope)
             }
         }
         .pickerStyle(.segmented)
-        .padding(14)
-        .background(cardBackground, in: RoundedRectangle(cornerRadius: 12))
     }
 
     // MARK: - Error Banner
@@ -320,26 +324,8 @@ public struct CompanionContentView: View {
                 CompanionProviderLogo(item: item)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text(item.title)
-                            .font(.system(size: 15, weight: .semibold))
-
-                        if model.sourceScope == .allSources, item.sourceCount > 1 {
-                            Text("\(item.sourceCount) sources")
-                                .font(.system(size: 10, weight: .semibold))
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Color.secondary.opacity(0.14), in: Capsule())
-                        }
-
-                        if model.sourceScope == .allSources, item.sourceCount > 1,
-                           item.hasSourceDiscrepancy(scope: model.sourceScope) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(.orange)
-                                .accessibilityLabel("Warning: sources disagree on this allowance")
-                        }
-                    }
+                    Text(item.title)
+                        .font(.system(size: 15, weight: .semibold))
 
                     if let sub = item.subtitle {
                         companionSubtitleView(sub)
@@ -434,28 +420,6 @@ public struct CompanionContentView: View {
                         CompanionMeterView(caption: first.caption, window: first)
                     }
                 }
-            }
-
-            if model.sourceScope == .allSources, item.sourceCount > 1,
-               item.hasSourceDiscrepancy(scope: model.sourceScope) {
-                HStack(spacing: 6) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.orange)
-                    Text(item.sourceDiscrepancies(scope: model.sourceScope).first?.description ?? "Sources differ")
-                        .font(.system(size: 11.5, weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
-                    Spacer()
-                }
-                .padding(.horizontal, 9)
-                .padding(.vertical, 5)
-                .background(Color.orange.opacity(0.14), in: RoundedRectangle(cornerRadius: 6))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(Color.orange.opacity(0.28), lineWidth: 0.5)
-                )
             }
 
             // Multiple time periods / windows when expanded (only extra allowances not already displayed on the card)
@@ -651,6 +615,15 @@ public struct CompanionContentView: View {
         .id("syncTokenSection")
 
         Section {
+                    sourceScopePicker
+                } header: {
+                    Text("What The Cards Read")
+                } footer: {
+                    Text("The main screen shows one reading per platform, the Mac's." + sentenceGap
+                         + "This switch is for reading the feeds behind it:  choose All Sources to see every feed of a platform, and This \(CompanionSourceScope.currentDeviceFamily) to see only the first reading of each period.")
+                }
+
+        Section {
                     if itemsWithDuplicates.isEmpty {
                         Text("No secondary or mirror sources detected." + sentenceGap
                              + "All allowance windows are sourced directly from your primary sync feed.")
@@ -731,7 +704,8 @@ public struct CompanionContentView: View {
                     Text("Data Sources & Mirrors")
                 } footer: {
                     Text("CodeCaps monitors primary and mirror feeds for each platform." + sentenceGap
-                         + "In All Sources, when a card lists two or more feeds reported within 20 minutes that disagree by 10 points or more, a warning appears on the card (hostnames are ignored). Otherwise the newest reading is shown and older feeds are marked Stale here.")
+                         + "The main screen shows the Mac's reading for each platform, and every other feed is listed here." + sentenceGap
+                         + "In All Sources, when two or more feeds reported within 20 minutes disagree by 10 points or more, a warning appears here (hostnames are ignored). Otherwise the newest reading is shown and older feeds are marked Stale here.")
                 }
                 .id("dataSourcesMirrorsSection")
                 .accessibilityIdentifier("dataSourcesMirrorsSection")
