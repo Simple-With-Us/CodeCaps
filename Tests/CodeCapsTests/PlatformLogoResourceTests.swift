@@ -57,8 +57,13 @@ final class PlatformLogoResourceTests: XCTestCase {
     func testTheResourceBundleCarriesArtwork() throws {
         let bundle = try XCTUnwrap(ResourceBundle.resolved,
                                     "the SwiftPM resource bundle could not be resolved at all")
+        // `muse-assist` is deliberately absent: PR #306 dropped its four
+        // artwork files and `PlatformLogo.resourceNames` now maps the key to
+        // the shared `muse` mark, so the bundle carries no file by that name.
+        // The key itself still has to resolve, which is what
+        // `testEveryProviderKeyResolvesABundledMark` above checks.
         let marks = ["claude", "openai", "gemini", "gemini-color", "gemini-mono",
-                     "cursor", "xai", "grok", "grok-bot", "minimax", "muse", "muse-assist", "muse-code", "muse-code-dark"]
+                     "cursor", "xai", "grok", "grok-bot", "minimax", "muse", "muse-code", "muse-code-dark"]
         // Every named mark must be present in some form.  Deliberately not an
         // exact count: the owner replacing the fabricated MiniMax `{M}` with
         // the real PNG mark added a file, and an equality assertion is a test
@@ -75,7 +80,7 @@ final class PlatformLogoResourceTests: XCTestCase {
     /// a different hat: `NSImage` returns an object, and the row draws nothing.
     func testEveryBundledMarkRasterises() throws {
         let bundle = try XCTUnwrap(ResourceBundle.resolved)
-        for name in ["claude", "openai", "gemini", "gemini-mono", "cursor", "xai", "grok", "grok-bot", "minimax", "muse", "muse-assist", "muse-code", "muse-code-dark"] {
+        for name in ["claude", "openai", "gemini", "gemini-mono", "cursor", "xai", "grok", "grok-bot", "minimax", "muse", "muse-code", "muse-code-dark"] {
             for ext in ["svg", "png"] {
                 guard let url = bundle.url(forResource: name, withExtension: ext) else { continue }
                 let image = try XCTUnwrap(NSImage(contentsOf: url), "\(name).\(ext) did not load")

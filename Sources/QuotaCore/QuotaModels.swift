@@ -625,6 +625,35 @@ public extension QuotaResponse {
         return copy
     }
 
+    /// The Grok subscription credits pool is reported twice: the local CLI
+    /// reader files it under `grok`, while the fleet collector buckets the
+    /// same payload as `xai:subscription`.  When both carry a subscription
+    /// window, keep the fresher reading and drop the staler duplicate, so
+    /// the two rows can never disagree about one pool.  Any other xAI
+    /// window (API usage, a different cadence) is untouched.
+    static func dedupedGrokSubscription(_ windows: [QuotaWindow]) -> [QuotaWindow] {
+        // The one Grok credits pool, identified by exact component equality on the
+        // window id.  Ids carry an optional source prefix
+        // (`local-mac:grok:subscription`), so the canonical form is the last
+        // two components: `<providerKey>:<token>`, each compared in full.
+        // `grok:legacy:subscription` names a different window and is not the
+        // pool; `xai:api-monthly` is not the pool either.
+        func isPool(_ window: QuotaWindow) -> Bool {
+            let parts = window.id.split(separator: ":")
+            guard parts.count >= 2 else { return false }
+            return parts[parts.count - 2] == Substring(window.canonicalProviderKey)
+                && parts[parts.count - 1] == "subscription"
+        }
+        guard let grokIndex = windows.firstIndex(where: { isPool($0) && $0.canonicalProviderKey == "grok" }),
+              let xaiIndex = windows.firstIndex(where: { isPool($0) && $0.canonicalProviderKey == "xai" })
+        else { return windows }
+        let grokDate = windows[grokIndex].occurredDate ?? .distantPast
+        let xaiDate = windows[xaiIndex].occurredDate ?? .distantPast
+        var copy = windows
+        copy.remove(at: grokDate >= xaiDate ? xaiIndex : grokIndex)
+        return copy
+    }
+
     /// Returns the stable native dashboard order, followed by future provider
     /// keys supplied by the server.  Missing expected providers are explicit.
     ///
@@ -634,19 +663,30 @@ public extension QuotaResponse {
     /// offline fallback / pre-manifest backend path.  That branch is kept as a
     /// safety net for first-launch installs before a sync has completed.
     func platformSections(now: Date = Date()) -> [QuotaPlatformSection] {
-        let normalizedWindows = windows.map { $0.normalized() }
+        // Collect every reading the response carries, then dedupe once over
+        // the whole collection.  Dedupe before the provider groups are
+        // merged would drop the fleet `xai:subscription` only for a group to
+        // hand back the same duplicate moments later — the one disagreement
+        // this dedupe exists to remove, reached by the additive manifest path.
+        var collected = windows.map { $0.normalized() }
+        // Older responses may not have top-level windows but do have the
+        // additive provider groups.  Fill only absent IDs to avoid duplicates.
+        var seen = Set(collected.map { "\($0.canonicalProviderKey):\($0.id)" })
+        for group in providerGroups {
+            for window in group.windows.map({ $0.normalized() }) where seen.insert("\(window.canonicalProviderKey):\(window.id)").inserted {
+                collected.append(window)
+            }
+        }
+        let normalizedWindows = Self.dedupedGrokSubscription(collected)
+        // A provider whose every reading the dedupe removed is not missing:
+        // its one pool is shown on the other row.  Keep it out of the
+        // sections, or its expected-provider entry renders an empty card
+        // ("Quota unavailable") beside the row that carries the reading.
+        let emptiedByDedupe = Set(collected.map(\.canonicalProviderKey))
+            .subtracting(normalizedWindows.map(\.canonicalProviderKey))
         var grouped = Dictionary<String, [QuotaWindow]>(minimumCapacity: normalizedWindows.count)
         for window in normalizedWindows {
             grouped[window.canonicalProviderKey, default: []].append(window)
-        }
-
-        // Older responses may not have top-level windows but do have the
-        // additive provider groups.  Fill only absent IDs to avoid duplicates.
-        var seen = Set(normalizedWindows.map { "\($0.canonicalProviderKey):\($0.id)" })
-        for group in providerGroups {
-            for window in group.windows.map({ $0.normalized() }) where seen.insert("\(window.canonicalProviderKey):\(window.id)").inserted {
-                grouped[window.canonicalProviderKey, default: []].append(window)
-            }
         }
 
         // Build the manifest view: key, label, via, expected, iconHint, and
@@ -716,7 +756,7 @@ public extension QuotaResponse {
         }
 
         var sections: [QuotaPlatformSection] = []
-        for entry in manifest {
+        for entry in manifest where !emptiedByDedupe.contains(entry.key) {
             sections.append(makeSection(key: entry.key, label: entry.label, via: entry.via, expected: entry.expected, iconHint: entry.iconHint, grouped: grouped, now: now))
         }
 

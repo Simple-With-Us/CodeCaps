@@ -95,6 +95,18 @@ final class CompanionModelTests: XCTestCase {
         )
     }
 
+    func testDataSourcesFooterUsesSentenceGap() throws {
+        let source = try readCompanionContentViewSource()
+        XCTAssertTrue(
+            source.contains(#"Text("Readings from each source." + sentenceGap"#),
+            "The Data Sources footer must use sentenceGap after its first sentence"
+        )
+        XCTAssertTrue(
+            source.contains(#"the difference shows here." + sentenceGap"#),
+            "The Data Sources footer must use sentenceGap after its second sentence"
+        )
+    }
+
     // MARK: - Reordering Logic
 
     func testPlatformOrderingLogic() {
@@ -288,7 +300,7 @@ final class CompanionModelTests: XCTestCase {
     func testTheCompanionCardShowsTheAtCapLine() throws {
         let view = try readCompanionContentViewSource()
         XCTAssertTrue(
-            view.contains("item.atCapSummary(scope: model.sourceScope)"),
+            view.contains("item.atCapSummary(scope: scope)"),
             "the quota card must show the cap line"
         )
         XCTAssertTrue(
@@ -684,8 +696,8 @@ final class CompanionModelTests: XCTestCase {
         XCTAssertTrue(source.contains("sourceLooksLikeHostname"))
         let content = try readCompanionContentViewSource()
         XCTAssertTrue(
-            content.contains("model.sourceScope == .allSources, item.sourceCount > 1"),
-            "discrepancy UI must follow the multi-source chip gate"
+            content.contains("item.sourceCount > 1"),
+            "discrepancy UI must follow the multi-source gate"
         )
     }
 
@@ -741,15 +753,25 @@ final class CompanionModelTests: XCTestCase {
         )
     }
 
+    /// PR #306 made the main list canonical: the card always reads
+    /// `.allSources`, so the header no longer carries a source-scope picker.
+    /// The device-aware label itself still ships, on the scope the model
+    /// exposes, and nothing on screen may fall back to the stored raw value
+    /// (which always says "This iPhone", even on an iPad).
     func testSourceScopePickerShowsTheDeviceAwareLabel() throws {
-        let view = try readCompanionContentViewSource()
+        let source = try readCompanionModelSource()
         XCTAssertTrue(
-            view.contains("Text(scope.displayTitle).tag(scope)"),
-            "The source-scope picker must show the device-aware label"
+            source.contains("public var displayTitle: String"),
+            "The scope must keep exposing the device-aware label the picker used to render"
         )
+        let view = try readCompanionContentViewSource()
         XCTAssertFalse(
             view.contains("Text(scope.rawValue).tag(scope)"),
-            "The source-scope picker must not show the stored raw value, which always says This iPhone"
+            "no scope control may show the stored raw value, which always says This iPhone"
+        )
+        XCTAssertFalse(
+            view.contains("Picker(\"Source scope\""),
+            "the main list is canonical-only: the source-scope picker belongs to source detail"
         )
     }
 
