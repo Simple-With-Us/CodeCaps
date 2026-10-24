@@ -34,4 +34,23 @@ final class PlanDetailsDedupeTests: XCTestCase {
         let response = QuotaResponse(generatedAt: "", windows: local + split.groups.flatMap(\.windows))
         XCTAssertEqual(response.platformSections().first(where: { $0.providerKey == "xai" })?.windows.count, 2)
     }
+    func testAnEmptyLocalCopyDoesNotHideItsReturningReading() {
+        let local = [window("local-mac:xai:unknown")]
+        var pushed = window("xai:unknown")
+        pushed.remainingPercent = 73
+        pushed.remainingUnknown = false
+        let adopted = QuotaLocalScope.adoptedOwnPush([pushed], localWindows: local)
+        XCTAssertEqual(adopted.map(\.remainingPercent), [73])
+    }
+
+    func testALocalReadingStillOwnsItsProviderAcrossDistinctWindowIds() {
+        var local = window("local-mac:xai:weekly")
+        local.remainingPercent = 81
+        local.remainingUnknown = false
+        var pushed = window("xai:subscription")
+        pushed.remainingPercent = 23
+        pushed.remainingUnknown = false
+        XCTAssertTrue(QuotaLocalScope.adoptedOwnPush([pushed], localWindows: [local]).isEmpty)
+    }
+
 }

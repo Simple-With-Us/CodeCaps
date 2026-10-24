@@ -433,7 +433,10 @@ public enum QuotaLocalScope {
         }
         let localKeys = Set(localWindows.map(key))
         return ownPush.filter {
-            !localProviders.contains($0.canonicalProviderKey) && !localKeys.contains(key($0))
+            // A local reading still owns its provider.  An empty local copy
+            // must not hide an informative returning push with the same key.
+            !localProviders.contains($0.canonicalProviderKey)
+                && (!localKeys.contains(key($0)) || $0.hasReading)
         }
     }
 }

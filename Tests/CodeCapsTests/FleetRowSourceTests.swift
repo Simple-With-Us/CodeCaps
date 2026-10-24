@@ -431,4 +431,58 @@ final class FleetRowSourceTests: XCTestCase {
         XCTAssertEqual(rebuilt.filter { $0.remainingPercent != nil }.count, 1,
                        "the file poll keeps the fleet's live reading in the row")
     }
+    /// xAI plan metadata survives normalization, so both paths really merge
+    /// a local copy with its own returning push rather than only the push.
+    func testBothMergePathsDedupePlanMetadataThatSurvivesNormalization() async throws {
+        for carriesReading in [false, true] {
+            let iso = ISO8601DateFormatter()
+            let now = Date()
+            let producer = QuotaPublisher.producerInstanceId
+            let machine = QuotaPublisher.machineName
+            let suffix = carriesReading ? "unknown" : "plan-metadata"
+            let local = QuotaWindow(id: "local-mac:xai:\(suffix)", provider: "xai",
+                                    providerKey: "xai", label: "Plan Details", remainingUnknown: true,
+                                    occurredAt: iso.string(from: now), source: "CodeCaps Settings",
+                                    producerInstanceId: producer, machine: machine)
+            var pushed = local
+            pushed.id = "xai:\(suffix)"
+            if carriesReading {
+                pushed.remainingPercent = 73
+                pushed.remainingUnknown = false
+            }
+            var foreign = pushed
+            foreign.id = "xai:foreign-reading"
+            foreign.remainingPercent = 11
+            foreign.remainingUnknown = false
+            foreign.producerInstanceId = "other-mac"
+            foreign.machine = "other-mac"
+            let server = QuotaResponse(generatedAt: iso.string(from: now), windows: [pushed, foreign])
+            let model = MonitorModel(defaults: defaults())
+            model.skipsSnapshotIOForTesting = true
+            model.localReadForTesting = { LocalQuotaResult(windows: [local]) }
+            model.serverFetchForTesting = { server }
+            model.refresh()
+            await model.refreshTaskForTesting?.value
+            func assertMerge(_ path: String, file: StaticString = #filePath, line: UInt = #line) {
+                XCTAssertEqual(model.localWindows.filter { $0.id == local.id }.count, 1,
+                               "\(path): the local fixture survives normalization", file: file, line: line)
+                let merged = model.response.windows.filter { $0.canonicalProviderKey == "xai" }
+                if carriesReading {
+                    let readings = merged.filter { $0.hasReading }
+                    XCTAssertEqual(readings.map(\.remainingPercent), [73],
+                                   "\(path): the own reading wins before foreign fallback", file: file, line: line)
+                    XCTAssertEqual(readings.first?.producerInstanceId, producer, file: file, line: line)
+                } else {
+                    XCTAssertEqual(merged.filter { $0.id.hasSuffix("plan-metadata") }.count, 1,
+                                   "\(path): two metadata copies dedupe to one", file: file, line: line)
+                }
+            }
+            assertMerge("refresh")
+            model.sessionFileReadForTesting = { LocalQuotaResult(windows: [local]) }
+            model.refreshSessionFiles()
+            await model.sessionFileTaskForTesting?.value
+            assertMerge("file poll")
+        }
+    }
+
 }
