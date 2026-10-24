@@ -69,4 +69,20 @@ final class PlanDetailsDedupeTests: XCTestCase {
         XCTAssertEqual(QuotaLocalScope.localWindowsForMerge([localReading], adopted: [reading]).map(\.remainingPercent), [81])
     }
 
+    func testLegacyProducerlessOwnPushSplitsAdoptsAndReplacesItsEmptyCopy() {
+        let local = window("local-mac:xai:unknown")
+        var legacyPush = window("local-mac:xai:unknown")
+        legacyPush.remainingPercent = 73
+        legacyPush.remainingUnknown = false
+        let split = FleetOrigin.split([legacyPush], host: "injected-host", localWindows: [local])
+        XCTAssertEqual(split.ownPush.count, 1)
+        XCTAssertTrue(split.groups.isEmpty)
+        let adopted = QuotaLocalScope.adoptedOwnPush(split.ownPush, localWindows: [local])
+        XCTAssertEqual(adopted.map(\.remainingPercent), [73])
+        let merged = QuotaLocalScope.localWindowsForMerge([local], adopted: adopted) + adopted
+        XCTAssertEqual(merged.count, 1)
+        XCTAssertEqual(merged.first?.remainingPercent, 73)
+        XCTAssertNil(merged.first?.producerInstanceId)
+    }
+
 }
