@@ -55,6 +55,23 @@ enum PipMetrics {
     static let controlInset: CGFloat = 4
     static let controlHitSize: CGFloat = 18
 
+    // MARK: Resize grip
+
+    /// The grab area for the resize corner.
+    ///
+    /// The panel is borderless, so AppKit's own resize area is the window's
+    /// bottom-right corner, and the rounded surface clips that corner away:  the
+    /// target the owner had to hit was a sliver of the window that the visible
+    /// shape did not even cover, and the drag view behind the surface took the
+    /// click and moved the window instead of resizing it (owner, 2026-10-23:
+    /// "grabbing corners is super hard ... a super tiny area maybe not even
+    /// inside the window, and can't get it to resize right now at all").  The
+    /// grip lives inside the visible surface instead, and this is how wide it is.
+    static let resizeGripSize: CGFloat = 22
+    /// How far the grip's outer edge stays from the window's corner, so the
+    /// whole grab area is inside the rounded shape rather than under it.
+    static let resizeGripInset: CGFloat = 4
+
     // MARK: Panel bounds
 
     static let minWidth: CGFloat = 110
@@ -326,7 +343,7 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
     func show(model: MonitorModel) {
         self.currentModel = model
         if let panel {
-            panel.contentView = NSHostingView(rootView: PipWidgetView(model: model))
+            panel.contentView = NSHostingView(rootView: PipWidgetView(model: model, panel: panel))
             applyLevel()
             applyFit(for: model)
             // The hosting view observes the model, so it is built once and
@@ -423,7 +440,7 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
         p.maxSize = NSSize(width: PipMetrics.maxWidth, height: PipMetrics.maxHeight)
         p.setFrameAutosaveName("CodeCapsPipWidgetPanel")
         p.delegate = self
-        p.contentView = NSHostingView(rootView: PipWidgetView(model: model))
+        p.contentView = NSHostingView(rootView: PipWidgetView(model: model, panel: p))
         self.panel = p
         dragMonitor = PipDragMonitor(window: p)
         applyLevel()
@@ -603,6 +620,105 @@ extension PipMetrics {
     }
 }
 
+/// Which corner or edge a resize grip drives.
+enum PipResizeEdge {
+    case right
+    case bottom
+    case bottomRight
+}
+
+extension PipMetrics {
+    /// The frame a resize drag produces.
+    ///
+    /// The left edge and the top edge stay where the owner left them and the
+    /// dragged edge follows the pointer, which is what dragging a corner of a
+    /// window does.  AppKit's frame origin is the bottom-left corner, so a
+    /// frame that grew downwards starts lower.
+    ///
+    /// The size is clamped here rather than left to AppKit, because a borderless
+    /// panel enforces `minSize` and `maxSize` on its own resize area but not on
+    /// a frame set from code, and the HUD has to stay inside those bounds.
+    static func resizedFrame(
+        from start: NSRect,
+        translation: CGSize,
+        edge: PipResizeEdge,
+        minSize: NSSize,
+        maxSize: NSSize
+    ) -> NSRect {
+        var width = start.width
+        var height = start.height
+        if edge != .bottom { width += translation.width }
+        if edge != .right { height += translation.height }
+        width = min(max(width, minSize.width), maxSize.width)
+        height = min(max(height, minSize.height), maxSize.height)
+        let originX = start.origin.x
+        // The top edge is the fixed one, so the origin follows the height.
+        let originY = edge == .right ? start.origin.y : start.maxY - height
+        return NSRect(x: originX, y: originY, width: width, height: height)
+    }
+}
+
+/// The corner grip that resizes the PiP panel.
+///
+/// It is drawn inside the rounded surface and it sits on top of the drag
+/// view, so the corner resizes the window instead of moving it.  The grip
+/// shows faintly all the time and clearly on hover, because a grab area the
+/// owner cannot see is a grab area the owner will not find.
+private struct PipResizeGrip: View {
+    let edge: PipResizeEdge
+    let ink: Color
+    let isHovering: Bool
+    let window: NSWindow?
+
+    @State private var startFrame: NSRect?
+
+    var body: some View {
+        ZStack(alignment: .bottomTrailing) {
+            Color.clear
+            gripMark
+                .padding(2)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 1)
+                .onChanged { value in
+                    resize(by: value.translation)
+                }
+                .onEnded { _ in
+                    startFrame = nil
+                }
+        )
+        .help("Drag to resize")
+    }
+
+    /// Three short strokes leaning into the corner, the way a window's own
+    /// resize grip does.
+    private var gripMark: some View {
+        Path { path in
+            for step in 0..<3 {
+                let x = 8 + CGFloat(step) * 4
+                let y = 8 + CGFloat(step) * 4
+                path.move(to: CGPoint(x: x, y: y))
+                path.addLine(to: CGPoint(x: x + 5, y: y + 5))
+            }
+        }
+        .stroke(ink.opacity(isHovering ? 0.6 : 0.22), lineWidth: 1.2)
+    }
+
+    private func resize(by translation: CGSize) {
+        guard let window else { return }
+        let start = startFrame ?? window.frame
+        if startFrame == nil { startFrame = start }
+        let frame = PipMetrics.resizedFrame(from: start,
+                                            translation: translation,
+                                            edge: edge,
+                                            minSize: window.minSize,
+                                            maxSize: window.maxSize)
+        window.setFrame(frame, display: true)
+    }
+}
+
 struct WindowDragView: NSViewRepresentable {
     final class DragNSView: NSView {
         override func mouseDown(with event: NSEvent) {
@@ -620,6 +736,12 @@ struct WindowDragView: NSViewRepresentable {
 /// The SwiftUI view for the floating PiP HUD widget.
 struct PipWidgetView: View {
     @ObservedObject var model: MonitorModel
+    /// The panel the view lives in, so the resize grip can move it.
+    ///
+    /// It is optional because the view is also rendered off screen, by the
+    /// screenshot fixtures and the name-fitting tests, where there is no window
+    /// to resize.
+    var panel: NSPanel?
     /// The same rows laid end to end.  Every row keeps its logo at its own left
     /// edge, so scrolling never hides which platform you are looking at —
     /// which was the whole point of the owner's request.
@@ -731,6 +853,7 @@ struct PipWidgetView: View {
                 }
                 floatingControl
                     .padding(PipMetrics.controlInset)
+                resizeGrip
             }
         }
         .background {
@@ -754,6 +877,19 @@ struct PipWidgetView: View {
     }
 
     // MARK: Header
+
+    /// The corner grip that resizes the panel.
+    ///
+    /// It sits in the bottom-right corner, inside the rounded surface, so the
+    /// area the owner grabs is the area the owner can see.  It is on top of the
+    /// rows and of the drag view behind them, so the corner resizes the window
+    /// rather than dragging it.
+    private var resizeGrip: some View {
+        PipResizeGrip(edge: .bottomRight, ink: background.ink, isHovering: isHovering, window: panel)
+            .frame(width: PipMetrics.resizeGripSize, height: PipMetrics.resizeGripSize)
+            .padding(PipMetrics.resizeGripInset)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+    }
 
     /// Close, or Back when a platform detail is open.  It floats over the
     /// rows' top-right corner and appears only on hover, so it never occupies
