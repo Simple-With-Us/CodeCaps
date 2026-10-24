@@ -459,13 +459,17 @@ final class FleetRowSourceTests: XCTestCase {
             let server = QuotaResponse(generatedAt: iso.string(from: now), windows: [pushed, foreign])
             let model = MonitorModel(defaults: defaults())
             model.skipsSnapshotIOForTesting = true
+            // The fixture itself must survive the same normalization used by
+            // both merge paths.  localWindows is private to MonitorModel.
+            XCTAssertEqual(AntigravityQuotaGroups.normalize([local]).map(\.id), [local.id],
+                           "the local fixture survives normalization before either merge")
             model.localReadForTesting = { LocalQuotaResult(windows: [local]) }
             model.serverFetchForTesting = { server }
             model.refresh()
             await model.refreshTaskForTesting?.value
             func assertMerge(_ path: String, file: StaticString = #filePath, line: UInt = #line) {
-                XCTAssertEqual(model.localWindows.filter { $0.id == local.id }.count, 1,
-                               "\(path): the local fixture survives normalization", file: file, line: line)
+                XCTAssertEqual(model.response.windows.filter { $0.id == local.id }.count, 1,
+                               "\(path): the observable merge retains the local fixture", file: file, line: line)
                 let merged = model.response.windows.filter { $0.canonicalProviderKey == "xai" }
                 if carriesReading {
                     let readings = merged.filter { $0.hasReading }
