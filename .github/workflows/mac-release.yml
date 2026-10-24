@@ -303,12 +303,15 @@ jobs:
           export SENTRY_ORG="${SENTRY_ORG:-simple-with-us}"
           # Install sentry-cli first, in an empty environment, so the
           # downloaded installer never inherits the job's secrets.
+          # The installer is a POSIX sh script that honours INSTALL_DIR (its
+          # default is /usr/local/bin).  Its output stays in the log, so a
+          # failed install shows why; with `env -i` it can't print a secret.
           if ! command -v sentry-cli >/dev/null 2>&1; then
             cli_dir="$RUNNER_TEMP/sentry-cli-bin"
             mkdir -p "$cli_dir"
             curl -fsSL https://sentry.io/get-cli/ \
               | env -i HOME="$HOME" PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
-                  INSTALL_DIR="$cli_dir" SENTRY_CLI_VERSION="" sh >/dev/null 2>&1 || true
+                  INSTALL_DIR="$cli_dir" SENTRY_CLI_VERSION="" sh 2>&1 || true
             export PATH="$cli_dir:$PATH:/opt/homebrew/bin"
           fi
           if ! command -v sentry-cli >/dev/null 2>&1; then
