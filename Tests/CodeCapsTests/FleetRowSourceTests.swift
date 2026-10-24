@@ -434,7 +434,9 @@ final class FleetRowSourceTests: XCTestCase {
     /// xAI plan metadata survives normalization, so both paths really merge
     /// a local copy with its own returning push rather than only the push.
     func testBothMergePathsDedupePlanMetadataThatSurvivesNormalization() async throws {
-        for carriesReading in [false, true] {
+        for variant in ["metadata", "reading", "legacy-reading"] {
+            let carriesReading = variant != "metadata"
+            let isLegacy = variant == "legacy-reading"
             let iso = ISO8601DateFormatter()
             let now = Date()
             let producer = QuotaPublisher.producerInstanceId
@@ -449,6 +451,13 @@ final class FleetRowSourceTests: XCTestCase {
             if carriesReading {
                 pushed.remainingPercent = 73
                 pushed.remainingUnknown = false
+            }
+            if isLegacy {
+                // No prefix, producer, machine or app-name shortcut: only
+                // the matching local timestamp/window proves this own push.
+                pushed.producerInstanceId = nil
+                pushed.machine = nil
+                pushed.source = "synthetic-legacy-source"
             }
             var foreign = pushed
             foreign.id = "xai:foreign-reading"
@@ -477,7 +486,7 @@ final class FleetRowSourceTests: XCTestCase {
                     let readings = merged.filter { $0.hasReading }
                     XCTAssertEqual(readings.map(\.remainingPercent), [73],
                                    "\(path): the own reading wins before foreign fallback", file: file, line: line)
-                    XCTAssertEqual(readings.first?.producerInstanceId, producer, file: file, line: line)
+                    XCTAssertEqual(readings.first?.producerInstanceId, isLegacy ? nil : producer, file: file, line: line)
                 } else {
                     XCTAssertEqual(merged.filter { $0.id.hasSuffix("plan-metadata") }.count, 1,
                                    "\(path): two metadata copies dedupe to one", file: file, line: line)

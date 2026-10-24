@@ -2555,7 +2555,7 @@ final class MonitorModel: ObservableObject {
         // as a local reading here put the xAI row back to no reading at all
         // within a minute of the refresh fixing it (owner, 2026-10-23).
         let localProviders = QuotaLocalScope.providers(withReadings: localWindows)
-        let split = FleetOrigin.split(serverWindows, now: now)
+        let split = FleetOrigin.split(serverWindows, localWindows: localWindows, now: now)
         let ownPush = split.ownPush
         let adopted = QuotaLocalScope.adoptedOwnPush(ownPush, localWindows: localWindows)
         // A window that carries no reading does not claim its provider, the
