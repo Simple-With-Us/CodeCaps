@@ -150,12 +150,21 @@ jobs:
           observed = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
           windows = [
               {"id": "claude-5h", "provider": "anthropic", "providerKey": "anthropic", "label": "5-hour window", "remainingPercent": 72.0, "isExhausted": False, "occurredAt": observed},
+              {"id": "claude-weekly", "provider": "anthropic", "providerKey": "anthropic", "label": "Weekly", "remainingPercent": 61.0, "isExhausted": False, "occurredAt": observed},
               {"id": "codex-weekly", "provider": "openai", "providerKey": "codex", "label": "Weekly", "remainingPercent": 44.0, "isExhausted": False, "occurredAt": observed},
               {"id": "cursor-fast", "provider": "cursor", "providerKey": "cursor", "label": "Fast Requests", "remainingPercent": 28.0, "isExhausted": False, "occurredAt": observed},
           ]
           with open(sys.argv[1], "w", encoding="utf-8") as snapshot:
               json.dump({"windows": windows}, snapshot)
           PY
+          # The main quota list with the seeded windows above (the Claude
+          # card carries two meter rows), so a change to the quota cards has
+          # a simulator screenshot to review.
+          xcrun simctl launch --terminate-running-process "$SIMULATOR_ID" "$bundle_id"
+          sleep 3
+          xcrun simctl io "$SIMULATOR_ID" screenshot "$RUNNER_TEMP/codecaps-ios-quota.png"
+          test -s "$RUNNER_TEMP/codecaps-ios-quota.png"
+          xcrun simctl terminate "$SIMULATOR_ID" "$bundle_id"
           xcrun simctl launch --terminate-running-process "$SIMULATOR_ID" "$bundle_id" -openSettings -reorderPlatforms
           sleep 3
           xcrun simctl io "$SIMULATOR_ID" screenshot "$screenshot"
@@ -195,6 +204,7 @@ jobs:
         with:
           name: codecaps-ios-platform-reordering
           path: |
+            ${{ runner.temp }}/codecaps-ios-quota.png
             ${{ runner.temp }}/codecaps-ios-reorder.png
             ${{ runner.temp }}/codecaps-ios-empty.png
             ${{ runner.temp }}/codecaps-ios-settings.png

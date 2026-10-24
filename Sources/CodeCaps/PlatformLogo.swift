@@ -287,7 +287,8 @@ private static let resourceNames: [String: String] = [
     "grok-bot": "grok-bot",
     "minimax": "minimax",
     "muse": "muse",
-    "muse-assist": "muse-assist",
+    // Muse Assist ships byte-identical artwork to Muse; one base serves both.
+    "muse-assist": "muse",
     "muse-code": "muse-code",
     "cursor": "cursor",
     "github-copilot": "copilot",

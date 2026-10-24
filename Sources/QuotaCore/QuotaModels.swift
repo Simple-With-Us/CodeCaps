@@ -625,6 +625,35 @@ public extension QuotaResponse {
         return copy
     }
 
+    /// The Grok subscription credits pool is reported twice: the local CLI
+    /// reader files it under `grok`, while the fleet collector buckets the
+    /// same payload as `xai:subscription`.  When both carry a subscription
+    /// window, keep the fresher reading and drop the staler duplicate, so
+    /// the two rows can never disagree about one pool.  Any other xAI
+    /// window (API usage, a different cadence) is untouched.
+    static func dedupedGrokSubscription(_ windows: [QuotaWindow]) -> [QuotaWindow] {
+        // The one Grok credits pool, identified by exact component equality on the
+        // window id.  Ids carry an optional source prefix
+        // (`local-mac:grok:subscription`), so the canonical form is the last
+        // two components: `<providerKey>:<token>`, each compared in full.
+        // `grok:legacy:subscription` names a different window and is not the
+        // pool; `xai:api-monthly` is not the pool either.
+        func isPool(_ window: QuotaWindow) -> Bool {
+            let parts = window.id.split(separator: ":")
+            guard parts.count >= 2 else { return false }
+            return parts[parts.count - 2] == Substring(window.canonicalProviderKey)
+                && parts[parts.count - 1] == "subscription"
+        }
+        guard let grokIndex = windows.firstIndex(where: { isPool($0) && $0.canonicalProviderKey == "grok" }),
+              let xaiIndex = windows.firstIndex(where: { isPool($0) && $0.canonicalProviderKey == "xai" })
+        else { return windows }
+        let grokDate = windows[grokIndex].occurredDate ?? .distantPast
+        let xaiDate = windows[xaiIndex].occurredDate ?? .distantPast
+        var copy = windows
+        copy.remove(at: grokDate >= xaiDate ? xaiIndex : grokIndex)
+        return copy
+    }
+
     /// Returns the stable native dashboard order, followed by future provider
     /// keys supplied by the server.  Missing expected providers are explicit.
     ///
@@ -634,19 +663,30 @@ public extension QuotaResponse {
     /// offline fallback / pre-manifest backend path.  That branch is kept as a
     /// safety net for first-launch installs before a sync has completed.
     func platformSections(now: Date = Date()) -> [QuotaPlatformSection] {
-        let normalizedWindows = windows.map { $0.normalized() }
+        // Collect every reading the response carries, then dedupe once over
+        // the whole collection.  Dedupe before the provider groups are
+        // merged would drop the fleet `xai:subscription` only for a group to
+        // hand back the same duplicate moments later — the one disagreement
+        // this dedupe exists to remove, reached by the additive manifest path.
+        var collected = windows.map { $0.normalized() }
+        // Older responses may not have top-level windows but do have the
+        // additive provider groups.  Fill only absent IDs to avoid duplicates.
+        var seen = Set(collected.map { "\($0.canonicalProviderKey):\($0.id)" })
+        for group in providerGroups {
+            for window in group.windows.map({ $0.normalized() }) where seen.insert("\(window.canonicalProviderKey):\(window.id)").inserted {
+                collected.append(window)
+            }
+        }
+        let normalizedWindows = Self.dedupedGrokSubscription(collected)
+        // A provider whose every reading the dedupe removed is not missing:
+        // its one pool is shown on the other row.  Keep it out of the
+        // sections, or its expected-provider entry renders an empty card
+        // ("Quota unavailable") beside the row that carries the reading.
+        let emptiedByDedupe = Set(collected.map(\.canonicalProviderKey))
+            .subtracting(normalizedWindows.map(\.canonicalProviderKey))
         var grouped = Dictionary<String, [QuotaWindow]>(minimumCapacity: normalizedWindows.count)
         for window in normalizedWindows {
             grouped[window.canonicalProviderKey, default: []].append(window)
-        }
-
-        // Older responses may not have top-level windows but do have the
-        // additive provider groups.  Fill only absent IDs to avoid duplicates.
-        var seen = Set(normalizedWindows.map { "\($0.canonicalProviderKey):\($0.id)" })
-        for group in providerGroups {
-            for window in group.windows.map({ $0.normalized() }) where seen.insert("\(window.canonicalProviderKey):\(window.id)").inserted {
-                grouped[window.canonicalProviderKey, default: []].append(window)
-            }
         }
 
         // Build the manifest view: key, label, via, expected, iconHint, and
@@ -716,7 +756,7 @@ public extension QuotaResponse {
         }
 
         var sections: [QuotaPlatformSection] = []
-        for entry in manifest {
+        for entry in manifest where !emptiedByDedupe.contains(entry.key) {
             sections.append(makeSection(key: entry.key, label: entry.label, via: entry.via, expected: entry.expected, iconHint: entry.iconHint, grouped: grouped, now: now))
         }
 
@@ -789,7 +829,59 @@ private extension QuotaWindow {
     }
 }
 
-private enum ISO8601Date {
+/// Memoizes parsed ISO-8601 instants.
+///
+/// Parsing one instant is not cheap.  `ISO8601DateFormatter` builds a fresh
+/// ICU calendar for every call, and ICU loads — then tears down — its
+/// date-format symbol tables from resources each time, which is what a hang
+/// capture shows as `icu::DateFormatSymbols::loadAllSymbols` underneath
+/// `udat_parseCalendar`.
+///
+/// Every window is parsed four times per `platformSections` call: twice for
+/// the snapshot, and twice more in `normalizedForExport`.  `displaySections`
+/// is a computed property, so each of its readers recomputed the whole set,
+/// and the main thread paid that cost thousands of times per view update.
+/// That is what pushed it past two seconds and produced the "App hanging for
+/// at least 2000 ms" reports.
+///
+/// The same instants are parsed over and over, so the results are memoized.
+/// The cache is bounded, and the lock also keeps the two shared formatters
+/// off concurrent callers, because `ISO8601DateFormatter` is not itself
+/// thread-safe.
+final class ISO8601DateMemo: @unchecked Sendable {
+    static let shared = ISO8601DateMemo()
+
+    private let lock = NSLock()
+    private var cache: [String: Date] = [:]
+    /// Bounded, so a long-lived menu bar app cannot grow the cache forever.
+    private let cacheLimit = 1024
+
+    /// How many instants were actually parsed.  A test reads this to prove
+    /// the memo works rather than trusting the comment above it.
+    private(set) var parseCount = 0
+
+    func date(from value: String) -> Date? {
+        guard !value.isEmpty else { return nil }
+        lock.lock()
+        defer { lock.unlock() }
+        if let hit = cache[value] { return hit }
+        let parsed = ISO8601DateMemo.fractional.date(from: value)
+            ?? ISO8601DateMemo.standard.date(from: value)
+        parseCount += 1
+        if let parsed {
+            if cache.count >= cacheLimit { cache.removeAll(keepingCapacity: true) }
+            cache[value] = parsed
+        }
+        return parsed
+    }
+
+    /// Test hook: drops every memoized instant.
+    func removeAll() {
+        lock.lock()
+        defer { lock.unlock() }
+        cache.removeAll()
+    }
+
     private static let fractional: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -800,9 +892,11 @@ private enum ISO8601Date {
         formatter.formatOptions = [.withInternetDateTime]
         return formatter
     }()
+}
 
+private enum ISO8601Date {
     static func parse(_ value: String) -> Date? {
-        fractional.date(from: value) ?? standard.date(from: value)
+        ISO8601DateMemo.shared.date(from: value)
     }
 }
 

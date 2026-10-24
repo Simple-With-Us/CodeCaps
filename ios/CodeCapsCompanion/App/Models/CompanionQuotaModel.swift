@@ -2002,9 +2002,7 @@ public final class CompanionQuotaModel: ObservableObject {
         let futureResets = primaryWindows.compactMap(\.resetAt).filter { $0 > now }
         let nearestReset = futureResets.min() ?? primaryWindows.compactMap(\.resetAt).min()
 
-        let sourceCount = Set(primaryWindows.compactMap(\.source) + duplicateWindows.compactMap(\.source)).count
-        let sourceSuffix = sourceCount > 1 ? "  (\(sourceCount) sources)" : ""
-        let subtitle = Self.subtitlePhrase(for: primaryWindows, fallback: title) + sourceSuffix
+        let subtitle = Self.subtitlePhrase(for: primaryWindows, fallback: title)
         let displayTitle = WidgetPlatformDisplay.title(
             canonicalKey: providerKey,
             manifestProviderLabel: title,
@@ -2113,8 +2111,6 @@ public final class CompanionQuotaModel: ObservableObject {
 
         let controllingPct: Double?
         let isExhausted: Bool
-        let sourceCount = Set(windows.compactMap(\.source)).count
-        let sourceSuffix = sourceCount > 1 ? "  (\(sourceCount) sources)" : ""
         let subtitle: String
 
         // The headline reads the fresh windows, the way the Mac's dashboard row
@@ -2130,13 +2126,13 @@ public final class CompanionQuotaModel: ObservableObject {
         if weeklyExhausted && weeklyWin != nil {
             controllingPct = weeklyPct ?? 0
             isExhausted = true
-            subtitle = "\(QuotaWindowVocabulary.sevenDay) limit exhausted\(sourceSuffix)"
+            subtitle = "\(QuotaWindowVocabulary.sevenDay) limit exhausted"
         } else {
             controllingPct = freshPercents.min()
                 ?? validPercents.min()
                 ?? windows.compactMap(\.remainingPercent).min()
             isExhausted = QuotaCapRule.isAtCap(remainingPercent: freshPercents.min())
-            subtitle = "\(QuotaWindowVocabulary.fiveHour) & \(QuotaWindowVocabulary.sevenDay)\(sourceSuffix)"
+            subtitle = "\(QuotaWindowVocabulary.fiveHour) & \(QuotaWindowVocabulary.sevenDay)"
         }
 
         // Collapse the pool's observations into one row per period.
