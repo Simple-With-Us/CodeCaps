@@ -668,12 +668,24 @@ public extension QuotaResponse {
         // merged would drop the fleet `xai:subscription` only for a group to
         // hand back the same duplicate moments later — the one disagreement
         // this dedupe exists to remove, reached by the additive manifest path.
-        var collected = windows.map { $0.normalized() }
+        // The dedupe key ignores the local source prefix:  this Mac's own
+        // window (`local-mac:xai:plan-metadata`) and its own push coming
+        // back (`xai:plan-metadata`) are one payload, and keying on the raw
+        // id let both survive as duplicate plan-details rows.
+        func dedupeKey(_ window: QuotaWindow) -> String {
+            let prefix = QuotaWindowVocabulary.localDeviceWindowPrefix
+            let id = window.id.hasPrefix(prefix) ? String(window.id.dropFirst(prefix.count)) : window.id
+            return "\(window.canonicalProviderKey):\(id)"
+        }
+        var collected: [QuotaWindow] = []
+        var seen: Set<String> = []
+        for window in windows.map({ $0.normalized() }) where seen.insert(dedupeKey(window)).inserted {
+            collected.append(window)
+        }
         // Older responses may not have top-level windows but do have the
         // additive provider groups.  Fill only absent IDs to avoid duplicates.
-        var seen = Set(collected.map { "\($0.canonicalProviderKey):\($0.id)" })
         for group in providerGroups {
-            for window in group.windows.map({ $0.normalized() }) where seen.insert("\(window.canonicalProviderKey):\(window.id)").inserted {
+            for window in group.windows.map({ $0.normalized() }) where seen.insert(dedupeKey(window)).inserted {
                 collected.append(window)
             }
         }
