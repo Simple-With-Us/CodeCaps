@@ -420,6 +420,22 @@ public enum QuotaLocalScope {
     public static func providers(withReadings windows: [QuotaWindow]) -> Set<String> {
         Set(windows.filter { $0.hasReading }.map(\.canonicalProviderKey))
     }
+
+    /// Own pushes have already been separated from foreign readings by
+    /// FleetOrigin.split. Keep the local copy when the same window returns
+    /// from that installation, without deduping any foreign producers.
+    public static func adoptedOwnPush(_ ownPush: [QuotaWindow], localWindows: [QuotaWindow]) -> [QuotaWindow] {
+        let localProviders = providers(withReadings: localWindows)
+        func key(_ window: QuotaWindow) -> [String] {
+            let prefix = QuotaWindowVocabulary.localDeviceWindowPrefix
+            let id = window.id.hasPrefix(prefix) ? String(window.id.dropFirst(prefix.count)) : window.id
+            return [window.canonicalProviderKey, id]
+        }
+        let localKeys = Set(localWindows.map(key))
+        return ownPush.filter {
+            !localProviders.contains($0.canonicalProviderKey) && !localKeys.contains(key($0))
+        }
+    }
 }
 
 /// Response from GET /api/quota-windows.  `providerGroups` is additive and is
@@ -668,24 +684,12 @@ public extension QuotaResponse {
         // merged would drop the fleet `xai:subscription` only for a group to
         // hand back the same duplicate moments later — the one disagreement
         // this dedupe exists to remove, reached by the additive manifest path.
-        // The dedupe key ignores the local source prefix:  this Mac's own
-        // window (`local-mac:xai:plan-metadata`) and its own push coming
-        // back (`xai:plan-metadata`) are one payload, and keying on the raw
-        // id let both survive as duplicate plan-details rows.
-        func dedupeKey(_ window: QuotaWindow) -> String {
-            let prefix = QuotaWindowVocabulary.localDeviceWindowPrefix
-            let id = window.id.hasPrefix(prefix) ? String(window.id.dropFirst(prefix.count)) : window.id
-            return "\(window.canonicalProviderKey):\(id)"
-        }
-        var collected: [QuotaWindow] = []
-        var seen: Set<String> = []
-        for window in windows.map({ $0.normalized() }) where seen.insert(dedupeKey(window)).inserted {
-            collected.append(window)
-        }
+        var collected = windows.map { $0.normalized() }
         // Older responses may not have top-level windows but do have the
         // additive provider groups.  Fill only absent IDs to avoid duplicates.
+        var seen = Set(collected.map { "\($0.canonicalProviderKey):\($0.id)" })
         for group in providerGroups {
-            for window in group.windows.map({ $0.normalized() }) where seen.insert(dedupeKey(window)).inserted {
+            for window in group.windows.map({ $0.normalized() }) where seen.insert("\(window.canonicalProviderKey):\(window.id)").inserted {
                 collected.append(window)
             }
         }

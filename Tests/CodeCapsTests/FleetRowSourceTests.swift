@@ -409,6 +409,8 @@ final class FleetRowSourceTests: XCTestCase {
         await model.refreshTaskForTesting?.value
 
         let merged = model.response.windows.filter { $0.canonicalProviderKey == "google-antigravity" }
+        XCTAssertEqual(merged.filter { $0.id.hasSuffix("plan-metadata") }.count, 1,
+                       "local plan details and their own returning push are one payload")
         let readings = merged.filter { $0.remainingPercent != nil }
         XCTAssertEqual(readings.count, 1,
                        "the fleet's live reading reaches the row")
@@ -424,6 +426,8 @@ final class FleetRowSourceTests: XCTestCase {
         await model.sessionFileTaskForTesting?.value
 
         let rebuilt = model.response.windows.filter { $0.canonicalProviderKey == "google-antigravity" }
+        XCTAssertEqual(rebuilt.filter { $0.id.hasSuffix("plan-metadata") }.count, 1,
+                       "the file poll also keeps one plan-details payload")
         XCTAssertEqual(rebuilt.filter { $0.remainingPercent != nil }.count, 1,
                        "the file poll keeps the fleet's live reading in the row")
     }

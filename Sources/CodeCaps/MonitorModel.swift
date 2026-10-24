@@ -2388,7 +2388,7 @@ final class MonitorModel: ObservableObject {
 
             // This Mac's own push fills in only a provider no local reader
             // produced — with local readers off, that is every provider.
-            let adopted = ownPush.filter { !localProviders.contains($0.canonicalProviderKey) }
+            let adopted = QuotaLocalScope.adoptedOwnPush(ownPush, localWindows: self.localWindows)
             // A window that carries no reading does not claim its provider.
             // This Mac's plan details are its own push coming back, and they
             // named the Antigravity key, so the fleet's live reading for
@@ -2557,7 +2557,7 @@ final class MonitorModel: ObservableObject {
         let localProviders = QuotaLocalScope.providers(withReadings: localWindows)
         let split = FleetOrigin.split(serverWindows, now: now)
         let ownPush = split.ownPush
-        let adopted = ownPush.filter { !localProviders.contains($0.canonicalProviderKey) }
+        let adopted = QuotaLocalScope.adoptedOwnPush(ownPush, localWindows: localWindows)
         // A window that carries no reading does not claim its provider, the
         // same rule the refresh path uses:  the file poll overwrites the
         // merged response, so a plan-details window that held the fleet's
