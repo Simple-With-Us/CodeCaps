@@ -545,6 +545,12 @@ asc_latest_marketing_patch() {
   errf="$(mktemp "${TMPDIR:-/tmp}/asc-patch-err.XXXXXX")"
   out=$(asc_client latest-marketing-patch "$BUNDLE_ID" "$prefix" "$plat" 2>"$errf")
   rc=$?
+  if [[ $rc -eq 4 ]]; then
+    set -e
+    logerr "asc-patch: App Store Connect rejected the credential (HTTP 401/403)"
+    rm -f "$errf" >/dev/null 2>&1 || true
+    return 4
+  fi
   set -e
   if [[ -s "$errf" ]]; then
     while IFS= read -r line; do
@@ -583,6 +589,19 @@ asc_build_floor() {
   set +e
   out=$(asc_client build-floor "$BUNDLE_ID" "$version" "$plat" 2>"$errfile")
   rc=$?
+  # Keep the client's build-floor lines:  they carry Apple's HTTP status,
+  # which the fatal message below tells the operator to look for.
+  if [[ -s "$errfile" ]]; then
+    while IFS= read -r _fl; do
+      case "$_fl" in build-floor:*|latest-build-seq:*) logerr "asc-floor: ${_fl}" ;; esac
+    done <"$errfile"
+  fi
+  if [[ $rc -eq 4 ]]; then
+    set -e
+    logerr "asc-floor: App Store Connect rejected the credential (HTTP 401/403)"
+    rm -f "$errfile" >/dev/null 2>&1 || true
+    return 4
+  fi
   set -e
   err="$(cat "$errfile" 2>/dev/null || true)"
   rm -f "$errfile" 2>/dev/null || true
@@ -958,6 +977,11 @@ else
     set +e
     _patch="$(asc_latest_marketing_patch "$MARKETING_PREFIX" "$ASC_PLATFORM")"
     _rc=$?
+    if [[ $_rc -eq 4 ]]; then
+      die "App Store Connect rejected the API key (HTTP 401/403) while reading the next marketing version.
+  Fix the key (ASC_* in env or Infisical /asc; fleet-secrets doctor) and re-run.
+  --allow-unverified-seq does not cover a rejected credential:  the upload would fail with it too."
+    fi
     set -e
     if [[ $_rc -ne 0 || ! "$_patch" =~ ^[0-9]+$ ]]; then
       if [[ "$ALLOW_UNVERIFIED_SEQ" -eq 0 ]]; then
@@ -1004,6 +1028,11 @@ else
     set +e
     _floor_line="$(asc_build_floor "$MARKETING" "$ASC_PLATFORM")"
     _rc=$?
+    if [[ $_rc -eq 4 ]]; then
+      die "App Store Connect rejected the API key (HTTP 401/403) while reading the build floor.
+  Fix the key (ASC_* in env or Infisical /asc; fleet-secrets doctor) and re-run.
+  --allow-unverified-seq does not cover a rejected credential:  the upload would fail with it too."
+    fi
     set -e
     if [[ $_rc -ne 0 || -z "$_floor_line" ]]; then
       if [[ "$ALLOW_UNVERIFIED_SEQ" -eq 0 ]]; then
