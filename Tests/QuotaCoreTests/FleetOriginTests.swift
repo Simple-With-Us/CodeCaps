@@ -130,6 +130,131 @@ final class FleetOriginTests: XCTestCase {
         XCTAssertTrue(FleetOrigin.isOwnPush(win, host: "Mac.Jays.Services"))
     }
 
+    /// A local window that carries no reading is not a local reading.  The
+    /// plan-details window of a provider this Mac cannot read must not count
+    /// as one, or the fleet's live reading for that provider never reaches its
+    /// row and the row reads no allowance at all.
+    func testALocalWindowWithoutAReadingIsNotALocalReading() {
+        let planDetails = QuotaWindow(
+            id: "local-mac:xai:plan-metadata",
+            provider: "xAI",
+            providerKey: "xai",
+            label: "Plan Details",
+            remainingUnknown: true,
+            occurredAt: "2026-10-23T22:54:46Z",
+            source: "CodeCaps Settings"
+        )
+        XCTAssertTrue(QuotaLocalScope.providers(withReadings: [planDetails]).isEmpty,
+                      "a plan-details window carries no reading, so it is not a local reading")
+
+        let grok = QuotaWindow(
+            id: "local-mac:grok:subscription",
+            provider: "Grok",
+            providerKey: "grok",
+            label: "Weekly window",
+            remainingPercent: 89,
+            occurredAt: "2026-10-23T22:54:46Z",
+            source: "Grok"
+        )
+        XCTAssertEqual(QuotaLocalScope.providers(withReadings: [planDetails, grok]), ["grok"],
+                       "only the provider this Mac has a reading for counts")
+    }
+
+    /// A local window that reports an absolute balance and no percentage is
+    /// still a reading.  Several readers report a balance that way, and
+    /// counting only the percentages said this Mac reads no such provider:
+    /// the Mac merge then did not hold the fleet out, so another machine's
+    /// reading of the same provider was merged into this Mac's row and
+    /// labelled local, giving the row two readings where it had one.
+    func testALocalWindowWithAnAbsoluteBalanceIsALocalReading() {
+        let balanceOnly = QuotaWindow(
+            id: "local-mac:grok:balance",
+            provider: "Grok",
+            providerKey: "grok",
+            label: "SuperGrok Heavy",
+            absoluteRemaining: 120,
+            absoluteLimit: 200,
+            occurredAt: "2026-10-23T22:54:46Z",
+            source: "Grok"
+        )
+        XCTAssertEqual(QuotaLocalScope.providers(withReadings: [balanceOnly]), ["grok"],
+                       "a window with an absolute balance is a reading, so this Mac reads that provider")
+
+        let planDetails = QuotaWindow(
+            id: "local-mac:xai:plan-metadata",
+            provider: "xAI",
+            providerKey: "xai",
+            label: "Plan Details",
+            remainingUnknown: true,
+            occurredAt: "2026-10-23T22:54:46Z",
+            source: "CodeCaps Settings"
+        )
+        XCTAssertTrue(QuotaLocalScope.providers(withReadings: [planDetails]).isEmpty,
+                      "a plan-details window carries no reading, so it is not a local reading")
+    }
+
+    /// This Mac's own push of a period that ended is a copy like any other
+    /// when this Mac has no local reading to grey that period out.  There is
+    /// nothing left to show for it, so it must not stand in for a reading.
+    func testOwnPushOfAnEndedPeriodIsDroppedWhenThisMacHasNoLocalReading() {
+        let ended = xaiWindow(id: "xai:subscription", percent: 0, resetIn: -86_400, observedAgo: 6 * 86_400)
+        let split = FleetOrigin.split([ended], host: "this-mac", localWindows: [], now: Date())
+        XCTAssertTrue(split.ownPush.isEmpty,
+                      "a copy of a period that ended is not a reading, so it never reaches a row")
+    }
+
+    /// The exemption stays for a provider this Mac reads locally:  the local
+    /// window is what greys the ended period out, so the copy of it coming
+    /// back from the fleet is redundant.
+    func testOwnPushOfAnEndedPeriodIsKeptWhenThisMacReadsThatProviderLocally() {
+        let now = Date()
+        let ended = xaiWindow(id: "local-mac:xai:subscription", percent: 89, resetIn: -86_400, observedAgo: 6 * 86_400)
+        let local = QuotaWindow(
+            id: "local-mac:xai:subscription",
+            provider: "xAI",
+            providerKey: "xai",
+            label: "7-day window",
+            remainingPercent: 89,
+            resetAt: ISO8601DateFormatter().string(from: now.addingTimeInterval(-86_400)),
+            window: "weekly",
+            occurredAt: ISO8601DateFormatter().string(from: now.addingTimeInterval(-6 * 86_400))
+        )
+        let split = FleetOrigin.split([ended], host: "this-mac", localWindows: [local], now: now)
+        XCTAssertEqual(split.ownPush.count, 1,
+                       "the local window greys the ended period out, so the copy is redundant")
+    }
+
+    /// The xAI row end to end at the rule level.  This Mac reads no xAI quota
+    /// locally, the fleet carries this Mac's own live SuperGrok Heavy reading
+    /// under the xAI key, and the row must show that reading rather than the
+    /// copies of two periods that ended.
+    func testTheFleetLiveReadingReachesAProviderThisMacDoesNotReadLocally() {
+        let live = xaiWindow(id: "grok:subscription", percent: 89, resetIn: 6 * 86_400, observedAgo: 60)
+        let endedOne = xaiWindow(id: "xai-subscription", percent: 0, resetIn: -86_400, observedAgo: 6 * 86_400)
+        let endedTwo = xaiWindow(id: "xai:subscription", percent: 0, resetIn: -86_400, observedAgo: 5 * 86_400)
+
+        let split = FleetOrigin.split([live, endedOne, endedTwo], host: "this-mac", localWindows: [], now: Date())
+        XCTAssertEqual(split.ownPush.map(\.id), ["grok:subscription"],
+                       "the live reading survives and the copies of ended periods do not")
+    }
+
+    private func xaiWindow(id: String, percent: Double, resetIn: TimeInterval, observedAgo: TimeInterval) -> QuotaWindow {
+        let iso = ISO8601DateFormatter()
+        let clock = Date()
+        return QuotaWindow(
+            id: id,
+            provider: "xAI",
+            providerKey: "xai",
+            label: "7-day window",
+            remainingPercent: percent,
+            resetAt: iso.string(from: clock.addingTimeInterval(resetIn)),
+            window: "weekly",
+            occurredAt: iso.string(from: clock.addingTimeInterval(-observedAgo)),
+            source: "codecaps",
+            producerInstanceId: "this-mac"
+        )
+    }
+
     private func window(id: String = "w", source: String?, sourceApp: String?) -> QuotaWindow {
         QuotaWindow(id: id, provider: "anthropic", providerKey: "anthropic", sourceApp: sourceApp,
                     label: "5h window", remainingPercent: 50,

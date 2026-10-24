@@ -395,6 +395,33 @@ public struct QuotaProviderGroup: Codable, Equatable, Sendable {
     }
 }
 
+/// The providers this Mac reads locally.
+///
+/// A local window that carries no reading (a plan-details window) does not
+/// mean this Mac reads that provider.  Counting it as one dropped the fleet's
+/// live reading for the provider and left the row with no reading at all:  the
+/// xAI row read "unavailable" while the fleet carried this Mac's own live
+/// SuperGrok Heavy reading for it (owner, 2026-10-23).
+public enum QuotaLocalScope {
+    /// The provider keys this Mac has a local reading for.
+    ///
+    /// The local window is what greys out an ended period, so a provider
+    /// without one has nothing to show for an expired reading, and a copy of
+    /// that ended period must not stand in for a reading either.
+    ///
+    /// A window counts when it carries a percentage or an absolute balance,
+    /// which is the codebase's own notion of a reading
+    /// (`QuotaWindow.hasReading`):  several readers report an absolute balance
+    /// and no percentage at all, and a provider read that way is read
+    /// locally.  Counting only the percentages said otherwise, so the Mac
+    /// merge did not hold the fleet out and another machine's reading of the
+    /// same provider was merged into this Mac's row and labelled local, giving
+    /// the row two readings where it had one.
+    public static func providers(withReadings windows: [QuotaWindow]) -> Set<String> {
+        Set(windows.filter { $0.hasReading }.map(\.canonicalProviderKey))
+    }
+}
+
 /// Response from GET /api/quota-windows.  `providerGroups` is additive and is
 /// optional on decode so this remains compatible with the original response.
 public struct QuotaResponse: Codable, Equatable, Sendable {
@@ -758,9 +785,9 @@ public extension QuotaResponse {
         grouped: [String: [QuotaWindow]],
         now: Date
     ) -> QuotaPlatformSection {
-        let reports = key == "google-antigravity"
+        let reports = (key == "google-antigravity"
             ? AntigravityQuotaGroups.normalize(grouped[key] ?? [], includeMissing: true)
-            : grouped[key] ?? []
+            : grouped[key] ?? [])
         let snapshots = reports.map { QuotaWindowSnapshot(window: $0, now: now) }
             .sorted { left, right in
                 if key == "google-antigravity" { return left.window.id < right.window.id }

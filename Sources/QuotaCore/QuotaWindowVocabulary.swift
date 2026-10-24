@@ -556,6 +556,62 @@ public enum QuotaWindowVocabulary {
         let token = (windowToken ?? "").lowercased()
         return lower.contains("weekly") || token.contains("weekly") || lower.contains("free")
     }
+
+    // MARK: - Whose reading is this
+
+    /// The id prefix a window carries when it is this device's own reading.
+    /// The fleet copy of a Mac reading keeps the prefix, so every surface can
+    /// tell an own reading from a copy of another machine's.
+    public static let localDeviceWindowPrefix = "local-mac:"
+
+    /// The producer id this app stamps its own windows with.
+    public static let localProducerId = "codecaps"
+
+    /// The producer ids this app and its legacy names stamp on their own
+    /// windows.
+    public static let localProducerIds = [localProducerId, "agent-bar", "local-mac"]
+
+    /// Whether a window is this device's own reading rather than a copy of
+    /// another machine's.
+    ///
+    /// A window that names a producer instance or a machine belongs to
+    /// somebody, so it is a copy.  A window that names neither, and whose
+    /// source is this app's own producer, is this device's own push coming
+    /// back from the server.
+    ///
+    /// The owning installation's own windows carry its producer instance, so a
+    /// window whose instance matches `ownInstanceId` is this device's own
+    /// reading even though it names an instance.  Every fleet-sourced window
+    /// names one, so without that the phone and the widget read this Mac's
+    /// own expired reading as somebody else's copy and deleted it, while the
+    /// Mac kept it, and the three surfaces decided differently about one
+    /// payload.  The Mac asks the same question the same way
+    /// (`FleetOrigin.isOwnPush` compares the instance and ignores case), so
+    /// the surfaces cannot drift.
+    ///
+    /// `ownInstanceId` is optional so a caller that does not know the owning
+    /// installation keeps the older behaviour rather than guessing:  an
+    /// invented id would make somebody else's reading look like this
+    /// device's own.
+    public static func isOwnDeviceWindow(
+        id: String,
+        source: String?,
+        machine: String?,
+        producerInstanceId: String?,
+        ownInstanceId: String? = nil
+    ) -> Bool {
+        if id.hasPrefix(localDeviceWindowPrefix) { return true }
+        let instance = (producerInstanceId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let own = (ownInstanceId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        // The owning installation's own reading, decided the way the Mac
+        // decides it:  the instance decides, and the comparison ignores case.
+        if !instance.isEmpty, !own.isEmpty, instance.lowercased() == own.lowercased() { return true }
+        if !instance.isEmpty { return false }
+        let named = (machine ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !named.isEmpty { return false }
+        let src = (source ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return localProducerIds.contains(src)
+    }
 }
 
 /// The one rule for "is this reading recent enough to believe", shared by
@@ -602,6 +658,37 @@ public enum QuotaFreshnessRule {
         guard isReadingRecent(observedAt: observedAt, now: now) else { return false }
         if let resetAt, resetAt <= now { return false }
         return true
+    }
+
+    /// Whether a window is a dead copy of a period that has already ended.
+    ///
+    /// Owner 2026-10-23: the xAI row showed two 7-day windows at 0% with a
+    /// "due" caption while Grok, Cursor and Grok Bot showed the same weekly
+    /// allowance at 91% with a reset on 2026-10-29.  This Mac reads no xAI
+    /// quota locally, so the fleet fallback filled the xAI row with copies of
+    /// a period that ended days earlier, and the app printed them as live
+    /// readings.
+    ///
+    /// A window whose reset has already passed and whose reading is no longer
+    /// recent carries no live information:  it says how the plan looked before
+    /// the last refresh, so no surface may present it as a reading of the
+    /// plan now.
+    ///
+    /// It deliberately changes nothing else.  A window whose reset passed
+    /// moments ago was observed moments ago as well, so it stays and keeps
+    /// its `due` caption, because a period that rolls over must not blank the
+    /// row beside it.  A window with no reset clock has not expired, so it
+    /// stays too, and a window that is still inside its period is a reading
+    /// whatever its age.
+    ///
+    /// A window with no observation is unverified, not dead.  The Mac's
+    /// decoder maps an absent `occurredAt` to "", and the phone's wire window
+    /// may carry no timestamp either, so a payload without one must keep its
+    /// row:  an unverified reading is not the same thing as a reading of a
+    /// period that has ended.
+    public static func isDeadCopy(observedAt: Date?, resetAt: Date?, now: Date) -> Bool {
+        guard let observedAt, let resetAt, resetAt <= now else { return false }
+        return !isReadingRecent(observedAt: observedAt, now: now)
     }
 }
 

@@ -415,6 +415,11 @@ final class MonitorModel: ObservableObject {
     @Published private(set) var serverError: String?
     @Published private(set) var handoffError: String?
     @Published private(set) var widgetSharingError: String?
+    /// Serial chain of background snapshot writes.  Encoding and writing the
+    /// handoff and widget files for a large fleet pull used to run on the main
+    /// actor and hang the UI (BOTFLEET-5B); each write now runs off-main, in
+    /// order, after the one before it.
+    private var snapshotWriteChain: Task<Void, Never>?
     @Published private(set) var now = Date()
 
     // Local & Remote Reading
@@ -1566,15 +1571,7 @@ final class MonitorModel: ObservableObject {
         guard localEnabled else { return }
         let windows = exportedWindows(localWindows)
         if let writeForTesting = handoffWriteForTesting { writeForTesting(windows) }
-        else if !skipsSnapshotIOForTesting {
-            do {
-                try LocalQuotaSnapshot.write(windows: windows, issues: issues,
-                                             customMarks: exportedCustomMarks(),
-                                             alerts: exportedAlerts(now: now), now: now,
-                                             stampInstallationProvenance: true)
-                handoffError = nil
-            } catch { handoffError = "BotFleet quota sharing is unavailable." }
-        }
+        else if !skipsSnapshotIOForTesting { enqueueHandoffWrite(windows: windows) }
         // Same candidate set as the refresh paths, so a Settings edit never drops the fleet rows.
         // `publishWidgetSnapshot` holds the rule that drops the stale fleet copy
         // of a provider this Mac reads itself, so this path publishes the same
@@ -2335,25 +2332,19 @@ final class MonitorModel: ObservableObject {
                 self.activePlanChanges = []
             }
 
-            // Publish local snapshot to BotFleet on disk
-            do {
-                // `issues` is still the local read's own map here — the server
-                // failure below is merged in afterwards and must never reach a
-                // file that promises local-only readings.
-                if let writeForTesting = self.handoffWriteForTesting {
-                    writeForTesting(self.exportedWindows(self.localWindows))
-                } else if self.skipsSnapshotIOForTesting {
-                    self.handoffError = nil
-                } else if self.localEnabled && local != nil {
-                    try LocalQuotaSnapshot.write(windows: self.exportedWindows(self.localWindows), issues: self.issues,
-                                                 customMarks: exportedCustomMarks(),
-                                                 alerts: exportedAlerts(now: self.now), now: self.now,
-                                                 stampInstallationProvenance: true)
-                }
-                else { try LocalQuotaSnapshot.remove() }
+            // Publish local snapshot to BotFleet on disk.
+            // `issues` is still the local read's own map here — the server
+            // failure below is merged in afterwards and must never reach a
+            // file that promises local-only readings.  `enqueueHandoffWrite`
+            // captures it now, before that merge.
+            if let writeForTesting = self.handoffWriteForTesting {
+                writeForTesting(self.exportedWindows(self.localWindows))
                 self.handoffError = nil
-            } catch {
-                self.handoffError = "BotFleet quota sharing is unavailable."
+            } else if self.skipsSnapshotIOForTesting {
+                self.handoffError = nil
+            } else {
+                self.enqueueHandoffWrite(windows: self.localEnabled && local != nil
+                    ? self.exportedWindows(self.localWindows) : nil)
             }
 
             guard !Task.isCancelled, self.revision == generation else { return }
@@ -2370,14 +2361,26 @@ final class MonitorModel: ObservableObject {
             }
             if !useServer { self.serverWindows = [] }
             self.serverError = failure
-            let localProviders = Set(self.localWindows.map(\.canonicalProviderKey))
+            // A local window that carries no reading (a plan-details window,
+            // or any window whose percentage is unknown) does not mean this Mac
+            // reads that provider, and it must not hold the fleet's live
+            // reading out of the row.  Counting it as one left the xAI row
+            // with no reading at all, while the fleet carried this Mac's own
+            // live SuperGrok Heavy reading for it (owner, 2026-10-23).
+            let localProviders = QuotaLocalScope.providers(withReadings: self.localWindows)
 
             // A pulled window is either this Mac's own push coming back, or
             // somebody else's reading.  Every window of the second kind is
             // rendered under FLEET, grouped by its origin — the previous
             // "supplemental" filter dropped all of them on a Mac that reads
             // every provider locally, so a working pull showed nothing at all.
-            let split = FleetOrigin.split(self.serverWindows, localWindows: self.localWindows)
+            //
+            // The split is where another machine's window enters this Mac's
+            // data, so it is where the shared dead-copy rule is asked:  a copy
+            // of a period that ended before the last refresh is not a reading,
+            // and it is dropped here rather than in a section builder, so this
+            // Mac's own expired reading survives and greys out.
+            let split = FleetOrigin.split(self.serverWindows, localWindows: self.localWindows, now: self.now)
             let ownPush = split.ownPush
             self.fleetWindowGroups = split.groups.map {
                 FleetWindowGroup(id: $0.id, title: $0.title, windows: $0.windows)
@@ -2386,7 +2389,12 @@ final class MonitorModel: ObservableObject {
             // This Mac's own push fills in only a provider no local reader
             // produced — with local readers off, that is every provider.
             let adopted = ownPush.filter { !localProviders.contains($0.canonicalProviderKey) }
-            let adoptedKeys = Set(adopted.map(\.canonicalProviderKey))
+            // A window that carries no reading does not claim its provider.
+            // This Mac's plan details are its own push coming back, and they
+            // named the Antigravity key, so the fleet's live reading for
+            // Antigravity was held out of the row and the row read
+            // "unavailable" while the fleet carried a fresh reading for it.
+            let adoptedReadingKeys = Set(adopted.filter { $0.hasReading }.map(\.canonicalProviderKey))
             // A provider this Mac can never read locally still deserves its
             // server reading in the local list instead of "no report": the
             // Muse Assist collector runs on the VM, so its windows are never
@@ -2394,7 +2402,7 @@ final class MonitorModel: ObservableObject {
             // fleet-only keys don't sprout local rows.
             let fleetFallback = split.groups.flatMap(\.windows).filter {
                 let key = $0.canonicalProviderKey
-                return !localProviders.contains(key) && !adoptedKeys.contains(key)
+                return !localProviders.contains(key) && !adoptedReadingKeys.contains(key)
                     && expectedQuotaProviderKeys.contains(key)
             }
             let merged = self.localWindows + adopted + fleetFallback
@@ -2539,17 +2547,29 @@ final class MonitorModel: ObservableObject {
         consentNeeded = local?.consentNeeded ?? []
         localWindows = AntigravityQuotaGroups.normalize(local?.windows ?? [])
         hasCurrentLocalRead = local != nil
-        let localProviders = Set(localWindows.map(\.canonicalProviderKey))
-        let split = FleetOrigin.split(serverWindows)
+        // A local window that carries no reading (a plan-details window, or
+        // any window whose percentage is unknown) does not mean this Mac reads
+        // that provider, so it must not hold the fleet's live reading out of
+        // the row here either.  The file poll runs every minute and overwrites
+        // the response the server refresh merged, so counting the plan details
+        // as a local reading here put the xAI row back to no reading at all
+        // within a minute of the refresh fixing it (owner, 2026-10-23).
+        let localProviders = QuotaLocalScope.providers(withReadings: localWindows)
+        let split = FleetOrigin.split(serverWindows, now: now)
         let ownPush = split.ownPush
         let adopted = ownPush.filter { !localProviders.contains($0.canonicalProviderKey) }
-        let adoptedKeys = Set(adopted.map(\.canonicalProviderKey))
+        // A window that carries no reading does not claim its provider, the
+        // same rule the refresh path uses:  the file poll overwrites the
+        // merged response, so a plan-details window that held the fleet's
+        // live reading out of the row here would empty it a minute after the
+        // refresh filled it.
+        let adoptedReadingKeys = Set(adopted.filter { $0.hasReading }.map(\.canonicalProviderKey))
         // Same fleet fallback as the refresh path: providers this Mac can
         // never read locally (e.g. Muse Assist, collected on the VM) show
         // their server reading instead of "no report".
         let fleetFallback = split.groups.flatMap(\.windows).filter {
             let key = $0.canonicalProviderKey
-            return !localProviders.contains(key) && !adoptedKeys.contains(key)
+            return !localProviders.contains(key) && !adoptedReadingKeys.contains(key)
                 && expectedQuotaProviderKeys.contains(key)
         }
         let merged = localWindows + adopted + fleetFallback
@@ -2559,19 +2579,7 @@ final class MonitorModel: ObservableObject {
             writeForTesting(exportedWindows(localWindows))
             handoffError = nil
         } else if !skipsSnapshotIOForTesting {
-            do {
-                if localEnabled {
-                    try LocalQuotaSnapshot.write(windows: exportedWindows(localWindows), issues: issues,
-                                                 customMarks: exportedCustomMarks(),
-                                                 alerts: exportedAlerts(now: now), now: now,
-                                                 stampInstallationProvenance: true)
-                } else {
-                    try LocalQuotaSnapshot.remove()
-                }
-                handoffError = nil
-            } catch {
-                handoffError = "BotFleet quota sharing is unavailable."
-            }
+            enqueueHandoffWrite(windows: localEnabled ? exportedWindows(localWindows) : nil)
         }
         // The widget publishes what the app's own rows publish: local rows
         // plus the fleet rows.  `publishWidgetSnapshot` holds the rule that
@@ -2712,6 +2720,18 @@ final class MonitorModel: ObservableObject {
             .label ?? providerKey
     }
 
+    /// Whether a window is this Mac's own reading rather than a copy of
+    /// another machine's.
+    ///
+    /// The fleet's copies of this Mac's readings carry the same identity, so
+    /// the only way to tell them apart is to ask the two questions the model
+    /// already knows:  is this one of the windows this Mac read, and is it
+    /// this Mac's own push coming back from the server?
+    private func isOwnDeviceWindow(_ window: QuotaWindow) -> Bool {
+        if self.localWindows.contains(window) { return true }
+        return FleetOrigin.isOwnPush(window, localWindows: self.localWindows)
+    }
+
     private func publishWidgetSnapshot(candidates: [QuotaWindow]) {
         // The snapshot publishes what the app's own rows publish.  Every fleet
         // group carries a second copy of the providers, and for a provider this
@@ -2723,6 +2743,17 @@ final class MonitorModel: ObservableObject {
         // forgets it cannot publish the stale copy again.
         let localProviders = Set(self.localWindows.map(\.canonicalProviderKey))
         let publishable = candidates.filter { candidate in
+            // A copy of another machine's reading whose period ended before the
+            // last refresh is not a reading, so the widget's cache does not
+            // carry it.  The rule is the shared one, so the widget, the phone
+            // and the Mac drop the same copies.  This Mac's own windows stay:
+            // an expired own reading greys out in the row instead of vanishing.
+            if !self.isOwnDeviceWindow(candidate),
+               QuotaFreshnessRule.isDeadCopy(observedAt: candidate.occurredDate,
+                                             resetAt: candidate.resetDate,
+                                             now: now) {
+                return false
+            }
             guard localProviders.contains(candidate.canonicalProviderKey) else { return true }
             // This Mac reads the provider, so only its own window may be
             // published:  never somebody else's copy of the same provider.
@@ -2732,11 +2763,7 @@ final class MonitorModel: ObservableObject {
         // Fleet-fallback windows already sit in `merged`, and the caller also
         // appends every fleet group.  The widget cache stores this array
         // verbatim, so an equal window is published once.
-        var unique: [QuotaWindow] = []
-        unique.reserveCapacity(publishable.count)
-        for window in publishable where !unique.contains(window) {
-            unique.append(window)
-        }
+        let unique = Self.uniqueWindows(publishable)
         let visibleProviderKeys = Set(QuotaResponse(generatedAt: "", windows: unique)
             .platformSections(now: now).map(\.providerKey))
         let windows = exportedWindows(unique, locallyProduced: false).filter {
@@ -2750,17 +2777,74 @@ final class MonitorModel: ObservableObject {
             return
         }
         guard !skipsSnapshotIOForTesting else { return }
-        do {
-            try LocalQuotaSnapshot.writeWidgetSnapshot(windows: windows,
-                                                      customMarks: exportedCustomMarks(), now: now)
-            widgetSharingError = nil
-            UserDefaults(suiteName: LocalQuotaSnapshot.appGroupId)?.set(platformOrder, forKey: "platformOrder")
-            #if canImport(WidgetKit)
-            WidgetCenter.shared.reloadAllTimelines()
-            #endif
-        } catch {
-            widgetSharingError = "Widgets cannot access the shared quota cache." + sentenceGap
-                + "Install a build with native widget sharing enabled."
+        let marks = exportedCustomMarks()
+        let stamp = now
+        let order = platformOrder
+        enqueueSnapshotWrite({
+            try LocalQuotaSnapshot.writeWidgetSnapshot(windows: windows, customMarks: marks, now: stamp)
+        }, completion: { [weak self] succeeded in
+            guard let self else { return }
+            if succeeded {
+                self.widgetSharingError = nil
+                UserDefaults(suiteName: LocalQuotaSnapshot.appGroupId)?.set(order, forKey: "platformOrder")
+                #if canImport(WidgetKit)
+                WidgetCenter.shared.reloadAllTimelines()
+                #endif
+            } else {
+                self.widgetSharingError = "Widgets cannot access the shared quota cache." + sentenceGap
+                    + "Install a build with native widget sharing enabled."
+            }
+        })
+    }
+
+    /// Order-preserving de-duplication in roughly linear time.  `QuotaWindow`
+    /// is only `Equatable`, so the old `unique.contains` loop was quadratic in
+    /// the size of a fleet pull.  Equal windows always share `id`, `provider`
+    /// and `label`, so only windows in the same bucket are compared.
+    static func uniqueWindows(_ candidates: [QuotaWindow]) -> [QuotaWindow] {
+        var unique: [QuotaWindow] = []
+        unique.reserveCapacity(candidates.count)
+        var buckets: [String: [Int]] = [:]
+        for window in candidates {
+            let key = window.id + "\u{1F}" + window.provider + "\u{1F}" + window.label
+            if let indices = buckets[key], indices.contains(where: { unique[$0] == window }) { continue }
+            buckets[key, default: []].append(unique.count)
+            unique.append(window)
+        }
+        return unique
+    }
+
+    /// Writes (or, with `nil`, removes) the local-only BotFleet handoff file
+    /// off the main actor.  Inputs are captured now so later state changes
+    /// cannot leak into this snapshot.
+    private func enqueueHandoffWrite(windows: [QuotaWindow]?) {
+        let issues = self.issues
+        let marks = windows == nil ? nil : exportedCustomMarks()
+        let alerts = windows == nil ? nil : exportedAlerts(now: now)
+        let stamp = now
+        enqueueSnapshotWrite({
+            if let windows {
+                try LocalQuotaSnapshot.write(windows: windows, issues: issues,
+                                             customMarks: marks, alerts: alerts, now: stamp,
+                                             stampInstallationProvenance: true)
+            } else {
+                try LocalQuotaSnapshot.remove()
+            }
+        }, completion: { [weak self] succeeded in
+            self?.handoffError = succeeded ? nil : "BotFleet quota sharing is unavailable."
+        })
+    }
+
+    /// Runs `work` on a background executor after every previously enqueued
+    /// write, then reports success back on the main actor.
+    private func enqueueSnapshotWrite(_ work: @escaping @Sendable () throws -> Void,
+                                      completion: @escaping @MainActor @Sendable (Bool) -> Void) {
+        let previous = snapshotWriteChain
+        snapshotWriteChain = Task.detached(priority: .utility) {
+            await previous?.value
+            let succeeded: Bool
+            do { try work(); succeeded = true } catch { succeeded = false }
+            await completion(succeeded)
         }
     }
 
