@@ -422,7 +422,7 @@ public enum QuotaLocalScope {
     }
 
     /// Own pushes have already been separated from foreign readings by
-    /// FleetOrigin.split. Keep the local copy when the same window returns
+    /// FleetOrigin.split.  Keep the local copy when the same window returns
     /// from that installation, without deduping any foreign producers.
     public static func adoptedOwnPush(_ ownPush: [QuotaWindow], localWindows: [QuotaWindow]) -> [QuotaWindow] {
         let localProviders = providers(withReadings: localWindows)
