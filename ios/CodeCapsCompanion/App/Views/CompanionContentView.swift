@@ -672,8 +672,9 @@ public struct CompanionContentView: View {
                 } header: {
                     Text("Data Sources & Mirrors")
                 } footer: {
-                    Text("Per-feed detail for debugging." + sentenceGap
-                         + "When two or more feeds reported within 20 minutes disagree by 10 points or more, the difference is listed here (hostnames are ignored). The main list always shows the newest canonical reading.")
+                    Text("Readings from each source." + sentenceGap
+                         + "When two sources that reported within 20 minutes differ by 10 points or more, the difference shows here." + sentenceGap
+                         + "The main list always shows the newest reading.")
                 }
                 .id("dataSourcesMirrorsSection")
                 .accessibilityIdentifier("dataSourcesMirrorsSection")

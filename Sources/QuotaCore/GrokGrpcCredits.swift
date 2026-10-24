@@ -109,8 +109,12 @@ public enum GrokGrpcCredits {
     /// Whether the reply's gRPC-web trailer frame reports status 16
     /// (`UNAUTHENTICATED`).  grok.com answers a probe it will not serve with
     /// a framed 200 and a `grpc-status: 16` trailer, so an HTTP status check
-    /// alone reads a refused credential as an empty payload.  Only the trailer
-    /// carries the status, which is why this lives beside the frame parser.
+    /// alone cannot see it.  Only the trailer carries the status, which is why
+    /// this lives beside the frame parser.  Status 16 is the documented answer
+    /// to a bearer-only probe with no Web Key Exchange keypair (see above), so
+    /// the reader treats it as a fallback miss, not as a refused credential.
+    /// Both trailer spellings count: `grpc-status:16` and the header-style
+    /// `grpc-status: 16`.
     public static func isUnauthenticated(_ data: Data) -> Bool {
         let bytes = [UInt8](data)
         var offset = 0
@@ -127,7 +131,8 @@ public enum GrokGrpcCredits {
         guard !trailer.isEmpty else { return false }
         let text = String(decoding: trailer, as: UTF8.self).lowercased()
         guard let marker = text.range(of: "grpc-status:") else { return false }
-        return text[marker.upperBound...].prefix(while: \.isNumber) == "16"
+        let value = text[marker.upperBound...].drop { $0 == " " || $0 == "\t" }
+        return value.prefix(while: \.isNumber) == "16"
     }
 
     /// A `{start: Timestamp, end: Timestamp}` submessage, when the bytes

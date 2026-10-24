@@ -95,6 +95,18 @@ final class CompanionModelTests: XCTestCase {
         )
     }
 
+    func testDataSourcesFooterUsesSentenceGap() throws {
+        let source = try readCompanionContentViewSource()
+        XCTAssertTrue(
+            source.contains(#"Text("Readings from each source." + sentenceGap"#),
+            "The Data Sources footer must use sentenceGap after its first sentence"
+        )
+        XCTAssertTrue(
+            source.contains(#"the difference shows here." + sentenceGap"#),
+            "The Data Sources footer must use sentenceGap after its second sentence"
+        )
+    }
+
     // MARK: - Reordering Logic
 
     func testPlatformOrderingLogic() {

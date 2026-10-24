@@ -651,6 +651,12 @@ public extension QuotaResponse {
             }
         }
         let normalizedWindows = Self.dedupedGrokSubscription(collected)
+        // A provider whose every reading the dedupe removed is not missing:
+        // its one pool is shown on the other row.  Keep it out of the
+        // sections, or its expected-provider entry renders an empty card
+        // ("Quota unavailable") beside the row that carries the reading.
+        let emptiedByDedupe = Set(collected.map(\.canonicalProviderKey))
+            .subtracting(normalizedWindows.map(\.canonicalProviderKey))
         var grouped = Dictionary<String, [QuotaWindow]>(minimumCapacity: normalizedWindows.count)
         for window in normalizedWindows {
             grouped[window.canonicalProviderKey, default: []].append(window)
@@ -723,7 +729,7 @@ public extension QuotaResponse {
         }
 
         var sections: [QuotaPlatformSection] = []
-        for entry in manifest {
+        for entry in manifest where !emptiedByDedupe.contains(entry.key) {
             sections.append(makeSection(key: entry.key, label: entry.label, via: entry.via, expected: entry.expected, iconHint: entry.iconHint, grouped: grouped, now: now))
         }
 

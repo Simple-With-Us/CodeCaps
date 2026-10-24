@@ -161,6 +161,27 @@ final class GrokGrpcCreditsTests: XCTestCase {
         XCTAssertNil(reading)
     }
 
+    // MARK: - The trailer status
+
+    private func trailerOnly(_ text: String) -> Data {
+        let trailer = Array(text.utf8)
+        return Data([0x80, 0, 0, 0, UInt8(trailer.count)] + trailer)
+    }
+
+    /// Both trailer spellings carry status 16: the unspaced form gRPC-web
+    /// servers emit and the header-style form with a space after the colon.
+    func testStatus16IsReadInBothTrailerSpellings() {
+        XCTAssertTrue(GrokGrpcCredits.isUnauthenticated(trailerOnly("grpc-status:16\r\n")))
+        XCTAssertTrue(GrokGrpcCredits.isUnauthenticated(trailerOnly("grpc-status: 16\r\ngrpc-message: no-credentials\r\n")))
+    }
+
+    func testOtherStatusesAndMissingTrailersAreNotStatus16() {
+        XCTAssertFalse(GrokGrpcCredits.isUnauthenticated(trailerOnly("grpc-status: 0\r\n")))
+        XCTAssertFalse(GrokGrpcCredits.isUnauthenticated(trailerOnly("grpc-status: 160\r\n")))
+        XCTAssertFalse(GrokGrpcCredits.isUnauthenticated(framed(Array(lenField(1, fixed32Field(4, 5))))))
+        XCTAssertFalse(GrokGrpcCredits.isUnauthenticated(Data()))
+    }
+
     func testRequestFrameMatchesDocumentedBytes() {
         XCTAssertEqual(GrokGrpcCredits.requestFrame, Data([0x00, 0x00, 0x00, 0x00, 0x02, 0x08, 0x00]))
     }

@@ -370,16 +370,22 @@ public struct LocalQuotaReader: Sendable {
         var authRejected = false
         switch credits {
         case .authRejected:
-            // grok.com answered, and what it said was that this credential is
-            // not accepted.  That is reported; it is never folded into the
-            // "no readable percentage" miss below.
+            // grok.com answered HTTP 401 for this credential.  That is
+            // reported; it is never folded into the "no readable percentage"
+            // miss below.
             authRejected = true
         case .unavailable:
             break
         case .reading(let grpc):
             // The proxy's period bounds stay authoritative; the fallback only
-            // supplies the percentage the proxy did not publish.
-            if let index = windows.firstIndex(where: { $0.id.hasSuffix(":subscription") || $0.remainingPercent == nil }) {
+            // supplies the percentage the proxy did not publish, so a window
+            // that already carries one is never a target.  The credits pool
+            // is matched on its exact id, never on a suffix, so an unrelated
+            // `…:legacy:subscription` window cannot stand in for it.
+            let poolID = "local-mac:\(provider.key):subscription"
+            let target = windows.firstIndex(where: { $0.id == poolID && $0.remainingPercent == nil })
+                ?? windows.firstIndex(where: { $0.remainingPercent == nil })
+            if let index = target {
                 var window = windows[index]
                 window.remainingPercent = 100 - grpc.usedPercent
                 window.remainingUnknown = false
@@ -397,8 +403,12 @@ public struct LocalQuotaReader: Sendable {
                 windows[index] = window.normalizedForExport()
             }
         }
+        // The CLI proxy accepted this same token moments ago (a refusal there
+        // throws `.reauth` before the fallback runs), so a grok.com refusal is
+        // about that endpoint, not proof the sign-in is bad: the message
+        // names the refusal and does not send the owner to sign in again.
         let issue = authRejected
-            ? "GROK_TOKEN was rejected by grok.com (\(Self.maskedTokenPreview(token))). Sign in again."
+            ? "Grok returned no readable quota percentage; grok.com refused the credits fallback for GROK_TOKEN (\(Self.maskedTokenPreview(token)))."
             : (windows.first?.remainingPercent == nil ? "Grok returned no readable quota percentage." : nil)
         return ProviderRead(provider: provider, windows: windows, issue: issue)
     }
@@ -428,9 +438,9 @@ public struct LocalQuotaReader: Sendable {
     }
 
     /// The grok.com gRPC-web credits fallback (see `GrokGrpcCredits`), and the
-/// one outcome that is not a fallback miss.  A rejected credential is a
-/// different fact from absent credits data, so it has its own case and is
-/// reported instead of being silently skipped.
+/// one outcome that is not a fallback miss.  An HTTP 401 is a different fact
+/// from absent credits data, so it has its own case and is reported instead
+/// of being silently skipped.
 private enum GrokGrpcOutcome {
     case reading(GrokGrpcCredits.Reading)
     case authRejected
@@ -451,15 +461,15 @@ private enum GrokGrpcOutcome {
         request.setValue("application/grpc-web+proto", forHTTPHeaderField: "Content-Type")
         request.setValue("1", forHTTPHeaderField: "X-Grpc-Web")
         guard let (data, response) = try? await fetchJSON(request) else { return .unavailable }
-        // HTTP 401/403 and gRPC status 16 (`UNAUTHENTICATED`, which grok.com
-        // returns for a bearer-only probe with no browser-held WKE keypair)
-        // both mean the token was refused.  Anything else non-2xx is a plain
-        // miss and keeps the fallback best-effort.
-        if response.statusCode == 401 || response.statusCode == 403 {
-            return .authRejected
-        }
+        // Only an HTTP 401 is a refused credential.  A 403, and gRPC status
+        // 16 (`UNAUTHENTICATED`), are what grok.com answers a bearer-only
+        // probe that carries no browser-held Web Key Exchange keypair, which
+        // this probe never sends (see `GrokGrpcCredits`): that is a capability
+        // miss on a token that still works, so it stays a plain miss and the
+        // fallback stays best-effort.
+        if response.statusCode == 401 { return .authRejected }
         guard (200..<300).contains(response.statusCode) else { return .unavailable }
-        if GrokGrpcCredits.isUnauthenticated(data) { return .authRejected }
+        if GrokGrpcCredits.isUnauthenticated(data) { return .unavailable }
         guard let reading = GrokGrpcCredits.parse(data, now: now()) else { return .unavailable }
         return .reading(reading)
     }
