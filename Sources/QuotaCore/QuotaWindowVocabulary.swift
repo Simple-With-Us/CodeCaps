@@ -600,13 +600,16 @@ public enum QuotaWindowVocabulary {
         producerInstanceId: String?,
         ownInstanceId: String? = nil
     ) -> Bool {
-        if id.hasPrefix(localDeviceWindowPrefix) { return true }
+        // The producer instance decides before the prefix, the same
+        // precedence `FleetOrigin.isOwnPush` applies:  a window carrying this
+        // Mac's `local-mac:` id prefix but ANOTHER installation's producer
+        // instance is a foreign copy of a same-named payload, and the two
+        // surfaces must agree on one payload.  The comparison ignores case.
         let instance = (producerInstanceId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let own = (ownInstanceId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        // The owning installation's own reading, decided the way the Mac
-        // decides it:  the instance decides, and the comparison ignores case.
-        if !instance.isEmpty, !own.isEmpty, instance.lowercased() == own.lowercased() { return true }
+        if !instance.isEmpty, !own.isEmpty { return instance.lowercased() == own.lowercased() }
         if !instance.isEmpty { return false }
+        if id.hasPrefix(localDeviceWindowPrefix) { return true }
         let named = (machine ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if !named.isEmpty { return false }
         let src = (source ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()

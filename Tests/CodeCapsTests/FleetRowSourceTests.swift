@@ -409,6 +409,8 @@ final class FleetRowSourceTests: XCTestCase {
         await model.refreshTaskForTesting?.value
 
         let merged = model.response.windows.filter { $0.canonicalProviderKey == "google-antigravity" }
+        XCTAssertEqual(merged.filter { $0.id.hasSuffix("plan-metadata") }.count, 1,
+                       "local plan details and their own returning push are one payload")
         let readings = merged.filter { $0.remainingPercent != nil }
         XCTAssertEqual(readings.count, 1,
                        "the fleet's live reading reaches the row")
@@ -424,7 +426,78 @@ final class FleetRowSourceTests: XCTestCase {
         await model.sessionFileTaskForTesting?.value
 
         let rebuilt = model.response.windows.filter { $0.canonicalProviderKey == "google-antigravity" }
+        XCTAssertEqual(rebuilt.filter { $0.id.hasSuffix("plan-metadata") }.count, 1,
+                       "the file poll also keeps one plan-details payload")
         XCTAssertEqual(rebuilt.filter { $0.remainingPercent != nil }.count, 1,
                        "the file poll keeps the fleet's live reading in the row")
     }
+    /// xAI plan metadata survives normalization, so both paths really merge
+    /// a local copy with its own returning push rather than only the push.
+    func testBothMergePathsDedupePlanMetadataThatSurvivesNormalization() async throws {
+        for variant in ["metadata", "reading", "legacy-reading"] {
+            let carriesReading = variant != "metadata"
+            let isLegacy = variant == "legacy-reading"
+            let iso = ISO8601DateFormatter()
+            let now = Date()
+            let producer = QuotaPublisher.producerInstanceId
+            let machine = QuotaPublisher.machineName
+            let suffix = carriesReading ? "unknown" : "plan-metadata"
+            let local = QuotaWindow(id: "local-mac:xai:\(suffix)", provider: "xai",
+                                    providerKey: "xai", label: "Plan Details", remainingUnknown: true,
+                                    occurredAt: iso.string(from: now), source: "CodeCaps Settings",
+                                    producerInstanceId: producer, machine: machine)
+            var pushed = local
+            pushed.id = "xai:\(suffix)"
+            if carriesReading {
+                pushed.remainingPercent = 73
+                pushed.remainingUnknown = false
+            }
+            if isLegacy {
+                // No prefix, producer, machine or app-name shortcut: only
+                // the matching local timestamp/window proves this own push.
+                pushed.producerInstanceId = nil
+                pushed.machine = nil
+                pushed.source = "synthetic-legacy-source"
+            }
+            var foreign = pushed
+            foreign.id = "xai:foreign-reading"
+            foreign.remainingPercent = 11
+            foreign.remainingUnknown = false
+            foreign.producerInstanceId = "other-mac"
+            foreign.machine = "other-mac"
+            let server = QuotaResponse(generatedAt: iso.string(from: now), windows: [pushed, foreign])
+            let model = MonitorModel(defaults: defaults())
+            model.skipsSnapshotIOForTesting = true
+            // The fixture itself must survive the same normalization used by
+            // both merge paths.  localWindows is private to MonitorModel.
+            XCTAssertEqual(AntigravityQuotaGroups.normalize([local]).map(\.id), [local.id],
+                           "the local fixture survives normalization before either merge")
+            model.localReadForTesting = { LocalQuotaResult(windows: [local]) }
+            model.serverFetchForTesting = { server }
+            model.refresh()
+            await model.refreshTaskForTesting?.value
+            func assertMerge(_ path: String, file: StaticString = #filePath, line: UInt = #line) {
+                XCTAssertEqual(model.response.windows.filter { $0.id == local.id }.count, carriesReading ? 0 : 1,
+                               "\(path): only an informative own push replaces the empty local copy", file: file, line: line)
+                let merged = model.response.windows.filter { $0.canonicalProviderKey == "xai" }
+                if carriesReading {
+                    XCTAssertEqual(merged.filter { $0.id == local.id || $0.id == "xai:\(suffix)" }.count, 1,
+                                   "\(path): the exact-key payload appears once", file: file, line: line)
+                    let readings = merged.filter { $0.hasReading }
+                    XCTAssertEqual(readings.map(\.remainingPercent), [73],
+                                   "\(path): the own reading wins before foreign fallback", file: file, line: line)
+                    XCTAssertEqual(readings.first?.producerInstanceId, isLegacy ? nil : producer, file: file, line: line)
+                } else {
+                    XCTAssertEqual(merged.filter { $0.id.hasSuffix("plan-metadata") }.count, 1,
+                                   "\(path): two metadata copies dedupe to one", file: file, line: line)
+                }
+            }
+            assertMerge("refresh")
+            model.sessionFileReadForTesting = { LocalQuotaResult(windows: [local]) }
+            model.refreshSessionFiles()
+            await model.sessionFileTaskForTesting?.value
+            assertMerge("file poll")
+        }
+    }
+
 }
