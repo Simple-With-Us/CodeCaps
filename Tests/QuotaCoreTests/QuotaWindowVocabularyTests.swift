@@ -249,4 +249,130 @@ final class QuotaWindowVocabularyTests: XCTestCase {
             source: "xai")
         XCTAssertFalse(QuotaWindowSnapshot(window: stale, now: now).isFresh)
     }
+
+    // MARK: - The dead copy rule
+
+    /// Owner 2026-10-23: the xAI row showed two 7-day windows at 0% with a
+    /// "due" caption while Grok, Cursor and Grok Bot showed the same weekly
+    /// allowance at 91% with a reset on 2026-10-29.  This Mac reads no xAI
+    /// quota locally, so the fleet fallback filled the xAI row with copies of
+    /// a period that ended days earlier, and the app printed them as live
+    /// readings.
+    ///
+    /// A copy whose period has ended and whose reading is no longer recent
+    /// carries no live information, so it is a dead copy.
+    func testACopyOfAPeriodThatEndedIsADeadCopy() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        // The live copy of the same pool:  observed a minute ago, with its
+        // reset still ahead.
+        XCTAssertFalse(QuotaFreshnessRule.isDeadCopy(observedAt: now.addingTimeInterval(-60),
+                                                      resetAt: now.addingTimeInterval(6 * 86_400),
+                                                      now: now))
+        // The dead copy:  the reset passed days ago and the reading is old.
+        XCTAssertTrue(QuotaFreshnessRule.isDeadCopy(observedAt: now.addingTimeInterval(-6 * 86_400),
+                                                     resetAt: now.addingTimeInterval(-86_400),
+                                                     now: now))
+        // A reading with no timestamp cannot be believed, but it is not a dead
+        // copy either:  a window with no observation is unverified, and an
+        // unverified window is never thrown away.  The Mac's decoder maps an
+        // absent `occurredAt` to "", so a payload without a timestamp must keep
+        // its row.
+        XCTAssertFalse(QuotaFreshnessRule.isDeadCopy(observedAt: nil,
+                                                      resetAt: now.addingTimeInterval(-86_400),
+                                                      now: now))
+        // A window with no reset clock has not expired, so it stays.
+        XCTAssertFalse(QuotaFreshnessRule.isDeadCopy(observedAt: now.addingTimeInterval(-6 * 86_400),
+                                                      resetAt: nil,
+                                                      now: now))
+        // A window still inside its period is a reading whatever its age.
+        XCTAssertFalse(QuotaFreshnessRule.isDeadCopy(observedAt: now.addingTimeInterval(-6 * 86_400),
+                                                      resetAt: now.addingTimeInterval(6 * 86_400),
+                                                      now: now))
+    }
+
+    /// A period that rolls over must not blank the row beside it:  a window
+    /// whose reset passed moments ago was observed moments ago as well, so it
+    /// is still a reading and it keeps its `due` caption.
+    func testAWindowWhoseResetJustPassedIsNotADeadCopy() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        XCTAssertFalse(QuotaFreshnessRule.isDeadCopy(observedAt: now.addingTimeInterval(-5),
+                                                      resetAt: now.addingTimeInterval(-1),
+                                                      now: now))
+    }
+
+    // MARK: - Whose reading is this
+
+    /// The one test every surface asks to tell this device's own reading from
+    /// a copy of another machine's.  The phone and the widget get their
+    /// windows straight from the server, so they have no other way to ask.
+    func testTheOwnDeviceWindowTestTellsAnOwnReadingFromACopy() {
+        // The prefix this Mac's own windows carry.
+        XCTAssertTrue(QuotaWindowVocabulary.isOwnDeviceWindow(id: "local-mac:xai:subscription",
+                                                              source: nil,
+                                                              machine: nil,
+                                                              producerInstanceId: nil),
+                      "a window this Mac read is its own reading")
+        // A window that names a producer instance belongs to somebody.
+        XCTAssertFalse(QuotaWindowVocabulary.isOwnDeviceWindow(id: "xai:subscription",
+                                                               source: "CodeCaps",
+                                                               machine: nil,
+                                                               producerInstanceId: "other-mac"),
+                       "a window that names a producer instance is a copy")
+        // A window that names a machine belongs to somebody.
+        XCTAssertFalse(QuotaWindowVocabulary.isOwnDeviceWindow(id: "xai:subscription",
+                                                               source: "CodeCaps",
+                                                               machine: "Other Mac",
+                                                               producerInstanceId: nil),
+                       "a window that names a machine is a copy")
+        // A window that names neither and comes from this app is this device's
+        // own push coming back from the server.
+        XCTAssertTrue(QuotaWindowVocabulary.isOwnDeviceWindow(id: "xai:subscription",
+                                                             source: "CodeCaps",
+                                                             machine: nil,
+                                                             producerInstanceId: nil),
+                      "a window that names neither and comes from this app is its own push")
+        // Somebody else's reader is a copy.
+        XCTAssertFalse(QuotaWindowVocabulary.isOwnDeviceWindow(id: "xai:subscription",
+                                                               source: "antigravity-usage",
+                                                               machine: nil,
+                                                               producerInstanceId: nil),
+                       "a window from another reader is a copy")
+    }
+
+    /// The owning installation's own window is this device's own reading, even
+    /// though it names a producer instance.  Every fleet-sourced window names
+    /// one, so without this the phone and the widget read this Mac's own
+    /// expired reading as somebody else's copy and deleted it, while the Mac
+    /// kept it, and the three surfaces decided differently about one payload.
+    func testTheOwningInstallationsWindowIsThisDevicesOwnReading() {
+        XCTAssertTrue(QuotaWindowVocabulary.isOwnDeviceWindow(id: "xai:subscription",
+                                                              source: "CodeCaps",
+                                                              machine: "Kitchen Mac",
+                                                              producerInstanceId: "this-mac",
+                                                              ownInstanceId: "this-mac"),
+                      "the owning installation's own window is its own reading")
+        XCTAssertFalse(QuotaWindowVocabulary.isOwnDeviceWindow(id: "xai:subscription",
+                                                               source: "CodeCaps",
+                                                               machine: "Other Mac",
+                                                               producerInstanceId: "other-mac",
+                                                               ownInstanceId: "this-mac"),
+                       "another machine's window is still a copy")
+        XCTAssertFalse(QuotaWindowVocabulary.isOwnDeviceWindow(id: "xai:subscription",
+                                                               source: "CodeCaps",
+                                                               machine: "Other Mac",
+                                                               producerInstanceId: "other-mac"),
+                       "a caller that does not know the owning installation keeps the older behaviour")
+        XCTAssertTrue(QuotaWindowVocabulary.isOwnDeviceWindow(id: "xai:subscription",
+                                                              source: "CodeCaps",
+                                                              machine: "Kitchen Mac",
+                                                              producerInstanceId: "THIS-MAC",
+                                                              ownInstanceId: "this-mac"),
+                      "the instance decides the way the Mac decides it, and the comparison ignores case")
+        XCTAssertFalse(QuotaWindowVocabulary.isOwnDeviceWindow(id: "xai:subscription",
+                                                               source: "CodeCaps",
+                                                               machine: "Kitchen Mac",
+                                                               producerInstanceId: "  ",
+                                                               ownInstanceId: "this-mac"),
+                       "a window that names no instance is not the owning installation's own window")
+    }
 }

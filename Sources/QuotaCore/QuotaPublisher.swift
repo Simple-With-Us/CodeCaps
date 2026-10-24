@@ -65,7 +65,7 @@ public enum QuotaPublisherError: Error, Equatable, Sendable, LocalizedError {
 public actor QuotaPublisher {
     /// The app-level producer namespace.  Ownership of a pulled reading is
     /// determined by producerInstanceId, never by this shared app name alone.
-    public static let producerId = "codecaps"
+    public static let producerId = QuotaWindowVocabulary.localProducerId
 
     /// Pre-rename producer labels remain readable as unidentified machines.
     public static let legacyProducerAliases: [String] = ["agent-bar"]
