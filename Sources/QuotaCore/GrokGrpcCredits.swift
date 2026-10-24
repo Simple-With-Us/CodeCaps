@@ -74,8 +74,11 @@ public enum GrokGrpcCredits {
                     percent = value
                 }
             case .bytes:
-                // First match wins: a later field-6 submessage is not allowed
-                // to overwrite bounds an earlier one already supplied.
+                // First valid match wins: a later field-6 submessage is not
+                // allowed to overwrite bounds an earlier one already supplied.
+                // A malformed or off-cadence field-6 submessage supplies
+                // nothing, so a valid one after it is still read.  That skip
+                // is deliberate; do not tighten this into "first field 6 only".
                 guard field.number == Self.currentPeriodField, periodStart == nil,
                       let period = timestampPair(field.bytes),
                       Self.isRecognizedPeriod(period.start, period.end) else { continue }

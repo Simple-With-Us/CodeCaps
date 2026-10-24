@@ -367,13 +367,13 @@ public struct LocalQuotaReader: Sendable {
                 return window
             }
         }
-        var authRejected = false
+        var fallbackRefused = false
         switch credits {
-        case .authRejected:
-            // grok.com answered HTTP 401 for this credential.  That is
+        case .refused:
+            // grok.com answered HTTP 401 to the credits fallback.  That is
             // reported; it is never folded into the "no readable percentage"
             // miss below.
-            authRejected = true
+            fallbackRefused = true
         case .unavailable:
             break
         case .reading(let grpc):
@@ -407,7 +407,7 @@ public struct LocalQuotaReader: Sendable {
         // throws `.reauth` before the fallback runs), so a grok.com refusal is
         // about that endpoint, not proof the sign-in is bad: the message
         // names the refusal and does not send the owner to sign in again.
-        let issue = authRejected
+        let issue = fallbackRefused
             ? "Grok returned no readable quota percentage; grok.com refused the credits fallback for GROK_TOKEN (\(Self.maskedTokenPreview(token)))."
             : (windows.first?.remainingPercent == nil ? "Grok returned no readable quota percentage." : nil)
         return ProviderRead(provider: provider, windows: windows, issue: issue)
@@ -437,17 +437,18 @@ public struct LocalQuotaReader: Sendable {
         return tier?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? tier : nil
     }
 
-    /// The grok.com gRPC-web credits fallback (see `GrokGrpcCredits`), and the
-/// one outcome that is not a fallback miss.  An HTTP 401 is a different fact
-/// from absent credits data, so it has its own case and is reported instead
-/// of being silently skipped.
-private enum GrokGrpcOutcome {
-    case reading(GrokGrpcCredits.Reading)
-    case authRejected
-    case unavailable
-}
+    /// What the grok.com gRPC-web credits fallback produced.  `refused` is the
+    /// one outcome that is not a fallback miss: grok.com answered HTTP 401,
+    /// which is a different fact from absent credits data, so it has its own
+    /// case and is reported instead of being silently skipped.  It names that
+    /// endpoint's answer, not a verdict on the sign-in (see `readGrok`).
+    private enum GrokGrpcOutcome {
+        case reading(GrokGrpcCredits.Reading)
+        case refused
+        case unavailable
+    }
 
-/// The grok.com gRPC-web credits fallback (see `GrokGrpcCredits`).
+    /// The grok.com gRPC-web credits fallback (see `GrokGrpcCredits`).
     private func grokGrpcReading(token: String, onlyIf: Bool = true) async -> GrokGrpcOutcome {
         // No window at all, or one that already carries a percentage, leaves
         // this fallback with nothing to fill — so no request is made and the
@@ -467,7 +468,7 @@ private enum GrokGrpcOutcome {
         // this probe never sends (see `GrokGrpcCredits`): that is a capability
         // miss on a token that still works, so it stays a plain miss and the
         // fallback stays best-effort.
-        if response.statusCode == 401 { return .authRejected }
+        if response.statusCode == 401 { return .refused }
         guard (200..<300).contains(response.statusCode) else { return .unavailable }
         if GrokGrpcCredits.isUnauthenticated(data) { return .unavailable }
         guard let reading = GrokGrpcCredits.parse(data, now: now()) else { return .unavailable }
