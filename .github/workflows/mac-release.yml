@@ -133,7 +133,7 @@ jobs:
         if: github.event_name != 'pull_request'
         uses: ./.github/actions/infisical-secrets
         with:
-          names: MAC_CERT_P12_BASE64 MAC_CERT_PASSWORD SENTRY_DSN SENTRY_AUTH_TOKEN
+          names: MAC_CERT_P12_BASE64 MAC_CERT_PASSWORD SENTRY_DSN SENTRY_AUTH_TOKEN SENTRY_AUTH_TOKEN_FULLSCOPE
           project-id: ${{ secrets.INFISICAL_FLEET_OPS_PROJECT_ID }}
           client-id: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID || secrets.INFISICAL_CLIENT_ID }}
           client-secret: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET || secrets.INFISICAL_CLIENT_SECRET }}
@@ -270,27 +270,70 @@ jobs:
           NOTARY_ISSUER_ID: ${{ env.ASC_ISSUER_ID }}
         run: script/build_and_run.sh --release
 
+      # The dSYM is what turns a macOS hang or crash capture into a readable
+      # stack, and two things kept it from ever being uploaded.  Both failed
+      # quietly, so every app frame in Sentry came back unsymbolicated:
+      #
+      #   * the token.  `SENTRY_AUTH_TOKEN` holds the DSN, and a DSN is not an
+      #     API token, so `sentry-cli` was refused and the step swallowed the
+      #     error as a warning.  The API token is `SENTRY_AUTH_TOKEN_FULLSCOPE`.
+      #   * the project.  `SENTRY_DSN` is one shared fleet key, so the app
+      #     reports into whichever project that key names -- the `botfleet`
+      #     project since 2026-10-22 -- while this step uploaded to `codecaps`.
+      #     A dSYM in a project the events do not land in never matches them.
+      #
+      # The upload goes to both projects, and every failure is an `::error::`
+      # annotation rather than a warning: telemetry must not block a release,
+      # but it must not be possible to miss one either.
       - name: Upload Sentry debug files
         if: steps.gate.outputs.publish == 'true'
+        env:
+          SENTRY_ORG: simple-with-us
         run: |
-          set -euo pipefail
-          if [ -z "${SENTRY_AUTH_TOKEN:-}" ]; then
-            echo "::notice::SENTRY_AUTH_TOKEN unset; skipping dSYM upload"
+          set -uo pipefail
+          export SENTRY_ORG="${SENTRY_ORG:-simple-with-us}"
+          TOKEN="${SENTRY_AUTH_TOKEN_FULLSCOPE:-}"
+          if [ -z "$TOKEN" ]; then
+            echo "::error::no Sentry API token (SENTRY_AUTH_TOKEN_FULLSCOPE); no dSYM was uploaded"
             exit 0
           fi
+          case "$TOKEN" in
+            *://*|*@*)
+              echo "::error::the Sentry API token looks like a DSN, not an API token; no dSYM was uploaded"
+              exit 0
+              ;;
+          esac
+          export SENTRY_AUTH_TOKEN="$TOKEN"
           if ! command -v sentry-cli >/dev/null 2>&1; then
             curl -sL https://sentry.io/get-cli/ | SENTRY_CLI_VERSION="" bash >/dev/null 2>&1 || true
             export PATH="${HOME}/.sentry-cli:${PATH}:/opt/homebrew/bin"
           fi
           if ! command -v sentry-cli >/dev/null 2>&1; then
-            echo "::warning::sentry-cli missing; skipping dSYM upload"
+            echo "::error::sentry-cli is missing; no dSYM was uploaded"
             exit 0
           fi
-          echo "sentry: uploading debug files for project=codecaps (token length ${#SENTRY_AUTH_TOKEN})"
-          if ! SENTRY_ORG=simple-with-us SENTRY_PROJECT=codecaps \
-            sentry-cli debug-files upload --include-sources .build dist/CodeCaps.app; then
-            echo "::warning::sentry debug-files upload failed; release continues"
+          DSYM_PATHS="$(find .build dist ios -maxdepth 10 -name '*.dSYM' -type d 2>/dev/null | grep -v 'sentry-cocoa' | head -40 || true)"
+          if [ -z "$DSYM_PATHS" ]; then
+            echo "::error::no dSYM bundle was found under .build, dist or ios; no dSYM was uploaded"
+            exit 0
           fi
+          # The project the events land in is the one in the DSN.  The app's
+          # own project is uploaded too, because the DSN is a shared fleet key
+          # and it can move.
+          DSN_PROJECT="${SENTRY_DSN##*/}"
+          if [ -z "$SENTRY_DSN" ] || [ "$DSN_PROJECT" = "$SENTRY_DSN" ]; then DSN_PROJECT=""; fi
+          PROJECTS="codecaps"
+          if [ -n "$DSN_PROJECT" ]; then PROJECTS="$DSN_PROJECT $PROJECTS"; fi
+          echo "uploading dSYM bundles to project(s): $PROJECTS"
+          for project in $PROJECTS; do
+            for d in $DSYM_PATHS; do
+              echo "uploading $d to project=$project"
+              if ! SENTRY_PROJECT="$project" sentry-cli debug-files upload --include-sources "$d"; then
+                echo "::error::sentry debug-files upload failed for project=$project ($d)"
+              fi
+            done
+          done
+          exit 0
 
       - name: Name the release
         if: steps.gate.outputs.publish == 'true'
