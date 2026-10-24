@@ -578,14 +578,34 @@ public enum QuotaWindowVocabulary {
     /// somebody, so it is a copy.  A window that names neither, and whose
     /// source is this app's own producer, is this device's own push coming
     /// back from the server.
+    ///
+    /// The owning installation's own windows carry its producer instance, so a
+    /// window whose instance matches `ownInstanceId` is this device's own
+    /// reading even though it names an instance.  Every fleet-sourced window
+    /// names one, so without that the phone and the widget read this Mac's
+    /// own expired reading as somebody else's copy and deleted it, while the
+    /// Mac kept it, and the three surfaces decided differently about one
+    /// payload.  The Mac asks the same question the same way
+    /// (`FleetOrigin.isOwnPush` compares the instance and ignores case), so
+    /// the surfaces cannot drift.
+    ///
+    /// `ownInstanceId` is optional so a caller that does not know the owning
+    /// installation keeps the older behaviour rather than guessing:  an
+    /// invented id would make somebody else's reading look like this
+    /// device's own.
     public static func isOwnDeviceWindow(
         id: String,
         source: String?,
         machine: String?,
-        producerInstanceId: String?
+        producerInstanceId: String?,
+        ownInstanceId: String? = nil
     ) -> Bool {
         if id.hasPrefix(localDeviceWindowPrefix) { return true }
         let instance = (producerInstanceId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let own = (ownInstanceId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        // The owning installation's own reading, decided the way the Mac
+        // decides it:  the instance decides, and the comparison ignores case.
+        if !instance.isEmpty, !own.isEmpty, instance.lowercased() == own.lowercased() { return true }
         if !instance.isEmpty { return false }
         let named = (machine ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if !named.isEmpty { return false }

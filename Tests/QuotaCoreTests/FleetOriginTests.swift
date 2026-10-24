@@ -160,6 +160,39 @@ final class FleetOriginTests: XCTestCase {
                        "only the provider this Mac has a reading for counts")
     }
 
+    /// A local window that reports an absolute balance and no percentage is
+    /// still a reading.  Several readers report a balance that way, and
+    /// counting only the percentages said this Mac reads no such provider:
+    /// the Mac merge then did not hold the fleet out, so another machine's
+    /// reading of the same provider was merged into this Mac's row and
+    /// labelled local, giving the row two readings where it had one.
+    func testALocalWindowWithAnAbsoluteBalanceIsALocalReading() {
+        let balanceOnly = QuotaWindow(
+            id: "local-mac:grok:balance",
+            provider: "Grok",
+            providerKey: "grok",
+            label: "SuperGrok Heavy",
+            absoluteRemaining: 120,
+            absoluteLimit: 200,
+            occurredAt: "2026-10-23T22:54:46Z",
+            source: "Grok"
+        )
+        XCTAssertEqual(QuotaLocalScope.providers(withReadings: [balanceOnly]), ["grok"],
+                       "a window with an absolute balance is a reading, so this Mac reads that provider")
+
+        let planDetails = QuotaWindow(
+            id: "local-mac:xai:plan-metadata",
+            provider: "xAI",
+            providerKey: "xai",
+            label: "Plan Details",
+            remainingUnknown: true,
+            occurredAt: "2026-10-23T22:54:46Z",
+            source: "CodeCaps Settings"
+        )
+        XCTAssertTrue(QuotaLocalScope.providers(withReadings: [planDetails]).isEmpty,
+                      "a plan-details window carries no reading, so it is not a local reading")
+    }
+
     /// This Mac's own push of a period that ended is a copy like any other
     /// when this Mac has no local reading to grey that period out.  There is
     /// nothing left to show for it, so it must not stand in for a reading.

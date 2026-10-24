@@ -161,6 +161,36 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
         ).lowercased()
     }
 
+    /// The same window, marked as a duplicate source or not.
+    ///
+    /// Which reading of a period is the row is decided by the reading's own
+    /// age, so the two readings of one period can swap places, and the flag
+    /// has to follow them:  the window that takes the row is the primary one
+    /// again, and the one it replaced is the second source.
+    func markedAsDuplicateSource(_ isDuplicate: Bool) -> CompanionWindowItem {
+        CompanionWindowItem(
+            id: id,
+            label: label,
+            cadence: cadence,
+            remainingPercent: remainingPercent,
+            resetAt: resetAt,
+            source: source,
+            via: via,
+            isDuplicateSource: isDuplicate,
+            isExhausted: isExhausted,
+            isMasked: isMasked,
+            isSupplementaryVideoQuota: isSupplementaryVideoQuota,
+            isScopedPoolAllowance: isScopedPoolAllowance,
+            isSubModelLimit: isSubModelLimit,
+            absoluteRemaining: absoluteRemaining,
+            absoluteLimit: absoluteLimit,
+            quotaUnit: quotaUnit,
+            reportedAt: reportedAt,
+            normalizedWindowKey: normalizedWindowKey,
+            producerInstanceId: producerInstanceId
+        )
+    }
+
     private enum CodingKeys: String, CodingKey {
         case id, label, cadence, remainingPercent, resetAt, source, via
         case isDuplicateSource, isExhausted, isMasked
@@ -836,6 +866,13 @@ public final class CompanionQuotaModel: ObservableObject {
     }
     /// True when at least one real reading has been parsed.
     @Published public var hasDataSource = false
+    /// The installation that wrote the payload the phone is reading.
+    ///
+    /// The payload names it, so the phone can tell this installation's own
+    /// reading from a copy of another machine's.  Nil when the payload does
+    /// not say, and the phone then keeps the older behaviour rather than
+    /// guessing which installation it is reading for.
+    private var payloadProducerInstanceId: String?
     @Published public private(set) var tokenStorageError: String?
     private let tokenStore: CompanionReadTokenStore
 
@@ -1298,6 +1335,14 @@ public final class CompanionQuotaModel: ObservableObject {
         let windows: [WireRawWindow]?
         let customMarks: [String: WireCustomMark]?
         let providerGroups: [WireProviderGroup]?
+        /// The installation that wrote this payload.
+        ///
+        /// Every window the fleet sends names a producer instance, so without
+        /// the payload's own id there is no way to tell this installation's
+        /// reading from a copy of another machine's.  Optional on decode, so an
+        /// older Mac's file still parses and the phone keeps the older
+        /// behaviour rather than guessing.
+        let producerInstanceId: String?
         /// Alerts the Mac has already decided to raise.
         ///
         /// Owner request, 2026-10-08: "iOS should have info about heavy
@@ -1588,6 +1633,10 @@ public final class CompanionQuotaModel: ObservableObject {
     private func parseSnapshot(data: Data) -> Bool {
         guard let envelope = try? JSONDecoder().decode(WireEnvelope.self, from: data),
               let rawWindows = envelope.windows else { return false }
+        // The payload names the installation that wrote it, so the phone can
+        // tell that installation's own reading from a copy of another
+        // machine's.  A payload that does not say leaves it unknown.
+        payloadProducerInstanceId = envelope.producerInstanceId
         alertSourceDevices = rawWindows.reduce(into: [:]) { devices, window in
             guard let raw = window.producerInstanceId, let id = UUID(uuidString: raw) else { return }
             devices[id.uuidString.lowercased()] = window.machine ?? "Mac (\(id.uuidString.prefix(8)))"
@@ -1766,7 +1815,8 @@ public final class CompanionQuotaModel: ObservableObject {
     ) -> CompanionQuotaItem {
         var primaryWindows: [CompanionWindowItem] = []
         var duplicateWindows: [CompanionWindowItem] = []
-        var seenCadenceKeys: Set<String> = []
+        var primaryIndexByCadenceKey: [String: Int] = [:]
+        var primaryWireByCadenceKey: [String: WireRawWindow] = [:]
         let now = Date()
 
         // A copy of a period that ended before the last refresh carries no
@@ -1779,12 +1829,36 @@ public final class CompanionQuotaModel: ObservableObject {
             if QuotaWindowVocabulary.isOwnDeviceWindow(id: w.id,
                                                         source: w.source,
                                                         machine: w.machine,
-                                                        producerInstanceId: w.producerInstanceId) {
+                                                        producerInstanceId: w.producerInstanceId,
+                                                        ownInstanceId: payloadProducerInstanceId) {
                 return true
             }
             return !QuotaFreshnessRule.isDeadCopy(observedAt: CompanionDateFormatter.date(from: w.occurredAt),
                                                   resetAt: CompanionDateFormatter.date(from: w.resetAt),
                                                   now: now)
+        }
+
+        /// Whether a window's reading is recent enough to believe, by the
+        /// shared rule, asked with the reading's own observation time.
+        func isFresh(_ window: WireRawWindow) -> Bool {
+            QuotaFreshnessRule.isFresh(observedAt: CompanionDateFormatter.date(from: window.occurredAt),
+                                        resetAt: CompanionDateFormatter.date(from: window.resetAt),
+                                        now: now)
+        }
+
+        /// The freshest window wins, not the first one in payload order.
+        ///
+        /// The payload carries a fleet copy beside the local window, and the
+        /// copy is often days old and reads zero, so taking the first match
+        /// let the stale copy win and the phone showed figures the widget had
+        /// already replaced (owner, Oct-22-2026).  The widget asks the same
+        /// question the same way, so the two cannot drift.
+        func isFresher(_ candidate: WireRawWindow, than current: WireRawWindow) -> Bool {
+            let candidateFresh = isFresh(candidate)
+            let currentFresh = isFresh(current)
+            if candidateFresh != currentFresh { return candidateFresh }
+            return (CompanionDateFormatter.date(from: candidate.occurredAt) ?? .distantPast)
+                > (CompanionDateFormatter.date(from: current.occurredAt) ?? .distantPast)
         }
 
         for w in liveWindows {
@@ -1816,8 +1890,6 @@ public final class CompanionQuotaModel: ObservableObject {
                 ? baseAllowanceKey
                 : "\(effectiveQualifier):\(baseAllowanceKey)"
 
-            let isDuplicate = seenCadenceKeys.contains(cadenceKey)
-
             // The shared cap rule needs the window's own label, not the
             // display label:  the Mac reads the reader's own label, and that is
             // where the "argon" and "video" signals live.
@@ -1830,6 +1902,12 @@ public final class CompanionQuotaModel: ObservableObject {
                 modelType: w.modelType,
                 label: w.label
             )
+
+            // A window that repeats a period already in the row is a second
+            // source of it.  Which of the two is the row is decided by the
+            // reading's own age, not by the order the payload happened to
+            // carry them in.
+            let isDuplicate = primaryIndexByCadenceKey[cadenceKey] != nil
 
             let windowItem = CompanionWindowItem(
                 id: w.id,
@@ -1853,10 +1931,21 @@ public final class CompanionQuotaModel: ObservableObject {
                 producerInstanceId: w.producerInstanceId
             )
 
-            if isDuplicate {
-                duplicateWindows.append(windowItem)
+            if let index = primaryIndexByCadenceKey[cadenceKey],
+               let current = primaryWireByCadenceKey[cadenceKey] {
+                if isFresher(w, than: current) {
+                    // The fresher reading takes the row, and the one it
+                    // replaces becomes a second source beside it.  Neither is
+                    // dropped:  the row still says how many sources it has.
+                    duplicateWindows.append(primaryWindows[index].markedAsDuplicateSource(true))
+                    primaryWindows[index] = windowItem.markedAsDuplicateSource(false)
+                    primaryWireByCadenceKey[cadenceKey] = w
+                } else {
+                    duplicateWindows.append(windowItem)
+                }
             } else {
-                seenCadenceKeys.insert(cadenceKey)
+                primaryIndexByCadenceKey[cadenceKey] = primaryWindows.count
+                primaryWireByCadenceKey[cadenceKey] = w
                 primaryWindows.append(windowItem)
             }
         }
@@ -1954,7 +2043,8 @@ public final class CompanionQuotaModel: ObservableObject {
             if QuotaWindowVocabulary.isOwnDeviceWindow(id: w.id,
                                                         source: w.source,
                                                         machine: w.machine,
-                                                        producerInstanceId: w.producerInstanceId) {
+                                                        producerInstanceId: w.producerInstanceId,
+                                                        ownInstanceId: payloadProducerInstanceId) {
                 return true
             }
             return !QuotaFreshnessRule.isDeadCopy(observedAt: CompanionDateFormatter.date(from: w.occurredAt),
@@ -1967,23 +2057,59 @@ public final class CompanionQuotaModel: ObservableObject {
         guard !windows.isEmpty else { return nil }
 
         let itemId = "antigravity:\(poolKey)"
-        let weeklyWin = windows.first {
-            let s = ($0.id + " " + $0.label).lowercased()
-            return s.contains("weekly") || s.contains("1w") || s.contains("7d")
+
+        /// Whether a window's reading is recent enough to believe, by the
+        /// shared rule.
+        func isFresh(_ window: WireRawWindow?) -> Bool {
+            guard let window else { return false }
+            return QuotaFreshnessRule.isFresh(observedAt: CompanionDateFormatter.date(from: window.occurredAt),
+                                              resetAt: CompanionDateFormatter.date(from: window.resetAt),
+                                              now: now)
         }
-        let fiveHourWin = windows.first {
-            let s = ($0.id + " " + $0.label).lowercased()
-            return s.contains("5h") || s.contains("5-hour") || s.contains("interval")
+
+        /// The freshest window wins, not the first one in payload order.
+        ///
+        /// The payload carries pool copies that are days old and read zero, and
+        /// taking the first match picked those, so the phone said the pool was
+        /// spent while the widget had already seen it recover (owner,
+        /// Oct-22-2026).  The widget asks the same question the same way, so
+        /// the two cannot drift.
+        func isFresher(_ candidate: WireRawWindow, than current: WireRawWindow?) -> Bool {
+            guard let current else { return true }
+            let candidateFresh = isFresh(candidate)
+            let currentFresh = isFresh(current)
+            if candidateFresh != currentFresh { return candidateFresh }
+            return (CompanionDateFormatter.date(from: candidate.occurredAt) ?? .distantPast)
+                > (CompanionDateFormatter.date(from: current.occurredAt) ?? .distantPast)
+        }
+
+        var weeklyWin: WireRawWindow?
+        var fiveHourWin: WireRawWindow?
+        for w in windows {
+            let s = (w.id + " " + w.label).lowercased()
+            if s.contains("weekly") || s.contains("1w") || s.contains("7d") {
+                if isFresher(w, than: weeklyWin) { weeklyWin = w }
+            }
+            if s.contains("5h") || s.contains("5-hour") || s.contains("interval") {
+                if isFresher(w, than: fiveHourWin) { fiveHourWin = w }
+            }
         }
 
         let weeklyPct = weeklyWin?.remainingPercent
+        // Only a fresh window may spend the pool.  A pool copy that is days old
+        // is not evidence about the pool now, and an ended period cannot
+        // exhaust it:  the row still renders with its stale windows greying
+        // out, but it does not claim the pool is spent.  The widget asks the
+        // same question the same way, so the two cannot drift.
+        //
         // A reading decides, exactly as the Mac's `AntigravityQuotaGroups.weeklyIsSpent`
         // and the shared rule do:  the export never clears `isExhausted`, so
         // letting the wire's exhausted word override a healthy reading made
         // the phone call a live pool exhausted while the Mac kept it live, and
         // the two surfaces told the owner different things about one account.
-        let weeklyExhausted = QuotaCapRule.isExhausted(remainingPercent: weeklyPct,
-                                                        providerSaysExhausted: weeklyWin?.isExhausted ?? false)
+        let weeklyExhausted = isFresh(weeklyWin)
+            && QuotaCapRule.isExhausted(remainingPercent: weeklyPct,
+                                        providerSaysExhausted: weeklyWin?.isExhausted ?? false)
 
         let controllingPct: Double?
         let isExhausted: Bool
@@ -1991,22 +2117,26 @@ public final class CompanionQuotaModel: ObservableObject {
         let sourceSuffix = sourceCount > 1 ? "  (\(sourceCount) sources)" : ""
         let subtitle: String
 
+        // The headline reads the fresh windows, the way the Mac's dashboard row
+        // does, and falls back to the last known reading when nothing is
+        // fresh:  a stale window says how the pool looked when the reading was
+        // taken, and it must not drive the pool now.
+        let freshPercents = [
+            fiveHourWin.flatMap { isFresh($0) ? $0.remainingPercent : nil },
+            weeklyWin.flatMap { isFresh($0) ? $0.remainingPercent : nil }
+        ].compactMap { $0 }
+        let validPercents = [fiveHourWin?.remainingPercent, weeklyWin?.remainingPercent].compactMap { $0 }
+
         if weeklyExhausted && weeklyWin != nil {
             controllingPct = weeklyPct ?? 0
             isExhausted = true
             subtitle = "\(QuotaWindowVocabulary.sevenDay) limit exhausted\(sourceSuffix)"
         } else {
-            let validPercents = [fiveHourWin?.remainingPercent, weeklyWin?.remainingPercent].compactMap { $0 }
-            if validPercents.isEmpty {
-                let allPcts = windows.compactMap { $0.remainingPercent }
-                controllingPct = allPcts.min()
-                isExhausted = QuotaCapRule.isAtCap(remainingPercent: controllingPct)
-                subtitle = "\(QuotaWindowVocabulary.fiveHour) & \(QuotaWindowVocabulary.sevenDay)\(sourceSuffix)"
-            } else {
-                controllingPct = validPercents.min()
-                isExhausted = QuotaCapRule.isAtCap(remainingPercent: controllingPct)
-                subtitle = "\(QuotaWindowVocabulary.fiveHour) & \(QuotaWindowVocabulary.sevenDay)\(sourceSuffix)"
-            }
+            controllingPct = freshPercents.min()
+                ?? validPercents.min()
+                ?? windows.compactMap(\.remainingPercent).min()
+            isExhausted = QuotaCapRule.isAtCap(remainingPercent: freshPercents.min())
+            subtitle = "\(QuotaWindowVocabulary.fiveHour) & \(QuotaWindowVocabulary.sevenDay)\(sourceSuffix)"
         }
 
         // Collapse the pool's observations into one row per period.

@@ -474,6 +474,14 @@ public enum WidgetPresentation {
     private struct WireEnvelope: Decodable {
         let windows: [WireRawWindow]?
         let providerGroups: [WireProviderGroup]?
+        /// The installation that wrote this payload.
+        ///
+        /// Every window the fleet sends names a producer instance, so without
+        /// the payload's own id there is no way to tell this installation's
+        /// reading from a copy of another machine's.  Optional on decode, so an
+        /// older Mac's file still parses and the widget keeps the older
+        /// behaviour rather than guessing.
+        let producerInstanceId: String?
     }
 
     private struct WireRawWindow: Decodable {
@@ -592,7 +600,8 @@ public enum WidgetPresentation {
                 iconHint: group.iconHint,
                 defaultWindowLabel: group.defaultWindowLabel,
                 rawWindows: group.windows,
-                now: now
+                now: now,
+                ownInstanceId: envelope.producerInstanceId
             )
             platforms.append(built)
         }
@@ -605,7 +614,8 @@ public enum WidgetPresentation {
                 iconHint: group.iconHint,
                 defaultWindowLabel: group.defaultWindowLabel,
                 rawWindows: group.windows,
-                now: now
+                now: now,
+                ownInstanceId: envelope.producerInstanceId
             )
             platforms.append(built)
         }
@@ -627,7 +637,8 @@ public enum WidgetPresentation {
                 windows: geminiWindows,
                 now: now,
                 iconHint: iconHint(for: "google-antigravity:gemini", in: manifest) ?? "gemini-color",
-                defaultLabel: defaultWindowLabel(for: "google-antigravity", in: manifest)
+                defaultLabel: defaultWindowLabel(for: "google-antigravity", in: manifest),
+                ownInstanceId: envelope.producerInstanceId
             ) {
                 platforms.append(item)
             }
@@ -638,7 +649,8 @@ public enum WidgetPresentation {
                 windows: thirdPartyWindows,
                 now: now,
                 iconHint: "antigravity",
-                defaultLabel: defaultWindowLabel(for: "google-antigravity", in: manifest)
+                defaultLabel: defaultWindowLabel(for: "google-antigravity", in: manifest),
+                ownInstanceId: envelope.producerInstanceId
             ) {
                 platforms.append(item)
             }
@@ -669,7 +681,8 @@ public enum WidgetPresentation {
         iconHint: String?,
         defaultWindowLabel: String?,
         rawWindows: [WireRawWindow],
-        now: Date
+        now: Date,
+        ownInstanceId: String? = nil
     ) -> WidgetPlatformItem {
         var windowByCadence: [String: WidgetWindowItem] = [:]
         var cadenceOrder: [String] = []
@@ -685,7 +698,8 @@ public enum WidgetPresentation {
             if QuotaWindowVocabulary.isOwnDeviceWindow(id: w.id,
                                                         source: w.source,
                                                         machine: w.machine,
-                                                        producerInstanceId: w.producerInstanceId) {
+                                                        producerInstanceId: w.producerInstanceId,
+                                                        ownInstanceId: ownInstanceId) {
                 return true
             }
             return !QuotaFreshnessRule.isDeadCopy(observedAt: parseDate(from: w.occurredAt),
@@ -808,7 +822,8 @@ public enum WidgetPresentation {
         windows: [WireRawWindow],
         now: Date,
         iconHint: String? = nil,
-        defaultLabel: String? = nil
+        defaultLabel: String? = nil,
+        ownInstanceId: String? = nil
     ) -> WidgetPlatformItem? {
         guard !windows.isEmpty else { return nil }
         // A copy of a period that ended before the last refresh is not a
@@ -820,7 +835,8 @@ public enum WidgetPresentation {
             if QuotaWindowVocabulary.isOwnDeviceWindow(id: w.id,
                                                         source: w.source,
                                                         machine: w.machine,
-                                                        producerInstanceId: w.producerInstanceId) {
+                                                        producerInstanceId: w.producerInstanceId,
+                                                        ownInstanceId: ownInstanceId) {
                 return true
             }
             return !QuotaFreshnessRule.isDeadCopy(observedAt: parseDate(from: w.occurredAt),
