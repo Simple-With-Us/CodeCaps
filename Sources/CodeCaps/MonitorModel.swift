@@ -2551,7 +2551,14 @@ final class MonitorModel: ObservableObject {
         consentNeeded = local?.consentNeeded ?? []
         localWindows = AntigravityQuotaGroups.normalize(local?.windows ?? [])
         hasCurrentLocalRead = local != nil
-        let localProviders = Set(localWindows.map(\.canonicalProviderKey))
+        // A local window that carries no reading (a plan-details window, or
+        // any window whose percentage is unknown) does not mean this Mac reads
+        // that provider, so it must not hold the fleet's live reading out of
+        // the row here either.  The file poll runs every minute and overwrites
+        // the response the server refresh merged, so counting the plan details
+        // as a local reading here put the xAI row back to no reading at all
+        // within a minute of the refresh fixing it (owner, 2026-10-23).
+        let localProviders = QuotaLocalScope.providers(withReadings: localWindows)
         let split = FleetOrigin.split(serverWindows, now: now)
         let ownPush = split.ownPush
         let adopted = ownPush.filter { !localProviders.contains($0.canonicalProviderKey) }
