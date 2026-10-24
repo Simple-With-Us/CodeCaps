@@ -149,6 +149,37 @@ final class AntigravityPoolsTests: XCTestCase {
         XCTAssertEqual(thirdParty.resetAt, ISO8601DateFormatter().date(from: "2026-09-20T10:00:00Z"))
     }
 
+    /// A copy of a period that ended must not spend the pool.
+    ///
+    /// The shared cap rule is percentage-level, so it cannot tell a live zero
+    /// from the zero a window carried before its period ended.  The Mac asked
+    /// it with no freshness term while the phone and the widget already asked
+    /// the shared freshness rule, so one pool read spent on one surface and
+    /// live on another.  Owner 2026-10-23: the Antigravity rows read
+    /// "unavailable" beside a live fleet reading.
+    func testAnEndedWeeklyDoesNotSpendThePool() throws {
+        let endedWeekly = QuotaWindow(
+            id: "gemini-pro-weekly", provider: "Antigravity", providerKey: "google-antigravity",
+            via: "antigravity", sourceApp: "local-mac", modelId: "gemini-pro", label: "gemini-pro",
+            remainingPercent: 0, resetAt: "2026-09-13T09:00:00Z",
+            window: "weekly", occurredAt: "2026-09-13T08:00:00Z")
+        let liveFiveHour = QuotaWindow(
+            id: "gemini-pro", provider: "Antigravity", providerKey: "google-antigravity",
+            via: "antigravity", sourceApp: "local-mac", modelId: "gemini-pro", label: "gemini-pro",
+            remainingPercent: 89, resetAt: "2026-09-13T15:00:00Z",
+            window: "5h", occurredAt: observedAt)
+
+        let pools = AntigravityQuotaGroups.pools(from: [liveFiveHour, endedWeekly], now: now)
+        let gemini = try XCTUnwrap(pools.first { $0.key == "gemini" })
+
+        XCTAssertFalse(gemini.weeklyExhausted,
+                       "a copy of a period that ended does not spend the pool")
+        XCTAssertTrue(gemini.maskedWindowIds.isEmpty,
+                      "the five-hour window is not masked by an ended weekly")
+        XCTAssertEqual(gemini.remainingPercent, 89,
+                       "the pool reads the live five-hour reading")
+    }
+
     private func report(_ model: String, _ percent: Double, period: String? = nil) -> QuotaWindow {
         QuotaWindow(id: model + (period ?? ""), provider: "Antigravity", via: "antigravity", sourceApp: "local-mac",
                     modelId: model, label: model, remainingPercent: percent, resetAt: "2026-09-13T15:00:00Z",

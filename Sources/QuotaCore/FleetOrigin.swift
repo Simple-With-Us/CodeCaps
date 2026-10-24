@@ -40,7 +40,7 @@ public enum FleetOrigin {
         if let instance = window.producerInstanceId?.trimmingCharacters(in: .whitespacesAndNewlines), !instance.isEmpty {
             return instance.lowercased() == host.lowercased()
         }
-        if window.id.hasPrefix("local-mac:") {
+        if window.id.hasPrefix(QuotaWindowVocabulary.localDeviceWindowPrefix) {
             return true
         }
         if let sourceApp = window.sourceApp?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
@@ -105,17 +105,41 @@ public enum FleetOrigin {
     /// Splits pulled windows into this Mac's own push and everybody else's,
     /// with the second group keyed by origin and sorted for a stable header
     /// order.
+    ///
+    /// This is where another machine's window enters a surface's data, so it
+    /// is where the shared dead-copy rule is asked.  A copy of a period that
+    /// ended before the last refresh is not a reading, so it never reaches a
+    /// row.  It is dropped here rather than in a section builder:  this Mac's
+    /// own expired reading must survive, so the row can grey it out and wait
+    /// for a refresh, and an Antigravity pool whose copies have all expired
+    /// must still get its missing window back.
     public static func split(
         _ windows: [QuotaWindow],
         host: String = QuotaPublisher.producerInstanceId,
-        localWindows: [QuotaWindow] = []
+        localWindows: [QuotaWindow] = [],
+        now: Date = Date()
     ) -> (ownPush: [QuotaWindow], groups: [(id: String, title: String, windows: [QuotaWindow])]) {
         var own: [QuotaWindow] = []
         var grouped: [String: [QuotaWindow]] = [:]
+        // This Mac's own push is exempt from the dead-copy rule only while
+        // this Mac still reads that provider:  the local window is what greys
+        // out an ended period, so the copy of it coming back from the fleet is
+        // redundant.  A provider this Mac no longer reads has no local window
+        // to grey out, and its own copy of an ended period is a copy like any
+        // other (owner, 2026-10-23:  the xAI row read two ended windows
+        // instead of the live reading).
+        let localReaders = QuotaLocalScope.providers(withReadings: localWindows)
         for window in windows {
             if isOwnPush(window, host: host, localWindows: localWindows) {
-                own.append(window)
-            } else {
+                if localReaders.contains(window.canonicalProviderKey)
+                    || !QuotaFreshnessRule.isDeadCopy(observedAt: window.occurredDate,
+                                                      resetAt: window.resetDate,
+                                                      now: now) {
+                    own.append(window)
+                }
+            } else if !QuotaFreshnessRule.isDeadCopy(observedAt: window.occurredDate,
+                                                     resetAt: window.resetDate,
+                                                     now: now) {
                 grouped[fleetGroupKey(for: window), default: []].append(window)
             }
         }
