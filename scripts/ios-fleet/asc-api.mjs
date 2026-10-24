@@ -38,7 +38,11 @@ import { pathToFileURL } from "node:url";
 import { normalizePrivateKey } from "./asc-key.mjs";
 // The version-numbering RULES live in ./version-plan.mjs (pure, no I/O, no
 // network); this client only reads the App Store Connect state they need.
-import { buildFloor, isDriftTrain, latestMarketingPatch } from "./version-plan.mjs";
+import {
+  buildFloor,
+  isDriftTrain,
+  nextMarketingPatch
+} from "./version-plan.mjs";
 
 // A failure that already knows what to say.
 //
