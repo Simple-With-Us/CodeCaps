@@ -468,10 +468,12 @@ final class FleetRowSourceTests: XCTestCase {
             model.refresh()
             await model.refreshTaskForTesting?.value
             func assertMerge(_ path: String, file: StaticString = #filePath, line: UInt = #line) {
-                XCTAssertEqual(model.response.windows.filter { $0.id == local.id }.count, 1,
-                               "\(path): the observable merge retains the local fixture", file: file, line: line)
+                XCTAssertEqual(model.response.windows.filter { $0.id == local.id }.count, carriesReading ? 0 : 1,
+                               "\(path): only an informative own push replaces the empty local copy", file: file, line: line)
                 let merged = model.response.windows.filter { $0.canonicalProviderKey == "xai" }
                 if carriesReading {
+                    XCTAssertEqual(merged.filter { $0.id == local.id || $0.id == "xai:\(suffix)" }.count, 1,
+                                   "\(path): the exact-key payload appears once", file: file, line: line)
                     let readings = merged.filter { $0.hasReading }
                     XCTAssertEqual(readings.map(\.remainingPercent), [73],
                                    "\(path): the own reading wins before foreign fallback", file: file, line: line)

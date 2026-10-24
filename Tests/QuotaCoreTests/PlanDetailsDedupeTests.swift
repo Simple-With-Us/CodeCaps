@@ -53,4 +53,20 @@ final class PlanDetailsDedupeTests: XCTestCase {
         XCTAssertTrue(QuotaLocalScope.adoptedOwnPush([pushed], localWindows: [local]).isEmpty)
     }
 
+    func testOnlyAnAdoptedReadingReplacesItsExactEmptyLocalCopy() {
+        let empty = window("local-mac:xai:unknown")
+        let distinct = window("local-mac:xai:plan-metadata")
+        var reading = window("xai:unknown")
+        reading.remainingPercent = 73
+        reading.remainingUnknown = false
+        XCTAssertEqual(QuotaLocalScope.localWindowsForMerge([empty, distinct], adopted: [reading]).map(\.id),
+                       [distinct.id])
+        XCTAssertEqual(QuotaLocalScope.localWindowsForMerge([empty], adopted: []).map(\.id), [empty.id])
+        XCTAssertEqual(QuotaLocalScope.localWindowsForMerge([empty], adopted: [window("xai:unknown")]).map(\.id), [empty.id])
+        var localReading = empty
+        localReading.remainingPercent = 81
+        localReading.remainingUnknown = false
+        XCTAssertEqual(QuotaLocalScope.localWindowsForMerge([localReading], adopted: [reading]).map(\.remainingPercent), [81])
+    }
+
 }

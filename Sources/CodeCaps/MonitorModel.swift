@@ -2405,7 +2405,7 @@ final class MonitorModel: ObservableObject {
                 return !localProviders.contains(key) && !adoptedReadingKeys.contains(key)
                     && expectedQuotaProviderKeys.contains(key)
             }
-            let merged = self.localWindows + adopted + fleetFallback
+            let merged = QuotaLocalScope.localWindowsForMerge(self.localWindows, adopted: adopted) + adopted + fleetFallback
             var origins: [String: QuotaOrigin] = [:]
             for key in Set(merged.map(\.canonicalProviderKey)) { origins[key] = .local }
             self.originByProvider = origins
@@ -2572,7 +2572,7 @@ final class MonitorModel: ObservableObject {
             return !localProviders.contains(key) && !adoptedReadingKeys.contains(key)
                 && expectedQuotaProviderKeys.contains(key)
         }
-        let merged = localWindows + adopted + fleetFallback
+        let merged = QuotaLocalScope.localWindowsForMerge(localWindows, adopted: adopted) + adopted + fleetFallback
         originByProvider = Dictionary(uniqueKeysWithValues: Set(merged.map(\.canonicalProviderKey)).map { ($0, .local) })
         response = QuotaResponse(generatedAt: ISO8601DateFormatter().string(from: now), windows: merged)
         if let writeForTesting = handoffWriteForTesting {
