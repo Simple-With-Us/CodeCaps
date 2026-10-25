@@ -55,7 +55,7 @@ export FAKE_OTHER_PEM="${tmp}/other.p8"
 
 extract() {
   awk '
-    /^fs_get\(\) \{/ || /^load_secrets\(\) \{/ || /^cleanup_asc_tmp\(\) \{/ || /^expand_tilde\(\) \{/ { grab = 1 }
+    /^fs_get\(\) \{/ || /^load_secrets\(\) \{/ || /^cleanup_asc_tmp\(\) \{/ || /^expand_tilde\(\) \{/ || /^rejected_key_file\(\) \{/ || /^init_rejected_key_file\(\) \{/ || /^rejected_key_label\(\) \{/ || /^asc_rejected_key_label\(\) \{/ || /^asc_rejected_key_sources\(\) \{/ { grab = 1 }
     grab { print }
     grab && /^\}/ { grab = 0 }
   ' "$script"
@@ -84,6 +84,8 @@ funcs="${tmp}/funcs.sh"
 {
   echo 'log() { :; }'
   echo 'ASC_TMP_DIR=""'
+  echo '_rejected_key_dir=""'
+  echo '_rejected_key_path=""'
   echo "FLEET_SECRETS_BIN=\"${tmp}/fleet-secrets\""
   echo "FLEET_DIR=\"${here}\""
   echo "ASC_COMPARE_TOOL=\"${tmp}/compare.cjs\""
@@ -370,4 +372,906 @@ if grep -nE '(~|\$\{?HOME\}?)/\.secrets' "$script" >/dev/null; then
   fail "ship-testflight.sh still names the old secrets folder"
 fi
 
+# 7. A rejected credential is named only by nonsecret labels:  the key id
+# and the source the client resolved it from.  Nothing derived from the
+# private key is read out of the client's diagnostic, so even a line that
+# carries a key fragment (an older client's "key in play" preview, here
+# made of synthetic text) leaves no trace in the label, the hand-off file or
+# the parent's fatal text.
+synthetic_head="SYNTHHEAD"
+synthetic_tail="TAIL"
+cat > "${tmp}/client-err.txt" <<ERR
+asc-auth: using ASC_KEY_P8 environment (key id length 15)
+latest-marketing-patch: App Store Connect rejected the API key (HTTP 401; key id SYNTHETICKEYID1, key source ASC_KEY_P8 environment)
+latest-build-seq: App Store Connect rejected the API key (HTTP 401; key id SYNTHETICKEYID1, key in play ${synthetic_head}…${synthetic_tail})
+ERR
+: > "${tmp}/client-err-empty.txt"
+label="$(bash -c '
+  set -euo pipefail
+  source "'"$funcs"'"
+  mkdir -p "'"${tmp}"'/td1"; TMPDIR="'"${tmp}"'/td1" init_rejected_key_file
+  asc_rejected_key_label "'"$tmp"'/client-err.txt"
+' 2>"${tmp}/label-stderr.txt")" || fail "asc_rejected_key_label"
+[[ "$label" == "key id SYNTHETICKEYID1, source ASC_KEY_P8 environment" ]] || fail "the key id and source were not read from the client diagnostic: ${label}"
+for out in "$label" "$(cat "${tmp}/label-stderr.txt")" "$(cat "${tmp}"/td1/ios-fleet-rejected-key.*/label)"; do
+  [[ "$out" != *"$synthetic_head"* && "$out" != *"$synthetic_tail"* && "$out" != *"key in play"* ]] || fail "a key-body fragment survived into the label, stderr or the hand-off file: ${out}"
+done
+empty_label="$(bash -c '
+  set -euo pipefail
+  source "'"$funcs"'"
+  mkdir -p "'"${tmp}"'/td2"; TMPDIR="'"${tmp}"'/td2" init_rejected_key_file
+  asc_rejected_key_label "'"$tmp"'/client-err-empty.txt"
+')" || fail "asc_rejected_key_label on an empty diagnostic"
+[[ -n "$empty_label" ]] || fail "an empty diagnostic produced no text at all"
+missing_label="$(bash -c '
+  set -euo pipefail
+  source "'"$funcs"'"
+  mkdir -p "'"${tmp}"'/td3"; TMPDIR="'"${tmp}"'/td3" init_rejected_key_file
+  asc_rejected_key_label
+')" || fail "asc_rejected_key_label without a file"
+[[ -n "$missing_label" ]] || fail "a missing diagnostic file produced no text at all"
+# A line with only a key fragment and no key id yields no label from it.
+printf '%s\n' "latest-marketing-patch: App Store Connect rejected the API key (HTTP 401; key in play ${synthetic_head}…${synthetic_tail})" > "${tmp}/client-err-legacy.txt"
+legacy_label="$(bash -c '
+  set -euo pipefail
+  source "'"$funcs"'"
+  mkdir -p "'"${tmp}"'/td4"; TMPDIR="'"${tmp}"'/td4" init_rejected_key_file
+  asc_rejected_key_label "'"$tmp"'/client-err-legacy.txt"
+')" || fail "asc_rejected_key_label on a legacy diagnostic"
+[[ "$legacy_label" != *"$synthetic_head"* && "$legacy_label" != *"$synthetic_tail"* ]] || fail "a legacy key fragment reached the label: ${legacy_label}"
+# The raw key must never appear in what the shell prints.
+pem_material="$(sed -e 's/-----[^-]*-----//g' "${tmp}/asc.p8" | tr -d '[:space:]')"
+[[ "$label" != *"${pem_material:0:8}"* ]] || fail "the label carries key material"
+# The ship script no longer prints or transports a preview of the key.
+if grep -nE 'key in play|rejected_key_preview' "$script" >/dev/null; then
+  fail "ship-testflight.sh still handles a key preview"
+fi
+
+# 8. The label has to survive the command substitution the ship script
+# uses.  Both helpers that can meet a rejection are only ever called
+# through "$(...)", so they run in a subshell and a global they assign
+# never reaches the parent -- the fatal message would name no key at all.
+# The label therefore travels through a file, and the parent reads it back
+# for its fatal text, which must carry the key id and source and no key
+# fragment.
+parent_fatal="$(bash -c '
+  set -euo pipefail
+  source "'"$funcs"'"
+  mkdir -p "'"${tmp}"'/td5"; TMPDIR="'"${tmp}"'/td5" init_rejected_key_file
+  _p="$(asc_rejected_key_label "'"$tmp"'/client-err.txt")"
+  [[ "$_p" == "key id SYNTHETICKEYID1, source ASC_KEY_P8 environment" ]] || exit 1
+  printf "App Store Connect rejected the API key (HTTP 401/403; rejected key %s) while reading the next marketing version." "$(rejected_key_label)"
+')" || fail "the label inside a command substitution"
+[[ "$parent_fatal" == *"rejected key key id SYNTHETICKEYID1, source ASC_KEY_P8 environment)"* ]] || fail "the label did not leave the command substitution: ${parent_fatal}"
+[[ "$parent_fatal" != *"$synthetic_head"* && "$parent_fatal" != *"$synthetic_tail"* ]] || fail "a key-body fragment reached the parent fatal text: ${parent_fatal}"
+hand_off_dir="$(ls -d "${tmp}"/td5/ios-fleet-rejected-key.*)"
+[[ "$(stat -c %a "$hand_off_dir" 2>/dev/null || stat -f %Lp "$hand_off_dir")" == "700" ]] || fail "the hand-off directory is not private"
+hand_off="$(cat "${hand_off_dir}/label")"
+[[ "$hand_off" != *"$synthetic_head"* && "$hand_off" != *"$synthetic_tail"* ]] || fail "a key-body fragment reached the hand-off file: ${hand_off}"
+# With no rejection there is no label, and the parent says so.
+unknown_label="$(bash -c '
+  set -euo pipefail
+  source "'"$funcs"'"
+  mkdir -p "'"${tmp}"'/td6"; TMPDIR="'"${tmp}"'/td6" init_rejected_key_file
+  rejected_key_label
+')" || fail "rejected_key_label without a label"
+[[ "$unknown_label" == "unknown" ]] || fail "a missing label should read unknown: ${unknown_label}"
+
+# 9. The hand-off path belongs to this run alone.  A stale or hostile
+# environment cannot choose what is written, read or removed, a symlink
+# planted at the old predictable name is never followed, and cleanup
+# removes only the private directory this run created.
+mkdir -p "${tmp}/td9"
+printf 'SENTINEL-ENV\n' > "${tmp}/sentinel-env"
+printf 'SENTINEL-LINK\n' > "${tmp}/sentinel-link"
+printf 'SENTINEL-DIR\n' > "${tmp}/sentinel-dir"
+env_out="$(REJECTED_KEY_FILE="${tmp}/sentinel-env" _rejected_key_path="${tmp}/sentinel-env" _rejected_key_dir="${tmp}/sentinel-dir" TMPDIR="${tmp}/td9" bash -c '
+  set -euo pipefail
+  source "'"$funcs"'"
+  ln -s "'"$tmp"'/sentinel-link" "${TMPDIR}/ios-fleet-rejected-key.$$"
+  init_rejected_key_file
+  _p="$(asc_rejected_key_label "'"$tmp"'/client-err.txt")"
+  printf "%s|%s\n" "$_p" "$(rejected_key_label)"
+  own="$_rejected_key_dir"
+  cleanup_asc_tmp
+  [[ ! -e "$own" ]] || { echo "own dir survived cleanup"; exit 1; }
+')" || fail "the run-owned hand-off path: ${env_out}"
+[[ "$env_out" == "key id SYNTHETICKEYID1, source ASC_KEY_P8 environment|key id SYNTHETICKEYID1, source ASC_KEY_P8 environment" ]] || fail "the label did not round-trip through the run-owned file: ${env_out}"
+[[ "$(cat "${tmp}/sentinel-env")" == "SENTINEL-ENV" ]] || fail "an environment-selected file was overwritten"
+[[ "$(cat "${tmp}/sentinel-link")" == "SENTINEL-LINK" ]] || fail "a symlink at the predictable name was followed"
+[[ -f "${tmp}/sentinel-dir" && "$(cat "${tmp}/sentinel-dir")" == "SENTINEL-DIR" ]] || fail "cleanup removed an environment-selected path"
+# Cleanup that never created a directory removes nothing, whatever the environment says.
+_rejected_key_dir="${tmp}/sentinel-dir" bash -c '
+  source "'"$funcs"'"
+  _rejected_key_dir=""
+  cleanup_asc_tmp
+'
+[[ -f "${tmp}/sentinel-dir" ]] || fail "cleanup without a run-owned directory deleted a file"
+# The ship script itself takes no hand-off path from the environment.
+if grep -nE 'REJECTED_KEY_FILE|ios-fleet-rejected-key\.\$\$' "$script" >/dev/null; then
+  fail "ship-testflight.sh still derives the hand-off path from the environment or a predictable name"
+fi
+
+# 10. The REAL client diagnostic, read by the shell parser.
+#
+# The parser has to understand the label the client actually prints, not a
+# hand-written copy of it:  a copy can drift away from the client, and then
+# a real rejection is named wrongly -- or not named at all.  So the client
+# itself is run against a local server that answers 401, with a synthetic
+# key, and its own stderr is what the parser reads.
+cat > "${tmp}/real-401.mjs" <<'CJS'
+import { spawn } from "node:child_process";
+import { createServer } from "node:http";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+const [script, outDir, pemPath] = process.argv.slice(2);
+const pem = readFileSync(pemPath, "utf8");
+
+// A server that refuses every request, the way App Store Connect refuses a
+// key it will not accept.
+const server = createServer((req, res) => {
+  res.writeHead(401, { "Content-Type": "text/plain" });
+  res.end("unauthorized");
+});
+await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+const base = `http://127.0.0.1:${server.address().port}`;
+
+function run(env) {
+  return new Promise((resolve) => {
+    const child = spawn("node", [script, "latest-build-seq", "com.example.nothing", "1.0"], {
+      env: {
+        PATH: process.env.PATH,
+        HOME: process.env.HOME,
+        ASC_API_BASE: base,
+        // Every other credential source is cleared, so the scenario below is
+        // the one that decides which credential the client uses.
+        ASC_KEY_ID: "",
+        ASC_ISSUER_ID: "",
+        ASC_KEY_P8: "",
+        ASC_KEY_PATH: "",
+        APPLE_API_KEY_ID: "",
+        APPLE_API_ISSUER_ID: "",
+        APPLE_API_KEY_P8_BASE64: "",
+        FLEET_SECRETS_BIN: "/nonexistent/fleet-secrets",
+        FLEET_SECRETS: "/nonexistent/fleet-secrets",
+        ...env
+      },
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    let stderr = "";
+    child.stderr.on("data", (d) => { stderr += d; });
+    child.on("close", () => resolve(stderr));
+  });
+}
+
+const scenarios = {
+  // A key id and a source the client can name.
+  "asc-env": {
+    ASC_KEY_ID: "SYNTHETICKEYID1",
+    ASC_ISSUER_ID: "synthetic-issuer",
+    ASC_KEY_P8: pem
+  },
+  // The other environment source.
+  "apple-env": {
+    APPLE_API_KEY_ID: "SYNTHETICKEYID2",
+    APPLE_API_ISSUER_ID: "synthetic-issuer-2",
+    APPLE_API_KEY_P8_BASE64: Buffer.from(pem).toString("base64")
+  },
+  // A key id that is not shaped like a key id:  the client says the id was
+  // unrecognized, and the source is still known.
+  "unrecognized-id": {
+    ASC_KEY_ID: "not a key id",
+    ASC_ISSUER_ID: "synthetic-issuer",
+    ASC_KEY_P8: pem
+  }
+};
+
+for (const [name, env] of Object.entries(scenarios)) {
+  writeFileSync(join(outDir, `${name}.err`), await run(env));
+}
+server.close();
+CJS
+node "${tmp}/real-401.mjs" "${here}/asc-api.mjs" "${tmp}" "${tmp}/asc.p8" || fail "the mock 401 run"
+
+# The label the client printed, in the client's own words:  the assertions
+# below are about the shell reading THAT, not about a copy of it.
+grep -q 'key id SYNTHETICKEYID1, key source ASC_KEY_P8 environment' "${tmp}/asc-env.err" \
+  || fail "the client did not print the expected label: $(cat "${tmp}/asc-env.err")"
+grep -q 'key id SYNTHETICKEYID2, key source APPLE_API_\* environment (base64 p8)' "${tmp}/apple-env.err" \
+  || fail "the client did not name the APPLE_API_* source: $(cat "${tmp}/apple-env.err")"
+grep -q 'key id (unrecognized), key source ASC_KEY_P8 environment' "${tmp}/unrecognized-id.err" \
+  || fail "the client did not report the id as unrecognized: $(cat "${tmp}/unrecognized-id.err")"
+
+# The shell parser, fed the real diagnostic.
+parse_label() {
+  local errf="$1" td="$2"
+  bash -c '
+    set -euo pipefail
+    source "'"$funcs"'"
+    mkdir -p "'"$td"'"; TMPDIR="'"$td"'" init_rejected_key_file
+    asc_rejected_key_label "'"$errf"'"
+  '
+}
+mkdir -p "${tmp}/td10"
+real_label="$(parse_label "${tmp}/asc-env.err" "${tmp}/td10")" || fail "the parser on the real client diagnostic"
+[[ "$real_label" == "key id SYNTHETICKEYID1, source ASC_KEY_P8 environment" ]] \
+  || fail "the real client diagnostic lost the key id or the source: ${real_label}"
+apple_label="$(parse_label "${tmp}/apple-env.err" "${tmp}/td10")" || fail "the parser on the APPLE_API_* diagnostic"
+[[ "$apple_label" == "key id SYNTHETICKEYID2, source APPLE_API_* environment (base64 p8)" ]] \
+  || fail "the real client diagnostic lost the APPLE_API_* source: ${apple_label}"
+# The case the review found:  the client named the source but not a usable
+# id, and the label has to say so AND name the source.  Dropping the source
+# would send the operator after the wrong credential.
+unrecognized_label="$(parse_label "${tmp}/unrecognized-id.err" "${tmp}/td10")" || fail "the parser on the unrecognized-id diagnostic"
+[[ "$unrecognized_label" == "key id (unrecognized), source ASC_KEY_P8 environment" ]] \
+  || fail "an unrecognized key id dropped the known source: ${unrecognized_label}"
+# The word "unknown" is only for the case where the client named neither.
+[[ "$unrecognized_label" != *"unknown"* ]] || fail "the label said unknown although the source was known: ${unrecognized_label}"
+
+# 11. ONE accepted source list.  The parser takes a source only when it is
+# on that list, so the list has to hold every source the client can emit:  a
+# real rejection whose source is missing from it would be named as if the
+# client had said nothing at all.
+cat > "${tmp}/list-sources.mjs" <<CJS
+import { REJECTED_KEY_SOURCES } from "file://${here}/asc-api.mjs";
+for (const source of REJECTED_KEY_SOURCES) console.log(source);
+CJS
+client_sources="$(node "${tmp}/list-sources.mjs")" || fail "the client's source list"
+shell_sources="$(bash -c 'set -euo pipefail; source "'"$funcs"'"; asc_rejected_key_sources')" || fail "the shell's source list"
+[[ -n "$client_sources" && -n "$shell_sources" ]] || fail "a source list is empty"
+while IFS= read -r src; do
+  [[ -n "$src" ]] || continue
+  printf '%s\n' "$shell_sources" | grep -Fxq "$src" \
+    || fail "the client can name the source '${src}' and the shell does not accept it"
+done <<< "$client_sources"
+while IFS= read -r src; do
+  [[ -n "$src" ]] || continue
+  printf '%s\n' "$client_sources" | grep -Fxq "$src" \
+    || fail "the shell accepts the source '${src}' and the client cannot emit it"
+done <<< "$shell_sources"
+
+# 12. Loading the ship script creates the run-owned hand-off path.  The init
+# runs when the script is loaded, so every run has a private place to put
+# the label before any subshell exists, and a refusal is never written
+# somewhere a stale value could pick.
+#
+# The prelude is cut from the top of the ship script down to the load-time
+# init call.  The cut is checked before anything is sourced, and the checks
+# keep this order:  it must stop strictly before the end of the file, its
+# last line must be the init call, the function definition must be in it on
+# its own line, and every column-0 line before that last one must be a
+# top-level shape the shell can carry into the prelude.  A missing or
+# reformatted call marker fails here, and so does a ship-body command the
+# cut swallowed, so the ship body is never sourced.
+extract_ship_prelude() {
+  local src="$1" dest="$2" total kept offender
+  sed -n '1,/^init_rejected_key_file ||/p' "$src" > "$dest"
+  total="$(wc -l < "$src")"
+  kept="$(wc -l < "$dest")"
+  (( kept < total )) || { echo "the prelude cut did not stop before the end of the ship script"; return 1; }
+  tail -n 1 "$dest" | grep -q '^init_rejected_key_file || ' \
+    || { echo "the prelude cut did not stop at the load-time hand-off init call"; return 1; }
+  grep -q '^init_rejected_key_file() {$' "$dest" \
+    || { echo "the hand-off init function definition is not in the prelude"; return 1; }
+  # The positional guard.  A line that starts with whitespace is accepted
+  # only inside a function body:  a body is opened by a column-0 `name() {`
+  # line and closed by a column-0 `}` line.  A whitespace-leading line
+  # outside a body is a top-level command, not a function body, and it is
+  # refused -- the cut took it with it, and the prelude would run it when
+  # it is sourced.  A whitespace-leading comment line is skipped anywhere.
+  #
+  # A line at column 0 has to be a shape that belongs to the prelude
+  # itself:  a comment, a blank line, set -euo pipefail, an allowlisted
+  # assignment, a function opener, a lone closing brace, or a trap.  Any
+  # other command at column 0 is ship-body code the cut took with it, and
+  # the prelude would run it when it is sourced.  A lone `}` outside a
+  # body closes nothing, so it is refused as well, and so is a second
+  # function opener while a body is still open:  the body tracking cannot
+  # be talked out of its shape.
+  #
+  # An assignment is accepted only when it is one the real prelude makes:
+  # export PATH=, and a plain assignment to ASC_NODE, FLEET_DIR, APPS_JSON,
+  # TEAM_ID, FLEET_SECRETS_BIN, ASC_TMP_DIR, _rejected_key_dir or
+  # _rejected_key_path.  A name that is not on that list is refused even
+  # when it only assigns a value, so no column-0 name= prefix can smuggle
+  # a command into the prelude.
+  #
+  # An allowlisted name is still refused when its value chains a command
+  # after it, and two rules refuse that between them.  A quoted value must
+  # be the whole remainder of the line:  nothing may follow its closing
+  # quote, so a line like TEAM_ID="x" && rm -rf ... is refused.  An
+  # unquoted value must be a single word, with no whitespace, ;, & or | in
+  # it, so a line like TEAM_ID=x&&rm -rf ... is refused as well.  The &&
+  # inside FLEET_DIR="$(cd "$(dirname "$0")" && pwd)" is inside the quoted
+  # value, so that line stays one assignment and is accepted.
+  #
+  # An allowlisted name is refused as well when its value holds a command
+  # substitution or a backtick:  sourcing the prelude would run that
+  # command, so a line like TEAM_ID="$(cmd)" or TEAM_ID=`cmd` is refused.
+  # A process substitution in a value, <( ... ) or >( ... ), is refused the
+  # same way.  The one exception is the pinned FLEET_DIR line of the real
+  # prelude, FLEET_DIR="$(cd "$(dirname "$0")" && pwd)":  it is the only
+  # line allowed to carry a command substitution, and it is accepted only
+  # when the whole line matches that pin exactly.  Any other FLEET_DIR
+  # line is refused like every other name.
+  offender="$(awk '
+    BEGIN {
+      SQ = sprintf("%c", 39)
+      # The names the real prelude sets at column 0, and nothing else.
+      allowed["ASC_NODE"] = 1
+      allowed["FLEET_DIR"] = 1
+      allowed["APPS_JSON"] = 1
+      allowed["TEAM_ID"] = 1
+      allowed["FLEET_SECRETS_BIN"] = 1
+      allowed["ASC_TMP_DIR"] = 1
+      allowed["_rejected_key_dir"] = 1
+      allowed["_rejected_key_path"] = 1
+      # The one line of the real prelude that carries a command
+      # substitution, pinned as a whole line and byte for byte:
+      # FLEET_DIR="$(cd "$(dirname "$0")" && pwd)".  It is the only
+      # assignment whose value may hold a substitution, and it is
+      # accepted only when the whole line matches this pin exactly.
+      pinned_fleet_dir = "FLEET_DIR=\"$(cd \"$(dirname \"$0\")\" && pwd)\""
+      # Whether the line being read is inside a function body.  A body is
+      # opened by a column-0 `name() {` line and closed by a column-0 `}`
+      # line, and only a body may hold a whitespace-leading line.
+      in_body = 0
+      # The brace depth of the body that is open.  Bash closes a function
+      # with an INDENTED `}` just as it closes it with a column-0 `}`, so
+      # the depth of the literal-stripped line is followed and the body
+      # ends when the depth returns to zero.
+      depth = 0
+    }
+    { lines[NR] = $0 }
+    END {
+      for (i = 1; i < NR; i++) {
+        l = lines[i]
+        if (l ~ /^[[:space:]]*$/) continue
+        if (l ~ /^[[:space:]]/) {
+          # A whitespace-leading line is accepted only inside a function
+          # body:  a body is opened by a column-0 `name() {` line and
+          # closed by a column-0 `}` line.  A whitespace-leading line
+          # outside a body is a top-level command, and the cut would run
+          # it when the prelude is sourced, so it is refused.  A
+          # whitespace-leading comment line is skipped anywhere.
+          if (l ~ /^[[:space:]]+#/) continue
+          if (in_body == 1) {
+            # An indented closing brace closes the body in bash, so the
+            # brace depth of the line is followed:  a body that ends with
+            # an indented brace must not leave the guard believing that a
+            # body is still open, because the next indented line would
+            # then be a top-level command that the cut would run.
+            # The comment is cut off on the MASKED line, which keeps the
+            # positions of the raw line:  the quoted text and the
+            # substitutions are filler there, so a `#` inside a string is
+            # not a `#` at all, and a `#` that follows a closing quote
+            # follows a word character and is a word continuation in bash,
+            # not the start of a comment.  A brace in a comment is not a
+            # structural brace.
+            mask = strip_literal(l, "x")
+            cpos = comment_start(mask)
+            if (cpos > 0) mask = substr(mask, 1, cpos - 1)
+            plain = mask
+            depth = depth + gsub(/\{/, "", plain) - gsub(/\}/, "", plain)
+            if (depth <= 0) in_body = 0
+            continue
+          }
+          print i ": " l
+          exit
+        }
+        if (l ~ /^#/) continue
+        if (l == "set -euo pipefail") continue
+        if (assignment_ok(l)) continue
+        if (l ~ /^[A-Za-z_][A-Za-z0-9_]*\(\)[[:space:]]*[{][[:space:]]*$/) {
+          # A column-0 opener opens a body.  A second one while a body is
+          # still open is refused:  the body would have no shape that the
+          # closing brace could match.
+          if (in_body == 1) {
+            print i ": " l
+            exit
+          }
+          in_body = 1
+          depth = 1
+          continue
+        }
+        # The one-line form does not open a body:  its body ends on its
+        # own line.
+        if (l ~ /^[A-Za-z_][A-Za-z0-9_]*\(\)[[:space:]]*[{].*[}]$/) continue
+        if (l ~ /^[}][[:space:]]*$/) {
+          # A column-0 `}` closes a body.  Outside a body it closes
+          # nothing, so it is refused.
+          if (in_body == 0) {
+            print i ": " l
+            exit
+          }
+          in_body = 0
+          depth = 0
+          continue
+        }
+        if (l ~ /^trap[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]+EXIT[[:space:]]*$/) continue
+        print i ": " l
+        exit
+      }
+    }
+    # The position of the first `#` that starts a comment on a masked
+    # line, or 0 when there is none.  Bash starts a comment only at a `#`
+    # that BEGINS A WORD, so the `#` must be at the start of the line or
+    # preceded by whitespace or by an operator, and it must not be inside
+    # a quoted string.  On the masked line the quoted text is filler, so a
+    # `#` inside a string is not a `#` at all and a `#` that follows a
+    # closing quote follows a word character.
+    function comment_start(m,   i, c, prev, n) {
+      n = length(m)
+      for (i = 1; i <= n; i++) {
+        c = substr(m, i, 1)
+        if (c != "#") continue
+        if (i == 1) return 1
+        prev = substr(m, i - 1, 1)
+        if (prev ~ /[[:space:]]/ || prev == ";" || prev == "&" || prev == "|" || prev == "(" || prev == ")" || prev == "<" || prev == ">") return i
+      }
+      return 0
+    }
+    # Strip the quoted text and the command substitutions from a line and
+    # return what is left.  The shell reads no chain inside a quoted string
+    # and no chain inside a ( ) substitution, so those parts are dropped:
+    # the && in FLEET_DIR="$(cd "$(dirname "$0")" && pwd)" is part of the
+    # value, and that line stays a single assignment.
+    # With a fill, the quoted text and the substitutions are kept as that
+    # many filler characters instead of being dropped, so the result has
+    # the same length as the line and the positions still line up with it.
+    # That masked line is what the comment start is found on, because only
+    # the raw line can say whether a `#` follows a closing quote, and in
+    # bash that is a word continuation and not the start of a comment.
+    function strip_literal(s, fill,   out, i, c, len, st, top, keep) {
+      out = ""
+      st = ""
+      len = length(s)
+      i = 1
+      keep = (fill == "") ? "" : fill
+      while (i <= len) {
+        c = substr(s, i, 1)
+        top = (st == "") ? "" : substr(st, length(st), 1)
+        if (top == "s") {
+          if (c == SQ) st = substr(st, 1, length(st) - 1)
+          out = out keep
+          i++
+          continue
+        }
+        if (top == "d") {
+          if (c == "\"") { st = substr(st, 1, length(st) - 1); i++; out = out keep; continue }
+          if (c == "$" && substr(s, i + 1, 1) == "(") { st = st "("; i += 2; out = out keep keep; continue }
+          out = out keep
+          i++
+          continue
+        }
+        if (top == "(") {
+          if (c == "\"") { st = st "d"; i++; out = out keep; continue }
+          if (c == SQ) { st = st "s"; i++; out = out keep; continue }
+          if (c == "$" && substr(s, i + 1, 1) == "(") { st = st "("; i += 2; out = out keep keep; continue }
+          if (c == ")") { st = substr(st, 1, length(st) - 1); i++; out = out keep; continue }
+          out = out keep
+          i++
+          continue
+        }
+        if (c == "\"") { st = st "d"; i++; out = out keep; continue }
+        if (c == SQ) { st = st "s"; i++; out = out keep; continue }
+        if (c == "$" && substr(s, i + 1, 1) == "(") { st = st "("; i += 2; out = out keep keep; continue }
+        out = out c
+        i++
+      }
+      return out
+    }
+    # The position of the closing quote of the quoted value that starts a
+    # line, or 0 when that value is not closed.  A command substitution
+    # inside the value is parsed in its own context, so the quotes inside
+    # it do not close the value.
+    function quoted_value_end(v,   i, c, len, st, top) {
+      len = length(v)
+      st = ""
+      c = substr(v, 1, 1)
+      if (c == "\"") st = "d"
+      else if (c == SQ) st = "s"
+      else return 0
+      i = 2
+      while (i <= len) {
+        c = substr(v, i, 1)
+        top = substr(st, length(st), 1)
+        if (top == "s") {
+          if (c == SQ) { st = substr(st, 1, length(st) - 1); if (st == "") return i }
+          i++
+          continue
+        }
+        if (top == "d") {
+          if (c == "\"") { st = substr(st, 1, length(st) - 1); if (st == "") return i; i++; continue }
+          if (c == "$" && substr(v, i + 1, 1) == "(") { st = st "("; i += 2; continue }
+          i++
+          continue
+        }
+        if (c == "\"") { st = st "d"; i++; continue }
+        if (c == SQ) { st = st "s"; i++; continue }
+        if (c == "$" && substr(v, i + 1, 1) == "(") { st = st "("; i += 2; continue }
+        if (c == ")") { st = substr(st, 1, length(st) - 1); if (st == "") return i; i++; continue }
+        i++
+      }
+      return 0
+    }
+    # An assignment is accepted only when it is one the real prelude makes,
+    # and only when the value does not chain a command after it and does not
+    # carry a command substitution of its own.
+    function assignment_ok(l,   name, value, first, stripped, rest, qend) {
+      if (match(l, /^export[[:space:]]+PATH=/)) {
+        value = substr(l, RSTART + RLENGTH)
+      } else if (match(l, /^[A-Za-z_][A-Za-z0-9_]*=/)) {
+        name = substr(l, 1, RLENGTH - 1)
+        if (!(name in allowed)) return 0
+        value = substr(l, RLENGTH + 1)
+      } else {
+        return 0
+      }
+      first = substr(value, 1, 1)
+      stripped = strip_literal(l)
+      rest = substr(stripped, index(stripped, "=") + 1)
+      # The chain refusal.  A value that runs a command after it is
+      # refused by the two rules below.  A quoted value must be the whole
+      # remainder of the line:  nothing may follow its closing quote.  An
+      # unquoted value must be a single word, with no whitespace, ;, & or
+      # | in it.  The && inside FLEET_DIR="$(cd "$(dirname "$0")" && pwd)"
+      # is inside the quoted value, so that line stays one assignment and
+      # is accepted.
+      if (first == "\"" || first == SQ) {
+        # A quoted value is the whole remainder of the line:  nothing may
+        # follow the closing quote.
+        qend = quoted_value_end(value)
+        if (qend == 0) return 0
+        if (substr(value, qend + 1) ~ /[^[:space:]]/) return 0
+      }
+      if (first != "\"" && first != SQ) {
+        # An unquoted value is a single word.
+        if (rest ~ /[[:space:];&|]/) return 0
+      }
+      # The substitution refusal.  A value that holds a command
+      # substitution or a backtick would run that command when the
+      # prelude is sourced, so it is refused.  The one exception is the
+      # pinned FLEET_DIR line of the real prelude:  it is the only
+      # assignment allowed to carry a command substitution, and it is
+      # accepted only when the whole line matches the pin exactly.  A
+      # process substitution in a value is refused the same way.
+      if (index(value, "$(") > 0 || index(value, "`") > 0) {
+        if (l != pinned_fleet_dir) return 0
+      }
+      if (index(value, "<(") > 0 || index(value, ">(") > 0) return 0
+      return 1
+    }
+  ' "$dest")"
+  if [[ -n "$offender" ]]; then
+    echo "the prelude cut holds a positional command at line ${offender}"
+    return 1
+  fi
+}
+
+# 12a. Synthetic ship scripts whose call marker is missing, reformatted,
+# moved or too tight are refused before sourcing.  Each variant has to be
+# refused by the check it is meant to trip:  a cut that never stops and a
+# cut that stops at the wrong line must not pass for one another, so every
+# variant asserts the words of its own refusal.
+for variant in missing reformatted moved nodef tight assignchain assignchainbare assignother assignsubst assignbacktick assignsubstbare assignprocin assignprocout fleetdirother indented strayclose secondopener indentedclose commentbrace gluedbrace gluedarg quotedhash; do
+  synth="${tmp}/synth-ship-${variant}.sh"
+  sentinel="${tmp}/synth-sentinel-${variant}"
+  {
+    echo '#!/bin/bash'
+    if [[ "$variant" != nodef ]]; then
+      echo 'init_rejected_key_file() {'
+      if [[ "$variant" == commentbrace ]]; then
+        echo '  _rejected_key_dir="$(mktemp -d)" # keep the dir { open'
+      elif [[ "$variant" == gluedbrace ]]; then
+        # The body is closed by a `}` that is in COMMAND position:  the `#`
+        # is glued to the closing quote, so it is not the start of a
+        # comment in bash, and the `;` ends the command so the `}` after
+        # it closes the body.  The indented command that follows is then a
+        # top-level command the cut would run.
+        echo '  true "x"#;}'
+      elif [[ "$variant" == gluedarg ]]; then
+        # The review's own shape:  a `#` glued to a closing quote is not a
+        # comment start, so the `}` after it is still counted.  Here it is
+        # an argument to `true`, and the guard stays conservative:  it
+        # closes the body on that count, so the indented command after it
+        # is refused rather than waved through as body text.
+        echo '  true "x"# }'
+      elif [[ "$variant" == quotedhash ]]; then
+        # A `#` inside a quoted string that follows whitespace is not a
+        # comment start either:  the `}` after the string is still a
+        # structural brace that closes the body.
+        echo '  true " #";}'
+      else
+        echo '  _rejected_key_dir="$(mktemp -d)"'
+      fi
+      # A second column-0 opener while the first body is still open:  the
+      # closing brace could not match a body that has two openers, so the
+      # body-shape rule has to refuse it.  The second opener sits inside
+      # the body, where it is the only thing that can refuse it.
+      if [[ "$variant" == secondopener ]]; then
+        echo 'other_func() {'
+      fi
+      if [[ "$variant" == gluedbrace || "$variant" == gluedarg || "$variant" == quotedhash ]]; then
+        # The body was already closed by the line above.
+        :
+      elif [[ "$variant" == indentedclose || "$variant" == commentbrace ]]; then
+        # The body is closed by an INDENTED brace:  bash closes the
+        # function with it just as it closes the function with a
+        # column-0 brace, so the guard has to follow the brace depth.
+        echo '  }'
+      else
+        echo '}'
+      fi
+    else
+      echo 'init_rejected_key_file_renamed() { :; }'
+    fi
+    case "$variant" in
+      missing)     ;;
+      reformatted) echo 'init_rejected_key_file|| echo "could not init" >&2' ;;
+      moved)       echo 'echo "arg parsing"'
+                   echo 'init_rejected_key_file || echo "could not init" >&2' ;;
+      nodef)       echo 'init_rejected_key_file || echo "could not init" >&2' ;;
+      tight)       echo 'init_rejected_key_file ||echo "could not init" >&2' ;;
+      # An allowlisted name whose quoted value chains a command after it:
+      # the quoted-value rule has to refuse it, not the allowlist -- nothing
+      # may follow the closing quote of the value.
+      assignchain) echo "TEAM_ID=\"x\" && printf 'SHIP-BODY-RAN\\n' > '${sentinel}'"
+                   echo 'init_rejected_key_file || echo "could not init" >&2' ;;
+      # The same chain with an unquoted value:  the unquoted single-word
+      # rule has to refuse it, not the allowlist.
+      assignchainbare) echo "TEAM_ID=x&&printf 'SHIP-BODY-RAN\\n' > '${sentinel}'"
+                       echo 'init_rejected_key_file || echo "could not init" >&2' ;;
+      # A name the real prelude never sets:  the allowlist has to refuse
+      # it, even though it only assigns a value.
+      assignother) echo 'OTHER_NAME=1'
+                   echo 'init_rejected_key_file || echo "could not init" >&2' ;;
+      # An allowlisted name whose quoted value holds a command
+      # substitution:  sourcing the prelude would run that command, so
+      # the substitution refusal has to refuse the line.
+      assignsubst) echo "TEAM_ID=\"\$(printf 'SHIP-BODY-RAN\\n' > '${sentinel}')\""
+                   echo 'init_rejected_key_file || echo "could not init" >&2' ;;
+      # The same with a backtick instead of a $( ... ) substitution:  a
+      # backtick runs its command when the prelude is sourced too.  The
+      # value holds no whitespace, so the unquoted single-word rule cannot
+      # refuse it first:  the backtick rule is the only one that can.
+      assignbacktick) echo "TEAM_ID=\`id>${sentinel}\`"
+                      echo 'init_rejected_key_file || echo "could not init" >&2' ;;
+      # The same substitution with an UNQUOTED value:  the unquoted
+      # single-word rule must not refuse it first either, so the
+      # substitution rule is the only one that can refuse this line.
+      assignsubstbare) echo "TEAM_ID=\$(id)"
+                        echo 'init_rejected_key_file || echo "could not init" >&2' ;;
+      # A value that holds a process substitution, <( ... ) or >( ... ):
+      # the process-substitution rule has to refuse it, and nothing else
+      # may:  the value is a single word with no whitespace in it.
+      assignprocin)  echo 'TEAM_ID=<(id)'
+                     echo 'init_rejected_key_file || echo "could not init" >&2' ;;
+      assignprocout) echo 'TEAM_ID=>(id)'
+                     echo 'init_rejected_key_file || echo "could not init" >&2' ;;
+      # The FLEET_DIR name is allowlisted, but only the pinned FLEET_DIR
+      # line of the real prelude may carry a command substitution, so
+      # any other FLEET_DIR line is refused like every other name.
+      fleetdirother) echo "FLEET_DIR=\"\$(printf 'SHIP-BODY-RAN\\n' > '${sentinel}')\""
+                     echo 'init_rejected_key_file || echo "could not init" >&2' ;;
+      # An indented top-level command placed after a function body closed:
+      # an indented line outside a body is a top-level command, and the
+      # cut would run it when the prelude is sourced, so the guard has to
+      # refuse it.
+      indented)    echo "  printf 'SHIP-BODY-RAN\\n' > '${sentinel}'"
+                   echo 'init_rejected_key_file || echo "could not init" >&2' ;;
+      # A lone closing brace outside any body:  it closes nothing, so it
+      # is a positional command and has to be refused.
+      strayclose)  echo '}'
+                   echo 'init_rejected_key_file || echo "could not init" >&2' ;;
+      # A second column-0 function opener while the first body is still
+      # open:  the body would have two openers and one closing brace, so
+      # the body-shape rule has to refuse it.
+      secondopener) echo 'init_rejected_key_file || echo "could not init" >&2' ;;
+      # A function body closed by an INDENTED brace, followed by an
+      # indented top-level command:  the indented brace ends the body in
+      # bash, so the indented command after it is a top-level command and
+      # the guard has to refuse it.
+      indentedclose) echo "  printf 'SHIP-BODY-RAN\\n' > '${sentinel}'"
+                     echo 'init_rejected_key_file || echo "could not init" >&2' ;;
+      # A body whose trailing COMMENT holds a brace, closed by an indented
+      # brace:  the brace in the comment is not a structural brace, so the
+      # indented brace still ends the body and the indented command after
+      # it is a top-level command the cut would run.
+      commentbrace) echo "  printf 'SHIP-BODY-RAN\\n' > '${sentinel}'"
+                    echo 'init_rejected_key_file || echo "could not init" >&2' ;;
+      # A body closed by a `}` in command position behind a `#` that is
+      # glued to a closing quote:  that `#` is not a comment start in
+      # bash, so the `}` closes the body and the indented command after it
+      # is a top-level command the cut would run.
+      gluedbrace) echo "  printf 'SHIP-BODY-RAN\\n' > '${sentinel}'"
+                  echo 'init_rejected_key_file || echo "could not init" >&2' ;;
+      # The same indented command behind the review's `cmd "x"# }` line and
+      # behind a `#` that sits inside a quoted string:  in both the `}`
+      # counts, so the command is outside the body and has to be refused.
+      gluedarg|quotedhash) echo "  printf 'SHIP-BODY-RAN\\n' > '${sentinel}'"
+                           echo 'init_rejected_key_file || echo "could not init" >&2' ;;
+    esac
+    echo "printf 'SHIP-BODY-RAN\\n' > '${sentinel}'"
+    echo 'exit 0'
+  } > "$synth"
+  if synth_out="$(extract_ship_prelude "$synth" "${tmp}/synth-prelude-${variant}.sh")"; then
+    fail "a ${variant} call marker was accepted as a prelude"
+  fi
+  [[ -n "$synth_out" ]] || fail "the ${variant} call marker was refused without a reason"
+  case "$variant" in
+    missing)     expect="did not stop before the end" ;;
+    reformatted) expect="did not stop before the end" ;;
+    moved)       expect="positional" ;;
+    nodef)       expect="function definition" ;;
+    tight)       expect="did not stop at the load-time hand-off init call" ;;
+    assignchain) expect="positional" ;;
+    assignchainbare) expect="positional" ;;
+    assignother) expect="positional" ;;
+    assignsubst) expect="positional" ;;
+    assignbacktick) expect="positional" ;;
+    assignsubstbare) expect="positional" ;;
+    assignprocin) expect="positional" ;;
+    assignprocout) expect="positional" ;;
+    fleetdirother) expect="positional" ;;
+    indented)    expect="positional" ;;
+    strayclose)  expect="positional" ;;
+    secondopener) expect="positional" ;;
+    indentedclose) expect="positional" ;;
+    commentbrace) expect="positional" ;;
+    gluedbrace) expect="positional" ;;
+    gluedarg)   expect="positional" ;;
+    quotedhash) expect="positional" ;;
+    *)           fail "an unknown variant ${variant} reached the refusal check" ;;
+  esac
+  [[ "$synth_out" == *"$expect"* ]] \
+    || fail "the ${variant} variant was refused by the wrong check: ${synth_out}"
+done
+
+# The refused indented prelude never ran its command.  The refusal happens
+# before anything is sourced, so the sentinel that command would have
+# written is not there -- and the cut did take the command with it, which
+# is exactly why the guard had to refuse it.
+grep -qF "printf 'SHIP-BODY-RAN" "${tmp}/synth-prelude-indented.sh" \
+  || fail "the indented variant did not put an indented command in the cut"
+[[ ! -e "${tmp}/synth-sentinel-indented" ]] \
+  || fail "the refused indented prelude ran its indented top-level command"
+
+# 12a-bis. The positive control:  a prelude that stops exactly at the init
+# call is accepted, and the ship body after that call is never sourced, so
+# the body never runs.  The sentinel is then fired on purpose by the full
+# script, which proves the sentinel can fire at all:  an absence that was
+# never shown to be able to become a presence proves nothing.
+kept_synth="${tmp}/synth-ship-kept.sh"
+kept_sentinel="${tmp}/synth-sentinel-kept"
+kept_prelude="${tmp}/synth-prelude-kept.sh"
+rm -f "$kept_sentinel"
+{
+  echo '#!/bin/bash'
+  echo 'init_rejected_key_file() {'
+  echo '  _rejected_key_dir="$(mktemp -d)"'
+  echo '}'
+  echo 'init_rejected_key_file || echo "could not init" >&2'
+  echo "printf 'SHIP-BODY-RAN\\n' > '${kept_sentinel}'"
+  echo 'exit 0'
+} > "$kept_synth"
+if ! kept_out="$(extract_ship_prelude "$kept_synth" "$kept_prelude")"; then
+  fail "a prelude that stops at the init call was refused: ${kept_out}"
+fi
+TMPDIR="$tmp" bash -c 'set -euo pipefail; source "'"$kept_prelude"'"' \
+  || fail "the accepted prelude did not load"
+[[ ! -e "$kept_sentinel" ]] \
+  || fail "the accepted prelude ran the ship body after the init call"
+TMPDIR="$tmp" bash "$kept_synth" || fail "the kept ship body did not run"
+[[ -e "$kept_sentinel" ]] \
+  || fail "the sentinel never fired, so its absence would prove nothing"
+rm -f "$kept_sentinel"
+
+# 12a-ter. The positive control for the comment case:  a VALID prelude whose
+# body carries a trailing comment with a brace in it is accepted.  A brace in
+# a comment is not a structural brace, so the body does not end early and the
+# guard must not refuse the prelude as a positional command.
+cmt_synth="${tmp}/synth-ship-commentbraceok.sh"
+cmt_sentinel="${tmp}/synth-sentinel-commentbraceok"
+cmt_prelude="${tmp}/synth-prelude-commentbraceok.sh"
+rm -f "$cmt_sentinel"
+{
+  echo '#!/bin/bash'
+  echo 'init_rejected_key_file() {'
+  echo '  _rejected_key_dir="$(mktemp -d)" # drop the old dir }'
+  echo '  echo ok'
+  echo '}'
+  echo 'init_rejected_key_file || echo "could not init" >&2'
+  echo "printf 'SHIP-BODY-RAN\\n' > '${cmt_sentinel}'"
+  echo 'exit 0'
+} > "$cmt_synth"
+if ! cmt_out="$(extract_ship_prelude "$cmt_synth" "$cmt_prelude")"; then
+  fail "a valid prelude with a trailing comment was refused: ${cmt_out}"
+fi
+rm -f "$cmt_sentinel"
+
+# 12a-quater. The same positive control for a comment that starts behind an
+# OPERATOR:  bash starts a comment at a `#` that begins a word, and `;` ends
+# a word, so the `}` inside that comment is not a structural brace and the
+# prelude is still valid.  The guard has to accept it.
+op_synth="${tmp}/synth-ship-commentbraceop.sh"
+op_sentinel="${tmp}/synth-sentinel-commentbraceop"
+op_prelude="${tmp}/synth-prelude-commentbraceop.sh"
+rm -f "$op_sentinel"
+{
+  echo '#!/bin/bash'
+  echo 'init_rejected_key_file() {'
+  echo '  true;# the old dir }'
+  echo '  echo ok'
+  echo '}'
+  echo 'init_rejected_key_file || echo "could not init" >&2'
+  echo "printf 'SHIP-BODY-RAN\\n' > '${op_sentinel}'"
+  echo 'exit 0'
+} > "$op_synth"
+if ! op_out="$(extract_ship_prelude "$op_synth" "$op_prelude")"; then
+  fail "a valid prelude with a comment behind an operator was refused: ${op_out}"
+fi
+rm -f "$op_sentinel"
+
+# 12a-quint. The positive control for a QUOTED brace:  a VALID prelude whose
+# body holds a brace inside a quoted string is accepted.  A brace in a quoted
+# string is not a structural brace, so the body does not end early, the
+# indented line after it is still body text, and the guard must not refuse
+# the prelude as a positional command.
+qb_synth="${tmp}/synth-ship-quotedbraceok.sh"
+qb_sentinel="${tmp}/synth-sentinel-quotedbraceok"
+qb_prelude="${tmp}/synth-prelude-quotedbraceok.sh"
+rm -f "$qb_sentinel"
+{
+  echo '#!/bin/bash'
+  echo 'init_rejected_key_file() {'
+  echo '  echo "a } b"'
+  echo '  _rejected_key_dir="$(mktemp -d)"'
+  echo '}'
+  echo 'init_rejected_key_file || echo "could not init" >&2'
+  echo "printf 'SHIP-BODY-RAN\\n' > '${qb_sentinel}'"
+  echo 'exit 0'
+} > "$qb_synth"
+if ! qb_out="$(extract_ship_prelude "$qb_synth" "$qb_prelude")"; then
+  fail "a valid prelude with a brace inside a quoted string was refused: ${qb_out}"
+fi
+rm -f "$qb_sentinel"
+
+# 12b. The real ship script passes the same checks, and only then is its
+# prelude sourced.
+prelude_err="$(extract_ship_prelude "$script" "${tmp}/ship-prelude.sh")" || fail "$prelude_err"
+load_out="$(bash -c '
+  set -euo pipefail
+  source "'"$tmp"'/ship-prelude.sh"
+  [[ -n "${_rejected_key_path:-}" ]] || { echo "no hand-off path"; exit 1; }
+  [[ -n "${_rejected_key_dir:-}" ]] || { echo "no hand-off directory"; exit 1; }
+  [[ -d "$_rejected_key_dir" ]] || { echo "no hand-off directory on disk"; exit 1; }
+  printf "%s\n%s\n%s\n" "$_rejected_key_path" "$_rejected_key_dir" "$(stat -c %a "$_rejected_key_dir" 2>/dev/null || stat -f %Lp "$_rejected_key_dir")"
+')" || fail "loading the ship script did not create the run-owned hand-off path: ${load_out}"
+load_path="$(printf '%s\n' "$load_out" | sed -n 1p)"
+load_dir="$(printf '%s\n' "$load_out" | sed -n 2p)"
+load_mode="$(printf '%s\n' "$load_out" | sed -n 3p)"
+[[ "$load_path" == "${load_dir}/label" ]] || fail "the hand-off path is not the label file inside the run-owned directory: ${load_path}"
+[[ "$load_mode" == "700" ]] || fail "the run-owned hand-off directory is not private: ${load_mode}"
+[[ "$load_dir" == "${TMPDIR:-/tmp}"/* ]] || fail "the hand-off directory is not inside the run's own temporary directory: ${load_dir}"
+
+# 13. Without the run-owned hand-off file the parent says the rejected key
+# is unknown:  it does not crash, and it does not read a hand-off path from
+# the environment.
+printf 'SENTINEL-BYPASS\n' > "${tmp}/sentinel-bypass"
+bypass_out="$(REJECTED_KEY_FILE="${tmp}/sentinel-bypass" _rejected_key_path="${tmp}/sentinel-bypass" bash -c '
+  set -euo pipefail
+  source "'"$funcs"'"
+  # init_rejected_key_file is deliberately NOT called.
+  _rejected_key_path=""
+  _rejected_key_dir=""
+  printf "%s|%s\n" "$(rejected_key_label)" "$(asc_rejected_key_label "'"$tmp"'/asc-env.err")"
+')" || fail "the bypass case crashed: ${bypass_out}"
+[[ "${bypass_out%%|*}" == "unknown" ]] || fail "the parent did not report the rejected key as unknown: ${bypass_out}"
+[[ "$bypass_out" == *"key id SYNTHETICKEYID1, source ASC_KEY_P8 environment" ]] \
+  || fail "the parser lost the label without the hand-off file: ${bypass_out}"
+[[ "$(cat "${tmp}/sentinel-bypass")" == "SENTINEL-BYPASS" ]] || fail "the hand-off path was taken from the environment"
+
 echo "ok: ASC credential resolution (environment first, then Infisical, a named path ignored, temp key removed)"
+echo "ok: the rejected-key label is parsed from the real client diagnostic, and the run-owned hand-off path is created at load"

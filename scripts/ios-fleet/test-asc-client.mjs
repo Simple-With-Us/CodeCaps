@@ -198,18 +198,21 @@ test("a rejected key is reported as a rejected key, not as a missing app", async
     !/app not found/.test(result.stderr),
     `a rejected key was reported as a missing app:\n${result.stderr}`
   );
-  //  The fleet's masked preview, so the key in play can be identified without
-  //  any of it being published.  It is taken from the key material rather
-  //  than from the PEM envelope:  the envelope is the same for every key, so
-  //  a preview of it names none of them.
-  const pem = keyPem;
-  const material = pem.replace(/-----[^-]+-----/g, "").trim();
-  const expectedPreview = `${material.slice(0, 8)}…${material.slice(-4)}`;
+  //  The credential is named only by nonsecret labels.  No fragment of the
+  //  key body may appear, masked or not:  part of a key is still key material.
+  const material = keyPem.replace(/-----[^-]+-----/g, "").replace(/\s+/g, "");
+  for (let i = 0; i + 8 <= material.length; i++) {
+    assert.ok(
+      !result.stderr.includes(material.slice(i, i + 8)),
+      `an eight-character fragment of the key body reached the failure at offset ${i}`
+    );
+  }
+  assert.ok(!/key in play/.test(result.stderr), `the failure still carries a key preview:\n${result.stderr}`);
   assert.ok(
-    result.stderr.includes(expectedPreview),
-    `the failure did not carry the masked key preview ${expectedPreview}:\n${result.stderr}`
+    /key source [^)]+\)/.test(result.stderr),
+    `the failure did not name the key source:\n${result.stderr}`
   );
-  //  A preview with a newline in it splits the diagnostic into two lines, and
+  //  A label with a newline in it splits the diagnostic into two lines, and
   //  ship-testflight.sh forwards only the lines starting with "latest-build-seq:",
   //  so the second half — which is where the HTTP status is — is lost.
   const diagnostic = result.stderr.split("\n").find((line) => line.startsWith("latest-build-seq:"));
@@ -226,16 +229,11 @@ test("a rejected key is reported as a rejected key, not as a missing app", async
   );
 });
 
-test("two different keys do not get the same masked preview", async () => {
-  //  The preview exists to say which credential was rejected.  Recomputing it
-  //  from the same file in the test above cannot catch a preview that is
-  //  identical for every key, so the two keys have to be compared with each
-  //  other.
+test("neither of two different keys leaks into its rejection", async () => {
+  //  Each key is checked against its own diagnostic, so a fragment of either
+  //  body cannot slip through on the strength of the other key's check.
   const otherKeyPem = generateKeyPairSync("ec", { namedCurve: "prime256v1" }).privateKey
     .export({ type: "pkcs8", format: "pem" });
-  const otherKeyPath = join(root, "other-synthetic.p8");
-  writeFileSync(otherKeyPath, otherKeyPem);
-  chmodSync(otherKeyPath, 0o600);
 
   const server = createServer((req, res) => {
     res.writeHead(401, { "Content-Type": "text/plain" });
@@ -243,7 +241,6 @@ test("two different keys do not get the same masked preview", async () => {
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
-  const previews = [];
   try {
     for (const pem of [keyPem, otherKeyPem]) {
       const result = await run(["latest-build-seq", "com.example.nothing", "1.0"], {
@@ -251,18 +248,16 @@ test("two different keys do not get the same masked preview", async () => {
         ASC_KEY_P8: pem
       });
       const diagnostic = result.stderr.split("\n").find((line) => line.startsWith("latest-build-seq:"));
-      const preview = diagnostic && diagnostic.match(/key in play (\S+)/);
-      assert.ok(preview, `no key preview in the diagnostic:\n${result.stderr}`);
-      previews.push(preview[1]);
+      assert.ok(diagnostic, `no forwarded diagnostic line:\n${result.stderr}`);
+      assert.ok(/key id SYNTHETICKEYID1, key source ASC_KEY_P8 environment\)/.test(diagnostic), `the label is missing:\n${diagnostic}`);
+      const material = pem.replace(/-----[^-]+-----/g, "").replace(/\s+/g, "");
+      for (let i = 0; i + 8 <= material.length; i++) {
+        assert.ok(!result.stderr.includes(material.slice(i, i + 8)), `a fragment of a key body reached the diagnostic at offset ${i}`);
+      }
     }
   } finally {
     server.close();
   }
-  assert.notEqual(
-    previews[0],
-    previews[1],
-    "two different keys produced the same masked preview, so it identifies neither"
-  );
 });
 
 test("a large payload is not truncated on the way out", async () => {
@@ -375,4 +370,39 @@ test("a symlinked key path is never followed", async () => {
   const result = await run(["GET", "/v1/apps"], { ASC_KEY_PATH: link });
   assert.match(result.stderr, /asc-auth: using ASC_KEY_P8 environment/);
   assert.doesNotMatch(result.stderr, /is not a regular file/);
+});
+//  A stub that answers the app lookup and then pages builds with whatever
+//  next link `nextFor(page)` returns, so the build-floor loops can be driven.
+async function buildFloorAgainst(nextFor) {
+  let page = 0;
+  const server = createServer((req, res) => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    if (req.url.startsWith("/v1/apps")) {
+      res.end(JSON.stringify({ data: [{ id: "1", type: "apps", attributes: { bundleId: "com.example.app" } }] }));
+      return;
+    }
+    page += 1;
+    res.end(JSON.stringify({ data: [], links: { next: nextFor(page, base) } }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    return { ...(await run(["build-floor", "com.example.app", "1.0.237"], { ASC_API_BASE: base })), pages: page };
+  } finally {
+    server.close();
+  }
+}
+
+test("build-floor never follows a next link to another host", async () => {
+  const result = await buildFloorAgainst(() => "https://not-the-real-host.example.com/v1/builds?cursor=x");
+  assert.equal(result.code, 2, `expected a failed lookup, got ${result.code}: ${result.stderr}`);
+  assert.ok(/next link leaves App Store Connect/.test(result.stderr), `the off-host link was not refused:\n${result.stderr}`);
+  assert.equal(result.pages, 1, "only the first page on the stub was read");
+});
+
+test("build-floor fails instead of answering from a list cut off at 10 pages", async () => {
+  const result = await buildFloorAgainst((page, base) => `${base}/v1/builds?cursor=${page}`);
+  assert.equal(result.code, 2, `expected a failed lookup, got ${result.code}: ${result.stderr}`);
+  assert.ok(/more than 10 pages of train builds/.test(result.stderr), `the cut-off list was not refused:\n${result.stderr}`);
+  assert.equal(result.stdout.trim(), "", "no floor is printed for a cut-off list");
 });
