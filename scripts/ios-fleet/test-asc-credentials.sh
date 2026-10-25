@@ -55,7 +55,7 @@ export FAKE_OTHER_PEM="${tmp}/other.p8"
 
 extract() {
   awk '
-    /^fs_get\(\) \{/ || /^load_secrets\(\) \{/ || /^cleanup_asc_tmp\(\) \{/ || /^expand_tilde\(\) \{/ || /^rejected_key_file\(\) \{/ || /^init_rejected_key_file\(\) \{/ || /^rejected_key_label\(\) \{/ || /^asc_rejected_key_label\(\) \{/ { grab = 1 }
+    /^fs_get\(\) \{/ || /^load_secrets\(\) \{/ || /^cleanup_asc_tmp\(\) \{/ || /^expand_tilde\(\) \{/ || /^rejected_key_file\(\) \{/ || /^init_rejected_key_file\(\) \{/ || /^rejected_key_label\(\) \{/ || /^asc_rejected_key_label\(\) \{/ || /^asc_rejected_key_sources\(\) \{/ { grab = 1 }
     grab { print }
     grab && /^\}/ { grab = 0 }
   ' "$script"
@@ -492,4 +492,182 @@ if grep -nE 'REJECTED_KEY_FILE|ios-fleet-rejected-key\.\$\$' "$script" >/dev/nul
   fail "ship-testflight.sh still derives the hand-off path from the environment or a predictable name"
 fi
 
+# 10. The REAL client diagnostic, read by the shell parser.
+#
+# The parser has to understand the label the client actually prints, not a
+# hand-written copy of it:  a copy can drift away from the client, and then
+# a real rejection is named wrongly -- or not named at all.  So the client
+# itself is run against a local server that answers 401, with a synthetic
+# key, and its own stderr is what the parser reads.
+cat > "${tmp}/real-401.mjs" <<'CJS'
+import { spawn } from "node:child_process";
+import { createServer } from "node:http";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+const [script, outDir, pemPath] = process.argv.slice(2);
+const pem = readFileSync(pemPath, "utf8");
+
+// A server that refuses every request, the way App Store Connect refuses a
+// key it will not accept.
+const server = createServer((req, res) => {
+  res.writeHead(401, { "Content-Type": "text/plain" });
+  res.end("unauthorized");
+});
+await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+const base = `http://127.0.0.1:${server.address().port}`;
+
+function run(env) {
+  return new Promise((resolve) => {
+    const child = spawn("node", [script, "latest-build-seq", "com.example.nothing", "1.0"], {
+      env: {
+        PATH: process.env.PATH,
+        HOME: process.env.HOME,
+        ASC_API_BASE: base,
+        // Every other credential source is cleared, so the scenario below is
+        // the one that decides which credential the client uses.
+        ASC_KEY_ID: "",
+        ASC_ISSUER_ID: "",
+        ASC_KEY_P8: "",
+        ASC_KEY_PATH: "",
+        APPLE_API_KEY_ID: "",
+        APPLE_API_ISSUER_ID: "",
+        APPLE_API_KEY_P8_BASE64: "",
+        FLEET_SECRETS_BIN: "/nonexistent/fleet-secrets",
+        FLEET_SECRETS: "/nonexistent/fleet-secrets",
+        ...env
+      },
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    let stderr = "";
+    child.stderr.on("data", (d) => { stderr += d; });
+    child.on("close", () => resolve(stderr));
+  });
+}
+
+const scenarios = {
+  // A key id and a source the client can name.
+  "asc-env": {
+    ASC_KEY_ID: "SYNTHETICKEYID1",
+    ASC_ISSUER_ID: "synthetic-issuer",
+    ASC_KEY_P8: pem
+  },
+  // The other environment source.
+  "apple-env": {
+    APPLE_API_KEY_ID: "SYNTHETICKEYID2",
+    APPLE_API_ISSUER_ID: "synthetic-issuer-2",
+    APPLE_API_KEY_P8_BASE64: Buffer.from(pem).toString("base64")
+  },
+  // A key id that is not shaped like a key id:  the client says the id was
+  // unrecognized, and the source is still known.
+  "unrecognized-id": {
+    ASC_KEY_ID: "not a key id",
+    ASC_ISSUER_ID: "synthetic-issuer",
+    ASC_KEY_P8: pem
+  }
+};
+
+for (const [name, env] of Object.entries(scenarios)) {
+  writeFileSync(join(outDir, `${name}.err`), await run(env));
+}
+server.close();
+CJS
+node "${tmp}/real-401.mjs" "${here}/asc-api.mjs" "${tmp}" "${tmp}/asc.p8" || fail "the mock 401 run"
+
+# The label the client printed, in the client's own words:  the assertions
+# below are about the shell reading THAT, not about a copy of it.
+grep -q 'key id SYNTHETICKEYID1, key source ASC_KEY_P8 environment' "${tmp}/asc-env.err" \
+  || fail "the client did not print the expected label: $(cat "${tmp}/asc-env.err")"
+grep -q 'key id SYNTHETICKEYID2, key source APPLE_API_\* environment (base64 p8)' "${tmp}/apple-env.err" \
+  || fail "the client did not name the APPLE_API_* source: $(cat "${tmp}/apple-env.err")"
+grep -q 'key id (unrecognized), key source ASC_KEY_P8 environment' "${tmp}/unrecognized-id.err" \
+  || fail "the client did not report the id as unrecognized: $(cat "${tmp}/unrecognized-id.err")"
+
+# The shell parser, fed the real diagnostic.
+parse_label() {
+  local errf="$1" td="$2"
+  bash -c '
+    set -euo pipefail
+    source "'"$funcs"'"
+    mkdir -p "'"$td"'"; TMPDIR="'"$td"'" init_rejected_key_file
+    asc_rejected_key_label "'"$errf"'"
+  '
+}
+mkdir -p "${tmp}/td10"
+real_label="$(parse_label "${tmp}/asc-env.err" "${tmp}/td10")" || fail "the parser on the real client diagnostic"
+[[ "$real_label" == "key id SYNTHETICKEYID1, source ASC_KEY_P8 environment" ]] \
+  || fail "the real client diagnostic lost the key id or the source: ${real_label}"
+apple_label="$(parse_label "${tmp}/apple-env.err" "${tmp}/td10")" || fail "the parser on the APPLE_API_* diagnostic"
+[[ "$apple_label" == "key id SYNTHETICKEYID2, source APPLE_API_* environment (base64 p8)" ]] \
+  || fail "the real client diagnostic lost the APPLE_API_* source: ${apple_label}"
+# The case the review found:  the client named the source but not a usable
+# id, and the label has to say so AND name the source.  Dropping the source
+# would send the operator after the wrong credential.
+unrecognized_label="$(parse_label "${tmp}/unrecognized-id.err" "${tmp}/td10")" || fail "the parser on the unrecognized-id diagnostic"
+[[ "$unrecognized_label" == "key id (unrecognized), source ASC_KEY_P8 environment" ]] \
+  || fail "an unrecognized key id dropped the known source: ${unrecognized_label}"
+# The word "unknown" is only for the case where the client named neither.
+[[ "$unrecognized_label" != *"unknown"* ]] || fail "the label said unknown although the source was known: ${unrecognized_label}"
+
+# 11. ONE accepted source list.  The parser takes a source only when it is
+# on that list, so the list has to hold every source the client can emit:  a
+# real rejection whose source is missing from it would be named as if the
+# client had said nothing at all.
+cat > "${tmp}/list-sources.mjs" <<CJS
+import { REJECTED_KEY_SOURCES } from "file://${here}/asc-api.mjs";
+for (const source of REJECTED_KEY_SOURCES) console.log(source);
+CJS
+client_sources="$(node "${tmp}/list-sources.mjs")" || fail "the client's source list"
+shell_sources="$(bash -c 'set -euo pipefail; source "'"$funcs"'"; asc_rejected_key_sources')" || fail "the shell's source list"
+[[ -n "$client_sources" && -n "$shell_sources" ]] || fail "a source list is empty"
+while IFS= read -r src; do
+  [[ -n "$src" ]] || continue
+  printf '%s\n' "$shell_sources" | grep -Fxq "$src" \
+    || fail "the client can name the source '${src}' and the shell does not accept it"
+done <<< "$client_sources"
+while IFS= read -r src; do
+  [[ -n "$src" ]] || continue
+  printf '%s\n' "$client_sources" | grep -Fxq "$src" \
+    || fail "the shell accepts the source '${src}' and the client cannot emit it"
+done <<< "$shell_sources"
+
+# 12. Loading the ship script creates the run-owned hand-off path.  The init
+# runs when the script is loaded, so every run has a private place to put
+# the label before any subshell exists, and a refusal is never written
+# somewhere a stale value could pick.
+sed -n '1,/^init_rejected_key_file ||/p' "$script" > "${tmp}/ship-prelude.sh"
+grep -q '^init_rejected_key_file' "${tmp}/ship-prelude.sh" || fail "the load-time hand-off init is not in the prelude"
+load_out="$(bash -c '
+  set -euo pipefail
+  source "'"$tmp"'/ship-prelude.sh"
+  [[ -n "${_rejected_key_path:-}" ]] || { echo "no hand-off path"; exit 1; }
+  [[ -n "${_rejected_key_dir:-}" ]] || { echo "no hand-off directory"; exit 1; }
+  [[ -d "$_rejected_key_dir" ]] || { echo "no hand-off directory on disk"; exit 1; }
+  printf "%s\n%s\n%s\n" "$_rejected_key_path" "$_rejected_key_dir" "$(stat -c %a "$_rejected_key_dir" 2>/dev/null || stat -f %Lp "$_rejected_key_dir")"
+')" || fail "loading the ship script did not create the run-owned hand-off path: ${load_out}"
+load_path="$(printf '%s\n' "$load_out" | sed -n 1p)"
+load_dir="$(printf '%s\n' "$load_out" | sed -n 2p)"
+load_mode="$(printf '%s\n' "$load_out" | sed -n 3p)"
+[[ "$load_path" == "${load_dir}/label" ]] || fail "the hand-off path is not the label file inside the run-owned directory: ${load_path}"
+[[ "$load_mode" == "700" ]] || fail "the run-owned hand-off directory is not private: ${load_mode}"
+[[ "$load_dir" == "${TMPDIR:-/tmp}"/* ]] || fail "the hand-off directory is not inside the run's own temporary directory: ${load_dir}"
+
+# 13. Without the run-owned hand-off file the parent says the rejected key
+# is unknown:  it does not crash, and it does not read a hand-off path from
+# the environment.
+printf 'SENTINEL-BYPASS\n' > "${tmp}/sentinel-bypass"
+bypass_out="$(REJECTED_KEY_FILE="${tmp}/sentinel-bypass" _rejected_key_path="${tmp}/sentinel-bypass" bash -c '
+  set -euo pipefail
+  source "'"$funcs"'"
+  # init_rejected_key_file is deliberately NOT called.
+  _rejected_key_path=""
+  _rejected_key_dir=""
+  printf "%s|%s\n" "$(rejected_key_label)" "$(asc_rejected_key_label "'"$tmp"'/asc-env.err")"
+')" || fail "the bypass case crashed: ${bypass_out}"
+[[ "${bypass_out%%|*}" == "unknown" ]] || fail "the parent did not report the rejected key as unknown: ${bypass_out}"
+[[ "$bypass_out" == *"key id SYNTHETICKEYID1, source ASC_KEY_P8 environment" ]] \
+  || fail "the parser lost the label without the hand-off file: ${bypass_out}"
+[[ "$(cat "${tmp}/sentinel-bypass")" == "SENTINEL-BYPASS" ]] || fail "the hand-off path was taken from the environment"
+
 echo "ok: ASC credential resolution (environment first, then Infisical, a named path ignored, temp key removed)"
+echo "ok: the rejected-key label is parsed from the real client diagnostic, and the run-owned hand-off path is created at load"

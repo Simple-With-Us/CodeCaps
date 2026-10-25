@@ -141,14 +141,17 @@ TEAM_ID="CC8UTF7ATG"
 FLEET_SECRETS_BIN="${FLEET_SECRETS:-${HOME}/.local/bin/fleet-secrets}"
 ASC_TMP_DIR=""
 cleanup_asc_tmp() {
+  # The redirects are on every path:  a bare `rm` can be a wrapper that prints
+  # to stdout, and this function runs inside the helpers whose stdout IS the
+  # value the caller reads.
   if [[ -n "${ASC_TMP_DIR:-}" ]]; then
-    rm -rf "$ASC_TMP_DIR" 2>/dev/null || true
+    rm -rf "$ASC_TMP_DIR" >/dev/null 2>&1 || true
   fi
   ASC_TMP_DIR=""
   # The rejected-key label goes with it:  only the private directory this
   # run created, never a path read from the environment.
   if [[ -n "${_rejected_key_dir:-}" ]]; then
-    rm -rf "$_rejected_key_dir" 2>/dev/null || true
+    rm -rf "$_rejected_key_dir" >/dev/null 2>&1 || true
   fi
   _rejected_key_dir=""
   _rejected_key_path=""
@@ -382,6 +385,21 @@ asc_client() {
   "$ASC_NODE" "${FLEET_DIR}/asc-api.mjs" "$@"
 }
 
+# The credential sources the client can name in a rejection, and the ONLY
+# sources this script reads out of a client's diagnostic.
+#
+# ONE list, on purpose.  The parser below matches a source against it, and
+# the test asserts that every source asc-api.mjs can emit is on it, so the
+# shell and the client cannot drift apart and leave a real rejection unnamed.
+# The strings are the ones the client hands to its rejectedKeyLabel()
+# (asc-api.mjs exports them as REJECTED_KEY_SOURCES).
+asc_rejected_key_sources() {
+  printf '%s\n' \
+    "APPLE_API_* environment (base64 p8)" \
+    "ASC_KEY_P8 environment" \
+    "Infisical /asc"
+}
+
 # The nonsecret label of the key App Store Connect refused.
 #
 # The client resolves the credential itself (this script resolves it later,
@@ -389,23 +407,71 @@ asc_client() {
 # which key was in play.  It names it in its own diagnostic by the key id and
 # the source it was resolved from:  "key id <id>, key source <source>".
 # Nothing derived from the private key is read, kept, written or printed
-# here.  Only a key id of the expected shape and one of the client's known
-# source names are taken out of the diagnostic, so any other text on that
-# line -- including a key fragment from an older client -- never reaches the
-# label, the hand-off file or a fatal message.
+# here.
+#
+# The label is read as ONE phrase out of ONE line:  the line has to carry
+# both markers, so the id and the source can never come from two different
+# diagnostics, and the source is taken only when it is one of the client's
+# known source names (asc_rejected_key_sources).  Only a key id of the
+# expected shape is taken as well, so any other text on that line --
+# including a key fragment from an older client -- never reaches the label,
+# the hand-off file or a fatal message.
+#
+# WHAT THE LABEL SAYS:
+#   key id <id>, source <source>            the client named both
+#   key id (unrecognized), source <source>  the client named no usable id
+#   key id <id>, source (not named)         the client named no usable source
+#   key id unknown, source unknown          the client named neither
+# "unknown" is said only when NEITHER part is available.  A source that IS
+# known is always named, even when the id is not:  the client already said
+# which credential it used, and dropping that would send the operator after
+# the wrong key.
 #
 # $1: the file the client's stderr was captured into.
 ASC_LAST_REJECTED_KEY=""
 asc_rejected_key_label() {
-  local errf="${1:-}" key_id="" key_source="" label=""
+  local errf="${1:-}" label_line="" rest="" id_part="" src_part=""
+  local key_id="" key_source="" source="" label=""
   if [[ -n "$errf" && -s "$errf" ]]; then
-    key_id="$(grep -oE 'key id [A-Za-z0-9]{1,40}[,)]' "$errf" 2>/dev/null | head -n 1 | sed -e 's/^key id //' -e 's/[,)]$//' || true)"
-    key_source="$(grep -oE 'key source (APPLE_API_\* environment \(base64 p8\)|ASC_KEY_P8 environment|Infisical /asc)' "$errf" 2>/dev/null | head -n 1 | sed 's/^key source //' || true)"
+    # The one line that carries the whole label.  The client's own "asc-auth:
+    # using <source> (key id length N)" line names no source, so it is not
+    # the line to read.
+    while IFS= read -r label_line || [[ -n "$label_line" ]]; do
+      case "$label_line" in
+        *"key id "*", key source "*) break ;;
+        *) label_line="" ;;
+      esac
+    done < "$errf"
   fi
-  if [[ -n "$key_id" ]]; then
-    label="key id ${key_id}, source ${key_source:-unknown}"
+  if [[ -n "$label_line" ]]; then
+    rest="${label_line#*key id }"
+    id_part="${rest%%, key source *}"
+    src_part="${rest#*, key source }"
+    # The id:  only a key id of the shape the client accepts is taken, and
+    # the client's own "(unrecognized)" is not an id.
+    if [[ "$id_part" == "(unrecognized)" ]]; then
+      key_id=""
+    elif [[ "$id_part" =~ ^[A-Za-z0-9]{1,40}$ ]]; then
+      key_id="$id_part"
+    fi
+    # The source:  only a known source name is taken, matched literally, so
+    # a source that merely starts like one of them cannot smuggle anything
+    # else into the label.
+    while IFS= read -r source; do
+      [[ -n "$source" ]] || continue
+      case "$src_part" in
+        "$source"*) key_source="$source"; break ;;
+      esac
+    done < <(asc_rejected_key_sources)
+  fi
+  if [[ -n "$key_id" && -n "$key_source" ]]; then
+    label="key id ${key_id}, source ${key_source}"
+  elif [[ -n "$key_source" ]]; then
+    label="key id (unrecognized), source ${key_source}"
+  elif [[ -n "$key_id" ]]; then
+    label="key id ${key_id}, source (not named)"
   else
-    label="(the client named no key id)"
+    label="key id unknown, source unknown"
   fi
   # Hand the label to the parent through the file:  the caller runs this
   # inside a command substitution, so a global it assigned would never get

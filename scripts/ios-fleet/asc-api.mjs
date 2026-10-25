@@ -51,6 +51,22 @@ import {
 // own, without a stack trace, and keeps the exit code the failure set.
 class NamedFailure extends Error {}
 
+// The credential sources this client can report.
+//
+// These three strings are what resolveCredential() hands to
+// rejectedKeyLabel(), and they are the WHOLE accepted set.  The shell layer
+// that reads a rejection keeps one list of its own, and the test asserts
+// that every source named here is on that list, so the two sides cannot
+// drift apart and leave a real rejection unnamed.
+export const SOURCE_APPLE_API_ENV = "APPLE_API_* environment (base64 p8)";
+export const SOURCE_ASC_KEY_ENV = "ASC_KEY_P8 environment";
+export const SOURCE_INFISICAL_ASC = "Infisical /asc";
+export const REJECTED_KEY_SOURCES = Object.freeze([
+  SOURCE_APPLE_API_ENV,
+  SOURCE_ASC_KEY_ENV,
+  SOURCE_INFISICAL_ASC
+]);
+
 // How a refused request names the credential in play.
 //
 // Only nonsecret labels are used:  the key id, which is a public identifier
@@ -64,7 +80,10 @@ class NamedFailure extends Error {}
 // a misfiled value (a pasted key, say) out of the diagnostic.  The label stays
 // on one line, because ship-testflight.sh keeps only the first line of a
 // forwarded diagnostic.
-function rejectedKeyLabel(keyId, source) {
+//
+// Exported so the shell layer's test can feed the REAL label through the
+// shell parser instead of a hand-written copy of the format.
+export function rejectedKeyLabel(keyId, source) {
   const id = typeof keyId === "string" && /^[A-Za-z0-9]{1,40}$/.test(keyId) ? keyId : "(unrecognized)";
   const from = typeof source === "string" && /^[A-Za-z0-9_*() /.-]{1,60}$/.test(source) ? source : "(unknown)";
   return `key id ${id}, key source ${from}`;
@@ -237,7 +256,7 @@ function resolveCredential() {
     const pem = decodeP8(process.env.APPLE_API_KEY_P8_BASE64);
     if (!pem) return { error: "APPLE_API_KEY_P8_BASE64 is set but did not decode to a PEM private key" };
     materializeP8(pem);
-    return { keyId, issuerId, privateKeyPem: pem, source: "APPLE_API_* environment (base64 p8)" };
+    return { keyId, issuerId, privateKeyPem: pem, source: SOURCE_APPLE_API_ENV };
   }
 
   // 2) The same secret as a plain environment variable.  This is the form
@@ -246,7 +265,7 @@ function resolveCredential() {
   if (envKeyId && envIssuer && envKeyPem) {
     const pem = normalizePrivateKey(envKeyPem);
     if (!pem) return { error: "ASC_KEY_P8 is set but is not a PEM private key" };
-    return { keyId: envKeyId, issuerId: envIssuer, privateKeyPem: pem, source: "ASC_KEY_P8 environment" };
+    return { keyId: envKeyId, issuerId: envIssuer, privateKeyPem: pem, source: SOURCE_ASC_KEY_ENV };
   }
 
   // 3) No file is read here (AFC-359, and Kody rule 42 on PR #271).  A path on
@@ -270,7 +289,7 @@ function resolveCredential() {
     if (!pem) pem = fleetSecretsGet(`AUTHKEY_${infKeyId}`, `/authkey-${infKeyId.toLowerCase()}-p8`);
     if (pem) {
       if (!pem.endsWith("\n")) pem += "\n";
-      return { keyId: infKeyId, issuerId: infIssuer, privateKeyPem: pem, source: "Infisical /asc" };
+      return { keyId: infKeyId, issuerId: infIssuer, privateKeyPem: pem, source: SOURCE_INFISICAL_ASC };
     }
   }
 
