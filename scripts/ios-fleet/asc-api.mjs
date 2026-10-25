@@ -51,29 +51,23 @@ import {
 // own, without a stack trace, and keeps the exit code the failure set.
 class NamedFailure extends Error {}
 
-// The fleet's masked key preview:  the first eight and the last four
-// characters, so a key can be identified without any of it being published.
+// How a refused request names the credential in play.
 //
-// This is the owner's rule of 2026-07-16 and the same shape the other fleet
-// apps use (maskApiKeyPreview, buildKeyPreview).  It exists because there is
-// otherwise no way to tell which of several keys is the one in play, and
-// pasting a value to find out is never the answer.
+// Only nonsecret labels are used:  the key id, which is a public identifier
+// that travels in the header of every request to App Store Connect, and the
+// name of the source the credential was resolved from.  Nothing derived from
+// the private key is ever printed, not even a masked slice of it:  a fragment
+// of the key body is still key material, whatever it is wrapped in.
 //
-// The preview is taken from the key material rather than from the PEM
-// envelope:  every .p8 opens "-----BEGIN" and ends "-----END PRIVATE KEY-----\n",
-// so previewing the envelope prints the same eight and four characters for
-// every key and identifies none of them.  The text is trimmed first, because
-// the key as stored ends with a newline and a preview carrying one splits the
-// diagnostic into two lines, of which ship-testflight.sh keeps only the first.
-function maskKeyPreview(value) {
-  if (typeof value !== "string") {
-    return "(too short to preview)";
-  }
-  const material = value.replace(/-----[^-]+-----/g, "").trim();
-  if (material.length < 12) {
-    return "(too short to preview)";
-  }
-  return `${material.slice(0, 8)}…${material.slice(-4)}`;
+// The key id comes from the environment or Infisical, so it is printed only
+// when it has the shape of a key id;  anything else is replaced, which keeps
+// a misfiled value (a pasted key, say) out of the diagnostic.  The label stays
+// on one line, because ship-testflight.sh keeps only the first line of a
+// forwarded diagnostic.
+function rejectedKeyLabel(keyId, source) {
+  const id = typeof keyId === "string" && /^[A-Za-z0-9]{1,40}$/.test(keyId) ? keyId : "(unrecognized)";
+  const from = typeof source === "string" && /^[A-Za-z0-9_*() /.-]{1,60}$/.test(source) ? source : "(unknown)";
+  return `key id ${id}, key source ${from}`;
 }
 
 // The device families a version has to carry a screenshot in.
@@ -218,9 +212,9 @@ function fleetSecretsGet(name, folder) {
 
 // Normalizes a PEM private key and refuses anything that is not one.
 //
-// The check matters because the key arrives in the environment, and it ends up
-// in the masked preview that a refused request prints.  A preview is only safe
-// when the material behind it really is a private key.  The parse check lives
+// The check matters because the key arrives in the environment, and a value
+// that is not a private key would only fail later, at signing, with a less
+// useful message.  The parse check lives
 // in asc-key.mjs, which the shell layer uses as well, so both sides of the
 // handoff accept exactly the same keys.
 //
@@ -799,9 +793,10 @@ async function main() {
     process.exit(1);
   }
   console.error(`asc-auth: using ${cred.source} (key id length ${cred.keyId.length})`);
-  // The key id and the private key stay in scope for the whole of main(), so
-  // the diagnostic helper can name the credential that was refused.
-  const { keyId, issuerId, privateKeyPem } = cred;
+  // The key id and the source label stay in scope for the whole of main(), so
+  // the diagnostic helper can name the credential that was refused without
+  // touching the key.
+  const { keyId, issuerId, privateKeyPem, source: keySource } = cred;
   const token = signJwt({ keyId, issuerId, privateKeyPem });
 
   const [method, path, body, arg4, arg5] = process.argv.slice(2);
@@ -844,12 +839,9 @@ async function main() {
   // Only the titles and details of the JSON API errors are used, and a run of
   // token-like characters in one of those is redacted.
   //
-  // A rejected key is reported with the fleet's masked preview of the key in
-  // play and the key id beside it, so the operator can tell which credential
-  // was refused without any of the key being published.  The preview is taken
-  // from the key material rather than from the envelope, because every key
-  // file opens and ends the same way and a preview of the envelope would
-  // identify none of them.
+  // A rejected key is reported with its key id and the source it was resolved
+  // from (rejectedKeyLabel), so the operator can tell which credential was
+  // refused.  Nothing derived from the private key is printed.
   function describeError(res) {
     if (res.networkError) {
       // A timeout and a transport failure have different causes, and the
@@ -861,11 +853,10 @@ async function main() {
     }
     if (res.status === 401 || res.status === 403) {
       // The key id is a public identifier:  it travels in the header of every
-      // request to App Store Connect.  Together with the fleet's masked
-      // preview of the key in play it says which credential was rejected,
-      // which is the question an operator actually has, without publishing
-      // any of the key.
-      return `App Store Connect rejected the key: check ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_P8 in Fleet-OPS prod /asc (key id ${keyId}, key in play ${maskKeyPreview(privateKeyPem)})`;
+      // request to App Store Connect.  With the source label it says which
+      // credential was rejected, which is the question an operator actually
+      // has, and none of the key is involved.
+      return `App Store Connect rejected the key: check ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_P8 in Fleet-OPS prod /asc (${rejectedKeyLabel(keyId, keySource)})`;
     }
     const parts = [];
     const errors = res.parsed && Array.isArray(res.parsed.errors) ? res.parsed.errors : [];
@@ -2171,20 +2162,17 @@ async function main() {
     const res = await ascGet(`/v1/apps?filter[bundleId]=${encodeURIComponent(bundleId)}&limit=1`);
     // A rejected key is not "app not found":  exit 4 so the ship refuses it.
     //
-    // The diagnostic names WHICH credential was refused:  the fleet's masked
-    // preview of the key in play and the key id beside it, never the key
-    // itself.  Without them an operator holding several keys cannot tell
-    // which one App Store Connect turned down, and the only other way to find
-    // out is to paste the key somewhere.  The preview comes from the same
-    // credential resolution the request was signed with, so it is the exact
-    // key in play.
+    // The diagnostic names WHICH credential was refused:  its key id and the
+    // source it was resolved from, never the key or any part of it.  Without
+    // them an operator holding several keys cannot tell which one App Store
+    // Connect turned down.
     //
     // The whole message stays on one line:  ship-testflight.sh forwards only
     // the lines that start with the method name, so a line break would split
     // the status off the forwarded line.
     if (res.status === 401 || res.status === 403) {
       console.error(
-        `${method}: App Store Connect rejected the API key (HTTP ${res.status}; key id ${keyId}, key in play ${maskKeyPreview(privateKeyPem)})`
+        `${method}: App Store Connect rejected the API key (HTTP ${res.status}; ${rejectedKeyLabel(keyId, keySource)})`
       );
       failExit(res.status);
     }

@@ -198,18 +198,21 @@ test("a rejected key is reported as a rejected key, not as a missing app", async
     !/app not found/.test(result.stderr),
     `a rejected key was reported as a missing app:\n${result.stderr}`
   );
-  //  The fleet's masked preview, so the key in play can be identified without
-  //  any of it being published.  It is taken from the key material rather
-  //  than from the PEM envelope:  the envelope is the same for every key, so
-  //  a preview of it names none of them.
-  const pem = keyPem;
-  const material = pem.replace(/-----[^-]+-----/g, "").trim();
-  const expectedPreview = `${material.slice(0, 8)}…${material.slice(-4)}`;
+  //  The credential is named only by nonsecret labels.  No fragment of the
+  //  key body may appear, masked or not:  part of a key is still key material.
+  const material = keyPem.replace(/-----[^-]+-----/g, "").replace(/\s+/g, "");
+  for (let i = 0; i + 8 <= material.length; i++) {
+    assert.ok(
+      !result.stderr.includes(material.slice(i, i + 8)),
+      `an eight-character fragment of the key body reached the failure at offset ${i}`
+    );
+  }
+  assert.ok(!/key in play/.test(result.stderr), `the failure still carries a key preview:\n${result.stderr}`);
   assert.ok(
-    result.stderr.includes(expectedPreview),
-    `the failure did not carry the masked key preview ${expectedPreview}:\n${result.stderr}`
+    /key source [^)]+\)/.test(result.stderr),
+    `the failure did not name the key source:\n${result.stderr}`
   );
-  //  A preview with a newline in it splits the diagnostic into two lines, and
+  //  A label with a newline in it splits the diagnostic into two lines, and
   //  ship-testflight.sh forwards only the lines starting with "latest-build-seq:",
   //  so the second half — which is where the HTTP status is — is lost.
   const diagnostic = result.stderr.split("\n").find((line) => line.startsWith("latest-build-seq:"));
@@ -226,16 +229,11 @@ test("a rejected key is reported as a rejected key, not as a missing app", async
   );
 });
 
-test("two different keys do not get the same masked preview", async () => {
-  //  The preview exists to say which credential was rejected.  Recomputing it
-  //  from the same file in the test above cannot catch a preview that is
-  //  identical for every key, so the two keys have to be compared with each
-  //  other.
+test("neither of two different keys leaks into its rejection", async () => {
+  //  Each key is checked against its own diagnostic, so a fragment of either
+  //  body cannot slip through on the strength of the other key's check.
   const otherKeyPem = generateKeyPairSync("ec", { namedCurve: "prime256v1" }).privateKey
     .export({ type: "pkcs8", format: "pem" });
-  const otherKeyPath = join(root, "other-synthetic.p8");
-  writeFileSync(otherKeyPath, otherKeyPem);
-  chmodSync(otherKeyPath, 0o600);
 
   const server = createServer((req, res) => {
     res.writeHead(401, { "Content-Type": "text/plain" });
@@ -243,7 +241,6 @@ test("two different keys do not get the same masked preview", async () => {
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
-  const previews = [];
   try {
     for (const pem of [keyPem, otherKeyPem]) {
       const result = await run(["latest-build-seq", "com.example.nothing", "1.0"], {
@@ -251,18 +248,16 @@ test("two different keys do not get the same masked preview", async () => {
         ASC_KEY_P8: pem
       });
       const diagnostic = result.stderr.split("\n").find((line) => line.startsWith("latest-build-seq:"));
-      const preview = diagnostic && diagnostic.match(/key in play (\S+)/);
-      assert.ok(preview, `no key preview in the diagnostic:\n${result.stderr}`);
-      previews.push(preview[1]);
+      assert.ok(diagnostic, `no forwarded diagnostic line:\n${result.stderr}`);
+      assert.ok(/key id SYNTHETICKEYID1, key source ASC_KEY_P8 environment\)/.test(diagnostic), `the label is missing:\n${diagnostic}`);
+      const material = pem.replace(/-----[^-]+-----/g, "").replace(/\s+/g, "");
+      for (let i = 0; i + 8 <= material.length; i++) {
+        assert.ok(!result.stderr.includes(material.slice(i, i + 8)), `a fragment of a key body reached the diagnostic at offset ${i}`);
+      }
     }
   } finally {
     server.close();
   }
-  assert.notEqual(
-    previews[0],
-    previews[1],
-    "two different keys produced the same masked preview, so it identifies neither"
-  );
 });
 
 test("a large payload is not truncated on the way out", async () => {

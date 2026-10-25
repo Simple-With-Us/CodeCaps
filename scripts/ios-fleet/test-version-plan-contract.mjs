@@ -330,10 +330,10 @@ test("the client and the module agree on the build floor (AFC-517)", async () =>
   });
 });
 
-test("a rejected key is reported with the masked preview of the key in play (AFC-517)", async () => {
-  //  The refusal has to say WHICH credential was refused, without any of the
-  //  key being published:  the fleet's preview is the first eight and the
-  //  last four characters of the key material.
+test("a rejected key is named by key id and source, with nothing from the key (AFC-517)", async () => {
+  //  The refusal has to say WHICH credential was refused, using only
+  //  nonsecret labels:  the key id and the source it was resolved from.  No
+  //  fragment of the key body may appear, masked or not.
   const server = createServer((req, res) => {
     res.writeHead(401, { "Content-Type": "text/plain" });
     res.end("unauthorized");
@@ -348,18 +348,17 @@ test("a rejected key is reported with the masked preview of the key in play (AFC
   }
   //  Exit 4 is the shell's "a rejected credential" code.
   assert.equal(result.code, 4, `expected the rejected-credential exit, got ${result.code}:\n${result.stderr}`);
-  const material = keyPem.replace(/-----[^-]+-----/g, "").trim();
-  const preview = `${material.slice(0, 8)}…${material.slice(-4)}`;
+  const material = keyPem.replace(/-----[^-]+-----/g, "").replace(/\s+/g, "");
   assert.ok(
-    result.stderr.includes(preview),
-    `the rejection did not carry the masked preview ${preview}:\n${result.stderr}`
+    result.stderr.includes("key id SYNTHETICKEYID1, key source "),
+    `the rejection did not name the key id and source:\n${result.stderr}`
   );
-  assert.ok(
-    result.stderr.includes("SYNTHETICKEYID1"),
-    `the rejection did not name the key id:\n${result.stderr}`
-  );
-  assert.ok(
-    !result.stderr.includes(material),
-    "the raw key reached the diagnostic"
-  );
+  assert.ok(!/key in play/.test(result.stderr), `the rejection still carries a key preview:\n${result.stderr}`);
+  for (let i = 0; i + 8 <= material.length; i++) {
+    assert.ok(
+      !result.stderr.includes(material.slice(i, i + 8)),
+      `an eight-character fragment of the key body reached the diagnostic at offset ${i}`
+    );
+  }
+  assert.ok(!result.stderr.includes(`…${material.slice(-4)}`), "the key body's last four characters reached the diagnostic");
 });

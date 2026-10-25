@@ -145,16 +145,16 @@ cleanup_asc_tmp() {
     rm -rf "$ASC_TMP_DIR" 2>/dev/null || true
   fi
   ASC_TMP_DIR=""
-  # The rejected-key preview file goes with it.
+  # The rejected-key label file goes with it.
   rm -f "$(rejected_key_file)" 2>/dev/null || true
 }
-# The file the masked preview of a refused App Store Connect key travels
-# through.
+# The file the nonsecret label (key id and source) of a refused App Store
+# Connect key travels through.
 #
 # Both helpers that can meet a rejection are only ever called through a
 # command substitution, so they run in a subshell:  a global they assign
 # dies with the subshell and never reaches the parent, and the fatal
-# message would always read "key in play unknown".  The preview therefore
+# message would always read "rejected key unknown".  The label therefore
 # travels through a file.  The path is derived from this script's own PID
 # -- a subshell keeps the parent's $$ -- so every layer computes the same
 # one, and REJECTED_KEY_FILE overrides it for a test.
@@ -364,39 +364,45 @@ asc_client() {
   "$ASC_NODE" "${FLEET_DIR}/asc-api.mjs" "$@"
 }
 
-# The masked preview of the key App Store Connect refused.
+# The nonsecret label of the key App Store Connect refused.
 #
 # The client resolves the credential itself (this script resolves it later,
 # and only for altool and Xcode), so the client is the only layer that knows
-# which key was in play.  It says so in its own diagnostic, already masked:
-# "key in play <first eight>…<last four>", which is the fleet's preview
-# shape.  The preview is read out of that diagnostic, so no key material is
-# ever handled here and none can reach a log line.
+# which key was in play.  It names it in its own diagnostic by the key id and
+# the source it was resolved from:  "key id <id>, key source <source>".
+# Nothing derived from the private key is read, kept, written or printed
+# here.  Only a key id of the expected shape and one of the client's known
+# source names are taken out of the diagnostic, so any other text on that
+# line -- including a key fragment from an older client -- never reaches the
+# label, the hand-off file or a fatal message.
 #
 # $1: the file the client's stderr was captured into.
 ASC_LAST_REJECTED_KEY=""
-asc_rejected_key_preview() {
-  local errf="${1:-}" preview=""
+asc_rejected_key_label() {
+  local errf="${1:-}" key_id="" key_source="" label=""
   if [[ -n "$errf" && -s "$errf" ]]; then
-    preview="$(sed -n 's/.*key in play \([^)]*\).*/\1/p' "$errf" 2>/dev/null | head -n 1 || true)"
+    key_id="$(grep -oE 'key id [A-Za-z0-9]{1,40}[,)]' "$errf" 2>/dev/null | head -n 1 | sed -e 's/^key id //' -e 's/[,)]$//' || true)"
+    key_source="$(grep -oE 'key source (APPLE_API_\* environment \(base64 p8\)|ASC_KEY_P8 environment|Infisical /asc)' "$errf" 2>/dev/null | head -n 1 | sed 's/^key source //' || true)"
   fi
-  if [[ -z "$preview" ]]; then
-    preview="(the client reported no preview)"
+  if [[ -n "$key_id" ]]; then
+    label="key id ${key_id}, source ${key_source:-unknown}"
+  else
+    label="(the client named no key id)"
   fi
-  # Hand the preview to the parent through the file:  the caller runs this
+  # Hand the label to the parent through the file:  the caller runs this
   # inside a command substitution, so a global it assigned would never get
-  # there.  The file is what the parent can actually read.
-  printf '%s' "$preview" >"$(rejected_key_file)" 2>/dev/null || true
-  printf '%s' "$preview"
+  # there.  Only the label built above is written.
+  printf '%s' "$label" >"$(rejected_key_file)" 2>/dev/null || true
+  printf '%s' "$label"
 }
-# The preview as the parent sees it, after a helper ran in a subshell.
-rejected_key_preview() {
-  local preview="" file
+# The label as the parent sees it, after a helper ran in a subshell.
+rejected_key_label() {
+  local label="" file
   file="$(rejected_key_file)"
   if [[ -f "$file" ]]; then
-    preview="$(cat "$file" 2>/dev/null || true)"
+    label="$(cat "$file" 2>/dev/null || true)"
   fi
-  printf '%s' "${preview:-unknown}"
+  printf '%s' "${label:-unknown}"
 }
 
 # Map ship APP_KEY to Sentry project slug in org simple-with-us.
@@ -600,11 +606,11 @@ asc_latest_marketing_patch() {
   rc=$?
   if [[ $rc -eq 4 ]]; then
     set -e
-    # The client's diagnostic names the key that was refused (masked);  the
-    # shell quotes that preview so the rejection says which credential it was
-    # and not only that a credential was rejected.
-    ASC_LAST_REJECTED_KEY="$(asc_rejected_key_preview "$errf")"
-    logerr "asc-patch: App Store Connect rejected the credential (HTTP 401/403; key in play ${ASC_LAST_REJECTED_KEY})"
+    # The client's diagnostic names the key that was refused by key id and
+    # source;  the shell quotes that label so the rejection says which
+    # credential it was and not only that a credential was rejected.
+    ASC_LAST_REJECTED_KEY="$(asc_rejected_key_label "$errf")"
+    logerr "asc-patch: App Store Connect rejected the credential (HTTP 401/403; rejected key ${ASC_LAST_REJECTED_KEY})"
     # Forward the client's own lines first:  they carry Apple's status and code.
     if [[ -s "$errf" ]]; then
       while IFS= read -r _pl; do
@@ -661,11 +667,11 @@ asc_build_floor() {
   fi
   if [[ $rc -eq 4 ]]; then
     set -e
-    # The client's diagnostic names the key that was refused (masked);  the
-    # shell quotes that preview so the rejection says which credential it was
-    # and not only that a credential was rejected.
-    ASC_LAST_REJECTED_KEY="$(asc_rejected_key_preview "$errfile")"
-    logerr "asc-floor: App Store Connect rejected the credential (HTTP 401/403; key in play ${ASC_LAST_REJECTED_KEY})"
+    # The client's diagnostic names the key that was refused by key id and
+    # source;  the shell quotes that label so the rejection says which
+    # credential it was and not only that a credential was rejected.
+    ASC_LAST_REJECTED_KEY="$(asc_rejected_key_label "$errfile")"
+    logerr "asc-floor: App Store Connect rejected the credential (HTTP 401/403; rejected key ${ASC_LAST_REJECTED_KEY})"
     rm -f "$errfile" >/dev/null 2>&1 || true
     return 4
   fi
@@ -1039,7 +1045,7 @@ else
     _patch="$(asc_latest_marketing_patch "$MARKETING_PREFIX" "$ASC_PLATFORM")"
     _rc=$?
     if [[ $_rc -eq 4 ]]; then
-      die "App Store Connect rejected the API key (HTTP 401/403; key in play $(rejected_key_preview)) while reading the next marketing version.
+      die "App Store Connect rejected the API key (HTTP 401/403; rejected key $(rejected_key_label)) while reading the next marketing version.
   Fix the key (ASC_* in env or Infisical /asc; fleet-secrets doctor) and re-run.
   --allow-unverified-seq does not cover a rejected credential:  the upload would fail with it too."
     fi
@@ -1091,7 +1097,7 @@ else
     _floor_line="$(asc_build_floor "$MARKETING" "$ASC_PLATFORM")"
     _rc=$?
     if [[ $_rc -eq 4 ]]; then
-      die "App Store Connect rejected the API key (HTTP 401/403; key in play $(rejected_key_preview)) while reading the build floor.
+      die "App Store Connect rejected the API key (HTTP 401/403; rejected key $(rejected_key_label)) while reading the build floor.
   Fix the key (ASC_* in env or Infisical /asc; fleet-secrets doctor) and re-run.
   --allow-unverified-seq does not cover a rejected credential:  the upload would fail with it too."
     fi

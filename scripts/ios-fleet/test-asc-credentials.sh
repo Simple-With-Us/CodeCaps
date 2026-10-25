@@ -55,7 +55,7 @@ export FAKE_OTHER_PEM="${tmp}/other.p8"
 
 extract() {
   awk '
-    /^fs_get\(\) \{/ || /^load_secrets\(\) \{/ || /^cleanup_asc_tmp\(\) \{/ || /^expand_tilde\(\) \{/ || /^rejected_key_file\(\) \{/ || /^rejected_key_preview\(\) \{/ || /^asc_rejected_key_preview\(\) \{/ { grab = 1 }
+    /^fs_get\(\) \{/ || /^load_secrets\(\) \{/ || /^cleanup_asc_tmp\(\) \{/ || /^expand_tilde\(\) \{/ || /^rejected_key_file\(\) \{/ || /^rejected_key_label\(\) \{/ || /^asc_rejected_key_label\(\) \{/ { grab = 1 }
     grab { print }
     grab && /^\}/ { grab = 0 }
   ' "$script"
@@ -370,65 +370,93 @@ if grep -nE '(~|\$\{?HOME\}?)/\.secrets' "$script" >/dev/null; then
   fail "ship-testflight.sh still names the old secrets folder"
 fi
 
-# 7. A rejected credential is named by the fleet's masked preview, and the
-# preview comes out of the client's own diagnostic.  The shell never holds
-# the key material at that point (load_secrets runs later), so it reads the
-# preview the client already masked -- and never a key.
-cat > "${tmp}/client-err.txt" <<'ERR'
+# 7. A rejected credential is named only by nonsecret labels:  the key id
+# and the source the client resolved it from.  Nothing derived from the
+# private key is read out of the client's diagnostic, so even a line that
+# carries a key fragment (an older client's "key in play" preview, here
+# made of synthetic text) leaves no trace in the label, the hand-off file or
+# the parent's fatal text.
+synthetic_head="SYNTHHEAD"
+synthetic_tail="TAIL"
+cat > "${tmp}/client-err.txt" <<ERR
 asc-auth: using ASC_KEY_P8 environment (key id length 15)
-latest-marketing-patch: App Store Connect rejected the API key (HTTP 401; key id SYNTHETICKEYID1, key in play MIGHAgEA…coyG)
+latest-marketing-patch: App Store Connect rejected the API key (HTTP 401; key id SYNTHETICKEYID1, key source ASC_KEY_P8 environment)
+latest-build-seq: App Store Connect rejected the API key (HTTP 401; key id SYNTHETICKEYID1, key in play ${synthetic_head}…${synthetic_tail})
 ERR
 : > "${tmp}/client-err-empty.txt"
-preview="$(bash -c '
+label="$(bash -c '
   set -euo pipefail
   source "'"$funcs"'"
-  asc_rejected_key_preview "'"$tmp"'/client-err.txt"
-')" || fail "asc_rejected_key_preview"
-[[ "$preview" == "MIGHAgEA…coyG" ]] || fail "the masked preview was not read from the client diagnostic: ${preview}"
-empty_preview="$(bash -c '
+  REJECTED_KEY_FILE="'"${tmp}"'/rejected-key-7"
+  asc_rejected_key_label "'"$tmp"'/client-err.txt"
+' 2>"${tmp}/label-stderr.txt")" || fail "asc_rejected_key_label"
+[[ "$label" == "key id SYNTHETICKEYID1, source ASC_KEY_P8 environment" ]] || fail "the key id and source were not read from the client diagnostic: ${label}"
+for out in "$label" "$(cat "${tmp}/label-stderr.txt")" "$(cat "${tmp}/rejected-key-7")"; do
+  [[ "$out" != *"$synthetic_head"* && "$out" != *"$synthetic_tail"* && "$out" != *"key in play"* ]] || fail "a key-body fragment survived into the label, stderr or the hand-off file: ${out}"
+done
+empty_label="$(bash -c '
   set -euo pipefail
   source "'"$funcs"'"
-  asc_rejected_key_preview "'"$tmp"'/client-err-empty.txt"
-')" || fail "asc_rejected_key_preview on an empty diagnostic"
-[[ -n "$empty_preview" ]] || fail "an empty diagnostic produced no text at all"
-missing_preview="$(bash -c '
+  REJECTED_KEY_FILE="'"${tmp}"'/rejected-key-7"
+  asc_rejected_key_label "'"$tmp"'/client-err-empty.txt"
+')" || fail "asc_rejected_key_label on an empty diagnostic"
+[[ -n "$empty_label" ]] || fail "an empty diagnostic produced no text at all"
+missing_label="$(bash -c '
   set -euo pipefail
   source "'"$funcs"'"
-  asc_rejected_key_preview
-')" || fail "asc_rejected_key_preview without a file"
-[[ -n "$missing_preview" ]] || fail "a missing diagnostic file produced no text at all"
+  REJECTED_KEY_FILE="'"${tmp}"'/rejected-key-7"
+  asc_rejected_key_label
+')" || fail "asc_rejected_key_label without a file"
+[[ -n "$missing_label" ]] || fail "a missing diagnostic file produced no text at all"
+# A line with only a key fragment and no key id yields no label from it.
+printf '%s\n' "latest-marketing-patch: App Store Connect rejected the API key (HTTP 401; key in play ${synthetic_head}…${synthetic_tail})" > "${tmp}/client-err-legacy.txt"
+legacy_label="$(bash -c '
+  set -euo pipefail
+  source "'"$funcs"'"
+  REJECTED_KEY_FILE="'"${tmp}"'/rejected-key-7"
+  asc_rejected_key_label "'"$tmp"'/client-err-legacy.txt"
+')" || fail "asc_rejected_key_label on a legacy diagnostic"
+[[ "$legacy_label" != *"$synthetic_head"* && "$legacy_label" != *"$synthetic_tail"* ]] || fail "a legacy key fragment reached the label: ${legacy_label}"
 # The raw key must never appear in what the shell prints.
 pem_material="$(sed -e 's/-----[^-]*-----//g' "${tmp}/asc.p8" | tr -d '[:space:]')"
-[[ "$preview" != *"$pem_material"* ]] || fail "the preview carries the key material"
+[[ "$label" != *"${pem_material:0:8}"* ]] || fail "the label carries key material"
+# The ship script no longer prints or transports a preview of the key.
+if grep -nE 'key in play|rejected_key_preview' "$script" >/dev/null; then
+  fail "ship-testflight.sh still handles a key preview"
+fi
 
-# 8. The preview has to survive the command substitution the ship script
+# 8. The label has to survive the command substitution the ship script
 # uses.  Both helpers that can meet a rejection are only ever called
 # through "$(...)", so they run in a subshell and a global they assign
 # never reaches the parent -- the fatal message would name no key at all.
-# The preview therefore travels through a file, and the parent reads the
-# key out of it.
+# The label therefore travels through a file, and the parent reads it back
+# for its fatal text, which must carry the key id and source and no key
+# fragment.
 bash -c '
   set -euo pipefail
   source "'"$funcs"'"
   REJECTED_KEY_FILE="'"${tmp}"'/rejected-key"
-  _p="$(asc_rejected_key_preview "'"$tmp"'/client-err.txt")"
-  [[ "$_p" == "MIGHAgEA…coyG" ]] || exit 1
-' || fail "asc_rejected_key_preview inside a command substitution"
-parent_preview="$(bash -c '
+  _p="$(asc_rejected_key_label "'"$tmp"'/client-err.txt")"
+  [[ "$_p" == "key id SYNTHETICKEYID1, source ASC_KEY_P8 environment" ]] || exit 1
+' || fail "asc_rejected_key_label inside a command substitution"
+parent_fatal="$(bash -c '
   set -euo pipefail
   source "'"$funcs"'"
   REJECTED_KEY_FILE="'"${tmp}"'/rejected-key"
-  rejected_key_preview
-')" || fail "rejected_key_preview"
-[[ "$parent_preview" == "MIGHAgEA…coyG" ]] || fail "the preview did not leave the command substitution: ${parent_preview}"
-# With no rejection there is no preview, and the parent says so.
+  printf "App Store Connect rejected the API key (HTTP 401/403; rejected key %s) while reading the next marketing version." "$(rejected_key_label)"
+')" || fail "rejected_key_label"
+[[ "$parent_fatal" == *"rejected key key id SYNTHETICKEYID1, source ASC_KEY_P8 environment)"* ]] || fail "the label did not leave the command substitution: ${parent_fatal}"
+[[ "$parent_fatal" != *"$synthetic_head"* && "$parent_fatal" != *"$synthetic_tail"* ]] || fail "a key-body fragment reached the parent fatal text: ${parent_fatal}"
+hand_off="$(cat "${tmp}/rejected-key")"
+[[ "$hand_off" != *"$synthetic_head"* && "$hand_off" != *"$synthetic_tail"* ]] || fail "a key-body fragment reached the hand-off file: ${hand_off}"
+# With no rejection there is no label, and the parent says so.
 rm -f "${tmp}/rejected-key"
-unknown_preview="$(bash -c '
+unknown_label="$(bash -c '
   set -euo pipefail
   source "'"$funcs"'"
   REJECTED_KEY_FILE="'"${tmp}"'/rejected-key"
-  rejected_key_preview
-')" || fail "rejected_key_preview without a preview"
-[[ "$unknown_preview" == "unknown" ]] || fail "a missing preview should read unknown: ${unknown_preview}"
+  rejected_key_label
+')" || fail "rejected_key_label without a label"
+[[ "$unknown_label" == "unknown" ]] || fail "a missing label should read unknown: ${unknown_label}"
 
 echo "ok: ASC credential resolution (environment first, then Infisical, a named path ignored, temp key removed)"
