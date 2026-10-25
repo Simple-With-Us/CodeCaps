@@ -743,6 +743,12 @@ extract_ship_prelude() {
             # body is still open, because the next indented line would
             # then be a top-level command that the cut would run.
             plain = strip_literal(l)
+            # A brace in a trailing comment is not a structural brace:  the
+            # comment starts at a `#` that follows whitespace, and the
+            # quoted text is already gone after strip_literal, so the
+            # comment is cut off before the braces are counted.
+            cmt = index(plain, " #")
+            if (cmt > 0) plain = substr(plain, 1, cmt - 1)
             depth = depth + gsub(/\{/, "", plain) - gsub(/\}/, "", plain)
             if (depth <= 0) in_body = 0
             continue
@@ -917,14 +923,18 @@ extract_ship_prelude() {
 # refused by the check it is meant to trip:  a cut that never stops and a
 # cut that stops at the wrong line must not pass for one another, so every
 # variant asserts the words of its own refusal.
-for variant in missing reformatted moved nodef tight assignchain assignchainbare assignother assignsubst assignbacktick assignsubstbare assignprocin assignprocout fleetdirother indented strayclose secondopener indentedclose; do
+for variant in missing reformatted moved nodef tight assignchain assignchainbare assignother assignsubst assignbacktick assignsubstbare assignprocin assignprocout fleetdirother indented strayclose secondopener indentedclose commentbrace; do
   synth="${tmp}/synth-ship-${variant}.sh"
   sentinel="${tmp}/synth-sentinel-${variant}"
   {
     echo '#!/bin/bash'
     if [[ "$variant" != nodef ]]; then
       echo 'init_rejected_key_file() {'
-      echo '  _rejected_key_dir="$(mktemp -d)"'
+      if [[ "$variant" == commentbrace ]]; then
+        echo '  _rejected_key_dir="$(mktemp -d)" # keep the dir { open'
+      else
+        echo '  _rejected_key_dir="$(mktemp -d)"'
+      fi
       # A second column-0 opener while the first body is still open:  the
       # closing brace could not match a body that has two openers, so the
       # body-shape rule has to refuse it.  The second opener sits inside
@@ -932,7 +942,7 @@ for variant in missing reformatted moved nodef tight assignchain assignchainbare
       if [[ "$variant" == secondopener ]]; then
         echo 'other_func() {'
       fi
-      if [[ "$variant" == indentedclose ]]; then
+      if [[ "$variant" == indentedclose || "$variant" == commentbrace ]]; then
         # The body is closed by an INDENTED brace:  bash closes the
         # function with it just as it closes the function with a
         # column-0 brace, so the guard has to follow the brace depth.
@@ -1011,6 +1021,12 @@ for variant in missing reformatted moved nodef tight assignchain assignchainbare
       # the guard has to refuse it.
       indentedclose) echo "  printf 'SHIP-BODY-RAN\\n' > '${sentinel}'"
                      echo 'init_rejected_key_file || echo "could not init" >&2' ;;
+      # A body whose trailing COMMENT holds a brace, closed by an indented
+      # brace:  the brace in the comment is not a structural brace, so the
+      # indented brace still ends the body and the indented command after
+      # it is a top-level command the cut would run.
+      commentbrace) echo "  printf 'SHIP-BODY-RAN\\n' > '${sentinel}'"
+                    echo 'init_rejected_key_file || echo "could not init" >&2' ;;
     esac
     echo "printf 'SHIP-BODY-RAN\\n' > '${sentinel}'"
     echo 'exit 0'
@@ -1038,6 +1054,7 @@ for variant in missing reformatted moved nodef tight assignchain assignchainbare
     strayclose)  expect="positional" ;;
     secondopener) expect="positional" ;;
     indentedclose) expect="positional" ;;
+    commentbrace) expect="positional" ;;
     *)           fail "an unknown variant ${variant} reached the refusal check" ;;
   esac
   [[ "$synth_out" == *"$expect"* ]] \
@@ -1082,6 +1099,29 @@ TMPDIR="$tmp" bash "$kept_synth" || fail "the kept ship body did not run"
 [[ -e "$kept_sentinel" ]] \
   || fail "the sentinel never fired, so its absence would prove nothing"
 rm -f "$kept_sentinel"
+
+# 12a-ter. The positive control for the comment case:  a VALID prelude whose
+# body carries a trailing comment with a brace in it is accepted.  A brace in
+# a comment is not a structural brace, so the body does not end early and the
+# guard must not refuse the prelude as a positional command.
+cmt_synth="${tmp}/synth-ship-commentbraceok.sh"
+cmt_sentinel="${tmp}/synth-sentinel-commentbraceok"
+cmt_prelude="${tmp}/synth-prelude-commentbraceok.sh"
+rm -f "$cmt_sentinel"
+{
+  echo '#!/bin/bash'
+  echo 'init_rejected_key_file() {'
+  echo '  _rejected_key_dir="$(mktemp -d)" # drop the old dir }'
+  echo '  echo ok'
+  echo '}'
+  echo 'init_rejected_key_file || echo "could not init" >&2'
+  echo "printf 'SHIP-BODY-RAN\\n' > '${cmt_sentinel}'"
+  echo 'exit 0'
+} > "$cmt_synth"
+if ! cmt_out="$(extract_ship_prelude "$cmt_synth" "$cmt_prelude")"; then
+  fail "a valid prelude with a trailing comment was refused: ${cmt_out}"
+fi
+rm -f "$cmt_sentinel"
 
 # 12b. The real ship script passes the same checks, and only then is its
 # prelude sourced.
