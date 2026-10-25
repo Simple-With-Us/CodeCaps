@@ -742,13 +742,17 @@ extract_ship_prelude() {
             # an indented brace must not leave the guard believing that a
             # body is still open, because the next indented line would
             # then be a top-level command that the cut would run.
-            plain = strip_literal(l)
-            # A brace in a trailing comment is not a structural brace:  the
-            # comment starts at a `#` that follows whitespace, and the
-            # quoted text is already gone after strip_literal, so the
-            # comment is cut off before the braces are counted.
-            cmt = index(plain, " #")
-            if (cmt > 0) plain = substr(plain, 1, cmt - 1)
+            # The comment is cut off on the MASKED line, which keeps the
+            # positions of the raw line:  the quoted text and the
+            # substitutions are filler there, so a `#` inside a string is
+            # not a `#` at all, and a `#` that follows a closing quote
+            # follows a word character and is a word continuation in bash,
+            # not the start of a comment.  A brace in a comment is not a
+            # structural brace.
+            mask = strip_literal(l, "x")
+            cpos = comment_start(mask)
+            if (cpos > 0) mask = substr(mask, 1, cpos - 1)
+            plain = mask
             depth = depth + gsub(/\{/, "", plain) - gsub(/\}/, "", plain)
             if (depth <= 0) in_body = 0
             continue
@@ -790,41 +794,69 @@ extract_ship_prelude() {
         exit
       }
     }
+    # The position of the first `#` that starts a comment on a masked
+    # line, or 0 when there is none.  Bash starts a comment only at a `#`
+    # that BEGINS A WORD, so the `#` must be at the start of the line or
+    # preceded by whitespace or by an operator, and it must not be inside
+    # a quoted string.  On the masked line the quoted text is filler, so a
+    # `#` inside a string is not a `#` at all and a `#` that follows a
+    # closing quote follows a word character.
+    function comment_start(m,   i, c, prev, n) {
+      n = length(m)
+      for (i = 1; i <= n; i++) {
+        c = substr(m, i, 1)
+        if (c != "#") continue
+        if (i == 1) return 1
+        prev = substr(m, i - 1, 1)
+        if (prev ~ /[[:space:]]/ || prev == ";" || prev == "&" || prev == "|" || prev == "(" || prev == ")" || prev == "<" || prev == ">") return i
+      }
+      return 0
+    }
     # Strip the quoted text and the command substitutions from a line and
     # return what is left.  The shell reads no chain inside a quoted string
     # and no chain inside a ( ) substitution, so those parts are dropped:
     # the && in FLEET_DIR="$(cd "$(dirname "$0")" && pwd)" is part of the
     # value, and that line stays a single assignment.
-    function strip_literal(s,   out, i, c, len, st, top) {
+    # With a fill, the quoted text and the substitutions are kept as that
+    # many filler characters instead of being dropped, so the result has
+    # the same length as the line and the positions still line up with it.
+    # That masked line is what the comment start is found on, because only
+    # the raw line can say whether a `#` follows a closing quote, and in
+    # bash that is a word continuation and not the start of a comment.
+    function strip_literal(s, fill,   out, i, c, len, st, top, keep) {
       out = ""
       st = ""
       len = length(s)
       i = 1
+      keep = (fill == "") ? "" : fill
       while (i <= len) {
         c = substr(s, i, 1)
         top = (st == "") ? "" : substr(st, length(st), 1)
         if (top == "s") {
           if (c == SQ) st = substr(st, 1, length(st) - 1)
+          out = out keep
           i++
           continue
         }
         if (top == "d") {
-          if (c == "\"") { st = substr(st, 1, length(st) - 1); i++; continue }
-          if (c == "$" && substr(s, i + 1, 1) == "(") { st = st "("; i += 2; continue }
+          if (c == "\"") { st = substr(st, 1, length(st) - 1); i++; out = out keep; continue }
+          if (c == "$" && substr(s, i + 1, 1) == "(") { st = st "("; i += 2; out = out keep keep; continue }
+          out = out keep
           i++
           continue
         }
         if (top == "(") {
-          if (c == "\"") { st = st "d"; i++; continue }
-          if (c == SQ) { st = st "s"; i++; continue }
-          if (c == "$" && substr(s, i + 1, 1) == "(") { st = st "("; i += 2; continue }
-          if (c == ")") { st = substr(st, 1, length(st) - 1); i++; continue }
+          if (c == "\"") { st = st "d"; i++; out = out keep; continue }
+          if (c == SQ) { st = st "s"; i++; out = out keep; continue }
+          if (c == "$" && substr(s, i + 1, 1) == "(") { st = st "("; i += 2; out = out keep keep; continue }
+          if (c == ")") { st = substr(st, 1, length(st) - 1); i++; out = out keep; continue }
+          out = out keep
           i++
           continue
         }
-        if (c == "\"") { st = st "d"; i++; continue }
-        if (c == SQ) { st = st "s"; i++; continue }
-        if (c == "$" && substr(s, i + 1, 1) == "(") { st = st "("; i += 2; continue }
+        if (c == "\"") { st = st "d"; i++; out = out keep; continue }
+        if (c == SQ) { st = st "s"; i++; out = out keep; continue }
+        if (c == "$" && substr(s, i + 1, 1) == "(") { st = st "("; i += 2; out = out keep keep; continue }
         out = out c
         i++
       }
@@ -923,7 +955,7 @@ extract_ship_prelude() {
 # refused by the check it is meant to trip:  a cut that never stops and a
 # cut that stops at the wrong line must not pass for one another, so every
 # variant asserts the words of its own refusal.
-for variant in missing reformatted moved nodef tight assignchain assignchainbare assignother assignsubst assignbacktick assignsubstbare assignprocin assignprocout fleetdirother indented strayclose secondopener indentedclose commentbrace; do
+for variant in missing reformatted moved nodef tight assignchain assignchainbare assignother assignsubst assignbacktick assignsubstbare assignprocin assignprocout fleetdirother indented strayclose secondopener indentedclose commentbrace gluedbrace; do
   synth="${tmp}/synth-ship-${variant}.sh"
   sentinel="${tmp}/synth-sentinel-${variant}"
   {
@@ -932,6 +964,13 @@ for variant in missing reformatted moved nodef tight assignchain assignchainbare
       echo 'init_rejected_key_file() {'
       if [[ "$variant" == commentbrace ]]; then
         echo '  _rejected_key_dir="$(mktemp -d)" # keep the dir { open'
+      elif [[ "$variant" == gluedbrace ]]; then
+        # The body is closed by a `}` that is in COMMAND position:  the `#`
+        # is glued to the closing quote, so it is not the start of a
+        # comment in bash, and the `;` ends the command so the `}` after
+        # it closes the body.  The indented command that follows is then a
+        # top-level command the cut would run.
+        echo '  true "x"#;}'
       else
         echo '  _rejected_key_dir="$(mktemp -d)"'
       fi
@@ -942,7 +981,10 @@ for variant in missing reformatted moved nodef tight assignchain assignchainbare
       if [[ "$variant" == secondopener ]]; then
         echo 'other_func() {'
       fi
-      if [[ "$variant" == indentedclose || "$variant" == commentbrace ]]; then
+      if [[ "$variant" == gluedbrace ]]; then
+        # The body was already closed by the line above.
+        :
+      elif [[ "$variant" == indentedclose || "$variant" == commentbrace ]]; then
         # The body is closed by an INDENTED brace:  bash closes the
         # function with it just as it closes the function with a
         # column-0 brace, so the guard has to follow the brace depth.
@@ -1027,6 +1069,12 @@ for variant in missing reformatted moved nodef tight assignchain assignchainbare
       # it is a top-level command the cut would run.
       commentbrace) echo "  printf 'SHIP-BODY-RAN\\n' > '${sentinel}'"
                     echo 'init_rejected_key_file || echo "could not init" >&2' ;;
+      # A body closed by a `}` in command position behind a `#` that is
+      # glued to a closing quote:  that `#` is not a comment start in
+      # bash, so the `}` closes the body and the indented command after it
+      # is a top-level command the cut would run.
+      gluedbrace) echo "  printf 'SHIP-BODY-RAN\\n' > '${sentinel}'"
+                  echo 'init_rejected_key_file || echo "could not init" >&2' ;;
     esac
     echo "printf 'SHIP-BODY-RAN\\n' > '${sentinel}'"
     echo 'exit 0'
@@ -1055,6 +1103,7 @@ for variant in missing reformatted moved nodef tight assignchain assignchainbare
     secondopener) expect="positional" ;;
     indentedclose) expect="positional" ;;
     commentbrace) expect="positional" ;;
+    gluedbrace) expect="positional" ;;
     *)           fail "an unknown variant ${variant} reached the refusal check" ;;
   esac
   [[ "$synth_out" == *"$expect"* ]] \
@@ -1122,6 +1171,29 @@ if ! cmt_out="$(extract_ship_prelude "$cmt_synth" "$cmt_prelude")"; then
   fail "a valid prelude with a trailing comment was refused: ${cmt_out}"
 fi
 rm -f "$cmt_sentinel"
+
+# 12a-quater. The same positive control for a comment that starts behind an
+# OPERATOR:  bash starts a comment at a `#` that begins a word, and `;` ends
+# a word, so the `}` inside that comment is not a structural brace and the
+# prelude is still valid.  The guard has to accept it.
+op_synth="${tmp}/synth-ship-commentbraceop.sh"
+op_sentinel="${tmp}/synth-sentinel-commentbraceop"
+op_prelude="${tmp}/synth-prelude-commentbraceop.sh"
+rm -f "$op_sentinel"
+{
+  echo '#!/bin/bash'
+  echo 'init_rejected_key_file() {'
+  echo '  true;# the old dir }'
+  echo '  echo ok'
+  echo '}'
+  echo 'init_rejected_key_file || echo "could not init" >&2'
+  echo "printf 'SHIP-BODY-RAN\\n' > '${op_sentinel}'"
+  echo 'exit 0'
+} > "$op_synth"
+if ! op_out="$(extract_ship_prelude "$op_synth" "$op_prelude")"; then
+  fail "a valid prelude with a comment behind an operator was refused: ${op_out}"
+fi
+rm -f "$op_sentinel"
 
 # 12b. The real ship script passes the same checks, and only then is its
 # prelude sourced.
