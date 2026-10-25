@@ -1214,6 +1214,30 @@ if ! op_out="$(extract_ship_prelude "$op_synth" "$op_prelude")"; then
 fi
 rm -f "$op_sentinel"
 
+# 12a-quint. The positive control for a QUOTED brace:  a VALID prelude whose
+# body holds a brace inside a quoted string is accepted.  A brace in a quoted
+# string is not a structural brace, so the body does not end early, the
+# indented line after it is still body text, and the guard must not refuse
+# the prelude as a positional command.
+qb_synth="${tmp}/synth-ship-quotedbraceok.sh"
+qb_sentinel="${tmp}/synth-sentinel-quotedbraceok"
+qb_prelude="${tmp}/synth-prelude-quotedbraceok.sh"
+rm -f "$qb_sentinel"
+{
+  echo '#!/bin/bash'
+  echo 'init_rejected_key_file() {'
+  echo '  echo "a } b"'
+  echo '  _rejected_key_dir="$(mktemp -d)"'
+  echo '}'
+  echo 'init_rejected_key_file || echo "could not init" >&2'
+  echo "printf 'SHIP-BODY-RAN\\n' > '${qb_sentinel}'"
+  echo 'exit 0'
+} > "$qb_synth"
+if ! qb_out="$(extract_ship_prelude "$qb_synth" "$qb_prelude")"; then
+  fail "a valid prelude with a brace inside a quoted string was refused: ${qb_out}"
+fi
+rm -f "$qb_sentinel"
+
 # 12b. The real ship script passes the same checks, and only then is its
 # prelude sourced.
 prelude_err="$(extract_ship_prelude "$script" "${tmp}/ship-prelude.sh")" || fail "$prelude_err"
