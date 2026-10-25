@@ -1214,7 +1214,7 @@ if ! op_out="$(extract_ship_prelude "$op_synth" "$op_prelude")"; then
 fi
 rm -f "$op_sentinel"
 
-# 12a-quint. The positive control for a QUOTED brace:  a VALID prelude whose
+# 12a-quint.  The positive control for a QUOTED brace:  a VALID prelude whose
 # body holds a brace inside a quoted string is accepted.  A brace in a quoted
 # string is not a structural brace, so the body does not end early, the
 # indented line after it is still body text, and the guard must not refuse
