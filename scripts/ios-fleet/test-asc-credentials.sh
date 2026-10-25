@@ -685,6 +685,16 @@ extract_ship_prelude() {
   # it, so a line like TEAM_ID=x&&rm -rf ... is refused as well.  The &&
   # inside FLEET_DIR="$(cd "$(dirname "$0")" && pwd)" is inside the quoted
   # value, so that line stays one assignment and is accepted.
+  #
+  # An allowlisted name is refused as well when its value holds a command
+  # substitution or a backtick:  sourcing the prelude would run that
+  # command, so a line like TEAM_ID="$(cmd)" or TEAM_ID=`cmd` is refused.
+  # A process substitution in a value, <( ... ) or >( ... ), is refused the
+  # same way.  The one exception is the pinned FLEET_DIR line of the real
+  # prelude, FLEET_DIR="$(cd "$(dirname "$0")" && pwd)":  it is the only
+  # line allowed to carry a command substitution, and it is accepted only
+  # when the whole line matches that pin exactly.  Any other FLEET_DIR
+  # line is refused like every other name.
   offender="$(awk '
     BEGIN {
       SQ = sprintf("%c", 39)
@@ -697,6 +707,12 @@ extract_ship_prelude() {
       allowed["ASC_TMP_DIR"] = 1
       allowed["_rejected_key_dir"] = 1
       allowed["_rejected_key_path"] = 1
+      # The one line of the real prelude that carries a command
+      # substitution, pinned as a whole line and byte for byte:
+      # FLEET_DIR="$(cd "$(dirname "$0")" && pwd)".  It is the only
+      # assignment whose value may hold a substitution, and it is
+      # accepted only when the whole line matches this pin exactly.
+      pinned_fleet_dir = "FLEET_DIR=\"$(cd \"$(dirname \"$0\")\" && pwd)\""
       # Whether the line being read is inside a function body.  A body is
       # opened by a column-0 `name() {` line and closed by a column-0 `}`
       # line, and only a body may hold a whitespace-leading line.
@@ -826,7 +842,8 @@ extract_ship_prelude() {
       return 0
     }
     # An assignment is accepted only when it is one the real prelude makes,
-    # and only when the value does not chain a command after it.
+    # and only when the value does not chain a command after it and does not
+    # carry a command substitution of its own.
     function assignment_ok(l,   name, value, first, stripped, rest, qend) {
       if (match(l, /^export[[:space:]]+PATH=/)) {
         value = substr(l, RSTART + RLENGTH)
@@ -858,6 +875,17 @@ extract_ship_prelude() {
         # An unquoted value is a single word.
         if (rest ~ /[[:space:];&|]/) return 0
       }
+      # The substitution refusal.  A value that holds a command
+      # substitution or a backtick would run that command when the
+      # prelude is sourced, so it is refused.  The one exception is the
+      # pinned FLEET_DIR line of the real prelude:  it is the only
+      # assignment allowed to carry a command substitution, and it is
+      # accepted only when the whole line matches the pin exactly.  A
+      # process substitution in a value is refused the same way.
+      if (index(value, "$(") > 0 || index(value, "`") > 0) {
+        if (l != pinned_fleet_dir) return 0
+      }
+      if (index(value, "<(") > 0 || index(value, ">(") > 0) return 0
       return 1
     }
   ' "$dest")"
@@ -872,7 +900,7 @@ extract_ship_prelude() {
 # refused by the check it is meant to trip:  a cut that never stops and a
 # cut that stops at the wrong line must not pass for one another, so every
 # variant asserts the words of its own refusal.
-for variant in missing reformatted moved nodef tight assignchain assignchainbare assignother indented strayclose; do
+for variant in missing reformatted moved nodef tight assignchain assignchainbare assignother assignsubst assignbacktick fleetdirother indented strayclose; do
   synth="${tmp}/synth-ship-${variant}.sh"
   sentinel="${tmp}/synth-sentinel-${variant}"
   {
@@ -904,6 +932,20 @@ for variant in missing reformatted moved nodef tight assignchain assignchainbare
       # it, even though it only assigns a value.
       assignother) echo 'OTHER_NAME=1'
                    echo 'init_rejected_key_file || echo "could not init" >&2' ;;
+      # An allowlisted name whose quoted value holds a command
+      # substitution:  sourcing the prelude would run that command, so
+      # the substitution refusal has to refuse the line.
+      assignsubst) echo "TEAM_ID=\"\$(printf 'SHIP-BODY-RAN\\n' > '${sentinel}')\""
+                   echo 'init_rejected_key_file || echo "could not init" >&2' ;;
+      # The same with a backtick instead of a $( ... ) substitution:  a
+      # backtick runs its command when the prelude is sourced too.
+      assignbacktick) echo "TEAM_ID=\`printf x > '${sentinel}'\`"
+                      echo 'init_rejected_key_file || echo "could not init" >&2' ;;
+      # The FLEET_DIR name is allowlisted, but only the pinned FLEET_DIR
+      # line of the real prelude may carry a command substitution, so
+      # any other FLEET_DIR line is refused like every other name.
+      fleetdirother) echo "FLEET_DIR=\"\$(printf 'SHIP-BODY-RAN\\n' > '${sentinel}')\""
+                     echo 'init_rejected_key_file || echo "could not init" >&2' ;;
       # An indented top-level command placed after a function body closed:
       # an indented line outside a body is a top-level command, and the
       # cut would run it when the prelude is sourced, so the guard has to
@@ -931,6 +973,9 @@ for variant in missing reformatted moved nodef tight assignchain assignchainbare
     assignchain) expect="positional" ;;
     assignchainbare) expect="positional" ;;
     assignother) expect="positional" ;;
+    assignsubst) expect="positional" ;;
+    assignbacktick) expect="positional" ;;
+    fleetdirother) expect="positional" ;;
     indented)    expect="positional" ;;
     strayclose)  expect="positional" ;;
     *)           fail "an unknown variant ${variant} reached the refusal check" ;;
