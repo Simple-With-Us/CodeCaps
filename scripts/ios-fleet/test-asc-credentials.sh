@@ -55,7 +55,7 @@ export FAKE_OTHER_PEM="${tmp}/other.p8"
 
 extract() {
   awk '
-    /^fs_get\(\) \{/ || /^load_secrets\(\) \{/ || /^cleanup_asc_tmp\(\) \{/ || /^expand_tilde\(\) \{/ || /^asc_rejected_key_preview\(\) \{/ { grab = 1 }
+    /^fs_get\(\) \{/ || /^load_secrets\(\) \{/ || /^cleanup_asc_tmp\(\) \{/ || /^expand_tilde\(\) \{/ || /^rejected_key_file\(\) \{/ || /^rejected_key_preview\(\) \{/ || /^asc_rejected_key_preview\(\) \{/ { grab = 1 }
     grab { print }
     grab && /^\}/ { grab = 0 }
   ' "$script"
@@ -400,5 +400,35 @@ missing_preview="$(bash -c '
 # The raw key must never appear in what the shell prints.
 pem_material="$(sed -e 's/-----[^-]*-----//g' "${tmp}/asc.p8" | tr -d '[:space:]')"
 [[ "$preview" != *"$pem_material"* ]] || fail "the preview carries the key material"
+
+# 8. The preview has to survive the command substitution the ship script
+# uses.  Both helpers that can meet a rejection are only ever called
+# through "$(...)", so they run in a subshell and a global they assign
+# never reaches the parent -- the fatal message would name no key at all.
+# The preview therefore travels through a file, and the parent reads the
+# key out of it.
+bash -c '
+  set -euo pipefail
+  source "'"$funcs"'"
+  REJECTED_KEY_FILE="'"${tmp}"'/rejected-key"
+  _p="$(asc_rejected_key_preview "'"$tmp"'/client-err.txt")"
+  [[ "$_p" == "MIGHAgEA…coyG" ]] || exit 1
+' || fail "asc_rejected_key_preview inside a command substitution"
+parent_preview="$(bash -c '
+  set -euo pipefail
+  source "'"$funcs"'"
+  REJECTED_KEY_FILE="'"${tmp}"'/rejected-key"
+  rejected_key_preview
+')" || fail "rejected_key_preview"
+[[ "$parent_preview" == "MIGHAgEA…coyG" ]] || fail "the preview did not leave the command substitution: ${parent_preview}"
+# With no rejection there is no preview, and the parent says so.
+rm -f "${tmp}/rejected-key"
+unknown_preview="$(bash -c '
+  set -euo pipefail
+  source "'"$funcs"'"
+  REJECTED_KEY_FILE="'"${tmp}"'/rejected-key"
+  rejected_key_preview
+')" || fail "rejected_key_preview without a preview"
+[[ "$unknown_preview" == "unknown" ]] || fail "a missing preview should read unknown: ${unknown_preview}"
 
 echo "ok: ASC credential resolution (environment first, then Infisical, a named path ignored, temp key removed)"

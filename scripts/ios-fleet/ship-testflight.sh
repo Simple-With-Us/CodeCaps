@@ -145,6 +145,21 @@ cleanup_asc_tmp() {
     rm -rf "$ASC_TMP_DIR" 2>/dev/null || true
   fi
   ASC_TMP_DIR=""
+  # The rejected-key preview file goes with it.
+  rm -f "$(rejected_key_file)" 2>/dev/null || true
+}
+# The file the masked preview of a refused App Store Connect key travels
+# through.
+#
+# Both helpers that can meet a rejection are only ever called through a
+# command substitution, so they run in a subshell:  a global they assign
+# dies with the subshell and never reaches the parent, and the fatal
+# message would always read "key in play unknown".  The preview therefore
+# travels through a file.  The path is derived from this script's own PID
+# -- a subshell keeps the parent's $$ -- so every layer computes the same
+# one, and REJECTED_KEY_FILE overrides it for a test.
+rejected_key_file() {
+  printf '%s' "${REJECTED_KEY_FILE:-${TMPDIR:-/tmp}/ios-fleet-rejected-key.$$}"
 }
 # Expand only a leading "~/" (not "~user/") so a typo is never merged with $HOME.
 expand_tilde() {
@@ -368,7 +383,20 @@ asc_rejected_key_preview() {
   if [[ -z "$preview" ]]; then
     preview="(the client reported no preview)"
   fi
+  # Hand the preview to the parent through the file:  the caller runs this
+  # inside a command substitution, so a global it assigned would never get
+  # there.  The file is what the parent can actually read.
+  printf '%s' "$preview" >"$(rejected_key_file)" 2>/dev/null || true
   printf '%s' "$preview"
+}
+# The preview as the parent sees it, after a helper ran in a subshell.
+rejected_key_preview() {
+  local preview="" file
+  file="$(rejected_key_file)"
+  if [[ -f "$file" ]]; then
+    preview="$(cat "$file" 2>/dev/null || true)"
+  fi
+  printf '%s' "${preview:-unknown}"
 }
 
 # Map ship APP_KEY to Sentry project slug in org simple-with-us.
@@ -1011,7 +1039,7 @@ else
     _patch="$(asc_latest_marketing_patch "$MARKETING_PREFIX" "$ASC_PLATFORM")"
     _rc=$?
     if [[ $_rc -eq 4 ]]; then
-      die "App Store Connect rejected the API key (HTTP 401/403; key in play ${ASC_LAST_REJECTED_KEY:-unknown}) while reading the next marketing version.
+      die "App Store Connect rejected the API key (HTTP 401/403; key in play $(rejected_key_preview)) while reading the next marketing version.
   Fix the key (ASC_* in env or Infisical /asc; fleet-secrets doctor) and re-run.
   --allow-unverified-seq does not cover a rejected credential:  the upload would fail with it too."
     fi
@@ -1063,7 +1091,7 @@ else
     _floor_line="$(asc_build_floor "$MARKETING" "$ASC_PLATFORM")"
     _rc=$?
     if [[ $_rc -eq 4 ]]; then
-      die "App Store Connect rejected the API key (HTTP 401/403; key in play ${ASC_LAST_REJECTED_KEY:-unknown}) while reading the build floor.
+      die "App Store Connect rejected the API key (HTTP 401/403; key in play $(rejected_key_preview)) while reading the build floor.
   Fix the key (ASC_* in env or Infisical /asc; fleet-secrets doctor) and re-run.
   --allow-unverified-seq does not cover a rejected credential:  the upload would fail with it too."
     fi
