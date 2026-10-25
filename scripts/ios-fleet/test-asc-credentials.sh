@@ -955,7 +955,7 @@ extract_ship_prelude() {
 # refused by the check it is meant to trip:  a cut that never stops and a
 # cut that stops at the wrong line must not pass for one another, so every
 # variant asserts the words of its own refusal.
-for variant in missing reformatted moved nodef tight assignchain assignchainbare assignother assignsubst assignbacktick assignsubstbare assignprocin assignprocout fleetdirother indented strayclose secondopener indentedclose commentbrace gluedbrace; do
+for variant in missing reformatted moved nodef tight assignchain assignchainbare assignother assignsubst assignbacktick assignsubstbare assignprocin assignprocout fleetdirother indented strayclose secondopener indentedclose commentbrace gluedbrace gluedarg quotedhash; do
   synth="${tmp}/synth-ship-${variant}.sh"
   sentinel="${tmp}/synth-sentinel-${variant}"
   {
@@ -971,6 +971,18 @@ for variant in missing reformatted moved nodef tight assignchain assignchainbare
         # it closes the body.  The indented command that follows is then a
         # top-level command the cut would run.
         echo '  true "x"#;}'
+      elif [[ "$variant" == gluedarg ]]; then
+        # The review's own shape:  a `#` glued to a closing quote is not a
+        # comment start, so the `}` after it is still counted.  Here it is
+        # an argument to `true`, and the guard stays conservative:  it
+        # closes the body on that count, so the indented command after it
+        # is refused rather than waved through as body text.
+        echo '  true "x"# }'
+      elif [[ "$variant" == quotedhash ]]; then
+        # A `#` inside a quoted string that follows whitespace is not a
+        # comment start either:  the `}` after the string is still a
+        # structural brace that closes the body.
+        echo '  true " #";}'
       else
         echo '  _rejected_key_dir="$(mktemp -d)"'
       fi
@@ -981,7 +993,7 @@ for variant in missing reformatted moved nodef tight assignchain assignchainbare
       if [[ "$variant" == secondopener ]]; then
         echo 'other_func() {'
       fi
-      if [[ "$variant" == gluedbrace ]]; then
+      if [[ "$variant" == gluedbrace || "$variant" == gluedarg || "$variant" == quotedhash ]]; then
         # The body was already closed by the line above.
         :
       elif [[ "$variant" == indentedclose || "$variant" == commentbrace ]]; then
@@ -1075,6 +1087,11 @@ for variant in missing reformatted moved nodef tight assignchain assignchainbare
       # is a top-level command the cut would run.
       gluedbrace) echo "  printf 'SHIP-BODY-RAN\\n' > '${sentinel}'"
                   echo 'init_rejected_key_file || echo "could not init" >&2' ;;
+      # The same indented command behind the review's `cmd "x"# }` line and
+      # behind a `#` that sits inside a quoted string:  in both the `}`
+      # counts, so the command is outside the body and has to be refused.
+      gluedarg|quotedhash) echo "  printf 'SHIP-BODY-RAN\\n' > '${sentinel}'"
+                           echo 'init_rejected_key_file || echo "could not init" >&2' ;;
     esac
     echo "printf 'SHIP-BODY-RAN\\n' > '${sentinel}'"
     echo 'exit 0'
@@ -1104,6 +1121,8 @@ for variant in missing reformatted moved nodef tight assignchain assignchainbare
     indentedclose) expect="positional" ;;
     commentbrace) expect="positional" ;;
     gluedbrace) expect="positional" ;;
+    gluedarg)   expect="positional" ;;
+    quotedhash) expect="positional" ;;
     *)           fail "an unknown variant ${variant} reached the refusal check" ;;
   esac
   [[ "$synth_out" == *"$expect"* ]] \
