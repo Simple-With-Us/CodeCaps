@@ -669,10 +669,12 @@ extract_ship_prelude() {
   # a command into the prelude.
   #
   # An allowlisted name is still refused when its value chains a command
-  # after it:  a &&, a ||, a ; or a | outside a quoted string and outside
-  # a ( ) substitution, and anything at all after the closing quote of the
-  # value.  So "TEAM_ID=x && rm -rf ..." never rides into the prelude.  The
-  # && inside FLEET_DIR="$(cd "$(dirname "$0")" && pwd)" is part of the
+  # after it, and two rules refuse that between them.  A quoted value must
+  # be the whole remainder of the line:  nothing may follow its closing
+  # quote, so a line like TEAM_ID="x" && rm -rf ... is refused.  An
+  # unquoted value must be a single word, with no whitespace, ;, & or | in
+  # it, so a line like TEAM_ID=x&&rm -rf ... is refused as well.  The &&
+  # inside FLEET_DIR="$(cd "$(dirname "$0")" && pwd)" is inside the quoted
   # value, so that line stays one assignment and is accepted.
   offender="$(awk '
     BEGIN {
@@ -793,10 +795,13 @@ extract_ship_prelude() {
       first = substr(value, 1, 1)
       stripped = strip_literal(l)
       rest = substr(stripped, index(stripped, "=") + 1)
-      # The chain refusal.  A value that runs a command after it is refused:
-      # a &&, a ||, a ; or a | that the shell would read as a chain, and
-      # anything at all after the closing quote of the value.
-      if (rest ~ /&&/ || rest ~ /\|\|/ || rest ~ /;/ || rest ~ /\|/) return 0
+      # The chain refusal.  A value that runs a command after it is
+      # refused by the two rules below.  A quoted value must be the whole
+      # remainder of the line:  nothing may follow its closing quote.  An
+      # unquoted value must be a single word, with no whitespace, ;, & or
+      # | in it.  The && inside FLEET_DIR="$(cd "$(dirname "$0")" && pwd)"
+      # is inside the quoted value, so that line stays one assignment and
+      # is accepted.
       if (first == "\"" || first == SQ) {
         # A quoted value is the whole remainder of the line:  nothing may
         # follow the closing quote.
@@ -822,7 +827,7 @@ extract_ship_prelude() {
 # refused by the check it is meant to trip:  a cut that never stops and a
 # cut that stops at the wrong line must not pass for one another, so every
 # variant asserts the words of its own refusal.
-for variant in missing reformatted moved nodef tight assignchain assignother; do
+for variant in missing reformatted moved nodef tight assignchain assignchainbare assignother; do
   synth="${tmp}/synth-ship-${variant}.sh"
   sentinel="${tmp}/synth-sentinel-${variant}"
   {
@@ -841,10 +846,15 @@ for variant in missing reformatted moved nodef tight assignchain assignother; do
                    echo 'init_rejected_key_file || echo "could not init" >&2' ;;
       nodef)       echo 'init_rejected_key_file || echo "could not init" >&2' ;;
       tight)       echo 'init_rejected_key_file ||echo "could not init" >&2' ;;
-      # An allowlisted name whose value chains a command after it:  the
-      # chain rule has to refuse it, not the allowlist.
+      # An allowlisted name whose quoted value chains a command after it:
+      # the quoted-value rule has to refuse it, not the allowlist -- nothing
+      # may follow the closing quote of the value.
       assignchain) echo "TEAM_ID=\"x\" && printf 'SHIP-BODY-RAN\\n' > '${sentinel}'"
                    echo 'init_rejected_key_file || echo "could not init" >&2' ;;
+      # The same chain with an unquoted value:  the unquoted single-word
+      # rule has to refuse it, not the allowlist.
+      assignchainbare) echo "TEAM_ID=x&&printf 'SHIP-BODY-RAN\\n' > '${sentinel}'"
+                       echo 'init_rejected_key_file || echo "could not init" >&2' ;;
       # A name the real prelude never sets:  the allowlist has to refuse
       # it, even though it only assigns a value.
       assignother) echo 'OTHER_NAME=1'
@@ -864,6 +874,7 @@ for variant in missing reformatted moved nodef tight assignchain assignother; do
     nodef)       expect="function definition" ;;
     tight)       expect="did not stop at the load-time hand-off init call" ;;
     assignchain) expect="positional" ;;
+    assignchainbare) expect="positional" ;;
     assignother) expect="positional" ;;
     *)           fail "an unknown variant ${variant} reached the refusal check" ;;
   esac
