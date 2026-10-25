@@ -1385,6 +1385,24 @@ release_archive_lock() {
   rmdir "$ARCHIVE_LOCK_DIR" 2>/dev/null || true
 }
 
+# What each ensure-tf-ready exit code means.  Kept in its own file so the
+# wording is testable without an App Store Connect round trip, and so the rc=5
+# branch can name the real cause (no internal tester group) instead of the
+# export-compliance wording that never applied to it.
+#
+# The helper is loaded here, in the ship body, and not at the top of the
+# script:  the prelude of this script is cut and sourced on its own by the
+# credential tests, and the prelude carries only safe top-level shapes.
+load_tf_ready_outcome() {
+  local helper="${FLEET_DIR}/tf-ready-outcome.sh"
+  if [[ ! -f "$helper" ]]; then
+    echo "missing ${helper}" >&2
+    return 1
+  fi
+  # shellcheck source=scripts/ios-fleet/tf-ready-outcome.sh
+  source "$helper"
+}
+
 # After a successful upload, declare export compliance if the IPA omitted
 # ITSAppUsesNonExemptEncryption. Otherwise TestFlight stays
 # MISSING_EXPORT_COMPLIANCE and the phone never sees the build (ST 1.0.1/2
@@ -1425,6 +1443,38 @@ ensure_tf_ready() {
     log "warning: if the phone never gets this build, declare compliance by hand in App Store Connect"
     if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
       echo "::warning::ensure-tf-ready could not find uploaded build ${BUILD_NUM} for ${BUNDLE_ID}; export compliance not declared"
+    fi
+    return 0
+  fi
+  if [[ $rc -eq 5 || $rc -eq 6 ]]; then
+    # rc=5 is READ AND ZERO ON THE INTERNAL PATH: the build was found, Apple
+    # finished processing it, and export compliance WAS declared (the compliance
+    # PATCH lands before the readiness poll, so the poll's enc=false is the
+    # answered state).  The count behind the code is the count of INTERNAL
+    # TestFlight testers in internal groups with access to all builds, so rc=5
+    # means this app has no internal group and zero internal testers can install
+    # the build.  rc=6 is the same situation with the count unreadable, so
+    # installability on the internal path is unverified rather than known-zero.
+    #
+    # It says nothing about external testers: a build assigned to an external
+    # group reaches that group, subject to Apple's beta review of the build.
+    # CodeCaps iOS 1.0.263 / build 281 was in exactly that state on
+    # 2026-10-25: no internal group, and at the same time assigned to the
+    # existing Public Beta external group.
+    #
+    # The generic export-compliance wording never applied to either code, and
+    # it is why 14 green ships reached nobody (GH #1018) and why CodeCaps iOS
+    # 1.0.263 / build 281 shipped with a green job on 2026-10-25 and a
+    # warning about the wrong thing.
+    if ! load_tf_ready_outcome; then
+      log "warning: the ensure-tf-ready outcome helper is missing, so exit code ${rc} has no wording"
+      return 0
+    fi
+    while IFS= read -r line; do
+      [[ -n "$line" ]] && log "$line"
+    done <<< "$(tf_ready_outcome_lines "$rc")"
+    if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+      echo "::warning::$(tf_ready_outcome_annotation "$rc" "$BUNDLE_ID" "$BUILD_NUM")"
     fi
     return 0
   fi
