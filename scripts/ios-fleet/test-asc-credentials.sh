@@ -654,12 +654,21 @@ extract_ship_prelude() {
     || { echo "the prelude cut did not stop at the load-time hand-off init call"; return 1; }
   grep -q '^init_rejected_key_file() {$' "$dest" \
     || { echo "the hand-off init function definition is not in the prelude"; return 1; }
-  # The positional guard.  A line that starts with whitespace is a function
-  # body and is ignored.  A line at column 0 has to be a shape that belongs
-  # to the prelude itself:  a comment, a blank line, set -euo pipefail, an
-  # allowlisted assignment, a function opener, a lone closing brace, or a
-  # trap.  Any other command at column 0 is ship-body code the cut took
-  # with it, and the prelude would run it when it is sourced.
+  # The positional guard.  A line that starts with whitespace is accepted
+  # only inside a function body:  a body is opened by a column-0 `name() {`
+  # line and closed by a column-0 `}` line.  A whitespace-leading line
+  # outside a body is a top-level command, not a function body, and it is
+  # refused -- the cut took it with it, and the prelude would run it when
+  # it is sourced.  A whitespace-leading comment line is skipped anywhere.
+  #
+  # A line at column 0 has to be a shape that belongs to the prelude
+  # itself:  a comment, a blank line, set -euo pipefail, an allowlisted
+  # assignment, a function opener, a lone closing brace, or a trap.  Any
+  # other command at column 0 is ship-body code the cut took with it, and
+  # the prelude would run it when it is sourced.  A lone `}` outside a
+  # body closes nothing, so it is refused as well, and so is a second
+  # function opener while a body is still open:  the body tracking cannot
+  # be talked out of its shape.
   #
   # An assignment is accepted only when it is one the real prelude makes:
   # export PATH=, and a plain assignment to ASC_NODE, FLEET_DIR, APPS_JSON,
@@ -688,19 +697,55 @@ extract_ship_prelude() {
       allowed["ASC_TMP_DIR"] = 1
       allowed["_rejected_key_dir"] = 1
       allowed["_rejected_key_path"] = 1
+      # Whether the line being read is inside a function body.  A body is
+      # opened by a column-0 `name() {` line and closed by a column-0 `}`
+      # line, and only a body may hold a whitespace-leading line.
+      in_body = 0
     }
     { lines[NR] = $0 }
     END {
       for (i = 1; i < NR; i++) {
         l = lines[i]
         if (l ~ /^[[:space:]]*$/) continue
-        if (l ~ /^[[:space:]]/) continue
+        if (l ~ /^[[:space:]]/) {
+          # A whitespace-leading line is accepted only inside a function
+          # body:  a body is opened by a column-0 `name() {` line and
+          # closed by a column-0 `}` line.  A whitespace-leading line
+          # outside a body is a top-level command, and the cut would run
+          # it when the prelude is sourced, so it is refused.  A
+          # whitespace-leading comment line is skipped anywhere.
+          if (l ~ /^[[:space:]]+#/) continue
+          if (in_body == 1) continue
+          print i ": " l
+          exit
+        }
         if (l ~ /^#/) continue
         if (l == "set -euo pipefail") continue
         if (assignment_ok(l)) continue
-        if (l ~ /^[A-Za-z_][A-Za-z0-9_]*\(\)[[:space:]]*[{][[:space:]]*$/) continue
+        if (l ~ /^[A-Za-z_][A-Za-z0-9_]*\(\)[[:space:]]*[{][[:space:]]*$/) {
+          # A column-0 opener opens a body.  A second one while a body is
+          # still open is refused:  the body would have no shape that the
+          # closing brace could match.
+          if (in_body == 1) {
+            print i ": " l
+            exit
+          }
+          in_body = 1
+          continue
+        }
+        # The one-line form does not open a body:  its body ends on its
+        # own line.
         if (l ~ /^[A-Za-z_][A-Za-z0-9_]*\(\)[[:space:]]*[{].*[}]$/) continue
-        if (l ~ /^[}][[:space:]]*$/) continue
+        if (l ~ /^[}][[:space:]]*$/) {
+          # A column-0 `}` closes a body.  Outside a body it closes
+          # nothing, so it is refused.
+          if (in_body == 0) {
+            print i ": " l
+            exit
+          }
+          in_body = 0
+          continue
+        }
         if (l ~ /^trap[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]+EXIT[[:space:]]*$/) continue
         print i ": " l
         exit
@@ -827,7 +872,7 @@ extract_ship_prelude() {
 # refused by the check it is meant to trip:  a cut that never stops and a
 # cut that stops at the wrong line must not pass for one another, so every
 # variant asserts the words of its own refusal.
-for variant in missing reformatted moved nodef tight assignchain assignchainbare assignother; do
+for variant in missing reformatted moved nodef tight assignchain assignchainbare assignother indented strayclose; do
   synth="${tmp}/synth-ship-${variant}.sh"
   sentinel="${tmp}/synth-sentinel-${variant}"
   {
@@ -859,6 +904,16 @@ for variant in missing reformatted moved nodef tight assignchain assignchainbare
       # it, even though it only assigns a value.
       assignother) echo 'OTHER_NAME=1'
                    echo 'init_rejected_key_file || echo "could not init" >&2' ;;
+      # An indented top-level command placed after a function body closed:
+      # an indented line outside a body is a top-level command, and the
+      # cut would run it when the prelude is sourced, so the guard has to
+      # refuse it.
+      indented)    echo "  printf 'SHIP-BODY-RAN\\n' > '${sentinel}'"
+                   echo 'init_rejected_key_file || echo "could not init" >&2' ;;
+      # A lone closing brace outside any body:  it closes nothing, so it
+      # is a positional command and has to be refused.
+      strayclose)  echo '}'
+                   echo 'init_rejected_key_file || echo "could not init" >&2' ;;
     esac
     echo "printf 'SHIP-BODY-RAN\\n' > '${sentinel}'"
     echo 'exit 0'
@@ -876,11 +931,22 @@ for variant in missing reformatted moved nodef tight assignchain assignchainbare
     assignchain) expect="positional" ;;
     assignchainbare) expect="positional" ;;
     assignother) expect="positional" ;;
+    indented)    expect="positional" ;;
+    strayclose)  expect="positional" ;;
     *)           fail "an unknown variant ${variant} reached the refusal check" ;;
   esac
   [[ "$synth_out" == *"$expect"* ]] \
     || fail "the ${variant} variant was refused by the wrong check: ${synth_out}"
 done
+
+# The refused indented prelude never ran its command.  The refusal happens
+# before anything is sourced, so the sentinel that command would have
+# written is not there -- and the cut did take the command with it, which
+# is exactly why the guard had to refuse it.
+grep -qF "printf 'SHIP-BODY-RAN" "${tmp}/synth-prelude-indented.sh" \
+  || fail "the indented variant did not put an indented command in the cut"
+[[ ! -e "${tmp}/synth-sentinel-indented" ]] \
+  || fail "the refused indented prelude ran its indented top-level command"
 
 # 12a-bis. The positive control:  a prelude that stops exactly at the init
 # call is accepted, and the ship body after that call is never sourced, so
