@@ -635,8 +635,60 @@ done <<< "$shell_sources"
 # runs when the script is loaded, so every run has a private place to put
 # the label before any subshell exists, and a refusal is never written
 # somewhere a stale value could pick.
-sed -n '1,/^init_rejected_key_file ||/p' "$script" > "${tmp}/ship-prelude.sh"
-grep -q '^init_rejected_key_file' "${tmp}/ship-prelude.sh" || fail "the load-time hand-off init is not in the prelude"
+#
+# The prelude is cut from the top of the ship script down to the load-time
+# init call.  The cut is checked before anything is sourced:  it must stop
+# strictly before the end of the file, its last line must be the init call,
+# and the function definition must be in it on its own line.  A missing or
+# reformatted call marker fails here, so the ship body is never sourced.
+extract_ship_prelude() {
+  local src="$1" dest="$2" total kept
+  sed -n '1,/^init_rejected_key_file ||/p' "$src" > "$dest"
+  total="$(wc -l < "$src")"
+  kept="$(wc -l < "$dest")"
+  (( kept < total )) || { echo "the prelude cut did not stop before the end of the ship script"; return 1; }
+  tail -n 1 "$dest" | grep -q '^init_rejected_key_file || ' \
+    || { echo "the prelude cut did not stop at the load-time hand-off init call"; return 1; }
+  grep -q '^init_rejected_key_file() {$' "$dest" \
+    || { echo "the hand-off init function definition is not in the prelude"; return 1; }
+}
+
+# 12a. Synthetic ship scripts whose call marker is missing or reformatted
+# are refused before sourcing.  Each body after the definition would write
+# a sentinel file if it were ever sourced or run.
+for variant in missing reformatted moved nodef; do
+  synth="${tmp}/synth-ship-${variant}.sh"
+  sentinel="${tmp}/synth-sentinel-${variant}"
+  rm -f "$sentinel"
+  {
+    echo '#!/bin/bash'
+    if [[ "$variant" != nodef ]]; then
+      echo 'init_rejected_key_file() {'
+      echo '  _rejected_key_dir="$(mktemp -d)"'
+      echo '}'
+    else
+      echo 'init_rejected_key_file_renamed() { :; }'
+    fi
+    case "$variant" in
+      missing)     ;;
+      reformatted) echo 'init_rejected_key_file|| echo "could not init" >&2' ;;
+      moved)       echo 'echo "arg parsing"'
+                   echo '  init_rejected_key_file || echo "could not init" >&2' ;;
+      nodef)       echo 'init_rejected_key_file || echo "could not init" >&2' ;;
+    esac
+    echo "printf 'SHIP-BODY-RAN\\n' > '${sentinel}'"
+    echo 'exit 0'
+  } > "$synth"
+  if synth_out="$(extract_ship_prelude "$synth" "${tmp}/synth-prelude-${variant}.sh")"; then
+    fail "a ${variant} call marker was accepted as a prelude"
+  fi
+  [[ -n "$synth_out" ]] || fail "the ${variant} call marker was refused without a reason"
+  [[ ! -e "$sentinel" ]] || fail "the ${variant} ship body ran during prelude extraction"
+done
+
+# 12b. The real ship script passes the same checks, and only then is its
+# prelude sourced.
+prelude_err="$(extract_ship_prelude "$script" "${tmp}/ship-prelude.sh")" || fail "$prelude_err"
 load_out="$(bash -c '
   set -euo pipefail
   source "'"$tmp"'/ship-prelude.sh"
