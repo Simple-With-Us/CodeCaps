@@ -2030,7 +2030,8 @@ async function main() {
     for (let page = 0; page < 10 && url; page++) {
       const res = await api("GET", url);
       if (!res.ok) {
-        console.error(`latest-build-seq: preReleaseVersions query failed (HTTP ${res.status})`);
+        const status = res.networkError ? "" : ` (HTTP ${res.status})`;
+        console.error(`latest-build-seq: preReleaseVersions query failed${status}: ${describeError(res)}`);
         process.exitCode = 2;
         return;
       }
@@ -2051,7 +2052,8 @@ async function main() {
     for (let page = 0; page < 10 && url; page++) {
       const res = await api("GET", url);
       if (!res.ok) {
-        console.error(`latest-build-seq: builds query failed (HTTP ${res.status})`);
+        const status = res.networkError ? "" : ` (HTTP ${res.status})`;
+        console.error(`latest-build-seq: builds query failed${status}: ${describeError(res)}`);
         process.exitCode = 2;
         return;
       }
@@ -2168,8 +2170,22 @@ async function main() {
   async function appIdForBundle(bundleId) {
     const res = await ascGet(`/v1/apps?filter[bundleId]=${encodeURIComponent(bundleId)}&limit=1`);
     // A rejected key is not "app not found":  exit 4 so the ship refuses it.
+    //
+    // The diagnostic names WHICH credential was refused:  the fleet's masked
+    // preview of the key in play and the key id beside it, never the key
+    // itself.  Without them an operator holding several keys cannot tell
+    // which one App Store Connect turned down, and the only other way to find
+    // out is to paste the key somewhere.  The preview comes from the same
+    // credential resolution the request was signed with, so it is the exact
+    // key in play.
+    //
+    // The whole message stays on one line:  ship-testflight.sh forwards only
+    // the lines that start with the method name, so a line break would split
+    // the status off the forwarded line.
     if (res.status === 401 || res.status === 403) {
-      console.error(`${method}: App Store Connect rejected the API key (HTTP ${res.status})`);
+      console.error(
+        `${method}: App Store Connect rejected the API key (HTTP ${res.status}; key id ${keyId}, key in play ${maskKeyPreview(privateKeyPem)})`
+      );
       failExit(res.status);
     }
     if (!res.ok) {
@@ -2186,11 +2202,71 @@ async function main() {
     return { ok: true, appId: row.id, error: "" };
   }
 
+  // Every build of the app on one platform, read ONCE and grouped by the
+  // train it belongs to.
+  //
+  // The inline `include=builds` window is capped (limit[builds]=50) and is
+  // shared by the whole page, so a train whose build list is cut short used
+  // to be completed by a request of its own -- one request per cut-short
+  // train, on top of the request that listed the trains.  On a heavily
+  // trained app that is thousands of App Store Connect requests for a ship.
+  //
+  // The app-wide builds query the build floor already uses answers the same
+  // question in one pass:  every build of the app on the platform, with the
+  // train it belongs to.
+  //
+  // The grouping needs the build's preReleaseVersion relationship, so the
+  // answer is only trusted when EVERY build could be attributed to a train
+  // this client has listed.  A build that cannot be attributed (or one whose
+  // train is not in the list) means the grouping did not work, and the
+  // caller falls back to the per-train request rather than let a drift train
+  // look empty.
+  async function appBuildsByTrain(appId, platform, knownTrainIds) {
+    const byTrain = new Map();
+    let unattributed = 0;
+    let unknownTrain = 0;
+    let url =
+      `/v1/builds?filter[app]=${appId}` +
+      `&filter[preReleaseVersion.platform]=${encodeURIComponent(platform)}` +
+      `&include=preReleaseVersion&limit=200`;
+    for (let page = 0; page < 10 && url; page++) {
+      const res = await ascGet(url);
+      if (!res.ok) {
+        return { ok: false, status: res.status, byTrain, complete: false };
+      }
+      for (const b of res.parsed.data || []) {
+        const version = b?.attributes?.version;
+        if (!validVersion(version)) {
+          return { ok: false, status: `malformed build ${b?.id || "?"}`, byTrain, complete: false };
+        }
+        const trainId = toOneId(b?.relationships?.preReleaseVersion?.data);
+        if (!trainId) {
+          unattributed += 1;
+          continue;
+        }
+        if (!knownTrainIds.has(trainId)) {
+          unknownTrain += 1;
+          continue;
+        }
+        if (!byTrain.has(trainId)) byTrain.set(trainId, []);
+        byTrain.get(trainId).push(version);
+      }
+      url = res.parsed.links?.next || "";
+    }
+    // A list still going after the last page is not an authoritative answer.
+    if (url) return { ok: false, status: "more than 10 pages of app builds", byTrain, complete: false };
+    return { ok: true, status: 200, byTrain, complete: unattributed === 0 && unknownTrain === 0 };
+  }
+
   // The trains of an app: the TestFlight version strings and the builds each
   // one holds.  `include=builds` puts the build records in `included`.
   async function fetchTrains(appId, platform) {
     const trains = [];
     const buildVersionById = new Map();
+    const knownTrainIds = new Set();
+    // The trains whose inline build list was cut short, and so still need
+    // their build list completed.
+    const cutShort = [];
     let url =
       `/v1/preReleaseVersions?filter[app]=${appId}` +
       `&filter[platform]=${encodeURIComponent(platform)}` +
@@ -2221,20 +2297,58 @@ async function main() {
         }
         const rel = v.relationships?.builds;
         const ids = (rel?.data || []).map((b) => b && b.id).filter(Boolean);
-        let builds = ids.map((id) => buildVersionById.get(id)).filter((x) => x !== undefined);
+        const builds = ids.map((id) => buildVersionById.get(id)).filter((x) => x !== undefined);
+        const entry = { version: v.attributes.version, builds };
+        trains.push(entry);
+        if (typeof v.id === "string" && v.id) knownTrainIds.add(v.id);
         // The inline list stops at limit[builds]; when it is cut short (or a
-        // build record is missing from `included`), read the whole train.
+        // build record is missing from `included`), the whole train is read
+        // below.
         const total = rel?.meta?.paging?.total;
         if (builds.length < ids.length || (Number.isInteger(total) && total > ids.length)) {
-          const full = await trainBuildVersions(v.id);
-          if (!full.ok) return { ok: false, status: full.status, trains };
-          builds = full.builds;
+          //  How many builds the train holds, as far as this response says:
+          //  the relationship listed `ids.length` of them and its paging
+          //  total, when App Store Connect reports one, is the real count.
+          //  A completed build list has to hold at least this many, or it is
+          //  not this train's build list.
+          const expected = Math.max(ids.length, Number.isInteger(total) ? total : 0);
+          cutShort.push({ id: v.id, entry, expected });
         }
-        trains.push({ version: v.attributes.version, builds });
       }
       url = res.parsed.links?.next || "";
     }
     if (url) return { ok: false, status: "more than 10 pages of trains", trains };
+
+    if (cutShort.length) {
+      // ONE app-wide builds query answers every cut-short train, instead of a
+      // request per train.
+      const all = await appBuildsByTrain(appId, platform, knownTrainIds);
+      let usable = all.ok && all.complete;
+      if (usable) {
+        // The app-wide answer has to hold at least what this response said
+        // the train holds:  a shorter answer means builds went missing, and a
+        // train that looks emptier than it is can be a drift train, which
+        // would plan a patch that already exists.
+        for (const cut of cutShort) {
+          const resolved = all.byTrain.get(cut.id) || [];
+          if (resolved.length < cut.expected) {
+            usable = false;
+            break;
+          }
+        }
+      }
+      for (const cut of cutShort) {
+        if (usable) {
+          cut.entry.builds = all.byTrain.get(cut.id) || [];
+          continue;
+        }
+        // The app-wide answer could not be trusted, so the train is read on
+        // its own, the way this client always has.
+        const full = await trainBuildVersions(cut.id);
+        if (!full.ok) return { ok: false, status: full.status, trains };
+        cut.entry.builds = full.builds;
+      }
+    }
     return { ok: true, status: 200, trains, error: "" };
   }
 
@@ -2272,7 +2386,7 @@ async function main() {
     for (let page = 1; page < 10 && storeNext; page++) {
       const more = await ascGet(storeNext);
       if (!more.ok) {
-        console.error(`latest-marketing-patch: appStoreVersions page ${page + 1} failed (HTTP ${more.status})`);
+        console.error(`latest-marketing-patch: appStoreVersions page ${page + 1} failed (HTTP ${more.status}): ${describeError(more)}`);
         failExit(more.status);
       }
       storeRows.push(...(more.parsed.data || []));

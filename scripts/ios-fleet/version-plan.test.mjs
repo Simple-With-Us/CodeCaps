@@ -122,11 +122,14 @@ test("buildFloor ignores dotted and non-numeric build values", () => {
 });
 
 test("planVersion picks the next patch on the train (real Congress.Trade data)", () => {
-  const ascPatch = latestMarketingPatch({
+  // ascPatch is what production feeds planVersion:  nextMarketingPatch - 1.
+  // The client prints exactly that number, so the module and the ship plan
+  // the same marketing version.
+  const ascPatch = nextMarketingPatch({
     prefix: "1.0",
     appStoreVersions: CONGRESS_APP_STORE_VERSIONS,
     trains: CONGRESS_TRAINS
-  });
+  }) - 1;
   assert.equal(ascPatch, 236);
 
   const floor = buildFloor({
@@ -245,6 +248,60 @@ test("nextMarketingPatch skips a patch a drift train already holds (Kody, AFC-51
   ];
   assert.equal(latestMarketingPatch({ prefix: "1.0", appStoreVersions: ["1.0.235"], trains }), 235);
   assert.equal(nextMarketingPatch({ prefix: "1.0", appStoreVersions: ["1.0.235"], trains }), 238);
+});
+
+test("planVersion lands on the next free patch past a drift train (Kody, AFC-517)", () => {
+  const trains = [
+    { version: "1.0.235", builds: ["202610110355"] },
+    { version: "1.0.236", builds: ["236"] },        // drift train on the next patch
+    { version: "1.0.237", builds: ["237", "2400"] } // drift train we already shipped into
+  ];
+  // The value production feeds in (what latest-marketing-patch prints).
+  const ascPatch = nextMarketingPatch({ prefix: "1.0", appStoreVersions: ["1.0.235"], trains }) - 1;
+  assert.equal(ascPatch, 237);
+  const plan = planVersion({ prefix: "1.0", ascPatch, commitCount: 2500, floor: 2400 });
+  assert.equal(plan.marketing, "1.0.238");
+  assert.equal(plan.build, "2500");
+  // Feeding latestMarketingPatch instead would plan 1.0.236, the drift train's patch.
+  // That is why the contract is nextMarketingPatch - 1.
+  assert.equal(latestMarketingPatch({ prefix: "1.0", appStoreVersions: ["1.0.235"], trains }), 235);
+});
+
+test("planVersion plans the same marketing version as nextMarketingPatch (Kody, AFC-517)", () => {
+  // The module and the ship have to agree on EVERY train, not only on the
+  // ones where the drift skip does not bite:  the client prints
+  // nextMarketingPatch - 1 and the module adds one back, so the marketing
+  // version is the next free patch.
+  const cases = [
+    { appStoreVersions: [], trains: [] },
+    { appStoreVersions: ["1.0.235"], trains: [] },
+    {
+      appStoreVersions: ["1.0.235"],
+      trains: [
+        { version: "1.0.235", builds: ["202610110355"] },
+        { version: "1.0.236", builds: ["202610180036"] },
+        { version: "1.0.2353", builds: ["2353"] },
+        { version: "1.0.2358", builds: ["2358"] }
+      ]
+    },
+    {
+      appStoreVersions: ["1.0.235"],
+      trains: [
+        { version: "1.0.235", builds: ["202610110355"] },
+        { version: "1.0.236", builds: ["236"] },
+        { version: "1.0.237", builds: ["237", "2400"] }
+      ]
+    }
+  ];
+  for (const state of cases) {
+    const nextFree = nextMarketingPatch({ prefix: "1.0", ...state });
+    const plan = planVersion({ prefix: "1.0", ascPatch: nextFree - 1, commitCount: 10, floor: 0 });
+    assert.equal(
+      plan.marketing,
+      `1.0.${nextFree}`,
+      `the module planned ${plan.marketing} but the next free patch is 1.0.${nextFree}`
+    );
+  }
 });
 
 test("nextMarketingPatch is latest + 1 when nothing is in the way", () => {

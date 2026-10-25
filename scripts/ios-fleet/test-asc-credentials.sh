@@ -55,7 +55,7 @@ export FAKE_OTHER_PEM="${tmp}/other.p8"
 
 extract() {
   awk '
-    /^fs_get\(\) \{/ || /^load_secrets\(\) \{/ || /^cleanup_asc_tmp\(\) \{/ || /^expand_tilde\(\) \{/ { grab = 1 }
+    /^fs_get\(\) \{/ || /^load_secrets\(\) \{/ || /^cleanup_asc_tmp\(\) \{/ || /^expand_tilde\(\) \{/ || /^asc_rejected_key_preview\(\) \{/ { grab = 1 }
     grab { print }
     grab && /^\}/ { grab = 0 }
   ' "$script"
@@ -369,5 +369,36 @@ done
 if grep -nE '(~|\$\{?HOME\}?)/\.secrets' "$script" >/dev/null; then
   fail "ship-testflight.sh still names the old secrets folder"
 fi
+
+# 7. A rejected credential is named by the fleet's masked preview, and the
+# preview comes out of the client's own diagnostic.  The shell never holds
+# the key material at that point (load_secrets runs later), so it reads the
+# preview the client already masked -- and never a key.
+cat > "${tmp}/client-err.txt" <<'ERR'
+asc-auth: using ASC_KEY_P8 environment (key id length 15)
+latest-marketing-patch: App Store Connect rejected the API key (HTTP 401; key id SYNTHETICKEYID1, key in play MIGHAgEA…coyG)
+ERR
+: > "${tmp}/client-err-empty.txt"
+preview="$(bash -c '
+  set -euo pipefail
+  source "'"$funcs"'"
+  asc_rejected_key_preview "'"$tmp"'/client-err.txt"
+')" || fail "asc_rejected_key_preview"
+[[ "$preview" == "MIGHAgEA…coyG" ]] || fail "the masked preview was not read from the client diagnostic: ${preview}"
+empty_preview="$(bash -c '
+  set -euo pipefail
+  source "'"$funcs"'"
+  asc_rejected_key_preview "'"$tmp"'/client-err-empty.txt"
+')" || fail "asc_rejected_key_preview on an empty diagnostic"
+[[ -n "$empty_preview" ]] || fail "an empty diagnostic produced no text at all"
+missing_preview="$(bash -c '
+  set -euo pipefail
+  source "'"$funcs"'"
+  asc_rejected_key_preview
+')" || fail "asc_rejected_key_preview without a file"
+[[ -n "$missing_preview" ]] || fail "a missing diagnostic file produced no text at all"
+# The raw key must never appear in what the shell prints.
+pem_material="$(sed -e 's/-----[^-]*-----//g' "${tmp}/asc.p8" | tr -d '[:space:]')"
+[[ "$preview" != *"$pem_material"* ]] || fail "the preview carries the key material"
 
 echo "ok: ASC credential resolution (environment first, then Infisical, a named path ignored, temp key removed)"

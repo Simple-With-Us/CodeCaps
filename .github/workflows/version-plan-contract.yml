@@ -5,19 +5,22 @@ name: Version plan contract
 # unit-tested copy of the rules; scripts/ios-fleet/ship-testflight.sh and
 # scripts/ios-fleet/asc-api.mjs implement the same rules against App Store
 # Connect.  This workflow runs the unit test, so a change to the rules cannot
-# land untested.
+# land untested, AND it runs the client against a stub App Store Connect, so
+# the module cannot drift away from the plan the ship actually applies.
 #
 # It is a workflow of its own on purpose:  the workflows that can upload to
 # TestFlight are the ship workflows, and a rule change must never travel with
 # an edit to one of them.  Nothing here reaches App Store Connect, xcodebuild
-# or the network:  the test is pure, and the two syntax checks are parser
-# runs.  So it is safe to run on every pull request that touches the rules.
+# or the network:  the unit test is pure, the contract test runs the client
+# against a loopback stub, and the two syntax checks are parser runs.  So it
+# is safe to run on every pull request that touches the rules.
 
 on:
   pull_request:
     paths:
       - 'scripts/ios-fleet/version-plan.mjs'
       - 'scripts/ios-fleet/version-plan.test.mjs'
+      - 'scripts/ios-fleet/test-version-plan-contract.mjs'
       - 'scripts/ios-fleet/ship-testflight.sh'
       - 'scripts/ios-fleet/asc-api.mjs'
   push:
@@ -25,6 +28,7 @@ on:
     paths:
       - 'scripts/ios-fleet/version-plan.mjs'
       - 'scripts/ios-fleet/version-plan.test.mjs'
+      - 'scripts/ios-fleet/test-version-plan-contract.mjs'
       - 'scripts/ios-fleet/ship-testflight.sh'
       - 'scripts/ios-fleet/asc-api.mjs'
   workflow_dispatch:
@@ -51,3 +55,13 @@ jobs:
           node --check scripts/ios-fleet/asc-api.mjs
           bash -n scripts/ios-fleet/ship-testflight.sh
           node --test scripts/ios-fleet/version-plan.test.mjs
+      - name: The version plan the ship actually applies (AFC-517)
+        run: |
+          #  The rules the ship applies live in the client and the ship
+          #  script, so the module is held to what the REAL client answers
+          #  against a stub App Store Connect (ASC_API_BASE).  Without this,
+          #  the module and the ship can drift apart -- which they did:  the
+          #  module computed "highest patch used + 1" while the client
+          #  computed the next free patch -- while this workflow stayed
+          #  green.
+          node --test scripts/ios-fleet/test-version-plan-contract.mjs

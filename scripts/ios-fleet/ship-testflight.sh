@@ -349,6 +349,28 @@ asc_client() {
   "$ASC_NODE" "${FLEET_DIR}/asc-api.mjs" "$@"
 }
 
+# The masked preview of the key App Store Connect refused.
+#
+# The client resolves the credential itself (this script resolves it later,
+# and only for altool and Xcode), so the client is the only layer that knows
+# which key was in play.  It says so in its own diagnostic, already masked:
+# "key in play <first eight>…<last four>", which is the fleet's preview
+# shape.  The preview is read out of that diagnostic, so no key material is
+# ever handled here and none can reach a log line.
+#
+# $1: the file the client's stderr was captured into.
+ASC_LAST_REJECTED_KEY=""
+asc_rejected_key_preview() {
+  local errf="${1:-}" preview=""
+  if [[ -n "$errf" && -s "$errf" ]]; then
+    preview="$(sed -n 's/.*key in play \([^)]*\).*/\1/p' "$errf" 2>/dev/null | head -n 1 || true)"
+  fi
+  if [[ -z "$preview" ]]; then
+    preview="(the client reported no preview)"
+  fi
+  printf '%s' "$preview"
+}
+
 # Map ship APP_KEY to Sentry project slug in org simple-with-us.
 sentry_project_for_app() {
   case "${APP_KEY}" in
@@ -550,7 +572,11 @@ asc_latest_marketing_patch() {
   rc=$?
   if [[ $rc -eq 4 ]]; then
     set -e
-    logerr "asc-patch: App Store Connect rejected the credential (HTTP 401/403)"
+    # The client's diagnostic names the key that was refused (masked);  the
+    # shell quotes that preview so the rejection says which credential it was
+    # and not only that a credential was rejected.
+    ASC_LAST_REJECTED_KEY="$(asc_rejected_key_preview "$errf")"
+    logerr "asc-patch: App Store Connect rejected the credential (HTTP 401/403; key in play ${ASC_LAST_REJECTED_KEY})"
     # Forward the client's own lines first:  they carry Apple's status and code.
     if [[ -s "$errf" ]]; then
       while IFS= read -r _pl; do
@@ -607,7 +633,11 @@ asc_build_floor() {
   fi
   if [[ $rc -eq 4 ]]; then
     set -e
-    logerr "asc-floor: App Store Connect rejected the credential (HTTP 401/403)"
+    # The client's diagnostic names the key that was refused (masked);  the
+    # shell quotes that preview so the rejection says which credential it was
+    # and not only that a credential was rejected.
+    ASC_LAST_REJECTED_KEY="$(asc_rejected_key_preview "$errfile")"
+    logerr "asc-floor: App Store Connect rejected the credential (HTTP 401/403; key in play ${ASC_LAST_REJECTED_KEY})"
     rm -f "$errfile" >/dev/null 2>&1 || true
     return 4
   fi
@@ -981,7 +1011,7 @@ else
     _patch="$(asc_latest_marketing_patch "$MARKETING_PREFIX" "$ASC_PLATFORM")"
     _rc=$?
     if [[ $_rc -eq 4 ]]; then
-      die "App Store Connect rejected the API key (HTTP 401/403) while reading the next marketing version.
+      die "App Store Connect rejected the API key (HTTP 401/403; key in play ${ASC_LAST_REJECTED_KEY:-unknown}) while reading the next marketing version.
   Fix the key (ASC_* in env or Infisical /asc; fleet-secrets doctor) and re-run.
   --allow-unverified-seq does not cover a rejected credential:  the upload would fail with it too."
     fi
@@ -1033,7 +1063,7 @@ else
     _floor_line="$(asc_build_floor "$MARKETING" "$ASC_PLATFORM")"
     _rc=$?
     if [[ $_rc -eq 4 ]]; then
-      die "App Store Connect rejected the API key (HTTP 401/403) while reading the build floor.
+      die "App Store Connect rejected the API key (HTTP 401/403; key in play ${ASC_LAST_REJECTED_KEY:-unknown}) while reading the build floor.
   Fix the key (ASC_* in env or Infisical /asc; fleet-secrets doctor) and re-run.
   --allow-unverified-seq does not cover a rejected credential:  the upload would fail with it too."
     fi

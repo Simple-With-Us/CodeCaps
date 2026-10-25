@@ -9,14 +9,21 @@
  *
  *   MARKETING_VERSION       = <prefix>.<P+1>
  *       <prefix> is the train from marketingVersionDefault ("1.0").
- *       P is the highest patch already used on that train in App Store
- *       Connect, counting BOTH App Store versions (appStoreVersions
- *       .versionString) AND TestFlight trains (preReleaseVersions.version)
- *       for the app's platform -- IGNORING any TestFlight train that is a
- *       "drift train":  a <prefix>.N train that holds a build whose
- *       CFBundleVersion is exactly the string "N".  Those are the
- *       1.0.N (N) uploads the retired scheme produced (1.0.2358 holding
- *       build 2358).  App Store versions are never ignored.
+ *       P+1 is the next free patch on that train (nextMarketingPatch), so
+ *       P is nextMarketingPatch - 1.  That is the number
+ *       `asc-api.mjs latest-marketing-patch` prints.  The next free patch
+ *       starts one past the highest patch already used in App Store
+ *       Connect (latestMarketingPatch), counting BOTH App Store versions
+ *       (appStoreVersions.versionString) AND TestFlight trains
+ *       (preReleaseVersions.version) for the app's platform -- IGNORING any
+ *       TestFlight train that is a "drift train":  a <prefix>.N train that
+ *       holds a build whose CFBundleVersion is exactly the string "N".
+ *       Those are the 1.0.N (N) uploads the retired scheme produced
+ *       (1.0.2358 holding build 2358).  App Store versions are never
+ *       ignored.  It then skips every patch a TestFlight train already
+ *       holds, drift trains included.  P is NOT latestMarketingPatch:  on a
+ *       train where a drift train sits on latest + 1, that would plan a
+ *       patch the drift train already holds.
  *
  *   CURRENT_PROJECT_VERSION = the repo commit count, raised when needed so it
  *       is strictly greater than
@@ -210,7 +217,12 @@ export function buildFloor({ trainBuilds = [], appBuilds = [], platform = "" } =
  * The marketing version and the build number for one ship.
  *
  *   prefix        the default train, e.g. "1.0"
- *   ascPatch      the highest patch already used on that train (0 if none)
+ *   ascPatch      the next free patch on that train minus one, i.e.
+ *                 nextMarketingPatch(...) - 1, which is what
+ *                 `asc-api.mjs latest-marketing-patch` prints (0 if the
+ *                 train is empty).  Not latestMarketingPatch:  that ignores
+ *                 drift trains, so a drift train on latest + 1 would be
+ *                 planned again.
  *   forcedVersion an exact --version override, or ""
  *   forcedBuild   an exact --build override, or ""
  *   commitCount   the repo commit count
