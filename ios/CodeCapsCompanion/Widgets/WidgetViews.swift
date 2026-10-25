@@ -311,7 +311,8 @@ struct OverviewSmallView: View {
 
                 Spacer(minLength: 0)
             }
-            .padding(11)
+            .padding(.horizontal, 13)
+            .padding(.vertical, 10)
         }
     }
 }

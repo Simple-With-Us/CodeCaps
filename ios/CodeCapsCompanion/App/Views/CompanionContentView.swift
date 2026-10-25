@@ -301,6 +301,13 @@ public struct CompanionContentView: View {
         let extraWindows = cardWindows.filter {
             $0.id != short?.window.id && $0.id != long?.window.id
         }
+        let atCapWindow = item.atCapWindow(scope: scope)
+        let isAtCap = atCapWindow != nil
+        let usableMuseExtra = item.providerKey == "muse-assist" ? cardWindows.first(where: {
+            QuotaWindowVocabulary.isMuseAssistExtra(providerKey: item.providerKey, windowToken: nil, label: $0.label, resetAt: $0.resetAt)
+            && (($0.remainingPercent ?? 0) > 0 || ($0.absoluteRemaining ?? 0) > 0)
+        }) : nil
+        let shouldDimTitle = isAtCap && usableMuseExtra == nil
 
         return VStack(alignment: .leading, spacing: 12) {
             // Main clickable row
@@ -311,6 +318,8 @@ public struct CompanionContentView: View {
                     HStack(spacing: 6) {
                         Text(item.title)
                             .font(.system(size: 15, weight: .semibold))
+                            .italic(shouldDimTitle)
+                            .foregroundStyle(shouldDimTitle ? Color.primary.opacity(0.45) : .primary)
                     }
 
                     if let sub = item.subtitle {
@@ -354,63 +363,101 @@ public struct CompanionContentView: View {
                 }
             }
 
-            // The cap line.  The Mac's menu-bar window and PiP say which
-            // allowance ran out and when it lifts; the phone said nothing, so
-            // a capped Codex or Antigravity plan looked like any other.
+            // The cap line or meters: when capped, the bars hide and one clean line names the cap and exact reset time.
             if let atCapSummary = item.atCapSummary(scope: scope) {
-                HStack(spacing: 6) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(CompanionTheme.danger)
-                    Text(atCapSummary)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(CompanionTheme.danger)
-                        .lineLimit(2)
-                        .minimumScaleFactor(0.85)
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, 9)
-                .padding(.vertical, 5)
-                .background(CompanionTheme.danger.opacity(0.14), in: RoundedRectangle(cornerRadius: 6))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(CompanionTheme.danger.opacity(0.28), lineWidth: 0.5)
-                )
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel("At cap. \(atCapSummary)")
-            }
+                if let extra = usableMuseExtra {
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Using extra balance")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(Color.primary)
+                            Text(atCapSummary)
+                                .font(.system(size: 10))
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
 
-            // Quota Bars side by side
-            HStack(spacing: 12) {
-                if let short {
-                    CompanionMeterView(
-                        caption: short.window.caption,
-                        window: short.window
-                    )
+                        CompanionMeterView(caption: extra.caption, window: extra)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("At cap. \(atCapSummary)")
+                } else {
+                    VStack(alignment: .center, spacing: 3) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(CompanionTheme.danger)
+                            Text(atCapSummary)
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(CompanionTheme.danger)
+                                .lineLimit(2)
+                                .minimumScaleFactor(0.85)
+                        }
+                        if let exact = item.atCapResetExactTime(scope: scope), !exact.isEmpty {
+                            Text(exact)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 4)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("At cap. \(atCapSummary)")
                 }
-                if let long, long.window.id != short?.window.id {
-                    CompanionMeterView(
-                        caption: long.window.caption,
-                        window: long.window
-                    )
-                } else if short == nil {
-                    if let first = cardWindows.first {
-                        CompanionMeterView(caption: first.caption, window: first)
+            } else {
+                // Quota Bars side by side in a clean 2-column grid
+                HStack(spacing: 12) {
+                    if let short {
+                        CompanionMeterView(
+                            caption: short.window.caption,
+                            window: short.window
+                        )
+                        .frame(maxWidth: .infinity)
+                    }
+                    if let long, long.window.id != short?.window.id {
+                        CompanionMeterView(
+                            caption: long.window.caption,
+                            window: long.window
+                        )
+                        .frame(maxWidth: .infinity)
+                    } else if short == nil {
+                        if let first = cardWindows.first {
+                            CompanionMeterView(caption: first.caption, window: first)
+                                .frame(maxWidth: .infinity)
+                            Spacer()
+                                .frame(maxWidth: .infinity)
+                        }
+                    } else {
+                        // Single meter row: keep first meter in column 1 and column 2 empty
+                        Spacer()
+                            .frame(maxWidth: .infinity)
                     }
                 }
             }
 
-            // Multiple time periods / windows when expanded (only extra allowances not already displayed on the card)
-            if isExpanded && !extraWindows.isEmpty {
-                Divider()
-                    .padding(.vertical, 2)
+            // Multiple time periods / windows and provider details when expanded
+            if isExpanded {
+                let hasExtraWindows = !extraWindows.isEmpty
+                let hasDetails = !item.providerDetailRows.isEmpty
+                if hasExtraWindows || hasDetails {
+                    Divider()
+                        .padding(.vertical, 2)
 
-                VStack(alignment: .leading, spacing: 10) {
-                    ForEach(extraWindows) { win in
-                        windowRow(win)
+                    if hasExtraWindows {
+                        VStack(alignment: .leading, spacing: 10) {
+                            ForEach(extraWindows) { win in
+                                windowRow(win)
+                            }
+                        }
+                    }
+
+                    if hasDetails {
+                        CompanionProviderDetailsView(rows: item.providerDetailRows)
+                            .padding(.top, hasExtraWindows ? 6 : 0)
                     }
                 }
-                .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
         .padding(14)
@@ -420,6 +467,33 @@ public struct CompanionContentView: View {
             if item.isExpandable {
                 toggleExpanded(item.id)
             }
+        }
+    }
+
+    // MARK: - Companion Provider Details View
+
+    public struct CompanionProviderDetailsView: View {
+        public let rows: [CompanionProviderDetailRow]
+
+        public init(rows: [CompanionProviderDetailRow]) {
+            self.rows = rows
+        }
+
+        public var body: some View {
+            VStack(alignment: .leading, spacing: 5) {
+                ForEach(rows) { row in
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(row.label)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.secondary)
+                        Spacer(minLength: 8)
+                        Text(row.value)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.primary)
+                    }
+                }
+            }
+            .padding(.vertical, 2)
         }
     }
 

@@ -173,6 +173,7 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
     public let iconHint: String?
     /// Server-supplied fallback window label (Phase 2 backend manifest).
     public let defaultWindowLabel: String?
+    public let planMetadata: PlanMetadata?
 
     public init(
         id: String,
@@ -185,7 +186,8 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
         isMasked: Bool = false,
         windows: [WidgetWindowItem] = [],
         iconHint: String? = nil,
-        defaultWindowLabel: String? = nil
+        defaultWindowLabel: String? = nil,
+        planMetadata: PlanMetadata? = nil
     ) {
         self.id = id
         self.providerKey = providerKey
@@ -198,6 +200,7 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
         self.windows = WidgetPlatformItem.windowsResolvingBarQualifiers(windows)
         self.iconHint = iconHint
         self.defaultWindowLabel = defaultWindowLabel
+        self.planMetadata = planMetadata
     }
 
     /// Resolve every window's caption qualifier against its siblings.
@@ -324,13 +327,13 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
     /// The pair of windows that represent this plan when a row displays two quota bars side by side.
     ///
     /// When a plan reports two or more windows (such as a 5-hour and a 7-day cap),
-    /// this returns the pair (shortest period first).  Returns nil if the plan does not have two distinct windows.
+    /// this returns the pair (shortest period first).  Returns nil if the plan does not have two distinct windows
+    /// or if one of the windows carries no reading or reset date.
     public func dualWindows() -> (window1: WidgetWindowItem, window2: WidgetWindowItem)? {
         guard windows.count >= 2 else { return nil }
-        let visible = windows.filter { !$0.isMasked }
-        let pool = visible.count >= 2 ? visible : windows
-        guard pool.count >= 2 else { return nil }
-        return (pool[0], pool[1])
+        let visible = windows.filter { !$0.isMasked && ($0.remainingPercent != nil || $0.resetAt != nil) }
+        guard visible.count >= 2 else { return nil }
+        return (visible[0], visible[1])
     }
 }
 
@@ -496,11 +499,86 @@ public enum WidgetPresentation {
         let window: String?
         let resetAt: String?
         let occurredAt: String?
-        /// Who produced the window, so the widget can tell this Mac's own
-        /// reading from a copy of another machine's.
         let source: String?
         let machine: String?
         let producerInstanceId: String?
+        let remainingUnknown: Bool?
+        let plan: String?
+        let planName: String?
+        let planMetadata: PlanMetadata?
+        let planDetectedName: String?
+        let planUserName: String?
+        let planUserCostUsd: String?
+        let planUserRenewalDateText: String?
+        let planUserSubtitle: String?
+        let planShowCostAndRenewal: Bool?
+        let planHasMismatch: Bool?
+        let planUserUpdatedAt: Double?
+
+        private enum CodingKeys: String, CodingKey {
+            case id, provider, providerKey, label, remainingPercent, isExhausted
+            case modelType, modelId, window, resetAt, occurredAt, source, machine
+            case producerInstanceId, remainingUnknown, plan, planName, planMetadata
+            case planDetectedName, planUserName, planUserCostUsd, planUserRenewalDateText
+            case planUserSubtitle, planShowCostAndRenewal, planHasMismatch, planUserUpdatedAt
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decode(String.self, forKey: .id)
+            provider = try container.decode(String.self, forKey: .provider)
+            providerKey = try container.decodeIfPresent(String.self, forKey: .providerKey)
+            label = try container.decodeIfPresent(String.self, forKey: .label) ?? ""
+            remainingPercent = try container.decodeIfPresent(Double.self, forKey: .remainingPercent)
+            isExhausted = try container.decodeIfPresent(Bool.self, forKey: .isExhausted)
+            modelType = try container.decodeIfPresent(String.self, forKey: .modelType)
+            modelId = try container.decodeIfPresent(String.self, forKey: .modelId)
+            window = try container.decodeIfPresent(String.self, forKey: .window)
+            resetAt = try container.decodeIfPresent(String.self, forKey: .resetAt)
+            occurredAt = try container.decodeIfPresent(String.self, forKey: .occurredAt)
+            source = try container.decodeIfPresent(String.self, forKey: .source)
+            machine = try container.decodeIfPresent(String.self, forKey: .machine)
+            producerInstanceId = try container.decodeIfPresent(String.self, forKey: .producerInstanceId)
+            remainingUnknown = try container.decodeIfPresent(Bool.self, forKey: .remainingUnknown)
+            plan = try container.decodeIfPresent(String.self, forKey: .plan)
+            planName = try container.decodeIfPresent(String.self, forKey: .planName)
+            planMetadata = try container.decodeIfPresent(PlanMetadata.self, forKey: .planMetadata)
+            planDetectedName = try container.decodeIfPresent(String.self, forKey: .planDetectedName)
+            planUserName = try container.decodeIfPresent(String.self, forKey: .planUserName)
+            if let costStr = try? container.decodeIfPresent(String.self, forKey: .planUserCostUsd) {
+                planUserCostUsd = costStr
+            } else if let costNum = try? container.decodeIfPresent(Double.self, forKey: .planUserCostUsd) {
+                planUserCostUsd = String(costNum)
+            } else {
+                planUserCostUsd = nil
+            }
+            planUserRenewalDateText = try container.decodeIfPresent(String.self, forKey: .planUserRenewalDateText)
+            planUserSubtitle = try container.decodeIfPresent(String.self, forKey: .planUserSubtitle)
+            planShowCostAndRenewal = try container.decodeIfPresent(Bool.self, forKey: .planShowCostAndRenewal)
+            planHasMismatch = try container.decodeIfPresent(Bool.self, forKey: .planHasMismatch)
+            planUserUpdatedAt = try container.decodeIfPresent(Double.self, forKey: .planUserUpdatedAt)
+        }
+
+        var resolvedPlanMetadata: PlanMetadata? {
+            if let planMetadata {
+                return planMetadata
+            }
+            if planUserName != nil || planDetectedName != nil || planUserCostUsd != nil || planUserRenewalDateText != nil || planUserSubtitle != nil || planShowCostAndRenewal != nil || planHasMismatch != nil {
+                var meta = PlanMetadata(detectedPlanName: planDetectedName ?? planName ?? plan, customInfo: nil, providerKey: providerKey ?? provider)
+                if let planUserName { meta.userPlanName = planUserName }
+                if let planUserCostUsd { meta.userCostUsd = planUserCostUsd }
+                if let planUserRenewalDateText { meta.userRenewalDateText = planUserRenewalDateText }
+                if let planUserSubtitle { meta.userSubtitle = planUserSubtitle }
+                if let planShowCostAndRenewal { meta.showCostAndRenewal = planShowCostAndRenewal }
+                if let planHasMismatch { meta.hasMismatch = planHasMismatch }
+                if let planUserUpdatedAt { meta.userUpdatedAt = planUserUpdatedAt }
+                return meta
+            }
+            if let p = planName ?? plan, !p.isEmpty {
+                return PlanMetadata(detectedPlanName: p, customInfo: nil, providerKey: providerKey ?? provider)
+            }
+            return nil
+        }
     }
 
     /// Mirrors the backend manifest's provider group on the wire.  Optional
@@ -684,6 +762,22 @@ public enum WidgetPresentation {
         now: Date,
         ownInstanceId: String? = nil
     ) -> WidgetPlatformItem {
+        var providerPlanMetadata: PlanMetadata? = nil
+        for w in rawWindows {
+            if let meta = w.resolvedPlanMetadata {
+                if providerPlanMetadata == nil {
+                    providerPlanMetadata = meta
+                } else {
+                    if providerPlanMetadata?.userPlanName == nil { providerPlanMetadata?.userPlanName = meta.userPlanName }
+                    if providerPlanMetadata?.userCostUsd == nil { providerPlanMetadata?.userCostUsd = meta.userCostUsd }
+                    if providerPlanMetadata?.userRenewalDateText == nil { providerPlanMetadata?.userRenewalDateText = meta.userRenewalDateText }
+                    if providerPlanMetadata?.userSubtitle == nil { providerPlanMetadata?.userSubtitle = meta.userSubtitle }
+                    if providerPlanMetadata?.detectedPlanName == nil { providerPlanMetadata?.detectedPlanName = meta.detectedPlanName }
+                    if providerPlanMetadata?.showCostAndRenewal == nil { providerPlanMetadata?.showCostAndRenewal = meta.showCostAndRenewal }
+                }
+            }
+        }
+
         var windowByCadence: [String: WidgetWindowItem] = [:]
         var cadenceOrder: [String] = []
         var childWindows: [WidgetWindowItem] = []
@@ -695,6 +789,17 @@ public enum WidgetPresentation {
         // observation time.  It only judges copies:  this Mac's own reading
         // keeps its row, so an expired one greys out instead of vanishing.
         let liveWindows = rawWindows.filter { w in
+            let lowId = w.id.lowercased()
+            let lowLabel = w.label.lowercased()
+            if lowId.hasSuffix(":plan-metadata") || lowLabel == "plan details" {
+                return false
+            }
+            if (w.remainingUnknown == true || lowLabel.contains("plan details"))
+                && w.remainingPercent == nil
+                && parseDate(from: w.resetAt) == nil
+                && !QuotaWindowVocabulary.isExtraAllowanceLabel(w.label) {
+                return false
+            }
             if QuotaWindowVocabulary.isOwnDeviceWindow(id: w.id,
                                                         source: w.source,
                                                         machine: w.machine,
@@ -789,11 +894,19 @@ public enum WidgetPresentation {
         let nearestReset = childWindows.compactMap(\.resetAt).filter { $0 > now }.min()
             ?? childWindows.compactMap(\.resetAt).min()
 
-        // Window label: prefer the per-window cadence.  When the provider has
-        // no windows yet, fall back to the server's `terms.defaultWindowLabel`
-        // (e.g. "5h" / "weekly") so the row does not go blank.
+        let automaticPlan = rawWindows.compactMap(\.planName).first(where: { !$0.isEmpty })
+            ?? rawWindows.compactMap(\.plan).first(where: { !$0.isEmpty })
+            ?? providerPlanMetadata?.detectedPlanName
+        let resolvedSubtitle = WidgetPlatformDisplay.subtitle(
+            planMetadata: providerPlanMetadata,
+            automaticPlanName: automaticPlan,
+            poolSubtitle: nil,
+            providerKey: providerKey
+        )
         let subtitle: String
-        if let firstCadence = childWindows.first?.cadence, !firstCadence.isEmpty {
+        if let resolvedSubtitle, !resolvedSubtitle.isEmpty {
+            subtitle = resolvedSubtitle
+        } else if let firstCadence = childWindows.first?.cadence, !firstCadence.isEmpty {
             subtitle = firstCadence
         } else if let defaultWindowLabel, !defaultWindowLabel.isEmpty {
             subtitle = defaultWindowLabel
@@ -812,7 +925,8 @@ public enum WidgetPresentation {
             isMasked: false,
             windows: childWindows,
             iconHint: iconHint,
-            defaultWindowLabel: defaultWindowLabel
+            defaultWindowLabel: defaultWindowLabel,
+            planMetadata: providerPlanMetadata
         )
     }
 
@@ -950,7 +1064,13 @@ public enum WidgetPresentation {
         let nearestReset = childWindows.compactMap(\.resetAt).filter { $0 > now }.min()
             ?? childWindows.compactMap(\.resetAt).min()
 
-        let subtitle = poolKey == "gemini" ? "Gemini Models" : "Third-Party Models"
+        let poolSub = poolKey == "gemini" ? "Gemini" : "Third-Party"
+        let subtitle = WidgetPlatformDisplay.subtitle(
+            planMetadata: nil,
+            automaticPlanName: nil,
+            poolSubtitle: poolSub,
+            providerKey: "google-antigravity"
+        ) ?? (poolKey == "gemini" ? "Gemini Models" : "Third-Party Models")
 
         return WidgetPlatformItem(
             id: "antigravity-\(poolKey)",
@@ -963,7 +1083,8 @@ public enum WidgetPresentation {
             isMasked: false,
             windows: childWindows,
             iconHint: iconHint,
-            defaultWindowLabel: defaultLabel
+            defaultWindowLabel: defaultLabel,
+            planMetadata: nil
         )
     }
 

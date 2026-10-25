@@ -67,6 +67,8 @@ targets:
         group: Shared
       - path: ../../Sources/QuotaCore/WidgetPlatformDisplay.swift
         group: Shared
+      - path: ../../Sources/QuotaCore/PlanMetadata.swift
+        group: Shared
       - path: ../../Sources/QuotaCore/CompanionReadTokenStore.swift
         group: Shared
     dependencies:
@@ -116,6 +118,8 @@ targets:
       - path: ../../Sources/QuotaCore/FleetSourceDisagreement.swift
         group: Shared
       - path: ../../Sources/QuotaCore/WidgetPlatformDisplay.swift
+        group: Shared
+      - path: ../../Sources/QuotaCore/PlanMetadata.swift
         group: Shared
       - path: ../../Sources/QuotaCore/WidgetSnapshotFetcher.swift
         group: Shared
@@ -169,6 +173,8 @@ targets:
         group: Shared
       - path: ../../Sources/QuotaCore/WidgetPlatformDisplay.swift
         group: Shared
+      - path: ../../Sources/QuotaCore/PlanMetadata.swift
+        group: Shared
       - path: ../../Sources/QuotaCore/CompanionReadTokenStore.swift
         group: Shared
     dependencies:
@@ -216,6 +222,8 @@ targets:
       - path: ../../Sources/QuotaCore/FleetSourceDisagreement.swift
         group: Shared
       - path: ../../Sources/QuotaCore/WidgetPlatformDisplay.swift
+        group: Shared
+      - path: ../../Sources/QuotaCore/PlanMetadata.swift
         group: Shared
       - path: ../../Sources/QuotaCore/WidgetSnapshotFetcher.swift
         group: Shared

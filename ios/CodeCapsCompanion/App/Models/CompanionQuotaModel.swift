@@ -363,6 +363,18 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
     }
 }
 
+/// One textual detail row for a platform (detected plan, plan, cost, renewal, notes).
+public struct CompanionProviderDetailRow: Identifiable, Codable, Equatable, Sendable {
+    public let label: String
+    public let value: String
+    public var id: String { label }
+
+    public init(label: String, value: String) {
+        self.label = label
+        self.value = value
+    }
+}
+
 /// An overarching platform section displayed in the CodeCaps iOS companion app.
 /// Holds all active time periods / windows for that platform, plus any duplicate sources folded under it.
 public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
@@ -385,6 +397,29 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
     /// Server-supplied fallback window label for this provider.  Used by the
     /// widget when the provider has no windows yet.
     public let defaultWindowLabel: String?
+    public let planMetadata: PlanMetadata?
+
+    public var providerDetailRows: [CompanionProviderDetailRow] {
+        var rows: [CompanionProviderDetailRow] = []
+        if let meta = planMetadata {
+            if let detected = meta.detectedPlanName, !detected.isEmpty {
+                rows.append(.init(label: "Detected Plan", value: detected))
+            }
+            if let userPlan = meta.userPlanName, !userPlan.isEmpty {
+                rows.append(.init(label: "Plan", value: userPlan))
+            }
+            if let cost = meta.userCostUsd, !cost.isEmpty {
+                rows.append(.init(label: "Cost", value: cost))
+            }
+            if let renewal = meta.userRenewalDateText, !renewal.isEmpty {
+                rows.append(.init(label: "Renewal", value: renewal))
+            }
+            if let customSubtitle = meta.userSubtitle, !customSubtitle.isEmpty {
+                rows.append(.init(label: "Notes", value: customSubtitle))
+            }
+        }
+        return rows
+    }
 
     public var shortWindow: CompanionWindowItem? {
         if let short = windows.first(where: { $0.isShortCadence }) {
@@ -401,10 +436,10 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
         return windows.first(where: { $0.id != shortWindow?.id })
     }
 
-    /// A platform card is only expandable if it reports more than two allowance
-    /// windows, so single and dual window cards never repeat their face data.
+    /// A platform card is expandable if it reports more than two allowance
+    /// windows or holds provider plan details.
     public var isExpandable: Bool {
-        windows.count > 2
+        windows.count > 2 || !providerDetailRows.isEmpty
     }
 
     /// Both feeds must report within this window for a source-disagreement banner.
@@ -620,7 +655,8 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
         windows: [CompanionWindowItem] = [],
         duplicateWindows: [CompanionWindowItem] = [],
         iconHint: String? = nil,
-        defaultWindowLabel: String? = nil
+        defaultWindowLabel: String? = nil,
+        planMetadata: PlanMetadata? = nil
     ) {
         self.id = id
         self.providerKey = providerKey
@@ -634,6 +670,7 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
         self.duplicateWindows = duplicateWindows
         self.iconHint = iconHint
         self.defaultWindowLabel = defaultWindowLabel
+        self.planMetadata = planMetadata
     }
 
     public var displayPercent: String {
@@ -698,6 +735,13 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
         return QuotaWindowVocabulary.atCapSummary(cadence: window.atCapCadenceLabel,
                                                   resetAt: window.resetAt,
                                                   now: now)
+    }
+
+    /// Short weekday + time for the cap reset, matching Mac Glance e.g. "Tue 5:00 PM".
+    public func atCapResetExactTime(scope: CompanionSourceScope = .allSources, now: Date = Date()) -> String? {
+        guard let window = atCapWindow(scope: scope, now: now),
+              let reset = window.resetAt, reset > now else { return nil }
+        return reset.formatted(.dateTime.weekday(.abbreviated).hour().minute())
     }
 
     public var elapsedFraction: Double? {
@@ -1399,6 +1443,91 @@ public final class CompanionQuotaModel: ObservableObject {
         let skipReason: String?
         let producerInstanceId: String?
         let machine: String?
+        let remainingUnknown: Bool?
+        let plan: String?
+        let planName: String?
+        let planMetadata: PlanMetadata?
+        let planDetectedName: String?
+        let planUserName: String?
+        let planUserCostUsd: String?
+        let planUserRenewalDateText: String?
+        let planUserSubtitle: String?
+        let planShowCostAndRenewal: Bool?
+        let planHasMismatch: Bool?
+        let planUserUpdatedAt: Double?
+
+        private enum CodingKeys: String, CodingKey {
+            case id, provider, providerKey, label, remainingPercent, isExhausted
+            case modelType, modelId, window, source, via, resetAt, occurredAt, reportedAt
+            case quotaUnit, absoluteRemaining, absoluteLimit, skip, skipReason
+            case producerInstanceId, machine, remainingUnknown, plan, planName, planMetadata
+            case planDetectedName, planUserName, planUserCostUsd, planUserRenewalDateText
+            case planUserSubtitle, planShowCostAndRenewal, planHasMismatch, planUserUpdatedAt
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decode(String.self, forKey: .id)
+            provider = try container.decode(String.self, forKey: .provider)
+            providerKey = try container.decodeIfPresent(String.self, forKey: .providerKey)
+            label = try container.decodeIfPresent(String.self, forKey: .label) ?? ""
+            remainingPercent = try container.decodeIfPresent(Double.self, forKey: .remainingPercent)
+            isExhausted = try container.decodeIfPresent(Bool.self, forKey: .isExhausted)
+            modelType = try container.decodeIfPresent(String.self, forKey: .modelType)
+            modelId = try container.decodeIfPresent(String.self, forKey: .modelId)
+            window = try container.decodeIfPresent(String.self, forKey: .window)
+            source = try container.decodeIfPresent(String.self, forKey: .source)
+            via = try container.decodeIfPresent(String.self, forKey: .via)
+            resetAt = try container.decodeIfPresent(String.self, forKey: .resetAt)
+            occurredAt = try container.decodeIfPresent(String.self, forKey: .occurredAt)
+            reportedAt = try container.decodeIfPresent(String.self, forKey: .reportedAt)
+            quotaUnit = try container.decodeIfPresent(String.self, forKey: .quotaUnit)
+            absoluteRemaining = try container.decodeIfPresent(Double.self, forKey: .absoluteRemaining)
+            absoluteLimit = try container.decodeIfPresent(Double.self, forKey: .absoluteLimit)
+            skip = try container.decodeIfPresent(Bool.self, forKey: .skip)
+            skipReason = try container.decodeIfPresent(String.self, forKey: .skipReason)
+            producerInstanceId = try container.decodeIfPresent(String.self, forKey: .producerInstanceId)
+            machine = try container.decodeIfPresent(String.self, forKey: .machine)
+            remainingUnknown = try container.decodeIfPresent(Bool.self, forKey: .remainingUnknown)
+            plan = try container.decodeIfPresent(String.self, forKey: .plan)
+            planName = try container.decodeIfPresent(String.self, forKey: .planName)
+            planMetadata = try container.decodeIfPresent(PlanMetadata.self, forKey: .planMetadata)
+            planDetectedName = try container.decodeIfPresent(String.self, forKey: .planDetectedName)
+            planUserName = try container.decodeIfPresent(String.self, forKey: .planUserName)
+            if let costStr = try? container.decodeIfPresent(String.self, forKey: .planUserCostUsd) {
+                planUserCostUsd = costStr
+            } else if let costNum = try? container.decodeIfPresent(Double.self, forKey: .planUserCostUsd) {
+                planUserCostUsd = String(costNum)
+            } else {
+                planUserCostUsd = nil
+            }
+            planUserRenewalDateText = try container.decodeIfPresent(String.self, forKey: .planUserRenewalDateText)
+            planUserSubtitle = try container.decodeIfPresent(String.self, forKey: .planUserSubtitle)
+            planShowCostAndRenewal = try container.decodeIfPresent(Bool.self, forKey: .planShowCostAndRenewal)
+            planHasMismatch = try container.decodeIfPresent(Bool.self, forKey: .planHasMismatch)
+            planUserUpdatedAt = try container.decodeIfPresent(Double.self, forKey: .planUserUpdatedAt)
+        }
+
+        var resolvedPlanMetadata: PlanMetadata? {
+            if let planMetadata {
+                return planMetadata
+            }
+            if planUserName != nil || planDetectedName != nil || planUserCostUsd != nil || planUserRenewalDateText != nil || planUserSubtitle != nil || planShowCostAndRenewal != nil || planHasMismatch != nil {
+                var meta = PlanMetadata(detectedPlanName: planDetectedName ?? planName ?? plan, customInfo: nil, providerKey: providerKey ?? provider)
+                if let planUserName { meta.userPlanName = planUserName }
+                if let planUserCostUsd { meta.userCostUsd = planUserCostUsd }
+                if let planUserRenewalDateText { meta.userRenewalDateText = planUserRenewalDateText }
+                if let planUserSubtitle { meta.userSubtitle = planUserSubtitle }
+                if let planShowCostAndRenewal { meta.showCostAndRenewal = planShowCostAndRenewal }
+                if let planHasMismatch { meta.hasMismatch = planHasMismatch }
+                if let planUserUpdatedAt { meta.userUpdatedAt = planUserUpdatedAt }
+                return meta
+            }
+            if let p = planName ?? plan, !p.isEmpty {
+                return PlanMetadata(detectedPlanName: p, customInfo: nil, providerKey: providerKey ?? provider)
+            }
+            return nil
+        }
     }
 
     /// Mirrors the backend manifest's provider group on the wire.  Optional
@@ -1755,8 +1884,8 @@ public final class CompanionQuotaModel: ObservableObject {
 
             if let geminiItem = consolidateAntigravityPool(
                 poolKey: "gemini",
-                title: "Antigravity · Gemini",
-                defaultSubtitle: "Gemini Models",
+                title: "Antigravity",
+                defaultSubtitle: "Gemini",
                 windows: geminiWindows
             ) {
                 newItems.append(geminiItem)
@@ -1764,8 +1893,8 @@ public final class CompanionQuotaModel: ObservableObject {
 
             if let thirdPartyItem = consolidateAntigravityPool(
                 poolKey: "third-party",
-                title: "Antigravity · Third-Party",
-                defaultSubtitle: "Third-Party Models",
+                title: "Antigravity",
+                defaultSubtitle: "Third-Party",
                 windows: thirdPartyWindows
             ) {
                 newItems.append(thirdPartyItem)
@@ -1813,6 +1942,22 @@ public final class CompanionQuotaModel: ObservableObject {
         iconHint: String? = nil,
         rawWindows: [WireRawWindow]
     ) -> CompanionQuotaItem {
+        var providerPlanMetadata: PlanMetadata? = nil
+        for w in rawWindows {
+            if let meta = w.resolvedPlanMetadata {
+                if providerPlanMetadata == nil {
+                    providerPlanMetadata = meta
+                } else {
+                    if providerPlanMetadata?.userPlanName == nil { providerPlanMetadata?.userPlanName = meta.userPlanName }
+                    if providerPlanMetadata?.userCostUsd == nil { providerPlanMetadata?.userCostUsd = meta.userCostUsd }
+                    if providerPlanMetadata?.userRenewalDateText == nil { providerPlanMetadata?.userRenewalDateText = meta.userRenewalDateText }
+                    if providerPlanMetadata?.userSubtitle == nil { providerPlanMetadata?.userSubtitle = meta.userSubtitle }
+                    if providerPlanMetadata?.detectedPlanName == nil { providerPlanMetadata?.detectedPlanName = meta.detectedPlanName }
+                    if providerPlanMetadata?.showCostAndRenewal == nil { providerPlanMetadata?.showCostAndRenewal = meta.showCostAndRenewal }
+                }
+            }
+        }
+
         var primaryWindows: [CompanionWindowItem] = []
         var duplicateWindows: [CompanionWindowItem] = []
         var primaryIndexByCadenceKey: [String: Int] = [:]
@@ -1826,6 +1971,17 @@ public final class CompanionQuotaModel: ObservableObject {
         // observation time.  It only judges copies:  this Mac's own reading
         // keeps its row, so an expired one greys out instead of vanishing.
         let liveWindows = rawWindows.filter { w in
+            let lowId = w.id.lowercased()
+            let lowLabel = w.label.lowercased()
+            if lowId.hasSuffix(":plan-metadata") || lowLabel == "plan details" {
+                return false
+            }
+            if (w.remainingUnknown == true || lowLabel.contains("plan details"))
+                && w.remainingPercent == nil
+                && CompanionDateFormatter.date(from: w.resetAt) == nil
+                && !QuotaWindowVocabulary.isExtraAllowanceLabel(w.label) {
+                return false
+            }
             if QuotaWindowVocabulary.isOwnDeviceWindow(id: w.id,
                                                         source: w.source,
                                                         machine: w.machine,
@@ -2002,7 +2158,16 @@ public final class CompanionQuotaModel: ObservableObject {
         let futureResets = primaryWindows.compactMap(\.resetAt).filter { $0 > now }
         let nearestReset = futureResets.min() ?? primaryWindows.compactMap(\.resetAt).min()
 
-        let subtitle = Self.subtitlePhrase(for: primaryWindows, fallback: title)
+        let automaticPlan = rawWindows.compactMap(\.planName).first(where: { !$0.isEmpty })
+            ?? rawWindows.compactMap(\.plan).first(where: { !$0.isEmpty })
+            ?? providerPlanMetadata?.detectedPlanName
+        let resolvedSubtitle = WidgetPlatformDisplay.subtitle(
+            planMetadata: providerPlanMetadata,
+            automaticPlanName: automaticPlan,
+            poolSubtitle: nil,
+            providerKey: providerKey
+        )
+        let subtitle = resolvedSubtitle ?? Self.subtitlePhrase(for: primaryWindows, fallback: title)
         let displayTitle = WidgetPlatformDisplay.title(
             canonicalKey: providerKey,
             manifestProviderLabel: title,
@@ -2020,7 +2185,8 @@ public final class CompanionQuotaModel: ObservableObject {
             isAlarmEnabled: alarmProviderIds.contains(id),
             windows: primaryWindows,
             duplicateWindows: duplicateWindows,
-            iconHint: iconHint
+            iconHint: iconHint,
+            planMetadata: providerPlanMetadata
         )
     }
 
@@ -2132,7 +2298,7 @@ public final class CompanionQuotaModel: ObservableObject {
                 ?? validPercents.min()
                 ?? windows.compactMap(\.remainingPercent).min()
             isExhausted = QuotaCapRule.isAtCap(remainingPercent: freshPercents.min())
-            subtitle = "\(QuotaWindowVocabulary.fiveHour) & \(QuotaWindowVocabulary.sevenDay)"
+            subtitle = defaultSubtitle
         }
 
         // Collapse the pool's observations into one row per period.
