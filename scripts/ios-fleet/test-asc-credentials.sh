@@ -717,6 +717,11 @@ extract_ship_prelude() {
       # opened by a column-0 `name() {` line and closed by a column-0 `}`
       # line, and only a body may hold a whitespace-leading line.
       in_body = 0
+      # The brace depth of the body that is open.  Bash closes a function
+      # with an INDENTED `}` just as it closes it with a column-0 `}`, so
+      # the depth of the literal-stripped line is followed and the body
+      # ends when the depth returns to zero.
+      depth = 0
     }
     { lines[NR] = $0 }
     END {
@@ -731,7 +736,17 @@ extract_ship_prelude() {
           # it when the prelude is sourced, so it is refused.  A
           # whitespace-leading comment line is skipped anywhere.
           if (l ~ /^[[:space:]]+#/) continue
-          if (in_body == 1) continue
+          if (in_body == 1) {
+            # An indented closing brace closes the body in bash, so the
+            # brace depth of the line is followed:  a body that ends with
+            # an indented brace must not leave the guard believing that a
+            # body is still open, because the next indented line would
+            # then be a top-level command that the cut would run.
+            plain = strip_literal(l)
+            depth = depth + gsub(/\{/, "", plain) - gsub(/\}/, "", plain)
+            if (depth <= 0) in_body = 0
+            continue
+          }
           print i ": " l
           exit
         }
@@ -747,6 +762,7 @@ extract_ship_prelude() {
             exit
           }
           in_body = 1
+          depth = 1
           continue
         }
         # The one-line form does not open a body:  its body ends on its
@@ -760,6 +776,7 @@ extract_ship_prelude() {
             exit
           }
           in_body = 0
+          depth = 0
           continue
         }
         if (l ~ /^trap[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]+EXIT[[:space:]]*$/) continue
@@ -900,7 +917,7 @@ extract_ship_prelude() {
 # refused by the check it is meant to trip:  a cut that never stops and a
 # cut that stops at the wrong line must not pass for one another, so every
 # variant asserts the words of its own refusal.
-for variant in missing reformatted moved nodef tight assignchain assignchainbare assignother assignsubst assignbacktick assignsubstbare assignprocin assignprocout fleetdirother indented strayclose secondopener; do
+for variant in missing reformatted moved nodef tight assignchain assignchainbare assignother assignsubst assignbacktick assignsubstbare assignprocin assignprocout fleetdirother indented strayclose secondopener indentedclose; do
   synth="${tmp}/synth-ship-${variant}.sh"
   sentinel="${tmp}/synth-sentinel-${variant}"
   {
@@ -915,7 +932,14 @@ for variant in missing reformatted moved nodef tight assignchain assignchainbare
       if [[ "$variant" == secondopener ]]; then
         echo 'other_func() {'
       fi
-      echo '}'
+      if [[ "$variant" == indentedclose ]]; then
+        # The body is closed by an INDENTED brace:  bash closes the
+        # function with it just as it closes the function with a
+        # column-0 brace, so the guard has to follow the brace depth.
+        echo '  }'
+      else
+        echo '}'
+      fi
     else
       echo 'init_rejected_key_file_renamed() { :; }'
     fi
@@ -981,6 +1005,12 @@ for variant in missing reformatted moved nodef tight assignchain assignchainbare
       # open:  the body would have two openers and one closing brace, so
       # the body-shape rule has to refuse it.
       secondopener) echo 'init_rejected_key_file || echo "could not init" >&2' ;;
+      # A function body closed by an INDENTED brace, followed by an
+      # indented top-level command:  the indented brace ends the body in
+      # bash, so the indented command after it is a top-level command and
+      # the guard has to refuse it.
+      indentedclose) echo "  printf 'SHIP-BODY-RAN\\n' > '${sentinel}'"
+                     echo 'init_rejected_key_file || echo "could not init" >&2' ;;
     esac
     echo "printf 'SHIP-BODY-RAN\\n' > '${sentinel}'"
     echo 'exit 0'
@@ -1007,6 +1037,7 @@ for variant in missing reformatted moved nodef tight assignchain assignchainbare
     indented)    expect="positional" ;;
     strayclose)  expect="positional" ;;
     secondopener) expect="positional" ;;
+    indentedclose) expect="positional" ;;
     *)           fail "an unknown variant ${variant} reached the refusal check" ;;
   esac
   [[ "$synth_out" == *"$expect"* ]] \
