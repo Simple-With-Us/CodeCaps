@@ -55,7 +55,7 @@ export FAKE_OTHER_PEM="${tmp}/other.p8"
 
 extract() {
   awk '
-    /^fs_get\(\) \{/ || /^load_secrets\(\) \{/ || /^cleanup_asc_tmp\(\) \{/ || /^expand_tilde\(\) \{/ || /^rejected_key_file\(\) \{/ || /^rejected_key_label\(\) \{/ || /^asc_rejected_key_label\(\) \{/ { grab = 1 }
+    /^fs_get\(\) \{/ || /^load_secrets\(\) \{/ || /^cleanup_asc_tmp\(\) \{/ || /^expand_tilde\(\) \{/ || /^rejected_key_file\(\) \{/ || /^init_rejected_key_file\(\) \{/ || /^rejected_key_label\(\) \{/ || /^asc_rejected_key_label\(\) \{/ { grab = 1 }
     grab { print }
     grab && /^\}/ { grab = 0 }
   ' "$script"
@@ -84,6 +84,8 @@ funcs="${tmp}/funcs.sh"
 {
   echo 'log() { :; }'
   echo 'ASC_TMP_DIR=""'
+  echo '_rejected_key_dir=""'
+  echo '_rejected_key_path=""'
   echo "FLEET_SECRETS_BIN=\"${tmp}/fleet-secrets\""
   echo "FLEET_DIR=\"${here}\""
   echo "ASC_COMPARE_TOOL=\"${tmp}/compare.cjs\""
@@ -387,24 +389,24 @@ ERR
 label="$(bash -c '
   set -euo pipefail
   source "'"$funcs"'"
-  REJECTED_KEY_FILE="'"${tmp}"'/rejected-key-7"
+  mkdir -p "'"${tmp}"'/td1"; TMPDIR="'"${tmp}"'/td1" init_rejected_key_file
   asc_rejected_key_label "'"$tmp"'/client-err.txt"
 ' 2>"${tmp}/label-stderr.txt")" || fail "asc_rejected_key_label"
 [[ "$label" == "key id SYNTHETICKEYID1, source ASC_KEY_P8 environment" ]] || fail "the key id and source were not read from the client diagnostic: ${label}"
-for out in "$label" "$(cat "${tmp}/label-stderr.txt")" "$(cat "${tmp}/rejected-key-7")"; do
+for out in "$label" "$(cat "${tmp}/label-stderr.txt")" "$(cat "${tmp}"/td1/ios-fleet-rejected-key.*/label)"; do
   [[ "$out" != *"$synthetic_head"* && "$out" != *"$synthetic_tail"* && "$out" != *"key in play"* ]] || fail "a key-body fragment survived into the label, stderr or the hand-off file: ${out}"
 done
 empty_label="$(bash -c '
   set -euo pipefail
   source "'"$funcs"'"
-  REJECTED_KEY_FILE="'"${tmp}"'/rejected-key-7"
+  mkdir -p "'"${tmp}"'/td2"; TMPDIR="'"${tmp}"'/td2" init_rejected_key_file
   asc_rejected_key_label "'"$tmp"'/client-err-empty.txt"
 ')" || fail "asc_rejected_key_label on an empty diagnostic"
 [[ -n "$empty_label" ]] || fail "an empty diagnostic produced no text at all"
 missing_label="$(bash -c '
   set -euo pipefail
   source "'"$funcs"'"
-  REJECTED_KEY_FILE="'"${tmp}"'/rejected-key-7"
+  mkdir -p "'"${tmp}"'/td3"; TMPDIR="'"${tmp}"'/td3" init_rejected_key_file
   asc_rejected_key_label
 ')" || fail "asc_rejected_key_label without a file"
 [[ -n "$missing_label" ]] || fail "a missing diagnostic file produced no text at all"
@@ -413,7 +415,7 @@ printf '%s\n' "latest-marketing-patch: App Store Connect rejected the API key (H
 legacy_label="$(bash -c '
   set -euo pipefail
   source "'"$funcs"'"
-  REJECTED_KEY_FILE="'"${tmp}"'/rejected-key-7"
+  mkdir -p "'"${tmp}"'/td4"; TMPDIR="'"${tmp}"'/td4" init_rejected_key_file
   asc_rejected_key_label "'"$tmp"'/client-err-legacy.txt"
 ')" || fail "asc_rejected_key_label on a legacy diagnostic"
 [[ "$legacy_label" != *"$synthetic_head"* && "$legacy_label" != *"$synthetic_tail"* ]] || fail "a legacy key fragment reached the label: ${legacy_label}"
@@ -432,31 +434,62 @@ fi
 # The label therefore travels through a file, and the parent reads it back
 # for its fatal text, which must carry the key id and source and no key
 # fragment.
-bash -c '
-  set -euo pipefail
-  source "'"$funcs"'"
-  REJECTED_KEY_FILE="'"${tmp}"'/rejected-key"
-  _p="$(asc_rejected_key_label "'"$tmp"'/client-err.txt")"
-  [[ "$_p" == "key id SYNTHETICKEYID1, source ASC_KEY_P8 environment" ]] || exit 1
-' || fail "asc_rejected_key_label inside a command substitution"
 parent_fatal="$(bash -c '
   set -euo pipefail
   source "'"$funcs"'"
-  REJECTED_KEY_FILE="'"${tmp}"'/rejected-key"
+  mkdir -p "'"${tmp}"'/td5"; TMPDIR="'"${tmp}"'/td5" init_rejected_key_file
+  _p="$(asc_rejected_key_label "'"$tmp"'/client-err.txt")"
+  [[ "$_p" == "key id SYNTHETICKEYID1, source ASC_KEY_P8 environment" ]] || exit 1
   printf "App Store Connect rejected the API key (HTTP 401/403; rejected key %s) while reading the next marketing version." "$(rejected_key_label)"
-')" || fail "rejected_key_label"
+')" || fail "the label inside a command substitution"
 [[ "$parent_fatal" == *"rejected key key id SYNTHETICKEYID1, source ASC_KEY_P8 environment)"* ]] || fail "the label did not leave the command substitution: ${parent_fatal}"
 [[ "$parent_fatal" != *"$synthetic_head"* && "$parent_fatal" != *"$synthetic_tail"* ]] || fail "a key-body fragment reached the parent fatal text: ${parent_fatal}"
-hand_off="$(cat "${tmp}/rejected-key")"
+hand_off_dir="$(ls -d "${tmp}"/td5/ios-fleet-rejected-key.*)"
+[[ "$(stat -c %a "$hand_off_dir" 2>/dev/null || stat -f %Lp "$hand_off_dir")" == "700" ]] || fail "the hand-off directory is not private"
+hand_off="$(cat "${hand_off_dir}/label")"
 [[ "$hand_off" != *"$synthetic_head"* && "$hand_off" != *"$synthetic_tail"* ]] || fail "a key-body fragment reached the hand-off file: ${hand_off}"
 # With no rejection there is no label, and the parent says so.
-rm -f "${tmp}/rejected-key"
 unknown_label="$(bash -c '
   set -euo pipefail
   source "'"$funcs"'"
-  REJECTED_KEY_FILE="'"${tmp}"'/rejected-key"
+  mkdir -p "'"${tmp}"'/td6"; TMPDIR="'"${tmp}"'/td6" init_rejected_key_file
   rejected_key_label
 ')" || fail "rejected_key_label without a label"
 [[ "$unknown_label" == "unknown" ]] || fail "a missing label should read unknown: ${unknown_label}"
+
+# 9. The hand-off path belongs to this run alone.  A stale or hostile
+# environment cannot choose what is written, read or removed, a symlink
+# planted at the old predictable name is never followed, and cleanup
+# removes only the private directory this run created.
+mkdir -p "${tmp}/td9"
+printf 'SENTINEL-ENV\n' > "${tmp}/sentinel-env"
+printf 'SENTINEL-LINK\n' > "${tmp}/sentinel-link"
+printf 'SENTINEL-DIR\n' > "${tmp}/sentinel-dir"
+env_out="$(REJECTED_KEY_FILE="${tmp}/sentinel-env" _rejected_key_path="${tmp}/sentinel-env" _rejected_key_dir="${tmp}/sentinel-dir" TMPDIR="${tmp}/td9" bash -c '
+  set -euo pipefail
+  source "'"$funcs"'"
+  ln -s "'"$tmp"'/sentinel-link" "${TMPDIR}/ios-fleet-rejected-key.$$"
+  init_rejected_key_file
+  _p="$(asc_rejected_key_label "'"$tmp"'/client-err.txt")"
+  printf "%s|%s\n" "$_p" "$(rejected_key_label)"
+  own="$_rejected_key_dir"
+  cleanup_asc_tmp
+  [[ ! -e "$own" ]] || { echo "own dir survived cleanup"; exit 1; }
+')" || fail "the run-owned hand-off path: ${env_out}"
+[[ "$env_out" == "key id SYNTHETICKEYID1, source ASC_KEY_P8 environment|key id SYNTHETICKEYID1, source ASC_KEY_P8 environment" ]] || fail "the label did not round-trip through the run-owned file: ${env_out}"
+[[ "$(cat "${tmp}/sentinel-env")" == "SENTINEL-ENV" ]] || fail "an environment-selected file was overwritten"
+[[ "$(cat "${tmp}/sentinel-link")" == "SENTINEL-LINK" ]] || fail "a symlink at the predictable name was followed"
+[[ -f "${tmp}/sentinel-dir" && "$(cat "${tmp}/sentinel-dir")" == "SENTINEL-DIR" ]] || fail "cleanup removed an environment-selected path"
+# Cleanup that never created a directory removes nothing, whatever the environment says.
+_rejected_key_dir="${tmp}/sentinel-dir" bash -c '
+  source "'"$funcs"'"
+  _rejected_key_dir=""
+  cleanup_asc_tmp
+'
+[[ -f "${tmp}/sentinel-dir" ]] || fail "cleanup without a run-owned directory deleted a file"
+# The ship script itself takes no hand-off path from the environment.
+if grep -nE 'REJECTED_KEY_FILE|ios-fleet-rejected-key\.\$\$' "$script" >/dev/null; then
+  fail "ship-testflight.sh still derives the hand-off path from the environment or a predictable name"
+fi
 
 echo "ok: ASC credential resolution (environment first, then Infisical, a named path ignored, temp key removed)"

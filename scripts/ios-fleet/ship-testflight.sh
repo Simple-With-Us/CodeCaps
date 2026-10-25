@@ -145,8 +145,13 @@ cleanup_asc_tmp() {
     rm -rf "$ASC_TMP_DIR" 2>/dev/null || true
   fi
   ASC_TMP_DIR=""
-  # The rejected-key label file goes with it.
-  rm -f "$(rejected_key_file)" 2>/dev/null || true
+  # The rejected-key label goes with it:  only the private directory this
+  # run created, never a path read from the environment.
+  if [[ -n "${_rejected_key_dir:-}" ]]; then
+    rm -rf "$_rejected_key_dir" 2>/dev/null || true
+  fi
+  _rejected_key_dir=""
+  _rejected_key_path=""
 }
 # The file the nonsecret label (key id and source) of a refused App Store
 # Connect key travels through.
@@ -155,11 +160,23 @@ cleanup_asc_tmp() {
 # command substitution, so they run in a subshell:  a global they assign
 # dies with the subshell and never reaches the parent, and the fatal
 # message would always read "rejected key unknown".  The label therefore
-# travels through a file.  The path is derived from this script's own PID
-# -- a subshell keeps the parent's $$ -- so every layer computes the same
-# one, and REJECTED_KEY_FILE overrides it for a test.
+# travels through a file.  The parent creates it once, inside a private
+# directory of its own (mode 0700, from mktemp -d), before any subshell
+# runs;  a subshell inherits the path through these script-owned
+# variables.  Nothing about the path comes from the environment, so a
+# stale or hostile value can never pick what is written, read or removed.
+_rejected_key_dir=""
+_rejected_key_path=""
+init_rejected_key_file() {
+  _rejected_key_dir="$(umask 077; mktemp -d "${TMPDIR:-/tmp}/ios-fleet-rejected-key.XXXXXX")" || {
+    _rejected_key_dir=""
+    _rejected_key_path=""
+    return 1
+  }
+  _rejected_key_path="${_rejected_key_dir}/label"
+}
 rejected_key_file() {
-  printf '%s' "${REJECTED_KEY_FILE:-${TMPDIR:-/tmp}/ios-fleet-rejected-key.$$}"
+  printf '%s' "${_rejected_key_path:-}"
 }
 # Expand only a leading "~/" (not "~user/") so a typo is never merged with $HOME.
 expand_tilde() {
@@ -169,6 +186,7 @@ expand_tilde() {
   esac
 }
 trap cleanup_asc_tmp EXIT
+init_rejected_key_file || echo "ship-testflight: could not create a private directory for the rejected-key label; a rejection will read \"rejected key unknown\"" >&2
 # 1 hour — owner 2026-08-14: ship unbuilt iOS updates as often as once per hour.
 # Not Apple compute; local/process hygiene. Cron ticks twice an hour so a
 # trailing merge inside the window is picked up on the next eligible tick.
@@ -392,14 +410,18 @@ asc_rejected_key_label() {
   # Hand the label to the parent through the file:  the caller runs this
   # inside a command substitution, so a global it assigned would never get
   # there.  Only the label built above is written.
-  printf '%s' "$label" >"$(rejected_key_file)" 2>/dev/null || true
+  local file
+  file="$(rejected_key_file)"
+  if [[ -n "$file" && -d "${file%/*}" && ! -L "$file" ]]; then
+    (umask 077; printf '%s' "$label" >"$file") 2>/dev/null || true
+  fi
   printf '%s' "$label"
 }
 # The label as the parent sees it, after a helper ran in a subshell.
 rejected_key_label() {
   local label="" file
   file="$(rejected_key_file)"
-  if [[ -f "$file" ]]; then
+  if [[ -n "$file" && -f "$file" && ! -L "$file" ]]; then
     label="$(cat "$file" 2>/dev/null || true)"
   fi
   printf '%s' "${label:-unknown}"
