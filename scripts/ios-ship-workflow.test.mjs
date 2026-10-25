@@ -338,3 +338,46 @@ test("scheduled gate and key handoff shell tests pass", () => {
     assert.match(out, /all tests passed/, `${script} did not report success`);
   }
 });
+
+// CC-200: the iOS lane never reached Sentry.  Two defects, both quiet.  The
+// token in SENTRY_AUTH_TOKEN was the DSN, and a DSN is not an API token, so
+// sentry-cli refused it in about seventy milliseconds.  The project was the
+// app's own, while the events land in the project the shared fleet DSN names,
+// so a dSYM in the wrong project never matches an event.  The failure was a
+// warning line inside a green job.
+const shipScript = read("scripts/ios-fleet/ship-testflight.sh");
+
+test("the iOS lane loads the Sentry API token, not the DSN", () => {
+  assert.match(code, /SENTRY_AUTH_TOKEN_FULLSCOPE/);
+  assert.match(shipScript, /SENTRY_AUTH_TOKEN_FULLSCOPE/);
+  // The full-scope token is the one sentry-cli accepts, and it is the one the
+  // workflow hands over.  The DSN must never reach the token slot.
+  assert.match(shipScript, /\*:\/\/\*\|\*@\*/);
+  assert.match(shipScript, /looks like a DSN, not an API token/);
+});
+
+test("the iOS lane uploads to the DSN project as well as the app's own", () => {
+  assert.match(shipScript, /sentry_dsn_project/);
+  assert.match(shipScript, /sentry_project_list/);
+  assert.match(shipScript, /SENTRY_PROJECT="\$p"/);
+  // The DSN project is not the same thing as the app's project, so both are
+  // uploaded to, and the same project is never uploaded to twice.
+  assert.match(shipScript, /\$dsn_project" != "\$app_project"/);
+});
+
+test("a failed Sentry upload is an error annotation and a red run", () => {
+  assert.match(shipScript, /::error title=Sentry upload::/);
+  assert.match(shipScript, /sentry_report_failure/);
+  assert.match(shipScript, /\.ios-ship-sentry-failed/);
+  // The workflow turns the marker into a failed step, and it is the LAST
+  // step, after the ship-state cache is saved, so a red run can neither block
+  // the release that already happened nor make the next ship repeat itself.
+  assert.match(code, /Sentry artifact upload status/);
+  assert.match(code, /\.ios-ship-sentry-failed/);
+  assert.match(code, /exit 1/);
+  const shipSteps = code.split(/- name:/);
+  const statusIndex = shipSteps.findIndex((s) => /Sentry artifact upload status/.test(s));
+  const cacheIndex = shipSteps.findIndex((s) => /Save ship-state cache/.test(s));
+  assert.ok(statusIndex > 0 && cacheIndex > 0, "the ship job has both steps");
+  assert.ok(statusIndex > cacheIndex, "the Sentry status step runs after the ship-state cache is saved");
+});

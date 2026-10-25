@@ -111,12 +111,23 @@
 #   environment (see asc_client).  altool and Xcode are given the path of the
 #   staged copy this script writes for them.
 #   or Xcode-signed-in session for destination=upload export
-#   SENTRY_AUTH_TOKEN  (dSYM + Size Analysis upload; env or `fleet-secrets get`)
+#   SENTRY_AUTH_TOKEN_FULLSCOPE
+#                        (the Sentry API token for the dSYM + Size Analysis
+#                        upload; env or `fleet-secrets get`).  This is the only
+#                        credential sentry-cli accepts.  SENTRY_AUTH_TOKEN on
+#                        some repos holds the DSN instead, and a DSN is not an
+#                        API token, so sentry-cli refuses it in about seventy
+#                        milliseconds and the upload never happens.
+#   SENTRY_AUTH_TOKEN  (legacy token slot; used only when it is not a DSN)
 #   SENTRY_DSN         (injected into xcodebuild so Cocoa plist $(SENTRY_DSN) is set)
 #
 # Sentry after a successful archive (2026-09-01):
 #   debug-files upload of the xcarchive dSYMs, then `sentry-cli build upload`
-#   for Size Analysis.  Failures WARN and do not fail the TestFlight ship.
+#   for Size Analysis.  The upload goes to the project the DSN names AND to the
+#   app's own project, because the DSN is one shared fleet key and it moves.
+#   Failures WARN and do not fail the TestFlight ship, but they are also
+#   reported as ::error:: annotations and recorded, so the run shows red
+#   instead of one warning line inside a green job (CC-200).
 #   Quota: 100 size-analysis builds/month on the sponsored plan.  No LaunchAgent.
 #
 # ASCII-only (Apple bash 3.2 safe). Team: CC8UTF7ATG.
@@ -509,24 +520,106 @@ sentry_project_for_app() {
   esac
 }
 
-# Pull SENTRY_AUTH_TOKEN from the environment, else from `fleet-secrets get`
-# when that helper is installed (Mac).  Extract into a var, never echo.
+# The Sentry API token, resolved once.  SENTRY_AUTH_TOKEN_FULLSCOPE is the only
+# credential sentry-cli accepts.  SENTRY_AUTH_TOKEN holds the DSN on some repos,
+# and a DSN is not an API token, so sentry-cli refuses it in about seventy
+# milliseconds and the upload never happens.  The token stays a shell variable
+# and is handed to sentry-cli one invocation at a time.
+SENTRY_API_TOKEN=""
+SENTRY_TOKEN_REASON=""
+SENTRY_UPLOAD_FAILED=0
+
+# The file that records a failed Sentry upload, so the workflow can turn it
+# into a red run instead of one warning line inside a green job (CC-200).
+sentry_failure_marker() {
+  printf '%s' "${GITHUB_WORKSPACE:-$PWD}/.ios-ship-sentry-failed"
+}
+
+# Resolve the Sentry API token into SENTRY_API_TOKEN.  The reason for an empty
+# token is kept in SENTRY_TOKEN_REASON, so the caller can name the cause
+# instead of saying "no token".
 load_sentry_auth() {
-  if [[ -n "${SENTRY_AUTH_TOKEN:-}" ]]; then
-    return 0
+  SENTRY_API_TOKEN=""
+  SENTRY_TOKEN_REASON=""
+  local token=""
+  if [[ -n "${SENTRY_AUTH_TOKEN_FULLSCOPE:-}" ]]; then
+    token="$SENTRY_AUTH_TOKEN_FULLSCOPE"
+  elif command -v fleet-secrets &>/dev/null; then
+    token="$(fleet-secrets get SENTRY_AUTH_TOKEN_FULLSCOPE 2>/dev/null | tr -d '\r')" || token=""
   fi
-  if command -v fleet-secrets &>/dev/null; then
-    local token
-    token="$(fleet-secrets get SENTRY_AUTH_TOKEN 2>/dev/null | tr -d '\r')" || token=""
-    if [[ -n "$token" ]]; then
-      SENTRY_AUTH_TOKEN="$token"
-      export SENTRY_AUTH_TOKEN
-    fi
+  if [[ -z "$token" && -n "${SENTRY_AUTH_TOKEN:-}" ]]; then
+    # The legacy slot is a fallback only, and only when it holds a real token.
+    token="$SENTRY_AUTH_TOKEN"
+  fi
+  case "$token" in
+    "")
+      SENTRY_TOKEN_REASON="SENTRY_AUTH_TOKEN_FULLSCOPE is unset"
+      return 0
+      ;;
+    *://*|*@*)
+      # A DSN in the token slot is exactly the defect this lane had:  the
+      # upload is refused in milliseconds and the job stays green.
+      SENTRY_TOKEN_REASON="the token looks like a DSN, not an API token"
+      return 0
+      ;;
+  esac
+  SENTRY_API_TOKEN="$token"
+}
+
+# Record a Sentry failure.  The ship itself is never blocked:  the TestFlight
+# upload has already succeeded by the time this runs.  What changes is that the
+# failure is an ::error:: annotation and a marker file, so the run shows red
+# and nobody has to read a warning line to find it.
+sentry_report_failure() {
+  local message="$1"
+  log "warning: sentry: ${message}"
+  SENTRY_UPLOAD_FAILED=1
+  if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+    echo "::error title=Sentry upload::${message}"
+    mkdir -p "$(dirname "$(sentry_failure_marker)")" 2>/dev/null || true
+    printf '%s\n' "${message}" >>"$(sentry_failure_marker)"
   fi
 }
 
+# The project the events land in is the one in the DSN, because SENTRY_DSN is
+# one shared fleet key and it moves between projects.  A standard DSN ends in
+# a numeric project id and sentry-cli needs the slug, so an id is resolved
+# through the Sentry API.  A slug is used as it stands.
+sentry_dsn_project() {
+  local raw="${SENTRY_DSN:-}"
+  [[ -n "$raw" ]] || return 0
+  local last="${raw##*/}"
+  [[ "$last" != "$raw" ]] || return 0
+  case "$last" in
+    *[!0-9]*)
+      printf '%s' "$last"
+      return 0
+      ;;
+  esac
+  # Numeric:  ask the API for the slug, using the DSN's own host.
+  local host slug
+  host="$(printf '%s' "$raw" | sed -E 's#^https?://[^@/]+@##; s#/.*$##')"
+  [[ -n "$host" ]] || return 0
+  slug="$(curl -fsS -H "Authorization: Bearer ${SENTRY_API_TOKEN}" \
+    "https://${host}/api/0/projects/simple-with-us/${last}/" 2>/dev/null \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin).get("slug",""))' 2>/dev/null)" || slug=""
+  [[ -n "$slug" ]] || return 0
+  printf '%s' "$slug"
+}
+
+# The projects the dSYM and the Size Analysis build go to.  The DSN's project
+# first, then the app's own project, and never the same project twice.
+sentry_project_list() {
+  local app_project="$1" dsn_project="$2"
+  if [[ -n "$dsn_project" && "$dsn_project" != "$app_project" ]]; then
+    printf '%s\n' "$dsn_project"
+  fi
+  printf '%s\n' "$app_project"
+}
+
 # After a successful archive: upload dSYMs and Size Analysis.  Never fail the
-# TestFlight ship if Sentry is missing or the upload errors.
+# TestFlight ship if Sentry is missing or the upload errors, but every miss is
+# reported as an ::error:: so the run shows red (CC-200).
 upload_sentry_artifacts() {
   local project archive
   project="$(sentry_project_for_app)"
@@ -540,46 +633,60 @@ upload_sentry_artifacts() {
     return 0
   fi
   load_sentry_auth
-  if [[ -z "${SENTRY_AUTH_TOKEN:-}" ]]; then
-    log "sentry: SENTRY_AUTH_TOKEN unset; skipping dSYM / Size Analysis upload"
+  if [[ -z "${SENTRY_API_TOKEN:-}" ]]; then
+    sentry_report_failure "no Sentry API token, so no dSYM and no Size Analysis build was uploaded:  ${SENTRY_TOKEN_REASON}.  Set SENTRY_AUTH_TOKEN_FULLSCOPE (the API token, not the DSN)."
     return 0
   fi
   if ! command -v sentry-cli >/dev/null 2>&1; then
     log "sentry: sentry-cli not on PATH; trying official installer"
-    if ! curl -sL https://sentry.io/get-cli/ | SENTRY_CLI_VERSION="" bash >/dev/null 2>&1; then
-      log "warning: sentry-cli install failed; TestFlight ship continues"
+    if ! curl -sL https://sentry.io/get-cli/ | SENTRY_CLI_VERSION="" bash >"${LOG_DIR}/sentry-cli-install.log" 2>&1; then
+      sentry_report_failure "sentry-cli could not be installed, so no dSYM and no Size Analysis build was uploaded; see ${LOG_DIR}/sentry-cli-install.log"
       return 0
     fi
     export PATH="${HOME}/.sentry-cli:${PATH}:/opt/homebrew/bin"
   fi
   if ! command -v sentry-cli >/dev/null 2>&1; then
-    log "warning: sentry-cli still missing; skipping artifact upload"
+    sentry_report_failure "sentry-cli is missing, so no dSYM and no Size Analysis build was uploaded"
     return 0
   fi
-  log "sentry: uploading debug files for project=${project} (token length ${#SENTRY_AUTH_TOKEN})"
-  set +e
-  SENTRY_ORG=simple-with-us SENTRY_PROJECT="$project" \
-    sentry-cli debug-files upload --include-sources "$archive" \
-    >"${LOG_DIR}/sentry-debug-files.log" 2>&1
-  local dif_rc=$?
-  set -e
-  if [[ $dif_rc -eq 0 ]]; then
-    log "sentry: debug-files upload ok"
-  else
-    log "warning: sentry debug-files upload rc=${dif_rc}; see ${LOG_DIR}/sentry-debug-files.log"
-  fi
-  log "sentry: Size Analysis build upload for project=${project}"
-  set +e
-  SENTRY_ORG=simple-with-us SENTRY_PROJECT="$project" \
-    sentry-cli build upload "$archive" \
-    >"${LOG_DIR}/sentry-build-upload.log" 2>&1
-  local build_rc=$?
-  set -e
-  if [[ $build_rc -eq 0 ]]; then
-    log "sentry: build upload ok"
-  else
-    log "warning: sentry build upload rc=${build_rc}; see ${LOG_DIR}/sentry-build-upload.log"
-  fi
+  local dsn_project projects p
+  dsn_project="$(sentry_dsn_project)"
+  projects="$(sentry_project_list "$project" "$dsn_project")"
+  local first=1
+  while IFS= read -r p; do
+    [[ -n "$p" ]] || continue
+    log "sentry: uploading debug files for project=${p} (token length ${#SENTRY_API_TOKEN})"
+    set +e
+    if [[ $first -eq 1 ]]; then
+      SENTRY_ORG=simple-with-us SENTRY_PROJECT="$p" SENTRY_AUTH_TOKEN="$SENTRY_API_TOKEN" \
+        sentry-cli debug-files upload --include-sources "$archive" \
+        >"${LOG_DIR}/sentry-debug-files.log" 2>&1
+    else
+      SENTRY_ORG=simple-with-us SENTRY_PROJECT="$p" SENTRY_AUTH_TOKEN="$SENTRY_API_TOKEN" \
+        sentry-cli debug-files upload "$archive" \
+        >"${LOG_DIR}/sentry-debug-files.log" 2>&1
+    fi
+    local dif_rc=$?
+    set -e
+    if [[ $dif_rc -eq 0 ]]; then
+      log "sentry: debug-files upload ok for project=${p}"
+    else
+      sentry_report_failure "sentry debug-files upload failed for project=${p} (rc=${dif_rc}); see ${LOG_DIR}/sentry-debug-files.log"
+    fi
+    log "sentry: Size Analysis build upload for project=${p}"
+    set +e
+    SENTRY_ORG=simple-with-us SENTRY_PROJECT="$p" SENTRY_AUTH_TOKEN="$SENTRY_API_TOKEN" \
+      sentry-cli build upload "$archive" \
+      >"${LOG_DIR}/sentry-build-upload.log" 2>&1
+    local build_rc=$?
+    set -e
+    if [[ $build_rc -eq 0 ]]; then
+      log "sentry: build upload ok for project=${p}"
+    else
+      sentry_report_failure "sentry build upload failed for project=${p} (rc=${build_rc}); see ${LOG_DIR}/sentry-build-upload.log"
+    fi
+    first=0
+  done <<<"$projects"
   return 0
 }
 
