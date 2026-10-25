@@ -900,7 +900,7 @@ extract_ship_prelude() {
 # refused by the check it is meant to trip:  a cut that never stops and a
 # cut that stops at the wrong line must not pass for one another, so every
 # variant asserts the words of its own refusal.
-for variant in missing reformatted moved nodef tight assignchain assignchainbare assignother assignsubst assignbacktick fleetdirother indented strayclose; do
+for variant in missing reformatted moved nodef tight assignchain assignchainbare assignother assignsubst assignbacktick assignsubstbare assignprocin assignprocout fleetdirother indented strayclose secondopener; do
   synth="${tmp}/synth-ship-${variant}.sh"
   sentinel="${tmp}/synth-sentinel-${variant}"
   {
@@ -908,6 +908,13 @@ for variant in missing reformatted moved nodef tight assignchain assignchainbare
     if [[ "$variant" != nodef ]]; then
       echo 'init_rejected_key_file() {'
       echo '  _rejected_key_dir="$(mktemp -d)"'
+      # A second column-0 opener while the first body is still open:  the
+      # closing brace could not match a body that has two openers, so the
+      # body-shape rule has to refuse it.  The second opener sits inside
+      # the body, where it is the only thing that can refuse it.
+      if [[ "$variant" == secondopener ]]; then
+        echo 'other_func() {'
+      fi
       echo '}'
     else
       echo 'init_rejected_key_file_renamed() { :; }'
@@ -938,9 +945,23 @@ for variant in missing reformatted moved nodef tight assignchain assignchainbare
       assignsubst) echo "TEAM_ID=\"\$(printf 'SHIP-BODY-RAN\\n' > '${sentinel}')\""
                    echo 'init_rejected_key_file || echo "could not init" >&2' ;;
       # The same with a backtick instead of a $( ... ) substitution:  a
-      # backtick runs its command when the prelude is sourced too.
-      assignbacktick) echo "TEAM_ID=\`printf x > '${sentinel}'\`"
+      # backtick runs its command when the prelude is sourced too.  The
+      # value holds no whitespace, so the unquoted single-word rule cannot
+      # refuse it first:  the backtick rule is the only one that can.
+      assignbacktick) echo "TEAM_ID=\`id>${sentinel}\`"
                       echo 'init_rejected_key_file || echo "could not init" >&2' ;;
+      # The same substitution with an UNQUOTED value:  the unquoted
+      # single-word rule must not refuse it first either, so the
+      # substitution rule is the only one that can refuse this line.
+      assignsubstbare) echo "TEAM_ID=\$(id)"
+                        echo 'init_rejected_key_file || echo "could not init" >&2' ;;
+      # A value that holds a process substitution, <( ... ) or >( ... ):
+      # the process-substitution rule has to refuse it, and nothing else
+      # may:  the value is a single word with no whitespace in it.
+      assignprocin)  echo 'TEAM_ID=<(id)'
+                     echo 'init_rejected_key_file || echo "could not init" >&2' ;;
+      assignprocout) echo 'TEAM_ID=>(id)'
+                     echo 'init_rejected_key_file || echo "could not init" >&2' ;;
       # The FLEET_DIR name is allowlisted, but only the pinned FLEET_DIR
       # line of the real prelude may carry a command substitution, so
       # any other FLEET_DIR line is refused like every other name.
@@ -956,6 +977,10 @@ for variant in missing reformatted moved nodef tight assignchain assignchainbare
       # is a positional command and has to be refused.
       strayclose)  echo '}'
                    echo 'init_rejected_key_file || echo "could not init" >&2' ;;
+      # A second column-0 function opener while the first body is still
+      # open:  the body would have two openers and one closing brace, so
+      # the body-shape rule has to refuse it.
+      secondopener) echo 'init_rejected_key_file || echo "could not init" >&2' ;;
     esac
     echo "printf 'SHIP-BODY-RAN\\n' > '${sentinel}'"
     echo 'exit 0'
@@ -975,9 +1000,13 @@ for variant in missing reformatted moved nodef tight assignchain assignchainbare
     assignother) expect="positional" ;;
     assignsubst) expect="positional" ;;
     assignbacktick) expect="positional" ;;
+    assignsubstbare) expect="positional" ;;
+    assignprocin) expect="positional" ;;
+    assignprocout) expect="positional" ;;
     fleetdirother) expect="positional" ;;
     indented)    expect="positional" ;;
     strayclose)  expect="positional" ;;
+    secondopener) expect="positional" ;;
     *)           fail "an unknown variant ${variant} reached the refusal check" ;;
   esac
   [[ "$synth_out" == *"$expect"* ]] \
