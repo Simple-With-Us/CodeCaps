@@ -278,3 +278,20 @@ test('the certificate path reads the vault project the repository actually has',
   assert.match(loader, /realpathSync/);
   assert.doesNotMatch(loader, /pathToFileURL\(process\.argv\[1\]\)\.href === import\.meta\.url/);
 });
+
+test('the Sentry upload keeps the full-scope token away from the installer and refuses a DSN', () => {
+  // The sentry-cli installer is fetched over the network and piped to sh, so
+  // it must run in an empty environment:  a hijacked installer response must
+  // not inherit SENTRY_AUTH_TOKEN_FULLSCOPE.  The token stays a shell variable
+  // and is handed only to sentry-cli, one invocation at a time.  A DSN in the
+  // token slot is refused, because sentry-cli rejects it as authentication.
+  const sentry = step(code, 'Upload Sentry debug files');
+  assert.match(sentry, /\| env -i [^\n]*\\\n[^\n]*INSTALL_DIR="\$cli_dir"[^\n]* sh /);
+  assert.doesNotMatch(sentry, /export SENTRY_AUTH_TOKEN/);
+  assert.doesNotMatch(sentry, /^\s+SENTRY_AUTH_TOKEN(_FULLSCOPE)?:/m);
+  assert.match(sentry, /TOKEN="\$\{SENTRY_AUTH_TOKEN_FULLSCOPE:-\}"/);
+  const handoffs = sentry.match(/SENTRY_AUTH_TOKEN="\$TOKEN"/g) ?? [];
+  assert.equal(handoffs.length, 1);
+  assert.match(sentry, /SENTRY_AUTH_TOKEN="\$TOKEN" SENTRY_PROJECT="\$project" \\\n\s+sentry-cli debug-files upload /);
+  assert.match(sentry, /\*:\/\/\*\|\*@\*\)\n[^\n]*looks like a DSN[^\n]*\n\s+exit 1/);
+});
