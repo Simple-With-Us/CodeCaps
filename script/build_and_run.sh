@@ -112,9 +112,10 @@ usage: script/build_and_run.sh [mode]
   --package also signs with the hardened runtime and a secure timestamp and
   prints the notarytool command; --release is the mode that actually notarizes.
 
-  Versions: CFBundleShortVersionString is the VERSION file at the repo root, so
-  cutting a release is one edit.  CFBundleVersion is `git rev-list --count
-  HEAD`, which only ever goes up.
+  Versions: CFBundleShortVersionString is unified as <prefix>.<commit_count>
+  per fleet standard (prefix from VERSION file, default 1.0; commit count from
+  `git rev-list --count HEAD`).  CFBundleVersion is `git rev-list --count HEAD`,
+  giving macOS and iOS the identical monotonic build number.
 
   Auto-update: Sparkle.framework is embedded in Contents/Frameworks and signed
   inside-out.  A build with the release identifier carries the update feed and
@@ -440,12 +441,17 @@ sign_app_bundle() {
   fi
 }
 
-# The marketing version lives in one file so a release is a one-line edit, and
-# the build number is the commit count so it is monotonic without bookkeeping.
+# The marketing version is unified as <prefix>.<commit_count> per fleet standard,
+# where prefix is drawn from the VERSION file (defaulting to 1.0) and commit count
+# is monotonic across all git commits.
 short_version() {
   local version=""
   [[ ! -f "$VERSION_FILE" ]] || version="$(/usr/bin/sed -e 's/[[:space:]]//g' -e '/^$/d' "$VERSION_FILE" | /usr/bin/head -n 1)"
-  printf '%s\n' "${version:-0.0.0}"
+  local prefix="${version:-1.0}"
+  prefix="$(printf '%s' "$prefix" | /usr/bin/awk -F. '{ if (NF >= 2) print $1"."$2; else print $1".0" }')"
+  local count=""
+  count="$(bundle_version)"
+  printf '%s.%s\n' "$prefix" "$count"
 }
 
 bundle_version() {

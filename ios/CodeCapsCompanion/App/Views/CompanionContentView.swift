@@ -754,11 +754,20 @@ public struct CompanionContentView: View {
                 .accessibilityIdentifier("dataSourcesMirrorsSection")
 
         Section("Help") {
-                    Link(
-                        "Setup & Data Guide",
-                        destination: URL(string: "https://codecaps.simplewithus.com/setup.html")!
-                    )
-                }
+            Link(
+                "Setup & Data Guide",
+                destination: URL(string: "https://codecaps.simplewithus.com/setup.html")!
+            )
+        }
+
+        Section("About") {
+            LabeledContent("Version") {
+                let short = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
+                let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "1"
+                Text("\(short) (\(build))")
+                    .foregroundStyle(.secondary)
+            }
+        }
 
                 Section {
                     Button {
