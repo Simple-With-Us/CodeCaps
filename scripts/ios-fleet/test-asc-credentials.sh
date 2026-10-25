@@ -637,12 +637,15 @@ done <<< "$shell_sources"
 # somewhere a stale value could pick.
 #
 # The prelude is cut from the top of the ship script down to the load-time
-# init call.  The cut is checked before anything is sourced:  it must stop
-# strictly before the end of the file, its last line must be the init call,
-# and the function definition must be in it on its own line.  A missing or
-# reformatted call marker fails here, so the ship body is never sourced.
+# init call.  The cut is checked before anything is sourced, and the checks
+# keep this order:  it must stop strictly before the end of the file, its
+# last line must be the init call, the function definition must be in it on
+# its own line, and every column-0 line before that last one must be a
+# top-level shape the shell can carry into the prelude.  A missing or
+# reformatted call marker fails here, and so does a ship-body command the
+# cut swallowed, so the ship body is never sourced.
 extract_ship_prelude() {
-  local src="$1" dest="$2" total kept
+  local src="$1" dest="$2" total kept offender
   sed -n '1,/^init_rejected_key_file ||/p' "$src" > "$dest"
   total="$(wc -l < "$src")"
   kept="$(wc -l < "$dest")"
@@ -651,15 +654,45 @@ extract_ship_prelude() {
     || { echo "the prelude cut did not stop at the load-time hand-off init call"; return 1; }
   grep -q '^init_rejected_key_file() {$' "$dest" \
     || { echo "the hand-off init function definition is not in the prelude"; return 1; }
+  # The positional guard.  A line that starts with whitespace is a function
+  # body and is ignored.  A line at column 0 has to be a shape that belongs
+  # to the prelude itself:  a comment, a blank line, set -euo pipefail, an
+  # assignment, a function opener, a lone closing brace, or a trap.  Any
+  # other command at column 0 is ship-body code the cut took with it, and
+  # the prelude would run it when it is sourced.
+  offender="$(awk '
+    { lines[NR] = $0 }
+    END {
+      for (i = 1; i < NR; i++) {
+        l = lines[i]
+        if (l ~ /^[[:space:]]*$/) continue
+        if (l ~ /^[[:space:]]/) continue
+        if (l ~ /^#/) continue
+        if (l == "set -euo pipefail") continue
+        if (l ~ /^(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*=/) continue
+        if (l ~ /^[A-Za-z_][A-Za-z0-9_]*\(\)[[:space:]]*[{][[:space:]]*$/) continue
+        if (l ~ /^[A-Za-z_][A-Za-z0-9_]*\(\)[[:space:]]*[{].*[}]$/) continue
+        if (l ~ /^[}][[:space:]]*$/) continue
+        if (l ~ /^trap[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]+EXIT[[:space:]]*$/) continue
+        print i ": " l
+        exit
+      }
+    }
+  ' "$dest")"
+  if [[ -n "$offender" ]]; then
+    echo "the prelude cut holds a positional command at line ${offender}"
+    return 1
+  fi
 }
 
-# 12a. Synthetic ship scripts whose call marker is missing or reformatted
-# are refused before sourcing.  Each body after the definition would write
-# a sentinel file if it were ever sourced or run.
-for variant in missing reformatted moved nodef; do
+# 12a. Synthetic ship scripts whose call marker is missing, reformatted,
+# moved or too tight are refused before sourcing.  Each variant has to be
+# refused by the check it is meant to trip:  a cut that never stops and a
+# cut that stops at the wrong line must not pass for one another, so every
+# variant asserts the words of its own refusal.
+for variant in missing reformatted moved nodef tight; do
   synth="${tmp}/synth-ship-${variant}.sh"
   sentinel="${tmp}/synth-sentinel-${variant}"
-  rm -f "$sentinel"
   {
     echo '#!/bin/bash'
     if [[ "$variant" != nodef ]]; then
@@ -673,8 +706,9 @@ for variant in missing reformatted moved nodef; do
       missing)     ;;
       reformatted) echo 'init_rejected_key_file|| echo "could not init" >&2' ;;
       moved)       echo 'echo "arg parsing"'
-                   echo '  init_rejected_key_file || echo "could not init" >&2' ;;
+                   echo 'init_rejected_key_file || echo "could not init" >&2' ;;
       nodef)       echo 'init_rejected_key_file || echo "could not init" >&2' ;;
+      tight)       echo 'init_rejected_key_file ||echo "could not init" >&2' ;;
     esac
     echo "printf 'SHIP-BODY-RAN\\n' > '${sentinel}'"
     echo 'exit 0'
@@ -683,8 +717,47 @@ for variant in missing reformatted moved nodef; do
     fail "a ${variant} call marker was accepted as a prelude"
   fi
   [[ -n "$synth_out" ]] || fail "the ${variant} call marker was refused without a reason"
-  [[ ! -e "$sentinel" ]] || fail "the ${variant} ship body ran during prelude extraction"
+  case "$variant" in
+    missing)     expect="did not stop before the end" ;;
+    reformatted) expect="did not stop before the end" ;;
+    moved)       expect="positional" ;;
+    nodef)       expect="function definition" ;;
+    tight)       expect="did not stop at the load-time hand-off init call" ;;
+    *)           fail "an unknown variant ${variant} reached the refusal check" ;;
+  esac
+  [[ "$synth_out" == *"$expect"* ]] \
+    || fail "the ${variant} variant was refused by the wrong check: ${synth_out}"
 done
+
+# 12a-bis. The positive control:  a prelude that stops exactly at the init
+# call is accepted, and the ship body after that call is never sourced, so
+# the body never runs.  The sentinel is then fired on purpose by the full
+# script, which proves the sentinel can fire at all:  an absence that was
+# never shown to be able to become a presence proves nothing.
+kept_synth="${tmp}/synth-ship-kept.sh"
+kept_sentinel="${tmp}/synth-sentinel-kept"
+kept_prelude="${tmp}/synth-prelude-kept.sh"
+rm -f "$kept_sentinel"
+{
+  echo '#!/bin/bash'
+  echo 'init_rejected_key_file() {'
+  echo '  _rejected_key_dir="$(mktemp -d)"'
+  echo '}'
+  echo 'init_rejected_key_file || echo "could not init" >&2'
+  echo "printf 'SHIP-BODY-RAN\\n' > '${kept_sentinel}'"
+  echo 'exit 0'
+} > "$kept_synth"
+if ! kept_out="$(extract_ship_prelude "$kept_synth" "$kept_prelude")"; then
+  fail "a prelude that stops at the init call was refused: ${kept_out}"
+fi
+TMPDIR="$tmp" bash -c 'set -euo pipefail; source "'"$kept_prelude"'"' \
+  || fail "the accepted prelude did not load"
+[[ ! -e "$kept_sentinel" ]] \
+  || fail "the accepted prelude ran the ship body after the init call"
+TMPDIR="$tmp" bash "$kept_synth" || fail "the kept ship body did not run"
+[[ -e "$kept_sentinel" ]] \
+  || fail "the sentinel never fired, so its absence would prove nothing"
+rm -f "$kept_sentinel"
 
 # 12b. The real ship script passes the same checks, and only then is its
 # prelude sourced.
