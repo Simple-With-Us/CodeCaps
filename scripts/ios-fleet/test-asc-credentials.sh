@@ -657,10 +657,36 @@ extract_ship_prelude() {
   # The positional guard.  A line that starts with whitespace is a function
   # body and is ignored.  A line at column 0 has to be a shape that belongs
   # to the prelude itself:  a comment, a blank line, set -euo pipefail, an
-  # assignment, a function opener, a lone closing brace, or a trap.  Any
-  # other command at column 0 is ship-body code the cut took with it, and
-  # the prelude would run it when it is sourced.
+  # allowlisted assignment, a function opener, a lone closing brace, or a
+  # trap.  Any other command at column 0 is ship-body code the cut took
+  # with it, and the prelude would run it when it is sourced.
+  #
+  # An assignment is accepted only when it is one the real prelude makes:
+  # export PATH=, and a plain assignment to ASC_NODE, FLEET_DIR, APPS_JSON,
+  # TEAM_ID, FLEET_SECRETS_BIN, ASC_TMP_DIR, _rejected_key_dir or
+  # _rejected_key_path.  A name that is not on that list is refused even
+  # when it only assigns a value, so no column-0 name= prefix can smuggle
+  # a command into the prelude.
+  #
+  # An allowlisted name is still refused when its value chains a command
+  # after it:  a &&, a ||, a ; or a | outside a quoted string and outside
+  # a ( ) substitution, and anything at all after the closing quote of the
+  # value.  So "TEAM_ID=x && rm -rf ..." never rides into the prelude.  The
+  # && inside FLEET_DIR="$(cd "$(dirname "$0")" && pwd)" is part of the
+  # value, so that line stays one assignment and is accepted.
   offender="$(awk '
+    BEGIN {
+      SQ = sprintf("%c", 39)
+      # The names the real prelude sets at column 0, and nothing else.
+      allowed["ASC_NODE"] = 1
+      allowed["FLEET_DIR"] = 1
+      allowed["APPS_JSON"] = 1
+      allowed["TEAM_ID"] = 1
+      allowed["FLEET_SECRETS_BIN"] = 1
+      allowed["ASC_TMP_DIR"] = 1
+      allowed["_rejected_key_dir"] = 1
+      allowed["_rejected_key_path"] = 1
+    }
     { lines[NR] = $0 }
     END {
       for (i = 1; i < NR; i++) {
@@ -669,7 +695,7 @@ extract_ship_prelude() {
         if (l ~ /^[[:space:]]/) continue
         if (l ~ /^#/) continue
         if (l == "set -euo pipefail") continue
-        if (l ~ /^(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*=/) continue
+        if (assignment_ok(l)) continue
         if (l ~ /^[A-Za-z_][A-Za-z0-9_]*\(\)[[:space:]]*[{][[:space:]]*$/) continue
         if (l ~ /^[A-Za-z_][A-Za-z0-9_]*\(\)[[:space:]]*[{].*[}]$/) continue
         if (l ~ /^[}][[:space:]]*$/) continue
@@ -677,6 +703,112 @@ extract_ship_prelude() {
         print i ": " l
         exit
       }
+    }
+    # Strip the quoted text and the command substitutions from a line and
+    # return what is left.  The shell reads no chain inside a quoted string
+    # and no chain inside a ( ) substitution, so those parts are dropped:
+    # the && in FLEET_DIR="$(cd "$(dirname "$0")" && pwd)" is part of the
+    # value, and that line stays a single assignment.
+    function strip_literal(s,   out, i, c, len, st, top) {
+      out = ""
+      st = ""
+      len = length(s)
+      i = 1
+      while (i <= len) {
+        c = substr(s, i, 1)
+        top = (st == "") ? "" : substr(st, length(st), 1)
+        if (top == "s") {
+          if (c == SQ) st = substr(st, 1, length(st) - 1)
+          i++
+          continue
+        }
+        if (top == "d") {
+          if (c == "\"") { st = substr(st, 1, length(st) - 1); i++; continue }
+          if (c == "$" && substr(s, i + 1, 1) == "(") { st = st "("; i += 2; continue }
+          i++
+          continue
+        }
+        if (top == "(") {
+          if (c == "\"") { st = st "d"; i++; continue }
+          if (c == SQ) { st = st "s"; i++; continue }
+          if (c == "$" && substr(s, i + 1, 1) == "(") { st = st "("; i += 2; continue }
+          if (c == ")") { st = substr(st, 1, length(st) - 1); i++; continue }
+          i++
+          continue
+        }
+        if (c == "\"") { st = st "d"; i++; continue }
+        if (c == SQ) { st = st "s"; i++; continue }
+        if (c == "$" && substr(s, i + 1, 1) == "(") { st = st "("; i += 2; continue }
+        out = out c
+        i++
+      }
+      return out
+    }
+    # The position of the closing quote of the quoted value that starts a
+    # line, or 0 when that value is not closed.  A command substitution
+    # inside the value is parsed in its own context, so the quotes inside
+    # it do not close the value.
+    function quoted_value_end(v,   i, c, len, st, top) {
+      len = length(v)
+      st = ""
+      c = substr(v, 1, 1)
+      if (c == "\"") st = "d"
+      else if (c == SQ) st = "s"
+      else return 0
+      i = 2
+      while (i <= len) {
+        c = substr(v, i, 1)
+        top = substr(st, length(st), 1)
+        if (top == "s") {
+          if (c == SQ) { st = substr(st, 1, length(st) - 1); if (st == "") return i }
+          i++
+          continue
+        }
+        if (top == "d") {
+          if (c == "\"") { st = substr(st, 1, length(st) - 1); if (st == "") return i; i++; continue }
+          if (c == "$" && substr(v, i + 1, 1) == "(") { st = st "("; i += 2; continue }
+          i++
+          continue
+        }
+        if (c == "\"") { st = st "d"; i++; continue }
+        if (c == SQ) { st = st "s"; i++; continue }
+        if (c == "$" && substr(v, i + 1, 1) == "(") { st = st "("; i += 2; continue }
+        if (c == ")") { st = substr(st, 1, length(st) - 1); if (st == "") return i; i++; continue }
+        i++
+      }
+      return 0
+    }
+    # An assignment is accepted only when it is one the real prelude makes,
+    # and only when the value does not chain a command after it.
+    function assignment_ok(l,   name, value, first, stripped, rest, qend) {
+      if (match(l, /^export[[:space:]]+PATH=/)) {
+        value = substr(l, RSTART + RLENGTH)
+      } else if (match(l, /^[A-Za-z_][A-Za-z0-9_]*=/)) {
+        name = substr(l, 1, RLENGTH - 1)
+        if (!(name in allowed)) return 0
+        value = substr(l, RLENGTH + 1)
+      } else {
+        return 0
+      }
+      first = substr(value, 1, 1)
+      stripped = strip_literal(l)
+      rest = substr(stripped, index(stripped, "=") + 1)
+      # The chain refusal.  A value that runs a command after it is refused:
+      # a &&, a ||, a ; or a | that the shell would read as a chain, and
+      # anything at all after the closing quote of the value.
+      if (rest ~ /&&/ || rest ~ /\|\|/ || rest ~ /;/ || rest ~ /\|/) return 0
+      if (first == "\"" || first == SQ) {
+        # A quoted value is the whole remainder of the line:  nothing may
+        # follow the closing quote.
+        qend = quoted_value_end(value)
+        if (qend == 0) return 0
+        if (substr(value, qend + 1) ~ /[^[:space:]]/) return 0
+      }
+      if (first != "\"" && first != SQ) {
+        # An unquoted value is a single word.
+        if (rest ~ /[[:space:];&|]/) return 0
+      }
+      return 1
     }
   ' "$dest")"
   if [[ -n "$offender" ]]; then
@@ -690,7 +822,7 @@ extract_ship_prelude() {
 # refused by the check it is meant to trip:  a cut that never stops and a
 # cut that stops at the wrong line must not pass for one another, so every
 # variant asserts the words of its own refusal.
-for variant in missing reformatted moved nodef tight; do
+for variant in missing reformatted moved nodef tight assignchain assignother; do
   synth="${tmp}/synth-ship-${variant}.sh"
   sentinel="${tmp}/synth-sentinel-${variant}"
   {
@@ -709,6 +841,14 @@ for variant in missing reformatted moved nodef tight; do
                    echo 'init_rejected_key_file || echo "could not init" >&2' ;;
       nodef)       echo 'init_rejected_key_file || echo "could not init" >&2' ;;
       tight)       echo 'init_rejected_key_file ||echo "could not init" >&2' ;;
+      # An allowlisted name whose value chains a command after it:  the
+      # chain rule has to refuse it, not the allowlist.
+      assignchain) echo "TEAM_ID=\"x\" && printf 'SHIP-BODY-RAN\\n' > '${sentinel}'"
+                   echo 'init_rejected_key_file || echo "could not init" >&2' ;;
+      # A name the real prelude never sets:  the allowlist has to refuse
+      # it, even though it only assigns a value.
+      assignother) echo 'OTHER_NAME=1'
+                   echo 'init_rejected_key_file || echo "could not init" >&2' ;;
     esac
     echo "printf 'SHIP-BODY-RAN\\n' > '${sentinel}'"
     echo 'exit 0'
@@ -723,6 +863,8 @@ for variant in missing reformatted moved nodef tight; do
     moved)       expect="positional" ;;
     nodef)       expect="function definition" ;;
     tight)       expect="did not stop at the load-time hand-off init call" ;;
+    assignchain) expect="positional" ;;
+    assignother) expect="positional" ;;
     *)           fail "an unknown variant ${variant} reached the refusal check" ;;
   esac
   [[ "$synth_out" == *"$expect"* ]] \
