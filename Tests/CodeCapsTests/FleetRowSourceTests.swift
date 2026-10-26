@@ -463,8 +463,10 @@ final class FleetRowSourceTests: XCTestCase {
             foreign.id = "xai:foreign-reading"
             foreign.remainingPercent = 11
             foreign.remainingUnknown = false
-            foreign.producerInstanceId = "other-mac"
-            foreign.machine = "other-mac"
+            foreign.producerInstanceId = isLegacy ? nil : "other-mac"
+            foreign.machine = isLegacy ? nil : "other-mac"
+            // The legacy foreign payload shares provider/time and missing cadence,
+            // but not payload ID. It must remain in Fleet on BOTH merge paths.
             let server = QuotaResponse(generatedAt: iso.string(from: now), windows: [pushed, foreign])
             let model = MonitorModel(defaults: defaults())
             model.skipsSnapshotIOForTesting = true
@@ -479,6 +481,15 @@ final class FleetRowSourceTests: XCTestCase {
             func assertMerge(_ path: String, file: StaticString = #filePath, line: UInt = #line) {
                 XCTAssertEqual(model.response.windows.filter { $0.id == local.id }.count, carriesReading ? 0 : 1,
                                "\(path): only an informative own push replaces the empty local copy", file: file, line: line)
+                // Only refresh publishes fleetWindowGroups; polling must be
+                // checked through its actual merged response below, not a stale group.
+                if path == "refresh" {
+                    let groupedForeign = model.fleetWindowGroups.flatMap(\.windows)
+                        .filter { $0.id == foreign.id }
+                    XCTAssertEqual(groupedForeign.count, 1,
+                                   "\(path): distinct legacy payload remains in Fleet", file: file, line: line)
+                    XCTAssertEqual(groupedForeign.first?.remainingPercent, 11, file: file, line: line)
+                }
                 let merged = model.response.windows.filter { $0.canonicalProviderKey == "xai" }
                 if carriesReading {
                     XCTAssertEqual(merged.filter { $0.id == local.id || $0.id == "xai:\(suffix)" }.count, 1,

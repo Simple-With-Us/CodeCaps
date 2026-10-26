@@ -30,6 +30,11 @@ public enum FleetOrigin {
             .replacingOccurrences(of: " ", with: "")
     }
 
+    private static func localPayloadId(_ id: String) -> String {
+        let prefix = QuotaWindowVocabulary.localDeviceWindowPrefix
+        return id.hasPrefix(prefix) ? String(id.dropFirst(prefix.count)) : id
+    }
+
     /// Whether a pulled window is this Mac's own push coming back.  Such a
     /// window belongs under This Mac and must never be duplicated under Fleet.
     public static func isOwnPush(
@@ -61,7 +66,10 @@ public enum FleetOrigin {
             let matchesLocal = localWindows.contains { local in
                 local.canonicalProviderKey == window.canonicalProviderKey
                     && local.occurredAt == occurred
-                    && (local.window == window.window || local.id == window.id)
+                    // Missing cadence tokens do not identify the same payload.
+                    // Compare the same normalized IDs used by local adoption.
+                    && (localPayloadId(local.id) == localPayloadId(window.id)
+                        || (local.window != nil && local.window == window.window))
             }
             if matchesLocal { return true }
         }
