@@ -1046,6 +1046,7 @@ struct PipWidgetView: View {
         let showExpanded = detail == .full
         let cadenceCaption = showExpanded ? singleModelCadenceExpanded(snapshot) : glanceMeterCaption(snapshot)
         let cleanLabel = cleanWindowLabel(snapshot.window.label.isEmpty ? "Quota" : snapshot.window.label)
+        let countdownWidth = detail.usesCompactCountdown ? PipMetrics.countdownCompactWidth : PipMetrics.countdownWidth
 
         return VStack(alignment: .leading, spacing: 1) {
             HStack(spacing: 5) {
@@ -1058,6 +1059,9 @@ struct PipWidgetView: View {
                     .foregroundStyle(background.ink)
                     .lineLimit(1)
                 Spacer(minLength: 0)
+                // Fixed combined width, leading-aligned: the countdown stays
+                // directly after the percent while the trailing column holds
+                // still as values tick, so rows stay aligned.
                 HStack(spacing: 6) {
                     Text(remaining.map { "\(Int($0.rounded()))%" } ?? "—")
                         .font(.system(size: 10, weight: .bold, design: .rounded).monospacedDigit())
@@ -1072,6 +1076,7 @@ struct PipWidgetView: View {
                             .fixedSize()
                     }
                 }
+                .frame(width: PipMetrics.percentWidth + 6 + countdownWidth, alignment: .leading)
             }
             QuotaUsageBar(
                 metrics: metrics,
@@ -1117,6 +1122,7 @@ struct PipWidgetView: View {
         let remaining = snapshot.remainingPercent
         let showExpanded = expandedCadence && detail == .full
         let cadenceCaption = showExpanded ? singleModelCadenceExpanded(snapshot) : glanceMeterCaption(snapshot)
+        let countdownWidth = detail.usesCompactCountdown ? PipMetrics.countdownCompactWidth : PipMetrics.countdownWidth
 
         return HStack(spacing: PipMetrics.meterSpacing) {
             if detail.showsCadence {
@@ -1134,6 +1140,9 @@ struct PipWidgetView: View {
             )
             .frame(minWidth: PipMetrics.barMinWidth, maxWidth: .infinity)
 
+            // Fixed combined width, leading-aligned: the countdown stays
+            // directly after the percent while the bar keeps a uniform width
+            // across rows as values tick.
             HStack(spacing: 6) {
                 Text(remaining.map { "\(Int($0.rounded()))%" } ?? "—")
                     .font(.system(size: 10, weight: .bold, design: .rounded).monospacedDigit())
@@ -1153,6 +1162,7 @@ struct PipWidgetView: View {
                         .fixedSize()
                 }
             }
+            .frame(width: PipMetrics.percentWidth + 6 + countdownWidth, alignment: .leading)
         }
         .fixedSize(horizontal: false, vertical: true)
     }
