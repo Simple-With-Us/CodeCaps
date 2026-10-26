@@ -15,6 +15,9 @@
  * it to 1.0.2359.
  */
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import {
@@ -25,8 +28,11 @@ import {
   parsePatch,
   planCodeCapsVersion,
   planVersion,
-  nextMarketingPatch
+  nextMarketingPatch,
+  publishedMarketingFloor
 } from "./version-plan.mjs";
+
+const plannerCli = join(dirname(fileURLToPath(import.meta.url)), "plan-codecaps-version.mjs");
 
 const CONGRESS_APP_STORE_VERSIONS = ["1.0.235"];
 const CONGRESS_TRAINS = [
@@ -96,6 +102,17 @@ test("latestMarketingPatch counts App Store versions that no train carries", () 
 
 test("latestMarketingPatch returns 0 for an empty train", () => {
   assert.equal(latestMarketingPatch({ prefix: "1.0", appStoreVersions: [], trains: [] }), 0);
+});
+
+test("publishedMarketingFloor includes versions in drift trains", () => {
+  assert.equal(publishedMarketingFloor({
+    prefix: "1.0",
+    appStoreVersions: ["1.0.264"],
+    trains: [
+      { version: "1.0.280", builds: ["280"] },
+      { version: "1.0.285", builds: ["285"] }
+    ]
+  }), 285);
 });
 
 test("buildFloor keeps the old UTC stamp inside the target train", () => {
@@ -360,4 +377,45 @@ test("CodeCaps accepts only explicit overrides equal to the canonical release", 
     () => planCodeCapsVersion({ commitCount: 291, marketingFloor: "unknown", buildFloor: 290 }),
     /cannot verify the published marketing floor/
   );
+});
+
+test("CodeCaps platform-only release advances the shared sequence without rebuilding its companion", () => {
+  const platformUpdate = planCodeCapsVersion({
+    commitCount: 292,
+    marketingFloor: 291,
+    buildFloor: 291
+  });
+  assert.deepEqual(platformUpdate, { marketing: "1.0.292", build: "292" });
+  // The unbuilt platform remains on its existing 1.0.291/291 metadata; this
+  // planner resolves the current platform only and does not schedule a rebuild.
+});
+
+test("CodeCaps same-release Mac and iOS builds share the same canonical pair", () => {
+  const ios = planCodeCapsVersion({ commitCount: 293, marketingFloor: 292, buildFloor: 291 });
+  const mac = planCodeCapsVersion({ commitCount: 293, marketingFloor: 292, buildFloor: 292 });
+  assert.deepEqual(mac, ios);
+  assert.deepEqual(ios, { marketing: "1.0.293", build: "293" });
+});
+
+test("CodeCaps delayed companion build keeps the original release identity", () => {
+  const firstPlatform = planCodeCapsVersion({ commitCount: 294, marketingFloor: 293, buildFloor: 293 });
+  // The second platform is built later from the same release commit. Its own
+  // published floor is independent, so it still receives the release's N.
+  const delayedCompanion = planCodeCapsVersion({ commitCount: 294, marketingFloor: 292, buildFloor: 292 });
+  assert.deepEqual(delayedCompanion, firstPlatform);
+  assert.deepEqual(delayedCompanion, { marketing: "1.0.294", build: "294" });
+});
+
+test("CodeCaps planner CLI returns the canonical pair and refuses release overrides", () => {
+  const canonical = spawnSync(process.execPath, [plannerCli, "291", "290", "289", "1.0.291", "291"], {
+    encoding: "utf8"
+  });
+  assert.equal(canonical.status, 0, canonical.stderr);
+  assert.equal(canonical.stdout, "1.0.291\t291\n");
+
+  const rollback = spawnSync(process.execPath, [plannerCli, "291", "291", "0", "", ""], {
+    encoding: "utf8"
+  });
+  assert.equal(rollback.status, 2);
+  assert.match(rollback.stderr, /published marketing floor 291/);
 });

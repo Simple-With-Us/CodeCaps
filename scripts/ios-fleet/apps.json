@@ -11,7 +11,7 @@
       "xcodegenDir": "ios/CodeCapsCompanion",
       "worktreeHint": "~/Code/codecaps",
       "marketingVersionDefault": "1.0.0",
-      "notes": "CodeCaps Companion \u2014 iOS companion for CodeCaps AI subscription monitor. Apple ID 6814623846 registered on ASC. ASC SKU codecaps-companion-ios. Marketing train 1.0.N: the next patch after the highest one App Store Connect holds on the train (the retired 0.1.N builds are on their own train and do not count); build is the repo commit count, raised above the App Store Connect floor.  The two numbers are independent (AFC-517)."
+      "notes": "CodeCaps Companion \u2014 iOS companion for CodeCaps AI subscription monitor. Apple ID 6814623846 registered on ASC. ASC SKU codecaps-companion-ios. Shared release numbering: N is the full-history CodeCaps commit count; marketing version is 1.0.N and bundle build is N on both Mac and iOS. Before an iOS ship, its App Store Connect marketing and build floors must both be verified below N; if either floor is N or higher, stop for a shared-number resolution instead of splitting or lowering the platform versions. Explicit version/build overrides must equal 1.0.N/N."
     }
   }
 }

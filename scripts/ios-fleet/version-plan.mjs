@@ -5,7 +5,7 @@
  * 1.0.<commit_count> scheme unified in #2801 (2026-10-18), which made App
  * Store Connect show "1.0.2358 (2358)".
  *
- * The rules, in one place:
+ * The generic fleet rules, in one place:
  *
  *   MARKETING_VERSION       = <prefix>.<P+1>
  *       <prefix> is the train from marketingVersionDefault ("1.0").
@@ -42,9 +42,13 @@
  *   "1.0.N (N)", so a build that happens to equal the patch number is bumped
  *   by one.
  *
+ * CodeCaps has a newer, app-specific contract: both 1.0.N and N equal the
+ * full-history commit count.  planCodeCapsVersion() below enforces that pair
+ * and treats App Store Connect floors as hard guards, never alternate inputs.
+ *
  * This module is PURE:  no I/O, no network, no environment.  The bash ship
- * script implements the same rules; this module is the readable reference
- * and the unit-testable copy of them.
+ * script uses the generic rules for other fleet apps and the CodeCaps rule for
+ * CodeCaps; unit tests cover both paths.
  */
 
 /** Escape a string for literal use inside a RegExp. */
@@ -139,6 +143,24 @@ export function latestMarketingPatch({ prefix, appStoreVersions = [], trains = [
   return best;
 }
 
+/** Highest published marketing patch, including TestFlight drift trains. */
+export function publishedMarketingFloor({ prefix, appStoreVersions = [], trains = [] } = {}) {
+  let best = 0;
+  const consider = (version) => {
+    const patch = parsePatch(version, prefix);
+    if (patch !== null && patch > best) best = patch;
+  };
+
+  for (const version of appStoreVersions || []) {
+    consider(typeof version === "string" ? version : version?.versionString);
+  }
+  for (const train of trains || []) {
+    if (!train) continue;
+    consider(typeof train === "string" ? train : train.version);
+  }
+  return best;
+}
+
 /**
  * The next free patch on a train:  one past latestMarketingPatch, skipping
  * every patch a TestFlight train already holds.  Drift trains are ignored for
@@ -179,9 +201,12 @@ export const MAC_PLATFORM = "MAC_OS";
 
 /**
  * The CodeCaps release contract: both marketing and bundle versions use one
- * canonical N from the full-history commit count.  Published floors are
- * guards, never alternate numbering inputs; a floor at or above N must stop
- * the ship so neither platform silently drifts from the shared 1.0.N train.
+ * canonical N from the full-history commit count.  Published floors for the
+ * platform being built are guards, never alternate numbering inputs; a floor
+ * at or above N must stop that ship so neither platform silently drifts from
+ * the shared 1.0.N sequence.  Each platform ships independently: an unbuilt
+ * companion keeps its existing version, and a delayed build from the same
+ * release commit reuses N while checking that platform's own floor.
  */
 export function planCodeCapsVersion({
   commitCount = 0,

@@ -21,8 +21,17 @@
 #                           (dangerous: the marketing version and the build
 #                           number are then planned from unverified state)
 #
-# Version numbering (owner directive 2026-10-24, AFC-517; replaces the
-# 1.0.<commit_count> scheme unified fleet-wide on 2026-10-18, fleet PR #2801):
+# Version numbering (default fleet policy: AFC-517; CodeCaps shared-number
+# exception: Jay's 2026-10-26 release directive):
+#   CodeCaps: MARKETING_VERSION=1.0.N and CURRENT_PROJECT_VERSION=N, where N
+#       is the full-history repository commit count.  The platform being
+#       shipped must have App Store Connect marketing and build floors below
+#       N, or the ship stops for a shared release-number resolution. Overrides
+#       must equal that pair. Mac and iOS both derive their metadata from the
+#       same full-history count, preventing either platform from choosing its
+#       own release sequence or displaying a repeated pair.
+#
+#   Other fleet apps continue to use the generic planner below:
 #   MARKETING_VERSION       = <prefix>.<P+1>
 #       <prefix> is the train from marketingVersionDefault (1.0).  P is the
 #       highest patch already used on that train in App Store Connect, counting
@@ -50,7 +59,8 @@
 #   count, floored against that train);  with --build only the marketing
 #   version is still the automatic next patch.
 #   App Store Connect renders "<marketing> (<build>)", e.g. "1.0.237 (2360)".
-#   Unified across macOS and iOS; timestamps permanently retired.
+#   Generic fleet policy is platform-local; CodeCaps uses the shared-number
+#   contract above. Timestamps remain retired.
 #
 # ---------------------------------------------------------------------------
 # WHAT IS HOLDING BACK AUTOMATIC SHIPPING: THE MIN-INTERVAL RATE LIMIT
@@ -724,6 +734,45 @@ asc_latest_marketing_patch() {
   printf '%s' "$out"
 }
 
+# Highest marketing patch already published in App Store Connect, including
+# drift trains.  CodeCaps uses this as a strict guard so a canonical 1.0.N
+# never reuses a patch merely because the generic planner ignores a drift
+# train while finding the next free patch.
+asc_marketing_floor() {
+  local prefix="$1" plat="${2:-}" out rc errf line
+  if ! command -v "$ASC_NODE" >/dev/null 2>&1; then
+    logerr "asc-marketing-floor: node not on PATH; cannot verify against App Store Connect"
+    return 1
+  fi
+  if [[ -z "${ASC_KEY_ID:-}" && -z "${APPLE_API_KEY_ID:-}" && ! -x "$FLEET_SECRETS_BIN" ]] && ! command -v fleet-secrets >/dev/null 2>&1; then
+    logerr "asc-marketing-floor: no ASC_* in env and no fleet-secrets; cannot verify against App Store Connect"
+    return 1
+  fi
+  errf="$(mktemp "${TMPDIR:-/tmp}/asc-marketing-floor-err.XXXXXX")"
+  set +e
+  out="$(asc_client marketing-floor "$BUNDLE_ID" "$prefix" "$plat" 2>"$errf")"
+  rc=$?
+  set -e
+  if [[ -s "$errf" ]]; then
+    while IFS= read -r line; do
+      case "$line" in marketing-floor:*) logerr "asc-marketing-floor: ${line}" ;; esac
+    done <"$errf"
+  fi
+  if [[ "$rc" -eq 4 ]]; then
+    ASC_LAST_REJECTED_KEY="$(asc_rejected_key_label "$errf")"
+    logerr "asc-marketing-floor: App Store Connect rejected the credential (HTTP 401/403; rejected key ${ASC_LAST_REJECTED_KEY})"
+    rm -f "$errf" >/dev/null 2>&1 || true
+    return 4
+  fi
+  if [[ "$rc" -ne 0 || ! "$out" =~ ^[0-9]+$ ]]; then
+    logerr "asc-marketing-floor: query failed (rc=${rc}); cannot verify against App Store Connect"
+    rm -f "$errf" >/dev/null 2>&1 || true
+    return 1
+  fi
+  rm -f "$errf" >/dev/null 2>&1 || true
+  printf '%s' "$out"
+}
+
 # The build floor for one marketing train:  every build already in that train
 # (Apple requires build numbers to grow inside one train, so the retired UTC
 # stamps still hold the floor up) plus the app's plain-integer builds below
@@ -1117,6 +1166,55 @@ else
     PLAN_COMMIT_COUNT="$COMMIT_COUNT"
   fi
 
+  if [[ "$APP_KEY" == "codecaps" ]]; then
+    [[ "$MARKETING_PREFIX" == "1.0" ]] || die "CodeCaps marketing version must stay on the canonical 1.0.N train"
+    [[ "$PLAN_COMMIT_COUNT" =~ ^[0-9]+$ ]] || die "could not read the full-history CodeCaps commit count from ${REPO_ROOT}"
+
+    # CodeCaps uses the full-history commit count as the one release number
+    # for marketing and build metadata.  Query every published version,
+    # including drift trains, before choosing it; the generic fleet planner
+    # deliberately ignores those trains while finding a free marketing patch.
+    # Use this invocation's platform because the iOS and native Mac products
+    # have different bundle identifiers in App Store Connect.
+    set +e
+    _marketing_floor="$(asc_marketing_floor "$MARKETING_PREFIX" "$ASC_PLATFORM")"
+    _rc=$?
+    set -e
+    if [[ "$_rc" -eq 4 ]]; then
+      die "App Store Connect rejected the API key (HTTP 401/403; rejected key $(rejected_key_label)) while reading the published CodeCaps marketing floor for ${ASC_PLATFORM}."
+    fi
+    if [[ "$_rc" -ne 0 || ! "$_marketing_floor" =~ ^[0-9]+$ ]]; then
+      die "cannot verify the published CodeCaps marketing floor for ${ASC_PLATFORM}.  --allow-unverified-seq cannot bypass the common 1.0.N requirement."
+    fi
+    PLAN_ASC_PATCH="published-floor:${ASC_PLATFORM}=${_marketing_floor}"
+    PLAN_TARGET_PATCH="$PLAN_COMMIT_COUNT"
+    MARKETING="1.0.${PLAN_COMMIT_COUNT}"
+
+    # The App Store Connect floor is a guard only.  If it reaches N, stop and
+    # report the shared release number instead of bumping just iOS above Mac.
+    set +e
+    _floor_line="$(asc_build_floor "$MARKETING" "$ASC_PLATFORM")"
+    _rc=$?
+    set -e
+    if [[ "$_rc" -eq 4 ]]; then
+      die "App Store Connect rejected the API key (HTTP 401/403; rejected key $(rejected_key_label)) while reading the CodeCaps build floor for ${ASC_PLATFORM}."
+    fi
+    if [[ "$_rc" -ne 0 || -z "$_floor_line" ]]; then
+      die "cannot verify the CodeCaps build floor for ${MARKETING} on ${ASC_PLATFORM}.  --allow-unverified-seq cannot bypass the common 1.0.N requirement."
+    fi
+    PLAN_FLOOR="$(printf '%s' "$_floor_line" | awk '{print $1}')"
+    PLAN_TRAIN_FLOOR="$(printf '%s' "$_floor_line" | awk '{print $2}')"
+    PLAN_APP_FLOOR="$(printf '%s' "$_floor_line" | awk '{print $3}')"
+    [[ "$PLAN_FLOOR" =~ ^[0-9]+$ && "$PLAN_TRAIN_FLOOR" =~ ^[0-9]+$ && "$PLAN_APP_FLOOR" =~ ^[0-9]+$ ]] || die "App Store Connect returned an invalid CodeCaps build floor for ${ASC_PLATFORM}"
+
+    CODECAPS_PLAN_LINE="$("$ASC_NODE" "${FLEET_DIR}/plan-codecaps-version.mjs" \
+      "$PLAN_COMMIT_COUNT" "$_marketing_floor" "$PLAN_FLOOR" "$FORCE_VERSION" "$FORCE_BUILD" 2>&1)" \
+      || die "CodeCaps shared release plan refused: ${CODECAPS_PLAN_LINE}"
+    MARKETING="${CODECAPS_PLAN_LINE%%$'\t'*}"
+    BUILD_NUM="${CODECAPS_PLAN_LINE#*$'\t'}"
+    [[ "$MARKETING" == "1.0.${PLAN_COMMIT_COUNT}" && "$BUILD_NUM" == "$PLAN_COMMIT_COUNT" ]] || die "CodeCaps planner returned a noncanonical result"
+    log "CodeCaps canonical release: N=${PLAN_COMMIT_COUNT}; ${ASC_PLATFORM} marketing floor=${_marketing_floor}; ${ASC_PLATFORM} build floor=${PLAN_FLOOR}"
+  else
   # ---- the marketing version ---------------------------------------------
   # --version is an exact override.  Otherwise the version is the next patch
   # on the default train, and P comes from App Store Connect.
@@ -1235,6 +1333,7 @@ else
       log "build: ${BUILD_NUM} equals the patch number; using ${_bumped} so the ship does not read ${MARKETING} (${BUILD_NUM})"
       BUILD_NUM="$_bumped"
     fi
+  fi
   fi
 fi
 

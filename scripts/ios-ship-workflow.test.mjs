@@ -156,6 +156,41 @@ test("push paths trigger on the native tree and not on test-only changes", () =>
   assert.equal(triggers("README.md", paths), false);
 });
 
+test("CodeCaps shipping applies one verified release number to every generated app bundle", () => {
+  const ship = read("scripts/ios-fleet/ship-testflight.sh");
+  const project = read("ios/CodeCapsCompanion/project.yml");
+  const appPlist = read("ios/CodeCapsCompanion/App/Info.plist");
+  const widgetPlist = read("ios/CodeCapsCompanion/Widgets/Info.plist");
+
+  // The CodeCaps path is production reachable and verifies the published
+  // floors on both Apple platforms before resolving the CLI overrides.
+  assert.match(ship, /if \[\[ "\$APP_KEY" == "codecaps" \]\]; then/);
+  assert.match(ship, /asc_marketing_floor "\$MARKETING_PREFIX" "\$ASC_PLATFORM"/);
+  assert.match(ship, /asc_build_floor "\$MARKETING" "\$ASC_PLATFORM"/);
+  assert.match(ship, /plan-codecaps-version\.mjs/);
+  assert.match(ship, /"\$PLAN_COMMIT_COUNT" "\$_marketing_floor" "\$PLAN_FLOOR" "\$FORCE_VERSION" "\$FORCE_BUILD"/);
+  assert.match(ship, /\[\[ "\$MARKETING" == "1\.0\.\$\{PLAN_COMMIT_COUNT\}" && "\$BUILD_NUM" == "\$PLAN_COMMIT_COUNT" \]\]/);
+
+  // Both archive branches pass the same resolved values as Xcode build
+  // settings. The generated app and widget plists consume those exact
+  // settings, so CFBundleShortVersionString is 1.0.N and CFBundleVersion N.
+  assert.equal([...ship.matchAll(/MARKETING_VERSION="\$MARKETING"/g)].length, 2);
+  assert.equal([...ship.matchAll(/CURRENT_PROJECT_VERSION="\$BUILD_NUM"/g)].length, 2);
+  for (const [bundleName, plist] of [["app", appPlist], ["widget", widgetPlist]]) {
+    assert.match(plist, /<key>CFBundleShortVersionString<\/key>\s*<string>\$\(MARKETING_VERSION\)<\/string>/);
+    assert.match(plist, /<key>CFBundleVersion<\/key>\s*<string>\$\(CURRENT_PROJECT_VERSION\)<\/string>/);
+    const builtMetadata = plist
+      .replaceAll("$(MARKETING_VERSION)", "1.0.291")
+      .replaceAll("$(CURRENT_PROJECT_VERSION)", "291");
+    assert.match(builtMetadata, /<key>CFBundleShortVersionString<\/key>\s*<string>1\.0\.291<\/string>/, `${bundleName} marketing version did not expand`);
+    assert.match(builtMetadata, /<key>CFBundleVersion<\/key>\s*<string>291<\/string>/, `${bundleName} build version did not expand`);
+  }
+  assert.match(project, /name: CodeCapsCompanion/);
+  assert.match(project, /^  CodeCapsWidgets:\n/m);
+  assert.match(project, /INFOPLIST_FILE: App\/Info\.plist/);
+  assert.match(project, /INFOPLIST_FILE: Widgets\/Info\.plist/);
+});
+
 test("ASC credentials come from Fleet-OPS /asc, never the stale repository secrets", () => {
   // The repository ASC_* secrets are a revoked copy (HTTP 401, CC-163).
   assert.doesNotMatch(code, /secrets\.ASC_KEY_ID/);

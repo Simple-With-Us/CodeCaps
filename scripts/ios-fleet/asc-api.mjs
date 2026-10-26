@@ -23,6 +23,7 @@
  *   node asc-api.mjs PATCH /v1/betaAppReviewDetails/<id> '{"data":{...}}'
  *   node asc-api.mjs latest-build-seq <bundleId> <prefix> [platform] [appleId]
  *   node asc-api.mjs latest-marketing-patch <bundleId> <prefix> [platform]
+ *   node asc-api.mjs marketing-floor <bundleId> <prefix> [platform]
  *   node asc-api.mjs build-floor <bundleId> <version> [platform]
  *
  * Prints the raw JSON response to stdout. Caller is responsible for not
@@ -41,7 +42,8 @@ import { normalizePrivateKey } from "./asc-key.mjs";
 import {
   buildFloor,
   isDriftTrain,
-  nextMarketingPatch
+  nextMarketingPatch,
+  publishedMarketingFloor
 } from "./version-plan.mjs";
 
 // A failure that already knows what to say.
@@ -826,6 +828,7 @@ async function main() {
     console.error("       node asc-api.mjs ensure-standing-testers <appleId> [buildVersion]   (emails from ASC_STANDING_TESTERS)");
     console.error("       node asc-api.mjs latest-build-seq <bundleId> <prefix> [platform] [appleId]");
     console.error("       node asc-api.mjs latest-marketing-patch <bundleId> <prefix> [platform=IOS]");
+    console.error("       node asc-api.mjs marketing-floor <bundleId> <prefix> [platform=IOS]");
     console.error("       node asc-api.mjs build-floor <bundleId> <version> [platform=IOS]");
     console.error("       node asc-api.mjs upload-screenshots <localizationId> <displayType|auto> <file...>");
     console.error("       node asc-api.mjs submit-review <versionId> [reviewSubmissionId] [platform]");
@@ -2360,18 +2363,18 @@ async function main() {
   }
 
   // Highest patch already used on the <prefix> train, drift trains ignored.
-  if (method === "latest-marketing-patch") {
+  if (method === "latest-marketing-patch" || method === "marketing-floor") {
     const bundleId = path;
     const prefix = body;
     const platform = arg4 || "IOS";
     if (!bundleId || !prefix) {
-      console.error("Usage: node asc-api.mjs latest-marketing-patch <bundleId> <prefix> [platform=IOS]");
+      console.error(`Usage: node asc-api.mjs ${method} <bundleId> <prefix> [platform=IOS]`);
       process.exitCode = 2;
       return;
     }
     const app = await appIdForBundle(bundleId);
     if (!app.ok) {
-      console.error(`latest-marketing-patch: app not found for bundle ${bundleId}: ${app.error}`);
+      console.error(`${method}: app not found for bundle ${bundleId}: ${app.error}`);
       process.exitCode = 2;
       return;
     }
@@ -2383,7 +2386,7 @@ async function main() {
     );
     if (!storeRes.ok) {
       const status = storeRes.networkError ? "" : ` (HTTP ${storeRes.status})`;
-      console.error(`latest-marketing-patch: appStoreVersions query failed${status}: ${describeError(storeRes)}`);
+      console.error(`${method}: appStoreVersions query failed${status}: ${describeError(storeRes)}`);
       process.exitCode = storeRes.status === 401 || storeRes.status === 403 ? 4 : 2;
       return;
     }
@@ -2393,32 +2396,40 @@ async function main() {
     for (let page = 1; page < 10 && storeNext; page++) {
       const more = await ascGet(storeNext);
       if (!more.ok) {
-        console.error(`latest-marketing-patch: appStoreVersions page ${page + 1} failed (HTTP ${more.status}): ${describeError(more)}`);
+        console.error(`${method}: appStoreVersions page ${page + 1} failed (HTTP ${more.status}): ${describeError(more)}`);
         failExit(more.status);
       }
       storeRows.push(...(more.parsed.data || []));
       storeNext = more.parsed.links?.next || "";
     }
     if (storeNext) {
-      console.error("latest-marketing-patch: more than 10 pages of App Store versions");
+      console.error(`${method}: more than 10 pages of App Store versions`);
       process.exit(2);
     }
     const appStoreVersions = storeRows
       .map((v) => v?.attributes?.versionString);
     const badStore = appStoreVersions.findIndex((v) => !validVersion(v));
     if (badStore !== -1) {
-      console.error(`latest-marketing-patch: malformed App Store version ${JSON.stringify(appStoreVersions[badStore] ?? null)}`);
+      console.error(`${method}: malformed App Store version ${JSON.stringify(appStoreVersions[badStore] ?? null)}`);
       process.exit(2);
     }
 
     // 2) The TestFlight trains and their builds.
     const trainRes = await fetchTrains(appId, platform);
     if (!trainRes.ok) {
-      console.error(`latest-marketing-patch: preReleaseVersions query failed (HTTP ${trainRes.status}): ${trainRes.error}`);
+      console.error(`${method}: preReleaseVersions query failed (HTTP ${trainRes.status}): ${trainRes.error}`);
       process.exitCode = trainRes.status === 401 || trainRes.status === 403 ? 4 : 2;
       return;
     }
     const trains = trainRes.trains;
+
+    if (method === "marketing-floor") {
+      const floor = publishedMarketingFloor({ prefix, appStoreVersions, trains });
+      console.error(`marketing-floor: highest published ${prefix}.N is N=${floor} on ${platform}; drift trains are included`);
+      console.log(String(floor));
+      process.exitCode = 0;
+      return;
+    }
 
     // Print one less than the next FREE patch, so the caller's P + 1 never
     // lands on a patch a drift train already holds (see nextMarketingPatch).

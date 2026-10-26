@@ -22,7 +22,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-import { buildFloor, nextMarketingPatch, planVersion } from "./version-plan.mjs";
+import { buildFloor, nextMarketingPatch, planVersion, publishedMarketingFloor } from "./version-plan.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const script = join(here, "asc-api.mjs");
@@ -214,6 +214,26 @@ test("the client and the module plan the same marketing version (AFC-517)", asyn
       `1.0.${expectedNextFree}`,
       `the ship would plan ${plan.marketing} from the client's ${printed}`
     );
+  });
+});
+
+test("CodeCaps published marketing floor includes App Store versions and drift trains", async () => {
+  const state = {
+    appStoreVersions: ["1.0.288"],
+    trains: [
+      { id: "ordinary", version: "1.0.289", builds: ["202610260001"] },
+      { id: "drift", version: "1.0.291", builds: ["291"] },
+      { id: "other-train", version: "2.0.999", builds: ["999"] }
+    ]
+  };
+  const expected = publishedMarketingFloor({ prefix: "1.0", ...state });
+  assert.equal(expected, 291, "the fixture must include the drift train but ignore another marketing train");
+
+  await withStub(state, async ({ base }) => {
+    const result = await run(["marketing-floor", BUNDLE, "1.0", "IOS"], base);
+    assert.equal(result.code, 0, `the client failed:\n${result.stderr}`);
+    assert.equal(Number(result.stdout.trim()), expected);
+    assert.match(result.stderr, /drift trains are included/);
   });
 });
 
