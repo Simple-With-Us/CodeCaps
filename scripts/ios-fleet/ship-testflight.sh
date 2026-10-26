@@ -887,6 +887,13 @@ record_successful_ship() {
   printf '%s %s\n' "$now" "$head_sha" >"$path"
   chmod 600 "$path" 2>/dev/null || true
   log "ship-gate: recorded success ts=${now} sha=${head_sha:0:10} -> ${path}"
+  # --upload-only resolves no version (MARKETING/BUILD_NUM stay the "(from
+  # IPA)" placeholder): forwarding it would write the placeholder into the
+  # manifest, so only the ship-gate state above is recorded.
+  if [[ "${MARKETING:-}" == "(from IPA)" || "${BUILD_NUM:-}" == "(from IPA)" ]]; then
+    log "version-manifest: skipped (upload-only; the IPA already carries its version)"
+    return 0
+  fi
   # Public version manifest for the in-app update prompt.  Best-effort —
   # a publish miss must never fail a ship that already uploaded.
   if [[ -n "${BUNDLE_ID:-}" && -n "${MARKETING:-}" ]]; then

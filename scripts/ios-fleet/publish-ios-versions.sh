@@ -128,7 +128,8 @@ api_request() {
   if [[ -n "$data_file" ]]; then
     args+=(-H "Content-Type: application/json" --data "@${data_file}")
   fi
-  API_STATUS="$(curl "${args[@]}" "${API_BASE}/${path}")"
+  API_STATUS="$(curl "${args[@]}" "${API_BASE}/${path}" || true)"
+  [[ -n "$API_STATUS" ]] || { echo "remote-manifest-publish-failed: ${method} ${path} could not reach ${API_BASE}" >&2; exit 1; }
 }
 
 api_message() {
@@ -171,7 +172,7 @@ PY
 # uploading it whole would delete every other app's row.
 api_request GET "repos/${REPO}/contents/${REMOTE_PATH}?ref=main"
 [[ "$API_STATUS" == "200" ]] || api_fail "GET repos/${REPO}/contents/${REMOTE_PATH}?ref=main"
-json_field "$API_BODY" "content" | tr -d '\n' | base64 -d > "${WORK_DIR}/remote.json" 2>/dev/null \
+json_field "$API_BODY" "content" | tr -d '\n' | python3 -c 'import base64,sys; sys.stdout.buffer.write(base64.b64decode(sys.stdin.read()))' > "${WORK_DIR}/remote.json" 2>/dev/null \
   || { echo "remote-manifest-publish-failed: could not decode the live ${REMOTE_PATH} (HTTP 200 with an unreadable body)" >&2; exit 1; }
 
 ALREADY_CURRENT="$(python3 - "${WORK_DIR}/remote.json" "$BUNDLE_ID" "$VERSION" "$BUILD" "$APPLE_ID" "$DISPLAY_NAME" <<'PY'
