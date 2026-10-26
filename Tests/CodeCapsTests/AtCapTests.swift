@@ -157,6 +157,26 @@ final class AtCapTests: XCTestCase {
                        "the sidebar's number reads the fresh window")
     }
 
+    /// Owner 2026-10-25: Muse Code sat at 0% with a 5-hour countdown, but showed
+    /// a 0% meter bar instead of the quota exhausted notice like Claude and AG.
+    ///
+    /// The collector had skipped polling because the weekly allowance was spent,
+    /// so `occurredAt` was 24 hours old.  The reset was still in the future, so
+    /// the allowance remained spent for the active cycle, but `isReadingRecent`
+    /// called it stale and the cap rule refused to bind, leaving the row drawing
+    /// meters instead of the cap notice.  An exhausted allowance whose cycle is
+    /// unexpired binds the cap.
+    func testAnUnexpiredExhaustedWindowObservedEarlierInCycleCapsTheRow() {
+        let row = makeRow([
+            makeWindow(id: "weekly", label: "7-day window", token: "weekly", remaining: 0,
+                       resetIn: 5 * hour + 16 * 60, observedIn: -24 * hour, provider: "muse-code"),
+        ])
+        XCTAssertTrue(row.isAtCap, "an unexpired spent window must cap the row")
+        XCTAssertEqual(row.atCapWindow?.window.id, "weekly")
+        XCTAssertEqual(glanceAtCapSummary(try! XCTUnwrap(row.atCapWindow), now: now),
+                       "7-day cap resets in 5h 16m")
+    }
+
     func testAMaskedWindowIsNotEvidenceOfACap() {
         // An Antigravity 5-hour window under a spent weekly is masked: the
         // number is real and meaningless.  Only the unmasked weekly may cap.

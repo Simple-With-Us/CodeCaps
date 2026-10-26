@@ -273,7 +273,7 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
     /// Oct-22-2026).
     public func atCapWindow(now: Date = Date()) -> WidgetWindowItem? {
         windows
-            .filter { $0.isFresh(now: now) }
+            .filter { $0.isFresh(now: now) || (WidgetPresentation.isAtCap(percent: $0.remainingPercent, isExhausted: $0.isExhausted) && $0.resetAt != nil && $0.resetAt! > now) }
             .filter { !$0.isMasked && $0.remainingPercent != nil }
             .filter { WidgetPresentation.isAtCap(percent: $0.remainingPercent, isExhausted: $0.isExhausted) }
             .min { ($0.resetAt ?? .distantFuture) < ($1.resetAt ?? .distantFuture) }

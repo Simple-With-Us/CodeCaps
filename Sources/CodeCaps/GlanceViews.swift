@@ -2231,14 +2231,14 @@ struct GlanceRow: View {
         HStack(spacing: 0) {
             nameBlock
             Spacer().frame(width: Metrics.glanceColumnGap)
-            if percent != nil {
+            if percent != nil || row.isAtCap {
                 // Both cadences, always.  The 4-5hr window and the
                 // weekly/monthly window are the two numbers an owner
                 // actually routes on, and hiding the second one behind a
                 // click made the compact row say half the truth.
                 GlanceMeterColumns(short: meters.short, long: meters.long, now: now,
                                    longGap: weeklyGap, pacingHighlights: pacingHighlights,
-                                   atCap: percent == nil ? nil : row.atCapWindow)
+                                   atCap: row.atCapWindow)
             } else {
                 // Where a single meter's bar would start (Cursor's, say),
                 // left-aligned, so a row without a reading still lines up

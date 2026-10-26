@@ -527,11 +527,28 @@ public struct QuotaWindowSnapshot: Equatable, Sendable {
         self.remainingPercent = normalized.boundedRemainingPercent
         self.status = normalized.status
 
-        let observedIsFresh = QuotaFreshnessRule.isReadingRecent(observedAt: observedAt, now: now)
+        let isAtCap = remainingPercent.map { QuotaCapRule.isAtCap(remainingPercent: $0) } ?? normalized.isExhausted
+        let duration = resetAt.flatMap { end in
+            ResetAlarmCadence.duration(
+                token: normalized.window,
+                label: normalized.label,
+                providerKey: normalized.canonicalProviderKey,
+                isSupplementaryVideoQuota: normalized.isSupplementaryVideoQuota,
+                endingAt: end
+            )
+        }
+
+        let isFreshReading = QuotaFreshnessRule.isFresh(
+            observedAt: observedAt,
+            resetAt: resetAt,
+            now: now,
+            isAtCap: isAtCap,
+            cadenceDuration: duration
+        )
 
         if let resetAt, resetAt <= now {
             freshness = .awaitingRefresh
-        } else if observedIsFresh {
+        } else if isFreshReading {
             freshness = .fresh
         } else {
             freshness = .stale
