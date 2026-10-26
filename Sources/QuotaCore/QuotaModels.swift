@@ -312,7 +312,13 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
             providerWordCounts = isExhausted
         }
         copy.skip = skip || bounded == 0 || providerWordCounts
-        copy.skipReason = skipReason ?? (copy.skip ? "quota exhausted" : nil)
+        // The reason explains a skip, so it is attached to a skip and never
+        // to a window that stays visible, and it never claims an exhaustion
+        // the window does not have:  a provider that hides a healthy window
+        // without saying why gets no reason at all, because "quota exhausted"
+        // on a window with room left is a false claim, and a consumer that
+        // filters on the reason would act on it (Kody review 2026-10-26).
+        copy.skipReason = skipReason ?? (copy.skip && copy.isExhausted ? "quota exhausted" : nil)
         let monthlyHint = copy.canonicalProviderKey == "cursor"
             && copy.label.lowercased().contains("plan")
         if let rewritten = QuotaWindowVocabulary.sanitizeLabelIfNeeded(

@@ -274,6 +274,7 @@ final class LocalQuotaSnapshotTests: XCTestCase {
             .normalizedForExport()
         XCTAssertTrue(contradicted.isExhausted)
         XCTAssertTrue(contradicted.skip, "a provider's word against a reading is believed")
+        XCTAssertEqual(contradicted.skipReason, "quota exhausted", "a hidden window says why it is hidden")
 
         // The same word beside a reading that already agrees with it settles
         // nothing:  the window is spent either way, and it stays visible.
@@ -284,14 +285,16 @@ final class LocalQuotaSnapshotTests: XCTestCase {
         XCTAssertTrue(agreed.isExhausted)
         XCTAssertFalse(agreed.skip)
 
-        // A provider that hides a window without saying why still leaves a
-        // reason on the wire, so a skip is never unexplained.
+        // A provider that hides a window without saying why gets no reason
+        // invented for it:  the window has room left, so "quota exhausted"
+        // would be a false claim for a consumer that filters on the reason.
         let silent = QuotaWindow(id: "silent", provider: "openai", label: "5h",
                                  remainingPercent: 40, skip: true,
                                  occurredAt: "2026-10-03T23:00:00Z")
             .normalizedForExport()
         XCTAssertTrue(silent.skip)
-        XCTAssertEqual(silent.skipReason, "quota exhausted")
+        XCTAssertFalse(silent.isExhausted, "40% is not a spent window")
+        XCTAssertNil(silent.skipReason, "a reason must never claim an exhaustion the window does not have")
 
         // An unreadable reading is not a spent one and raises nothing.
         let unreadable = QuotaWindow(id: "unreadable", provider: "cursor", label: "Included plan",
