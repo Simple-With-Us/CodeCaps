@@ -466,7 +466,7 @@ final class FleetRowSourceTests: XCTestCase {
             foreign.producerInstanceId = isLegacy ? nil : "other-mac"
             foreign.machine = isLegacy ? nil : "other-mac"
             // The legacy foreign payload shares provider/time and missing cadence,
-            // but not payload ID. It must remain in Fleet on BOTH merge paths.
+            // but not payload ID.  It must remain in Fleet on BOTH merge paths.
             let server = QuotaResponse(generatedAt: iso.string(from: now), windows: [pushed, foreign])
             let model = MonitorModel(defaults: defaults())
             model.skipsSnapshotIOForTesting = true
