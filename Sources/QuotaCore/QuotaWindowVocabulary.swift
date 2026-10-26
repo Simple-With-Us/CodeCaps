@@ -667,18 +667,18 @@ public enum QuotaFreshnessRule {
         isAtCap: Bool = false,
         cadenceDuration: TimeInterval? = nil
     ) -> Bool {
-        if isAtCap, let resetAt, resetAt > now, let observedAt {
+        if let resetAt, resetAt <= now { return false }
+        if isReadingRecent(observedAt: observedAt, now: now) { return true }
+        if isAtCap, let resetAt, let observedAt {
             let age = now.timeIntervalSince(observedAt)
             guard age >= -maximumFutureSkew else { return false }
             if let duration = cadenceDuration, duration.isFinite, duration > 0 {
                 let cycleStart = resetAt.addingTimeInterval(-duration)
-                return observedAt >= cycleStart
+                return observedAt >= cycleStart.addingTimeInterval(-3_600)
             }
             return true
         }
-        guard isReadingRecent(observedAt: observedAt, now: now) else { return false }
-        if let resetAt, resetAt <= now { return false }
-        return true
+        return false
     }
 
     /// Whether a window is a dead copy of a period that has already ended.
