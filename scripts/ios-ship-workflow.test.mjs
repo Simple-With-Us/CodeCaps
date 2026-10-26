@@ -297,6 +297,40 @@ test("the ASC credential reaches every client through the environment, never a p
   assert.ok(pushPaths().includes("scripts/ios-load-asc-key.sh"), "editing the loader must re-ship");
 });
 
+test("the version manifest publish names its cause and can write the CodeCaps row (CC-202)", () => {
+  const ship = read("scripts/ios-fleet/ship-testflight.sh");
+  const publish = read("scripts/ios-fleet/publish-ios-versions.sh");
+
+  // The publisher's streams are never discarded, and its failure stays a
+  // warning: the TestFlight upload that already succeeded must not fail.
+  assert.doesNotMatch(ship, /publish-ios-versions\.sh[^|\n]*>\/dev\/null/);
+  assert.match(ship, /publish_output="\$\(bash "\$\{FLEET_DIR\}\/publish-ios-versions\.sh"/);
+  assert.match(ship, /version-manifest publish failed \(non-fatal, rc=\$\{publish_rc\}\)/);
+  assert.match(publish, /HTTP \$\{API_STATUS\}/);
+  assert.match(publish, /no IOS_VERSIONS_PUBLISH_TOKEN credential/);
+  assert.match(publish, /contents:read on this repository and cannot write/);
+
+  // The remote leg merges into the live manifest and writes through a
+  // branch and pull request, because ai-fleet-coordinator main requires a
+  // pull request and this job's token is contents:read here.
+  assert.match(publish, /repos\/\$\{REPO\}\/git\/refs/);
+  assert.match(publish, /repos\/\$\{REPO\}\/pulls/);
+  assert.match(publish, /"branch": branch/);
+  assert.doesNotMatch(publish, /gh api "\$\{ARGS\[@\]\}"/);
+  assert.match(publish, /other app|every other app/);
+
+  // The credential is the org GH_PAT secret, scoped to the ship step only,
+  // and this job's own permissions stay read-only.
+  assert.match(code, /IOS_VERSIONS_PUBLISH_TOKEN:\s*\$\{\{ secrets\.GH_PAT \}\}/);
+  assert.match(code, /permissions:\s*\n\s+contents: read/);
+  assert.doesNotMatch(code, /contents: write/);
+  assert.doesNotMatch(code, /(echo|printf)[^\n]*IOS_VERSIONS_PUBLISH_TOKEN/);
+  assert.match(publish, /CURL_CONFIG="\$\{WORK_DIR\}\/curl-config"/);
+  assert.match(publish, /chmod 600 "\$CURL_CONFIG"/);
+  assert.doesNotMatch(publish, /echo[^\n]*\$\{TOKEN\}/);
+  assert.doesNotMatch(publish, /Authorization: Bearer \$\{TOKEN\}/);
+});
+
 test("the ship carries no standing gate override and always publishes What to Test", () => {
   assert.doesNotMatch(code, /IOS_TF_MIN_INTERVAL_SEC/);
   assert.doesNotMatch(code, /--force-ship/);
@@ -323,6 +357,7 @@ test("the marketing train is 1.0.N and release notes use the owner clock", () =>
 test("scheduled gate and key handoff shell tests pass", () => {
   for (const script of [
     "scripts/ios-fleet/test-scheduled-ship-gate.sh",
+    "scripts/ios-fleet/test-publish-ios-versions.sh",
     "scripts/test-ios-stage-asc-key.sh",
     "scripts/test-ios-load-asc-key.sh",
   ]) {
