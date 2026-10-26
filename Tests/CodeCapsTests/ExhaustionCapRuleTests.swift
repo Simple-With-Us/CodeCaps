@@ -63,6 +63,10 @@ final class ExhaustionCapRuleTests: XCTestCase {
             source.contains("QuotaCapRule.spentThreshold"),
             "the copy must quote the shared threshold itself, so a change to the rule cannot leave the copy behind"
         )
+        XCTAssertTrue(
+            source.contains(".formatted(.number.precision(.fractionLength(0...1)))"),
+            "the threshold is a Double, so a plain interpolation would print 1.0% once the rule reaches a whole number"
+        )
     }
 
     /// The rule itself spends a window at or below the threshold and calls a
