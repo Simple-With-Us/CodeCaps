@@ -220,6 +220,18 @@ test('PRs cannot notarize or publish, and icon-only changes trigger releases', (
   assert.ok(code.indexOf('Verify notarization access') < code.indexOf('Build, sign, notarize'));
 });
 
+test('Mac release policy changes trigger Mac checks without forcing an iOS build', () => {
+  const macPush = code.slice(code.indexOf('  push:\n'), code.indexOf('  pull_request:\n'));
+  const macPullRequest = code.slice(code.indexOf('  pull_request:\n'), code.indexOf('  workflow_dispatch:'));
+  for (const block of [macPush, macPullRequest]) {
+    assert.match(block, /'script\/build_and_run\.sh'/);
+    assert.doesNotMatch(block, /'script\/release-version\.sh'/);
+    assert.doesNotMatch(block, /'ios\/CodeCapsCompanion\/\*\*'/);
+  }
+  assert.match(iosCode, /'ios\/CodeCapsCompanion\/\*\*'/);
+  assert.doesNotMatch(iosCode, /'Sources\/CodeCaps\/\*\*'/);
+});
+
 test('a verify-only dispatch is isolated from the release job, and only main publishes', () => {
   // A verify-only dispatch has its own job.  The release job must not run for
   // one: it would load the Developer ID, Sentry and Sparkle material and

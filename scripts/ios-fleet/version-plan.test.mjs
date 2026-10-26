@@ -15,7 +15,9 @@
  * it to 1.0.2359.
  */
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
@@ -33,6 +35,7 @@ import {
 } from "./version-plan.mjs";
 
 const plannerCli = join(dirname(fileURLToPath(import.meta.url)), "plan-codecaps-version.mjs");
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../..");
 
 const CONGRESS_APP_STORE_VERSIONS = ["1.0.235"];
 const CONGRESS_TRAINS = [
@@ -418,4 +421,46 @@ test("CodeCaps planner CLI returns the canonical pair and refuses release overri
   });
   assert.equal(rollback.status, 2);
   assert.match(rollback.stderr, /published marketing floor 291/);
+});
+
+test("shared Mac and iOS release helper emits only 1.0.N from full history", () => {
+  const helperPath = join(repoRoot, "script/release-version.sh");
+  const helper = readFileSync(helperPath, "utf8");
+  const macBuild = readFileSync(join(repoRoot, "script/build_and_run.sh"), "utf8");
+  assert.match(macBuild, /source "\$ROOT_DIR\/script\/release-version\.sh"/);
+  assert.match(macBuild, /short_version\(\)[\s\S]*?codecaps_short_version "\$ROOT_DIR" "\$VERSION_FILE"/);
+  assert.match(macBuild, /bundle_version\(\)[\s\S]*?codecaps_commit_count "\$ROOT_DIR"/);
+  assert.match(helper, /git -C "\$repo_root" rev-parse --is-shallow-repository/);
+  assert.match(helper, /git -C "\$repo_root" rev-list --count HEAD/);
+
+  const temp = mkdtempSync(join(tmpdir(), "codecaps-release-version-test-"));
+  const full = join(temp, "full");
+  const empty = join(temp, "empty");
+  const shallow = join(temp, "shallow");
+  const versionFile = join(full, "VERSION");
+  const count = (repo) => spawnSync("bash", ["-c", 'source "$1" && codecaps_commit_count "$2"', "test", helperPath, repo], { encoding: "utf8" });
+  const marketing = (repo, file) => spawnSync("bash", ["-c", 'source "$1" && codecaps_short_version "$2" "$3"', "test", helperPath, repo, file], { encoding: "utf8" });
+  try {
+    execFileSync("git", ["init", "--quiet", "--initial-branch=main", full]);
+    execFileSync("git", ["-C", full, "-c", "user.name=CodeCaps Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-m", "release fixture"]);
+    writeFileSync(versionFile, "1.0\n");
+    assert.equal(count(full).stdout, "1\n");
+    assert.equal(marketing(full, versionFile).stdout, "1.0.1\n");
+    writeFileSync(versionFile, "2.0\n");
+    const wrongTrain = marketing(full, versionFile);
+    assert.notEqual(wrongTrain.status, 0);
+    assert.match(wrongTrain.stderr, /canonical 1\.0\.N marketing train/);
+
+    execFileSync("git", ["init", "--quiet", "--initial-branch=main", empty]);
+    const noHead = count(empty);
+    assert.notEqual(noHead.status, 0);
+    assert.match(noHead.stderr, /refusing to guess a CodeCaps release number/);
+
+    execFileSync("git", ["clone", "--quiet", "--depth=1", `file://${full}`, shallow]);
+    const partialHistory = count(shallow);
+    assert.notEqual(partialHistory.status, 0);
+    assert.match(partialHistory.stderr, /shallow git history/);
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
 });

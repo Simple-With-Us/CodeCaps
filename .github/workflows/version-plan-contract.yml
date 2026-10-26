@@ -23,6 +23,11 @@ on:
       - 'scripts/ios-fleet/test-version-plan-contract.mjs'
       - 'scripts/ios-fleet/ship-testflight.sh'
       - 'scripts/ios-fleet/asc-api.mjs'
+      - 'scripts/ios-fleet/plan-codecaps-version.mjs'
+      - 'scripts/ios-fleet/version-display.source.test.mjs'
+      - 'script/release-version.sh'
+      - 'script/build_and_run.sh'
+      - '.github/workflows/version-plan-contract.yml'
   push:
     branches: [main]
     paths:
@@ -31,6 +36,11 @@ on:
       - 'scripts/ios-fleet/test-version-plan-contract.mjs'
       - 'scripts/ios-fleet/ship-testflight.sh'
       - 'scripts/ios-fleet/asc-api.mjs'
+      - 'scripts/ios-fleet/plan-codecaps-version.mjs'
+      - 'scripts/ios-fleet/version-display.source.test.mjs'
+      - 'script/release-version.sh'
+      - 'script/build_and_run.sh'
+      - '.github/workflows/version-plan-contract.yml'
   workflow_dispatch:
 
 concurrency:
@@ -53,8 +63,12 @@ jobs:
         run: |
           node --check scripts/ios-fleet/version-plan.mjs
           node --check scripts/ios-fleet/asc-api.mjs
+          node --check scripts/ios-fleet/plan-codecaps-version.mjs
+          bash -n script/release-version.sh
+          bash -n script/build_and_run.sh
           bash -n scripts/ios-fleet/ship-testflight.sh
           node --test scripts/ios-fleet/version-plan.test.mjs
+          node --test scripts/ios-fleet/version-display.source.test.mjs
       - name: The version plan the ship actually applies (AFC-517)
         run: |
           #  The rules the ship applies live in the client and the ship

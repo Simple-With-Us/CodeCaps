@@ -151,6 +151,8 @@ test("push paths trigger on the native tree and not on test-only changes", () =>
   assert.equal(triggers("ios/CodeCapsCompanion/project.yml", paths), true);
   assert.equal(triggers("Sources/QuotaCore/ResetAlarmTracker.swift", paths), true);
   assert.equal(triggers("scripts/ios-fleet/ship-testflight.sh", paths), true);
+  assert.equal(triggers("scripts/ios-fleet/plan-codecaps-version.mjs", paths), true);
+  assert.equal(triggers("script/release-version.sh", paths), false);
   assert.equal(triggers("scripts/ios-fleet/test-scheduled-ship-gate.sh", paths), false);
   assert.equal(triggers("Sources/CodeCaps/AppDelegate.swift", paths), false);
   assert.equal(triggers("README.md", paths), false);

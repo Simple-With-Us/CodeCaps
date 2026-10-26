@@ -3,6 +3,7 @@ set -euo pipefail
 
 MODE="${1:-run}"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT_DIR/script/release-version.sh"
 PACKAGE_DIR="$ROOT_DIR"
 DIST_DIR="$PACKAGE_DIR/dist"
 APP_NAME="CodeCaps"
@@ -112,10 +113,10 @@ usage: script/build_and_run.sh [mode]
   --package also signs with the hardened runtime and a secure timestamp and
   prints the notarytool command; --release is the mode that actually notarizes.
 
-  Versions: CFBundleShortVersionString is unified as <prefix>.<commit_count>
-  per fleet standard (prefix from VERSION file, default 1.0; commit count from
-  `git rev-list --count HEAD`).  CFBundleVersion is `git rev-list --count HEAD`,
-  giving macOS and iOS the identical monotonic build number.
+  Versions: both CFBundleShortVersionString (1.0.N) and CFBundleVersion (N)
+  use the shared full-history `git rev-list --count HEAD` release number.  A
+  shallow checkout, missing history, or VERSION train other than 1.0 fails
+  closed; macOS and iOS builds of the same release commit therefore share N.
 
   Auto-update: Sparkle.framework is embedded in Contents/Frameworks and signed
   inside-out.  A build with the release identifier carries the update feed and
@@ -441,23 +442,14 @@ sign_app_bundle() {
   fi
 }
 
-# The marketing version is unified as <prefix>.<commit_count> per fleet standard,
-# where prefix is drawn from the VERSION file (defaulting to 1.0) and commit count
-# is monotonic across all git commits.
+# CodeCaps uses one shared 1.0.N release number for Mac and iOS. VERSION is
+# checked against the fixed 1.0 train so it cannot silently create another train.
 short_version() {
-  local version=""
-  [[ ! -f "$VERSION_FILE" ]] || version="$(/usr/bin/sed -e 's/[[:space:]]//g' -e '/^$/d' "$VERSION_FILE" | /usr/bin/head -n 1)"
-  local prefix="${version:-1.0}"
-  prefix="$(printf '%s' "$prefix" | /usr/bin/awk -F. '{ if (NF >= 2) print $1"."$2; else print $1".0" }')"
-  local count=""
-  count="$(bundle_version)"
-  printf '%s.%s\n' "$prefix" "$count"
+  codecaps_short_version "$ROOT_DIR" "$VERSION_FILE"
 }
 
 bundle_version() {
-  local count=""
-  count="$(/usr/bin/git -C "$ROOT_DIR" rev-list --count HEAD 2>/dev/null || true)"
-  printf '%s\n' "${count:-1}"
+  codecaps_commit_count "$ROOT_DIR"
 }
 
 bundle_identifier() {

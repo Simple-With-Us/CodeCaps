@@ -1168,7 +1168,8 @@ else
 
   if [[ "$APP_KEY" == "codecaps" ]]; then
     [[ "$MARKETING_PREFIX" == "1.0" ]] || die "CodeCaps marketing version must stay on the canonical 1.0.N train"
-    [[ "$PLAN_COMMIT_COUNT" =~ ^[0-9]+$ ]] || die "could not read the full-history CodeCaps commit count from ${REPO_ROOT}"
+    PLAN_COMMIT_COUNT="$(source "${REPO_ROOT}/script/release-version.sh" && codecaps_commit_count "$REPO_ROOT")" \
+      || die "could not read the full-history CodeCaps commit count from ${REPO_ROOT}"
 
     # CodeCaps uses the full-history commit count as the one release number
     # for marketing and build metadata.  Query every published version,

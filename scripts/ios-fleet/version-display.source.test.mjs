@@ -4,6 +4,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
+const releaseVersion = readFileSync(`${repoRoot}/script/release-version.sh`, "utf8");
 const macBuildScript = readFileSync(`${repoRoot}/script/build_and_run.sh`, "utf8");
 const macSettingsSource = readFileSync(`${repoRoot}/Sources/CodeCaps/ConsoleViews.swift`, "utf8");
 const companionSource = readFileSync(
@@ -12,8 +13,10 @@ const companionSource = readFileSync(
 );
 
 test("macOS marketing and build metadata use the same full-history commit count", () => {
-  assert.match(macBuildScript, /short_version\(\)[\s\S]*?count="\$\(bundle_version\)"/);
-  assert.match(macBuildScript, /bundle_version\(\)[\s\S]*?git -C "\$ROOT_DIR" rev-list --count HEAD/);
+  assert.match(macBuildScript, /short_version\(\)[\s\S]*?codecaps_short_version "\$ROOT_DIR" "\$VERSION_FILE"/);
+  assert.match(macBuildScript, /source "\$ROOT_DIR\/script\/release-version\.sh"/);
+  assert.match(macBuildScript, /bundle_version\(\)[\s\S]*?codecaps_commit_count "\$ROOT_DIR"/);
+  assert.match(releaseVersion, /\[\[ "\$prefix" != "1\.0" \]\]/);
   assert.match(macBuildScript, /<key>CFBundleShortVersionString<\/key>[\s\S]*?<string>\$\(short_version\)<\/string>/);
   assert.match(macBuildScript, /<key>CFBundleVersion<\/key>[\s\S]*?<string>\$\(bundle_version\)<\/string>/);
 });
