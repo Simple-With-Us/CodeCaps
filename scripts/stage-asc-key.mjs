@@ -314,7 +314,9 @@ export async function run({
         if (code === 0) resolvePromise();
         else rejectPromise(new Error(`The ASC key staging script exited ${code}.`));
       });
-      child.stdin.on('error', rejectPromise);
+      child.stdin.on('error', (err) => {
+        if (err.code !== 'EPIPE') rejectPromise(err);
+      });
       child.stdin.end(key);
     });
 
