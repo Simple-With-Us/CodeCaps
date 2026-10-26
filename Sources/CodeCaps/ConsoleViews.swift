@@ -1088,14 +1088,18 @@ struct PlatformDetailPage: View {
     }
 }
 
-/// Version string, read once from the bundle the build script writes.  `var`
-/// only so the screenshot test, which runs inside Xcode's test host and would
-/// otherwise print Xcode's own version, can put a release's string in the footer.
+/// Marketing version, read once from the bundle the build script writes.  The
+/// build number is the same canonical N and is already part of 1.0.N, so it
+/// should not be repeated in the app-owned presentation.  `var` only so the
+/// screenshot test can provide a fixed version for its output.
 enum CodeCapsVersion {
     static var display: String = {
         let info = Bundle.main.infoDictionary
         let short = info?["CFBundleShortVersionString"] as? String ?? "1.0"
-        let build = info?["CFBundleVersion"] as? String ?? "1"
-        return "Version \(short) (\(build))"
+        return displayVersion(shortVersion: short)
     }()
+
+    static func displayVersion(shortVersion: String?) -> String {
+        "Version \(shortVersion ?? "1.0")"
+    }
 }

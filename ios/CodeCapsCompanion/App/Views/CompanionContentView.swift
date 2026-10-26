@@ -763,8 +763,7 @@ public struct CompanionContentView: View {
         Section("About") {
             LabeledContent("Version") {
                 let short = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
-                let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "1"
-                Text("\(short) (\(build))")
+                Text(short)
                     .foregroundStyle(.secondary)
             }
         }

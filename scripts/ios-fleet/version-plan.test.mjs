@@ -23,6 +23,7 @@ import {
   latestMarketingPatch,
   ownPatch,
   parsePatch,
+  planCodeCapsVersion,
   planVersion,
   nextMarketingPatch
 } from "./version-plan.mjs";
@@ -321,5 +322,42 @@ test("planVersion refuses a forced build that recreates 1.0.N (N) (Kody, AFC-517
   assert.deepEqual(
     planVersion({ prefix: "1.0", ascPatch: 236, forcedBuild: "999", commitCount: 10, floor: 0 }),
     { marketing: "1.0.237", build: "999" }
+  );
+});
+
+test("CodeCaps uses one canonical commit count for marketing and build metadata", () => {
+  assert.deepEqual(
+    planCodeCapsVersion({ commitCount: 291, marketingFloor: 290, buildFloor: 290 }),
+    { marketing: "1.0.291", build: "291" }
+  );
+});
+
+test("CodeCaps stops when a published marketing or build floor would break shared numbering", () => {
+  assert.throws(
+    () => planCodeCapsVersion({ commitCount: 291, marketingFloor: 291, buildFloor: 290 }),
+    /shared release number must be resolved/
+  );
+  assert.throws(
+    () => planCodeCapsVersion({ commitCount: 291, marketingFloor: 290, buildFloor: 291 }),
+    /shared release number must be resolved/
+  );
+});
+
+test("CodeCaps accepts only explicit overrides equal to the canonical release", () => {
+  assert.deepEqual(
+    planCodeCapsVersion({ commitCount: 291, marketingFloor: 290, buildFloor: 290, forcedVersion: "1.0.291", forcedBuild: "291" }),
+    { marketing: "1.0.291", build: "291" }
+  );
+  assert.throws(
+    () => planCodeCapsVersion({ commitCount: 291, marketingFloor: 290, buildFloor: 290, forcedVersion: "1.0.292" }),
+    /canonical shared version/
+  );
+  assert.throws(
+    () => planCodeCapsVersion({ commitCount: 291, marketingFloor: 290, buildFloor: 290, forcedBuild: "292" }),
+    /canonical shared build/
+  );
+  assert.throws(
+    () => planCodeCapsVersion({ commitCount: 291, marketingFloor: "unknown", buildFloor: 290 }),
+    /cannot verify the published marketing floor/
   );
 });

@@ -178,6 +178,62 @@ function integerBuild(value) {
 export const MAC_PLATFORM = "MAC_OS";
 
 /**
+ * The CodeCaps release contract: both marketing and bundle versions use one
+ * canonical N from the full-history commit count.  Published floors are
+ * guards, never alternate numbering inputs; a floor at or above N must stop
+ * the ship so neither platform silently drifts from the shared 1.0.N train.
+ */
+export function planCodeCapsVersion({
+  commitCount = 0,
+  marketingFloor,
+  buildFloor,
+  forcedVersion = "",
+  forcedBuild = ""
+} = {}) {
+  const count = Number(commitCount);
+  if (!Number.isSafeInteger(count) || count < 1) {
+    throw new Error("CodeCaps canonical N must be a positive full-history commit count");
+  }
+
+  const readFloor = (value, label) => {
+    if (!/^\d+$/.test(String(value ?? ""))) {
+      throw new Error(`CodeCaps cannot verify the published ${label} floor`);
+    }
+    const parsed = Number(value);
+    if (!Number.isSafeInteger(parsed) || parsed < 0) {
+      throw new Error(`CodeCaps cannot verify the published ${label} floor`);
+    }
+    return parsed;
+  };
+  const marketingUsed = readFloor(marketingFloor, "marketing");
+  if (marketingUsed >= count) {
+    throw new Error(
+      `CodeCaps canonical 1.0.${count} does not advance the published marketing floor ${marketingUsed}; ` +
+      "the shared release number must be resolved before either platform ships"
+    );
+  }
+
+  const buildsUsed = readFloor(buildFloor, "build");
+  if (buildsUsed >= count) {
+    throw new Error(
+      `CodeCaps canonical build ${count} does not advance the published build floor ${buildsUsed}; ` +
+      "the shared release number must be resolved before either platform ships"
+    );
+  }
+
+  const marketing = `1.0.${count}`;
+  const build = String(count);
+  if (forcedVersion && String(forcedVersion) !== marketing) {
+    throw new Error(`CodeCaps --version must match the canonical shared version ${marketing}`);
+  }
+  if (forcedBuild && String(forcedBuild) !== build) {
+    throw new Error(`CodeCaps --build must match the canonical shared build ${build}`);
+  }
+
+  return { marketing, build };
+}
+
+/**
  * The build number the next ship has to exceed.
  *
  * trainBuilds: every build already in the target marketing train.  All of

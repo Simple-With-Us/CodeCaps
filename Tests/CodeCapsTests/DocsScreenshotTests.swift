@@ -114,7 +114,7 @@ final class DocsScreenshotTests: XCTestCase {
         }
         let directory = URL(fileURLWithPath: path, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        CodeCapsVersion.display = "Version 1.0.0 (1)"
+        CodeCapsVersion.display = "Version 1.0.0"
 
         try write(glance(view: .fromMac, dark: false), "glance-light.png", to: directory)
         try write(glance(view: .fromMac, dark: true), "glance-dark.png", to: directory)
