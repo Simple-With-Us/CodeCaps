@@ -167,6 +167,7 @@ test("CodeCaps shipping applies one verified release number to every generated a
   // The CodeCaps path is production reachable and verifies the published
   // floors on both Apple platforms before resolving the CLI overrides.
   assert.match(ship, /if \[\[ "\$APP_KEY" == "codecaps" \]\]; then/);
+  assert.match(ship, /source "\$\{REPO_ROOT\}\/script\/release-version\.sh" && codecaps_commit_count "\$REPO_ROOT"/);
   assert.match(ship, /asc_marketing_floor "\$MARKETING_PREFIX" "\$ASC_PLATFORM"/);
   assert.match(ship, /asc_build_floor "\$MARKETING" "\$ASC_PLATFORM"/);
   assert.match(ship, /plan-codecaps-version\.mjs/);
