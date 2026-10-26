@@ -538,14 +538,28 @@ sentry_failure_marker() {
 # Resolve the Sentry API token into SENTRY_API_TOKEN.  The reason for an empty
 # token is kept in SENTRY_TOKEN_REASON, so the caller can name the cause
 # instead of saying "no token".
+#
+# The return status is the signal:  0 when the token resolved, nonzero when it
+# did not.  A credential that cannot be resolved is not the same thing as a
+# credential that is absent, and the reader has to be told which one it is:  a
+# fleet-secrets outage is not a missing secret, and a missing secret is not a
+# DSN in the token slot.  The caller reads the failure through
+# SENTRY_TOKEN_REASON and never lets it abort the TestFlight ship.
 load_sentry_auth() {
   SENTRY_API_TOKEN=""
   SENTRY_TOKEN_REASON=""
-  local token=""
+  local token="" raw=""
   if [[ -n "${SENTRY_AUTH_TOKEN_FULLSCOPE:-}" ]]; then
     token="$SENTRY_AUTH_TOKEN_FULLSCOPE"
   elif command -v fleet-secrets &>/dev/null; then
-    token="$(fleet-secrets get SENTRY_AUTH_TOKEN_FULLSCOPE 2>/dev/null | tr -d '\r')" || token=""
+    # The reader's exit status is captured on its own:  in a pipeline the
+    # status would be the one of the last stage, so a failed read would look
+    # like a successful read of an empty secret.
+    if ! raw="$(fleet-secrets get SENTRY_AUTH_TOKEN_FULLSCOPE 2>/dev/null)"; then
+      SENTRY_TOKEN_REASON="SENTRY_AUTH_TOKEN_FULLSCOPE could not be read from fleet-secrets"
+      return 1
+    fi
+    token="$(printf '%s' "$raw" | tr -d '\r')"
   fi
   if [[ -z "$token" && -n "${SENTRY_AUTH_TOKEN:-}" ]]; then
     # The legacy slot is a fallback only, and only when it holds a real token.
@@ -554,16 +568,17 @@ load_sentry_auth() {
   case "$token" in
     "")
       SENTRY_TOKEN_REASON="SENTRY_AUTH_TOKEN_FULLSCOPE is unset"
-      return 0
+      return 1
       ;;
     *://*|*@*)
       # A DSN in the token slot is exactly the defect this lane had:  the
       # upload is refused in milliseconds and the job stays green.
       SENTRY_TOKEN_REASON="the token looks like a DSN, not an API token"
-      return 0
+      return 1
       ;;
   esac
   SENTRY_API_TOKEN="$token"
+  return 0
 }
 
 # Record a Sentry failure.  The ship itself is never blocked:  the TestFlight
@@ -577,7 +592,11 @@ sentry_report_failure() {
   if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
     echo "::error title=Sentry upload::${message}"
     mkdir -p "$(dirname "$(sentry_failure_marker)")" 2>/dev/null || true
-    printf '%s\n' "${message}" >>"$(sentry_failure_marker)"
+    # The marker is bookkeeping:  a failed write must not abort the ship under
+    # set -e, because that would destroy a release that has not happened yet.
+    # The ::error:: annotation above is the trace either way.
+    printf '%s\n' "${message}" >>"$(sentry_failure_marker)" 2>/dev/null \
+      || log "warning: sentry: could not write the failure marker; the ::error:: annotation is the only trace"
   fi
 }
 
@@ -585,8 +604,19 @@ sentry_report_failure() {
 # one shared fleet key and it moves between projects.  A standard DSN ends in
 # a numeric project id and sentry-cli needs the slug, so an id is resolved
 # through the Sentry API.  A slug is used as it stands.
+#
+# The org comes from the DSN's own host (o<org id>.ingest.sentry.io), so a
+# DSN minted in another org resolves too;  the fleet slug is the fallback for a
+# host that carries no numeric org id.
+#
+# A resolution that fails is REPORTED through SENTRY_DSN_PROJECT_ERROR:  a
+# silent empty result drops the DSN project from the upload list, which is
+# exactly the "the dSYM landed in the wrong project" defect this lane exists to
+# fix (CC-200), and it would leave the run green.
+SENTRY_DSN_PROJECT_ERROR=""
 sentry_dsn_project() {
   local raw="${SENTRY_DSN:-}"
+  SENTRY_DSN_PROJECT_ERROR=""
   [[ -n "$raw" ]] || return 0
   local last="${raw##*/}"
   [[ "$last" != "$raw" ]] || return 0
@@ -596,15 +626,34 @@ sentry_dsn_project() {
       return 0
       ;;
   esac
-  # Numeric:  ask the API for the slug, using the DSN's own host.
-  local host slug
+  # Numeric:  ask the API for the slug.  The token never enters the command
+  # line:  it is handed to curl on stdin, so a process listing cannot read it.
+  local host org slug body
   host="$(printf '%s' "$raw" | sed -E 's#^https?://[^@/]+@##; s#/.*$##')"
-  [[ -n "$host" ]] || return 0
-  slug="$(curl -fsS -H "Authorization: Bearer ${SENTRY_API_TOKEN}" \
-    "https://${host}/api/0/projects/simple-with-us/${last}/" 2>/dev/null \
-    | python3 -c 'import json,sys; print(json.load(sys.stdin).get("slug",""))' 2>/dev/null)" || slug=""
-  [[ -n "$slug" ]] || return 0
-  printf '%s' "$slug"
+  if [[ -z "$host" ]]; then
+    SENTRY_DSN_PROJECT_ERROR="the host could not be read from the DSN"
+    return 1
+  fi
+  local org_id=""
+  if [[ "$host" =~ ^o([0-9]+)\. ]]; then
+    org_id="${BASH_REMATCH[1]}"
+  fi
+  for org in "$org_id" "simple-with-us"; do
+    [[ -n "$org" ]] || continue
+    body="$(curl -fsS -H @- "https://${host}/api/0/organizations/${org}/projects/${last}/" \
+      <<<"Authorization: Bearer ${SENTRY_API_TOKEN}" 2>/dev/null)" || body=""
+    slug="$(printf '%s' "$body" | python3 -c 'import json,sys
+try:
+    print(json.load(sys.stdin).get("slug",""))
+except Exception:
+    print("")' 2>/dev/null)" || slug=""
+    if [[ -n "$slug" ]]; then
+      printf '%s' "$slug"
+      return 0
+    fi
+  done
+  SENTRY_DSN_PROJECT_ERROR="the project id ${last} in the DSN could not be resolved to a Sentry project slug"
+  return 1
 }
 
 # The projects the dSYM and the Size Analysis build go to.  The DSN's project
@@ -632,8 +681,7 @@ upload_sentry_artifacts() {
     log "sentry: archive missing; skipping artifact upload"
     return 0
   fi
-  load_sentry_auth
-  if [[ -z "${SENTRY_API_TOKEN:-}" ]]; then
+  if ! load_sentry_auth; then
     sentry_report_failure "no Sentry API token, so no dSYM and no Size Analysis build was uploaded:  ${SENTRY_TOKEN_REASON}.  Set SENTRY_AUTH_TOKEN_FULLSCOPE (the API token, not the DSN)."
     return 0
   fi
@@ -650,22 +698,24 @@ upload_sentry_artifacts() {
     return 0
   fi
   local dsn_project projects p
-  dsn_project="$(sentry_dsn_project)"
+  if ! dsn_project="$(sentry_dsn_project)"; then
+    # Without the DSN project the dSYM lands in the app's own project only,
+    # which is the defect this lane exists to fix, so the run goes red rather
+    # than going quietly wrong.
+    sentry_report_failure "the Sentry project named by the DSN could not be resolved, so the dSYM and the Size Analysis build can only go to ${project}:  ${SENTRY_DSN_PROJECT_ERROR}"
+    dsn_project=""
+  fi
   projects="$(sentry_project_list "$project" "$dsn_project")"
-  local first=1
   while IFS= read -r p; do
     [[ -n "$p" ]] || continue
-    log "sentry: uploading debug files for project=${p} (token length ${#SENTRY_API_TOKEN})"
+    log "sentry: uploading debug files for project=${p}"
     set +e
-    if [[ $first -eq 1 ]]; then
-      SENTRY_ORG=simple-with-us SENTRY_PROJECT="$p" SENTRY_AUTH_TOKEN="$SENTRY_API_TOKEN" \
-        sentry-cli debug-files upload --include-sources "$archive" \
-        >"${LOG_DIR}/sentry-debug-files.log" 2>&1
-    else
-      SENTRY_ORG=simple-with-us SENTRY_PROJECT="$p" SENTRY_AUTH_TOKEN="$SENTRY_API_TOKEN" \
-        sentry-cli debug-files upload "$archive" \
-        >"${LOG_DIR}/sentry-debug-files.log" 2>&1
-    fi
+    # Source bundles are a PER-PROJECT artifact:  uploading them to the DSN
+    # project gives the app's own project no source context for a minified
+    # stack, so every project in the list gets them.
+    SENTRY_ORG=simple-with-us SENTRY_PROJECT="$p" SENTRY_AUTH_TOKEN="$SENTRY_API_TOKEN" \
+      sentry-cli debug-files upload --include-sources "$archive" \
+      >"${LOG_DIR}/sentry-debug-files.log" 2>&1
     local dif_rc=$?
     set -e
     if [[ $dif_rc -eq 0 ]]; then
@@ -673,19 +723,26 @@ upload_sentry_artifacts() {
     else
       sentry_report_failure "sentry debug-files upload failed for project=${p} (rc=${dif_rc}); see ${LOG_DIR}/sentry-debug-files.log"
     fi
-    log "sentry: Size Analysis build upload for project=${p}"
-    set +e
-    SENTRY_ORG=simple-with-us SENTRY_PROJECT="$p" SENTRY_AUTH_TOKEN="$SENTRY_API_TOKEN" \
-      sentry-cli build upload "$archive" \
-      >"${LOG_DIR}/sentry-build-upload.log" 2>&1
-    local build_rc=$?
-    set -e
-    if [[ $build_rc -eq 0 ]]; then
-      log "sentry: build upload ok for project=${p}"
+    if [[ -z "$dsn_project" || "$p" == "$dsn_project" ]]; then
+      # The Size Analysis quota is 100 builds a month on the sponsored plan and
+      # every build upload spends one of them.  The events land in the DSN
+      # project, so that is the project that needs the Size Analysis build;
+      # the app's own project gets the dSYMs only.
+      log "sentry: Size Analysis build upload for project=${p}"
+      set +e
+      SENTRY_ORG=simple-with-us SENTRY_PROJECT="$p" SENTRY_AUTH_TOKEN="$SENTRY_API_TOKEN" \
+        sentry-cli build upload "$archive" \
+        >"${LOG_DIR}/sentry-build-upload.log" 2>&1
+      local build_rc=$?
+      set -e
+      if [[ $build_rc -eq 0 ]]; then
+        log "sentry: build upload ok for project=${p}"
+      else
+        sentry_report_failure "sentry build upload failed for project=${p} (rc=${build_rc}); see ${LOG_DIR}/sentry-build-upload.log"
+      fi
     else
-      sentry_report_failure "sentry build upload failed for project=${p} (rc=${build_rc}); see ${LOG_DIR}/sentry-build-upload.log"
+      log "sentry: skipping the Size Analysis build upload for project=${p}; the DSN project (${dsn_project}) holds the events and the quota is 100 builds a month"
     fi
-    first=0
   done <<<"$projects"
   return 0
 }

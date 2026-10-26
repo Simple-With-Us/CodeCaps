@@ -5,15 +5,21 @@
 # Why this test exists: the ship script used to send every exit code other
 # than 0, 3 and 4 to one generic warning, "build may be stuck on export
 # compliance".  For rc=5 that warning names the wrong cause.  rc=5 means the
-# build WAS processed and export compliance WAS declared, but the app has no
-# internal TestFlight group with access to all builds, so zero internal
+# build WAS processed and export compliance WAS declared, but ZERO internal
 # testers can install it.  CodeCaps iOS 1.0.263 / build 281 shipped that way
 # on 2026-10-25 with a green job, and 14 green ships reached nobody on the
 # internal path the same way before that (GH #1018).
 #
 # The wording is scoped to the INTERNAL path on purpose, because rc=5 counts
-# only internal all-builds groups.  It says nothing about external testers, and
+# only internal all-builds testers.  It says nothing about external testers, and
 # build 281 was in an external Public Beta group at the same time.
+#
+# The wording states only what the exit code PROVES.  rc=5 fires on the
+# tester count being zero (asc-api.mjs: nobody = testers === 0), so an app
+# whose internal group exists with no members also yields rc=5.  A wording
+# that claims "no internal group" contradicts the group count on the
+# ensure-tf-ready line the ship script forwards, and it prescribes a group
+# that already exists.
 #
 # Everything here is offline: no network, no credentials, no App Store
 # Connect, no xcodebuild.
@@ -68,13 +74,23 @@ lacks() {
 
 echo "== rc=5 names the real cause, not export compliance =="
 R5="$(tf_ready_outcome_lines 5)"
-contains "rc=5 says there is no internal TestFlight group" "no internal TestFlight group" "$R5"
 contains "rc=5 says zero internal testers" "ZERO internal testers" "$R5"
 contains "rc=5 says compliance WAS declared" "export compliance WAS declared" "$R5"
 contains "rc=5 points at the standing-testers secret" "ASC_STANDING_TESTERS" "$R5"
 lacks "rc=5 never says the build may be stuck on compliance" "stuck on export compliance" "$R5"
 lacks "rc=5 never says compliance was not declared" "export compliance not declared" "$R5"
 lacks "rc=5 never says compliance was NOT declared" "export compliance NOT declared" "$R5"
+
+echo "== rc=5 states only what the exit code proves =="
+# The exit code fires on the TESTER count being zero, so it cannot tell a
+# missing group from an empty one.  A wording that names the group count
+# contradicts the ensure-tf-ready line the ship script forwards, and a remedy
+# that says "create the group" is wrong when the group is already there.
+lacks "rc=5 never claims the app has no internal group" "no internal TestFlight group" "$R5"
+lacks "rc=5 never states a group count" "groups=0" "$R5"
+lacks "rc=5 never says the remedy creates the group" "creates the group" "$R5"
+contains "rc=5 points at the ensure-tf-ready line for the group count" "ensure-tf-ready line" "$R5"
+contains "rc=5 says no tester can install the build" "no tester in an internal group with access to all builds can install this build" "$R5"
 
 echo "== rc=5 is scoped to the internal path, never to external testers =="
 # The count behind rc=5 is the INTERNAL all-builds tester count, so the wording
@@ -88,7 +104,7 @@ contains "rc=5 points at External Testing" "TestFlight > External Testing" "$R5"
 lacks "rc=5 never claims installable by nobody" "installable by NOBODY" "$R5"
 lacks "rc=5 never says the build reaches nobody" "the build reaches nobody" "$R5"
 
-echo "== the rc=5 count really is the internal-group count =="
+echo "== the rc=5 count really is the internal all-builds tester count =="
 # If the client ever starts counting external groups, the rc=5 wording has to
 # be rewritten, so the filter is pinned here rather than left to a comment.
 ASC_API="${SCRIPT_DIR}/asc-api.mjs"
@@ -96,6 +112,11 @@ if [[ -f "$ASC_API" ]]; then
   ASC_TEXT="$(cat "$ASC_API")"
   contains "the client filters the groups on isInternalGroup" "isInternalGroup === true" "$ASC_TEXT"
   contains "the client filters the groups on hasAccessToAllBuilds" "hasAccessToAllBuilds === true" "$ASC_TEXT"
+  # The exit code fires on the TESTER count, never on the group count:  a group
+  # that exists with no members gives the same zero as no group at all, so the
+  # wording may not name the group count.
+  contains "the client decides rc=5 on the tester count" "internalTesters.ok && internalTesters.testers === 0" "$ASC_TEXT"
+  contains "the client exits 5 for zero testers" "nobody ? 5 : internalTesters.ok ? 0 : 6" "$ASC_TEXT"
 else
   echo "  FAIL: missing ${ASC_API}"
   FAIL=$((FAIL + 1))
@@ -124,6 +145,8 @@ contains "rc=5 annotation scopes the failure to the internal path" "internal pat
 contains "rc=5 annotation says external testers are not counted" "External testers are not counted" "$A5"
 lacks "rc=5 annotation never claims installable by nobody" "installable by NOBODY" "$A5"
 lacks "rc=5 annotation never says compliance was not declared" "export compliance not declared" "$A5"
+lacks "rc=5 annotation never claims the app has no internal group" "no internal TestFlight group" "$A5"
+contains "rc=5 annotation points at the ensure-tf-ready line for the group count" "ensure-tf-ready line" "$A5"
 A6="$(tf_ready_outcome_annotation 6 com.example.ios 281)"
 contains "rc=6 annotation names the code" "rc=6" "$A6"
 A2="$(tf_ready_outcome_annotation 2 com.example.ios 281)"

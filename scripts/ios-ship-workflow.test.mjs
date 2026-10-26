@@ -381,3 +381,44 @@ test("a failed Sentry upload is an error annotation and a red run", () => {
   assert.ok(statusIndex > 0 && cacheIndex > 0, "the ship job has both steps");
   assert.ok(statusIndex > cacheIndex, "the Sentry status step runs after the ship-state cache is saved");
 });
+
+test("the Sentry status step never claims a TestFlight upload that never ran", () => {
+  // The marker is written before the export and the upload, so a marker can
+  // exist for a run that never uploaded anything.  The claim has to come from
+  // the ship step's own outcome, not from the mere presence of the marker.
+  assert.match(code, /- name: Ship CodeCaps to TestFlight\n\s+id: ship\b/);
+  assert.match(code, /steps\.ship\.result\s*\}\}" = "success"/);
+  assert.ok(
+    (code.match(/steps\.ship\.result/g) || []).length >= 2,
+    "the status step must read the ship step's outcome in both branches",
+  );
+});
+
+test("the Sentry upload keeps the token out of argv and reports every miss", () => {
+  // The token reaches curl on stdin, so a process listing cannot read it.
+  assert.match(shipScript, /-H @-/);
+  assert.match(shipScript, /<<<"Authorization: Bearer \$\{SENTRY_API_TOKEN\}"/);
+  assert.doesNotMatch(shipScript, /curl[^\n]*Bearer/);
+  assert.doesNotMatch(shipScript, /-H "Authorization: Bearer/);
+
+  // A credential that cannot be resolved is reported by name and fails the
+  // resolution, instead of becoming an empty token that looks like a success.
+  assert.ok(shipScript.includes("could not be read from fleet-secrets"));
+  assert.match(shipScript, /load_sentry_auth\(\) \{[\s\S]*?return 1/);
+
+  // Source bundles are a per-project artifact, so every project gets them.
+  assert.match(shipScript, /debug-files upload --include-sources "\$archive"/);
+  assert.doesNotMatch(shipScript, /debug-files upload "\$archive"/);
+
+  // The Size Analysis quota is 100 builds a month, so only the project that
+  // holds the events spends one.
+  assert.ok(shipScript.includes('if [[ -z "$dsn_project" || "$p" == "$dsn_project" ]]; then'));
+
+  // A DSN project that cannot be resolved is reported:  dropping it silently
+  // is the defect the lane exists to fix.
+  assert.ok(shipScript.includes("the Sentry project named by the DSN could not be resolved"));
+
+  // The marker write is guarded:  a bookkeeping failure must not abort the
+  // ship under set -e.
+  assert.ok(shipScript.includes('>>"$(sentry_failure_marker)" 2>/dev/null'));
+});

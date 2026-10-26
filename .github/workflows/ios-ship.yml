@@ -289,6 +289,7 @@ jobs:
           bash "$GITHUB_WORKSPACE/scripts/ios-install-appstore-profiles.sh"
 
       - name: Ship CodeCaps to TestFlight
+        id: ship
         env:
           IOS_TF_RELEASE_NOTES: "1"
           IOS_MANUAL_SIGN: "1"
@@ -349,10 +350,18 @@ jobs:
         run: |
           marker="$GITHUB_WORKSPACE/.ios-ship-sentry-failed"
           if [ -f "$marker" ]; then
-            echo "::error title=Sentry upload::the dSYM / Size Analysis upload failed, so iOS crash symbolication is broken for this build.  The TestFlight upload itself succeeded."
+            if [ "${{ steps.ship.result }}" = "success" ]; then
+              echo "::error title=Sentry upload::the dSYM / Size Analysis upload failed, so iOS crash symbolication is broken for this build.  The TestFlight upload itself succeeded."
+            else
+              echo "::error title=Sentry upload::the dSYM / Size Analysis upload failed, and the ship step did not succeed either, so this build may never have reached TestFlight.  See the ship step output for the real cause."
+            fi
             while IFS= read -r line; do
               echo "  ${line}"
             done <"$marker"
             exit 1
           fi
-          echo "Sentry dSYM and Size Analysis upload succeeded."
+          if [ "${{ steps.ship.result }}" = "success" ]; then
+            echo "Sentry dSYM and Size Analysis upload succeeded."
+          else
+            echo "The ship step did not succeed (result: ${{ steps.ship.result }}), so the Sentry upload status is unknown.  See the ship step output for the real cause."
+          fi

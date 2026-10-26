@@ -19,9 +19,14 @@
 #      state, not a missing declaration).  The number behind the exit code is
 #      the count of INTERNAL TestFlight testers in internal groups that have
 #      access to all builds (asc-api.mjs countInternalTesters filters on
-#      isInternalGroup AND hasAccessToAllBuilds), so rc=5 means this app has no
-#      such group, and zero internal testers can install the build.  This is how
-#      14 green ships reached nobody on the internal path (GH #1018), and how
+#      isInternalGroup AND hasAccessToAllBuilds).  The exit code fires on that
+#      TESTER count being zero (asc-api.mjs: nobody = testers === 0), so rc=5
+#      proves that zero internal testers can install the build.  It does NOT
+#      prove that the app has no internal group:  a group that exists with no
+#      members gives the same zero, and the remedy for that is testers, not a
+#      group.  The group count is on the ensure-tf-ready line that the ship
+#      script forwards, so the wording here leaves it there.  This is how 14
+#      green ships reached nobody on the internal path (GH #1018), and how
 #      CodeCaps iOS 1.0.263 / build 281 shipped with a green job on
 #      2026-10-25.
 #
@@ -51,9 +56,10 @@ tf_ready_outcome_lines() {
   case "$rc" in
     5)
       printf '%s\n' \
-        "warning: build was processed by App Store Connect and export compliance WAS declared, but ZERO internal testers can install it:  this app has no internal TestFlight group with access to all builds (internal testers with access to all builds=0, groups=0)" \
+        "warning: build was processed by App Store Connect and export compliance WAS declared, but ZERO internal testers can install it:  no tester in an internal group with access to all builds can install this build" \
         "warning: the INTERNAL path reaches nobody.  External testers are a separate question:  this build may already be assigned to an external group, and external installability then depends on Apple's beta review of that build.  Check TestFlight > External Testing for this build's group assignment and review state" \
-        "warning: to populate the internal path, set the ASC_STANDING_TESTERS repository secret to the standing tester emails so every ship creates the group, or add testers by hand in App Store Connect > TestFlight > Internal Testing"
+        "warning: the ensure-tf-ready line above carries the internal tester count and the number of matching internal groups, so that line says which of the two is the cause" \
+        "warning: to populate the internal path, set the ASC_STANDING_TESTERS repository secret to the standing tester emails so every ship adds them to the internal group, or add testers by hand in App Store Connect > TestFlight > Internal Testing"
       ;;
     6)
       printf '%s\n' \
@@ -74,7 +80,7 @@ tf_ready_outcome_annotation() {
   local rc="${1:-}" bundle="${2:-}" build="${3:-}"
   case "$rc" in
     5)
-      printf '%s' "ensure-tf-ready rc=5 for ${bundle} build ${build}: the build was processed and export compliance was declared, but this app has no internal TestFlight group with access to all builds, so ZERO internal testers can install it and the internal path reaches nobody.  External testers are not counted here:  check TestFlight > External Testing for this build's group assignment and Apple's beta review state.  Set ASC_STANDING_TESTERS (or add testers by hand in TestFlight > Internal Testing) to populate the internal path."
+      printf '%s' "ensure-tf-ready rc=5 for ${bundle} build ${build}: the build was processed and export compliance was declared, but ZERO internal testers can install it, so the internal path reaches nobody.  The exit code proves the tester count is zero;  the internal group count is on the ensure-tf-ready line in the log.  External testers are not counted here:  check TestFlight > External Testing for this build's group assignment and Apple's beta review state.  Set ASC_STANDING_TESTERS (or add testers by hand in TestFlight > Internal Testing) to populate the internal path."
       ;;
     6)
       printf '%s' "ensure-tf-ready rc=6 for ${bundle} build ${build}: the build was processed and export compliance was declared, but the internal tester count could not be read, so installability on the internal path is unverified.  Check TestFlight > Internal Testing by hand."
