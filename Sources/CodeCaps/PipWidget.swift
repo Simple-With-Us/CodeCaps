@@ -952,7 +952,9 @@ struct PipWidgetView: View {
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(background.countdownInk)
                     .lineLimit(1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .minimumScaleFactor(0.7)
+                    .frame(maxWidth: .infinity)
+                    .multilineTextAlignment(.center)
             } else if atCap != nil, let extra {
                 HStack(spacing: PipMetrics.meterSpacing) {
                     Text("Using extra balance")
@@ -1044,7 +1046,6 @@ struct PipWidgetView: View {
         let showExpanded = detail == .full
         let cadenceCaption = showExpanded ? singleModelCadenceExpanded(snapshot) : glanceMeterCaption(snapshot)
         let cleanLabel = cleanWindowLabel(snapshot.window.label.isEmpty ? "Quota" : snapshot.window.label)
-        let countdownWidth = detail.usesCompactCountdown ? PipMetrics.countdownCompactWidth : PipMetrics.countdownWidth
 
         return VStack(alignment: .leading, spacing: 1) {
             HStack(spacing: 5) {
@@ -1057,17 +1058,19 @@ struct PipWidgetView: View {
                     .foregroundStyle(background.ink)
                     .lineLimit(1)
                 Spacer(minLength: 0)
-                Text(remaining.map { "\(Int($0.rounded()))%" } ?? "—")
-                    .font(.system(size: 10, weight: .bold, design: .rounded).monospacedDigit())
-                    .foregroundStyle(background.ink)
-                    .fixedSize()
-                if !cd.isEmpty {
-                    Text(cd)
-                        .font(isExtra ? .system(size: 9, weight: .bold) : .system(size: 9).monospacedDigit())
-                        .foregroundStyle(isExtra ? background.ink : background.countdownInk)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.75)
-                        .frame(width: countdownWidth, alignment: .trailing)
+                HStack(spacing: 6) {
+                    Text(remaining.map { "\(Int($0.rounded()))%" } ?? "—")
+                        .font(.system(size: 10, weight: .bold, design: .rounded).monospacedDigit())
+                        .foregroundStyle(background.ink)
+                        .fixedSize()
+                    if !cd.isEmpty {
+                        Text(cd)
+                            .font(isExtra ? .system(size: 9, weight: .bold) : .system(size: 9).monospacedDigit())
+                            .foregroundStyle(isExtra ? background.ink : background.countdownInk)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+                            .fixedSize()
+                    }
                 }
             }
             QuotaUsageBar(
@@ -1114,7 +1117,6 @@ struct PipWidgetView: View {
         let remaining = snapshot.remainingPercent
         let showExpanded = expandedCadence && detail == .full
         let cadenceCaption = showExpanded ? singleModelCadenceExpanded(snapshot) : glanceMeterCaption(snapshot)
-        let countdownWidth = detail.usesCompactCountdown ? PipMetrics.countdownCompactWidth : PipMetrics.countdownWidth
 
         return HStack(spacing: PipMetrics.meterSpacing) {
             if detail.showsCadence {
@@ -1132,24 +1134,24 @@ struct PipWidgetView: View {
             )
             .frame(minWidth: PipMetrics.barMinWidth, maxWidth: .infinity)
 
-            Text(remaining.map { "\(Int($0.rounded()))%" } ?? "—")
-                .font(.system(size: 10, weight: .bold, design: .rounded).monospacedDigit())
-                .foregroundStyle(background.ink)
-                .lineLimit(1)
-                .fixedSize()
-                .frame(width: PipMetrics.percentWidth, alignment: .leading)
-                .help("Remaining: \(remaining.map { "\(Int($0.rounded()))%" } ?? "unknown")")
-
-            if detail.showsCountdown, !cd.isEmpty {
-                Text(cd)
-                    .font(isExtra
-                          ? .system(size: 9, weight: .bold)
-                          : .system(size: 9, weight: .medium).monospacedDigit())
-                    .foregroundStyle(isExtra ? background.ink : background.countdownInk)
+            HStack(spacing: 6) {
+                Text(remaining.map { "\(Int($0.rounded()))%" } ?? "—")
+                    .font(.system(size: 10, weight: .bold, design: .rounded).monospacedDigit())
+                    .foregroundStyle(background.ink)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.75)
                     .fixedSize()
-                    .frame(width: countdownWidth, alignment: .trailing)
+                    .help("Remaining: \(remaining.map { "\(Int($0.rounded()))%" } ?? "unknown")")
+
+                if detail.showsCountdown, !cd.isEmpty {
+                    Text(cd)
+                        .font(isExtra
+                              ? .system(size: 9, weight: .bold)
+                              : .system(size: 9, weight: .medium).monospacedDigit())
+                        .foregroundStyle(isExtra ? background.ink : background.countdownInk)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                        .fixedSize()
+                }
             }
         }
         .fixedSize(horizontal: false, vertical: true)
