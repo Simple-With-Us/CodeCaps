@@ -96,7 +96,8 @@ struct WindowCaptionRow: View {
                     .font(.system(size: font, weight: .medium, design: .monospaced))
                     .foregroundColor(.secondary)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.8)
+                    .minimumScaleFactor(0.75)
+                    .truncationMode(.tail)
             }
         }
     }

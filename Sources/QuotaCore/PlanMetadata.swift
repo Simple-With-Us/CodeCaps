@@ -12,6 +12,26 @@ public struct PlanMetadata: Codable, Equatable, Sendable {
     public var hasMismatch: Bool
     public var userUpdatedAt: Double?
 
+    public init(
+        detectedPlanName: String? = nil,
+        userPlanName: String? = nil,
+        userCostUsd: String? = nil,
+        userRenewalDateText: String? = nil,
+        userSubtitle: String? = nil,
+        showCostAndRenewal: Bool? = nil,
+        hasMismatch: Bool = false,
+        userUpdatedAt: Double? = nil
+    ) {
+        self.detectedPlanName = Self.clean(detectedPlanName, limit: 256)
+        self.userPlanName = Self.clean(userPlanName, limit: 256)
+        self.userCostUsd = Self.clean(userCostUsd, limit: 128)
+        self.userRenewalDateText = Self.clean(userRenewalDateText, limit: 512)
+        self.userSubtitle = Self.clean(userSubtitle, limit: 1_024)
+        self.showCostAndRenewal = showCostAndRenewal
+        self.hasMismatch = hasMismatch
+        self.userUpdatedAt = userUpdatedAt
+    }
+
     public init(detectedPlanName: String?, customInfo: PlatformCustomInfo?, providerKey: String) {
         self.detectedPlanName = Self.clean(detectedPlanName, limit: 256)
         userPlanName = Self.clean(customInfo?.planName, limit: 256)
@@ -127,3 +147,42 @@ public enum PlanComparison {
         "cursor": [("ultra", "unifiedultra")],
     ]
 }
+
+// MARK: - Platform Custom Metadata
+
+public struct PlatformCustomInfo: Codable, Equatable, Sendable {
+    /// Persisted edit revision; quota observation time remains independent.
+    public var updatedAt: Date?
+    public var customSubtitle: String
+    public var planName: String
+    public var costUsd: String
+    public var renewalDateText: String
+    public var showCostAndRenewal: Bool
+
+    public init(
+        customSubtitle: String = "",
+        planName: String = "",
+        costUsd: String = "",
+        renewalDateText: String = "",
+        showCostAndRenewal: Bool = false
+    ) {
+        self.updatedAt = nil
+        self.customSubtitle = customSubtitle
+        self.planName = planName
+        self.costUsd = costUsd
+        self.renewalDateText = renewalDateText
+        self.showCostAndRenewal = showCostAndRenewal
+    }
+
+    /// Whether the owner's free-text Settings fields mention a plan or cost
+    /// change (e.g. "↓ $50/mo plan then").  Treated as an explicit plan-change
+    /// signal: the runaway detector stands down for this provider and the
+    /// informational plan-change state shows until the text no longer
+    /// mentions a change.
+    public var mentionsPlanChange: Bool {
+        let text = [planName, costUsd, renewalDateText].joined(separator: " ").lowercased()
+        let markers = ["↓", "↑", "→", "downgrade", "upgrade"]
+        return markers.contains { text.contains($0) }
+    }
+}
+

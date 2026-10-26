@@ -527,11 +527,28 @@ public struct QuotaWindowSnapshot: Equatable, Sendable {
         self.remainingPercent = normalized.boundedRemainingPercent
         self.status = normalized.status
 
-        let observedIsFresh = QuotaFreshnessRule.isReadingRecent(observedAt: observedAt, now: now)
+        let isAtCap = remainingPercent.map { QuotaCapRule.isAtCap(remainingPercent: $0) } ?? normalized.isExhausted
+        let duration = resetAt.flatMap { end in
+            ResetAlarmCadence.duration(
+                token: normalized.window,
+                label: normalized.label,
+                providerKey: normalized.canonicalProviderKey,
+                isSupplementaryVideoQuota: normalized.isSupplementaryVideoQuota,
+                endingAt: end
+            )
+        }
+
+        let isFreshReading = QuotaFreshnessRule.isFresh(
+            observedAt: observedAt,
+            resetAt: resetAt,
+            now: now,
+            isAtCap: isAtCap,
+            cadenceDuration: duration
+        )
 
         if let resetAt, resetAt <= now {
             freshness = .awaitingRefresh
-        } else if observedIsFresh {
+        } else if isFreshReading {
             freshness = .fresh
         } else {
             freshness = .stale
@@ -1116,43 +1133,7 @@ public extension QuotaWindowSnapshot {
     }
 }
 
-// MARK: - Platform Custom Metadata
-
-public struct PlatformCustomInfo: Codable, Equatable, Sendable {
-    /// Persisted edit revision; quota observation time remains independent.
-    public var updatedAt: Date?
-    public var customSubtitle: String
-    public var planName: String
-    public var costUsd: String
-    public var renewalDateText: String
-    public var showCostAndRenewal: Bool
-
-    public init(
-        customSubtitle: String = "",
-        planName: String = "",
-        costUsd: String = "",
-        renewalDateText: String = "",
-        showCostAndRenewal: Bool = false
-    ) {
-        self.updatedAt = nil
-        self.customSubtitle = customSubtitle
-        self.planName = planName
-        self.costUsd = costUsd
-        self.renewalDateText = renewalDateText
-        self.showCostAndRenewal = showCostAndRenewal
-    }
-
-    /// Whether the owner's free-text Settings fields mention a plan or cost
-    /// change (e.g. "↓ $50/mo plan then").  Treated as an explicit plan-change
-    /// signal: the runaway detector stands down for this provider and the
-    /// informational plan-change state shows until the text no longer
-    /// mentions a change.
-    public var mentionsPlanChange: Bool {
-        let text = [planName, costUsd, renewalDateText].joined(separator: " ").lowercased()
-        let markers = ["↓", "↑", "→", "downgrade", "upgrade"]
-        return markers.contains { text.contains($0) }
-    }
-}
+// MARK: - Billing Renewal
 
 /// The Renewal Date field is a free-text override.  When the owner has not
 /// typed one, a platform that actually reports a billing-cycle end (Cursor's

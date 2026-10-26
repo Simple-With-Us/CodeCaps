@@ -219,6 +219,37 @@ final class QuotaWindowVocabularyTests: XCTestCase {
                                                  now: now))
     }
 
+    /// An exhausted allowance stays at cap until it resets, even when observed
+    /// earlier in the active cycle.
+    func testAnUnexpiredExhaustedWindowIsFreshThroughoutItsCycle() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let week: TimeInterval = 7 * 86_400
+        // Observed 24 hours ago, resets in 5 hours, 7-day period
+        XCTAssertTrue(QuotaFreshnessRule.isFresh(
+            observedAt: now.addingTimeInterval(-86_400),
+            resetAt: now.addingTimeInterval(5 * 3600),
+            now: now,
+            isAtCap: true,
+            cadenceDuration: week
+        ))
+        // But if the reset has passed, it is not fresh
+        XCTAssertFalse(QuotaFreshnessRule.isFresh(
+            observedAt: now.addingTimeInterval(-86_400),
+            resetAt: now.addingTimeInterval(-60),
+            now: now,
+            isAtCap: true,
+            cadenceDuration: week
+        ))
+        // And if the observation was before the cycle began (e.g. 8 days ago for a 7-day window)
+        XCTAssertFalse(QuotaFreshnessRule.isFresh(
+            observedAt: now.addingTimeInterval(-8 * 86_400),
+            resetAt: now.addingTimeInterval(5 * 3600),
+            now: now,
+            isAtCap: true,
+            cadenceDuration: week
+        ))
+    }
+
     /// The Mac's own snapshot asks the shared rule, so the dashboard and the cap
     /// rule can never read one window differently.
     func testTheMacSnapshotAsksTheSharedRule() {
