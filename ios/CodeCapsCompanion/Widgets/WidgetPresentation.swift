@@ -102,7 +102,8 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
 
     /// Compact cadence token for the caption under a bar: `5h`, `7d`, `1m`.
     public var cadenceToken: String {
-        WidgetPresentation.shortCadence(cadence: cadence, label: label)
+        let token = WidgetPresentation.shortCadence(cadence: cadence, label: label)
+        return token == "+" ? (isExtraAllowance ? "Extra" : "Limit") : token
     }
 
     /// The caption this window's bar prints.
@@ -277,6 +278,13 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
             .filter { !$0.isMasked && $0.remainingPercent != nil }
             .filter { WidgetPresentation.isAtCap(percent: $0.remainingPercent, isExhausted: $0.isExhausted) }
             .min { ($0.resetAt ?? .distantFuture) < ($1.resetAt ?? .distantFuture) }
+    }
+
+    /// A separate extra balance remains visible even while the weekly window
+    /// is spent. This does not change whether the weekly window is at cap.
+    public var usableMuseExtra: WidgetWindowItem? {
+        guard providerKey == "muse-assist" else { return nil }
+        return windows.first { $0.isExtraAllowance && !$0.isMasked && ($0.remainingPercent ?? 0) > 0 }
     }
 
     /// Whether this plan is at its cap on any window it reports honestly.

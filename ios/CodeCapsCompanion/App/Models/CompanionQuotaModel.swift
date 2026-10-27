@@ -260,12 +260,13 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
 
     /// Compact cadence beside a meter bar (`5h`, `7d`, `1m`, `+`), matching Mac Glance.
     public var meterCaption: String {
-        QuotaWindowVocabulary.popoverCaption(
+        let token = QuotaWindowVocabulary.popoverCaption(
             windowToken: cadence.isEmpty ? nil : cadence,
             label: label,
             resetAt: resetAt,
             monthlyHint: label.lowercased().contains("plan") || cadence.lowercased().contains("plan")
         )
+        return token == "+" ? (QuotaWindowVocabulary.isExtraAllowanceLabel(label) ? "Extra" : "Limit") : token
     }
 
     /// The cadence in the words an at-cap line uses: "7-day", "5-hour".  The
@@ -336,7 +337,7 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
 
     /// Countdown or a placeholder when an extra allowance has no reset clock.
     public func meterCountdown(now: Date = Date()) -> String {
-        if QuotaWindowVocabulary.isExtraAllowanceLabel(label) { return "extra" }
+        if QuotaWindowVocabulary.isExtraAllowanceLabel(label), resetAt == nil { return "—" }
         let cd = countdown(now: now)
         return cd.isEmpty ? "—" : cd
     }
@@ -2021,7 +2022,9 @@ public final class CompanionQuotaModel: ObservableObject {
             let parsedReset = CompanionDateFormatter.date(from: w.resetAt)
             let parsedReportedAt = Self.reportedAt(from: w)
             let cadence = Self.formatCadence(w.label, window: w.window, resetAt: parsedReset)
-            let displayLabel = QuotaWindowVocabulary.windowLabel(
+            let displayLabel = QuotaWindowVocabulary.isExtraAllowanceLabel(w.label)
+                ? w.label
+                : QuotaWindowVocabulary.windowLabel(
                 windowToken: w.window,
                 existingLabel: w.label,
                 resetAt: parsedReset

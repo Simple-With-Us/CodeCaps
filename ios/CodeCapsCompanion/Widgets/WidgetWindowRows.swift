@@ -1,5 +1,6 @@
 import SwiftUI
 import WidgetKit
+import AppIntents
 
 #if canImport(UIKit)
 import UIKit
@@ -207,7 +208,7 @@ struct PlanBarRow: View {
     }
 
     var body: some View {
-        if let atCap = platform.atCapWindow() {
+        if let atCap = platform.atCapWindow(), platform.usableMuseExtra == nil {
             // Owner 2026-10-11: a plan at its cap showed a bar labelled 100%
             // beside a plan that could not be used.  The words go where the bar
             // was, and the bar does not get drawn at all.
@@ -245,23 +246,24 @@ struct PlanBarRow: View {
                     Text(platform.title)
                         .font(.system(size: titleFont, weight: .semibold))
                         .lineLimit(1)
-                    Spacer(minLength: 2)
+                }
+                HStack(spacing: 8) {
+                    Text(captionToken).font(.system(size: captionFont, weight: .semibold))
                     Text(WidgetPresentation.displayPercent(percent: percent, isMasked: shown.window?.isMasked ?? platform.isMasked))
                         .font(.system(size: percentFont, weight: .bold, design: .rounded))
                         .foregroundColor(statusColor)
-                }
+                    Text(shown.window?.countdown() ?? platform.countdown())
+                        .font(.system(size: captionFont - 0.5)).foregroundStyle(.secondary)
+                }.lineLimit(1).minimumScaleFactor(0.8)
 
                 MiniProgressBar(
                     fraction: fraction,
                     color: statusColor,
                     elapsedFraction: shown.window?.elapsedFraction(),
+                    hasReading: !(shown.window?.isMasked ?? platform.isMasked) && percent?.isFinite == true,
                     height: barHeight
                 )
 
-                WindowCaptionRow(
-                    caption: .withoutQualifier(token: captionToken, resetCaption: captionReset),
-                    font: captionFont
-                )
             }
         }
     }
@@ -294,76 +296,34 @@ struct PlanDualBarRow: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: columnSpacing) {
-                // Left Column header: Mark, title, and Window 1 percent
-                HStack(spacing: 5) {
-                    if showMark {
-                        ProviderMarkView(
-                            providerKey: platform.providerKey,
-                            itemId: platform.id,
-                            size: markSize
-                        )
-                    }
-                    Text(platform.title)
-                        .font(.system(size: titleFont, weight: .semibold))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
-                    Spacer(minLength: 2)
-                    Text(window1.displayPercent)
-                        .font(.system(size: percentFont, weight: .bold, design: .rounded))
-                        .foregroundColor(window1.statusColor)
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 5) {
+                if showMark {
+                    ProviderMarkView(providerKey: platform.providerKey, itemId: platform.id, size: markSize)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                // Right Column header: Window 2 cadence token or label, and Window 2 percent
-                HStack(spacing: 4) {
-                    Text(window2.cadenceToken.isEmpty ? window2.label : window2.cadenceToken)
-                        .font(.system(size: captionFont, weight: .semibold, design: .rounded))
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
-                    Spacer(minLength: 2)
-                    Text(window2.displayPercent)
-                        .font(.system(size: percentFont, weight: .bold, design: .rounded))
-                        .foregroundColor(window2.statusColor)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                Text(platform.title).font(.system(size: titleFont, weight: .semibold)).lineLimit(1)
             }
-
-            // Dual bars
             HStack(spacing: columnSpacing) {
-                MiniProgressBar(
-                    fraction: fraction1,
-                    color: window1.statusColor,
-                    elapsedFraction: window1.elapsedFraction(),
-                    height: barHeight
-                )
-                .frame(maxWidth: .infinity)
-
-                MiniProgressBar(
-                    fraction: fraction2,
-                    color: window2.statusColor,
-                    elapsedFraction: window2.elapsedFraction(),
-                    height: barHeight
-                )
-                .frame(maxWidth: .infinity)
-            }
-
-            // Dual captions
-            HStack(spacing: columnSpacing) {
-                WindowCaptionRow(
-                    caption: window1.caption,
-                    font: captionFont
-                )
-                .frame(maxWidth: .infinity)
-
-                WindowCaptionRow(
-                    caption: window2.caption,
-                    font: captionFont
-                )
-                .frame(maxWidth: .infinity)
+                allowance(window1, fraction: fraction1)
+                allowance(window2, fraction: fraction2)
             }
         }
+    }
+
+    private func allowance(_ window: WidgetWindowItem, fraction: Double) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 7) {
+                Text(window.cadenceToken).font(.system(size: captionFont, weight: .semibold))
+                Text(window.displayPercent)
+                    .font(.system(size: percentFont, weight: .bold, design: .rounded))
+                    .foregroundStyle(window.statusColor)
+                Text(window.countdown().isEmpty ? "—" : window.countdown())
+                    .font(.system(size: captionFont - 0.5)).foregroundStyle(.secondary)
+            }.lineLimit(1).minimumScaleFactor(0.8)
+            MiniProgressBar(fraction: fraction, color: window.statusColor,
+                elapsedFraction: window.elapsedFraction(),
+                hasReading: !window.isMasked && window.remainingPercent?.isFinite == true, height: barHeight)
+        }.frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -387,15 +347,18 @@ struct PlanGrid: View {
     var barHeight: CGFloat = 4
     var spacing: CGFloat = 8
     var horizontalSpacing: CGFloat = 12
+    var detailScope: String? = nil
 
     var body: some View {
         if columns <= 1 {
             VStack(spacing: spacing) {
                 ForEach(platforms) { platform in
+                    HStack(alignment: .top, spacing: 4) {
+                    Group {
                     // Checked here too, not only inside `PlanBarRow`: this
                     // branch builds `PlanDualBarRow` directly, so a capped plan
                     // would otherwise keep both of its bars.
-                    if let atCap = platform.atCapWindow() {
+                    if let atCap = platform.atCapWindow(), platform.usableMuseExtra == nil {
                         PlanAtCapRow(
                             platform: platform,
                             window: atCap,
@@ -430,6 +393,15 @@ struct PlanGrid: View {
                             percentFont: percentFont,
                             barHeight: barHeight
                         )
+                    }
+                    }
+                    if let detailScope {
+                        Button(intent: ShowWidgetPlanDetailIntent(planID: platform.id, overviewKey: detailScope)) {
+                            Image(systemName: "info.circle").font(.system(size: 11))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Details for \(platform.title)")
+                    }
                     }
                 }
             }

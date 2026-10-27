@@ -67,6 +67,17 @@ public enum WidgetWindowPick: String, AppEnum, Sendable {
     ]
 }
 
+// MARK: - Detail Density
+
+public enum WidgetDetailLevel: String, AppEnum, Sendable {
+    case automatic, compact
+    public static var typeDisplayRepresentation = TypeDisplayRepresentation(name: "Detail Level")
+    public static var caseDisplayRepresentations: [WidgetDetailLevel: DisplayRepresentation] = [
+        .automatic: "Automatic (More On Larger Widgets)",
+        .compact: "Compact"
+    ]
+}
+
 // MARK: - Plan Entity
 
 /// A selectable plan, listed from the live snapshot so the picker's options are
@@ -157,6 +168,9 @@ public struct SelectQuotaIntent: WidgetConfigurationIntent {
     /// Which window stands in for a plan that reports two.
     @Parameter(title: "Window Shown", default: .mostUrgent)
     public var windowPick: WidgetWindowPick
+
+    @Parameter(title: "Detail Level", default: .automatic)
+    public var detailLevel: WidgetDetailLevel
 
     public static var parameterSummary: some ParameterSummary {
         Summary("Show \(\.$plan) \(\.$rowLayout) with \(\.$quotasPerProvider) (\(\.$windowPick))")

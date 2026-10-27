@@ -322,9 +322,6 @@ public struct CompanionContentView: View {
                             .foregroundStyle(shouldDimTitle ? Color.primary.opacity(0.45) : .primary)
                     }
 
-                    if let sub = item.subtitle {
-                        companionSubtitleView(sub)
-                    }
                 }
                 Spacer()
                 HStack(spacing: 10) {
@@ -347,9 +344,18 @@ public struct CompanionContentView: View {
                     }
 
                     VStack(alignment: .trailing, spacing: 2) {
-                        Text(item.cardDisplayPercent(scope: scope))
-                            .font(.system(size: 17, weight: .bold, design: .rounded).monospacedDigit())
-                            .foregroundStyle(item.cardStatusColor(scope: scope))
+                        if let extra = usableMuseExtra {
+                            Text("Extra balance")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(.secondary)
+                            Text(extra.displayPercent)
+                                .font(.system(size: 17, weight: .bold, design: .rounded).monospacedDigit())
+                                .foregroundStyle(extra.statusColor)
+                        } else {
+                            Text(item.cardDisplayPercent(scope: scope))
+                                .font(.system(size: 17, weight: .bold, design: .rounded).monospacedDigit())
+                                .foregroundStyle(item.cardStatusColor(scope: scope))
+                        }
                     }
 
                     if item.isExpandable {
@@ -987,40 +993,38 @@ public struct CompanionMeterView: View {
     }
 
     public var body: some View {
-        // Fixed columns so the percent sits in the same place on every card:
-        // caption, bar, percent, countdown.  No per-window timestamps — the
-        // header already carries the last-updated time.
-        HStack(spacing: 4) {
-            Text(caption)
-                .font(.system(size: 11, weight: .bold))
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
-                .multilineTextAlignment(.trailing)
-                .frame(width: 32, alignment: .trailing)
+        // Each allowance owns its caption, reading and reset.  The percentage
+        // and reset stay together at the leading edge, even in narrow columns.
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 8) {
+                Text(caption)
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+
+                Text(window.displayPercent)
+                    .font(.system(size: 12, weight: .bold, design: .rounded).monospacedDigit())
+                    .foregroundStyle(window.statusColor)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+
+                Text(window.meterCountdown())
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             CompanionUsageBar(
                 remainingPercent: window.isMasked ? nil : window.remainingPercent,
                 elapsedFraction: window.isMasked ? nil : window.elapsedFraction(),
                 height: 7
             )
-            .frame(minWidth: 35, maxWidth: .infinity)
-
-            Text(window.displayPercent)
-                .font(.system(size: 12, weight: .bold, design: .rounded).monospacedDigit())
-                .foregroundStyle(window.statusColor)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-                .frame(width: 40, alignment: .trailing)
-
-            Text(window.meterCountdown())
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.primary.opacity(0.85))
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-                .frame(width: 46, alignment: .leading)
+            .frame(maxWidth: .infinity)
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
