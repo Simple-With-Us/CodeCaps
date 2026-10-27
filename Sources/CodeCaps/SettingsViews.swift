@@ -1398,7 +1398,7 @@ struct SettingsNotificationsPage: View {
                 Eyebrow("ALERT DELIVERY")
             } footer: {
                 Text("Anomalies compare usage with your average; runaway usage compares it with your peak." + sentenceGap
-                     + "Quota Exhausted fires at zero remaining." + sentenceGap
+                     + "Quota Exhausted alerts when \(QuotaCapRule.spentThreshold.formatted(.number.precision(.fractionLength(0...1))))% or less remains." + sentenceGap
                      + "Provider bells choose which scheduled and vendor resets alert on this Mac.")
             }
             if let row = model.displaySections.first(where: {
