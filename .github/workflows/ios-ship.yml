@@ -66,6 +66,7 @@ on:
       # ship a TestFlight build.
       - 'Sources/QuotaCore/CompanionReadTokenStore.swift'
       - 'Sources/QuotaCore/FleetSourceDisagreement.swift'
+      - 'Sources/QuotaCore/PlanMetadata.swift'
       - 'Sources/QuotaCore/QuotaWindowCaption.swift'
       - 'Sources/QuotaCore/QuotaWindowVocabulary.swift'
       - 'Sources/QuotaCore/ResetAlarmCadence.swift'
@@ -136,6 +137,7 @@ jobs:
             --path-prefix 'ios/CodeCapsCompanion/' \
             --path-prefix 'Sources/QuotaCore/CompanionReadTokenStore.swift' \
             --path-prefix 'Sources/QuotaCore/FleetSourceDisagreement.swift' \
+            --path-prefix 'Sources/QuotaCore/PlanMetadata.swift' \
             --path-prefix 'Sources/QuotaCore/QuotaWindowCaption.swift' \
             --path-prefix 'Sources/QuotaCore/QuotaWindowVocabulary.swift' \
             --path-prefix 'Sources/QuotaCore/ResetAlarmCadence.swift' \

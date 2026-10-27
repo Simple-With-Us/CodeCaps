@@ -43,7 +43,7 @@ A `--dev` build (identifier `com.jays.agent-bar.mac.dev`) gets none of them, so 
 
 ## Versions
 
-`CFBundleVersion` is `git rev-list --count HEAD`, so every squash merge to `main` raises it by one, and Sparkle compares that number.  CI checks out with `fetch-depth: 0`; a shallow clone would make every build number 1.  `CFBundleShortVersionString` is the `VERSION` file and stays human.  A local build from a feature branch can carry a higher count than `main`; that copy simply waits until `main` passes it.
+`CFBundleVersion` is `git rev-list --count HEAD`, so every squash merge to `main` raises it by one, and Sparkle compares that number.  CI checks out with `fetch-depth: 0`; a shallow clone would make every build number 1.  `CFBundleShortVersionString` is `<prefix>.<commit_count>` (prefix from `VERSION`, default `1.0`), matching the fleet's unified 1.#.### standard across macOS and iOS.  A local build from a feature branch can carry a higher count than `main`; that copy simply waits until `main` passes it.
 
 ## Keys
 

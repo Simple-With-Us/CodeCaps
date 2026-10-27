@@ -372,13 +372,18 @@ jobs:
           short="$(plutil -extract CFBundleShortVersionString raw -o - "$plist")"
           build="$(plutil -extract CFBundleVersion raw -o - "$plist")"
           feed="$(plutil -extract SUFeedURL raw -o - "$plist")"
+          if [[ "$short" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$short" == *."$build" ]]; then
+            tag="v$short"
+          else
+            tag="v$short-build.$build"
+          fi
           {
             echo "short=$short"
             echo "build=$build"
-            echo "tag=v$short-build.$build"
+            echo "tag=$tag"
             echo "feed=$feed"
           } >> "$GITHUB_OUTPUT"
-          echo "CodeCaps $short (build $build), feed $feed"
+          echo "CodeCaps $short (build $build), feed $feed, tag $tag"
 
       - name: Write the signed appcast
         if: steps.gate.outputs.publish == 'true'

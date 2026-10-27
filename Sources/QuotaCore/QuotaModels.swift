@@ -285,8 +285,40 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
         } else if status == .unknown, bounded != nil {
             copy.status = QuotaWindowStatus.derived(remainingPercent: bounded)
         }
-        copy.skip = skip || copy.isExhausted
-        copy.skipReason = skipReason ?? (copy.isExhausted ? "quota exhausted" : nil)
+        // `skip` means "a reading that must not be believed", which is not the
+        // same question as "is the allowance spent".  The shared cap rule
+        // answers the second one for any reading at or under the threshold,
+        // and a spent window is still a window with a reading in it:  when
+        // `skip` followed the rule, a window at 0.3% was dropped from the
+        // picture in picture along with its cap line, while the menu bar still
+        // announced the cap, so the same window was live in one place and
+        // gone in the other (Kody review 2026-10-22).
+        //
+        // The provider's own exhausted word is believed only when the reading
+        // disagrees with it, because only the provider knows why (a rejected
+        // session, a suspended plan) and the reading cannot say.  It is also
+        // the answer when there is no reading at all.  An exact zero is the
+        // one reading that is never shown as a meter.
+        //
+        // The reading is what makes this rule safe to apply twice, which the
+        // display path does:  the picture in picture rebuilds a snapshot from
+        // an already derived window, and a rule that read the derived
+        // `isExhausted` back as the provider's word would hide the window
+        // again on the second pass.
+        let providerWordCounts: Bool
+        if let bounded {
+            providerWordCounts = isExhausted && bounded > QuotaCapRule.spentThreshold
+        } else {
+            providerWordCounts = isExhausted
+        }
+        copy.skip = skip || bounded == 0 || providerWordCounts
+        // The reason explains a skip, so it is attached to a skip and never
+        // to a window that stays visible, and it never claims an exhaustion
+        // the window does not have:  a provider that hides a healthy window
+        // without saying why gets no reason at all, because "quota exhausted"
+        // on a window with room left is a false claim, and a consumer that
+        // filters on the reason would act on it (Kody review 2026-10-26).
+        copy.skipReason = skipReason ?? (copy.skip && copy.isExhausted ? "quota exhausted" : nil)
         let monthlyHint = copy.canonicalProviderKey == "cursor"
             && copy.label.lowercased().contains("plan")
         if let rewritten = QuotaWindowVocabulary.sanitizeLabelIfNeeded(
@@ -527,11 +559,28 @@ public struct QuotaWindowSnapshot: Equatable, Sendable {
         self.remainingPercent = normalized.boundedRemainingPercent
         self.status = normalized.status
 
-        let observedIsFresh = QuotaFreshnessRule.isReadingRecent(observedAt: observedAt, now: now)
+        let isAtCap = remainingPercent.map { QuotaCapRule.isAtCap(remainingPercent: $0) } ?? normalized.isExhausted
+        let duration = resetAt.flatMap { end in
+            ResetAlarmCadence.duration(
+                token: normalized.window,
+                label: normalized.label,
+                providerKey: normalized.canonicalProviderKey,
+                isSupplementaryVideoQuota: normalized.isSupplementaryVideoQuota,
+                endingAt: end
+            )
+        }
+
+        let isFreshReading = QuotaFreshnessRule.isFresh(
+            observedAt: observedAt,
+            resetAt: resetAt,
+            now: now,
+            isAtCap: isAtCap,
+            cadenceDuration: duration
+        )
 
         if let resetAt, resetAt <= now {
             freshness = .awaitingRefresh
-        } else if observedIsFresh {
+        } else if isFreshReading {
             freshness = .fresh
         } else {
             freshness = .stale
@@ -1116,43 +1165,7 @@ public extension QuotaWindowSnapshot {
     }
 }
 
-// MARK: - Platform Custom Metadata
-
-public struct PlatformCustomInfo: Codable, Equatable, Sendable {
-    /// Persisted edit revision; quota observation time remains independent.
-    public var updatedAt: Date?
-    public var customSubtitle: String
-    public var planName: String
-    public var costUsd: String
-    public var renewalDateText: String
-    public var showCostAndRenewal: Bool
-
-    public init(
-        customSubtitle: String = "",
-        planName: String = "",
-        costUsd: String = "",
-        renewalDateText: String = "",
-        showCostAndRenewal: Bool = false
-    ) {
-        self.updatedAt = nil
-        self.customSubtitle = customSubtitle
-        self.planName = planName
-        self.costUsd = costUsd
-        self.renewalDateText = renewalDateText
-        self.showCostAndRenewal = showCostAndRenewal
-    }
-
-    /// Whether the owner's free-text Settings fields mention a plan or cost
-    /// change (e.g. "↓ $50/mo plan then").  Treated as an explicit plan-change
-    /// signal: the runaway detector stands down for this provider and the
-    /// informational plan-change state shows until the text no longer
-    /// mentions a change.
-    public var mentionsPlanChange: Bool {
-        let text = [planName, costUsd, renewalDateText].joined(separator: " ").lowercased()
-        let markers = ["↓", "↑", "→", "downgrade", "upgrade"]
-        return markers.contains { text.contains($0) }
-    }
-}
+// MARK: - Billing Renewal
 
 /// The Renewal Date field is a free-text override.  When the owner has not
 /// typed one, a platform that actually reports a billing-cycle end (Cursor's
