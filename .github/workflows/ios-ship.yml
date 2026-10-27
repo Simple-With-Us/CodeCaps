@@ -295,6 +295,13 @@ jobs:
         env:
           IOS_TF_RELEASE_NOTES: "1"
           IOS_MANUAL_SIGN: "1"
+          # The version-manifest publisher writes site/ios-versions.json on
+          # Simple-With-Us/ai-fleet-coordinator through a branch and pull
+          # request.  This job's GITHUB_TOKEN is contents:read here and cannot
+          # write that repository, so the publisher gets the org GH_PAT secret
+          # scoped to this step only.  The value is never printed, and a publish
+          # miss stays non-fatal for the TestFlight upload (CC-202).
+          IOS_VERSIONS_PUBLISH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           source scripts/ios-load-asc-key.sh
           bash scripts/ios-ship-testflight.sh

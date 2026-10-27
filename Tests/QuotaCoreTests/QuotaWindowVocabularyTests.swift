@@ -370,6 +370,26 @@ final class QuotaWindowVocabularyTests: XCTestCase {
                        "a window from another reader is a copy")
     }
 
+    /// A window carrying this Mac's `local-mac:` prefix but ANOTHER
+    /// installation's producer instance id is a foreign copy of a same-named
+    /// payload:  the instance outranks the prefix, the same precedence
+    /// `FleetOrigin.isOwnPush` applies, so the phone, the widget and the Mac
+    /// decide one payload the same way.
+    func testAForeignProducerInstanceOutranksTheLocalMacPrefix() {
+        XCTAssertFalse(QuotaWindowVocabulary.isOwnDeviceWindow(id: "local-mac:xai:subscription",
+                                                               source: "CodeCaps",
+                                                               machine: nil,
+                                                               producerInstanceId: "other-mac",
+                                                               ownInstanceId: "this-mac"),
+                       "a foreign producer instance makes the payload a copy even under the local-mac prefix")
+        XCTAssertTrue(QuotaWindowVocabulary.isOwnDeviceWindow(id: "local-mac:xai:subscription",
+                                                              source: "CodeCaps",
+                                                              machine: nil,
+                                                              producerInstanceId: "this-mac",
+                                                              ownInstanceId: "this-mac"),
+                      "this installation's own instance confirms its own payload")
+    }
+
     /// The owning installation's own window is this device's own reading, even
     /// though it names a producer instance.  Every fleet-sourced window names
     /// one, so without this the phone and the widget read this Mac's own
