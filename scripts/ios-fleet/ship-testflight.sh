@@ -617,6 +617,7 @@ SENTRY_DSN_PROJECT_ERROR=""
 sentry_dsn_project() {
   local raw="${SENTRY_DSN:-}"
   SENTRY_DSN_PROJECT_ERROR=""
+  : >"${LOG_DIR}/sentry-dsn-project.error"
   [[ -n "$raw" ]] || return 0
   local last="${raw##*/}"
   [[ "$last" != "$raw" ]] || return 0
@@ -632,6 +633,7 @@ sentry_dsn_project() {
   host="$(printf '%s' "$raw" | sed -E 's#^https?://[^@/]+@##; s#/.*$##')"
   if [[ -z "$host" ]]; then
     SENTRY_DSN_PROJECT_ERROR="the host could not be read from the DSN"
+    printf '%s' "$SENTRY_DSN_PROJECT_ERROR" >"${LOG_DIR}/sentry-dsn-project.error"
     return 1
   fi
   local org_id=""
@@ -653,6 +655,7 @@ except Exception:
     fi
   done
   SENTRY_DSN_PROJECT_ERROR="the project id ${last} in the DSN could not be resolved to a Sentry project slug"
+  printf '%s' "$SENTRY_DSN_PROJECT_ERROR" >"${LOG_DIR}/sentry-dsn-project.error"
   return 1
 }
 
@@ -702,6 +705,11 @@ upload_sentry_artifacts() {
     # Without the DSN project the dSYM lands in the app's own project only,
     # which is the defect this lane exists to fix, so the run goes red rather
     # than going quietly wrong.
+    # Command substitution runs in a subshell, so the function persists the
+    # reason in LOG_DIR rather than in the parent shell's variable.
+    if [[ -s "${LOG_DIR}/sentry-dsn-project.error" ]]; then
+      SENTRY_DSN_PROJECT_ERROR="$(cat "${LOG_DIR}/sentry-dsn-project.error")"
+    fi
     sentry_report_failure "the Sentry project named by the DSN could not be resolved, so the dSYM and the Size Analysis build can only go to ${project}:  ${SENTRY_DSN_PROJECT_ERROR}"
     dsn_project=""
   fi
@@ -715,13 +723,13 @@ upload_sentry_artifacts() {
     # stack, so every project in the list gets them.
     SENTRY_ORG=simple-with-us SENTRY_PROJECT="$p" SENTRY_AUTH_TOKEN="$SENTRY_API_TOKEN" \
       sentry-cli debug-files upload --include-sources "$archive" \
-      >"${LOG_DIR}/sentry-debug-files.log" 2>&1
+      >"${LOG_DIR}/sentry-debug-files-${p}.log" 2>&1
     local dif_rc=$?
     set -e
     if [[ $dif_rc -eq 0 ]]; then
       log "sentry: debug-files upload ok for project=${p}"
     else
-      sentry_report_failure "sentry debug-files upload failed for project=${p} (rc=${dif_rc}); see ${LOG_DIR}/sentry-debug-files.log"
+      sentry_report_failure "sentry debug-files upload failed for project=${p} (rc=${dif_rc}); see ${LOG_DIR}/sentry-debug-files-${p}.log"
     fi
     if [[ -z "$dsn_project" || "$p" == "$dsn_project" ]]; then
       # The Size Analysis quota is 100 builds a month on the sponsored plan and
@@ -732,13 +740,13 @@ upload_sentry_artifacts() {
       set +e
       SENTRY_ORG=simple-with-us SENTRY_PROJECT="$p" SENTRY_AUTH_TOKEN="$SENTRY_API_TOKEN" \
         sentry-cli build upload "$archive" \
-        >"${LOG_DIR}/sentry-build-upload.log" 2>&1
+        >"${LOG_DIR}/sentry-build-upload-${p}.log" 2>&1
       local build_rc=$?
       set -e
       if [[ $build_rc -eq 0 ]]; then
         log "sentry: build upload ok for project=${p}"
       else
-        sentry_report_failure "sentry build upload failed for project=${p} (rc=${build_rc}); see ${LOG_DIR}/sentry-build-upload.log"
+        sentry_report_failure "sentry build upload failed for project=${p} (rc=${build_rc}); see ${LOG_DIR}/sentry-build-upload-${p}.log"
       fi
     else
       log "sentry: skipping the Size Analysis build upload for project=${p}; the DSN project (${dsn_project}) holds the events and the quota is 100 builds a month"
