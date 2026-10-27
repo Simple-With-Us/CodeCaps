@@ -123,4 +123,29 @@ final class UnifiedSubscriptionPoolTests: XCTestCase {
         XCTAssertEqual(apiResult?.remainingPercent, 12.0, "API credits window must remain untouched")
         XCTAssertEqual(apiResult?.label, "API credits")
     }
+
+    func testBillingCycleAndCurrencyWindowsAreExcludedFromPool() {
+        var billingWindow = makeWindow(providerKey: "cursor", id: "cursor:billing-cycle", rem: 5.0)
+        billingWindow.label = "Billing cycle spend"
+        billingWindow.quotaUnit = "USD"
+        let cursorPlan = makeWindow(providerKey: "cursor", id: "local-mac:cursor:plan", rem: 90.0)
+        let windows = [billingWindow, cursorPlan]
+
+        XCTAssertFalse(UnifiedSubscriptionPool.isPoolWindow(billingWindow), "Billing cycle window must not be considered a pool window")
+        let shared = UnifiedSubscriptionPool.share(windows: windows, now: now)
+        let preservedBilling = shared.first { $0.id == "cursor:billing-cycle" }
+        XCTAssertEqual(preservedBilling?.remainingPercent, 5.0, "Billing cycle window must remain untouched")
+    }
+
+    func testMultiAccountWindowsAreExcludedFromPool() {
+        var accountWindow = makeWindow(providerKey: "grok-bot", id: "gbu-weekly:account-123", rem: 15.0)
+        accountWindow.label = "Account allowance"
+        let cursorPlan = makeWindow(providerKey: "cursor", id: "local-mac:cursor:plan", rem: 88.0)
+        let windows = [accountWindow, cursorPlan]
+
+        XCTAssertFalse(UnifiedSubscriptionPool.isPoolWindow(accountWindow), "Multi-account window must not be considered a pool window")
+        let shared = UnifiedSubscriptionPool.share(windows: windows, now: now)
+        let preservedAccount = shared.first { $0.id == "gbu-weekly:account-123" }
+        XCTAssertEqual(preservedAccount?.remainingPercent, 15.0, "Multi-account window must remain untouched")
+    }
 }

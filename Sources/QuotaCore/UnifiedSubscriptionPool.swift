@@ -18,12 +18,17 @@ public enum UnifiedSubscriptionPool {
         let key = window.canonicalProviderKey
         guard participantKeys.contains(key) else { return false }
         if window.isSupplementaryVideoQuota { return false }
+        if window.quotaUnit == "$" || window.quotaUnit == "USD" { return false }
         let lowerId = window.id.lowercased()
         let lowerLabel = window.label.lowercased()
+        // Exclude billing cycles and financial spend meters
+        if lowerId.contains("billing") || lowerLabel.contains("billing") { return false }
         // Exclude API spend balances (e.g. xai:api-monthly)
         if lowerId.contains("api") || lowerLabel.contains("api") { return false }
         // Exclude metadata-only windows that carry no readings
         if lowerId.contains("plan-metadata") || lowerLabel.contains("plan details") { return false }
+        // Exclude secondary multi-account windows
+        if lowerId.contains("account") || lowerLabel.contains("account") { return false }
         return true
     }
 

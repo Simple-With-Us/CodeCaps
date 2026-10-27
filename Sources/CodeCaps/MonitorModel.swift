@@ -2317,8 +2317,7 @@ final class MonitorModel: ObservableObject {
             if let local {
                 self.issues = local.issues
                 self.consentNeeded = local.consentNeeded
-                let normalized = AntigravityQuotaGroups.normalize(local.windows)
-                self.localWindows = UnifiedSubscriptionPool.share(windows: normalized, now: self.now)
+                self.localWindows = AntigravityQuotaGroups.normalize(local.windows)
                 self.hasCurrentLocalRead = true
                 // One sample per window per refresh.  This is what the runaway
                 // detector compares against, so it has to be recorded whether
@@ -2547,8 +2546,7 @@ final class MonitorModel: ObservableObject {
         }
         issues = local?.issues ?? [:]
         consentNeeded = local?.consentNeeded ?? []
-        let normalized = AntigravityQuotaGroups.normalize(local?.windows ?? [])
-        localWindows = UnifiedSubscriptionPool.share(windows: normalized, now: now)
+        localWindows = AntigravityQuotaGroups.normalize(local?.windows ?? [])
         hasCurrentLocalRead = local != nil
         // A local window that carries no reading (a plan-details window, or
         // any window whose percentage is unknown) does not mean this Mac reads
