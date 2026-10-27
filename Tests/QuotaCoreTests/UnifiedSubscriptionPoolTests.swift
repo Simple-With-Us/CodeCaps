@@ -1,0 +1,126 @@
+import XCTest
+@testable import QuotaCore
+
+final class UnifiedSubscriptionPoolTests: XCTestCase {
+    private let iso = ISO8601DateFormatter()
+    private let now = Date()
+
+    private func makeWindow(providerKey: String, id: String, rem: Double?, resetIn: TimeInterval = 86400 * 6, observedAgo: TimeInterval = 60) -> QuotaWindow {
+        QuotaWindow(
+            id: id,
+            provider: QuotaProviders.label(for: providerKey),
+            providerKey: providerKey,
+            providerLabel: QuotaProviders.label(for: providerKey),
+            label: "Subscription window",
+            remainingPercent: rem,
+            resetAt: iso.string(from: now.addingTimeInterval(resetIn)),
+            window: "weekly",
+            occurredAt: iso.string(from: now.addingTimeInterval(-observedAgo)),
+            source: QuotaProviders.label(for: providerKey)
+        )
+    }
+
+    func testCursorReadingPopulatesXaiGrokAndGrokBot() {
+        let cursor = makeWindow(providerKey: "cursor", id: "local-mac:cursor:plan", rem: 31.5)
+        let windows = [cursor]
+
+        let shared = UnifiedSubscriptionPool.share(windows: windows, now: now, targetKeys: UnifiedSubscriptionPool.participantKeys)
+        let byProvider = Dictionary(grouping: shared, by: \.canonicalProviderKey)
+
+        XCTAssertNotNil(byProvider["xai"]?.first, "xAI must receive an adapted pool window")
+        XCTAssertEqual(byProvider["xai"]?.first?.remainingPercent, 31.5)
+        XCTAssertEqual(byProvider["xai"]?.first?.id, "local-mac:xai:plan")
+
+        XCTAssertNotNil(byProvider["grok"]?.first, "Grok must receive an adapted pool window")
+        XCTAssertEqual(byProvider["grok"]?.first?.remainingPercent, 31.5)
+
+        XCTAssertNotNil(byProvider["grok-bot"]?.first, "Grok Bot must receive an adapted pool window")
+        XCTAssertEqual(byProvider["grok-bot"]?.first?.remainingPercent, 31.5)
+
+        XCTAssertEqual(byProvider["cursor"]?.first?.remainingPercent, 31.5)
+    }
+
+    func testGrokReadingPopulatesCursorXaiAndGrokBot() {
+        let grok = makeWindow(providerKey: "grok", id: "local-mac:grok:subscription", rem: 50.0)
+        let windows = [grok]
+
+        let shared = UnifiedSubscriptionPool.share(windows: windows, now: now, targetKeys: UnifiedSubscriptionPool.participantKeys)
+        let byProvider = Dictionary(grouping: shared, by: \.canonicalProviderKey)
+
+        XCTAssertEqual(byProvider["cursor"]?.first?.remainingPercent, 50.0)
+        XCTAssertEqual(byProvider["xai"]?.first?.remainingPercent, 50.0)
+        XCTAssertEqual(byProvider["grok-bot"]?.first?.remainingPercent, 50.0)
+        XCTAssertEqual(byProvider["grok"]?.first?.remainingPercent, 50.0)
+    }
+
+    func testGrokBotReadingPopulatesCursorXaiAndGrok() {
+        let grokBot = makeWindow(providerKey: "grok-bot", id: "local-mac:grok-bot:weekly", rem: 42.0)
+        let windows = [grokBot]
+
+        let shared = UnifiedSubscriptionPool.share(windows: windows, now: now, targetKeys: UnifiedSubscriptionPool.participantKeys)
+        let byProvider = Dictionary(grouping: shared, by: \.canonicalProviderKey)
+
+        XCTAssertEqual(byProvider["cursor"]?.first?.remainingPercent, 42.0)
+        XCTAssertEqual(byProvider["xai"]?.first?.remainingPercent, 42.0)
+        XCTAssertEqual(byProvider["grok"]?.first?.remainingPercent, 42.0)
+    }
+
+    func testXaiReadingPopulatesCursorGrokAndGrokBot() {
+        let xai = makeWindow(providerKey: "xai", id: "xai:subscription", rem: 88.0)
+        let windows = [xai]
+
+        let shared = UnifiedSubscriptionPool.share(windows: windows, now: now, targetKeys: UnifiedSubscriptionPool.participantKeys)
+        let byProvider = Dictionary(grouping: shared, by: \.canonicalProviderKey)
+
+        XCTAssertEqual(byProvider["cursor"]?.first?.remainingPercent, 88.0)
+        XCTAssertEqual(byProvider["grok"]?.first?.remainingPercent, 88.0)
+        XCTAssertEqual(byProvider["grok-bot"]?.first?.remainingPercent, 88.0)
+    }
+
+    func testFreshestReadingWinsAmongMultipleParticipants() {
+        let olderCursor = makeWindow(providerKey: "cursor", id: "local-mac:cursor:plan", rem: 60.0, observedAgo: 3600)
+        let newerGrok = makeWindow(providerKey: "grok", id: "local-mac:grok:subscription", rem: 55.0, observedAgo: 60)
+        let windows = [olderCursor, newerGrok]
+
+        let shared = UnifiedSubscriptionPool.share(windows: windows, now: now, targetKeys: UnifiedSubscriptionPool.participantKeys)
+        let byProvider = Dictionary(grouping: shared, by: \.canonicalProviderKey)
+
+        // The 55.0% reading is fresher (60s ago vs 3600s ago)
+        XCTAssertEqual(byProvider["cursor"]?.first?.remainingPercent, 55.0)
+        XCTAssertEqual(byProvider["xai"]?.first?.remainingPercent, 55.0)
+        XCTAssertEqual(byProvider["grok"]?.first?.remainingPercent, 55.0)
+        XCTAssertEqual(byProvider["grok-bot"]?.first?.remainingPercent, 55.0)
+    }
+
+    func testStaleReadingIsOverwrittenByFreshReading() {
+        let staleXai = makeWindow(providerKey: "xai", id: "xai:subscription", rem: 10.0, observedAgo: 86400 * 2)
+        let freshCursor = makeWindow(providerKey: "cursor", id: "local-mac:cursor:plan", rem: 75.0, observedAgo: 120)
+        let windows = [staleXai, freshCursor]
+
+        let shared = UnifiedSubscriptionPool.share(windows: windows, now: now)
+        let byProvider = Dictionary(grouping: shared, by: \.canonicalProviderKey)
+
+        XCTAssertEqual(byProvider["xai"]?.first?.remainingPercent, 75.0, "xAI stale reading must be updated by fresh Cursor reading")
+        XCTAssertEqual(byProvider["cursor"]?.first?.remainingPercent, 75.0)
+    }
+
+    func testApiCreditsAreNotPartOfTheSubscriptionPool() {
+        let apiWindow = QuotaWindow(
+            id: "xai:api-monthly",
+            provider: "xAI",
+            providerKey: "xai",
+            providerLabel: "xAI",
+            label: "API credits",
+            remainingPercent: 12.0,
+            occurredAt: iso.string(from: now)
+        )
+        let cursor = makeWindow(providerKey: "cursor", id: "local-mac:cursor:plan", rem: 80.0)
+        let windows = [apiWindow, cursor]
+
+        let shared = UnifiedSubscriptionPool.share(windows: windows, now: now)
+        let apiResult = shared.first { $0.id == "xai:api-monthly" }
+
+        XCTAssertEqual(apiResult?.remainingPercent, 12.0, "API credits window must remain untouched")
+        XCTAssertEqual(apiResult?.label, "API credits")
+    }
+}

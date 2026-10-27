@@ -2317,7 +2317,8 @@ final class MonitorModel: ObservableObject {
             if let local {
                 self.issues = local.issues
                 self.consentNeeded = local.consentNeeded
-                self.localWindows = AntigravityQuotaGroups.normalize(local.windows)
+                let normalized = AntigravityQuotaGroups.normalize(local.windows)
+                self.localWindows = UnifiedSubscriptionPool.share(windows: normalized, now: self.now)
                 self.hasCurrentLocalRead = true
                 // One sample per window per refresh.  This is what the runaway
                 // detector compares against, so it has to be recorded whether
@@ -2406,11 +2407,12 @@ final class MonitorModel: ObservableObject {
                     && expectedQuotaProviderKeys.contains(key)
             }
             let merged = self.localWindows + adopted + fleetFallback
+            let unifiedMerged = UnifiedSubscriptionPool.share(windows: merged, now: self.now)
             var origins: [String: QuotaOrigin] = [:]
-            for key in Set(merged.map(\.canonicalProviderKey)) { origins[key] = .local }
+            for key in Set(unifiedMerged.map(\.canonicalProviderKey)) { origins[key] = .local }
             self.originByProvider = origins
             if newServer != nil { self.lastPullTime = self.now }
-            self.response = QuotaResponse(generatedAt: ISO8601DateFormatter().string(from: self.now), windows: merged)
+            self.response = QuotaResponse(generatedAt: ISO8601DateFormatter().string(from: self.now), windows: unifiedMerged)
             // The widget publishes what the app's own rows publish.  The fleet
             // groups carry a second copy of every provider, and for a provider
             // this Mac reads itself that copy is the stale one:  it is days old
@@ -2545,7 +2547,8 @@ final class MonitorModel: ObservableObject {
         }
         issues = local?.issues ?? [:]
         consentNeeded = local?.consentNeeded ?? []
-        localWindows = AntigravityQuotaGroups.normalize(local?.windows ?? [])
+        let normalized = AntigravityQuotaGroups.normalize(local?.windows ?? [])
+        localWindows = UnifiedSubscriptionPool.share(windows: normalized, now: now)
         hasCurrentLocalRead = local != nil
         // A local window that carries no reading (a plan-details window, or
         // any window whose percentage is unknown) does not mean this Mac reads
@@ -2573,8 +2576,9 @@ final class MonitorModel: ObservableObject {
                 && expectedQuotaProviderKeys.contains(key)
         }
         let merged = localWindows + adopted + fleetFallback
-        originByProvider = Dictionary(uniqueKeysWithValues: Set(merged.map(\.canonicalProviderKey)).map { ($0, .local) })
-        response = QuotaResponse(generatedAt: ISO8601DateFormatter().string(from: now), windows: merged)
+        let unifiedMerged = UnifiedSubscriptionPool.share(windows: merged, now: now)
+        originByProvider = Dictionary(uniqueKeysWithValues: Set(unifiedMerged.map(\.canonicalProviderKey)).map { ($0, .local) })
+        response = QuotaResponse(generatedAt: ISO8601DateFormatter().string(from: now), windows: unifiedMerged)
         if let writeForTesting = handoffWriteForTesting {
             writeForTesting(exportedWindows(localWindows))
             handoffError = nil
