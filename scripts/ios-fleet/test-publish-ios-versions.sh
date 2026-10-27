@@ -124,4 +124,12 @@ fi
 grep -q "no IOS_VERSIONS_PUBLISH_TOKEN" "${TMP}/notoken.err"
 grep -q "contents:read" "${TMP}/notoken.err"
 
+# A non-numeric apple id is a named failure, not a bare traceback.
+if bash "${TMP}/fleet/publish-ios-versions.sh" --bundle-id com.simplewithus.codecaps.ios \
+    --version 1.0.264 --apple-id notanumber >"${TMP}/badid.out" 2>"${TMP}/badid.err"; then
+  echo "FAIL: a non-numeric --apple-id must exit non-zero" >&2; exit 1
+fi
+grep -q "remote-manifest-publish-failed: --apple-id must be a number" "${TMP}/badid.err"
+if grep -q Traceback "${TMP}/badid.err"; then echo "FAIL: traceback leaked" >&2; exit 1; fi
+
 echo "test-publish-ios-versions: all tests passed"

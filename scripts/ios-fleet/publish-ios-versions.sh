@@ -63,6 +63,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -n "$BUNDLE_ID" && -n "$VERSION" ]] || { echo "need --bundle-id and --version" >&2; exit 2; }
+if [[ -n "$APPLE_ID" && ! "$APPLE_ID" =~ ^[0-9]+$ ]]; then
+  echo "remote-manifest-publish-failed: --apple-id must be a number (got a non-numeric value)" >&2
+  exit 2
+fi
 
 python3 - "$LOCAL_JSON" "$BUNDLE_ID" "$VERSION" "$BUILD" "$APPLE_ID" "$DISPLAY_NAME" <<'PY'
 import json, sys, datetime

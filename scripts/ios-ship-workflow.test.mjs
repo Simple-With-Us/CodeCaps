@@ -373,3 +373,10 @@ test("scheduled gate and key handoff shell tests pass", () => {
     assert.match(out, /all tests passed/, `${script} did not report success`);
   }
 });
+
+test("upload-only never forwards the (from IPA) placeholder to the manifest publisher", () => {
+  const ship = read("scripts/ios-fleet/ship-testflight.sh");
+  const guard = ship.indexOf('"${MARKETING:-}" == "(from IPA)" || "${BUILD_NUM:-}" == "(from IPA)"');
+  const publish = ship.indexOf('bash "${FLEET_DIR}/publish-ios-versions.sh"');
+  assert.ok(guard > 0 && publish > guard, "placeholder guard must come before the publisher call");
+});
