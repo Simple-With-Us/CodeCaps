@@ -1273,6 +1273,20 @@ bypass_out="$(REJECTED_KEY_FILE="${tmp}/sentinel-bypass" _rejected_key_path="${t
   || fail "the parser lost the label without the hand-off file: ${bypass_out}"
 [[ "$(cat "${tmp}/sentinel-bypass")" == "SENTINEL-BYPASS" ]] || fail "the hand-off path was taken from the environment"
 
+# The released-version helper keeps the client's reason and its auth status:
+# a discarded stderr or a flattened status 4 hides a credential fault behind
+# a generic "cannot read the released version".
+body="$(awk '/^asc_released_store_version\(\) \{/ {g=1} g {print} g && /^}/ {exit}' "$script")"
+if grep -v '^[[:space:]]*#' <<<"$body" | grep -q '2>/dev/null'; then
+  fail "asc_released_store_version discards the client's stderr"
+fi
+grep -q 'return 4' <<<"$body" || fail "asc_released_store_version does not preserve the auth status 4"
+grep -q 'released-store-version:\*' <<<"$body" || fail "asc_released_store_version does not log the client's reason"
+if grep -q 'asc_released_store_version "\$ASC_PLATFORM" 2>/dev/null' "$script"; then
+  fail "the fixed-version caller discards the released-version reason"
+fi
+unset body
+
 echo "ok: ASC credential resolution (environment first, then Infisical, a named path ignored, temp key removed)"
 # The version helpers run inside command substitutions, where load_secrets
 # would write a temp key whose cleanup trap dies with the subshell.  They must
