@@ -55,6 +55,14 @@ final class WidgetTests: XCTestCase {
         }
     }
 
+    func testDetailLevelIsConfigurableAndSingleResetStaysUnknown() throws {
+        let intent = try readSource(at: Self.repoRoot.appendingPathComponent("ios/CodeCapsCompanion/Widgets/WidgetConfigurationIntent.swift"))
+        let summary = intent.components(separatedBy: "public static var parameterSummary").last ?? ""
+        XCTAssertTrue(summary.contains("$detailLevel"))
+        let rows = try readSource(at: Self.repoRoot.appendingPathComponent("ios/CodeCapsCompanion/Widgets/WidgetWindowRows.swift"))
+        XCTAssertTrue(rows.contains(#"return countdown.isEmpty ? "—" : countdown"#))
+    }
+
     func testWidgetDetailActionStaysInTheWidget() throws {
         let source = try readSource(at: Self.repoRoot.appendingPathComponent("ios/CodeCapsCompanion/Widgets/WidgetDetailIntent.swift"))
         XCTAssertTrue(source.contains("openAppWhenRun: Bool = false"))

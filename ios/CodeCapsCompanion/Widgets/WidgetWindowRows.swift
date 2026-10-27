@@ -252,7 +252,7 @@ struct PlanBarRow: View {
                     Text(WidgetPresentation.displayPercent(percent: percent, isMasked: shown.window?.isMasked ?? platform.isMasked))
                         .font(.system(size: percentFont, weight: .bold, design: .rounded))
                         .foregroundColor(statusColor)
-                    Text(shown.window?.countdown() ?? platform.countdown())
+                    Text({ let countdown = shown.window?.countdown() ?? platform.countdown(); return countdown.isEmpty ? "—" : countdown }())
                         .font(.system(size: captionFont - 0.5)).foregroundStyle(.secondary)
                 }.lineLimit(1).minimumScaleFactor(0.8)
 

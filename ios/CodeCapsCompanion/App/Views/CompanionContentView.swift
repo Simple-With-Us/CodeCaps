@@ -1070,7 +1070,7 @@ public struct CompanionUsageBar: View {
     public var body: some View {
         GeometryReader { geo in
             let totalWidth = geo.size.width
-            let safeRemaining = remainingPercent.map { min(100.0, max(0.0, $0)) }
+            let safeRemaining = remainingPercent.flatMap { $0.isFinite ? min(100.0, max(0.0, $0)) : nil }
             let remainingWidth = safeRemaining.map { CGFloat($0 / 100.0) * totalWidth }
             let usedWidth = remainingWidth.map { totalWidth - $0 }
 
@@ -1099,7 +1099,7 @@ public struct CompanionUsageBar: View {
                 }
 
                 // Pacing marker line (elapsed time fraction)
-                if let frac = elapsedFraction, frac >= 0, frac <= 1.0, totalWidth > 0 {
+                if safeRemaining != nil, let frac = elapsedFraction, frac.isFinite, frac >= 0, frac <= 1.0, totalWidth > 0 {
                     let markerX = CGFloat(frac) * totalWidth
                     let markerHeight: CGFloat = 18
                     let markerWidth: CGFloat = 3.0

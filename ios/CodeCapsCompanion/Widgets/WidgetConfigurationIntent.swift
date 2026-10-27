@@ -173,7 +173,7 @@ public struct SelectQuotaIntent: WidgetConfigurationIntent {
     public var detailLevel: WidgetDetailLevel
 
     public static var parameterSummary: some ParameterSummary {
-        Summary("Show \(\.$plan) \(\.$rowLayout) with \(\.$quotasPerProvider) (\(\.$windowPick))")
+        Summary("Show \(\.$plan) \(\.$rowLayout) with \(\.$quotasPerProvider) (\(\.$windowPick)) \(\.$detailLevel)")
     }
 }
 

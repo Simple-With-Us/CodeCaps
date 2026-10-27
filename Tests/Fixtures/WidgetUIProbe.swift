@@ -12,6 +12,12 @@ import AppIntents
   precondition(extra.displayPercent == "83%")
   precondition(missing.cadenceToken == "Limit")
   precondition(extra.cadenceToken == "Extra")
+  let countedExtra = WidgetWindowItem(id:"count-extra",label:"Other limit",cadence:"Other limit",remainingPercent:nil,resetAt:nil,isExtraAllowance:true,absoluteRemaining:42)
+  let counted = WidgetPlatformItem(id:"counted",providerKey:"muse-assist",title:"Muse Assist",subtitle:"",remainingPercent:0,resetAt:nil,windows:[zero,countedExtra])
+  precondition(countedExtra.displayPercent == "42 left")
+  precondition(counted.usableMuseExtra?.absoluteRemaining == 42)
+  precondition(counted.windows.last?.absoluteRemaining == 42)
+  precondition(counted.dualWindows() != nil)
   precondition(!ShowWidgetPlanDetailIntent.openAppWhenRun)
   let defaults=UserDefaults(suiteName:WidgetSnapshotStore.appGroupId)!
   let scope="native-regression-"+UUID().uuidString
