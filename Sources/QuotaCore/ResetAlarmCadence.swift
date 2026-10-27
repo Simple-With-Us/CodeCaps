@@ -23,6 +23,19 @@ public enum ResetAlarmCadence {
         case fixed(TimeInterval)
         /// Whole calendar months:  a monthly plan or a billing cycle.
         case calendarMonths(Int)
+
+        /// When a window of this length that ends at `end` began.  Months are counted
+        /// on `billingCalendar` unless a caller passes another.
+        public func start(endingAt end: Date, calendar: Calendar = ResetAlarmCadence.billingCalendar) -> Date? {
+            switch self {
+            case .fixed(let seconds):
+                guard seconds.isFinite, seconds > 0 else { return nil }
+                return end.addingTimeInterval(-seconds)
+            case .calendarMonths(let months):
+                guard months > 0 else { return nil }
+                return calendar.date(byAdding: .month, value: -months, to: end)
+            }
+        }
     }
 
     /// The calendar whole months are counted on:  Gregorian, fixed to UTC.
@@ -117,6 +130,20 @@ public enum ResetAlarmCadence {
         if cleaned == "session" { return 5 * 3_600 }
         guard let period = resolve(token: token, label: label, monthlyHint: monthlyHint) else { return nil }
         return seconds(for: period)
+    }
+
+    /// The duration in seconds of a window ending at `end`, or nil when neither
+    /// the token nor the label says.
+    public static func duration(
+        token: String?,
+        label: String,
+        providerKey: String? = nil,
+        isSupplementaryVideoQuota: Bool = false,
+        endingAt end: Date
+    ) -> TimeInterval? {
+        guard let period = resolve(token: token, label: label, providerKey: providerKey, isSupplementaryVideoQuota: isSupplementaryVideoQuota),
+              let start = period.start(endingAt: end) else { return nil }
+        return end.timeIntervalSince(start)
     }
 
     /// A duration token such as "5h", "300m", "168h" or "1w" in seconds; `nil`

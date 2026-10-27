@@ -59,4 +59,53 @@ public enum WidgetPlatformDisplay {
         let key = canonicalKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return trimmed == key && trimmed == trimmed.lowercased()
     }
+
+    /// Resolves the human-readable platform subtitle, mirroring the Mac app's
+    /// `displaySubtitle` and `planCostRenewalDetail`.
+    ///
+    /// Order of precedence:
+    /// 1. Pool subtitle (e.g. "Gemini", "Third-Party" for Antigravity)
+    /// 2. Custom subtitle if set by the user (`userSubtitle`)
+    /// 3. Plan / Cost / Renewal string if `showCostAndRenewal` is enabled
+    /// 4. User-entered plan name (`userPlanName`)
+    /// 5. Detected/automatic plan name (`detectedPlanName` or `automaticPlanName`)
+    /// 6. Provider-specific fallback (e.g. "free" for Muse Assist)
+    public static func subtitle(
+        planMetadata: PlanMetadata? = nil,
+        automaticPlanName: String? = nil,
+        poolSubtitle: String? = nil,
+        providerKey: String? = nil
+    ) -> String? {
+        if let pool = poolSubtitle?.trimmingCharacters(in: .whitespacesAndNewlines), !pool.isEmpty {
+            return pool
+        }
+        if let meta = planMetadata {
+            if let custom = meta.userSubtitle?.trimmingCharacters(in: .whitespacesAndNewlines), !custom.isEmpty {
+                return custom
+            }
+            if meta.showCostAndRenewal == true {
+                let plan = meta.userPlanName ?? meta.detectedPlanName ?? automaticPlanName ?? ""
+                let cost = meta.userCostUsd ?? ""
+                let renewal = (meta.userRenewalDateText ?? "").isEmpty ? "" : "Renews \(meta.userRenewalDateText!)"
+                let parts = [plan, cost, renewal].map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+                if !parts.isEmpty {
+                    return parts.joined(separator: " · ")
+                }
+            }
+            if let userPlan = meta.userPlanName?.trimmingCharacters(in: .whitespacesAndNewlines), !userPlan.isEmpty {
+                return userPlan
+            }
+            if let detected = meta.detectedPlanName?.trimmingCharacters(in: .whitespacesAndNewlines), !detected.isEmpty {
+                return detected
+            }
+        }
+        if let auto = automaticPlanName?.trimmingCharacters(in: .whitespacesAndNewlines), !auto.isEmpty {
+            return auto
+        }
+        let key = providerKey?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if key == "muse-assist" {
+            return "free"
+        }
+        return nil
+    }
 }

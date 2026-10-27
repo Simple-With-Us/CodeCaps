@@ -657,10 +657,31 @@ public enum QuotaFreshnessRule {
     ///
     /// A window whose reset has passed is waiting for a fresh reading, so its
     /// old number says nothing about the plan now, and it cannot bind a cap.
-    public static func isFresh(observedAt: Date?, resetAt: Date?, now: Date) -> Bool {
-        guard isReadingRecent(observedAt: observedAt, now: now) else { return false }
+    ///
+    /// An exhausted allowance (at its cap) stays at cap until it resets:
+    /// collectors skip polling while spent to avoid quota-endpoint churn, so its
+    /// reading does not update every 30 minutes, but the plan remains capped
+    /// throughout the active cycle until `resetAt`.  A reading from before this
+    /// cycle began is not believed.
+    public static func isFresh(
+        observedAt: Date?,
+        resetAt: Date?,
+        now: Date,
+        isAtCap: Bool = false,
+        cadenceDuration: TimeInterval? = nil
+    ) -> Bool {
         if let resetAt, resetAt <= now { return false }
-        return true
+        if isReadingRecent(observedAt: observedAt, now: now) { return true }
+        if isAtCap, let resetAt, let observedAt {
+            let age = now.timeIntervalSince(observedAt)
+            guard age >= -maximumFutureSkew else { return false }
+            if let duration = cadenceDuration, duration.isFinite, duration > 0 {
+                let cycleStart = resetAt.addingTimeInterval(-duration)
+                return observedAt >= cycleStart.addingTimeInterval(-3_600)
+            }
+            return true
+        }
+        return false
     }
 
     /// Whether a window is a dead copy of a period that has already ended.
@@ -798,8 +819,9 @@ public enum QuotaCapRule {
     /// first snapshot with that id, which can be the wrong window when a
     /// section carries two snapshots with the same id.
     public static func bindingWindowIndex(in windows: [WindowFacts]) -> Int? {
+        let now = Date()
         let eligible = windows.indices.filter {
-            windows[$0].isFresh
+            (windows[$0].isFresh || (isAtCap(remainingPercent: windows[$0].remainingPercent) && windows[$0].resetAt != nil && windows[$0].resetAt! > now))
                 && !windows[$0].isMasked
                 && !windows[$0].isSupplementaryVideoQuota
                 && !windows[$0].isScopedPoolAllowance

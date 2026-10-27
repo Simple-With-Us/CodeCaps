@@ -228,6 +228,103 @@ final class LocalQuotaSnapshotTests: XCTestCase {
         XCTAssertEqual(QuotaWindowStatus.derived(remainingPercent: 20), .available)
     }
 
+    /// A window that is at its cap is not a window that must be hidden.
+    ///
+    /// The shared cap rule calls any reading at or under 0.5% spent, because
+    /// the interface rounds a reading to the nearest whole percent.  When
+    /// `skip` followed that rule, a window at 0.3% was dropped from the
+    /// picture in picture along with its cap line, while the menu bar still
+    /// announced the cap, so the same window was live in one place and gone
+    /// in the other.  `skip` keeps its own meaning:  a reading that must not
+    /// be believed.
+    func testSkipDoesNotFollowTheSharedCapThreshold() {
+        // At the cap by the shared rule, but a real reading that is not zero.
+        let nearZero = QuotaWindow(id: "near-zero", provider: "openai", label: "5h",
+                                   remainingPercent: 0.3, occurredAt: "2026-10-03T23:00:00Z")
+            .normalizedForExport()
+        XCTAssertTrue(nearZero.isExhausted, "0.3% is at the cap, so the window is spent")
+        XCTAssertEqual(nearZero.status, .exhausted)
+        XCTAssertFalse(nearZero.skip, "a window at 0.3% is at its cap, not a reading to hide")
+        XCTAssertNil(nearZero.skipReason)
+
+        // Exactly zero is still hidden, and still says why.
+        let zero = QuotaWindow(id: "zero", provider: "openai", label: "5h",
+                               remainingPercent: 0, occurredAt: "2026-10-03T23:00:00Z")
+            .normalizedForExport()
+        XCTAssertTrue(zero.isExhausted)
+        XCTAssertTrue(zero.skip, "an exact zero is the one reading that is not believed")
+        XCTAssertEqual(zero.skipReason, "quota exhausted")
+
+        // The provider's own flag still hides the window, and its own reason
+        // is never talked over.
+        let reported = QuotaWindow(id: "reported", provider: "openai", label: "5h",
+                                   remainingPercent: 15, isExhausted: true, status: .exhausted,
+                                   skip: true, skipReason: "session rejected",
+                                   occurredAt: "2026-10-03T23:00:00Z")
+            .normalizedForExport()
+        XCTAssertTrue(reported.skip)
+        XCTAssertEqual(reported.skipReason, "session rejected")
+
+        // A provider that calls a window exhausted while the reading says
+        // there is room left is believed:  only the provider knows why, and
+        // the reading cannot say.
+        let contradicted = QuotaWindow(id: "contradicted", provider: "openai", label: "5h",
+                                       remainingPercent: 15, isExhausted: true,
+                                       occurredAt: "2026-10-03T23:00:00Z")
+            .normalizedForExport()
+        XCTAssertTrue(contradicted.isExhausted)
+        XCTAssertTrue(contradicted.skip, "a provider's word against a reading is believed")
+        XCTAssertEqual(contradicted.skipReason, "quota exhausted", "a hidden window says why it is hidden")
+
+        // The same word beside a reading that already agrees with it settles
+        // nothing:  the window is spent either way, and it stays visible.
+        let agreed = QuotaWindow(id: "agreed", provider: "openai", label: "5h",
+                                 remainingPercent: 0.3, isExhausted: true,
+                                 occurredAt: "2026-10-03T23:00:00Z")
+            .normalizedForExport()
+        XCTAssertTrue(agreed.isExhausted)
+        XCTAssertFalse(agreed.skip)
+
+        // A provider that hides a window without saying why gets no reason
+        // invented for it:  the window has room left, so "quota exhausted"
+        // would be a false claim for a consumer that filters on the reason.
+        let silent = QuotaWindow(id: "silent", provider: "openai", label: "5h",
+                                 remainingPercent: 40, skip: true,
+                                 occurredAt: "2026-10-03T23:00:00Z")
+            .normalizedForExport()
+        XCTAssertTrue(silent.skip)
+        XCTAssertFalse(silent.isExhausted, "40% is not a spent window")
+        XCTAssertNil(silent.skipReason, "a reason must never claim an exhaustion the window does not have")
+
+        // An unreadable reading is not a spent one and raises nothing.
+        let unreadable = QuotaWindow(id: "unreadable", provider: "cursor", label: "Included plan",
+                                     remainingUnknown: true, occurredAt: "2026-10-03T23:00:00Z")
+            .normalizedForExport()
+        XCTAssertFalse(unreadable.isExhausted)
+        XCTAssertFalse(unreadable.skip)
+        XCTAssertNil(unreadable.skipReason)
+
+        // The derivation is applied twice on the display path,  the picture in
+        // picture rebuilds a snapshot from an already derived window,  so the
+        // second pass has to reach the same answer as the first.
+        for source in [
+            QuotaWindow(id: "a", provider: "openai", label: "5h", remainingPercent: 0.3,
+                        occurredAt: "2026-10-03T23:00:00Z"),
+            QuotaWindow(id: "b", provider: "openai", label: "5h", remainingPercent: 0,
+                        occurredAt: "2026-10-03T23:00:00Z"),
+            QuotaWindow(id: "c", provider: "openai", label: "5h", remainingPercent: 15,
+                        isExhausted: true, occurredAt: "2026-10-03T23:00:00Z"),
+            QuotaWindow(id: "d", provider: "openai", label: "5h", remainingPercent: 15,
+                        isExhausted: true, skip: true, skipReason: "session rejected",
+                        occurredAt: "2026-10-03T23:00:00Z"),
+            QuotaWindow(id: "e", provider: "cursor", label: "Included plan", remainingUnknown: true,
+                        occurredAt: "2026-10-03T23:00:00Z"),
+        ] {
+            let once = source.normalizedForExport()
+            XCTAssertEqual(once.normalizedForExport(), once, "\(source.id) is not stable under a second pass")
+        }
+    }
+
     func testExhaustedFlagHasTheSameStatusInExportAndDisplayAtNonzeroPercent() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
