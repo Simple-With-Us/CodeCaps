@@ -887,6 +887,13 @@ record_successful_ship() {
   printf '%s %s\n' "$now" "$head_sha" >"$path"
   chmod 600 "$path" 2>/dev/null || true
   log "ship-gate: recorded success ts=${now} sha=${head_sha:0:10} -> ${path}"
+  # --upload-only resolves no version (MARKETING/BUILD_NUM stay the "(from
+  # IPA)" placeholder): forwarding it would write the placeholder into the
+  # manifest, so only the ship-gate state above is recorded.
+  if [[ "${MARKETING:-}" == "(from IPA)" || "${BUILD_NUM:-}" == "(from IPA)" ]]; then
+    log "version-manifest: skipped (upload-only; the IPA already carries its version)"
+    return 0
+  fi
   # Public version manifest for the in-app update prompt.  Best-effort —
   # a publish miss must never fail a ship that already uploaded.
   if [[ -n "${BUNDLE_ID:-}" && -n "${MARKETING:-}" ]]; then
@@ -898,10 +905,20 @@ record_successful_ship() {
     [[ -n "${BUILD_NUM:-}" ]] && pub_args+=(--build "$BUILD_NUM")
     [[ -n "${apple_id:-}" ]] && pub_args+=(--apple-id "$apple_id")
     [[ -n "${display:-}" ]] && pub_args+=(--display-name "$display")
-    if bash "${FLEET_DIR}/publish-ios-versions.sh" "${pub_args[@]}" >/dev/null 2>&1; then
+    # Never discard the publisher's streams: a missed publish must name its
+    # cause (including the HTTP status) in the ship log, while staying
+    # non-fatal for a TestFlight upload that already succeeded (CC-202).
+    local publish_output publish_rc=0
+    publish_output="$(bash "${FLEET_DIR}/publish-ios-versions.sh" "${pub_args[@]}" 2>&1)" || publish_rc=$?
+    if [[ -n "$publish_output" ]]; then
+      while IFS= read -r publish_line; do
+        log "version-manifest: ${publish_line}"
+      done <<< "$publish_output"
+    fi
+    if [[ "$publish_rc" -eq 0 ]]; then
       log "version-manifest: published ${BUNDLE_ID} ${MARKETING}"
     else
-      log "warning: version-manifest publish failed (non-fatal)"
+      log "warning: version-manifest publish failed (non-fatal, rc=${publish_rc}); the TestFlight upload above still counts as shipped"
     fi
   fi
 }
