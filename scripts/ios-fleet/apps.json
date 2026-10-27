@@ -2,6 +2,7 @@
   "teamId": "CC8UTF7ATG",
   "apps": {
     "codecaps": {
+      "fixedMarketingVersion": "0.1.0",
       "displayName": "CodeCaps Companion",
       "bundleId": "com.simplewithus.codecaps.ios",
       "appleId": 6814623846,
