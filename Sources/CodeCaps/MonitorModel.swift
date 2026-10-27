@@ -2388,7 +2388,7 @@ final class MonitorModel: ObservableObject {
 
             // This Mac's own push fills in only a provider no local reader
             // produced — with local readers off, that is every provider.
-            let adopted = ownPush.filter { !localProviders.contains($0.canonicalProviderKey) }
+            let adopted = QuotaLocalScope.adoptedOwnPush(ownPush, localWindows: self.localWindows)
             // A window that carries no reading does not claim its provider.
             // This Mac's plan details are its own push coming back, and they
             // named the Antigravity key, so the fleet's live reading for
@@ -2405,7 +2405,7 @@ final class MonitorModel: ObservableObject {
                 return !localProviders.contains(key) && !adoptedReadingKeys.contains(key)
                     && expectedQuotaProviderKeys.contains(key)
             }
-            let merged = self.localWindows + adopted + fleetFallback
+            let merged = QuotaLocalScope.localWindowsForMerge(self.localWindows, adopted: adopted) + adopted + fleetFallback
             var origins: [String: QuotaOrigin] = [:]
             for key in Set(merged.map(\.canonicalProviderKey)) { origins[key] = .local }
             self.originByProvider = origins
@@ -2555,9 +2555,9 @@ final class MonitorModel: ObservableObject {
         // as a local reading here put the xAI row back to no reading at all
         // within a minute of the refresh fixing it (owner, 2026-10-23).
         let localProviders = QuotaLocalScope.providers(withReadings: localWindows)
-        let split = FleetOrigin.split(serverWindows, now: now)
+        let split = FleetOrigin.split(serverWindows, localWindows: localWindows, now: now)
         let ownPush = split.ownPush
-        let adopted = ownPush.filter { !localProviders.contains($0.canonicalProviderKey) }
+        let adopted = QuotaLocalScope.adoptedOwnPush(ownPush, localWindows: localWindows)
         // A window that carries no reading does not claim its provider, the
         // same rule the refresh path uses:  the file poll overwrites the
         // merged response, so a plan-details window that held the fleet's
@@ -2572,7 +2572,7 @@ final class MonitorModel: ObservableObject {
             return !localProviders.contains(key) && !adoptedReadingKeys.contains(key)
                 && expectedQuotaProviderKeys.contains(key)
         }
-        let merged = localWindows + adopted + fleetFallback
+        let merged = QuotaLocalScope.localWindowsForMerge(localWindows, adopted: adopted) + adopted + fleetFallback
         originByProvider = Dictionary(uniqueKeysWithValues: Set(merged.map(\.canonicalProviderKey)).map { ($0, .local) })
         response = QuotaResponse(generatedAt: ISO8601DateFormatter().string(from: now), windows: merged)
         if let writeForTesting = handoffWriteForTesting {
