@@ -952,7 +952,9 @@ struct PipWidgetView: View {
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(background.countdownInk)
                     .lineLimit(1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .minimumScaleFactor(0.7)
+                    .frame(maxWidth: .infinity)
+                    .multilineTextAlignment(.center)
             } else if atCap != nil, let extra {
                 HStack(spacing: PipMetrics.meterSpacing) {
                     Text("Using extra balance")
@@ -1057,18 +1059,24 @@ struct PipWidgetView: View {
                     .foregroundStyle(background.ink)
                     .lineLimit(1)
                 Spacer(minLength: 0)
-                Text(remaining.map { "\(Int($0.rounded()))%" } ?? "—")
-                    .font(.system(size: 10, weight: .bold, design: .rounded).monospacedDigit())
-                    .foregroundStyle(background.ink)
-                    .fixedSize()
-                if !cd.isEmpty {
-                    Text(cd)
-                        .font(isExtra ? .system(size: 9, weight: .bold) : .system(size: 9).monospacedDigit())
-                        .foregroundStyle(isExtra ? background.ink : background.countdownInk)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.75)
-                        .frame(width: countdownWidth, alignment: .trailing)
+                // Fixed combined width, leading-aligned: the countdown stays
+                // directly after the percent while the trailing column holds
+                // still as values tick, so rows stay aligned.
+                HStack(spacing: 6) {
+                    Text(remaining.map { "\(Int($0.rounded()))%" } ?? "—")
+                        .font(.system(size: 10, weight: .bold, design: .rounded).monospacedDigit())
+                        .foregroundStyle(background.ink)
+                        .fixedSize()
+                    if !cd.isEmpty {
+                        Text(cd)
+                            .font(isExtra ? .system(size: 9, weight: .bold) : .system(size: 9).monospacedDigit())
+                            .foregroundStyle(isExtra ? background.ink : background.countdownInk)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+                            .fixedSize()
+                    }
                 }
+                .frame(width: PipMetrics.percentWidth + 6 + countdownWidth, alignment: .leading)
             }
             QuotaUsageBar(
                 metrics: metrics,
@@ -1132,25 +1140,29 @@ struct PipWidgetView: View {
             )
             .frame(minWidth: PipMetrics.barMinWidth, maxWidth: .infinity)
 
-            Text(remaining.map { "\(Int($0.rounded()))%" } ?? "—")
-                .font(.system(size: 10, weight: .bold, design: .rounded).monospacedDigit())
-                .foregroundStyle(background.ink)
-                .lineLimit(1)
-                .fixedSize()
-                .frame(width: PipMetrics.percentWidth, alignment: .leading)
-                .help("Remaining: \(remaining.map { "\(Int($0.rounded()))%" } ?? "unknown")")
-
-            if detail.showsCountdown, !cd.isEmpty {
-                Text(cd)
-                    .font(isExtra
-                          ? .system(size: 9, weight: .bold)
-                          : .system(size: 9, weight: .medium).monospacedDigit())
-                    .foregroundStyle(isExtra ? background.ink : background.countdownInk)
+            // Fixed combined width, leading-aligned: the countdown stays
+            // directly after the percent while the bar keeps a uniform width
+            // across rows as values tick.
+            HStack(spacing: 6) {
+                Text(remaining.map { "\(Int($0.rounded()))%" } ?? "—")
+                    .font(.system(size: 10, weight: .bold, design: .rounded).monospacedDigit())
+                    .foregroundStyle(background.ink)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.75)
                     .fixedSize()
-                    .frame(width: countdownWidth, alignment: .trailing)
+                    .help("Remaining: \(remaining.map { "\(Int($0.rounded()))%" } ?? "unknown")")
+
+                if detail.showsCountdown, !cd.isEmpty {
+                    Text(cd)
+                        .font(isExtra
+                              ? .system(size: 9, weight: .bold)
+                              : .system(size: 9, weight: .medium).monospacedDigit())
+                        .foregroundStyle(isExtra ? background.ink : background.countdownInk)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                        .fixedSize()
+                }
             }
+            .frame(width: PipMetrics.percentWidth + 6 + countdownWidth, alignment: .leading)
         }
         .fixedSize(horizontal: false, vertical: true)
     }
