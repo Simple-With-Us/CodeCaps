@@ -44,7 +44,7 @@ final class PipUnifiedPoolTests: XCTestCase {
     func testPipWidgetXaiGetsReadingFromCursorPeer() {
         let cursorRow = makeDisplaySection(providerKey: "cursor", windowId: "local-mac:cursor:plan", rem: 31.5, observedAgo: 60)
         // xAI has a stale reading (observed 2 days ago)
-        let xaiStaleRow = makeDisplaySection(providerKey: "xai", windowId: "local-mac:xai:plan", rem: 10.0, observedAgo: 86400 * 2)
+        let xaiStaleRow = makeDisplaySection(providerKey: "xai", windowId: "local-mac:xai:subscription", rem: 10.0, observedAgo: 86400 * 2)
 
         let peerRows = [cursorRow, xaiStaleRow]
 

@@ -13,23 +13,81 @@ public enum UnifiedSubscriptionPool {
     /// The canonical provider keys that participate in this shared pool.
     public static let participantKeys: Set<String> = ["cursor", "xai", "grok", "grok-bot"]
 
+    /// The window ids that name the shared pool, per participant.
+    ///
+    /// Each entry is the id's last two components:  the segment that names
+    /// the window's family and the token that names the window inside it.
+    /// They are compared in full, so a window that merely mentions a pool
+    /// word, or whose id merely starts with a pool token, is not the pool.
+    ///
+    /// `plan` is the Cursor reader's included pool, `subscription` the Grok
+    /// reader's credits and the fleet's xAI collector's bucket, and `weekly`
+    /// and `gbu-weekly` the two Grok Bot readers' weekly meter.  The `unknown`
+    /// entries are the placeholders a reader writes when it could not read the
+    /// provider:  they carry no number, and the pool fills them in place
+    /// rather than adding a second row beside them.
+    ///
+    /// The xAI provider takes the `grok` segment as well:  the fleet files
+    /// the Grok credits payload under the xAI key, and the id it carries
+    /// names the reader that produced it.
+    ///
+    /// An id that is not listed here is not in the pool.  That is the safe
+    /// direction:  a window that cannot be named confidently stays out rather
+    /// than standing in for the pool reading.
+    private static let canonicalPoolWindowIDs: [String: Set<String>] = [
+        "cursor": ["cursor:plan", "cursor:unknown", "cursor:subscription"],
+        "xai": ["xai:subscription", "grok:subscription"],
+        "grok": ["grok:subscription", "grok:unknown"],
+        "grok-bot": ["grok-bot:weekly", "grok-bot:gbu-weekly", "grok-bot:unknown",
+                    "grok-bot:gbu-unknown", "grok-bot:subscription"],
+    ]
+
+    /// The labels of the windows that sit beside the pool rather than in it.
+    ///
+    /// They are matched in full.  The id is the identity of a window, so a
+    /// label that merely mentions one of these words no longer decides
+    /// anything on its own:  the id decides, and a label that is one of
+    /// these keeps its window out.
+    private static let nonCanonicalPoolLabels: Set<String> = [
+        // The plan metadata window this app writes for a provider it has no
+        // reading for.  It carries no reading at all.
+        "plan details",
+        // The meters that report money rather than the included pool.
+        "billing cycle spend",
+        "api credits",
+        // A per-account allowance, which is a separate quota of its own.
+        "account allowance",
+    ]
+
+    /// The cadence tokens of the windows that sit beside the pool.
+    ///
+    /// Cursor's plan spend meter reports the billing cycle and shares the
+    /// pool's own window id, so the cadence is what tells the two apart.
+    private static let nonCanonicalCadenceTokens: Set<String> = ["billing-cycle"]
+
+    /// The quota units that mean money rather than the included pool.
+    private static let currencyUnits: Set<String> = ["$", "usd", "us$"]
+
     /// Whether a window belongs to this shared subscription pool.
     public static func isPoolWindow(_ window: QuotaWindow) -> Bool {
         let key = window.canonicalProviderKey
         guard participantKeys.contains(key) else { return false }
         if window.isSupplementaryVideoQuota { return false }
-        let unit = window.quotaUnit?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-        if unit == "$" || unit == "usd" || unit == "us$" { return false }
-        let lowerId = window.id.lowercased()
-        let lowerLabel = window.label.lowercased()
-        // Exclude billing cycles and financial spend meters
-        if lowerId.contains("billing") || lowerLabel.contains("billing") { return false }
-        // Exclude API spend balances (e.g. xai:api-monthly)
-        if lowerId.contains("api") || lowerLabel.contains("api") { return false }
-        // Exclude metadata-only windows that carry no readings
-        if lowerId.contains("plan-metadata") || lowerLabel.contains("plan details") { return false }
-        // Exclude secondary multi-account windows
-        if lowerId.contains("account") || lowerLabel.contains("account") { return false }
+        // A financial spend meter is not the included pool.
+        if currencyUnits.contains(normalizedToken(window.quotaUnit)) { return false }
+        // A billing cycle is not the included pool either.
+        if nonCanonicalCadenceTokens.contains(normalizedToken(window.window)) { return false }
+        // The id names the window: its last two components must be exactly
+        // one of the canonical ids, matched in full.  Comparing in full is the
+        // point: a substring test let a window that merely mentioned "api"
+        // or "account" decide, and let an id that merely started with a pool
+        // word join the pool by accident.
+        guard let identity = poolIdentity(of: window.id),
+              canonicalPoolWindowIDs[key]?.contains(identity) == true
+        else { return false }
+        // A label this codebase mints for a window beside the pool keeps it
+        // out, even when its id names the pool.
+        guard !nonCanonicalPoolLabels.contains(normalizedToken(window.label)) else { return false }
         return true
     }
 
@@ -57,13 +115,22 @@ public enum UnifiedSubscriptionPool {
     }
 
     /// Canonical pool window ID for a given participant key.
+    ///
+    /// Every participant is named with the same `:subscription` token: the
+    /// four rows are one pool, and the rest of the app reads the pool by that
+    /// token.  `UsageMonitorPushMetadata.bucketId` files an xAI window under
+    /// the `xai:subscription` bucket only when the id's suffix is exactly
+    /// `subscription`, and `QuotaResponse.dedupedGrokSubscription` pairs a
+    /// Grok row with an xAI row only when both ids end in `:subscription`, so
+    /// a participant named `:plan` landed in a second Usage Monitor bucket
+    /// and escaped the dedupe.
     public static func canonicalWindowId(for providerKey: String) -> String {
         switch providerKey {
-        case "cursor": return "local-mac:cursor:plan"
-        case "xai": return "local-mac:xai:plan"
+        case "cursor": return "local-mac:cursor:subscription"
+        case "xai": return "local-mac:xai:subscription"
         case "grok": return "local-mac:grok:subscription"
-        case "grok-bot": return "local-mac:grok-bot:weekly"
-        default: return "local-mac:\(providerKey):plan"
+        case "grok-bot": return "local-mac:grok-bot:subscription"
+        default: return "local-mac:\(providerKey):subscription"
         }
     }
 
@@ -87,16 +154,20 @@ public enum UnifiedSubscriptionPool {
         // Participant IDs describe the target provider, never the donor. Keep
         // origin in dedicated fields; a remote donor is not this Mac's reader.
         let participantID = canonicalWindowId(for: providerKey)
+        let origin = source.producerInstanceId ?? source.machine ?? source.source ?? source.id
         if source.id.hasPrefix("local-mac:"), source.sourceApp == "local-mac" {
             copy.id = participantID
         } else {
-            let origin = source.producerInstanceId ?? source.machine ?? source.source ?? source.id
             let originKey = Data(origin.utf8).base64EncodedString()
             copy.id = participantID.replacingOccurrences(of: "local-mac:", with: "shared-pool:\(originKey):")
         }
         copy.label = canonicalWindowLabel(for: providerKey)
         copy.remainingUnknown = false
         copy.sourceApp = source.sourceApp
+        // The row the pool injects is a participant of the pool and it carries
+        // the collector that produced the number.  The dedupe must not read it
+        // as a second collector's report of the same pool.
+        copy.sharedPoolOrigin = origin
         return copy.normalizedForExport()
     }
 
@@ -109,6 +180,12 @@ public enum UnifiedSubscriptionPool {
 
         let bestDate = best.occurredDate ?? .distantPast
         let keysToUpdate = targetKeys ?? participantKeys
+        // The collector that produced the reading the pool shares.  It is
+        // resolved the way `adapt` resolves an origin, and it names the
+        // producer rather than the row: `source` keeps naming the row's own
+        // collector, so switching one producer off in Settings cannot hide
+        // the pool reading on every other row.
+        let donorOrigin = best.producerInstanceId ?? best.machine ?? best.source ?? best.id
 
         var result: [QuotaWindow] = []
         var participantsHandled = Set<String>()
@@ -124,22 +201,42 @@ public enum UnifiedSubscriptionPool {
                 } else {
                     // Update this window with the fresher reading from best
                     var updated = window
-                    updated.remainingPercent = best.remainingPercent
-                    updated.absoluteRemaining = best.absoluteRemaining
-                    updated.absoluteLimit = best.absoluteLimit
-                    updated.quotaUnit = best.quotaUnit
+                    // A donor that cannot report a value must not erase the
+                    // target's own.  `freshestReading` only accepts a donor
+                    // with a bounded percentage, so the percentage is always
+                    // there; the absolute amounts and the unit are not, and a
+                    // target that knows its own limit keeps it.
+                    updated.remainingPercent = best.remainingPercent ?? window.remainingPercent
+                    updated.absoluteRemaining = best.absoluteRemaining ?? window.absoluteRemaining
+                    updated.absoluteLimit = best.absoluteLimit ?? window.absoluteLimit
+                    updated.quotaUnit = best.quotaUnit ?? window.quotaUnit
                     updated.status = best.status
                     updated.isExhausted = best.isExhausted
                     updated.resetAt = best.resetAt ?? window.resetAt
                     updated.periodStart = best.periodStart ?? window.periodStart
+                    // The number is the pool's, so it was observed when the
+                    // donor observed it, and the row is dated then.  A row
+                    // that kept its own older date would read as stale while
+                    // showing a live number.
                     updated.occurredAt = best.occurredAt
-                    updated.source = best.source
-                    updated.sourceApp = best.sourceApp ?? window.sourceApp ?? "local-mac"
+                    // The row keeps its own collector.  The number is the
+                    // pool's, but the row is still this provider's, and
+                    // `disabledSources` switches off one collector at a time:
+                    // a shared row that wore the donor's name disappeared
+                    // from every other row when that collector was switched
+                    // off.
+                    updated.source = window.source ?? best.source
+                    updated.sourceApp = window.sourceApp ?? best.sourceApp ?? "local-mac"
                     updated.planName = window.planName ?? best.planName
                     updated.window = best.window ?? window.window ?? "weekly"
                     updated.remainingUnknown = false
                     updated.skip = best.skip
                     updated.skipReason = best.skipReason
+                    // The row now shows the pool's reading, so it names the
+                    // collector that produced it.  The dedupe leaves the
+                    // pool's own rows alone, so the Grok and xAI rows of one
+                    // pool cannot tie on time and lose one of themselves.
+                    updated.sharedPoolOrigin = donorOrigin
                     result.append(updated.normalizedForExport())
                 }
             } else {
@@ -155,5 +252,26 @@ public enum UnifiedSubscriptionPool {
         }
 
         return result
+    }
+
+    // MARK: - Canonical matching
+
+    /// The provider and the token a window id names.
+    ///
+    /// An id carries an optional source prefix (`local-mac:grok:subscription`,
+    /// `shared-pool:<origin>:grok:subscription`), so the last two components
+    /// are the identity, exactly as `QuotaResponse.dedupedGrokSubscription`
+    /// reads them.
+    private static func poolIdentity(of id: String) -> String? {
+        let parts = id.split(separator: ":")
+        guard parts.count >= 2 else { return nil }
+        return "\(parts[parts.count - 2]):\(parts[parts.count - 1])"
+    }
+
+    /// A comparable form of a label, unit or token: trimmed and lowercased,
+    /// so the canonical sets are compared against the value the reader wrote
+    /// rather than against its spacing.
+    private static func normalizedToken(_ value: String?) -> String {
+        (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 }

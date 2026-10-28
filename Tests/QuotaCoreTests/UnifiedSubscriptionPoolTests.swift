@@ -30,7 +30,7 @@ final class UnifiedSubscriptionPoolTests: XCTestCase {
 
         XCTAssertNotNil(byProvider["xai"]?.first, "xAI must receive an adapted pool window")
         XCTAssertEqual(byProvider["xai"]?.first?.remainingPercent, 31.5)
-        XCTAssertEqual(byProvider["xai"]?.first?.id, "local-mac:xai:plan")
+        XCTAssertEqual(byProvider["xai"]?.first?.id, "local-mac:xai:subscription")
 
         XCTAssertNotNil(byProvider["grok"]?.first, "Grok must receive an adapted pool window")
         XCTAssertEqual(byProvider["grok"]?.first?.remainingPercent, 31.5)
@@ -165,7 +165,7 @@ final class UnifiedSubscriptionPoolTests: XCTestCase {
         let adapted = UnifiedSubscriptionPool.adapt(remote, for: "xai")
         XCTAssertNotEqual(adapted.id, remote.id)
         XCTAssertFalse(adapted.id.hasPrefix("local-mac:"))
-        XCTAssertTrue(adapted.id.hasSuffix(":xai:plan"))
+        XCTAssertTrue(adapted.id.hasSuffix(":xai:subscription"))
         XCTAssertEqual(adapted.sourceApp, remote.sourceApp)
         XCTAssertEqual(adapted.source, remote.source)
         XCTAssertEqual(adapted.canonicalProviderKey, "xai")
@@ -178,7 +178,7 @@ final class UnifiedSubscriptionPoolTests: XCTestCase {
         let adapted = UnifiedSubscriptionPool.adapt(remote, for: "xai")
         XCTAssertNotEqual(adapted.id, remote.id)
         XCTAssertFalse(adapted.id.hasPrefix("local-mac:"))
-        XCTAssertTrue(adapted.id.hasSuffix(":xai:plan"))
+        XCTAssertTrue(adapted.id.hasSuffix(":xai:subscription"))
         XCTAssertEqual(adapted.machine, remote.machine)
         XCTAssertEqual(adapted.sourceApp, remote.sourceApp)
     }
@@ -209,4 +209,193 @@ final class UnifiedSubscriptionPoolTests: XCTestCase {
         XCTAssertNil(UnifiedSubscriptionPool.adapt(remote, for: "cursor").sourceApp)
     }
 
+    // MARK: - The pool window is named by its id, in full
+
+    /// The pool window is identified by an exact id, never by a substring of
+    /// one.
+    ///
+    /// The old rule tested the id for words like "api" and "account", so an id
+    /// that merely started with a pool token joined the pool, and a window
+    /// nobody could name stood in for the pool reading.
+    func testAnIdThatOnlyStartsWithAPoolTokenIsNotAPoolWindow() {
+        let lookalike = makeWindow(providerKey: "grok", id: "local-mac:grok:subscription-extra", rem: 12)
+        XCTAssertFalse(UnifiedSubscriptionPool.isPoolWindow(lookalike),
+                       "an id that only starts with a pool token is not the pool window")
+    }
+
+    /// Cursor's plan spend meter carries the pool's own window id and the
+    /// pool's own label.  The billing cycle is what tells the two apart.
+    func testABillingCycleWindowIsNotAPoolWindowEvenWithoutACurrencyUnit() {
+        var billing = makeWindow(providerKey: "cursor", id: "local-mac:cursor:plan", rem: 12)
+        billing.label = "Included plan"
+        billing.window = "billing-cycle"
+        XCTAssertFalse(UnifiedSubscriptionPool.isPoolWindow(billing),
+                       "a billing cycle is not the included pool")
+    }
+
+    /// A per-account allowance is a separate quota, and it must never be
+    /// overwritten by the pool's reading.
+    func testAPerAccountAllowanceStaysOutOfThePool() {
+        var account = makeWindow(providerKey: "grok-bot", id: "local-mac:grok-bot:gbu-weekly:alice", rem: 12)
+        account.label = "Grok Bot weekly (alice)"
+        XCTAssertFalse(UnifiedSubscriptionPool.isPoolWindow(account),
+                       "a per-account allowance is not the pool window")
+    }
+
+    /// The plan details window carries no reading at all.
+    func testThePlanDetailsWindowStaysOutOfThePool() {
+        let details = QuotaWindow(
+            id: "local-mac:xai:plan-metadata",
+            provider: "xAI",
+            providerKey: "xai",
+            providerLabel: "xAI",
+            label: "Plan Details",
+            remainingUnknown: true,
+            occurredAt: iso.string(from: now),
+            source: "CodeCaps Settings"
+        )
+        XCTAssertFalse(UnifiedSubscriptionPool.isPoolWindow(details))
+    }
+
+    /// The pool's own windows are still in the pool.
+    func testTheCanonicalPoolWindowsArePoolWindows() {
+        XCTAssertTrue(UnifiedSubscriptionPool.isPoolWindow(makeWindow(providerKey: "cursor", id: "local-mac:cursor:plan", rem: 40)))
+        XCTAssertTrue(UnifiedSubscriptionPool.isPoolWindow(makeWindow(providerKey: "grok", id: "local-mac:grok:subscription", rem: 40)))
+        XCTAssertTrue(UnifiedSubscriptionPool.isPoolWindow(makeWindow(providerKey: "xai", id: "xai:subscription", rem: 40)))
+        XCTAssertTrue(UnifiedSubscriptionPool.isPoolWindow(makeWindow(providerKey: "grok-bot", id: "local-mac:grok-bot:weekly", rem: 40)))
+        XCTAssertTrue(UnifiedSubscriptionPool.isPoolWindow(makeWindow(providerKey: "grok-bot", id: "local-mac:grok-bot:gbu-weekly", rem: 40)))
+    }
+
+    // MARK: - One name for the pool
+
+    /// Every participant is named with the same token, because that is the
+    /// token the rest of the app reads the pool by.
+    ///
+    /// `UsageMonitorPushMetadata.bucketId` files an xAI window under the
+    /// `xai:subscription` bucket only when the id's suffix is exactly
+    /// `subscription`, and `QuotaResponse.dedupedGrokSubscription` pairs a
+    /// Grok row with an xAI row only when both ids end in `:subscription`.
+    func testEveryParticipantIsNamedWithTheSubscriptionToken() {
+        XCTAssertEqual(UnifiedSubscriptionPool.canonicalWindowId(for: "cursor"), "local-mac:cursor:subscription")
+        XCTAssertEqual(UnifiedSubscriptionPool.canonicalWindowId(for: "xai"), "local-mac:xai:subscription")
+        XCTAssertEqual(UnifiedSubscriptionPool.canonicalWindowId(for: "grok"), "local-mac:grok:subscription")
+        XCTAssertEqual(UnifiedSubscriptionPool.canonicalWindowId(for: "grok-bot"), "local-mac:grok-bot:subscription")
+    }
+
+    /// The xAI participant row lands in the Usage Monitor bucket the fleet's
+    /// xAI collector writes, so the pool is one bucket and not two.
+    func testTheXaiParticipantRowLandsInTheXaiSubscriptionBucket() throws {
+        let cursor = makeWindow(providerKey: "cursor", id: "local-mac:cursor:plan", rem: 31.5)
+        let shared = UnifiedSubscriptionPool.share(windows: [cursor], now: now,
+                                                   targetKeys: UnifiedSubscriptionPool.participantKeys)
+        let xai = try XCTUnwrap(shared.first { $0.canonicalProviderKey == "xai" })
+        XCTAssertEqual(UsageMonitorPushMetadata.bucketId(for: xai), "xai:subscription")
+    }
+
+    // MARK: - The pool's own rows are not duplicates of each other
+
+    /// The Grok row and the xAI row of one shared pool must both survive the
+    /// Grok/xAI dedupe.
+    ///
+    /// The pool stamps the donor's time on every participant, so the two rows
+    /// tie, and the tie used to drop one of them from the dashboard with the
+    /// live reading on it.
+    func testBothPoolParticipantsSurviveTheGrokXaiDedupe() {
+        let grok = makeWindow(providerKey: "grok", id: "local-mac:grok:subscription", rem: 40, observedAgo: 3600)
+        let xai = makeWindow(providerKey: "xai", id: "xai:subscription", rem: 70, observedAgo: 60)
+        let shared = UnifiedSubscriptionPool.share(windows: [grok, xai], now: now)
+
+        let deduped = QuotaResponse.dedupedGrokSubscription(shared)
+        XCTAssertEqual(deduped.count, 2, "the pool's own rows must not be deduped against each other")
+        XCTAssertEqual(Set(deduped.map(\.canonicalProviderKey)), ["grok", "xai"])
+    }
+
+    /// Two collectors reporting the same pool are still deduped: the dedupe
+    /// exists so the two rows cannot disagree about one pool.
+    func testTwoCollectorsReportingOnePoolAreStillDeduped() {
+        let grok = makeWindow(providerKey: "grok", id: "local-mac:grok:subscription", rem: 40, observedAgo: 3600)
+        let xai = makeWindow(providerKey: "xai", id: "xai:subscription", rem: 70, observedAgo: 60)
+        let deduped = QuotaResponse.dedupedGrokSubscription([grok, xai])
+        XCTAssertEqual(deduped.count, 1, "two reports of one pool are still one row")
+    }
+
+    // MARK: - A donor without a value erases nothing
+
+    /// A donor that cannot report an amount must not erase the target's own.
+    ///
+    /// `freshestReading` only accepts a donor with a bounded percentage, so
+    /// the percentage is always there, but the absolute amounts and the unit
+    /// are not, and a target that knows its own limit kept it.
+    func testADonorWithoutAbsoluteValuesDoesNotEraseTheTargetsOwn() {
+        var donor = makeWindow(providerKey: "cursor", id: "local-mac:cursor:plan", rem: 40, observedAgo: 30)
+        donor.absoluteRemaining = nil
+        donor.absoluteLimit = nil
+        donor.quotaUnit = nil
+        var target = makeWindow(providerKey: "xai", id: "xai:subscription", rem: 10, observedAgo: 3600)
+        target.absoluteRemaining = 250
+        target.absoluteLimit = 500
+        target.quotaUnit = "credits"
+
+        let shared = UnifiedSubscriptionPool.share(windows: [donor, target], now: now)
+        let xai = shared.first { $0.canonicalProviderKey == "xai" }
+        XCTAssertEqual(xai?.remainingPercent, 40, "the pool's percentage reaches the row")
+        XCTAssertEqual(xai?.absoluteRemaining, 250, "the target keeps its own remaining amount")
+        XCTAssertEqual(xai?.absoluteLimit, 500, "the target keeps its own limit")
+        XCTAssertEqual(xai?.quotaUnit, "credits", "the target keeps its own unit")
+    }
+
+    /// A donor that does report an amount replaces the target's.
+    func testADonorWithAbsoluteValuesReplacesTheTargetsOwn() {
+        var donor = makeWindow(providerKey: "cursor", id: "local-mac:cursor:plan", rem: 40, observedAgo: 30)
+        donor.absoluteRemaining = 40
+        donor.absoluteLimit = 100
+        donor.quotaUnit = "credits"
+        var target = makeWindow(providerKey: "xai", id: "xai:subscription", rem: 10, observedAgo: 3600)
+        target.absoluteRemaining = 250
+        target.absoluteLimit = 500
+        target.quotaUnit = "credits"
+
+        let shared = UnifiedSubscriptionPool.share(windows: [donor, target], now: now)
+        let xai = shared.first { $0.canonicalProviderKey == "xai" }
+        XCTAssertEqual(xai?.absoluteRemaining, 40)
+        XCTAssertEqual(xai?.absoluteLimit, 100)
+    }
+
+    // MARK: - Each row keeps its own collector
+
+    /// The shared reading keeps the row's own collector name.
+    ///
+    /// A row that wore the donor's name was hidden from every other row when
+    /// that collector was switched off in Settings, because the rows are
+    /// filtered by `source`.
+    func testASharedRowKeepsItsOwnCollectorName() {
+        var donor = makeWindow(providerKey: "grok-bot", id: "local-mac:grok-bot:weekly", rem: 44, observedAgo: 30)
+        donor.source = "gbu"
+        var target = makeWindow(providerKey: "cursor", id: "local-mac:cursor:plan", rem: 10, observedAgo: 3600)
+        target.source = "Cursor"
+        target.sourceApp = "local-mac"
+
+        let shared = UnifiedSubscriptionPool.share(windows: [donor, target], now: now)
+        let cursor = shared.first { $0.canonicalProviderKey == "cursor" }
+        XCTAssertEqual(cursor?.source, "Cursor", "the row keeps the collector it names")
+        XCTAssertEqual(cursor?.sourceApp, "local-mac", "the row keeps the app it was read by")
+        XCTAssertEqual(cursor?.sharedPoolOrigin, "gbu", "the producer of the number is kept as provenance")
+    }
+
+    /// The producer identity of a remote donor is kept as provenance, and the
+    /// installation identity of the row is left alone.
+    func testASharedRowKeepsTheDonorsProducerIdentityAsProvenance() {
+        var donor = makeWindow(providerKey: "grok", id: "studio:grok:subscription", rem: 44, observedAgo: 30)
+        donor.sourceApp = "codecaps"
+        donor.producerInstanceId = "studio-instance"
+        var target = makeWindow(providerKey: "cursor", id: "local-mac:cursor:plan", rem: 10, observedAgo: 3600)
+        target.source = "Cursor"
+
+        let shared = UnifiedSubscriptionPool.share(windows: [donor, target], now: now)
+        let cursor = shared.first { $0.canonicalProviderKey == "cursor" }
+        XCTAssertEqual(cursor?.sharedPoolOrigin, "studio-instance")
+        XCTAssertEqual(cursor?.source, "Cursor")
+        XCTAssertNil(cursor?.producerInstanceId,
+                     "the row keeps the installation identity the fleet rules read")
+    }
 }
