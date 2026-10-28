@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 @testable import CodeCaps
 
@@ -46,30 +47,26 @@ final class PipMetricsTests: XCTestCase {
     /// thing to go (after things have compressed as much as allowable) is the
     /// platform name ASSUMING WE FINALLY CAN MAKE THE LOGOS ACTUALLY SHOW UP".
     ///
-    /// The logo and the name used to drop together at `minimal`, so there was
-    /// nothing left to identify the row.  The name now goes first, at its own
-    /// `logoOnly` level, and the logo survives until the identity ladder runs
-    /// out entirely.
+    /// The logo and the name used to drop together, so there was nothing left
+    /// to identify the row.  The name now goes first, at its own `logoOnly`
+    /// level, and the logo survives all the way to the floor.
     func testThePlatformNameDropsBeforeTheLogo() {
         XCTAssertTrue(PipMetrics.Detail.logoOnly.showsProviderLogo,
                       "the logo must still identify the row at this level")
         XCTAssertFalse(PipMetrics.Detail.logoOnly.showsTitle,
                        "the name is the first thing to go")
 
-        // And there is a real width band that selects it, between the named
-        // single-meter row and the identity-free minimal one.
+        // And there is a real width band that selects it.
         XCTAssertEqual(PipMetrics.detail(forWidth: PipMetrics.padding * 2 + PipMetrics.logoOnlyMinWidth),
                        .logoOnly)
-        XCTAssertEqual(PipMetrics.detail(forWidth: PipMetrics.padding * 2 + PipMetrics.minimalMinWidth),
-                       .minimal)
-        XCTAssertFalse(PipMetrics.Detail.minimal.showsProviderLogo,
-                       "the logo goes only after the name, at the identity-free end")
+        XCTAssertEqual(PipMetrics.detail(forWidth: PipMetrics.padding * 2 + PipMetrics.logoBareMetersMinWidth),
+                       .logoBareMeters)
 
-        // Nothing above logoOnly may lose the logo while keeping two meters.
-        for level in [PipMetrics.Detail.full, .logoWithFullCountdown, .logoWithCompactCountdown, .logoOnly] {
-            if level.maxMeters > 1 || level == .logoOnly {
-                XCTAssertTrue(level.showsProviderLogo, "\(level) must keep the logo")
-            }
+        // Owner 2026-10-28: the logo is 14 points and the name is up to 150.
+        // The meters need the room more, but a row with no logo is a row
+        // nobody can identify, so the logo survives every level.
+        for level in PipMetrics.Detail.allCases {
+            XCTAssertTrue(level.showsProviderLogo, "\(level) must keep the logo")
         }
     }
 
@@ -190,14 +187,162 @@ final class PipMetricsTests: XCTestCase {
     }
 
     func testNarrowWindowStillShowsBarAndPercent() {
-        // The owner's floor: only the bars and the percentages remain.
+        // The owner's floor: the logo, one bar and its percentage remain.
         let detail = PipMetrics.detail(forWidth: PipMetrics.minWidth)
-        XCTAssertEqual(detail, .singleBar)
+        XCTAssertEqual(detail, .logoSingleMeter)
         XCTAssertEqual(detail.maxMeters, 1)
         XCTAssertFalse(detail.showsCountdown)
         XCTAssertFalse(detail.showsCadence)
         XCTAssertFalse(detail.showsTitle)
-        XCTAssertFalse(detail.showsProviderLogo)
+        XCTAssertTrue(detail.showsProviderLogo,
+                      "the logo must survive to the smallest window the owner can drag to")
+    }
+
+    /// Owner 2026-10-28: "the smallest PiP window sizes need rethinking like
+    /// those bars can be closer and logo can fit in 3rd screenshot".
+    func testTheSmallestWindowStillCarriesTheLogoAndTwoBareMeters() {
+        let bare = PipMetrics.padding * 2 + PipMetrics.logoBareMetersMinWidth
+        let detail = PipMetrics.detail(forWidth: bare)
+        XCTAssertEqual(detail, .logoBareMeters)
+        XCTAssertTrue(detail.showsProviderLogo)
+        XCTAssertEqual(detail.maxMeters, 2)
+        XCTAssertFalse(detail.showsCadence, "the caption is the first thing a bare meter drops")
+        XCTAssertFalse(detail.showsCountdown)
+
+        // The bars sit closer together than they used to: a bare meter has no
+        // caption to be separated from, so it starts straight at the bar.
+        XCTAssertLessThan(PipMetrics.bareMeterMinWidth, PipMetrics.meterMinWidth)
+        XCTAssertLessThan(PipMetrics.logoBareMetersMinWidth, PipMetrics.logoOnlyMinWidth)
+    }
+
+    /// The meter's reserved width has to match what the meter draws, or the
+    /// ladder promises room the row does not have.
+    func testMeterWidthsMatchTheMetresTheyReserve() {
+        XCTAssertEqual(PipMetrics.meterMinWidth,
+                       PipMetrics.cadenceWidth + PipMetrics.meterSpacing + PipMetrics.barMinWidth
+                       + PipMetrics.meterSpacing + PipMetrics.percentWidth)
+        XCTAssertEqual(PipMetrics.meterMinWidthWithCountdown,
+                       PipMetrics.meterMinWidth + PipMetrics.countdownGap + PipMetrics.countdownWidth)
+        XCTAssertEqual(PipMetrics.meterMinWidthWithCompactCountdown,
+                       PipMetrics.meterMinWidth + PipMetrics.countdownGap + PipMetrics.countdownCompactWidth)
+        XCTAssertEqual(PipMetrics.bareMeterMinWidth,
+                       PipMetrics.barMinWidth + PipMetrics.meterSpacing + PipMetrics.percentWidth)
+    }
+
+    /// A row that publishes one meter must not land on the level that draws
+    /// two: that level would render exactly like the level below it.
+    func testNoTwoLevelsRenderTheSameRow() {
+        // The bare two-meter level and the one-meter level differ only by how
+        // many meters they draw, so for a one-meter row they are the same row.
+        XCTAssertEqual(PipMetrics.rowWidth(for: .logoBareMeters, meterCount: 1),
+                       PipMetrics.rowWidth(for: .logoSingleMeter, meterCount: 1),
+                       "these two levels would render the same row, which is why one of them is skipped")
+
+        for width in stride(from: PipMetrics.minWidth, through: PipMetrics.maxWidth, by: 1) {
+            let one = PipMetrics.detail(forWidth: width, meterCount: 1)
+            XCTAssertNotEqual(one, .logoBareMeters,
+                              "the two-meter level must be skipped for a row that publishes one meter")
+            XCTAssertTrue(one.showsProviderLogo)
+            XCTAssertLessThanOrEqual(one.maxMeters, 2)
+        }
+        XCTAssertNotEqual(PipMetrics.detail(forWidth: PipMetrics.padding * 2 + PipMetrics.logoBareMetersMinWidth,
+                                             meterCount: 1),
+                          .logoBareMeters)
+        // And the two-meter row does get it, at the same width.
+        XCTAssertEqual(PipMetrics.detail(forWidth: PipMetrics.padding * 2 + PipMetrics.logoBareMetersMinWidth,
+                                          meterCount: 2),
+                       .logoBareMeters)
+    }
+
+    /// Owner 2026-10-28: "lets make showing the name (when it fits) optional in
+    /// PiP settings since I'd rather never show the name instead of showing it
+    /// when in PiP so that more room for other parts."
+    func testProviderNamesCanBeSuppressedEntirely() {
+        for width in stride(from: PipMetrics.minWidth, through: PipMetrics.maxWidth, by: 3) {
+            let detail = PipMetrics.detail(forWidth: width, allowsTitle: false)
+            XCTAssertNotEqual(detail, .full,
+                              "a row that may not print its name must never pick the level that carries it")
+            XCTAssertFalse(detail.showsTitle)
+            XCTAssertTrue(detail.showsProviderLogo,
+                          "the logo is still worth 14 points, even with no name")
+        }
+        // With no name to carry, the ladder starts one rung lower, so the same
+        // panel buys more meter.
+        XCTAssertEqual(PipMetrics.detail(forWidth: PipMetrics.padding * 2 + PipMetrics.fullMinWidth,
+                                          allowsTitle: false),
+                       .logoWithFullCountdown)
+        XCTAssertEqual(PipMetrics.detail(forWidth: PipMetrics.padding * 2 + PipMetrics.logoWithCountdownMinWidth,
+                                          allowsTitle: false),
+                       .logoWithFullCountdown)
+    }
+
+    /// With no name on the row, the strip starts scrolling sooner: the row it
+    /// has to fit is narrower.
+    func testTheHorizontalThresholdFollowsTheNameSetting() {
+        let namedThreshold = PipMetrics.padding * 2
+            + PipMetrics.rowWidth(for: .full) + PipMetrics.horizontalPeek
+        let unnamedThreshold = PipMetrics.padding * 2
+            + PipMetrics.rowWidth(for: .logoWithFullCountdown) + PipMetrics.horizontalPeek
+        XCTAssertLessThan(unnamedThreshold, namedThreshold)
+        XCTAssertFalse(PipMetrics.rowsScrollHorizontally(forWidth: unnamedThreshold - 1, allowsTitle: false))
+        XCTAssertTrue(PipMetrics.rowsScrollHorizontally(forWidth: unnamedThreshold, allowsTitle: false))
+    }
+
+    /// Owner 2026-10-28: "there should not be 5-hour and 7-day since already
+    /// says 5h and 7d".  A label that only repeats the caption is dropped; a
+    /// label that names something the caption cannot is kept.
+    func testARedundantWindowLabelIsDroppedButANameIsKept() {
+        XCTAssertTrue(detailLabelRedundant(caption: "5h", label: "5-hour"))
+        XCTAssertTrue(detailLabelRedundant(caption: "7d", label: "7-day"))
+        XCTAssertTrue(detailLabelRedundant(caption: "5h", label: "5h"))
+        XCTAssertTrue(detailLabelRedundant(caption: "5h", label: ""))
+        XCTAssertFalse(detailLabelRedundant(caption: "5h", label: "Sonnet"))
+        XCTAssertFalse(detailLabelRedundant(caption: "7d", label: "weekly"))
+        XCTAssertFalse(detailLabelRedundant(caption: "Quota", label: "Included plan"))
+    }
+
+    /// A label that merely starts with the caption's number is not a repeat of
+    /// the caption.  "5 GB bonus" beside a "5h" caption names something the
+    /// caption cannot, so it stays (review finding, 2026-10-28).
+    func testALabelThatOnlySharesTheCaptionDigitsIsKept() {
+        XCTAssertFalse(detailLabelRedundant(caption: "5h", label: "5 GB bonus"))
+        XCTAssertFalse(detailLabelRedundant(caption: "1m", label: "1M tokens"))
+        XCTAssertFalse(detailLabelRedundant(caption: "5h", label: "5-hour reset"))
+        XCTAssertTrue(detailLabelRedundant(caption: "5h", label: "5 hour"))
+        XCTAssertTrue(detailLabelRedundant(caption: "5h", label: "5h"))
+        XCTAssertTrue(detailLabelRedundant(caption: "7d", label: "7-day"))
+    }
+
+    /// The percentage column has to hold "100%" at 10pt bold monospaced: the
+    /// percentage is a fixed-size text, so a column narrower than the text
+    /// clips its last digit (review finding, 2026-10-28).
+    func testThePercentColumnHoldsOneHundredPercent() {
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .bold)
+        let width = ("100%" as NSString).size(withAttributes: [.font: font]).width
+        XCTAssertLessThanOrEqual(width, PipMetrics.percentWidth,
+                                 "the percent column must hold the widest percentage")
+    }
+
+    /// The words beside a capped row's extra balance have to still read at the
+    /// narrowest width they are allowed (review finding, 2026-10-28).
+    func testTheExtraBalanceWordsStillReadAtTheirSmallest() {
+        let font = NSFont.systemFont(ofSize: 10, weight: .semibold)
+        let width = ("Using extra balance" as NSString).size(withAttributes: [.font: font]).width
+        XCTAssertLessThanOrEqual(width * 0.7, PipMetrics.extraBalanceTextMinWidth,
+                                 "the words must still read at 70% of their full width")
+    }
+
+    /// One line of the expanded detail has to fit the smallest panel the owner
+    /// can drag the HUD to, and the countdown gives way there (review finding,
+    /// 2026-10-28).
+    func testTheDetailLineFitsTheSmallestPanel() {
+        let smallest = PipMetrics.minWidth - PipMetrics.padding * 2
+        XCTAssertLessThanOrEqual(PipMetrics.detailRowMinWidth, smallest,
+                                 "the narrowest detail line must fit the smallest panel")
+        XCTAssertGreaterThan(PipMetrics.detailRowMinWidthWithCountdown, smallest,
+                             "the countdown cannot fit the smallest panel, so it is the first thing to go")
+        XCTAssertEqual(PipMetrics.detailRowMinWidthWithCountdown,
+                       PipMetrics.detailRowMinWidth + PipMetrics.meterSpacing + PipMetrics.countdownWidth)
     }
 
     func testTwoMeterRowsStayOnScreenAtFullDetail() {
@@ -213,7 +358,7 @@ final class PipMetricsTests: XCTestCase {
     func testSingleMeterRowOpensAtAReadableWidth() {
         let fit = PipMetrics.fitSize(rowCount: 1, hasDualMeterRow: false)
         XCTAssertGreaterThanOrEqual(fit.width, PipMetrics.singleMeterDefaultWidth)
-        XCTAssertEqual(PipMetrics.detail(forWidth: fit.width), .full)
+        XCTAssertEqual(PipMetrics.detail(forWidth: fit.width, meterCount: 1), .full)
     }
 
     func testFullProviderNamesFitWithoutTruncation() {

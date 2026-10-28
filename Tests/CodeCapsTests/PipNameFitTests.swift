@@ -164,8 +164,8 @@ final class PipNameFitTests: XCTestCase {
             PipMetrics.rowWidth(for: .full, titleWidth: titleWidth, meterCount: 3),
             PipMetrics.rowWidth(for: .full, titleWidth: titleWidth, meterCount: 2))
         XCTAssertEqual(
-            PipMetrics.rowWidth(for: .singleMeter, titleWidth: titleWidth, meterCount: 3),
-            PipMetrics.rowWidth(for: .singleMeter, titleWidth: titleWidth, meterCount: 1))
+            PipMetrics.rowWidth(for: .logoSingleMeter, titleWidth: titleWidth, meterCount: 3),
+            PipMetrics.rowWidth(for: .logoSingleMeter, titleWidth: titleWidth, meterCount: 1))
 
         let rowWidth = PipMetrics.rowWidth(
             for: .full, hasFlame: true, titleWidth: titleWidth, meterCount: 1,
