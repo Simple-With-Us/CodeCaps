@@ -892,8 +892,8 @@ final class CompanionModelTests: XCTestCase {
             "the phone's payload must carry the installation that wrote it"
         )
         XCTAssertTrue(
-            source.contains("payloadProducerInstanceId = envelope.producerInstanceId"),
-            "the phone must remember the installation that wrote the payload it is reading"
+            source.contains("resolvedPayloadProducerInstanceId"),
+            "the phone must infer the owning installation when the envelope omits it"
         )
         XCTAssertTrue(
             source.contains("ownInstanceId: payloadProducerInstanceId"),

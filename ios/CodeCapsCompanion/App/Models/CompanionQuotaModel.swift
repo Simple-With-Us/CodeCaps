@@ -873,6 +873,8 @@ public final class CompanionQuotaModel: ObservableObject {
     /// not say, and the phone then keeps the older behaviour rather than
     /// guessing which installation it is reading for.
     private var payloadProducerInstanceId: String?
+    /// Provider keys this Mac currently reads locally in the snapshot being parsed.
+    private var snapshotLocalReaderProviders: Set<String> = []
     @Published public private(set) var tokenStorageError: String?
     private let tokenStore: CompanionReadTokenStore
 
@@ -1629,14 +1631,71 @@ public final class CompanionQuotaModel: ObservableObject {
         }
     }
 
+    private static func resolvedPayloadProducerInstanceId(
+        envelope: WireEnvelope,
+        rawWindows: [WireRawWindow]
+    ) -> String? {
+        if let trimmed = envelope.producerInstanceId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !trimmed.isEmpty {
+            return trimmed
+        }
+        let prefix = QuotaWindowVocabulary.localDeviceWindowPrefix
+        let instances = rawWindows.filter { $0.id.hasPrefix(prefix) }
+            .compactMap { $0.producerInstanceId?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        let unique = Set(instances)
+        if unique.count == 1, let only = unique.first { return only }
+        return instances.first
+    }
+
+    private static func localReaderProviders(
+        from rawWindows: [WireRawWindow],
+        ownInstanceId: String?
+    ) -> Set<String> {
+        Set(rawWindows.compactMap { window -> String? in
+            guard window.remainingPercent != nil else { return nil }
+            guard QuotaWindowVocabulary.isOwnDeviceWindow(id: window.id,
+                                                            source: window.source,
+                                                            machine: window.machine,
+                                                            producerInstanceId: window.producerInstanceId,
+                                                            ownInstanceId: ownInstanceId) else { return nil }
+            return (window.providerKey ?? window.provider).lowercased()
+        })
+    }
+
+    private static func keepsLiveWireRow(
+        _ window: WireRawWindow,
+        ownInstanceId: String?,
+        localReaderProviders: Set<String>,
+        now: Date
+    ) -> Bool {
+        let providerKey = (window.providerKey ?? window.provider).lowercased()
+        let own = QuotaWindowVocabulary.isOwnDeviceWindow(id: window.id,
+                                                          source: window.source,
+                                                          machine: window.machine,
+                                                          producerInstanceId: window.producerInstanceId,
+                                                          ownInstanceId: ownInstanceId)
+        return QuotaFreshnessRule.keepsLiveRow(isOwnDeviceWindow: own,
+                                               providerKey: providerKey,
+                                               observedAt: CompanionDateFormatter.date(from: window.occurredAt),
+                                               resetAt: CompanionDateFormatter.date(from: window.resetAt),
+                                               localReaderProviders: localReaderProviders,
+                                               now: now)
+    }
+
     @discardableResult
     private func parseSnapshot(data: Data) -> Bool {
         guard let envelope = try? JSONDecoder().decode(WireEnvelope.self, from: data),
               let rawWindows = envelope.windows else { return false }
         // The payload names the installation that wrote it, so the phone can
         // tell that installation's own reading from a copy of another
-        // machine's.  A payload that does not say leaves it unknown.
-        payloadProducerInstanceId = envelope.producerInstanceId
+        // machine's.  When the envelope omits it, infer from this Mac's own
+        // `local-mac:` windows so instance-tagged readings are not misread as
+        // foreign copies.
+        payloadProducerInstanceId = Self.resolvedPayloadProducerInstanceId(envelope: envelope,
+                                                                           rawWindows: rawWindows)
+        snapshotLocalReaderProviders = Self.localReaderProviders(from: rawWindows,
+                                                                 ownInstanceId: payloadProducerInstanceId)
         alertSourceDevices = rawWindows.reduce(into: [:]) { devices, window in
             guard let raw = window.producerInstanceId, let id = UUID(uuidString: raw) else { return }
             devices[id.uuidString.lowercased()] = window.machine ?? "Mac (\(id.uuidString.prefix(8)))"
@@ -1826,16 +1885,10 @@ public final class CompanionQuotaModel: ObservableObject {
         // observation time.  It only judges copies:  this Mac's own reading
         // keeps its row, so an expired one greys out instead of vanishing.
         let liveWindows = rawWindows.filter { w in
-            if QuotaWindowVocabulary.isOwnDeviceWindow(id: w.id,
-                                                        source: w.source,
-                                                        machine: w.machine,
-                                                        producerInstanceId: w.producerInstanceId,
-                                                        ownInstanceId: payloadProducerInstanceId) {
-                return true
-            }
-            return !QuotaFreshnessRule.isDeadCopy(observedAt: CompanionDateFormatter.date(from: w.occurredAt),
-                                                  resetAt: CompanionDateFormatter.date(from: w.resetAt),
-                                                  now: now)
+            Self.keepsLiveWireRow(w,
+                                  ownInstanceId: payloadProducerInstanceId,
+                                  localReaderProviders: snapshotLocalReaderProviders,
+                                  now: now)
         }
 
         /// Whether a window's reading is recent enough to believe, by the
@@ -2040,16 +2093,10 @@ public final class CompanionQuotaModel: ObservableObject {
         // copies:  this Mac's own reading keeps the pool alive, so an expired
         // one greys out instead of vanishing.
         let liveWindows = windows.filter { w in
-            if QuotaWindowVocabulary.isOwnDeviceWindow(id: w.id,
-                                                        source: w.source,
-                                                        machine: w.machine,
-                                                        producerInstanceId: w.producerInstanceId,
-                                                        ownInstanceId: payloadProducerInstanceId) {
-                return true
-            }
-            return !QuotaFreshnessRule.isDeadCopy(observedAt: CompanionDateFormatter.date(from: w.occurredAt),
-                                                  resetAt: CompanionDateFormatter.date(from: w.resetAt),
-                                                  now: now)
+            Self.keepsLiveWireRow(w,
+                                  ownInstanceId: payloadProducerInstanceId,
+                                  localReaderProviders: snapshotLocalReaderProviders,
+                                  now: now)
         }
         // A pool whose copies have all expired still renders:  it keeps the
         // windows it had, so the row survives rather than disappearing.

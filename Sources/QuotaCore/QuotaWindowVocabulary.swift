@@ -600,13 +600,16 @@ public enum QuotaWindowVocabulary {
         producerInstanceId: String?,
         ownInstanceId: String? = nil
     ) -> Bool {
-        if id.hasPrefix(localDeviceWindowPrefix) { return true }
+        // The producer instance decides before the prefix, the same
+        // precedence `FleetOrigin.isOwnPush` applies:  a window carrying this
+        // Mac's `local-mac:` id prefix but ANOTHER installation's producer
+        // instance is a foreign copy of a same-named payload, and the two
+        // surfaces must agree on one payload.  The comparison ignores case.
         let instance = (producerInstanceId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let own = (ownInstanceId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        // The owning installation's own reading, decided the way the Mac
-        // decides it:  the instance decides, and the comparison ignores case.
-        if !instance.isEmpty, !own.isEmpty, instance.lowercased() == own.lowercased() { return true }
+        if !instance.isEmpty, !own.isEmpty { return instance.lowercased() == own.lowercased() }
         if !instance.isEmpty { return false }
+        if id.hasPrefix(localDeviceWindowPrefix) { return true }
         let named = (machine ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if !named.isEmpty { return false }
         let src = (source ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -689,6 +692,24 @@ public enum QuotaFreshnessRule {
     public static func isDeadCopy(observedAt: Date?, resetAt: Date?, now: Date) -> Bool {
         guard let observedAt, let resetAt, resetAt <= now else { return false }
         return !isReadingRecent(observedAt: observedAt, now: now)
+    }
+
+    /// Whether a window should stay in a live cache row, matching
+    /// `FleetOrigin.split`:  this device's own windows keep an ended period
+    /// only while this device still reads that provider locally.
+    public static func keepsLiveRow(
+        isOwnDeviceWindow: Bool,
+        providerKey: String,
+        observedAt: Date?,
+        resetAt: Date?,
+        localReaderProviders: Set<String>,
+        now: Date
+    ) -> Bool {
+        if isOwnDeviceWindow {
+            return localReaderProviders.contains(providerKey)
+                || !isDeadCopy(observedAt: observedAt, resetAt: resetAt, now: now)
+        }
+        return !isDeadCopy(observedAt: observedAt, resetAt: resetAt, now: now)
     }
 }
 

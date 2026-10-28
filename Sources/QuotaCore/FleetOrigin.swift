@@ -131,15 +131,20 @@ public enum FleetOrigin {
         let localReaders = QuotaLocalScope.providers(withReadings: localWindows)
         for window in windows {
             if isOwnPush(window, host: host, localWindows: localWindows) {
-                if localReaders.contains(window.canonicalProviderKey)
-                    || !QuotaFreshnessRule.isDeadCopy(observedAt: window.occurredDate,
-                                                      resetAt: window.resetDate,
-                                                      now: now) {
+                if QuotaFreshnessRule.keepsLiveRow(isOwnDeviceWindow: true,
+                                                    providerKey: window.canonicalProviderKey,
+                                                    observedAt: window.occurredDate,
+                                                    resetAt: window.resetDate,
+                                                    localReaderProviders: localReaders,
+                                                    now: now) {
                     own.append(window)
                 }
-            } else if !QuotaFreshnessRule.isDeadCopy(observedAt: window.occurredDate,
-                                                     resetAt: window.resetDate,
-                                                     now: now) {
+            } else if QuotaFreshnessRule.keepsLiveRow(isOwnDeviceWindow: false,
+                                                       providerKey: window.canonicalProviderKey,
+                                                       observedAt: window.occurredDate,
+                                                       resetAt: window.resetDate,
+                                                       localReaderProviders: localReaders,
+                                                       now: now) {
                 grouped[fleetGroupKey(for: window), default: []].append(window)
             }
         }

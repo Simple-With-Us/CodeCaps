@@ -141,16 +141,12 @@ final class WidgetTests: XCTestCase {
     func testWidgetDropsACopyOfAPeriodThatEnded() throws {
         let source = try readSource(at: Self.widgetPresentationURL)
         XCTAssertTrue(
-            source.contains("QuotaFreshnessRule.isDeadCopy(observedAt: parseDate(from: w.occurredAt),"),
-            "the widget must ask the shared rule about a window whose period already ended"
-        )
-        XCTAssertFalse(
-            source.contains("QuotaFreshnessRule.isDeadCopy(observedAt: observed,"),
-            "the widget must ask the shared rule with the reading's own observation time"
+            source.contains("QuotaFreshnessRule.keepsLiveRow("),
+            "the widget must ask the shared live-row rule about ended periods"
         )
         XCTAssertTrue(
             source.contains("QuotaWindowVocabulary.isOwnDeviceWindow("),
-            "the widget must only judge copies, so this Mac's own reading keeps its row"
+            "the widget must classify own readings before applying the shared live-row rule"
         )
     }
 

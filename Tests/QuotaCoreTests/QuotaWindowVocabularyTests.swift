@@ -339,6 +339,46 @@ final class QuotaWindowVocabularyTests: XCTestCase {
                        "a window from another reader is a copy")
     }
 
+    /// A window carrying this Mac's `local-mac:` prefix but ANOTHER
+    /// installation's producer instance id is a foreign copy of a same-named
+    /// payload:  the instance outranks the prefix, the same precedence
+    /// `FleetOrigin.isOwnPush` applies, so the phone, the widget and the Mac
+    /// decide one payload the same way.
+    func testAForeignProducerInstanceOutranksTheLocalMacPrefix() {
+        XCTAssertFalse(QuotaWindowVocabulary.isOwnDeviceWindow(id: "local-mac:xai:subscription",
+                                                               source: "CodeCaps",
+                                                               machine: nil,
+                                                               producerInstanceId: "other-mac",
+                                                               ownInstanceId: "this-mac"),
+                       "a foreign producer instance makes the payload a copy even under the local-mac prefix")
+        XCTAssertTrue(QuotaWindowVocabulary.isOwnDeviceWindow(id: "local-mac:xai:subscription",
+                                                              source: "CodeCaps",
+                                                              machine: nil,
+                                                              producerInstanceId: "this-mac",
+                                                              ownInstanceId: "this-mac"),
+                      "this installation's own instance confirms its own payload")
+    }
+
+    func testKeepsLiveRowMatchesFleetOriginForOwnDeviceWithoutLocalReader() {
+        let ended = Date(timeIntervalSince1970: 1_000)
+        let now = ended.addingTimeInterval(86_400)
+        let readers: Set<String> = []
+        XCTAssertFalse(QuotaFreshnessRule.keepsLiveRow(isOwnDeviceWindow: true,
+                                                       providerKey: "xai",
+                                                       observedAt: ended.addingTimeInterval(-86_400),
+                                                       resetAt: ended,
+                                                       localReaderProviders: readers,
+                                                       now: now),
+                       "an expired own window drops when this device no longer reads that provider")
+        XCTAssertTrue(QuotaFreshnessRule.keepsLiveRow(isOwnDeviceWindow: true,
+                                                      providerKey: "xai",
+                                                      observedAt: ended.addingTimeInterval(-86_400),
+                                                      resetAt: ended,
+                                                      localReaderProviders: ["xai"],
+                                                      now: now),
+                      "an expired own window stays while this device still reads that provider locally")
+    }
+
     /// The owning installation's own window is this device's own reading, even
     /// though it names a producer instance.  Every fleet-sourced window names
     /// one, so without this the phone and the widget read this Mac's own
