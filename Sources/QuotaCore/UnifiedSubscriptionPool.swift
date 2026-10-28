@@ -84,10 +84,15 @@ public enum UnifiedSubscriptionPool {
         copy.provider = QuotaProviders.label(for: providerKey)
         copy.providerKey = providerKey
         copy.providerLabel = QuotaProviders.label(for: providerKey)
-        // Only an already-local ID may become a local participant ID.  Remote
-        // IDs and source metadata remain provenance, not local-reader evidence.
+        // Participant IDs describe the target provider, never the donor. Keep
+        // origin in dedicated fields; a remote donor is not this Mac's reader.
+        let participantID = canonicalWindowId(for: providerKey)
         if source.id.hasPrefix("local-mac:"), source.sourceApp == "local-mac" {
-            copy.id = canonicalWindowId(for: providerKey)
+            copy.id = participantID
+        } else {
+            let origin = source.producerInstanceId ?? source.machine ?? source.source ?? source.id
+            let originKey = Data(origin.utf8).base64EncodedString()
+            copy.id = participantID.replacingOccurrences(of: "local-mac:", with: "shared-pool:\(originKey):")
         }
         copy.label = canonicalWindowLabel(for: providerKey)
         copy.remainingUnknown = false

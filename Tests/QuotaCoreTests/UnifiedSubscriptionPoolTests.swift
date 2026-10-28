@@ -163,7 +163,9 @@ final class UnifiedSubscriptionPoolTests: XCTestCase {
         remote.sourceApp = "codecaps"
         remote.source = "studio"
         let adapted = UnifiedSubscriptionPool.adapt(remote, for: "xai")
-        XCTAssertEqual(adapted.id, remote.id)
+        XCTAssertNotEqual(adapted.id, remote.id)
+        XCTAssertFalse(adapted.id.hasPrefix("local-mac:"))
+        XCTAssertTrue(adapted.id.hasSuffix(":xai:plan"))
         XCTAssertEqual(adapted.sourceApp, remote.sourceApp)
         XCTAssertEqual(adapted.source, remote.source)
         XCTAssertEqual(adapted.canonicalProviderKey, "xai")
@@ -174,9 +176,32 @@ final class UnifiedSubscriptionPoolTests: XCTestCase {
         remote.sourceApp = "codecaps"
         remote.machine = "Studio"
         let adapted = UnifiedSubscriptionPool.adapt(remote, for: "xai")
-        XCTAssertEqual(adapted.id, remote.id)
+        XCTAssertNotEqual(adapted.id, remote.id)
+        XCTAssertFalse(adapted.id.hasPrefix("local-mac:"))
+        XCTAssertTrue(adapted.id.hasSuffix(":xai:plan"))
         XCTAssertEqual(adapted.machine, remote.machine)
         XCTAssertEqual(adapted.sourceApp, remote.sourceApp)
+    }
+
+    func testRemoteSharedParticipantsHaveUniqueTargetIDsAndPreserveProvenance() {
+        var remote = makeWindow(providerKey: "cursor", id: "studio:cursor:plan", rem: 55)
+        remote.producerInstanceId = "studio-instance"
+        remote.machine = "Studio"
+        remote.source = "studio"
+        remote.sourceApp = "codecaps"
+        let shared = UnifiedSubscriptionPool.share(windows: [remote], now: now,
+                                                   targetKeys: UnifiedSubscriptionPool.participantKeys)
+        XCTAssertEqual(Set(shared.map(\.id)).count, 4)
+        for window in shared where window.canonicalProviderKey != "cursor" {
+            XCTAssertFalse(window.id.hasPrefix("local-mac:"))
+            XCTAssertFalse(window.id.contains(":cursor:"))
+            XCTAssertTrue(window.id.contains(":\(window.canonicalProviderKey):"))
+            XCTAssertEqual(window.producerInstanceId, remote.producerInstanceId)
+            XCTAssertEqual(window.machine, remote.machine)
+            XCTAssertEqual(window.source, remote.source)
+            XCTAssertEqual(window.sourceApp, remote.sourceApp)
+            XCTAssertEqual(window.remainingPercent, 55)
+        }
     }
 
     func testMissingSourceAppIsNotInventedDuringAdaptation() {
