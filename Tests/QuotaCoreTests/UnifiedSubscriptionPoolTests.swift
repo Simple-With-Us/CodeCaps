@@ -183,6 +183,39 @@ final class UnifiedSubscriptionPoolTests: XCTestCase {
         XCTAssertEqual(adapted.sourceApp, remote.sourceApp)
     }
 
+    func testRemoteIDsUseURLSafeNonemptyProvenance() {
+        // The id ends up in cache keys, file names, URLs and alert keys, so
+        // the encoding has to be safe in all of them.
+        var remote = makeWindow(providerKey: "cursor", id: "studio:cursor:plan", rem: 55)
+        remote.producerInstanceId = "studio/instance+1="
+        remote.sourceApp = "codecaps"
+        let adapted = UnifiedSubscriptionPool.adapt(remote, for: "xai")
+        let key = adapted.id.replacingOccurrences(of: "shared-pool:", with: "")
+        let encoded = key.components(separatedBy: ":").dropLast().joined(separator: ":")
+        XCTAssertFalse(encoded.contains("/"))
+        XCTAssertFalse(encoded.contains("+"))
+        XCTAssertFalse(encoded.contains("="))
+
+        // An empty provenance field is not an identity, so two donors that
+        // both leave it blank must not collapse onto one id.
+        var first = makeWindow(providerKey: "cursor", id: "studio:cursor:plan", rem: 55)
+        first.producerInstanceId = ""
+        first.machine = ""
+        first.source = ""
+        first.sourceApp = "codecaps"
+        var second = makeWindow(providerKey: "cursor", id: "other:cursor:plan", rem: 55)
+        second.producerInstanceId = ""
+        second.machine = ""
+        second.source = ""
+        second.sourceApp = "codecaps"
+        let firstID = UnifiedSubscriptionPool.adapt(first, for: "xai").id
+        let secondID = UnifiedSubscriptionPool.adapt(second, for: "xai").id
+        XCTAssertNotEqual(firstID, secondID)
+        XCTAssertFalse(firstID.contains("shared-pool::"))
+        XCTAssertFalse(secondID.contains("shared-pool::"))
+        XCTAssertTrue(firstID.hasPrefix("shared-pool:"))
+    }
+
     func testRemoteSharedParticipantsHaveUniqueTargetIDsAndPreserveProvenance() {
         var remote = makeWindow(providerKey: "cursor", id: "studio:cursor:plan", rem: 55)
         remote.producerInstanceId = "studio-instance"

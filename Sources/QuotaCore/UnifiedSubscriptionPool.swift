@@ -154,11 +154,11 @@ public enum UnifiedSubscriptionPool {
         // Participant IDs describe the target provider, never the donor. Keep
         // origin in dedicated fields; a remote donor is not this Mac's reader.
         let participantID = canonicalWindowId(for: providerKey)
-        let origin = source.producerInstanceId ?? source.machine ?? source.source ?? source.id
+        let origin = poolOrigin(of: source)
         if source.id.hasPrefix("local-mac:"), source.sourceApp == "local-mac" {
             copy.id = participantID
         } else {
-            let originKey = Data(origin.utf8).base64EncodedString()
+            let originKey = encodedOriginKey(origin)
             copy.id = participantID.replacingOccurrences(of: "local-mac:", with: "shared-pool:\(originKey):")
         }
         copy.label = canonicalWindowLabel(for: providerKey)
@@ -169,6 +169,35 @@ public enum UnifiedSubscriptionPool {
         // as a second collector's report of the same pool.
         copy.sharedPoolOrigin = origin
         return copy.normalizedForExport()
+    }
+
+    /// The donor's identity, taken from the first provenance field that has a
+    /// value.
+    ///
+    /// An empty field is not an identity.  Two donors that both leave the
+    /// field blank would otherwise share one id, and the dedupe and the
+    /// exhaustion tracking would read them as the same donor.
+    public static func poolOrigin(of source: QuotaWindow) -> String {
+        let candidates = [source.producerInstanceId, source.machine, source.source, source.id]
+        for candidate in candidates {
+            guard let candidate else { continue }
+            let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return trimmed }
+        }
+        return source.id
+    }
+
+    /// The origin encoded for use in an id.
+    ///
+    /// The id ends up in cache keys, file names, URLs and alert keys, so the
+    /// encoding has to be safe in all of them: base64url without padding,
+    /// which carries none of the characters that break a path or a query.
+    public static func encodedOriginKey(_ origin: String) -> String {
+        Data(origin.utf8)
+            .base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
     }
 
     /// Updates or injects the freshest reading across all participant providers present
