@@ -1388,6 +1388,18 @@ final class MonitorModel: ObservableObject {
         refreshTimer?.invalidate()
         sessionFileTimer?.invalidate()
         clockTimer?.invalidate()
+        drainPendingSnapshotWrites()
+    }
+
+    /// Waits for every enqueued handoff and widget write before process exit.
+    /// Without this, `Task.detached` snapshot work can be cut off mid-write.
+    private func drainPendingSnapshotWrites() {
+        guard let chain = snapshotWriteChain else { return }
+        snapshotWriteChain = nil
+        let group = DispatchGroup()
+        group.enter()
+        Task { await chain.value; group.leave() }
+        group.wait()
     }
 
     /// Fires only while something is at risk, so the forecast keeps measuring a
@@ -1767,7 +1779,12 @@ final class MonitorModel: ObservableObject {
             localWindows = []
             updateActiveAnomalies([])
             activePlanChanges = []
-            if !skipsSnapshotIOForTesting { try? LocalQuotaSnapshot.remove() }
+            if !skipsSnapshotIOForTesting {
+                try? LocalQuotaSnapshot.remove()
+                // A handoff write already queued before this toggle must not
+                // recreate the file after sharing is off; chain a remove after it.
+                enqueueHandoffWrite(windows: nil)
+            }
             rebuildLocalState(recordSamples: false)
         }
         refresh()
@@ -2727,14 +2744,14 @@ final class MonitorModel: ObservableObject {
         guard !skipsSnapshotIOForTesting else { return }
         let marks = exportedCustomMarks()
         let stamp = now
-        let order = platformOrder
         enqueueSnapshotWrite({
             try LocalQuotaSnapshot.writeWidgetSnapshot(windows: windows, customMarks: marks, now: stamp)
         }, completion: { [weak self] succeeded in
             guard let self else { return }
             if succeeded {
                 self.widgetSharingError = nil
-                UserDefaults(suiteName: LocalQuotaSnapshot.appGroupId)?.set(order, forKey: "platformOrder")
+                UserDefaults(suiteName: LocalQuotaSnapshot.appGroupId)?
+                    .set(self.platformOrder, forKey: "platformOrder")
                 #if canImport(WidgetKit)
                 WidgetCenter.shared.reloadAllTimelines()
                 #endif
