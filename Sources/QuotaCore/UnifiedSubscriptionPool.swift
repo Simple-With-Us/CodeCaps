@@ -18,7 +18,8 @@ public enum UnifiedSubscriptionPool {
         let key = window.canonicalProviderKey
         guard participantKeys.contains(key) else { return false }
         if window.isSupplementaryVideoQuota { return false }
-        if window.quotaUnit == "$" || window.quotaUnit == "USD" { return false }
+        let unit = window.quotaUnit?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        if unit == "$" || unit == "usd" || unit == "us$" { return false }
         let lowerId = window.id.lowercased()
         let lowerLabel = window.label.lowercased()
         // Exclude billing cycles and financial spend meters
