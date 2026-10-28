@@ -178,6 +178,14 @@ public enum UnifiedSubscriptionPool {
     /// field blank would otherwise share one id, and the dedupe and the
     /// exhaustion tracking would read them as the same donor.
     public static func poolOrigin(of source: QuotaWindow) -> String {
+        // A row the pool filled in already names the producer of the number.
+        // That name comes first, so the origin stays steady when the row is
+        // elected as the donor on a later round: without it the origin would
+        // name the row's own collector and flap on every refresh.
+        if let shared = source.sharedPoolOrigin?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !shared.isEmpty {
+            return shared
+        }
         let candidates = [source.producerInstanceId, source.machine, source.source, source.id]
         for candidate in candidates {
             guard let candidate else { continue }
@@ -214,7 +222,12 @@ public enum UnifiedSubscriptionPool {
         // producer rather than the row: `source` keeps naming the row's own
         // collector, so switching one producer off in Settings cannot hide
         // the pool reading on every other row.
-        let donorOrigin = best.producerInstanceId ?? best.machine ?? best.source ?? best.id
+        //
+        // A row the pool filled in on an earlier round already carries the
+        // producer's name, and that name wins.  Without it the origin would
+        // name the row's own collector when that row was elected as the
+        // donor on the next round, and it would flap on every refresh.
+        let donorOrigin = poolOrigin(of: best)
 
         var result: [QuotaWindow] = []
         var participantsHandled = Set<String>()

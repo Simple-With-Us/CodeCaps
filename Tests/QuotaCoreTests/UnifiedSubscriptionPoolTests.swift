@@ -242,6 +242,73 @@ final class UnifiedSubscriptionPoolTests: XCTestCase {
         XCTAssertNil(UnifiedSubscriptionPool.adapt(remote, for: "cursor").sourceApp)
     }
 
+    // MARK: - The origin does not flap between rounds
+
+    func testTheOriginDoesNotFlapWhenAFilledInRowIsElectedAsTheDonor() {
+        // A remote producer fills the pool in.  On the next round the row it
+        // filled in is the freshest reading left, and the origin that row
+        // hands on must still name the producer rather than the row's own
+        // collector.
+        var localXai = makeWindow(providerKey: "xai", id: "local-mac:xai:subscription",
+                                  rem: 20, observedAgo: 600)
+        localXai.producerInstanceId = "local-instance"
+        var remote = makeWindow(providerKey: "cursor", id: "studio:cursor:plan", rem: 55, observedAgo: 60)
+        remote.producerInstanceId = "studio-instance"
+        remote.machine = "Studio"
+        remote.source = "studio"
+        remote.sourceApp = "codecaps"
+
+        let first = UnifiedSubscriptionPool.share(windows: [localXai, remote], now: now,
+                                                  targetKeys: UnifiedSubscriptionPool.participantKeys)
+        let filledXai = first.first { $0.canonicalProviderKey == "xai" }
+        XCTAssertEqual(filledXai?.sharedPoolOrigin, "studio-instance")
+        XCTAssertEqual(filledXai?.producerInstanceId, "local-instance")
+
+        // The producer has gone quiet, so the row it filled in is the
+        // freshest reading the pool has.
+        let second = UnifiedSubscriptionPool.share(
+            windows: first.filter { $0.canonicalProviderKey == "xai" },
+            now: now.addingTimeInterval(1),
+            targetKeys: UnifiedSubscriptionPool.participantKeys
+        )
+        let injectedGrokBot = second.first { $0.canonicalProviderKey == "grok-bot" }
+        XCTAssertEqual(injectedGrokBot?.sharedPoolOrigin, "studio-instance")
+        XCTAssertNotEqual(injectedGrokBot?.sharedPoolOrigin, "local-instance")
+        // The row that was filled in and the row the pool injected now name
+        // the same producer.
+        XCTAssertEqual(injectedGrokBot?.sharedPoolOrigin, filledXai?.sharedPoolOrigin)
+    }
+
+    func testTheOriginOfAFilledInRowNamesTheProducerAndNotItsOwnCollector() {
+        // A row the pool filled in hands on the producer's name, so a row the
+        // pool builds from it names the same producer.
+        var localXai = makeWindow(providerKey: "xai", id: "local-mac:xai:subscription",
+                                  rem: 20, observedAgo: 600)
+        localXai.producerInstanceId = "local-instance"
+        var remote = makeWindow(providerKey: "cursor", id: "studio:cursor:plan", rem: 55, observedAgo: 60)
+        remote.producerInstanceId = "studio-instance"
+        remote.sourceApp = "codecaps"
+
+        let first = UnifiedSubscriptionPool.share(windows: [localXai, remote], now: now,
+                                                  targetKeys: UnifiedSubscriptionPool.participantKeys)
+        let filledXai = first.first { $0.canonicalProviderKey == "xai" }
+        XCTAssertEqual(UnifiedSubscriptionPool.poolOrigin(of: filledXai!), "studio-instance")
+        XCTAssertNotEqual(UnifiedSubscriptionPool.poolOrigin(of: filledXai!), "local-instance")
+        // The row the pool builds from it names the same producer.
+        let injected = UnifiedSubscriptionPool.adapt(filledXai!, for: "grok-bot")
+        XCTAssertEqual(injected.sharedPoolOrigin, "studio-instance")
+        XCTAssertEqual(injected.sharedPoolOrigin, filledXai?.sharedPoolOrigin)
+    }
+
+    func testAnOriginThatIsOnlyBlankIsNotAnIdentity() {
+        // A row the pool filled in can carry a blank origin, and a blank
+        // field is not an identity.
+        var filled = makeWindow(providerKey: "xai", id: "local-mac:xai:subscription", rem: 20)
+        filled.producerInstanceId = "local-instance"
+        filled.sharedPoolOrigin = "   "
+        XCTAssertEqual(UnifiedSubscriptionPool.poolOrigin(of: filled), "local-instance")
+    }
+
     // MARK: - The pool window is named by its id, in full
 
     /// The pool window is identified by an exact id, never by a substring of
