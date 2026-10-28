@@ -8,6 +8,16 @@ import QuotaCore
 /// Mirrors the companion contract used on iOS so behavioral regressions
 /// are caught directly in the standard `swift test` suite.
 final class CompanionModelTests: XCTestCase {
+    func testPhoneNonfiniteReadingGuardsRemainAtTextAndBarBoundaries() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(source.contains("guard let remainingPercent, remainingPercent.isFinite else { return \"—\" }"))
+        XCTAssertTrue(source.contains("guard let remainingPercent, remainingPercent.isFinite else { return .secondary }"))
+        XCTAssertTrue(source.contains("Int(min(100, max(0, remainingPercent)).rounded())"))
+        let view = try String(contentsOf: Self.companionContentViewURL!, encoding: .utf8)
+        XCTAssertTrue(view.contains("window.remainingPercent.flatMap { $0.isFinite ? $0 : nil }"))
+        XCTAssertTrue(view.contains("window.elapsedFraction().flatMap { $0.isFinite ? $0 : nil }"))
+    }
+
     private static var companionModelURL: URL? {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()  // Tests/CodeCapsTests

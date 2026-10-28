@@ -1018,8 +1018,8 @@ public struct CompanionMeterView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             CompanionUsageBar(
-                remainingPercent: window.isMasked ? nil : window.remainingPercent,
-                elapsedFraction: window.isMasked ? nil : window.elapsedFraction(),
+                remainingPercent: window.isMasked ? nil : window.remainingPercent.flatMap { $0.isFinite ? $0 : nil },
+                elapsedFraction: window.isMasked ? nil : window.elapsedFraction().flatMap { $0.isFinite ? $0 : nil },
                 height: 7
             )
             .frame(maxWidth: .infinity)

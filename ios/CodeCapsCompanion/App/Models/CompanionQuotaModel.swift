@@ -278,13 +278,13 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
 
     public var displayPercent: String {
         if isMasked { return "n/a" }
-        guard let remainingPercent else { return "—" }
-        return "\(Int(remainingPercent.rounded()))%"
+        guard let remainingPercent, remainingPercent.isFinite else { return "—" }
+        return "\(Int(min(100, max(0, remainingPercent)).rounded()))%"
     }
 
     public var statusColor: Color {
         if isMasked { return .secondary }
-        guard let remainingPercent else { return .secondary }
+        guard let remainingPercent, remainingPercent.isFinite else { return .secondary }
         if remainingPercent <= 0 { return CompanionTheme.danger }
         if remainingPercent < 20 { return CompanionTheme.warning }
         return CompanionTheme.accent
@@ -604,7 +604,7 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
 
     public func cardDisplayPercent(scope: CompanionSourceScope, now: Date = Date()) -> String {
         guard let remainingPercent = cardRemainingPercent(scope: scope, now: now) else { return "—" }
-        return "\(Int(remainingPercent.rounded()))%"
+        return "\(Int(min(100, max(0, remainingPercent)).rounded()))%"
     }
 
     public func cardStatusColor(scope: CompanionSourceScope, now: Date = Date()) -> Color {
@@ -675,12 +675,12 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
     }
 
     public var displayPercent: String {
-        guard let remainingPercent else { return "—" }
-        return "\(Int(remainingPercent.rounded()))%"
+        guard let remainingPercent, remainingPercent.isFinite else { return "—" }
+        return "\(Int(min(100, max(0, remainingPercent)).rounded()))%"
     }
 
     public var statusColor: Color {
-        guard let remainingPercent else { return .secondary }
+        guard let remainingPercent, remainingPercent.isFinite else { return .secondary }
         if remainingPercent <= 0 { return CompanionTheme.danger }
         if remainingPercent < 20 { return CompanionTheme.warning }
         return CompanionTheme.accent
