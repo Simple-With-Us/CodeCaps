@@ -452,6 +452,34 @@ public enum QuotaLocalScope {
     public static func providers(withReadings windows: [QuotaWindow]) -> Set<String> {
         Set(windows.filter { $0.hasReading }.map(\.canonicalProviderKey))
     }
+
+    /// Own pushes have already been separated from foreign readings by
+    /// FleetOrigin.split.  Keep an informative local copy when its push returns;
+    /// an informative push can replace an empty local copy at the merge.
+    /// Foreign producers are never deduped by this local adoption rule.
+    public static func adoptedOwnPush(_ ownPush: [QuotaWindow], localWindows: [QuotaWindow]) -> [QuotaWindow] {
+        let localProviders = providers(withReadings: localWindows)
+        let localKeys = Set(localWindows.map(windowKey))
+        return ownPush.filter {
+            // A local reading still owns its provider.  An empty local copy
+            // must not hide an informative returning push with the same key.
+            !localProviders.contains($0.canonicalProviderKey)
+                && (!localKeys.contains(windowKey($0)) || $0.hasReading)
+        }
+    }
+
+    /// Only an informative adopted own push replaces its empty local copy.
+    /// The collector's actual local windows are not changed by this merge view.
+    public static func localWindowsForMerge(_ localWindows: [QuotaWindow], adopted: [QuotaWindow]) -> [QuotaWindow] {
+        let replacementKeys = Set(adopted.filter { $0.hasReading }.map(windowKey))
+        return localWindows.filter { $0.hasReading || !replacementKeys.contains(windowKey($0)) }
+    }
+
+    private static func windowKey(_ window: QuotaWindow) -> [String] {
+        let prefix = QuotaWindowVocabulary.localDeviceWindowPrefix
+        let id = window.id.hasPrefix(prefix) ? String(window.id.dropFirst(prefix.count)) : window.id
+        return [window.canonicalProviderKey, id]
+    }
 }
 
 /// Response from GET /api/quota-windows.  `providerGroups` is additive and is

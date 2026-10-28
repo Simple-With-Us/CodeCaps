@@ -89,6 +89,53 @@ final class FleetOriginTests: XCTestCase {
         XCTAssertTrue(split.groups.isEmpty)
     }
 
+    /// An arbitrary source avoids the separate legacy app-name fallback.
+    func testMissingCadenceDoesNotIdentifyDistinctLegacyPayloadAsOwn() {
+        let local = window(id: "local-mac:anthropic:five_hour", source: "synthetic-local", sourceApp: nil)
+        let foreign = window(id: "anthropic:weekly", source: "synthetic-remote", sourceApp: nil)
+        XCTAssertNil(local.window)
+        XCTAssertNil(foreign.window)
+        XCTAssertEqual(local.occurredAt, foreign.occurredAt)
+        XCTAssertFalse(FleetOrigin.isOwnPush(foreign, host: "injected-host", localWindows: [local]))
+        let split = FleetOrigin.split([foreign], host: "injected-host", localWindows: [local],
+                                     now: foreign.occurredDate ?? Date())
+        XCTAssertTrue(split.ownPush.isEmpty)
+        XCTAssertEqual(split.groups.flatMap(\.windows).map(\.id), [foreign.id])
+    }
+
+    func testLegacyMatchingPayloadIdSurvivesLocalPrefixNormalization() {
+        let local = window(id: "local-mac:anthropic:five_hour", source: "synthetic-local", sourceApp: nil)
+        let echo = window(id: "anthropic:five_hour", source: "synthetic-remote", sourceApp: nil)
+        XCTAssertTrue(FleetOrigin.isOwnPush(echo, host: "injected-host", localWindows: [local]))
+    }
+
+    func testExplicitMatchingCadenceStillIdentifiesLegacyPayload() {
+        var local = window(id: "local-mac:anthropic:a", source: "synthetic-local", sourceApp: nil)
+        var echo = window(id: "anthropic:b", source: "synthetic-remote", sourceApp: nil)
+        local.window = "five_hour"
+        echo.window = "five_hour"
+        XCTAssertTrue(FleetOrigin.isOwnPush(echo, host: "injected-host", localWindows: [local]))
+        echo.window = "weekly"
+        XCTAssertFalse(FleetOrigin.isOwnPush(echo, host: "injected-host", localWindows: [local]))
+    }
+
+    func testExplicitRemoteProducerOverridesMatchingTimestampAndId() {
+        let local = window(id: "local-mac:anthropic:five_hour", source: "synthetic-local", sourceApp: nil)
+        var remote = window(id: "anthropic:five_hour", source: "synthetic-remote", sourceApp: nil)
+        remote.producerInstanceId = "other-installation"
+        XCTAssertFalse(FleetOrigin.isOwnPush(remote, host: "injected-host", localWindows: [local]))
+    }
+
+    func testNilCadenceFixDoesNotChangeLegacyAppSourceProviderFallback() {
+        let local = window(id: "local-mac:anthropic:a", source: "synthetic-local", sourceApp: nil)
+        for source in ["codecaps", "agent-bar"] {
+            var legacy = window(id: "anthropic:b", source: source, sourceApp: nil)
+            legacy.occurredAt = "2026-09-18T03:37:53.456Z"
+            XCTAssertTrue(FleetOrigin.isOwnPush(legacy, host: "injected-host", localWindows: [local]),
+                          "the separate legacy provider fallback is deliberately unchanged")
+        }
+    }
+
     func testLocalMacPrefixAndSourceAppIdentifiesOwnPush() {
         let prefixed = window(id: "local-mac:anthropic:five_hour", source: "Claude Code", sourceApp: nil)
         XCTAssertTrue(FleetOrigin.isOwnPush(prefixed, host: "unrelated-host"))
