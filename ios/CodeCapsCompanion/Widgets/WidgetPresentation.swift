@@ -92,14 +92,20 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
     }
 
     public var displayPercent: String {
-        if !isMasked, remainingPercent == nil, let count = absoluteRemaining, count.isFinite {
+        if !isMasked, remainingPercent == nil, let count = absoluteRemaining, count.isFinite, count >= 0 {
             return "\(count.formatted(.number.precision(.fractionLength(0...2)))) left"
         }
         return WidgetPresentation.displayPercent(percent: remainingPercent, isMasked: isMasked)
     }
 
+    /// A count without a known denominator is available quantity, not a percentage.
+    public var isCountOnly: Bool {
+        !isMasked && remainingPercent == nil && absoluteRemaining?.isFinite == true && (absoluteRemaining ?? -1) >= 0
+    }
+
     public var statusColor: Color {
-        WidgetPresentation.statusColor(percent: remainingPercent, isMasked: isMasked)
+        if isCountOnly { return (absoluteRemaining ?? 0) > 0 ? .primary : WidgetPresentation.statusColor(percent: 0, isMasked: false) }
+        return WidgetPresentation.statusColor(percent: remainingPercent, isMasked: isMasked)
     }
 
     public func countdown(now: Date = Date()) -> String {
@@ -320,9 +326,11 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
         let pool = visible.isEmpty ? windows : visible
         switch pick {
         case .mostHeadroom:
-            return pool.max {
-                ($0.remainingPercent ?? 100, $0.resetAt ?? .distantFuture)
-                    < ($1.remainingPercent ?? 100, $1.resetAt ?? .distantFuture)
+            // Counts have no denominator and cannot be ranked as 100% headroom.
+            let comparable = pool.filter { $0.remainingPercent?.isFinite == true }
+            return (comparable.isEmpty ? pool : comparable).max {
+                ($0.remainingPercent ?? -1, $0.resetAt ?? .distantFuture)
+                    < ($1.remainingPercent ?? -1, $1.resetAt ?? .distantFuture)
             }
         case .resetsSoonest:
             return pool.min {

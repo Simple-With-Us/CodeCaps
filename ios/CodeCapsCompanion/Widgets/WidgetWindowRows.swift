@@ -199,7 +199,7 @@ struct PlanBarRow: View {
     }
 
     private var statusColor: Color {
-        WidgetPresentation.statusColor(percent: percent, isMasked: shown.window?.isMasked ?? platform.isMasked)
+        shown.window?.statusColor ?? WidgetPresentation.statusColor(percent: percent, isMasked: platform.isMasked)
     }
 
     private var fraction: Double {
@@ -249,13 +249,14 @@ struct PlanBarRow: View {
                 }
                 HStack(spacing: 8) {
                     Text(captionToken).font(.system(size: captionFont, weight: .semibold))
-                    Text(WidgetPresentation.displayPercent(percent: percent, isMasked: shown.window?.isMasked ?? platform.isMasked))
+                    Text(shown.window?.displayPercent ?? WidgetPresentation.displayPercent(percent: percent, isMasked: platform.isMasked))
                         .font(.system(size: percentFont, weight: .bold, design: .rounded))
                         .foregroundColor(statusColor)
                     Text({ let countdown = shown.window?.countdown() ?? platform.countdown(); return countdown.isEmpty ? "—" : countdown }())
                         .font(.system(size: captionFont - 0.5)).foregroundStyle(.secondary)
                 }.lineLimit(1).minimumScaleFactor(0.8)
 
+                if shown.window?.isCountOnly != true {
                 MiniProgressBar(
                     fraction: fraction,
                     color: statusColor,
@@ -263,6 +264,7 @@ struct PlanBarRow: View {
                     hasReading: !(shown.window?.isMasked ?? platform.isMasked) && percent?.isFinite == true,
                     height: barHeight
                 )
+                }
 
             }
         }
@@ -320,9 +322,11 @@ struct PlanDualBarRow: View {
                 Text(window.countdown().isEmpty ? "—" : window.countdown())
                     .font(.system(size: captionFont - 0.5)).foregroundStyle(.secondary)
             }.lineLimit(1).minimumScaleFactor(0.8)
+            if !window.isCountOnly {
             MiniProgressBar(fraction: fraction, color: window.statusColor,
                 elapsedFraction: window.elapsedFraction(),
                 hasReading: !window.isMasked && window.remainingPercent?.isFinite == true, height: barHeight)
+            }
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
 }
