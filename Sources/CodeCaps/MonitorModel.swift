@@ -702,6 +702,7 @@ final class MonitorModel: ObservableObject {
         localEnabled = defaults.object(forKey: "localEnabled") as? Bool ?? true
         glanceLogosFollowAccent = defaults.bool(forKey: "glanceLogosFollowAccent")
         pipBackground = PipBackground(rawValue: defaults.string(forKey: "pipBackground") ?? "") ?? .black
+        pipShowProviderNames = defaults.bool(forKey: "pipShowProviderNames")
         providerChecksEnabled = SourceRefreshPreference.enabled(SourceRefreshPreference.providerEnabled, defaults: defaults)
         sessionFileChecksEnabled = SourceRefreshPreference.enabled(SourceRefreshPreference.sessionEnabled, defaults: defaults)
         providerCheckCadence = SourceRefreshPreference.cadence(SourceRefreshPreference.providerMinutes,
@@ -1630,6 +1631,19 @@ final class MonitorModel: ObservableObject {
     /// request, 2026-10-10).
     @Published var pipBackground: PipBackground {
         didSet { defaults.set(pipBackground.rawValue, forKey: "pipBackground") }
+    }
+
+    /// Whether the PiP HUD prints the platform name beside its logo.
+    ///
+    /// Off by default, and deliberately so.  The name is up to 150 points wide
+    /// and the meters need that room more; the owner would rather have the
+    /// meters and never the name (owner, 2026-10-28).  A per-user setting, like
+    /// the PiP background: it is a display preference, not an app-level knob.
+    @Published var pipShowProviderNames: Bool {
+        didSet {
+            defaults.set(pipShowProviderNames, forKey: "pipShowProviderNames")
+            if presentsPipWindows { PipWidgetController.shared.update(model: self) }
+        }
     }
 
     /// Whether the Glance popover's provider logos wear the chosen accent.

@@ -23,6 +23,66 @@ final class PipInteractionTests: XCTestCase {
         }
     }
 
+    /// Owner 2026-10-28: "Muse assist says at 7 day cap but doesn't mention the
+    /// extra quota so it isn't stopped really and needs to reflect that in PiP
+    /// like it does in menu bar window."
+    ///
+    /// The extra allowance is a *count*, not a percentage: it has no cap and no
+    /// reset date, so the HUD's own meter filter dropped it and the row said
+    /// "At Cap" while the plan could still be used.
+    func testMuseExtraBalanceIsFoundEvenThoughTheMeterFilterDropsIt() throws {
+        let (model, defaults, suite) = GlanceFixtures.makeModel(view: .fromMac, alarmsAll: false, fleet: false)
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let weekly = GlanceFixtures.window("muse-assist:weekly", provider: "muse-assist",
+            label: "weekly", token: "7d", remaining: 0,
+            resetIn: GlanceFixtures.day + 2 * GlanceFixtures.hour)
+        var extra = GlanceFixtures.window("muse-assist:extra", provider: "muse-assist",
+            label: "Extra tokens", token: nil, remaining: nil, resetIn: nil)
+        extra.absoluteRemaining = 42
+
+        model.injectForTests(sections: QuotaResponse(generatedAt: "", windows: [weekly, extra])
+            .platformSections(now: GlanceFixtures.now), now: GlanceFixtures.now)
+        let row = try XCTUnwrap(model.displaySections.first { $0.id == "muse-assist" })
+
+        // The meter filter drops the counted balance: a count is not a quota.
+        let current = PipWidgetController.currentWindows(for: row, now: model.now)
+        XCTAssertFalse(current.contains { $0.window.id == "muse-assist:extra" },
+                       "the counted balance is not a meter")
+
+        // But the row can still spend it.
+        let usable = PipWidgetController.usableMuseExtra(for: row, now: model.now)
+        XCTAssertEqual(usable?.window.id, "muse-assist:extra",
+                       "the extra balance must be found, or the HUD says the plan is stopped")
+
+        // And the plan really is at its weekly cap: the extra balance does not
+        // undo the cap, it only says the plan is still usable.
+        let cap = QuotaPlatformSection(providerKey: row.providerKey,
+                                       providerLabel: row.section.providerLabel,
+                                       expected: row.section.expected,
+                                       windows: current).atCapWindow()
+        XCTAssertEqual(cap?.window.id, "muse-assist:weekly")
+    }
+
+    /// A failed provider claims nothing, not even an extra balance.
+    func testAFailedProviderHasNoExtraBalanceToSpend() throws {
+        let (model, defaults, suite) = GlanceFixtures.makeModel(view: .fromMac, alarmsAll: false, fleet: false)
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let weekly = GlanceFixtures.window("muse-assist:weekly", provider: "muse-assist",
+            label: "weekly", token: "7d", remaining: 0,
+            resetIn: GlanceFixtures.day + 2 * GlanceFixtures.hour)
+        var extra = GlanceFixtures.window("muse-assist:extra", provider: "muse-assist",
+            label: "Extra tokens", token: nil, remaining: nil, resetIn: nil)
+        extra.absoluteRemaining = 42
+
+        model.injectForTests(sections: QuotaResponse(generatedAt: "", windows: [weekly, extra])
+            .platformSections(now: GlanceFixtures.now), now: GlanceFixtures.now)
+        let row = try XCTUnwrap(model.displaySections.first { $0.id == "muse-assist" })
+
+        XCTAssertNil(PipWidgetController.usableMuseExtra(for: row, now: model.now, issue: "signed out"))
+    }
+
     /// A window that is at its cap is still a window the panel shows.
     ///
     /// The shared cap rule calls any reading at or under 0.5% spent, because
