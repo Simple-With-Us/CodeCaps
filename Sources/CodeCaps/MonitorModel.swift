@@ -415,6 +415,11 @@ final class MonitorModel: ObservableObject {
     @Published private(set) var serverError: String?
     @Published private(set) var handoffError: String?
     @Published private(set) var widgetSharingError: String?
+    /// Serial chain of background snapshot writes.  Encoding and writing the
+    /// handoff and widget files for a large fleet pull used to run on the main
+    /// actor and hang the UI (BOTFLEET-5B); each write now runs off-main, in
+    /// order, after the one before it.
+    private var snapshotWriteChain: Task<Void, Never>?
     @Published private(set) var now = Date()
 
     // Local & Remote Reading
@@ -1383,6 +1388,18 @@ final class MonitorModel: ObservableObject {
         refreshTimer?.invalidate()
         sessionFileTimer?.invalidate()
         clockTimer?.invalidate()
+        drainPendingSnapshotWrites()
+    }
+
+    /// Waits for every enqueued handoff and widget write before process exit.
+    /// Without this, `Task.detached` snapshot work can be cut off mid-write.
+    private func drainPendingSnapshotWrites() {
+        guard let chain = snapshotWriteChain else { return }
+        snapshotWriteChain = nil
+        let group = DispatchGroup()
+        group.enter()
+        Task { await chain.value; group.leave() }
+        group.wait()
     }
 
     /// Fires only while something is at risk, so the forecast keeps measuring a
@@ -1566,15 +1583,7 @@ final class MonitorModel: ObservableObject {
         guard localEnabled else { return }
         let windows = exportedWindows(localWindows)
         if let writeForTesting = handoffWriteForTesting { writeForTesting(windows) }
-        else if !skipsSnapshotIOForTesting {
-            do {
-                try LocalQuotaSnapshot.write(windows: windows, issues: issues,
-                                             customMarks: exportedCustomMarks(),
-                                             alerts: exportedAlerts(now: now), now: now,
-                                             stampInstallationProvenance: true)
-                handoffError = nil
-            } catch { handoffError = "BotFleet quota sharing is unavailable." }
-        }
+        else if !skipsSnapshotIOForTesting { enqueueHandoffWrite(windows: windows) }
         // Same candidate set as the refresh paths, so a Settings edit never drops the fleet rows.
         // `publishWidgetSnapshot` holds the rule that drops the stale fleet copy
         // of a provider this Mac reads itself, so this path publishes the same
@@ -1770,7 +1779,12 @@ final class MonitorModel: ObservableObject {
             localWindows = []
             updateActiveAnomalies([])
             activePlanChanges = []
-            if !skipsSnapshotIOForTesting { try? LocalQuotaSnapshot.remove() }
+            if !skipsSnapshotIOForTesting {
+                try? LocalQuotaSnapshot.remove()
+                // A handoff write already queued before this toggle must not
+                // recreate the file after sharing is off; chain a remove after it.
+                enqueueHandoffWrite(windows: nil)
+            }
             rebuildLocalState(recordSamples: false)
         }
         refresh()
@@ -2335,25 +2349,19 @@ final class MonitorModel: ObservableObject {
                 self.activePlanChanges = []
             }
 
-            // Publish local snapshot to BotFleet on disk
-            do {
-                // `issues` is still the local read's own map here — the server
-                // failure below is merged in afterwards and must never reach a
-                // file that promises local-only readings.
-                if let writeForTesting = self.handoffWriteForTesting {
-                    writeForTesting(self.exportedWindows(self.localWindows))
-                } else if self.skipsSnapshotIOForTesting {
-                    self.handoffError = nil
-                } else if self.localEnabled && local != nil {
-                    try LocalQuotaSnapshot.write(windows: self.exportedWindows(self.localWindows), issues: self.issues,
-                                                 customMarks: exportedCustomMarks(),
-                                                 alerts: exportedAlerts(now: self.now), now: self.now,
-                                                 stampInstallationProvenance: true)
-                }
-                else { try LocalQuotaSnapshot.remove() }
+            // Publish local snapshot to BotFleet on disk.
+            // `issues` is still the local read's own map here — the server
+            // failure below is merged in afterwards and must never reach a
+            // file that promises local-only readings.  `enqueueHandoffWrite`
+            // captures it now, before that merge.
+            if let writeForTesting = self.handoffWriteForTesting {
+                writeForTesting(self.exportedWindows(self.localWindows))
                 self.handoffError = nil
-            } catch {
-                self.handoffError = "BotFleet quota sharing is unavailable."
+            } else if self.skipsSnapshotIOForTesting {
+                self.handoffError = nil
+            } else {
+                self.enqueueHandoffWrite(windows: self.localEnabled && local != nil
+                    ? self.exportedWindows(self.localWindows) : nil)
             }
 
             guard !Task.isCancelled, self.revision == generation else { return }
@@ -2559,19 +2567,7 @@ final class MonitorModel: ObservableObject {
             writeForTesting(exportedWindows(localWindows))
             handoffError = nil
         } else if !skipsSnapshotIOForTesting {
-            do {
-                if localEnabled {
-                    try LocalQuotaSnapshot.write(windows: exportedWindows(localWindows), issues: issues,
-                                                 customMarks: exportedCustomMarks(),
-                                                 alerts: exportedAlerts(now: now), now: now,
-                                                 stampInstallationProvenance: true)
-                } else {
-                    try LocalQuotaSnapshot.remove()
-                }
-                handoffError = nil
-            } catch {
-                handoffError = "BotFleet quota sharing is unavailable."
-            }
+            enqueueHandoffWrite(windows: localEnabled ? exportedWindows(localWindows) : nil)
         }
         // The widget publishes what the app's own rows publish: local rows
         // plus the fleet rows.  `publishWidgetSnapshot` holds the rule that
@@ -2732,11 +2728,7 @@ final class MonitorModel: ObservableObject {
         // Fleet-fallback windows already sit in `merged`, and the caller also
         // appends every fleet group.  The widget cache stores this array
         // verbatim, so an equal window is published once.
-        var unique: [QuotaWindow] = []
-        unique.reserveCapacity(publishable.count)
-        for window in publishable where !unique.contains(window) {
-            unique.append(window)
-        }
+        let unique = Self.uniqueWindows(publishable)
         let visibleProviderKeys = Set(QuotaResponse(generatedAt: "", windows: unique)
             .platformSections(now: now).map(\.providerKey))
         let windows = exportedWindows(unique, locallyProduced: false).filter {
@@ -2750,17 +2742,74 @@ final class MonitorModel: ObservableObject {
             return
         }
         guard !skipsSnapshotIOForTesting else { return }
-        do {
-            try LocalQuotaSnapshot.writeWidgetSnapshot(windows: windows,
-                                                      customMarks: exportedCustomMarks(), now: now)
-            widgetSharingError = nil
-            UserDefaults(suiteName: LocalQuotaSnapshot.appGroupId)?.set(platformOrder, forKey: "platformOrder")
-            #if canImport(WidgetKit)
-            WidgetCenter.shared.reloadAllTimelines()
-            #endif
-        } catch {
-            widgetSharingError = "Widgets cannot access the shared quota cache." + sentenceGap
-                + "Install a build with native widget sharing enabled."
+        let marks = exportedCustomMarks()
+        let stamp = now
+        enqueueSnapshotWrite({
+            try LocalQuotaSnapshot.writeWidgetSnapshot(windows: windows, customMarks: marks, now: stamp)
+        }, completion: { [weak self] succeeded in
+            guard let self else { return }
+            if succeeded {
+                self.widgetSharingError = nil
+                UserDefaults(suiteName: LocalQuotaSnapshot.appGroupId)?
+                    .set(self.platformOrder, forKey: "platformOrder")
+                #if canImport(WidgetKit)
+                WidgetCenter.shared.reloadAllTimelines()
+                #endif
+            } else {
+                self.widgetSharingError = "Widgets cannot access the shared quota cache." + sentenceGap
+                    + "Install a build with native widget sharing enabled."
+            }
+        })
+    }
+
+    /// Order-preserving de-duplication in roughly linear time.  `QuotaWindow`
+    /// is only `Equatable`, so the old `unique.contains` loop was quadratic in
+    /// the size of a fleet pull.  Equal windows always share `id`, `provider`
+    /// and `label`, so only windows in the same bucket are compared.
+    static func uniqueWindows(_ candidates: [QuotaWindow]) -> [QuotaWindow] {
+        var unique: [QuotaWindow] = []
+        unique.reserveCapacity(candidates.count)
+        var buckets: [String: [Int]] = [:]
+        for window in candidates {
+            let key = window.id + "\u{1F}" + window.provider + "\u{1F}" + window.label
+            if let indices = buckets[key], indices.contains(where: { unique[$0] == window }) { continue }
+            buckets[key, default: []].append(unique.count)
+            unique.append(window)
+        }
+        return unique
+    }
+
+    /// Writes (or, with `nil`, removes) the local-only BotFleet handoff file
+    /// off the main actor.  Inputs are captured now so later state changes
+    /// cannot leak into this snapshot.
+    private func enqueueHandoffWrite(windows: [QuotaWindow]?) {
+        let issues = self.issues
+        let marks = windows == nil ? nil : exportedCustomMarks()
+        let alerts = windows == nil ? nil : exportedAlerts(now: now)
+        let stamp = now
+        enqueueSnapshotWrite({
+            if let windows {
+                try LocalQuotaSnapshot.write(windows: windows, issues: issues,
+                                             customMarks: marks, alerts: alerts, now: stamp,
+                                             stampInstallationProvenance: true)
+            } else {
+                try LocalQuotaSnapshot.remove()
+            }
+        }, completion: { [weak self] succeeded in
+            self?.handoffError = succeeded ? nil : "BotFleet quota sharing is unavailable."
+        })
+    }
+
+    /// Runs `work` on a background executor after every previously enqueued
+    /// write, then reports success back on the main actor.
+    private func enqueueSnapshotWrite(_ work: @escaping @Sendable () throws -> Void,
+                                      completion: @escaping @MainActor @Sendable (Bool) -> Void) {
+        let previous = snapshotWriteChain
+        snapshotWriteChain = Task.detached(priority: .utility) {
+            await previous?.value
+            let succeeded: Bool
+            do { try work(); succeeded = true } catch { succeeded = false }
+            await completion(succeeded)
         }
     }
 
