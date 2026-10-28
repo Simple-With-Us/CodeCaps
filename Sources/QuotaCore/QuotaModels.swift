@@ -80,6 +80,16 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
     /// a window's history when this changes, so switching accounts is never
     /// mistaken for a reset.  Local only, like `periodStart`: not a coding key.
     public var accountKey: String? = nil
+    /// The collector that produced the reading this window shows, when the
+    /// unified subscription pool filled the window in from another provider.
+    ///
+    /// It names the producer of the number, never the identity of the row:
+    /// `source` keeps naming the row's own collector, and
+    /// `producerInstanceId` keeps naming the installation that produced the
+    /// push, because the fleet ownership rules read that field to decide
+    /// whose copy a window is.  Local only, like `periodStart`: not a coding
+    /// key, so the fleet ingest payload and the handoff file are unchanged.
+    public var sharedPoolOrigin: String? = nil
 
     private enum CodingKeys: String, CodingKey {
         case id, provider, providerKey, providerLabel, via, sourceApp, modelId, modelType, label
@@ -116,7 +126,8 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
         periodStart: String? = nil,
         accountKey: String? = nil,
         producerInstanceId: String? = nil,
-        machine: String? = nil
+        machine: String? = nil,
+        sharedPoolOrigin: String? = nil
     ) {
         self.id = id
         self.provider = provider
@@ -146,6 +157,7 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
         self.source = source
         self.periodStart = periodStart
         self.accountKey = accountKey
+        self.sharedPoolOrigin = sharedPoolOrigin
     }
 
     public init(from decoder: Decoder) throws {
@@ -715,7 +727,15 @@ public extension QuotaResponse {
         // two components: `<providerKey>:<token>`, each compared in full.
         // `grok:legacy:subscription` names a different window and is not the
         // pool; `xai:api-monthly` is not the pool either.
+        //
+        // A window the unified subscription pool filled in is not a second
+        // report of the pool: it is the pool's own participant row.  The
+        // Grok row and the xAI row of one shared pool then tie on time, and
+        // the tie used to drop one of them from the dashboard, taking the
+        // live reading with it.  The pool's rows are left alone here, and
+        // the two collectors' own reports are still deduped.
         func isPool(_ window: QuotaWindow) -> Bool {
+            guard window.sharedPoolOrigin == nil else { return false }
             let parts = window.id.split(separator: ":")
             guard parts.count >= 2 else { return false }
             return parts[parts.count - 2] == Substring(window.canonicalProviderKey)
