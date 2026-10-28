@@ -797,8 +797,8 @@ final class CompanionModelTests: XCTestCase {
     func testTheCompanionDropsACopyOfAPeriodThatEnded() throws {
         let source = try readCompanionModelSource()
         XCTAssertTrue(
-            source.contains("QuotaFreshnessRule.isDeadCopy(observedAt: CompanionDateFormatter.date(from: w.occurredAt),"),
-            "the phone must ask the shared rule about a window whose period already ended"
+            source.contains("QuotaFreshnessRule.keepsLiveRow("),
+            "the phone must ask the shared live-row rule about a window whose period already ended"
         )
         XCTAssertFalse(
             source.contains("QuotaFreshnessRule.isDeadCopy(observedAt: parsedReportedAt,"),
@@ -810,7 +810,7 @@ final class CompanionModelTests: XCTestCase {
         )
         XCTAssertTrue(
             source.contains("QuotaWindowVocabulary.isOwnDeviceWindow("),
-            "the phone must only judge copies, so this Mac's own reading keeps its row"
+            "the phone must classify own readings before applying the shared live-row rule"
         )
         XCTAssertFalse(
             source.contains("private static let staleAfter"),
