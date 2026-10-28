@@ -35,7 +35,13 @@ public enum UnifiedSubscriptionPool {
 
     /// Finds the freshest, most authoritative reading among candidate windows.
     public static func freshestReading(in windows: [QuotaWindow], now: Date = Date()) -> QuotaWindow? {
-        let candidates = windows.filter { isPoolWindow($0) && $0.hasReading }
+        // An absolute balance alone cannot replace a percentage meter.  Keep the
+        // target reading until a usable shared percentage is available.
+        let candidates = windows.filter {
+            isPoolWindow($0) && $0.boundedRemainingPercent != nil
+                && QuotaWindowSnapshot(window: $0, now: now).isFresh
+                && (!$0.skip || $0.boundedRemainingPercent == 0)
+        }
         return candidates.max { a, b in
             let dateA = a.occurredDate ?? .distantPast
             let dateB = b.occurredDate ?? .distantPast
@@ -78,10 +84,14 @@ public enum UnifiedSubscriptionPool {
         copy.provider = QuotaProviders.label(for: providerKey)
         copy.providerKey = providerKey
         copy.providerLabel = QuotaProviders.label(for: providerKey)
-        copy.id = canonicalWindowId(for: providerKey)
+        // Only an already-local ID may become a local participant ID.  Remote
+        // IDs and source metadata remain provenance, not local-reader evidence.
+        if source.id.hasPrefix("local-mac:"), source.sourceApp == "local-mac" {
+            copy.id = canonicalWindowId(for: providerKey)
+        }
         copy.label = canonicalWindowLabel(for: providerKey)
         copy.remainingUnknown = false
-        copy.sourceApp = source.sourceApp ?? "local-mac"
+        copy.sourceApp = source.sourceApp
         return copy.normalizedForExport()
     }
 

@@ -11,6 +11,7 @@ final class UnifiedSubscriptionPoolTests: XCTestCase {
             provider: QuotaProviders.label(for: providerKey),
             providerKey: providerKey,
             providerLabel: QuotaProviders.label(for: providerKey),
+            sourceApp: id.hasPrefix("local-mac:") ? "local-mac" : nil,
             label: "Subscription window",
             remainingPercent: rem,
             resetAt: iso.string(from: now.addingTimeInterval(resetIn)),
@@ -148,4 +149,39 @@ final class UnifiedSubscriptionPoolTests: XCTestCase {
         let preservedAccount = shared.first { $0.id == "gbu-weekly:account-123" }
         XCTAssertEqual(preservedAccount?.remainingPercent, 15.0, "Multi-account window must remain untouched")
     }
+    func testAbsoluteOnlyDonorDoesNotErasePercentage() {
+        var absoluteOnly = makeWindow(providerKey: "cursor", id: "local-mac:cursor:plan", rem: nil, observedAgo: 1)
+        absoluteOnly.absoluteRemaining = 100
+        let xai = makeWindow(providerKey: "xai", id: "xai:subscription", rem: 60, observedAgo: 60)
+        let shared = UnifiedSubscriptionPool.share(windows: [absoluteOnly, xai], now: now)
+        XCTAssertEqual(shared.first { $0.canonicalProviderKey == "xai" }?.remainingPercent, 60)
+        XCTAssertEqual(UnifiedSubscriptionPool.freshestReading(in: [absoluteOnly, xai], now: now)?.id, xai.id)
+    }
+
+    func testRemoteAdaptationPreservesOrigin() {
+        var remote = makeWindow(providerKey: "cursor", id: "studio:cursor:plan", rem: 55)
+        remote.sourceApp = "codecaps"
+        remote.source = "studio"
+        let adapted = UnifiedSubscriptionPool.adapt(remote, for: "xai")
+        XCTAssertEqual(adapted.id, remote.id)
+        XCTAssertEqual(adapted.sourceApp, remote.sourceApp)
+        XCTAssertEqual(adapted.source, remote.source)
+        XCTAssertEqual(adapted.canonicalProviderKey, "xai")
+    }
+
+    func testRemoteLocalStyleIDIsNotRelabeledAsThisMac() {
+        var remote = makeWindow(providerKey: "cursor", id: "local-mac:cursor:plan", rem: 55)
+        remote.sourceApp = "codecaps"
+        remote.machine = "Studio"
+        let adapted = UnifiedSubscriptionPool.adapt(remote, for: "xai")
+        XCTAssertEqual(adapted.id, remote.id)
+        XCTAssertEqual(adapted.machine, remote.machine)
+        XCTAssertEqual(adapted.sourceApp, remote.sourceApp)
+    }
+
+    func testMissingSourceAppIsNotInventedDuringAdaptation() {
+        let remote = makeWindow(providerKey: "grok", id: "server:grok:subscription", rem: 55)
+        XCTAssertNil(UnifiedSubscriptionPool.adapt(remote, for: "cursor").sourceApp)
+    }
+
 }

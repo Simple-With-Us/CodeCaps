@@ -530,12 +530,15 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
         if !own.isEmpty { return own }
 
         if UnifiedSubscriptionPool.participantKeys.contains(row.providerKey) {
-            for peer in peerRows where peer.id != row.id && UnifiedSubscriptionPool.participantKeys.contains(peer.providerKey) {
-                let peerWindows = currentWindows(for: peer, now: now, issue: nil, disabledSources: disabledSources, peerRows: [])
-                if let best = peerWindows.first {
-                    let adapted = UnifiedSubscriptionPool.adapt(best.window, for: row.providerKey)
-                    return [QuotaWindowSnapshot(window: adapted, now: now)]
+            let candidates = peerRows
+                .filter { $0.id != row.id && UnifiedSubscriptionPool.participantKeys.contains($0.providerKey) }
+                .flatMap { peer in
+                    currentWindows(for: peer, now: now, issue: nil,
+                                   disabledSources: disabledSources, peerRows: []).map(\.window)
                 }
+            if let best = UnifiedSubscriptionPool.freshestReading(in: candidates, now: now) {
+                let adapted = UnifiedSubscriptionPool.adapt(best, for: row.providerKey)
+                return [QuotaWindowSnapshot(window: adapted, now: now)]
             }
         }
         return []

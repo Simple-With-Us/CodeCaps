@@ -83,4 +83,19 @@ final class PipUnifiedPoolTests: XCTestCase {
         let windows = PipWidgetController.currentWindows(for: grokEmptyRow, now: now, peerRows: peerRows)
         XCTAssertEqual(windows.first?.remainingPercent, 44.0, "Grok must receive Grok Bot's fresh reading")
     }
+    func testPeerFallbackRejectsBillingAndAccountMeters() {
+        let billing = makeDisplaySection(providerKey: "cursor", windowId: "cursor:billing-cycle", rem: 9, observedAgo: 1)
+        let account = makeDisplaySection(providerKey: "grok-bot", windowId: "gbu-weekly:account-123", rem: 12, observedAgo: 2)
+        let target = makeDisplaySection(providerKey: "xai", windowId: "xai:subscription", rem: nil)
+        XCTAssertTrue(PipWidgetController.currentWindows(for: target, now: now, peerRows: [billing, account]).isEmpty)
+    }
+
+    func testPeerFallbackUsesFreshestEligibleReadingAcrossRows() {
+        let older = makeDisplaySection(providerKey: "cursor", windowId: "local-mac:cursor:plan", rem: 70, observedAgo: 120)
+        let newer = makeDisplaySection(providerKey: "grok", windowId: "local-mac:grok:subscription", rem: 40, observedAgo: 10)
+        let target = makeDisplaySection(providerKey: "xai", windowId: "xai:subscription", rem: nil)
+        let windows = PipWidgetController.currentWindows(for: target, now: now, peerRows: [older, newer])
+        XCTAssertEqual(windows.first?.remainingPercent, 40)
+    }
+
 }
