@@ -2421,9 +2421,16 @@ final class MonitorModel: ObservableObject {
             //
             // `publishWidgetSnapshot` holds the rule that drops it, so all
             // three call sites publish the same set.
-            self.publishWidgetSnapshot(candidates: merged + split.groups.flatMap(\.windows))
+            //
+            // The rows the widget and the alerts read are the unified ones,
+            // the same rows the app publishes.  The pre-unification list read
+            // "stale" on a provider another provider had just filled in, so
+            // the widget and the exhaustion alerts contradicted the app's own
+            // rows.
+            let widgetCandidates = unifiedMerged + split.groups.flatMap(\.windows)
+            self.publishWidgetSnapshot(candidates: widgetCandidates)
             self.refreshRunawayUsageState(recordSamples: local != nil)
-            self.refreshExhaustionWarnings(windows: merged + split.groups.flatMap(\.windows), now: self.now)
+            self.refreshExhaustionWarnings(windows: widgetCandidates, now: self.now)
             self.alarmManager.evaluate(observations: self.resetAlarmObservationsForCurrentReadings(), now: self.now)
             self.evaluatePipLowQuota()
             // Publish after evaluating this reading so remote alerts include its new events.
@@ -2587,9 +2594,14 @@ final class MonitorModel: ObservableObject {
         // plus the fleet rows.  `publishWidgetSnapshot` holds the rule that
         // drops the stale fleet copy of a provider this Mac reads itself, so
         // this path publishes the same set as the others.
-        publishWidgetSnapshot(candidates: merged + split.groups.flatMap(\.windows))
+        //
+        // The rows are the unified ones, the same rows the app publishes, so
+        // the widget and the exhaustion alerts cannot contradict the app's
+        // own rows.
+        let widgetCandidates = unifiedMerged + split.groups.flatMap(\.windows)
+        publishWidgetSnapshot(candidates: widgetCandidates)
         refreshRunawayUsageState(recordSamples: recordSamples)
-        refreshExhaustionWarnings(windows: merged + split.groups.flatMap(\.windows), now: now)
+        refreshExhaustionWarnings(windows: widgetCandidates, now: now)
         alarmManager.evaluate(observations: resetAlarmObservationsForCurrentReadings(), now: now)
         evaluatePipLowQuota()
     }

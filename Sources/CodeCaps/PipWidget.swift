@@ -645,15 +645,16 @@ struct PipWidgetView: View {
     /// The same rows laid end to end.  Every row keeps its logo at its own left
     /// edge, so scrolling never hides which platform you are looking at —
     /// which was the whole point of the owner's request.
-    private func horizontalRows(detail: PipMetrics.Detail, expandedCadence: Bool) -> some View {
+    private func horizontalRows(detail: PipMetrics.Detail, expandedCadence: Bool,
+                                peerRows: [DisplaySection]) -> some View {
         // Wide enough for the widest pinned row, including a flame if any row
         // has one, so no row is clipped by the frame below.
-        let rowWidth = PipMetrics.rowWidth(for: detail, hasFlame: anyRowSpiking, titleWidth: providerTitleWidth,
+        let rowWidth = PipMetrics.rowWidth(for: detail, hasFlame: anyRowSpiking(peerRows: peerRows), titleWidth: providerTitleWidth,
                                           meterCount: maximumMeterCount, expandedCadence: expandedCadence)
         return ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: PipMetrics.rowSpacing * 2) {
                 ForEach(targetRows) { row in
-                    pipRow(row, detail: detail, expandedCadence: expandedCadence)
+                    pipRow(row, detail: detail, expandedCadence: expandedCadence, peerRows: peerRows)
                         .frame(width: rowWidth, alignment: .leading)
                 }
             }
@@ -676,10 +677,10 @@ struct PipWidgetView: View {
     /// Whether any pinned row currently shows a usage spike.  One answer for
     /// the whole strip: rows are a uniform width by design, so one spiking row
     /// widens them all rather than each row being a different size.
-    private var anyRowSpiking: Bool {
+    private func anyRowSpiking(peerRows: [DisplaySection]) -> Bool {
         targetRows.contains { row in
             PipWidgetController.readingStatus(for: row, now: model.now, issue: model.issues[row.providerKey],
-                disabledSources: model.disabledSources, peerRows: model.orderedPipDisplaySections()) == nil && model.hasActiveRunawayAnomaly(for: row)
+                disabledSources: model.disabledSources, peerRows: peerRows) == nil && model.hasActiveRunawayAnomaly(for: row)
         }
     }
 
@@ -735,20 +736,27 @@ struct PipWidgetView: View {
 
     var body: some View {
         GeometryReader { geo in
+            // The rows are resolved once per render and handed to every helper
+            // that needs them.  `orderedPipDisplaySections` walks every window
+            // of every provider, so asking for it again inside each row
+            // helper rebuilt the same list once per row, once per frame.
+            let peerRows = model.orderedPipDisplaySections()
             ZStack(alignment: .topTrailing) {
                 VStack(spacing: 0) {
                     dragStrip
                     if let detailRow {
-                        detailPanel(detailRow, detail: PipMetrics.detail(forWidth: geo.size.width))
+                        detailPanel(detailRow, detail: PipMetrics.detail(forWidth: geo.size.width),
+                                    peerRows: peerRows)
                     } else {
+                        let spiking = anyRowSpiking(peerRows: peerRows)
                         let expandedCadence = isSingleModel && PipMetrics.expandedCadenceFits(
                             forWidth: geo.size.width, titleWidth: providerTitleWidth,
-                            hasFlame: anyRowSpiking, meterCount: maximumMeterCount)
+                            hasFlame: spiking, meterCount: maximumMeterCount)
                         let detail = PipMetrics.detail(forWidth: geo.size.width, titleWidth: providerTitleWidth,
-                                                       hasFlame: anyRowSpiking, meterCount: maximumMeterCount,
+                                                       hasFlame: spiking, meterCount: maximumMeterCount,
                                                        expandedCadence: expandedCadence)
                         rowsPanel(detail: detail, height: geo.size.height, width: geo.size.width,
-                                  expandedCadence: expandedCadence)
+                                  expandedCadence: expandedCadence, peerRows: peerRows)
                     }
                 }
                 floatingControl
@@ -873,7 +881,7 @@ struct PipWidgetView: View {
     /// scrolled if the owner has made the window shorter than its content.
     @ViewBuilder
     private func rowsPanel(detail: PipMetrics.Detail, height: CGFloat, width: CGFloat,
-                           expandedCadence: Bool) -> some View {
+                           expandedCadence: Bool, peerRows: [DisplaySection]) -> some View {
         let visible = PipMetrics.visibleRowCount(total: targetRows.count, height: height)
         let overflows = visible < targetRows.count
 
@@ -885,20 +893,21 @@ struct PipWidgetView: View {
         // rows become a horizontal strip, each keeping its own logo at its
         // left edge.
         if overflows && PipMetrics.rowsScrollHorizontally(forWidth: width, titleWidth: providerTitleWidth,
-                                                       hasFlame: anyRowSpiking, meterCount: maximumMeterCount,
+                                                       hasFlame: anyRowSpiking(peerRows: peerRows), meterCount: maximumMeterCount,
                                                        expandedCadence: expandedCadence) {
-            horizontalRows(detail: detail, expandedCadence: expandedCadence)
+            horizontalRows(detail: detail, expandedCadence: expandedCadence, peerRows: peerRows)
         } else {
-            verticalRows(detail: detail, visible: visible, overflows: overflows, expandedCadence: expandedCadence)
+            verticalRows(detail: detail, visible: visible, overflows: overflows, expandedCadence: expandedCadence,
+                         peerRows: peerRows)
         }
     }
 
     private func verticalRows(detail: PipMetrics.Detail, visible: Int, overflows: Bool,
-                              expandedCadence: Bool) -> some View {
+                              expandedCadence: Bool, peerRows: [DisplaySection]) -> some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(spacing: 0) {
                 ForEach(Array(targetRows.prefix(max(1, visible)))) { row in
-                    pipRow(row, detail: detail, expandedCadence: expandedCadence)
+                    pipRow(row, detail: detail, expandedCadence: expandedCadence, peerRows: peerRows)
                 }
                 if overflows {
                     // Say so, rather than letting a pinned row look absent.
@@ -919,8 +928,8 @@ struct PipWidgetView: View {
 
     /// One row.  The whole row is the tap target for opening that platform's
     /// detail.
-    private func pipRow(_ row: DisplaySection, detail: PipMetrics.Detail, expandedCadence: Bool) -> some View {
-        let peerRows = model.orderedPipDisplaySections()
+    private func pipRow(_ row: DisplaySection, detail: PipMetrics.Detail, expandedCadence: Bool,
+                         peerRows: [DisplaySection]) -> some View {
         let issue = model.issues[row.providerKey]
         let status = PipWidgetController.readingStatus(for: row, now: model.now, issue: issue,
                                                        disabledSources: model.disabledSources,
@@ -1017,8 +1026,8 @@ struct PipWidgetView: View {
 
     /// One platform, in the panel, with every window it publishes rather than
     /// the two the summary row has room for.
-    private func detailPanel(_ row: DisplaySection, detail: PipMetrics.Detail) -> some View {
-        let peerRows = model.orderedPipDisplaySections()
+    private func detailPanel(_ row: DisplaySection, detail: PipMetrics.Detail,
+                              peerRows: [DisplaySection]) -> some View {
         let issue = model.issues[row.providerKey]
         let windows = PipWidgetController.currentWindows(for: row, now: model.now, issue: issue,
                                                          disabledSources: model.disabledSources,
