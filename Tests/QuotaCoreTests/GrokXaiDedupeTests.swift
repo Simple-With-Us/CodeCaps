@@ -109,4 +109,18 @@ final class GrokXaiDedupeTests: XCTestCase {
         let sections = QuotaResponse(generatedAt: "", windows: [local, fleet, api]).platformSections(now: Date())
         XCTAssertEqual(sections.first { $0.providerKey == "xai" }?.windows.map(\.window.id), ["xai:api-monthly"])
     }
+
+    /// A window the unified subscription pool filled in is the pool's own
+    /// participant row, not a second collector's report of the pool.
+    ///
+    /// The Grok row and the xAI row of one shared pool tie on time once the
+    /// pool stamps the donor's time on every participant, and the tie used to
+    /// drop one of the two rows from the dashboard with the live reading on it.
+    func testAPoolFilledRowIsNotDedupedAgainstTheOtherParticipant() {
+        var filled = window(providerKey: "grok", id: "local-mac:grok:subscription", occurredAt: "2026-10-22T03:00:00Z")
+        filled.sharedPoolOrigin = "xai"
+        let fleet = window(providerKey: "xai", id: "xai:subscription", occurredAt: "2026-10-22T03:00:00Z")
+        let result = QuotaResponse.dedupedGrokSubscription([filled, fleet])
+        XCTAssertEqual(result.count, 2, "the pool's own rows must both survive")
+    }
 }
