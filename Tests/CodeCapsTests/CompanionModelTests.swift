@@ -18,6 +18,13 @@ final class CompanionModelTests: XCTestCase {
         XCTAssertTrue(view.contains("window.elapsedFraction().flatMap { $0.isFinite ? $0 : nil }"))
     }
 
+    func testCardNonfiniteReadingsStayUnknown() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(source.contains(".filter { $0.isFinite }"))
+        XCTAssertTrue(source.contains("guard let remainingPercent = cardRemainingPercent(scope: scope, now: now), remainingPercent.isFinite else { return \"—\" }"))
+        XCTAssertTrue(source.contains("guard let remainingPercent = cardRemainingPercent(scope: scope, now: now), remainingPercent.isFinite else { return .secondary }"))
+    }
+
     private static var companionModelURL: URL? {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()  // Tests/CodeCapsTests

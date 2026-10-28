@@ -599,16 +599,17 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
         cardWindows(scope: scope, now: now)
             .filter { !$0.isMasked }
             .compactMap(\.remainingPercent)
+            .filter { $0.isFinite }
             .min()
     }
 
     public func cardDisplayPercent(scope: CompanionSourceScope, now: Date = Date()) -> String {
-        guard let remainingPercent = cardRemainingPercent(scope: scope, now: now) else { return "—" }
+        guard let remainingPercent = cardRemainingPercent(scope: scope, now: now), remainingPercent.isFinite else { return "—" }
         return "\(Int(min(100, max(0, remainingPercent)).rounded()))%"
     }
 
     public func cardStatusColor(scope: CompanionSourceScope, now: Date = Date()) -> Color {
-        guard let remainingPercent = cardRemainingPercent(scope: scope, now: now) else { return .secondary }
+        guard let remainingPercent = cardRemainingPercent(scope: scope, now: now), remainingPercent.isFinite else { return .secondary }
         if remainingPercent <= 0 { return CompanionTheme.danger }
         if remainingPercent < 20 { return CompanionTheme.warning }
         return CompanionTheme.accent
