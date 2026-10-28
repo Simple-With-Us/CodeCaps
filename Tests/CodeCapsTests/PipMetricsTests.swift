@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 @testable import CodeCaps
 
@@ -298,6 +299,50 @@ final class PipMetricsTests: XCTestCase {
         XCTAssertFalse(detailLabelRedundant(caption: "5h", label: "Sonnet"))
         XCTAssertFalse(detailLabelRedundant(caption: "7d", label: "weekly"))
         XCTAssertFalse(detailLabelRedundant(caption: "Quota", label: "Included plan"))
+    }
+
+    /// A label that merely starts with the caption's number is not a repeat of
+    /// the caption.  "5 GB bonus" beside a "5h" caption names something the
+    /// caption cannot, so it stays (review finding, 2026-10-28).
+    func testALabelThatOnlySharesTheCaptionDigitsIsKept() {
+        XCTAssertFalse(detailLabelRedundant(caption: "5h", label: "5 GB bonus"))
+        XCTAssertFalse(detailLabelRedundant(caption: "1m", label: "1M tokens"))
+        XCTAssertFalse(detailLabelRedundant(caption: "5h", label: "5-hour reset"))
+        XCTAssertTrue(detailLabelRedundant(caption: "5h", label: "5 hour"))
+        XCTAssertTrue(detailLabelRedundant(caption: "5h", label: "5h"))
+        XCTAssertTrue(detailLabelRedundant(caption: "7d", label: "7-day"))
+    }
+
+    /// The percentage column has to hold "100%" at 10pt bold monospaced: the
+    /// percentage is a fixed-size text, so a column narrower than the text
+    /// clips its last digit (review finding, 2026-10-28).
+    func testThePercentColumnHoldsOneHundredPercent() {
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .bold)
+        let width = ("100%" as NSString).size(withAttributes: [.font: font]).width
+        XCTAssertLessThanOrEqual(width, PipMetrics.percentWidth,
+                                 "the percent column must hold the widest percentage")
+    }
+
+    /// The words beside a capped row's extra balance have to still read at the
+    /// narrowest width they are allowed (review finding, 2026-10-28).
+    func testTheExtraBalanceWordsStillReadAtTheirSmallest() {
+        let font = NSFont.systemFont(ofSize: 10, weight: .semibold)
+        let width = ("Using extra balance" as NSString).size(withAttributes: [.font: font]).width
+        XCTAssertLessThanOrEqual(width * 0.7, PipMetrics.extraBalanceTextMinWidth,
+                                 "the words must still read at 70% of their full width")
+    }
+
+    /// One line of the expanded detail has to fit the smallest panel the owner
+    /// can drag the HUD to, and the countdown gives way there (review finding,
+    /// 2026-10-28).
+    func testTheDetailLineFitsTheSmallestPanel() {
+        let smallest = PipMetrics.minWidth - PipMetrics.padding * 2
+        XCTAssertLessThanOrEqual(PipMetrics.detailRowMinWidth, smallest,
+                                 "the narrowest detail line must fit the smallest panel")
+        XCTAssertGreaterThan(PipMetrics.detailRowMinWidthWithCountdown, smallest,
+                             "the countdown cannot fit the smallest panel, so it is the first thing to go")
+        XCTAssertEqual(PipMetrics.detailRowMinWidthWithCountdown,
+                       PipMetrics.detailRowMinWidth + PipMetrics.meterSpacing + PipMetrics.countdownWidth)
     }
 
     func testTwoMeterRowsStayOnScreenAtFullDetail() {

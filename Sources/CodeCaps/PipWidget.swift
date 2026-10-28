@@ -30,7 +30,11 @@ enum PipMetrics {
     /// Wide enough for "100%" in bold monospaced digits at 10pt, left-aligned so
     /// a long number never clips: the owner saw "100%" lose a couple of points
     /// at the narrow end when it was right-aligned into a tight frame.
-    static let percentWidth: CGFloat = 30
+    ///
+    /// 32, not 30: the rendered "100%" measures 31 points at 10pt bold
+    /// monospaced, and the percentage is a fixed-size text, so a 30 point
+    /// column clipped its last digit.
+    static let percentWidth: CGFloat = 32
     static let countdownWidth: CGFloat = 42
     static let countdownCompactWidth: CGFloat = 28
     static let barMinWidth: CGFloat = 20
@@ -139,6 +143,28 @@ enum PipMetrics {
     /// very smallest window the owner can drag the panel to.
     static let logoSingleMeterMinWidth: CGFloat =
         providerLogoSize + rowSpacing + bareMeterMinWidth
+
+    /// The narrowest one line of the expanded platform detail can be and still
+    /// show the cadence caption, the percentage and the bar.
+    static let detailRowMinWidth: CGFloat =
+        cadenceWidth + meterSpacing + percentWidth + meterSpacing + barMinWidth
+
+    /// The same line plus its reset countdown.
+    static let detailRowMinWidthWithCountdown: CGFloat =
+        detailRowMinWidth + meterSpacing + countdownWidth
+
+    /// The least room a window label needs before it is worth showing.
+    static let detailLabelMinWidth: CGFloat = 24
+
+    /// The most a window label may take.  The bar needs the room more.
+    static let detailLabelMaxWidth: CGFloat = 120
+
+    /// The narrowest the words beside a capped row's extra balance can be.
+    ///
+    /// "Using extra balance" measures 99 points at 10pt semibold and is allowed
+    /// to shrink to 70% of that, so 70 points is the least room in which the
+    /// words still read.
+    static let extraBalanceTextMinWidth: CGFloat = 70
 
     // MARK: Responsive detail
 
@@ -738,7 +764,8 @@ struct PipWidgetView: View {
                             .frame(width: 1)
                             .frame(height: PipMetrics.rowHeight)
                     }
-                    pipRow(row, detail: detail, expandedCadence: expandedCadence, peerRows: peerRows)
+                    pipRow(row, detail: detail, expandedCadence: expandedCadence, peerRows: peerRows,
+                           available: rowWidth)
                         .frame(width: rowWidth, alignment: .leading)
                 }
             }
@@ -831,22 +858,24 @@ struct PipWidgetView: View {
             // of every provider, so asking for it again inside each row
             // helper rebuilt the same list once per row, once per frame.
             let peerRows = model.orderedPipDisplaySections()
+            let spiking = anyRowSpiking(peerRows: peerRows)
+            let expandedCadence = isSingleModel && PipMetrics.expandedCadenceFits(
+                forWidth: geo.size.width, titleWidth: providerTitleWidth,
+                hasFlame: spiking, meterCount: maximumMeterCount,
+                allowsTitle: model.pipShowProviderNames)
+            // One ladder for the whole panel, so the expanded detail reads the
+            // same width the rows do.
+            let detail = PipMetrics.detail(forWidth: geo.size.width, titleWidth: providerTitleWidth,
+                                           hasFlame: spiking, meterCount: maximumMeterCount,
+                                           expandedCadence: expandedCadence,
+                                           allowsTitle: model.pipShowProviderNames)
             ZStack(alignment: .topTrailing) {
                 VStack(spacing: 0) {
                     dragStrip
                     if let detailRow {
-                        detailPanel(detailRow, detail: PipMetrics.detail(forWidth: geo.size.width),
-                                    peerRows: peerRows, height: geo.size.height)
+                        detailPanel(detailRow, detail: detail, peerRows: peerRows,
+                                    height: geo.size.height, width: geo.size.width)
                     } else {
-                        let spiking = anyRowSpiking(peerRows: peerRows)
-                        let expandedCadence = isSingleModel && PipMetrics.expandedCadenceFits(
-                            forWidth: geo.size.width, titleWidth: providerTitleWidth,
-                            hasFlame: spiking, meterCount: maximumMeterCount,
-                            allowsTitle: model.pipShowProviderNames)
-                        let detail = PipMetrics.detail(forWidth: geo.size.width, titleWidth: providerTitleWidth,
-                                                       hasFlame: spiking, meterCount: maximumMeterCount,
-                                                       expandedCadence: expandedCadence,
-                                                       allowsTitle: model.pipShowProviderNames)
                         rowsPanel(detail: detail, height: geo.size.height, width: geo.size.width,
                                   expandedCadence: expandedCadence, peerRows: peerRows)
                     }
@@ -991,16 +1020,18 @@ struct PipWidgetView: View {
             horizontalRows(detail: detail, expandedCadence: expandedCadence, peerRows: peerRows)
         } else {
             verticalRows(detail: detail, visible: visible, overflows: overflows, expandedCadence: expandedCadence,
-                         peerRows: peerRows)
+                         peerRows: peerRows, available: width - PipMetrics.padding * 2)
         }
     }
 
     private func verticalRows(detail: PipMetrics.Detail, visible: Int, overflows: Bool,
-                              expandedCadence: Bool, peerRows: [DisplaySection]) -> some View {
+                              expandedCadence: Bool, peerRows: [DisplaySection],
+                              available: CGFloat) -> some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(spacing: 0) {
                 ForEach(Array(targetRows.prefix(max(1, visible)))) { row in
-                    pipRow(row, detail: detail, expandedCadence: expandedCadence, peerRows: peerRows)
+                    pipRow(row, detail: detail, expandedCadence: expandedCadence, peerRows: peerRows,
+                           available: available)
                 }
                 if overflows {
                     // Say so, rather than letting a pinned row look absent.
@@ -1022,7 +1053,7 @@ struct PipWidgetView: View {
     /// One row.  The whole row is the tap target for opening that platform's
     /// detail.
     private func pipRow(_ row: DisplaySection, detail: PipMetrics.Detail, expandedCadence: Bool,
-                         peerRows: [DisplaySection]) -> some View {
+                         peerRows: [DisplaySection], available: CGFloat) -> some View {
         let issue = model.issues[row.providerKey]
         let status = PipWidgetController.readingStatus(for: row, now: model.now, issue: issue,
                                                        disabledSources: model.disabledSources,
@@ -1076,11 +1107,14 @@ struct PipWidgetView: View {
                 // The name hugs its own bar instead of sitting in a column of
                 // its own: the owner asked for the logo and the name close to
                 // the meter, not aligned somewhere else (owner, 2026-10-28).
+                // It never grows past the width the ladder budgeted for it
+                // though: a long name truncates instead of pushing the meters
+                // out of the row.
                 Text(row.title)
                     .font(.system(size: PipMetrics.titleFontSize, weight: .medium))
                     .foregroundStyle(background.ink)
                     .lineLimit(1)
-                    .fixedSize()
+                    .frame(maxWidth: PipMetrics.titleWidth, alignment: .leading)
             }
 
             if let status {
@@ -1095,17 +1129,31 @@ struct PipWidgetView: View {
                 // The words hug their meter.  Splitting the row in half put a
                 // void between the sentence and the bar it describes, which is
                 // the same dead gap the meters had (owner, 2026-10-28).
-                HStack(spacing: PipMetrics.meterSpacing) {
-                    Text("Using extra balance")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(background.ink)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.7)
-                        .fixedSize()
-                    pipMeter(extra, detail: detail, expandedCadence: expandedCadence)
-                        .frame(maxWidth: .infinity)
+                //
+                // They never push the meter out of the row either.  The words
+                // take the room they need and shrink to give the meter what is
+                // left, and when even that is not enough the meter goes first:
+                // the words are what says the plan is still working (owner,
+                // 2026-10-28).
+                let meterMin = detail.showsCadence ? PipMetrics.meterMinWidth : PipMetrics.bareMeterMinWidth
+                let identity = PipMetrics.providerLogoSize + PipMetrics.rowSpacing
+                let textBudget = max(0, available - identity - PipMetrics.meterSpacing - meterMin)
+                let showsMeter = textBudget >= PipMetrics.extraBalanceTextMinWidth
+                let words = Text("Using extra balance")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(background.ink)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                if showsMeter {
+                    HStack(spacing: PipMetrics.meterSpacing) {
+                        words.frame(maxWidth: textBudget, alignment: .leading)
+                        pipMeter(extra, detail: detail, expandedCadence: expandedCadence)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    words.frame(maxWidth: max(0, available - identity), alignment: .leading)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
             } else if let atCap {
                 pipAtCap(atCap, detail: detail)
             } else {
@@ -1131,7 +1179,8 @@ struct PipWidgetView: View {
     /// One platform, in the panel, with every window it publishes rather than
     /// the two the summary row has room for.
     private func detailPanel(_ row: DisplaySection, detail: PipMetrics.Detail,
-                              peerRows: [DisplaySection], height: CGFloat) -> some View {
+                              peerRows: [DisplaySection], height: CGFloat,
+                              width: CGFloat) -> some View {
         let issue = model.issues[row.providerKey]
         let windows = PipWidgetController.currentWindows(for: row, now: model.now, issue: issue,
                                                          disabledSources: model.disabledSources,
@@ -1143,6 +1192,8 @@ struct PipWidgetView: View {
         // spare spreads the rows out instead of huddling them at the top
         // (owner, 2026-10-28).
         let spacing = detailRowSpacing(rowCount: windows.count, height: height)
+        // What one line of the panel actually has to work with.
+        let available = max(0, width - PipMetrics.padding * 2)
 
         return ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 0) {
@@ -1167,7 +1218,7 @@ struct PipWidgetView: View {
                 .padding(.bottom, 1)
 
                 ForEach(Array(windows.enumerated()), id: \.element.window.id) { index, snapshot in
-                    detailWindowRow(snapshot, detail: detail)
+                    detailWindowRow(snapshot, detail: detail, available: available)
                         .frame(height: PipMetrics.detailRowHeight)
                         .padding(.top, index == 0 ? PipMetrics.detailRowSpacingMin : spacing)
                 }
@@ -1196,14 +1247,22 @@ struct PipWidgetView: View {
     /// The label is dropped when it only restates the caption -- "5-hour"
     /// beside "5h" says the same thing twice -- and kept when it names
     /// something the caption cannot, such as a model.
-    private func detailWindowRow(_ snapshot: QuotaWindowSnapshot, detail: PipMetrics.Detail) -> some View {
+    private func detailWindowRow(_ snapshot: QuotaWindowSnapshot, detail: PipMetrics.Detail,
+                                  available: CGFloat) -> some View {
         let metrics = QuotaBarMetrics(snapshot: snapshot, now: model.now)
         let remaining = snapshot.remainingPercent
         let isExtra = isMuseAssistExtra(snapshot)
         let cd = isExtra ? "extra" : (detail.usesCompactCountdown ? glanceResetCompactCountdown(snapshot.resetAt, now: model.now) : glanceResetCountdown(snapshot.resetAt, now: model.now))
         let cadenceCaption = glanceMeterCaption(snapshot)
         let label = cleanWindowLabel(snapshot.window.label)
+        // The line gives way before the panel clips: the countdown goes
+        // first, then the label, and the bar takes whatever is left.
+        let showsCountdown = !cd.isEmpty && available >= PipMetrics.detailRowMinWidthWithCountdown
+        let labelBudget = max(0, available - PipMetrics.detailRowMinWidth - PipMetrics.meterSpacing
+                              - (showsCountdown ? PipMetrics.meterSpacing + PipMetrics.countdownWidth : 0))
         let showLabel = !detailLabelRedundant(caption: cadenceCaption, label: label)
+            && labelBudget >= PipMetrics.detailLabelMinWidth
+        let labelWidth = min(labelBudget, PipMetrics.detailLabelMaxWidth)
 
         return HStack(spacing: PipMetrics.meterSpacing) {
             Text(cadenceCaption)
@@ -1216,7 +1275,7 @@ struct PipWidgetView: View {
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(background.ink)
                     .lineLimit(1)
-                    .fixedSize()
+                    .frame(maxWidth: labelWidth, alignment: .leading)
             }
 
             Text(remaining.map { "\(Int($0.rounded()))%" } ?? "—")
@@ -1233,7 +1292,7 @@ struct PipWidgetView: View {
             )
             .frame(minWidth: PipMetrics.barMinWidth, maxWidth: PipMetrics.detailBarMaxWidth)
 
-            if !cd.isEmpty {
+            if showsCountdown {
                 Text(cd)
                     .font(isExtra ? .system(size: 9, weight: .bold) : .system(size: 9).monospacedDigit())
                     .foregroundStyle(isExtra ? background.ink : background.countdownInk)
@@ -1377,8 +1436,14 @@ func detailLabelRedundant(caption: String, label: String) -> Bool {
     if captionText == labelText { return true }
     let digits = captionText.prefix(while: { $0.isNumber })
     guard !digits.isEmpty else { return false }
-    // "5h" and "5-hour"; "7d" and "7-day".
-    return labelText.hasPrefix(String(digits))
+    guard labelText.hasPrefix(String(digits)) else { return false }
+    // Only a time unit after the digits repeats the caption: "5h" and
+    // "5-hour", "7d" and "7-day".  A label that merely starts with the same
+    // number -- "5 GB bonus" beside a "5h" caption -- names something the
+    // caption cannot, so it stays.
+    let rest = labelText.dropFirst(digits.count).trimmingCharacters(in: .whitespaces)
+    let unit = rest.hasPrefix("-") ? String(rest.dropFirst()) : rest
+    return ["", "h", "d", "hr", "hrs", "hour", "hours", "day", "days"].contains(unit)
 }
 
 func cleanWindowLabel(_ label: String) -> String {
