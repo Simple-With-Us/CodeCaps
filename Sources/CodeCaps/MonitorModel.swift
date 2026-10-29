@@ -2400,12 +2400,15 @@ final class MonitorModel: ObservableObject {
             // Muse Assist collector runs on the VM, so its windows are never
             // this Mac's own push.  Limited to expected providers so unknown
             // fleet-only keys don't sprout local rows.
-            let fleetFallback = split.groups.flatMap(\.windows).filter {
-                let key = $0.canonicalProviderKey
-                return !localProviders.contains(key) && !adoptedReadingKeys.contains(key)
-                    && expectedQuotaProviderKeys.contains(key)
-            }
-            let merged = QuotaLocalScope.localWindowsForMerge(self.localWindows, adopted: adopted) + adopted + fleetFallback
+            let mergeBasis = QuotaLocalScope.localWindowsForMerge(self.localWindows, adopted: adopted) + adopted
+            let fleetFallback = QuotaLocalScope.fleetFallbackWindows(
+                from: split.groups,
+                mergeBasis: mergeBasis,
+                localProviders: localProviders,
+                adoptedReadingKeys: adoptedReadingKeys,
+                expectedProviderKeys: expectedQuotaProviderKeys
+            )
+            let merged = mergeBasis + fleetFallback
             var origins: [String: QuotaOrigin] = [:]
             for key in Set(merged.map(\.canonicalProviderKey)) { origins[key] = .local }
             self.originByProvider = origins
@@ -2567,12 +2570,15 @@ final class MonitorModel: ObservableObject {
         // Same fleet fallback as the refresh path: providers this Mac can
         // never read locally (e.g. Muse Assist, collected on the VM) show
         // their server reading instead of "no report".
-        let fleetFallback = split.groups.flatMap(\.windows).filter {
-            let key = $0.canonicalProviderKey
-            return !localProviders.contains(key) && !adoptedReadingKeys.contains(key)
-                && expectedQuotaProviderKeys.contains(key)
-        }
-        let merged = QuotaLocalScope.localWindowsForMerge(localWindows, adopted: adopted) + adopted + fleetFallback
+        let mergeBasis = QuotaLocalScope.localWindowsForMerge(localWindows, adopted: adopted) + adopted
+        let fleetFallback = QuotaLocalScope.fleetFallbackWindows(
+            from: split.groups,
+            mergeBasis: mergeBasis,
+            localProviders: localProviders,
+            adoptedReadingKeys: adoptedReadingKeys,
+            expectedProviderKeys: expectedQuotaProviderKeys
+        )
+        let merged = mergeBasis + fleetFallback
         originByProvider = Dictionary(uniqueKeysWithValues: Set(merged.map(\.canonicalProviderKey)).map { ($0, .local) })
         response = QuotaResponse(generatedAt: ISO8601DateFormatter().string(from: now), windows: merged)
         if let writeForTesting = handoffWriteForTesting {

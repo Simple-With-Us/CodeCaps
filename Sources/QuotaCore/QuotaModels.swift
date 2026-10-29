@@ -443,6 +443,24 @@ public enum QuotaLocalScope {
         return localWindows.filter { $0.hasReading || !replacementKeys.contains(windowKey($0)) }
     }
 
+    /// Fleet readings that fill providers this Mac never reads locally.  A copy
+    /// already present in the merge basis must not be appended again.
+    public static func fleetFallbackWindows(
+        from groups: [(id: String, title: String, windows: [QuotaWindow])],
+        mergeBasis: [QuotaWindow],
+        localProviders: Set<String>,
+        adoptedReadingKeys: Set<String>,
+        expectedProviderKeys: Set<String>
+    ) -> [QuotaWindow] {
+        groups.flatMap(\.windows).filter { candidate in
+            let key = candidate.canonicalProviderKey
+            return !localProviders.contains(key)
+                && !adoptedReadingKeys.contains(key)
+                && expectedProviderKeys.contains(key)
+                && !mergeBasis.contains(candidate)
+        }
+    }
+
     private static func windowKey(_ window: QuotaWindow) -> [String] {
         let prefix = QuotaWindowVocabulary.localDeviceWindowPrefix
         let id = window.id.hasPrefix(prefix) ? String(window.id.dropFirst(prefix.count)) : window.id

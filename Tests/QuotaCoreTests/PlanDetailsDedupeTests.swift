@@ -85,4 +85,29 @@ final class PlanDetailsDedupeTests: XCTestCase {
         XCTAssertEqual(merged.first?.remainingPercent, 73)
         XCTAssertNil(merged.first?.producerInstanceId)
     }
+
+    func testAFleetFallbackWindowAlreadyInTheMergeBasisIsNotAppendedAgain() {
+        let iso = "2026-10-24T07:00:00Z"
+        var fleet = QuotaWindow(
+            id: "muse:weekly",
+            provider: "Muse",
+            providerKey: "muse-assist",
+            label: "Weekly",
+            remainingPercent: 40,
+            occurredAt: iso,
+            source: "muse-collector",
+            producerInstanceId: "vm-collector",
+            machine: "quota-vm"
+        )
+        let mergeBasis = [fleet]
+        let groups = [(id: "vm", title: "quota-vm", windows: [fleet])]
+        let fallback = QuotaLocalScope.fleetFallbackWindows(
+            from: groups,
+            mergeBasis: mergeBasis,
+            localProviders: [],
+            adoptedReadingKeys: [],
+            expectedProviderKeys: ["muse-assist"]
+        )
+        XCTAssertTrue(fallback.isEmpty, "an identical fleet window already in the merge basis must not be republished")
+    }
 }
