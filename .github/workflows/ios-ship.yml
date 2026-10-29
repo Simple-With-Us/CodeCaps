@@ -413,11 +413,14 @@ jobs:
             done <"$marker"
             exit 1
           fi
+          # Report the ship outcome before the DSN exit, so a failed ship
+          # is never hidden behind the Sentry DSN error.
+          if [ "${{ steps.ship.outcome }}" != "success" ]; then
+            echo "The ship step did not succeed (result: ${{ steps.ship.outcome }}), so the Sentry upload status is unknown.  See the ship step output for the real cause."
+          fi
           if [ "$dsn_missing" = "1" ]; then
             exit 1
           fi
           if [ "${{ steps.ship.outcome }}" = "success" ]; then
             echo "Sentry dSYM and Size Analysis upload succeeded."
-          else
-            echo "The ship step did not succeed (result: ${{ steps.ship.outcome }}), so the Sentry upload status is unknown.  See the ship step output for the real cause."
           fi
