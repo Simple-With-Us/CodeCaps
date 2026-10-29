@@ -68,6 +68,23 @@ public enum QuotaWindowVocabulary {
         )
     }
 
+    /// Whether a window reports an Antigravity pool's five-hour or weekly cap.
+    ///
+    /// Matches the window token exactly and the label through whole lexical
+    /// tokens only, so an id such as `model-15h` does not read as five-hour.
+    public static func antigravityPoolPeriod(windowToken: String?, label: String) -> String? {
+        let token = (windowToken ?? "").lowercased().replacingOccurrences(of: " ", with: "")
+        if ["weekly", "week", "1w", "7d", "168h", "10080m"].contains(token) { return "weekly" }
+        if ["5h", "5hr", "5-hour", "5hours", "300m"].contains(token) { return "5h" }
+        let labelTokens = lexicalTokens(label)
+        if labelTokens.contains("weekly") || labelTokens.contains("week") { return "weekly" }
+        if labelTokens.contains("5h") || labelTokens.contains("five_hour") { return "5h" }
+        let hasHour = labelTokens.contains("hour") || labelTokens.contains("hours")
+        if labelTokens.contains("5"), hasHour { return "5h" }
+        if labelTokens.contains("interval") { return "5h" }
+        return nil
+    }
+
     /// The short distinguishing noun for a bar caption row, or "" when the
     /// row needs none.
     ///

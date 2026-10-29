@@ -854,6 +854,14 @@ final class CompanionModelTests: XCTestCase {
             "the phone's five-hour window must be the freshest one that matches"
         )
         XCTAssertTrue(
+            source.contains("QuotaWindowVocabulary.antigravityPoolPeriod(windowToken: w.window, label: w.label)"),
+            "the phone must classify Antigravity pool periods through the shared resolver, not substring scans"
+        )
+        XCTAssertFalse(
+            source.contains("s.contains(\"5h\")"),
+            "the phone must not treat 5h as a substring of longer tokens such as 15h"
+        )
+        XCTAssertTrue(
             source.contains("let windows = liveWindows.isEmpty ? windows : liveWindows"),
             "a pool whose copies have all expired must still render its row"
         )

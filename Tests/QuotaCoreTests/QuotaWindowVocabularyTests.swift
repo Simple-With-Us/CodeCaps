@@ -415,4 +415,19 @@ final class QuotaWindowVocabularyTests: XCTestCase {
                                                                ownInstanceId: "this-mac"),
                        "a window that names no instance is not the owning installation's own window")
     }
+
+    /// A longer hour token must not read as the five-hour pool period through
+    /// substring matching on ids or labels.
+    func testAntigravityPoolPeriodDoesNotTreat15hAsFiveHour() {
+        XCTAssertNil(QuotaWindowVocabulary.antigravityPoolPeriod(windowToken: "15h", label: "15h window"))
+        XCTAssertNil(QuotaWindowVocabulary.antigravityPoolPeriod(windowToken: nil, label: "15h window"))
+        XCTAssertEqual(
+            QuotaWindowVocabulary.antigravityPoolPeriod(windowToken: "5h", label: "Gemini · 5-hour"),
+            "5h"
+        )
+        XCTAssertEqual(
+            QuotaWindowVocabulary.antigravityPoolPeriod(windowToken: "7d", label: "Third-Party · Weekly"),
+            "weekly"
+        )
+    }
 }

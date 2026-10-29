@@ -2133,12 +2133,13 @@ public final class CompanionQuotaModel: ObservableObject {
         var weeklyWin: WireRawWindow?
         var fiveHourWin: WireRawWindow?
         for w in windows {
-            let s = (w.id + " " + w.label).lowercased()
-            if s.contains("weekly") || s.contains("1w") || s.contains("7d") {
+            switch QuotaWindowVocabulary.antigravityPoolPeriod(windowToken: w.window, label: w.label) {
+            case "weekly":
                 if isFresher(w, than: weeklyWin) { weeklyWin = w }
-            }
-            if s.contains("5h") || s.contains("5-hour") || s.contains("interval") {
+            case "5h":
                 if isFresher(w, than: fiveHourWin) { fiveHourWin = w }
+            default:
+                break
             }
         }
 
@@ -2236,17 +2237,7 @@ public final class CompanionQuotaModel: ObservableObject {
     /// from the export for exactly this reason, and the Mac shows two periods per
     /// pool because of it.
     private static func antigravityPeriod(of w: WireRawWindow) -> String? {
-        let token = (w.window ?? "").lowercased().replacingOccurrences(of: " ", with: "")
-        let label = w.label.lowercased()
-        if ["weekly", "week", "1w", "7d", "168h", "10080m"].contains(token)
-            || label.contains("weekly") || label.contains("week") {
-            return "weekly"
-        }
-        if ["5h", "5hr", "5-hour", "5hours", "300m"].contains(token)
-            || label.contains("5h") || label.contains("5-hour") || label.contains("five_hour") {
-            return "5h"
-        }
-        return nil
+        QuotaWindowVocabulary.antigravityPoolPeriod(windowToken: w.window, label: w.label)
     }
 
     /// The two rows an Antigravity pool shows: five-hour first, then weekly.
