@@ -1366,7 +1366,7 @@ if [[ -z "${DEVELOPER_DIR:-}" ]]; then
   fi
 fi
 if [[ -n "${DEVELOPER_DIR:-}" ]]; then
-  echo "[ios-ship] DEVELOPER_DIR=${DEVELOPER_DIR}"
+  echo "[ios-ship] DEVELOPER_DIR=${DEVELOPER_DIR}" >&2
 fi
 
 # Planning a build needs git, node and curl, never Xcode:  --plan-build-only
