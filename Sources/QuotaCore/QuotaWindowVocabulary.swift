@@ -79,11 +79,31 @@ public enum QuotaWindowVocabulary {
         let labelTokens = lexicalTokens(label)
         if labelTokens.contains("weekly") || labelTokens.contains("week") { return "weekly" }
         if labelTokens.contains("5h") { return "5h" }
-        // `lexicalTokens` splits on "_", so "five_hour" arrives as "five" and "hour".
-        let hasHour = labelTokens.contains("hour") || labelTokens.contains("hours")
-        if labelTokens.contains("5") || labelTokens.contains("five"), hasHour { return "5h" }
+        if namesFiveHours(label) { return "5h" }
         if labelTokens.contains("interval") { return "5h" }
         return nil
+    }
+
+    /// Whether a label says "five hours" as one phrase: "5" or "five"
+    /// immediately followed by "hour" or "hours" in token order.
+    ///
+    /// Splitting on "_" and "-" is what makes "five_hour" and "5-hour" match.
+    /// The pair has to be adjacent, so "five models per hour" is not
+    /// five-hour, and a "five" that ends a compound number such as
+    /// "twenty-five hours" is not either.
+    static func namesFiveHours(_ label: String) -> Bool {
+        let tokens = label.lowercased()
+            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .map(String.init)
+        let tens: Set<String> = ["twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"]
+        for index in tokens.indices.dropLast()
+        where ["5", "five"].contains(tokens[index]) && ["hour", "hours"].contains(tokens[index + 1]) {
+            if index > 0, tens.contains(tokens[index - 1]) || tokens[index - 1].allSatisfy(\.isNumber) {
+                continue
+            }
+            return true
+        }
+        return false
     }
 
     /// The short distinguishing noun for a bar caption row, or "" when the

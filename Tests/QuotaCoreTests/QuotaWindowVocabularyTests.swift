@@ -436,7 +436,18 @@ final class QuotaWindowVocabularyTests: XCTestCase {
     func testAntigravityPoolPeriodReadsFiveHourSpelledOut() {
         XCTAssertEqual(QuotaWindowVocabulary.antigravityPoolPeriod(windowToken: nil, label: "Gemini five_hour"), "5h")
         XCTAssertEqual(QuotaWindowVocabulary.antigravityPoolPeriod(windowToken: nil, label: "Five hours"), "5h")
+        XCTAssertEqual(QuotaWindowVocabulary.antigravityPoolPeriod(windowToken: nil, label: "Gemini · 5-hour"), "5h")
+        XCTAssertEqual(QuotaWindowVocabulary.antigravityPoolPeriod(windowToken: nil, label: "5 hours"), "5h")
         XCTAssertNil(QuotaWindowVocabulary.antigravityPoolPeriod(windowToken: nil, label: "five models"))
         XCTAssertNil(QuotaWindowVocabulary.antigravityPoolPeriod(windowToken: nil, label: "fifteen hour"))
+    }
+
+    /// "five" and "hour" must sit side by side as one phrase, and a "five"
+    /// that ends a compound number is not the five-hour pool.
+    func testAntigravityPoolPeriodNeedsAdjacentFiveHourPhrase() {
+        XCTAssertNil(QuotaWindowVocabulary.antigravityPoolPeriod(windowToken: nil, label: "five models per hour"))
+        XCTAssertNil(QuotaWindowVocabulary.antigravityPoolPeriod(windowToken: nil, label: "twenty-five hours"))
+        XCTAssertNil(QuotaWindowVocabulary.antigravityPoolPeriod(windowToken: nil, label: "2 5 hours"))
+        XCTAssertNil(QuotaWindowVocabulary.antigravityPoolPeriod(windowToken: nil, label: "hour five"))
     }
 }
