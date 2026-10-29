@@ -23,6 +23,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import { buildFloor, nextMarketingPatch, planVersion } from "./version-plan.mjs";
+import { nextSharedBuild } from "./shared-build.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const script = join(here, "asc-api.mjs");
@@ -127,9 +128,13 @@ async function withStub(state, fn) {
     }
     if (url.pathname === "/v1/builds") {
       const wanted = url.searchParams.get("filter[preReleaseVersion.version]");
+      const platform = url.searchParams.get("filter[preReleaseVersion.platform]");
       const rows = [];
       for (const train of state.trains || []) {
         if (wanted && wanted !== train.version) continue;
+        //  A train without a platform is an iOS train:  only the shared-build
+        //  fixture names a platform, so older fixtures keep meaning iOS.
+        if (platform && (train.platform || "IOS") !== platform) continue;
         for (const [i, version] of train.builds.entries()) {
           const row = {
             id: `build-${train.id}-${i}`,
@@ -361,4 +366,49 @@ test("a rejected key is named by key id and source, with nothing from the key (A
     );
   }
   assert.ok(!result.stderr.includes(`…${material.slice(-4)}`), "the key body's last four characters reached the diagnostic");
+});
+
+test("the client and the module agree on the next shared build", async () => {
+  //  The iOS train holds a four-digit build and a timestamp build the counter
+  //  ignores; the macOS train holds one four-digit build.  The floor on the
+  //  command line sits above both, so it decides the answer.
+  const iosBuilds = ["1004", "202610110355"];
+  const macBuilds = ["1007"];
+  const state = {
+    trains: [
+      { id: "t-ios", version: "1.0.1", builds: iosBuilds },
+      { id: "t-mac", version: "1.0.1", builds: macBuilds, platform: "MAC_OS" }
+    ]
+  };
+  const expected = nextSharedBuild({ iosBuilds, macBuilds, extraFloors: [1009], complete: true }).build;
+  assert.equal(expected, "1010", `the fixture does not let the floor decide: ${expected}`);
+
+  await withStub(state, async ({ base, requests }) => {
+    const result = await run(["next-shared-build", BUNDLE, "1009"], base);
+    assert.equal(result.code, 0, `the client failed:\n${result.stderr}`);
+    assert.equal(
+      result.stdout.trim(),
+      expected,
+      `the client printed ${result.stdout.trim()}, the module says ${expected}`
+    );
+
+    //  One inventory read per platform:  the iOS timestamp build is filtered
+    //  by the counter, not by a narrower query.
+    const iosQueries = requests.filter(
+      (r) => r.startsWith("/v1/builds?") && r.includes("filter[preReleaseVersion.platform]=IOS")
+    );
+    const macQueries = requests.filter(
+      (r) => r.startsWith("/v1/builds?") && r.includes("filter[preReleaseVersion.platform]=MAC_OS")
+    );
+    assert.equal(
+      iosQueries.length,
+      1,
+      `expected one iOS builds query, saw ${iosQueries.length}: ${iosQueries.join(", ")}`
+    );
+    assert.equal(
+      macQueries.length,
+      1,
+      `expected one macOS builds query, saw ${macQueries.length}: ${macQueries.join(", ")}`
+    );
+  });
 });
