@@ -911,5 +911,25 @@ final class CompanionModelTests: XCTestCase {
             source.contains("ownInstanceId: \"codecaps\""),
             "the phone must not invent an owning installation id"
         )
+        XCTAssertTrue(
+            source.contains("return unique.count == 1 ? unique.first : nil"),
+            "a payload whose own-device windows name different installations has no owner"
+        )
+        XCTAssertFalse(
+            source.contains("return instances.first"),
+            "the phone must not guess an owner from payload order"
+        )
+    }
+
+    /// The phone counts a provider as read locally the way the Mac's
+    /// `QuotaLocalScope` does (`QuotaWindow.hasReading`):  an absolute balance
+    /// with no percentage is a reading too, or the two surfaces keep and drop
+    /// different expired rows.
+    func testTheCompanionLocalReaderCountsAbsoluteReadings() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains("guard window.remainingPercent != nil\n                || window.absoluteRemaining != nil\n                || window.absoluteLimit != nil else { return nil }"),
+            "the phone's local-reader set must count absolute-only readings"
+        )
     }
 }

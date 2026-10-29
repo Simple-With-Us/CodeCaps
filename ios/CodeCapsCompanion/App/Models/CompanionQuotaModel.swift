@@ -1643,9 +1643,9 @@ public final class CompanionQuotaModel: ObservableObject {
         let instances = rawWindows.filter { $0.id.hasPrefix(prefix) }
             .compactMap { $0.producerInstanceId?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
+        // Contested windows name no single owner, so none is guessed.
         let unique = Set(instances)
-        if unique.count == 1, let only = unique.first { return only }
-        return instances.first
+        return unique.count == 1 ? unique.first : nil
     }
 
     private static func localReaderProviders(
@@ -1653,7 +1653,11 @@ public final class CompanionQuotaModel: ObservableObject {
         ownInstanceId: String?
     ) -> Set<String> {
         Set(rawWindows.compactMap { window -> String? in
-            guard window.remainingPercent != nil else { return nil }
+            // Same notion of a reading as `QuotaWindow.hasReading`, which
+            // `QuotaLocalScope` uses on the Mac:  a percentage or an absolute figure.
+            guard window.remainingPercent != nil
+                || window.absoluteRemaining != nil
+                || window.absoluteLimit != nil else { return nil }
             guard QuotaWindowVocabulary.isOwnDeviceWindow(id: window.id,
                                                             source: window.source,
                                                             machine: window.machine,

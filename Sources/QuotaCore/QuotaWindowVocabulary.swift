@@ -78,9 +78,10 @@ public enum QuotaWindowVocabulary {
         if ["5h", "5hr", "5-hour", "5hours", "300m"].contains(token) { return "5h" }
         let labelTokens = lexicalTokens(label)
         if labelTokens.contains("weekly") || labelTokens.contains("week") { return "weekly" }
-        if labelTokens.contains("5h") || labelTokens.contains("five_hour") { return "5h" }
+        if labelTokens.contains("5h") { return "5h" }
+        // `lexicalTokens` splits on "_", so "five_hour" arrives as "five" and "hour".
         let hasHour = labelTokens.contains("hour") || labelTokens.contains("hours")
-        if labelTokens.contains("5"), hasHour { return "5h" }
+        if labelTokens.contains("5") || labelTokens.contains("five"), hasHour { return "5h" }
         if labelTokens.contains("interval") { return "5h" }
         return nil
     }

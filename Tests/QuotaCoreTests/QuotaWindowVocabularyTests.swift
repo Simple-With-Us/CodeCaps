@@ -430,4 +430,13 @@ final class QuotaWindowVocabularyTests: XCTestCase {
             "weekly"
         )
     }
+
+    /// A label that spells the period as `five_hour` splits into "five" and
+    /// "hour", so it must still resolve to the five-hour pool.
+    func testAntigravityPoolPeriodReadsFiveHourSpelledOut() {
+        XCTAssertEqual(QuotaWindowVocabulary.antigravityPoolPeriod(windowToken: nil, label: "Gemini five_hour"), "5h")
+        XCTAssertEqual(QuotaWindowVocabulary.antigravityPoolPeriod(windowToken: nil, label: "Five hours"), "5h")
+        XCTAssertNil(QuotaWindowVocabulary.antigravityPoolPeriod(windowToken: nil, label: "five models"))
+        XCTAssertNil(QuotaWindowVocabulary.antigravityPoolPeriod(windowToken: nil, label: "fifteen hour"))
+    }
 }
