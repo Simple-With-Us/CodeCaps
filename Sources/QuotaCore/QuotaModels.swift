@@ -450,13 +450,14 @@ public enum QuotaLocalScope {
         mergeBasis: [QuotaWindow],
         localProviders: Set<String>,
         adoptedReadingKeys: Set<String>,
-        expectedProviderKeys: Set<String>
+        expectedProviderKeys: [String]
     ) -> [QuotaWindow] {
+        let expected = Set(expectedProviderKeys)
         groups.flatMap(\.windows).filter { candidate in
             let key = candidate.canonicalProviderKey
             return !localProviders.contains(key)
                 && !adoptedReadingKeys.contains(key)
-                && expectedProviderKeys.contains(key)
+                && expected.contains(key)
                 && !mergeBasis.contains(candidate)
         }
     }
