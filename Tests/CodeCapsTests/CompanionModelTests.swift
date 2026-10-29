@@ -20,7 +20,19 @@ final class CompanionModelTests: XCTestCase {
 
     func testCardNonfiniteReadingsStayUnknown() throws {
         let source = try readCompanionModelSource()
-        XCTAssertTrue(source.contains(".filter { $0.isFinite }"))
+        // The headline's reading rule now lives in the shared `CardHeadline`;
+        // the card must ask it, and it must keep non-finite readings out.
+        XCTAssertTrue(source.contains("return CardHeadline.percent(readings)"))
+        XCTAssertTrue(source.contains("windowToken: window.rawWindowToken,"),
+                      "the headline must pass the producer's own token, not a formatted cadence")
+        XCTAssertTrue(source.contains("rawWindowToken: w.window"),
+                      "the window item must carry the producer's raw token")
+        XCTAssertFalse(source.contains("windowToken: nil, label: left.label"),
+                       "the muse sort must pass the producer's raw token")
+        XCTAssertFalse(source.contains("windowToken: nil,\n                    label: $0.window.label"),
+                       "the card windows must pass the producer's raw token")
+        let shared = try readHeadlineSource()
+        XCTAssertTrue(shared.contains(".filter { $0.isFinite }"))
         XCTAssertTrue(source.contains("guard let remainingPercent = cardRemainingPercent(scope: scope, now: now), remainingPercent.isFinite else { return \"—\" }"))
         XCTAssertTrue(source.contains("guard let remainingPercent = cardRemainingPercent(scope: scope, now: now), remainingPercent.isFinite else { return .secondary }"))
     }
@@ -47,6 +59,18 @@ final class CompanionModelTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("ios/CodeCapsCompanion/App/Views/CompanionContentView.swift")
+    }
+
+    private func readHeadlineSource() throws -> String {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/QuotaCore/WidgetPlatformDisplay.swift")
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw XCTSkip("WidgetPlatformDisplay.swift is not present at \(url.path)")
+        }
+        return try String(contentsOf: url, encoding: .utf8)
     }
 
     private func readCompanionModelSource() throws -> String {
@@ -416,8 +440,13 @@ final class CompanionModelTests: XCTestCase {
     func testMaskedWindowsNeverFeedTheHeadlineOrTheBar() throws {
         let model = try readCompanionModelSource()
         XCTAssertTrue(
-            model.contains(".filter { !$0.isMasked }"),
-            "the card headline must leave masked windows out"
+            model.contains("return CardHeadline.percent(readings)")
+                && model.contains("isMasked: window.isMasked"),
+            "the card headline must hand every window's mask to the shared headline rule"
+        )
+        XCTAssertTrue(
+            try readHeadlineSource().contains(".filter { !$0.isMasked }"),
+            "the shared headline rule must leave masked windows out"
         )
         XCTAssertFalse(
             model.contains("cardWindows(scope: scope, now: now).compactMap(\\.remainingPercent).min()"),

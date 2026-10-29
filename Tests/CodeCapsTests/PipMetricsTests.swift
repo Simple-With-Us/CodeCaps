@@ -327,7 +327,7 @@ final class PipMetricsTests: XCTestCase {
     /// narrowest width they are allowed (review finding, 2026-10-28).
     func testTheExtraBalanceWordsStillReadAtTheirSmallest() {
         let font = NSFont.systemFont(ofSize: 10, weight: .semibold)
-        let width = ("Using extra balance" as NSString).size(withAttributes: [.font: font]).width
+        let width = ("extra" as NSString).size(withAttributes: [.font: font]).width
         XCTAssertLessThanOrEqual(width * 0.7, PipMetrics.extraBalanceTextMinWidth,
                                  "the words must still read at 70% of their full width")
     }

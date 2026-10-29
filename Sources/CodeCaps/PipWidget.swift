@@ -161,10 +161,10 @@ enum PipMetrics {
 
     /// The narrowest the words beside a capped row's extra balance can be.
     ///
-    /// "Using extra balance" measures 99 points at 10pt semibold and is allowed
-    /// to shrink to 70% of that, so 70 points is the least room in which the
-    /// words still read.
-    static let extraBalanceTextMinWidth: CGFloat = 70
+    /// "extra" measures about 29 points at 10pt semibold and is allowed to
+    /// shrink to 70% of that, so 22 points is the least room in which the
+    /// word still reads.
+    static let extraBalanceTextMinWidth: CGFloat = 22
 
     // MARK: Responsive detail
 
@@ -1139,7 +1139,7 @@ struct PipWidgetView: View {
                 let identity = PipMetrics.providerLogoSize + PipMetrics.rowSpacing
                 let textBudget = max(0, available - identity - PipMetrics.meterSpacing - meterMin)
                 let showsMeter = textBudget >= PipMetrics.extraBalanceTextMinWidth
-                let words = Text("Using extra balance")
+                let words = Text("extra")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(background.ink)
                     .lineLimit(1)
@@ -1147,7 +1147,8 @@ struct PipWidgetView: View {
                 if showsMeter {
                     HStack(spacing: PipMetrics.meterSpacing) {
                         words.frame(maxWidth: textBudget, alignment: .leading)
-                        pipMeter(extra, detail: detail, expandedCadence: expandedCadence)
+                        pipMeter(extra, detail: detail, expandedCadence: expandedCadence,
+                                 extraWordShownBeside: true)
                             .frame(maxWidth: .infinity)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -1340,12 +1341,14 @@ struct PipWidgetView: View {
     }
 
     private func pipMeter(_ snapshot: QuotaWindowSnapshot, detail: PipMetrics.Detail,
-                          expandedCadence: Bool) -> some View {
+                          expandedCadence: Bool, extraWordShownBeside: Bool = false) -> some View {
         let metrics = QuotaBarMetrics(snapshot: snapshot, now: model.now)
         let isExtra = isMuseAssistExtra(snapshot)
         let cd: String
         if isExtra {
-            cd = "extra"
+            // The capped row already says "extra" to the left of this meter,
+            // so the trailing slot stays empty instead of repeating it.
+            cd = extraWordShownBeside ? "" : "extra"
         } else if detail.usesCompactCountdown {
             cd = glanceResetCompactCountdown(snapshot.resetAt, now: model.now)
         } else {
@@ -1365,7 +1368,7 @@ struct PipWidgetView: View {
             : PipMetrics.percentWidth
 
         return HStack(spacing: PipMetrics.meterSpacing) {
-            if detail.showsCadence {
+            if detail.showsCadence && !extraWordShownBeside {
                 Text(cadenceCaption)
                     .font(.system(size: showExpanded ? 10 : 9, weight: showExpanded ? .bold : .bold))
                     .foregroundStyle(background.countdownInk)

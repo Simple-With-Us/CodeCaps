@@ -109,3 +109,44 @@ public enum WidgetPlatformDisplay {
         return nil
     }
 }
+
+/// The one percentage a plan card leads with.
+///
+/// It is the lowest honest reading on the card, except that a Muse Assist
+/// extra balance that can still be spent speaks for the card:  the weekly
+/// allowance being spent does not stop the plan while the extra balance is
+/// being used, and the weekly row below still shows its own 0%.
+public enum CardHeadline {
+    public struct Reading: Equatable {
+        public var isMuseAssistExtra: Bool
+        public var isMasked: Bool
+        public var remainingPercent: Double?
+
+        public init(isMuseAssistExtra: Bool, isMasked: Bool, remainingPercent: Double?) {
+            self.isMuseAssistExtra = isMuseAssistExtra
+            self.isMasked = isMasked
+            self.remainingPercent = remainingPercent
+        }
+    }
+
+    public static func percent(_ readings: [Reading]) -> Double? {
+        let honest = readings.filter { !$0.isMasked }
+        if let extra = honest.first(where: { $0.isMuseAssistExtra }),
+           let percent = extra.remainingPercent, percent.isFinite, percent > 0 {
+            return percent
+        }
+        return honest.compactMap(\.remainingPercent).filter { $0.isFinite }.min()
+    }
+}
+
+/// How "last updated" reads.  The time alone is enough for today, but a
+/// reading from an earlier day has to say so, or a day-old snapshot looks
+/// current.
+public enum UpdatedStamp {
+    public static func label(_ date: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
+        if calendar.isDate(date, inSameDayAs: now) {
+            return date.formatted(date: .omitted, time: .shortened)
+        }
+        return date.formatted(date: .abbreviated, time: .shortened)
+    }
+}

@@ -176,7 +176,7 @@ public struct CompanionContentView: View {
             Spacer(minLength: 4)
 
             if let updated = model.lastUpdated {
-                Text(updated.formatted(date: .omitted, time: .shortened))
+                Text(UpdatedStamp.label(updated))
                     .font(.caption2)
                     .italic()
                     .foregroundStyle(.secondary)
@@ -304,7 +304,7 @@ public struct CompanionContentView: View {
         let atCapWindow = item.atCapWindow(scope: scope)
         let isAtCap = atCapWindow != nil
         let usableMuseExtra = item.providerKey == "muse-assist" ? cardWindows.first(where: {
-            QuotaWindowVocabulary.isMuseAssistExtra(providerKey: item.providerKey, windowToken: nil, label: $0.label, resetAt: $0.resetAt)
+            QuotaWindowVocabulary.isMuseAssistExtra(providerKey: item.providerKey, windowToken: $0.rawWindowToken, label: $0.label, resetAt: $0.resetAt)
             && (($0.remainingPercent ?? 0) > 0 || ($0.absoluteRemaining ?? 0) > 0)
         }) : nil
         let shouldDimTitle = isAtCap && usableMuseExtra == nil
@@ -809,7 +809,7 @@ public struct CompanionContentView: View {
                 } footer: {
                     VStack(alignment: .leading, spacing: 4) {
                         if let updated = model.lastUpdated {
-                            Text("Last updated \(updated.formatted(date: .omitted, time: .shortened))")
+                            Text("Last updated \(UpdatedStamp.label(updated))")
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }

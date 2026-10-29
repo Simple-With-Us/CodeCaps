@@ -208,6 +208,26 @@ public enum AntigravityQuotaGroups {
         let identity = [value.modelId, value.modelType, value.label].compactMap { $0 }.joined(separator: " ").lowercased()
         if identity.contains("gemini") || identity.contains("argon") { return "gemini" }
         if ["third-party", "third party", "third_party", "claude", "gpt", "openai", "anthropic"].contains(where: identity.contains) { return "third-party" }
+        // A producer that leaves the pool out of the label and model fields
+        // ("7-day window", no model) still names the pool in its bucket id:
+        // `gemini-weekly`, `3p-5h`, `3p-weekly`.  Without this a pool's weekly
+        // window belonged to no pool and was not drawn in any Antigravity row,
+        // while the phone, which files every non-Gemini window under
+        // Third-Party, drew it.  Only a window the fields above could not
+        // place reaches this line.
+        // The id is either the bare bucket, a `:`-joined path ending in it, or a
+        // JSON array of strings kept whole inside the id string
+        // (`["producer","instance","3p-weekly"]`), whose last element is it.
+        let bucket: String
+        if value.id.first == "[",
+           let elements = try? JSONDecoder().decode([String].self, from: Data(value.id.utf8)),
+           let last = elements.last {
+            bucket = last.lowercased()
+        } else {
+            bucket = value.id.lowercased().split(separator: ":").last.map(String.init) ?? ""
+        }
+        if bucket.hasPrefix("gemini-") { return "gemini" }
+        if bucket.hasPrefix("3p-") { return "third-party" }
         return nil
     }
 
