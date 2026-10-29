@@ -105,4 +105,18 @@ final class WidgetPlatformDisplayTests: XCTestCase {
             CardHeadline.Reading(isMuseAssistExtra: false, isMasked: false, remainingPercent: 0)
         ]), 0)
     }
+
+    /// An empty window token is a token the producer sent, and the Mac keeps it
+    /// that way: `QuotaWindow` decodes `""` as `""`, and the vocabulary reads
+    /// only nil as tokenless.  The companion stores the wire token unchanged so
+    /// the two surfaces classify the same payload the same way.
+    func testAnEmptyWindowTokenIsKeptAsATokenOnTheMac() throws {
+        let json = #"{"id":"w","provider":"Muse Assist","providerKey":"muse-assist","label":"Usage","window":""}"#
+        let decoded = try JSONDecoder().decode(QuotaWindow.self, from: Data(json.utf8))
+        XCTAssertEqual(decoded.window, "")
+        XCTAssertFalse(QuotaWindowVocabulary.isMuseAssistExtra(
+            providerKey: "muse-assist", windowToken: decoded.window, label: "Usage", resetAt: nil))
+        XCTAssertTrue(QuotaWindowVocabulary.isMuseAssistExtra(
+            providerKey: "muse-assist", windowToken: nil, label: "Usage", resetAt: nil))
+    }
 }
