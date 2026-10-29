@@ -867,7 +867,7 @@ asc_next_shared_build() {
   if [[ -n "$feed" ]]; then
     command -v curl >/dev/null 2>&1 || return 1
     set +e
-    feed_xml="$(curl -fsSL "$feed" 2>/dev/null)"
+    feed_xml="$(curl -fsSL --connect-timeout 10 --max-time 30 "$feed" 2>/dev/null)"
     rc=$?
     set -e
     [[ $rc -eq 0 && -n "$feed_xml" ]] || return 1
