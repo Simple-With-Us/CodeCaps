@@ -30,7 +30,9 @@ name: iOS TestFlight ship (GitHub-hosted macOS)
 #     stay repository secrets.
 #   * SENTRY_DSN and SENTRY_AUTH_TOKEN are best-effort: an inert Sentry beats a
 #     red TestFlight ship.  Infisical prod first, same-named GitHub secrets as
-#     fallback.
+#     fallback.  SENTRY_DSN_CODECAPS (the DSN of Sentry project `codecaps`)
+#     replaces the shared fleet SENTRY_DSN for this app; a missing one falls
+#     back to the shared key and turns the run red.
 #   Values are never printed.
 #
 # scripts/ios-appstore-gm-prepare.sh imports the Distribution identity (the job
@@ -207,14 +209,45 @@ jobs:
       - name: Load Sentry ship secrets (Infisical, then repository secrets)
         uses: ./.github/actions/infisical-secrets
         with:
-          names: SENTRY_DSN SENTRY_AUTH_TOKEN SENTRY_AUTH_TOKEN_FULLSCOPE
+          names: SENTRY_DSN SENTRY_DSN_CODECAPS SENTRY_AUTH_TOKEN SENTRY_AUTH_TOKEN_FULLSCOPE
           project-id: ${{ secrets.INFISICAL_FLEET_OPS_PROJECT_ID }}
           client-id: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID || secrets.INFISICAL_CLIENT_ID }}
           client-secret: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET || secrets.INFISICAL_CLIENT_SECRET }}
         env:
           GH_FALLBACK_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          GH_FALLBACK_SENTRY_DSN_CODECAPS: ${{ secrets.SENTRY_DSN_CODECAPS }}
           GH_FALLBACK_SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           GH_FALLBACK_SENTRY_AUTH_TOKEN_FULLSCOPE: ${{ secrets.SENTRY_AUTH_TOKEN_FULLSCOPE }}
+
+      # CodeCaps iOS reports into its own Sentry project, `codecaps`
+      # (4512207409840129), not into the project the shared fleet SENTRY_DSN
+      # names (`botfleet` since 2026-10-22).  SENTRY_DSN_CODECAPS is that
+      # project's DSN; this step makes it the SENTRY_DSN the archive and the
+      # ship script see, so the events, the dSYMs and the Size Analysis build
+      # all land in `codecaps`.
+      #
+      # A missing SENTRY_DSN_CODECAPS falls back to the shared SENTRY_DSN,
+      # LOUDLY:  an ::error:: annotation plus a line in the Sentry failure
+      # marker, so the last step turns the run red.  It never blocks the
+      # TestFlight upload (an inert or misrouted Sentry beats a missed ship),
+      # and it never stays green while crashes go to the wrong project.
+      # The value is masked by the fetch above and is never printed here.
+      - name: Use the CodeCaps Sentry DSN
+        run: |
+          set +o xtrace
+          set -euo pipefail
+          if [ -n "${SENTRY_DSN_CODECAPS:-}" ]; then
+            {
+              echo "SENTRY_DSN<<SENTRY_DSN_CODECAPS_EOF"
+              printf '%s\n' "$SENTRY_DSN_CODECAPS"
+              echo "SENTRY_DSN_CODECAPS_EOF"
+            } >>"$GITHUB_ENV"
+            echo "SENTRY_DSN now comes from SENTRY_DSN_CODECAPS (Sentry project codecaps)."
+          else
+            msg="SENTRY_DSN_CODECAPS is missing from Infisical Fleet-OPS prod / and from the repository secrets, so this build falls back to the shared fleet SENTRY_DSN and its crashes do not land in the codecaps project.  Set SENTRY_DSN_CODECAPS to the DSN of Sentry project codecaps."
+            echo "::error title=Sentry DSN::${msg}"
+            printf '%s\n' "$msg" >>"$GITHUB_WORKSPACE/.ios-ship-sentry-failed"
+          fi
 
       # Do not use `secrets.*` in `if:` -- GitHub's dispatch parser rejects it
       # (`Unrecognized named-value: secrets`) and the whole workflow dies at 0s.

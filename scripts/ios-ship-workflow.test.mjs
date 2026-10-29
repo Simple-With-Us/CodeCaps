@@ -10,7 +10,8 @@
 // Run: node --test scripts/ios-ship-workflow.test.mjs
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
@@ -398,6 +399,110 @@ test("the iOS lane uploads to the DSN project as well as the app's own", () => {
   // The DSN project is not the same thing as the app's project, so both are
   // uploaded to, and the same project is never uploaded to twice.
   assert.match(shipScript, /\$dsn_project" != "\$app_project"/);
+});
+
+// The DSN names a numeric project id, and sentry-cli needs the slug.  The
+// lookup must hit the Sentry web API's project endpoint, never the DSN's
+// ingest host and never the nonexistent /organizations/{org}/projects/{id}/
+// form, which answered 404 for every input and turned every ship red
+// (2026-10-28).  The function runs here against a stub curl that answers
+// only the real endpoint.
+function runDsnProject(dsn) {
+  const dir = mkdtempSync(join(tmpdir(), "dsn-project-"));
+  const fn = shipScript.match(/^SENTRY_DSN_PROJECT_ERROR=""\n[\s\S]*?^sentry_dsn_project\(\) \{\n[\s\S]*?^\}\n/m);
+  assert.ok(fn, "ship-testflight.sh defines sentry_dsn_project");
+  writeFileSync(join(dir, "fn.sh"), fn[0]);
+  const stub = join(dir, "curl");
+  writeFileSync(
+    stub,
+    [
+      "#!/usr/bin/env bash",
+      'url="${@: -1}"',
+      'printf "%s\\n" "$url" >>"$STUB_LOG"',
+      'case "$url" in',
+      '  https://sentry.io/api/0/projects/*/4512207409840129/) echo \'{"slug":"codecaps"}\' ;;',
+      "  *) exit 22 ;;",
+      "esac",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(stub, 0o755);
+  const log = join(dir, "urls.log");
+  writeFileSync(log, "");
+  let out = "";
+  let ok = true;
+  try {
+    out = execFileSync(
+      "bash",
+      ["-c", 'source "$DIR/fn.sh"; sentry_dsn_project'],
+      {
+        env: {
+          PATH: `${dir}:${process.env.PATH}`,
+          DIR: dir,
+          LOG_DIR: dir,
+          STUB_LOG: log,
+          SENTRY_DSN: dsn,
+          SENTRY_API_TOKEN: "test-token-not-real",
+        },
+        encoding: "utf8",
+      },
+    );
+  } catch {
+    ok = false;
+  }
+  return { ok, out, urls: readFileSync(log, "utf8").trim().split("\n").filter(Boolean) };
+}
+
+test("the DSN project id is resolved through sentry.io /api/0/projects/{org}/{id}/", () => {
+  const dsn = "https://placeholder@o4511650476326912.ingest.us.sentry.io/4512207409840129";
+  const r = runDsnProject(dsn);
+  assert.ok(r.ok, "a resolvable id succeeds");
+  assert.equal(r.out, "codecaps");
+  assert.equal(r.urls[0], "https://sentry.io/api/0/projects/4511650476326912/4512207409840129/");
+  for (const u of r.urls) {
+    assert.doesNotMatch(u, /ingest/, "the API is never asked on the ingest host");
+    assert.doesNotMatch(u, /\/organizations\/[^/]+\/projects\//);
+  }
+});
+
+test("an unresolvable DSN project id fails with the reason and tries the fleet org", () => {
+  const r = runDsnProject("https://placeholder@o4511650476326912.ingest.us.sentry.io/999");
+  assert.equal(r.ok, false);
+  assert.deepEqual(r.urls, [
+    "https://sentry.io/api/0/projects/4511650476326912/999/",
+    "https://sentry.io/api/0/projects/simple-with-us/999/",
+  ]);
+});
+
+test("a slug DSN tail is used as it stands, with no API call", () => {
+  const r = runDsnProject("https://placeholder@o1.ingest.us.sentry.io/codecaps");
+  assert.ok(r.ok);
+  assert.equal(r.out, "codecaps");
+  assert.deepEqual(r.urls, []);
+});
+
+test("CodeCaps iOS ships with its own Sentry DSN, and a missing one is loud", () => {
+  // SENTRY_DSN_CODECAPS (Sentry project codecaps) is fetched with the other
+  // Sentry names, from Infisical first and the same-named repository secret
+  // second, and it replaces the shared fleet SENTRY_DSN before the archive.
+  assert.match(code, /names: [^\n]*\bSENTRY_DSN_CODECAPS\b/);
+  assert.match(code, /GH_FALLBACK_SENTRY_DSN_CODECAPS: \$\{\{ secrets\.SENTRY_DSN_CODECAPS \}\}/);
+  const steps = code.split(/- name:/);
+  const pick = steps.findIndex((s) => /Use the CodeCaps Sentry DSN/.test(s));
+  const load = steps.findIndex((s) => /Load Sentry ship secrets/.test(s));
+  const ship = steps.findIndex((s) => /Ship CodeCaps to TestFlight/.test(s));
+  assert.ok(load > 0 && pick > load && ship > pick, "the DSN is picked after the fetch and before the ship");
+  const step = steps[pick];
+  assert.match(step, /SENTRY_DSN<</);
+  assert.match(step, /"\$SENTRY_DSN_CODECAPS"/);
+  assert.match(step, />>"\$GITHUB_ENV"/);
+  // Missing: the shared key stays, but the run goes red through the same
+  // marker the Sentry status step reads, and the ship itself is not blocked.
+  assert.match(step, /::error title=Sentry DSN::/);
+  assert.match(step, /\.ios-ship-sentry-failed/);
+  assert.doesNotMatch(step, /exit 1/);
+  // The DSN value is never echoed.
+  assert.doesNotMatch(step, /echo[^\n]*\$\{?SENTRY_DSN_CODECAPS\}?"?\s*$/m);
 });
 
 test("a failed Sentry upload is an error annotation and a red run", () => {

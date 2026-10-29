@@ -20,6 +20,7 @@ The ship script keeps its own rate gate and the same-HEAD skip.  Never set `IOS_
 - The same-named repository secrets are a stale copy that App Store Connect rejects with HTTP 401 (CC-163).  The workflow does not read them and has no fallback to them.
 - `IOS_DIST_P12_BASE64` and `IOS_DIST_P12_PASSWORD` (the Apple Distribution identity) stay repository secrets.
 - `SENTRY_DSN` and `SENTRY_AUTH_TOKEN` are best-effort: Infisical first, same-named repository secrets as fallback.
+- `SENTRY_DSN_CODECAPS` is the DSN of Sentry project `codecaps` (id 4512207409840129), read from Fleet-OPS Infisical prod `/` (repository secret of the same name as fallback).  The workflow makes it the `SENTRY_DSN` the archive and the ship script see, so crashes, dSYMs and the Size Analysis build all land in `codecaps`.  When it is missing the build falls back to the shared fleet `SENTRY_DSN` (project `botfleet` since 2026-10-22), and the run goes red with a `Sentry DSN` error; the TestFlight upload is never blocked.
 
 ## Versions And Notes
 

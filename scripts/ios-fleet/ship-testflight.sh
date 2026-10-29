@@ -625,6 +625,7 @@ sentry_report_failure() {
 # exactly the "the dSYM landed in the wrong project" defect this lane exists to
 # fix (CC-200), and it would leave the run green.
 SENTRY_DSN_PROJECT_ERROR=""
+SENTRY_API_BASE="${SENTRY_API_BASE:-https://sentry.io}"
 sentry_dsn_project() {
   local raw="${SENTRY_DSN:-}"
   SENTRY_DSN_PROJECT_ERROR=""
@@ -640,6 +641,14 @@ sentry_dsn_project() {
   esac
   # Numeric:  ask the API for the slug.  The token never enters the command
   # line:  it is handed to curl on stdin, so a process listing cannot read it.
+  #
+  # The lookup goes to the Sentry web API (sentry.io), never to the DSN's own
+  # host:  that host is the ingest endpoint (o<org id>.ingest.us.sentry.io) and
+  # answers 404 for every /api/0/ path.  The endpoint is
+  # /api/0/projects/{org}/{project id or slug}/;  the older
+  # /api/0/organizations/{org}/projects/{id}/ form does not exist and answered
+  # 404 for every input, which turned every CodeCaps ship red (2026-10-28).
+  # The DSN host is still read, but only for the numeric org id.
   local host org slug body
   host="$(printf '%s' "$raw" | sed -E 's#^https?://[^@/]+@##; s#/.*$##')"
   if [[ -z "$host" ]]; then
@@ -653,7 +662,7 @@ sentry_dsn_project() {
   fi
   for org in "$org_id" "simple-with-us"; do
     [[ -n "$org" ]] || continue
-    body="$(curl -fsS -H @- "https://${host}/api/0/organizations/${org}/projects/${last}/" \
+    body="$(curl -fsS -H @- "${SENTRY_API_BASE}/api/0/projects/${org}/${last}/" \
       <<<"Authorization: Bearer ${SENTRY_API_TOKEN}" 2>/dev/null)" || body=""
     slug="$(printf '%s' "$body" | python3 -c 'import json,sys
 try:
