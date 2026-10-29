@@ -496,11 +496,17 @@ test("CodeCaps iOS ships with its own Sentry DSN, and a missing one is loud", ()
   assert.match(step, /SENTRY_DSN<</);
   assert.match(step, /"\$SENTRY_DSN_CODECAPS"/);
   assert.match(step, />>"\$GITHUB_ENV"/);
-  // Missing: the shared key stays, but the run goes red through the same
-  // marker the Sentry status step reads, and the ship itself is not blocked.
+  // Missing: the shared key stays, but the run goes red through a note the
+  // Sentry status step reads, and the ship itself is not blocked.  The note
+  // lives in RUNNER_TEMP, never in the checkout:  the ship script refuses a
+  // dirty worktree, so an untracked file there would stop the ship.
   assert.match(step, /::error title=Sentry DSN::/);
-  assert.match(step, /\.ios-ship-sentry-failed/);
+  assert.match(step, /"\$RUNNER_TEMP\/ios-ship-sentry-dsn-missing"/);
+  assert.doesNotMatch(step, /GITHUB_WORKSPACE/);
   assert.doesNotMatch(step, /exit 1/);
+  const status = steps.find((s) => /Sentry artifact upload status/.test(s));
+  assert.match(status, /\$RUNNER_TEMP\/ios-ship-sentry-dsn-missing/);
+  assert.match(status, /dsn_missing" = "1" \]; then\s+exit 1/);
   // The DSN value is never echoed.
   assert.doesNotMatch(step, /echo[^\n]*\$\{?SENTRY_DSN_CODECAPS\}?"?\s*$/m);
 });

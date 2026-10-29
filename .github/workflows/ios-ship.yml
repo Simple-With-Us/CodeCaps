@@ -227,8 +227,10 @@ jobs:
       # all land in `codecaps`.
       #
       # A missing SENTRY_DSN_CODECAPS falls back to the shared SENTRY_DSN,
-      # LOUDLY:  an ::error:: annotation plus a line in the Sentry failure
-      # marker, so the last step turns the run red.  It never blocks the
+      # LOUDLY:  an ::error:: annotation plus a note in RUNNER_TEMP that the
+      # Sentry status step reads, so the last step turns the run red.  The
+      # note is never written into the checkout:  the ship script refuses a
+      # dirty worktree, and an untracked file there would stop the ship.  It never blocks the
       # TestFlight upload (an inert or misrouted Sentry beats a missed ship),
       # and it never stays green while crashes go to the wrong project.
       # The value is masked by the fetch above and is never printed here.
@@ -246,7 +248,7 @@ jobs:
           else
             msg="SENTRY_DSN_CODECAPS is missing from Infisical Fleet-OPS prod / and from the repository secrets, so this build falls back to the shared fleet SENTRY_DSN and its crashes do not land in the codecaps project.  Set SENTRY_DSN_CODECAPS to the DSN of Sentry project codecaps."
             echo "::error title=Sentry DSN::${msg}"
-            printf '%s\n' "$msg" >>"$GITHUB_WORKSPACE/.ios-ship-sentry-failed"
+            printf '%s\n' "$msg" >>"$RUNNER_TEMP/ios-ship-sentry-dsn-missing"
           fi
 
       # Do not use `secrets.*` in `if:` -- GitHub's dispatch parser rejects it
@@ -390,6 +392,15 @@ jobs:
       - name: Sentry artifact upload status
         if: always()
         run: |
+          dsn_note="$RUNNER_TEMP/ios-ship-sentry-dsn-missing"
+          dsn_missing=0
+          if [ -f "$dsn_note" ]; then
+            dsn_missing=1
+            echo "::error title=Sentry DSN::this build used the shared fleet SENTRY_DSN, not SENTRY_DSN_CODECAPS, so its crashes do not land in the codecaps project."
+            while IFS= read -r line; do
+              echo "  ${line}"
+            done <"$dsn_note"
+          fi
           marker="$GITHUB_WORKSPACE/.ios-ship-sentry-failed"
           if [ -f "$marker" ]; then
             if [ "${{ steps.ship.outcome }}" = "success" ]; then
@@ -400,6 +411,9 @@ jobs:
             while IFS= read -r line; do
               echo "  ${line}"
             done <"$marker"
+            exit 1
+          fi
+          if [ "$dsn_missing" = "1" ]; then
             exit 1
           fi
           if [ "${{ steps.ship.outcome }}" = "success" ]; then
