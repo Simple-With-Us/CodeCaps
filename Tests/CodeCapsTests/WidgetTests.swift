@@ -126,6 +126,74 @@ final class WidgetTests: XCTestCase {
         )
     }
 
+    /// Owner 2026-10-23: the xAI row showed two 7-day windows at 0% with a
+    /// "due" caption while the live weekly allowance read 91% with a reset on
+    /// 2026-10-29.  The fleet copies of a period that ended days earlier
+    /// reached the widget's cache as well.
+    ///
+    /// The widget reads the same payload the app does, so it has to drop the
+    /// same copies, through the same shared rule.  The widget target compiles
+    /// `QuotaWindowVocabulary.swift` by path, so the rule is in scope here.
+    ///
+    /// The widget asks the shared rule with the reading's own observation time,
+    /// the same field the Mac and the phone ask with, and it only judges
+    /// copies:  this Mac's own reading keeps its row.
+    func testWidgetDropsACopyOfAPeriodThatEnded() throws {
+        let source = try readSource(at: Self.widgetPresentationURL)
+        XCTAssertTrue(
+            source.contains("QuotaFreshnessRule.keepsLiveRow("),
+            "the widget must ask the shared live-row rule about ended periods"
+        )
+        XCTAssertTrue(
+            source.contains("QuotaWindowVocabulary.isOwnDeviceWindow("),
+            "the widget must classify own readings before applying the shared live-row rule"
+        )
+    }
+
+    /// This Mac's own reading is this device's own reading, and the widget can
+    /// only tell it from another machine's copy when the payload names the
+    /// installation that wrote it.  Every fleet-sourced window names a
+    /// producer instance, so without that the widget read this Mac's own
+    /// expired reading as somebody else's copy and deleted it, while the Mac
+    /// kept it, and the row vanished instead of greying out.
+    ///
+    /// `WidgetPresentation.swift` is not in the macOS test target, so the
+    /// wiring is pinned here by reading the source.
+    func testWidgetAsksWithThePayloadsOwningInstallation() throws {
+        let source = try readSource(at: Self.widgetPresentationURL)
+        XCTAssertTrue(
+            source.contains("let producerInstanceId: String?"),
+            "the widget's payload must carry the installation that wrote it"
+        )
+        XCTAssertTrue(
+            source.contains("ownInstanceId: envelope.producerInstanceId"),
+            "the widget must ask the own-device rule with the owning installation's id"
+        )
+        XCTAssertTrue(
+            source.contains("ownInstanceId: ownInstanceId"),
+            "the widget's own-device rule must receive the owning installation's id"
+        )
+        XCTAssertFalse(
+            source.contains("ownInstanceId: \"codecaps\""),
+            "the widget must not invent an owning installation id"
+        )
+    }
+
+    /// Only a fresh window may spend the widget's Antigravity pool, and the
+    /// freshest window wins.  The phone has to agree with both, or the same
+    /// payload reads exhausted on one surface and live on the other.
+    func testWidgetOnlyLetsAFreshWindowSpendTheAntigravityPool() throws {
+        let source = try readSource(at: Self.widgetPresentationURL)
+        XCTAssertTrue(
+            source.contains("let weeklyExhausted = isFresh(weeklyWin)"),
+            "only a fresh window may spend the widget's Antigravity pool"
+        )
+        XCTAssertTrue(
+            source.contains("func isFresher(_ candidate: WireRawWindow, than current: WireRawWindow?) -> Bool {"),
+            "the widget must pick the freshest window of a pool period"
+        )
+    }
+
     /// Only a fresh window may cap a plan in the widget.  A stale window said
     /// how the plan looked when the reading was taken.
     func testWidgetOnlyLetsAFreshWindowCapAPlan() throws {

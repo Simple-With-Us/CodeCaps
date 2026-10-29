@@ -416,7 +416,7 @@ final class CompanionModelTests: XCTestCase {
             "the phone must not keep a weekly spent threshold of its own; the shared rule owns the number"
         )
         XCTAssertTrue(
-            model.contains("let weeklyExhausted = QuotaCapRule.isExhausted(remainingPercent: weeklyPct,"),
+            model.contains("&& QuotaCapRule.isExhausted(remainingPercent: weeklyPct,"),
             "the phone must decide the weekly through the shared rule, so a reading outranks the provider's exhausted word"
         )
     }
@@ -775,6 +775,161 @@ final class CompanionModelTests: XCTestCase {
         XCTAssertTrue(
             view.contains(#"case alarms = "Alarms""#),
             "The Alarms tab must still exist as a tab of the settings sheet"
+        )
+    }
+
+    // MARK: - A copy of a period that ended is not a reading
+
+    /// Owner 2026-10-23: the xAI row showed two 7-day windows at 0% with a
+    /// "due" caption while Grok, Cursor and Grok Bot showed the same weekly
+    /// allowance at 91% with a reset on 2026-10-29.  This Mac reads no xAI
+    /// quota locally, so the fleet fallback filled the xAI row with copies of
+    /// a period that ended days earlier.
+    ///
+    /// The phone pulls the same fleet payload, so it has to drop the same
+    /// copies.  Its model is not in the macOS test target, so the rule is
+    /// pinned here by reading the source.
+    ///
+    /// The phone asks the shared rule with the reading's own observation time,
+    /// the same field the Mac and the widget ask with, so the same payload
+    /// cannot read live on the phone and stale on the Mac.  It only judges
+    /// copies:  this Mac's own reading keeps its row.
+    func testTheCompanionDropsACopyOfAPeriodThatEnded() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains("QuotaFreshnessRule.keepsLiveRow("),
+            "the phone must ask the shared live-row rule about a window whose period already ended"
+        )
+        XCTAssertFalse(
+            source.contains("QuotaFreshnessRule.isDeadCopy(observedAt: parsedReportedAt,"),
+            "the phone must ask the shared rule with the reading's own observation time, not the feed's reported time"
+        )
+        XCTAssertFalse(
+            source.contains("QuotaFreshnessRule.isDeadCopy(observedAt: Self.reportedAt(from:"),
+            "the phone's Antigravity pool must ask the shared rule with the reading's own observation time too"
+        )
+        XCTAssertTrue(
+            source.contains("QuotaWindowVocabulary.isOwnDeviceWindow("),
+            "the phone must classify own readings before applying the shared live-row rule"
+        )
+        XCTAssertFalse(
+            source.contains("private static let staleAfter"),
+            "the phone must not carry a stale threshold of its own"
+        )
+    }
+
+    /// An ended period cannot exhaust the phone's Antigravity pool.  The
+    /// widget already guarded the exhaustion decision with the shared
+    /// freshness rule, and the phone did not, so the same payload read
+    /// exhausted on the phone and live on the widget:  the pool's copies had
+    /// all expired, the fallback put them back so the row still renders, and
+    /// the ended weekly window then read zero and spent the pool.
+    ///
+    /// The phone's model is not in the macOS test target, so the rule is
+    /// pinned here by reading the source.
+    func testTheCompanionPoolIsNotExhaustedByAnEndedPeriod() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains("let weeklyExhausted = isFresh(weeklyWin)"),
+            "only a fresh window may spend the phone's Antigravity pool"
+        )
+        XCTAssertTrue(
+            source.contains("QuotaFreshnessRule.isFresh(observedAt: CompanionDateFormatter.date(from: window.occurredAt),"),
+            "the phone must ask the shared freshness rule with the reading's own observation time"
+        )
+        XCTAssertFalse(
+            source.contains("let weeklyWin = windows.first {"),
+            "the phone must pick the freshest weekly window, not the first one in payload order"
+        )
+        XCTAssertFalse(
+            source.contains("let fiveHourWin = windows.first {"),
+            "the phone must pick the freshest five-hour window, not the first one in payload order"
+        )
+        XCTAssertTrue(
+            source.contains("if isFresher(w, than: weeklyWin) { weeklyWin = w }"),
+            "the phone's weekly window must be the freshest one that matches"
+        )
+        XCTAssertTrue(
+            source.contains("if isFresher(w, than: fiveHourWin) { fiveHourWin = w }"),
+            "the phone's five-hour window must be the freshest one that matches"
+        )
+        XCTAssertTrue(
+            source.contains("QuotaWindowVocabulary.antigravityPoolPeriod(windowToken: w.window, label: w.label)"),
+            "the phone must classify Antigravity pool periods through the shared resolver, not substring scans"
+        )
+        XCTAssertFalse(
+            source.contains("s.contains(\"5h\")"),
+            "the phone must not treat 5h as a substring of longer tokens such as 15h"
+        )
+        XCTAssertTrue(
+            source.contains("let windows = liveWindows.isEmpty ? windows : liveWindows"),
+            "a pool whose copies have all expired must still render its row"
+        )
+    }
+
+    /// The phone's platform row must be driven by the freshest reading of a
+    /// period, the way the widget's row is.  The payload carries a fleet copy
+    /// beside the local window, and the copy is often days old and reads zero,
+    /// so taking the first one in payload order let the stale copy win and
+    /// the phone showed figures the widget had already replaced.
+    func testTheCompanionRowIsDrivenByTheFreshestReading() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains("if isFresher(w, than: current) {"),
+            "the phone's row must take the freshest reading of a period"
+        )
+        XCTAssertTrue(
+            source.contains("func isFresher(_ candidate: WireRawWindow, than current: WireRawWindow) -> Bool {"),
+            "the phone must ask the shared freshness rule when it compares two readings"
+        )
+    }
+
+    /// This Mac's own reading is this device's own reading, and the phone can
+    /// only tell it from another machine's copy when the payload names the
+    /// installation that wrote it.  Every fleet-sourced window names a
+    /// producer instance, so without that the phone read this Mac's own
+    /// expired reading as somebody else's copy and deleted it, while the Mac
+    /// kept it, and the row vanished on the phone instead of greying out.
+    ///
+    /// The phone's model is not in the macOS test target, so the wiring is
+    /// pinned here by reading the source.
+    func testTheCompanionAsksWithThePayloadsOwningInstallation() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains("let producerInstanceId: String?"),
+            "the phone's payload must carry the installation that wrote it"
+        )
+        XCTAssertTrue(
+            source.contains("resolvedPayloadProducerInstanceId"),
+            "the phone must infer the owning installation when the envelope omits it"
+        )
+        XCTAssertTrue(
+            source.contains("ownInstanceId: payloadProducerInstanceId"),
+            "the phone must ask the own-device rule with the owning installation's id"
+        )
+        XCTAssertFalse(
+            source.contains("ownInstanceId: \"codecaps\""),
+            "the phone must not invent an owning installation id"
+        )
+        XCTAssertTrue(
+            source.contains("return unique.count == 1 ? unique.first : nil"),
+            "a payload whose own-device windows name different installations has no owner"
+        )
+        XCTAssertFalse(
+            source.contains("return instances.first"),
+            "the phone must not guess an owner from payload order"
+        )
+    }
+
+    /// The phone counts a provider as read locally the way the Mac's
+    /// `QuotaLocalScope` does (`QuotaWindow.hasReading`):  an absolute balance
+    /// with no percentage is a reading too, or the two surfaces keep and drop
+    /// different expired rows.
+    func testTheCompanionLocalReaderCountsAbsoluteReadings() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains("guard window.remainingPercent != nil\n                || window.absoluteRemaining != nil\n                || window.absoluteLimit != nil else { return nil }"),
+            "the phone's local-reader set must count absolute-only readings"
         )
     }
 }

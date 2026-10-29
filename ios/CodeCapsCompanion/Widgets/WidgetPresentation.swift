@@ -474,6 +474,14 @@ public enum WidgetPresentation {
     private struct WireEnvelope: Decodable {
         let windows: [WireRawWindow]?
         let providerGroups: [WireProviderGroup]?
+        /// The installation that wrote this payload.
+        ///
+        /// Every window the fleet sends names a producer instance, so without
+        /// the payload's own id there is no way to tell this installation's
+        /// reading from a copy of another machine's.  Optional on decode, so an
+        /// older Mac's file still parses and the widget keeps the older
+        /// behaviour rather than guessing.
+        let producerInstanceId: String?
     }
 
     private struct WireRawWindow: Decodable {
@@ -488,6 +496,11 @@ public enum WidgetPresentation {
         let window: String?
         let resetAt: String?
         let occurredAt: String?
+        /// Who produced the window, so the widget can tell this Mac's own
+        /// reading from a copy of another machine's.
+        let source: String?
+        let machine: String?
+        let producerInstanceId: String?
     }
 
     /// Mirrors the backend manifest's provider group on the wire.  Optional
@@ -587,7 +600,8 @@ public enum WidgetPresentation {
                 iconHint: group.iconHint,
                 defaultWindowLabel: group.defaultWindowLabel,
                 rawWindows: group.windows,
-                now: now
+                now: now,
+                ownInstanceId: envelope.producerInstanceId
             )
             platforms.append(built)
         }
@@ -600,7 +614,8 @@ public enum WidgetPresentation {
                 iconHint: group.iconHint,
                 defaultWindowLabel: group.defaultWindowLabel,
                 rawWindows: group.windows,
-                now: now
+                now: now,
+                ownInstanceId: envelope.producerInstanceId
             )
             platforms.append(built)
         }
@@ -622,7 +637,8 @@ public enum WidgetPresentation {
                 windows: geminiWindows,
                 now: now,
                 iconHint: iconHint(for: "google-antigravity:gemini", in: manifest) ?? "gemini-color",
-                defaultLabel: defaultWindowLabel(for: "google-antigravity", in: manifest)
+                defaultLabel: defaultWindowLabel(for: "google-antigravity", in: manifest),
+                ownInstanceId: envelope.producerInstanceId
             ) {
                 platforms.append(item)
             }
@@ -633,7 +649,8 @@ public enum WidgetPresentation {
                 windows: thirdPartyWindows,
                 now: now,
                 iconHint: "antigravity",
-                defaultLabel: defaultWindowLabel(for: "google-antigravity", in: manifest)
+                defaultLabel: defaultWindowLabel(for: "google-antigravity", in: manifest),
+                ownInstanceId: envelope.producerInstanceId
             ) {
                 platforms.append(item)
             }
@@ -656,6 +673,44 @@ public enum WidgetPresentation {
         return platforms
     }
 
+    private static func wireProviderKey(_ window: WireRawWindow) -> String {
+        (window.providerKey ?? window.provider).lowercased()
+    }
+
+    private static func wireLocalReaderProviders(
+        from rawWindows: [WireRawWindow],
+        ownInstanceId: String?
+    ) -> Set<String> {
+        Set(rawWindows.compactMap { window -> String? in
+            guard window.remainingPercent != nil else { return nil }
+            guard QuotaWindowVocabulary.isOwnDeviceWindow(id: window.id,
+                                                            source: window.source,
+                                                            machine: window.machine,
+                                                            producerInstanceId: window.producerInstanceId,
+                                                            ownInstanceId: ownInstanceId) else { return nil }
+            return wireProviderKey(window)
+        })
+    }
+
+    private static func keepsLiveWireRow(
+        _ window: WireRawWindow,
+        ownInstanceId: String?,
+        localReaderProviders: Set<String>,
+        now: Date
+    ) -> Bool {
+        let own = QuotaWindowVocabulary.isOwnDeviceWindow(id: window.id,
+                                                            source: window.source,
+                                                            machine: window.machine,
+                                                            producerInstanceId: window.producerInstanceId,
+                                                            ownInstanceId: ownInstanceId)
+        return QuotaFreshnessRule.keepsLiveRow(isOwnDeviceWindow: own,
+                                               providerKey: wireProviderKey(window),
+                                               observedAt: parseDate(from: window.occurredAt),
+                                               resetAt: parseDate(from: window.resetAt),
+                                               localReaderProviders: localReaderProviders,
+                                               now: now)
+    }
+
     /// Build a single WidgetPlatformItem from a window group + manifest hints.
     private static func buildPlatformItem(
         id: String,
@@ -664,16 +719,31 @@ public enum WidgetPresentation {
         iconHint: String?,
         defaultWindowLabel: String?,
         rawWindows: [WireRawWindow],
-        now: Date
+        now: Date,
+        ownInstanceId: String? = nil
     ) -> WidgetPlatformItem {
         var windowByCadence: [String: WidgetWindowItem] = [:]
         var cadenceOrder: [String] = []
         var childWindows: [WidgetWindowItem] = []
 
-        for w in rawWindows {
+        let localReaders = wireLocalReaderProviders(from: rawWindows, ownInstanceId: ownInstanceId)
+        // A copy of a period that ended before the last refresh is not a
+        // reading, so it never becomes a row here either.  The rule is the
+        // shared one, the same the Mac and the phone ask, so the three
+        // surfaces cannot drift apart, and it is asked with the reading's own
+        // observation time.  It only judges copies:  this Mac's own reading
+        // keeps its row while this Mac still reads that provider locally.
+        let liveWindows = rawWindows.filter { w in
+            keepsLiveWireRow(w,
+                             ownInstanceId: ownInstanceId,
+                             localReaderProviders: localReaders,
+                             now: now)
+        }
+
+        for w in liveWindows {
             let parsedReset = parseDate(from: w.resetAt)
-            let cadence = formatCadence(w.label, window: w.window, resetAt: parsedReset)
             let observed = parseDate(from: w.occurredAt)
+            let cadence = formatCadence(w.label, window: w.window, resetAt: parsedReset)
             let pct = w.remainingPercent
             // The one shared rule decides, as it does on the phone and on the
             // Mac:  a reading outranks the export's stale exhausted word, and
@@ -785,8 +855,25 @@ public enum WidgetPresentation {
         windows: [WireRawWindow],
         now: Date,
         iconHint: String? = nil,
-        defaultLabel: String? = nil
+        defaultLabel: String? = nil,
+        ownInstanceId: String? = nil
     ) -> WidgetPlatformItem? {
+        guard !windows.isEmpty else { return nil }
+        let localReaders = wireLocalReaderProviders(from: windows, ownInstanceId: ownInstanceId)
+        // A copy of a period that ended before the last refresh is not a
+        // reading, so it never joins the pool.  The rule is the shared one,
+        // asked with the reading's own observation time, and it only judges
+        // copies:  this Mac's own reading keeps the pool alive while this Mac
+        // still reads that provider locally.
+        let liveWindows = windows.filter { w in
+            keepsLiveWireRow(w,
+                             ownInstanceId: ownInstanceId,
+                             localReaderProviders: localReaders,
+                             now: now)
+        }
+        // A pool whose copies have all expired still renders:  it keeps the
+        // windows it had, so the row survives rather than disappearing.
+        let windows = liveWindows.isEmpty ? windows : liveWindows
         guard !windows.isEmpty else { return nil }
 
         var childWindows: [WidgetWindowItem] = []
