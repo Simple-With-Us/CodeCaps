@@ -14,6 +14,9 @@
 #   7. a fixed --build is accepted only above this platform's max, so the
 #      paired platform can reuse the planned value
 #   8. the curl invocation is hardened and the max uses POSIX tools
+#   9. --plan-build-only stdout stays a single 12-digit build with
+#      DEVELOPER_DIR set (the notice goes to stderr, or the workflow's
+#      GITHUB_OUTPUT entry corrupts)
 #
 # Everything here is offline: no network, no credentials, no App Store
 # Connect, no xcodebuild.  curl and asc_client are stubbed, and the merge
@@ -376,6 +379,41 @@ HELPER_TEXT="$(awk '/^asc_next_shared_build\(\) \{/ { grab = 1 } grab { print } 
 lacks "the max never calls a hardcoded python" "/usr/bin/python3" "$HELPER_TEXT"
 contains "the max uses sort -n" "sort -n" "$HELPER_TEXT"
 contains "the max uses tail -n 1" "tail -n 1" "$HELPER_TEXT"
+
+echo "== --plan-build-only stdout stays a single build with DEVELOPER_DIR set =="
+# The workflow exports DEVELOPER_DIR and captures the script's stdout into
+# $build for GITHUB_OUTPUT.  The informational notice must go to stderr:  on
+# stdout it becomes a second line in $build and corrupts the entry.  This runs
+# the real script top level, offline (stub node client, stub curl feed, fixed
+# committer date, dummy credential for the availability check).
+cat > "${BIN}/stub-node" <<'FAKENODE'
+#!/usr/bin/env bash
+printf '202610290935'
+FAKENODE
+chmod +x "${BIN}/stub-node"
+# An exported function, not the BIN/curl binary above:  the script prepends
+# the system paths to PATH, so a binary stub loses to /usr/bin/curl, while a
+# function wins over PATH lookup.  Defined here, after the last helper-level
+# curl test, so only this top-level run sees it.
+curl() { printf '%s' "${FAKE_FEED_XML:-}"; return "${FAKE_CURL_RC:-0}"; }
+export -f curl
+export FAKE_FEED_XML='<rss><channel><item><sparkle:version>1500</sparkle:version></item></channel></rss>'
+export FAKE_CURL_RC=0
+PLAN_ERR="${TMP}/plan.err"
+PLAN_OUT="$(DEVELOPER_DIR=/tmp/fake-Xcode.app/Contents/Developer ASC_KEY_ID=test-id ASC_ISSUER_ID=test-issuer ASC_KEY_P8=test-key IOS_FLEET_NODE=stub-node bash "$SHIP" codecaps --repo-root "$STAMP_REPO" --plan-build-only 2>"$PLAN_ERR")"
+PLAN_RC=$?
+check "plan-build-only exits 0 with DEVELOPER_DIR set" "0" "$PLAN_RC"
+check "plan-build-only stdout is the single planned build" "202610290935" "$PLAN_OUT"
+lacks "plan-build-only stdout carries no DEVELOPER_DIR notice" "DEVELOPER_DIR" "$PLAN_OUT"
+contains "the DEVELOPER_DIR notice still reaches stderr" "DEVELOPER_DIR" "$(cat "$PLAN_ERR")"
+if printf '%s' "$PLAN_OUT" | grep -qE '^[1-9][0-9]{11}$' && [[ "$PLAN_OUT" != *$'\n'* ]]; then
+  PLAN_SINGLE="single-12-digit"
+else
+  PLAN_SINGLE="not-single: $PLAN_OUT"
+fi
+check "plan-build-only stdout is one 12-digit line for GITHUB_OUTPUT" "single-12-digit" "$PLAN_SINGLE"
+contains "the DEVELOPER_DIR notice goes to stderr" 'echo "[ios-ship] DEVELOPER_DIR=${DEVELOPER_DIR}" >&2' "$SHIP_TEXT"
+contains "the DEVELOPER_DIR xcodebuild probe skips plan-build-only" 'if [[ -n "${DEVELOPER_DIR:-}" && "$PLAN_BUILD_ONLY" -eq 0 ]]; then' "$SHIP_TEXT"
 
 echo
 echo "passed: ${PASS}  failed: ${FAIL}"
