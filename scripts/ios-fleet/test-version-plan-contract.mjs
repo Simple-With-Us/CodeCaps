@@ -23,6 +23,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import { buildFloor, nextMarketingPatch, planVersion } from "./version-plan.mjs";
+import { nextSharedBuild } from "./shared-build.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const script = join(here, "asc-api.mjs");
@@ -50,6 +51,10 @@ function run(args, base, env = {}) {
         APPLE_API_ISSUER_ID: "",
         APPLE_API_KEY_P8_BASE64: "",
         ASC_API_BASE: base,
+        //  The stub is loopback:  never let an ambient proxy redirect the
+        //  client's request away from it.
+        NO_PROXY: "127.0.0.1,localhost",
+        no_proxy: "127.0.0.1,localhost",
         ...env
       },
       stdio: ["ignore", "pipe", "pipe"]
@@ -71,6 +76,10 @@ function run(args, base, env = {}) {
  */
 async function withStub(state, fn) {
   const requests = [];
+  //  An optional paired app for the shared-counter union test:  state.paired
+  //  is { bundle, appId, trains }.  Without it the stub answers one app, as
+  //  before.
+  const paired = state.paired || null;
   const server = createServer((req, res) => {
     const url = new URL(req.url, "http://127.0.0.1");
     requests.push(url.pathname + url.search);
@@ -80,6 +89,11 @@ async function withStub(state, fn) {
     };
 
     if (url.pathname === "/v1/apps") {
+      const wantedBundle = url.searchParams.get("filter[bundleId]");
+      if (paired && wantedBundle === paired.bundle) {
+        send({ data: [{ id: paired.appId, type: "apps", attributes: { bundleId: paired.bundle } }] });
+        return;
+      }
       send({ data: [{ id: APP_ID, type: "apps", attributes: { bundleId: BUNDLE } }] });
       return;
     }
@@ -127,9 +141,19 @@ async function withStub(state, fn) {
     }
     if (url.pathname === "/v1/builds") {
       const wanted = url.searchParams.get("filter[preReleaseVersion.version]");
+      const platform = url.searchParams.get("filter[preReleaseVersion.platform]");
+      const wantedApp = url.searchParams.get("filter[app]");
+      let trains = state.trains || [];
+      if (paired) {
+        if (wantedApp === paired.appId) trains = paired.trains || [];
+        else if (wantedApp && wantedApp !== APP_ID) trains = [];
+      }
       const rows = [];
-      for (const train of state.trains || []) {
+      for (const train of trains) {
         if (wanted && wanted !== train.version) continue;
+        //  A train without a platform is an iOS train:  only the shared-build
+        //  fixture names a platform, so older fixtures keep meaning iOS.
+        if (platform && (train.platform || "IOS") !== platform) continue;
         for (const [i, version] of train.builds.entries()) {
           const row = {
             id: `build-${train.id}-${i}`,
@@ -361,4 +385,188 @@ test("a rejected key is named by key id and source, with nothing from the key (A
     );
   }
   assert.ok(!result.stderr.includes(`…${material.slice(-4)}`), "the key body's last four characters reached the diagnostic");
+});
+
+test("the client and the module agree on the next shared build", async () => {
+  //  The iOS train holds a four-digit build and a timestamp build the counter
+  //  ignores; the macOS train holds one four-digit build.  The floor on the
+  //  command line sits above both, so it decides the answer.
+  const iosBuilds = ["1004", "202610110355"];
+  const macBuilds = ["1007"];
+  const state = {
+    trains: [
+      { id: "t-ios", version: "1.0.1", builds: iosBuilds },
+      { id: "t-mac", version: "1.0.1", builds: macBuilds, platform: "MAC_OS" }
+    ]
+  };
+  const expected = nextSharedBuild({ iosBuilds, macBuilds, extraFloors: [1009], complete: true }).build;
+  assert.equal(expected, "1010", `the fixture does not let the floor decide: ${expected}`);
+
+  await withStub(state, async ({ base, requests }) => {
+    const result = await run(["next-shared-build", BUNDLE, "1009"], base);
+    assert.equal(result.code, 0, `the client failed:\n${result.stderr}`);
+    assert.equal(
+      result.stdout.trim(),
+      expected,
+      `the client printed ${result.stdout.trim()}, the module says ${expected}`
+    );
+
+    //  One inventory read per platform:  the iOS timestamp build is filtered
+    //  by the counter, not by a narrower query.
+    const iosQueries = requests.filter(
+      (r) => r.startsWith("/v1/builds?") && r.includes("filter[preReleaseVersion.platform]=IOS")
+    );
+    const macQueries = requests.filter(
+      (r) => r.startsWith("/v1/builds?") && r.includes("filter[preReleaseVersion.platform]=MAC_OS")
+    );
+    assert.equal(
+      iosQueries.length,
+      1,
+      `expected one iOS builds query, saw ${iosQueries.length}: ${iosQueries.join(", ")}`
+    );
+    assert.equal(
+      macQueries.length,
+      1,
+      `expected one macOS builds query, saw ${macQueries.length}: ${macQueries.join(", ")}`
+    );
+  });
+});
+
+test("next-shared-build unions IOS and MAC_OS across both paired apps", async () => {
+  //  Each of the four inventories holds a distinct build.  The paired app's
+  //  iOS build is the highest, so the answer proves IOS(paired) joined:
+  //  without it the max would be the paired macOS build and next 1401.
+  const PAIRED_BUNDLE = "com.example.paired";
+  const PAIRED_APP = "app-2";
+  const state = {
+    trains: [
+      { id: "t-main-ios", version: "1.0.1", builds: ["1100"], platform: "IOS" },
+      { id: "t-main-mac", version: "1.0.1", builds: ["1200"], platform: "MAC_OS" }
+    ],
+    paired: {
+      bundle: PAIRED_BUNDLE,
+      appId: PAIRED_APP,
+      trains: [
+        { id: "t-pair-ios", version: "1.0.1", builds: ["1500"], platform: "IOS" },
+        { id: "t-pair-mac", version: "1.0.1", builds: ["1400"], platform: "MAC_OS" }
+      ]
+    }
+  };
+  const expected = nextSharedBuild({
+    iosBuilds: ["1100", "1500"],
+    macBuilds: ["1200", "1400"],
+    extraFloors: [],
+    complete: true
+  }).build;
+  assert.equal(expected, "1501", `the fixture does not let paired iOS decide: ${expected}`);
+
+  await withStub(state, async ({ base, requests }) => {
+    const result = await run(["next-shared-build", BUNDLE, PAIRED_BUNDLE], base);
+    assert.equal(result.code, 0, `the client failed:\n${result.stderr}`);
+    assert.equal(
+      result.stdout.trim(),
+      expected,
+      `the client printed ${result.stdout.trim()}, the union says ${expected}`
+    );
+    //  Two apps times two platforms:  IOS(app) + IOS(paired),
+    //  MAC_OS(app) + MAC_OS(paired).
+    const buildsQueries = requests.filter((r) => r.startsWith("/v1/builds?"));
+    assert.equal(
+      buildsQueries.length,
+      4,
+      `expected four builds queries (two apps x two platforms), saw ${buildsQueries.length}: ${buildsQueries.join(", ")}`
+    );
+    for (const appId of [APP_ID, PAIRED_APP]) {
+      for (const platform of ["IOS", "MAC_OS"]) {
+        assert.ok(
+          buildsQueries.some((r) => r.includes(`filter[app]=${appId}`) && r.includes(`filter[preReleaseVersion.platform]=${platform}`)),
+          `no builds query for app ${appId} platform ${platform}: ${buildsQueries.join(", ")}`
+        );
+      }
+    }
+  });
+
+  //  The mirror case:  the paired macOS build is the highest, so the answer
+  //  proves MAC_OS(paired) joined too.
+  const state2 = {
+    trains: [
+      { id: "t-main-ios", version: "1.0.1", builds: ["1100"], platform: "IOS" },
+      { id: "t-main-mac", version: "1.0.1", builds: ["1200"], platform: "MAC_OS" }
+    ],
+    paired: {
+      bundle: PAIRED_BUNDLE,
+      appId: PAIRED_APP,
+      trains: [
+        { id: "t-pair-ios", version: "1.0.1", builds: ["1150"], platform: "IOS" },
+        { id: "t-pair-mac", version: "1.0.1", builds: ["1600"], platform: "MAC_OS" }
+      ]
+    }
+  };
+  const expected2 = nextSharedBuild({
+    iosBuilds: ["1100", "1150"],
+    macBuilds: ["1200", "1600"],
+    extraFloors: [],
+    complete: true
+  }).build;
+  assert.equal(expected2, "1601", `the fixture does not let paired macOS decide: ${expected2}`);
+  await withStub(state2, async ({ base }) => {
+    const result = await run(["next-shared-build", BUNDLE, PAIRED_BUNDLE], base);
+    assert.equal(result.code, 0, `the client failed:\n${result.stderr}`);
+    assert.equal(
+      result.stdout.trim(),
+      expected2,
+      `the client printed ${result.stdout.trim()}, the union says ${expected2}`
+    );
+  });
+});
+
+test("next-shared-build reads its inventories concurrently and fails closed past the page cap", async () => {
+  //  The independent inventories are fetched with Promise.all, not serial
+  //  awaits.  Pinned so a later edit cannot serialize them again.
+  const { readFileSync } = await import("node:fs");
+  const clientText = readFileSync(script, "utf8");
+  const sharedSection = clientText.slice(clientText.indexOf('method === "next-shared-build"'));
+  assert.ok(
+    sharedSection.includes("Promise.all"),
+    "next-shared-build does not fetch its inventories with Promise.all"
+  );
+
+  //  Past the 100-page cap the client fails closed (exit 2 with a message)
+  //  instead of truncating the inventory and planning from a partial max.
+  const server = createServer((req, res) => {
+    const url = new URL(req.url, "http://127.0.0.1");
+    const send = (payload) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(payload));
+    };
+    if (url.pathname === "/v1/apps") {
+      send({ data: [{ id: APP_ID, type: "apps", attributes: { bundleId: BUNDLE } }] });
+      return;
+    }
+    if (url.pathname === "/v1/builds") {
+      const page = Number(url.searchParams.get("page") || "0");
+      const next = `http://127.0.0.1:${server.address().port}/v1/builds?filter[app]=${APP_ID}&filter[preReleaseVersion.platform]=IOS&limit=200&page=${page + 1}`;
+      send({
+        data: [{ id: `build-p${page}`, type: "builds", attributes: { version: "1000" } }],
+        links: { next }
+      });
+      return;
+    }
+    res.writeHead(404, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ errors: [{ title: "not found" }] }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  let result;
+  try {
+    result = await run(["next-shared-build", BUNDLE], base);
+  } finally {
+    server.close();
+  }
+  assert.equal(result.code, 2, `expected exit 2 past the page cap, got ${result.code}:\n${result.stderr}`);
+  assert.ok(
+    /incomplete pagination|more than 100 pages/.test(result.stderr),
+    `the cap failure named no reason:\n${result.stderr}`
+  );
+  assert.equal(result.stdout.trim(), "", "a capped inventory must print no build");
 });
