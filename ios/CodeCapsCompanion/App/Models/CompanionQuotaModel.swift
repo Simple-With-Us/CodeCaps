@@ -108,6 +108,10 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
     public let producerInstanceId: String?
     /// Normalized allowance key used to pair primary and mirror windows.
     public let normalizedWindowKey: String
+    /// The producer's own window token, exactly as it arrived, or nil when the
+    /// payload carried none.  The Mac asks whether a token is present, not
+    /// what it means, so a window's formatted `cadence` cannot stand in for it.
+    public let rawWindowToken: String?
 
     public init(
         id: String,
@@ -128,9 +132,11 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
         quotaUnit: String? = nil,
         reportedAt: Date? = nil,
         normalizedWindowKey: String = "",
-        producerInstanceId: String? = nil
+        producerInstanceId: String? = nil,
+        rawWindowToken: String? = nil
     ) {
         self.id = id
+        self.rawWindowToken = rawWindowToken
         self.label = label
         self.cadence = cadence
         self.remainingPercent = remainingPercent
@@ -187,7 +193,8 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
             quotaUnit: quotaUnit,
             reportedAt: reportedAt,
             normalizedWindowKey: normalizedWindowKey,
-            producerInstanceId: producerInstanceId
+            producerInstanceId: producerInstanceId,
+            rawWindowToken: rawWindowToken
         )
     }
 
@@ -196,7 +203,7 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
         case isDuplicateSource, isExhausted, isMasked
         case isSupplementaryVideoQuota, isScopedPoolAllowance, isSubModelLimit
         case absoluteRemaining, absoluteLimit, quotaUnit
-        case reportedAt, observedAt, normalizedWindowKey, producerInstanceId
+        case reportedAt, observedAt, normalizedWindowKey, producerInstanceId, rawWindowToken
     }
 
     public init(from decoder: Decoder) throws {
@@ -205,6 +212,7 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
         label = try container.decode(String.self, forKey: .label)
         cadence = try container.decode(String.self, forKey: .cadence)
         producerInstanceId = try container.decodeIfPresent(String.self, forKey: .producerInstanceId)
+        rawWindowToken = try container.decodeIfPresent(String.self, forKey: .rawWindowToken)
         remainingPercent = try container.decodeIfPresent(Double.self, forKey: .remainingPercent)
         resetAt = try container.decodeIfPresent(Date.self, forKey: .resetAt)
         source = try container.decodeIfPresent(String.self, forKey: .source)
@@ -246,6 +254,7 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
         try container.encodeIfPresent(quotaUnit, forKey: .quotaUnit)
         try container.encodeIfPresent(reportedAt, forKey: .reportedAt)
         try container.encodeIfPresent(producerInstanceId, forKey: .producerInstanceId)
+        try container.encodeIfPresent(rawWindowToken, forKey: .rawWindowToken)
         try container.encode(normalizedWindowKey, forKey: .normalizedWindowKey)
     }
 
@@ -555,7 +564,7 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
             if let weekly = resolved.first(where: {
                 QuotaWindowVocabulary.isMuseAssistWeekly(
                     providerKey: providerKey,
-                    windowToken: nil,
+                    windowToken: $0.window.rawWindowToken,
                     label: $0.window.label,
                     resetAt: $0.window.resetAt
                 )
@@ -573,7 +582,7 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
             if let extra = resolved.first(where: {
                 QuotaWindowVocabulary.isMuseAssistExtra(
                     providerKey: providerKey,
-                    windowToken: nil,
+                    windowToken: $0.window.rawWindowToken,
                     label: $0.window.label,
                     resetAt: $0.window.resetAt
                 )
@@ -601,7 +610,10 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
                 isMuseAssistExtra: providerKey == "muse-assist"
                     && QuotaWindowVocabulary.isMuseAssistExtra(
                         providerKey: providerKey,
-                        windowToken: nil,
+                        // The producer's own token, as the Mac passes it: only
+                        // a window that carried none may be read as the extra
+                        // meter from its label.
+                        windowToken: window.rawWindowToken,
                         label: window.label,
                         resetAt: window.resetAt
                     ),
@@ -2097,7 +2109,8 @@ public final class CompanionQuotaModel: ObservableObject {
                 quotaUnit: w.quotaUnit,
                 reportedAt: parsedReportedAt,
                 normalizedWindowKey: cadenceKey,
-                producerInstanceId: w.producerInstanceId
+                producerInstanceId: w.producerInstanceId,
+                rawWindowToken: w.window
             )
 
             if let index = primaryIndexByCadenceKey[cadenceKey],
@@ -2123,14 +2136,14 @@ public final class CompanionQuotaModel: ObservableObject {
         primaryWindows.sort { left, right in
             if providerKey == "muse-assist" {
                 let leftWeekly = QuotaWindowVocabulary.isMuseAssistWeekly(
-                    providerKey: providerKey, windowToken: nil, label: left.label, resetAt: left.resetAt)
+                    providerKey: providerKey, windowToken: left.rawWindowToken, label: left.label, resetAt: left.resetAt)
                 let rightWeekly = QuotaWindowVocabulary.isMuseAssistWeekly(
-                    providerKey: providerKey, windowToken: nil, label: right.label, resetAt: right.resetAt)
+                    providerKey: providerKey, windowToken: right.rawWindowToken, label: right.label, resetAt: right.resetAt)
                 if leftWeekly != rightWeekly { return leftWeekly }
                 let leftExtra = QuotaWindowVocabulary.isMuseAssistExtra(
-                    providerKey: providerKey, windowToken: nil, label: left.label, resetAt: left.resetAt)
+                    providerKey: providerKey, windowToken: left.rawWindowToken, label: left.label, resetAt: left.resetAt)
                 let rightExtra = QuotaWindowVocabulary.isMuseAssistExtra(
-                    providerKey: providerKey, windowToken: nil, label: right.label, resetAt: right.resetAt)
+                    providerKey: providerKey, windowToken: right.rawWindowToken, label: right.label, resetAt: right.resetAt)
                 if leftExtra != rightExtra { return !leftExtra }
             }
             if left.isShortCadence != right.isShortCadence {

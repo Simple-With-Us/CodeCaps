@@ -304,7 +304,7 @@ public struct CompanionContentView: View {
         let atCapWindow = item.atCapWindow(scope: scope)
         let isAtCap = atCapWindow != nil
         let usableMuseExtra = item.providerKey == "muse-assist" ? cardWindows.first(where: {
-            QuotaWindowVocabulary.isMuseAssistExtra(providerKey: item.providerKey, windowToken: nil, label: $0.label, resetAt: $0.resetAt)
+            QuotaWindowVocabulary.isMuseAssistExtra(providerKey: item.providerKey, windowToken: $0.rawWindowToken, label: $0.label, resetAt: $0.resetAt)
             && (($0.remainingPercent ?? 0) > 0 || ($0.absoluteRemaining ?? 0) > 0)
         }) : nil
         let shouldDimTitle = isAtCap && usableMuseExtra == nil

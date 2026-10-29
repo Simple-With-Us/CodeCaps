@@ -1146,7 +1146,7 @@ struct PipWidgetView: View {
                     .minimumScaleFactor(0.7)
                 if showsMeter {
                     HStack(spacing: PipMetrics.meterSpacing) {
-                        words.fixedSize(horizontal: true, vertical: false)
+                        words.frame(maxWidth: textBudget, alignment: .leading)
                         pipMeter(extra, detail: detail, expandedCadence: expandedCadence,
                                  extraWordShownBeside: true)
                             .frame(maxWidth: .infinity)

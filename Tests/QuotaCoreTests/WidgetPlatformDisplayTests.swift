@@ -64,4 +64,45 @@ final class WidgetPlatformDisplayTests: XCTestCase {
         XCTAssertNotEqual(UpdatedStamp.label(yesterday, now: now),
                           yesterday.formatted(date: .omitted, time: .shortened))
     }
+
+    /// The companion passes the producer's own window token, as the Mac does.
+    /// A window that carried a token is a normal window even when its label
+    /// says nothing, and only a window that carried none may be read as the
+    /// extra meter from its label.  Presence is the signal, not meaning.
+    func testACadenceTokenKeepsANormalWindowFromBeingTheExtraMeter() {
+        XCTAssertFalse(QuotaWindowVocabulary.isMuseAssistExtra(
+            providerKey: "muse-assist", windowToken: "7d", label: "Usage", resetAt: nil))
+        XCTAssertFalse(QuotaWindowVocabulary.isMuseAssistExtra(
+            providerKey: "muse-assist", windowToken: "5h", label: "Usage", resetAt: nil))
+        XCTAssertTrue(QuotaWindowVocabulary.isMuseAssistExtra(
+            providerKey: "muse-assist", windowToken: nil, label: "Usage", resetAt: nil))
+        XCTAssertTrue(QuotaWindowVocabulary.isMuseAssistExtra(
+            providerKey: "muse-assist", windowToken: "7d", label: "Extra balance", resetAt: nil))
+        // Presence is the signal, not meaning: a token the vocabulary cannot
+        // read still keeps an unlabelled window from being the extra meter.
+        XCTAssertFalse(QuotaWindowVocabulary.isMuseAssistExtra(
+            providerKey: "muse-assist", windowToken: "foo", label: "Usage", resetAt: nil))
+    }
+
+    /// The rules the companion's source-text tests used to pin by string, now
+    /// pinned by behavior: a masked window and a non-finite reading never speak
+    /// for the card, and a card with nothing believable has no headline.
+    func testHeadlineLeavesMaskedAndNonFiniteReadingsOut() {
+        XCTAssertEqual(CardHeadline.percent([
+            CardHeadline.Reading(isMuseAssistExtra: false, isMasked: true, remainingPercent: 5),
+            CardHeadline.Reading(isMuseAssistExtra: false, isMasked: false, remainingPercent: 40)
+        ]), 40)
+        XCTAssertEqual(CardHeadline.percent([
+            CardHeadline.Reading(isMuseAssistExtra: false, isMasked: false, remainingPercent: .nan),
+            CardHeadline.Reading(isMuseAssistExtra: false, isMasked: false, remainingPercent: 40)
+        ]), 40)
+        XCTAssertNil(CardHeadline.percent([
+            CardHeadline.Reading(isMuseAssistExtra: false, isMasked: false, remainingPercent: .infinity),
+            CardHeadline.Reading(isMuseAssistExtra: false, isMasked: true, remainingPercent: 5)
+        ]))
+        XCTAssertEqual(CardHeadline.percent([
+            CardHeadline.Reading(isMuseAssistExtra: true, isMasked: false, remainingPercent: .nan),
+            CardHeadline.Reading(isMuseAssistExtra: false, isMasked: false, remainingPercent: 0)
+        ]), 0)
+    }
 }
