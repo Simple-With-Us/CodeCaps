@@ -1,5 +1,6 @@
 import SwiftUI
 import WidgetKit
+import AppIntents
 
 #if canImport(UIKit)
 import UIKit
@@ -157,6 +158,8 @@ struct MiniProgressBar: View {
     let fraction: Double
     var color: Color = Color(red: 0.10, green: 0.70, blue: 0.45)
     var elapsedFraction: Double? = nil
+    /// Missing and masked readings are neutral, never a numeric zero.
+    var hasReading: Bool = true
     var height: CGFloat = 4
 
     @Environment(\.colorScheme) private var colorScheme
@@ -173,7 +176,7 @@ struct MiniProgressBar: View {
                     .fill(Color.primary.opacity(0.12))
                     .frame(height: height)
 
-                if totalW > 0 {
+                if hasReading, fraction.isFinite, totalW > 0 {
                     HStack(spacing: 0) {
                         if usedW > 0 {
                             Rectangle()
@@ -190,7 +193,7 @@ struct MiniProgressBar: View {
                     .frame(height: height)
                 }
 
-                if let elapsed = elapsedFraction, elapsed >= 0, elapsed <= 1.0, totalW > 0 {
+                if hasReading, let elapsed = elapsedFraction, elapsed.isFinite, elapsed >= 0, elapsed <= 1.0, totalW > 0 {
                     let markerX = CGFloat(elapsed) * totalW
                     let markerHeight = max(height + 6, 11)
                     let markerWidth: CGFloat = 2.5
@@ -383,7 +386,7 @@ struct OverviewLargeView: View {
 
     /// Seven rows one per row, twelve two per row.  The header dropped the app
     /// name for the mark, which is what paid for the extra row.
-    private var cap: Int { columns >= 2 ? 12 : 7 }
+    private var cap: Int { columns >= 2 ? 12 : 6 }
 
     private var displayed: [WidgetPlatformItem] {
         Array(entry.platforms.prefix(cap))
@@ -405,6 +408,9 @@ struct OverviewLargeView: View {
                 subtitle: "Open CodeCaps on your Mac or iOS to connect and monitor your plans."
             )
             .padding(14)
+        } else if let selected = entry.selectedDetail, entry.detailLevel != .compact {
+            WidgetPlanDetailView(platform: selected, entry: entry)
+                .padding(14)
         } else {
             VStack(alignment: .leading, spacing: 7) {
                 WidgetHeaderView(
@@ -425,7 +431,8 @@ struct OverviewLargeView: View {
                     percentFont: 12.5,
                     barHeight: 4,
                     spacing: 6,
-                    horizontalSpacing: 14
+                    horizontalSpacing: 14,
+                    detailScope: entry.detailLevel == .compact ? nil : entry.detailScope
                 )
 
                 Spacer(minLength: 0)
@@ -630,7 +637,7 @@ struct ProviderFocusView: View {
                         return platform.windows
                     }()
 
-                    if let atCap {
+                    if let atCap, platform.usableMuseExtra == nil {
                         // The plan's own windows still get listed, but with the
                         // cap named once instead of a bar each: the 5-hour
                         // window's 100% is exactly the number that reads as
@@ -665,6 +672,7 @@ struct ProviderFocusView: View {
                                     fraction: max(0.0, min(1.0, (win.remainingPercent ?? 0.0) / 100.0)),
                                     color: win.statusColor,
                                     elapsedFraction: win.elapsedFraction(),
+                                    hasReading: !win.isMasked && win.remainingPercent?.isFinite == true,
                                     height: 3.5
                                 )
                                 WindowCaptionRow(
@@ -767,12 +775,14 @@ struct AccessoryView: View {
                                 fraction: max(0.0, min(1.0, (pair.window1.remainingPercent ?? 0.0) / 100.0)),
                                 color: .primary,
                                 elapsedFraction: pair.window1.elapsedFraction(),
+                                hasReading: !pair.window1.isMasked && pair.window1.remainingPercent?.isFinite == true,
                                 height: 3.5
                             )
                             MiniProgressBar(
                                 fraction: max(0.0, min(1.0, (pair.window2.remainingPercent ?? 0.0) / 100.0)),
                                 color: .primary,
                                 elapsedFraction: pair.window2.elapsedFraction(),
+                                hasReading: !pair.window2.isMasked && pair.window2.remainingPercent?.isFinite == true,
                                 height: 3.5
                             )
                         }
@@ -800,7 +810,7 @@ struct AccessoryView: View {
                             Text(platform.displayPercent)
                                 .font(.system(size: 12, weight: .bold, design: .rounded))
                         }
-                        MiniProgressBar(fraction: platform.progressFraction, color: .primary, elapsedFraction: platform.elapsedFraction, height: 4)
+                        MiniProgressBar(fraction: platform.progressFraction, color: .primary, elapsedFraction: platform.elapsedFraction, hasReading: !platform.isMasked && platform.remainingPercent?.isFinite == true, height: 4)
                         WindowCaptionRow(
                             caption: platform.controllingWindow(entry.windowPick)?.caption
                                 ?? .withoutQualifier(
@@ -845,6 +855,45 @@ struct AccessoryView: View {
             default:
                 Text("CodeCaps")
             }
+        }
+    }
+}
+
+/// Cached plan content in the large widget. No app launch or provider request
+/// is needed to enter or leave this view. WidgetKit reloads after the intent.
+struct WidgetPlanDetailView: View {
+    let platform: WidgetPlatformItem
+    let entry: CodeCapsWidgetEntry
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Button(intent: ShowWidgetPlanDetailIntent(planID: "", overviewKey: entry.detailScope)) {
+                    Label("All Plans", systemImage: "chevron.left")
+                }.buttonStyle(.plain).font(.caption)
+                Spacer()
+            }
+            Text(platform.title).font(.headline)
+            ForEach(Array(platform.windows.prefix(4))) { window in
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        Text(window.cadenceToken).font(.caption.bold())
+                        Text(window.displayPercent).font(.subheadline.bold()).foregroundStyle(window.statusColor)
+                        Text(window.countdown().isEmpty ? "—" : window.countdown())
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    MiniProgressBar(fraction: (window.remainingPercent ?? 0) / 100,
+                        color: window.statusColor, elapsedFraction: window.elapsedFraction(),
+                        hasReading: !window.isMasked && window.remainingPercent?.isFinite == true, height: 5)
+                    if window.isStale() { Text("Reading is stale").font(.caption2).foregroundStyle(.secondary) }
+                }
+            }
+            if platform.windows.count > 4 {
+                Text("+\(platform.windows.count - 4) more windows in CodeCaps").font(.caption2).foregroundStyle(.secondary)
+            }
+            if let plan = platform.planMetadata?.detectedPlanName, !plan.isEmpty {
+                Text(plan).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 0)
         }
     }
 }

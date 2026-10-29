@@ -40,6 +40,44 @@ final class WidgetTests: XCTestCase {
         return try String(contentsOf: url, encoding: .utf8)
     }
 
+    func testUnknownMetersDoNotRenderUsedSegmentsOrPacingMarkers() throws {
+        let source = try readSource(at: Self.repoRoot.appendingPathComponent("ios/CodeCapsCompanion/Widgets/WidgetViews.swift"))
+        XCTAssertTrue(source.contains("if hasReading, fraction.isFinite, totalW > 0"))
+        XCTAssertTrue(source.contains("if hasReading, let elapsed = elapsedFraction"))
+        // Every production call site must supply validity, rather than silently
+        // accepting the meter's numeric-zero default for unknown readings.
+        for path in ["WidgetViews.swift", "WidgetWindowRows.swift"] {
+            let text = try readSource(at: Self.repoRoot.appendingPathComponent("ios/CodeCapsCompanion/Widgets/" + path))
+            let calls = text.components(separatedBy: "MiniProgressBar(").dropFirst()
+            for call in calls {
+                XCTAssertTrue(call.prefix(500).contains("hasReading:"), path)
+            }
+        }
+    }
+
+    func testDetailLevelIsConfigurableAndSingleResetStaysUnknown() throws {
+        let intent = try readSource(at: Self.repoRoot.appendingPathComponent("ios/CodeCapsCompanion/Widgets/WidgetConfigurationIntent.swift"))
+        let summary = intent.components(separatedBy: "public static var parameterSummary").last ?? ""
+        XCTAssertTrue(summary.contains("$detailLevel"))
+        let rows = try readSource(at: Self.repoRoot.appendingPathComponent("ios/CodeCapsCompanion/Widgets/WidgetWindowRows.swift"))
+        XCTAssertTrue(rows.contains(#"return countdown.isEmpty ? "—" : countdown"#))
+    }
+
+    func testWidgetDetailActionStaysInTheWidget() throws {
+        let source = try readSource(at: Self.repoRoot.appendingPathComponent("ios/CodeCapsCompanion/Widgets/WidgetDetailIntent.swift"))
+        XCTAssertTrue(source.contains("openAppWhenRun: Bool = false"))
+        XCTAssertTrue(source.contains("defaults.removeObject(forKey: key)"))
+        XCTAssertFalse(source.contains("URLSession"))
+        let views = try readSource(at: Self.repoRoot.appendingPathComponent("ios/CodeCapsCompanion/Widgets/WidgetViews.swift"))
+        XCTAssertTrue(views.contains("WidgetPlanDetailView(platform: selected"))
+        XCTAssertTrue(views.contains(#"ShowWidgetPlanDetailIntent(planID: "", overviewKey:"#))
+    }
+
+    func testWidgetDistinguishesExtraFromUnclassifiedLimit() throws {
+        let source = try readSource(at: Self.widgetPresentationURL)
+        XCTAssertTrue(source.contains(#"isExtraAllowance ? "Extra" : "Limit""#))
+    }
+
     // MARK: - Sentence Gap & Hygiene Tests
 
     func testWidgetSentenceGapHygiene() throws {

@@ -260,12 +260,13 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
 
     /// Compact cadence beside a meter bar (`5h`, `7d`, `1m`, `+`), matching Mac Glance.
     public var meterCaption: String {
-        QuotaWindowVocabulary.popoverCaption(
+        let token = QuotaWindowVocabulary.popoverCaption(
             windowToken: cadence.isEmpty ? nil : cadence,
             label: label,
             resetAt: resetAt,
             monthlyHint: label.lowercased().contains("plan") || cadence.lowercased().contains("plan")
         )
+        return token == "+" ? (QuotaWindowVocabulary.isExtraAllowanceLabel(label) ? "Extra" : "Limit") : token
     }
 
     /// The cadence in the words an at-cap line uses: "7-day", "5-hour".  The
@@ -277,13 +278,13 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
 
     public var displayPercent: String {
         if isMasked { return "n/a" }
-        guard let remainingPercent else { return "—" }
-        return "\(Int(remainingPercent.rounded()))%"
+        guard let remainingPercent, remainingPercent.isFinite else { return "—" }
+        return "\(Int(min(100, max(0, remainingPercent)).rounded()))%"
     }
 
     public var statusColor: Color {
         if isMasked { return .secondary }
-        guard let remainingPercent else { return .secondary }
+        guard let remainingPercent, remainingPercent.isFinite else { return .secondary }
         if remainingPercent <= 0 { return CompanionTheme.danger }
         if remainingPercent < 20 { return CompanionTheme.warning }
         return CompanionTheme.accent
@@ -336,7 +337,7 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
 
     /// Countdown or a placeholder when an extra allowance has no reset clock.
     public func meterCountdown(now: Date = Date()) -> String {
-        if QuotaWindowVocabulary.isExtraAllowanceLabel(label) { return "extra" }
+        if QuotaWindowVocabulary.isExtraAllowanceLabel(label), resetAt == nil { return "—" }
         let cd = countdown(now: now)
         return cd.isEmpty ? "—" : cd
     }
@@ -598,16 +599,17 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
         cardWindows(scope: scope, now: now)
             .filter { !$0.isMasked }
             .compactMap(\.remainingPercent)
+            .filter { $0.isFinite }
             .min()
     }
 
     public func cardDisplayPercent(scope: CompanionSourceScope, now: Date = Date()) -> String {
-        guard let remainingPercent = cardRemainingPercent(scope: scope, now: now) else { return "—" }
-        return "\(Int(remainingPercent.rounded()))%"
+        guard let remainingPercent = cardRemainingPercent(scope: scope, now: now), remainingPercent.isFinite else { return "—" }
+        return "\(Int(min(100, max(0, remainingPercent)).rounded()))%"
     }
 
     public func cardStatusColor(scope: CompanionSourceScope, now: Date = Date()) -> Color {
-        guard let remainingPercent = cardRemainingPercent(scope: scope, now: now) else { return .secondary }
+        guard let remainingPercent = cardRemainingPercent(scope: scope, now: now), remainingPercent.isFinite else { return .secondary }
         if remainingPercent <= 0 { return CompanionTheme.danger }
         if remainingPercent < 20 { return CompanionTheme.warning }
         return CompanionTheme.accent
@@ -674,12 +676,12 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
     }
 
     public var displayPercent: String {
-        guard let remainingPercent else { return "—" }
-        return "\(Int(remainingPercent.rounded()))%"
+        guard let remainingPercent, remainingPercent.isFinite else { return "—" }
+        return "\(Int(min(100, max(0, remainingPercent)).rounded()))%"
     }
 
     public var statusColor: Color {
-        guard let remainingPercent else { return .secondary }
+        guard let remainingPercent, remainingPercent.isFinite else { return .secondary }
         if remainingPercent <= 0 { return CompanionTheme.danger }
         if remainingPercent < 20 { return CompanionTheme.warning }
         return CompanionTheme.accent
@@ -2021,7 +2023,9 @@ public final class CompanionQuotaModel: ObservableObject {
             let parsedReset = CompanionDateFormatter.date(from: w.resetAt)
             let parsedReportedAt = Self.reportedAt(from: w)
             let cadence = Self.formatCadence(w.label, window: w.window, resetAt: parsedReset)
-            let displayLabel = QuotaWindowVocabulary.windowLabel(
+            let displayLabel = QuotaWindowVocabulary.isExtraAllowanceLabel(w.label)
+                ? w.label
+                : QuotaWindowVocabulary.windowLabel(
                 windowToken: w.window,
                 existingLabel: w.label,
                 resetAt: parsedReset

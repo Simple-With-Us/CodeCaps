@@ -111,12 +111,23 @@
 #   environment (see asc_client).  altool and Xcode are given the path of the
 #   staged copy this script writes for them.
 #   or Xcode-signed-in session for destination=upload export
-#   SENTRY_AUTH_TOKEN  (dSYM + Size Analysis upload; env or `fleet-secrets get`)
+#   SENTRY_AUTH_TOKEN_FULLSCOPE
+#                        (the Sentry API token for the dSYM + Size Analysis
+#                        upload; env or `fleet-secrets get`).  This is the only
+#                        credential sentry-cli accepts.  SENTRY_AUTH_TOKEN on
+#                        some repos holds the DSN instead, and a DSN is not an
+#                        API token, so sentry-cli refuses it in about seventy
+#                        milliseconds and the upload never happens.
+#   SENTRY_AUTH_TOKEN  (legacy token slot; used only when it is not a DSN)
 #   SENTRY_DSN         (injected into xcodebuild so Cocoa plist $(SENTRY_DSN) is set)
 #
 # Sentry after a successful archive (2026-09-01):
 #   debug-files upload of the xcarchive dSYMs, then `sentry-cli build upload`
-#   for Size Analysis.  Failures WARN and do not fail the TestFlight ship.
+#   for Size Analysis.  The upload goes to the project the DSN names AND to the
+#   app's own project, because the DSN is one shared fleet key and it moves.
+#   Failures WARN and do not fail the TestFlight ship, but they are also
+#   reported as ::error:: annotations and recorded, so the run shows red
+#   instead of one warning line inside a green job (CC-200).
 #   Quota: 100 size-analysis builds/month on the sponsored plan.  No LaunchAgent.
 #
 # ASCII-only (Apple bash 3.2 safe). Team: CC8UTF7ATG.
@@ -520,24 +531,158 @@ sentry_project_for_app() {
   esac
 }
 
-# Pull SENTRY_AUTH_TOKEN from the environment, else from `fleet-secrets get`
-# when that helper is installed (Mac).  Extract into a var, never echo.
+# The Sentry API token, resolved once.  SENTRY_AUTH_TOKEN_FULLSCOPE is the only
+# credential sentry-cli accepts.  SENTRY_AUTH_TOKEN holds the DSN on some repos,
+# and a DSN is not an API token, so sentry-cli refuses it in about seventy
+# milliseconds and the upload never happens.  The token stays a shell variable
+# and is handed to sentry-cli one invocation at a time.
+SENTRY_API_TOKEN=""
+SENTRY_TOKEN_REASON=""
+SENTRY_UPLOAD_FAILED=0
+
+# The file that records a failed Sentry upload, so the workflow can turn it
+# into a red run instead of one warning line inside a green job (CC-200).
+sentry_failure_marker() {
+  printf '%s' "${GITHUB_WORKSPACE:-$PWD}/.ios-ship-sentry-failed"
+}
+
+# Resolve the Sentry API token into SENTRY_API_TOKEN.  The reason for an empty
+# token is kept in SENTRY_TOKEN_REASON, so the caller can name the cause
+# instead of saying "no token".
+#
+# The return status is the signal:  0 when the token resolved, nonzero when it
+# did not.  A credential that cannot be resolved is not the same thing as a
+# credential that is absent, and the reader has to be told which one it is:  a
+# fleet-secrets outage is not a missing secret, and a missing secret is not a
+# DSN in the token slot.  The caller reads the failure through
+# SENTRY_TOKEN_REASON and never lets it abort the TestFlight ship.
 load_sentry_auth() {
-  if [[ -n "${SENTRY_AUTH_TOKEN:-}" ]]; then
-    return 0
-  fi
-  if command -v fleet-secrets &>/dev/null; then
-    local token
-    token="$(fleet-secrets get SENTRY_AUTH_TOKEN 2>/dev/null | tr -d '\r')" || token=""
-    if [[ -n "$token" ]]; then
-      SENTRY_AUTH_TOKEN="$token"
-      export SENTRY_AUTH_TOKEN
+  SENTRY_API_TOKEN=""
+  SENTRY_TOKEN_REASON=""
+  local token="" raw=""
+  if [[ -n "${SENTRY_AUTH_TOKEN_FULLSCOPE:-}" ]]; then
+    token="$SENTRY_AUTH_TOKEN_FULLSCOPE"
+  elif command -v fleet-secrets &>/dev/null; then
+    # The reader's exit status is captured on its own:  in a pipeline the
+    # status would be the one of the last stage, so a failed read would look
+    # like a successful read of an empty secret.
+    if ! raw="$(fleet-secrets get SENTRY_AUTH_TOKEN_FULLSCOPE 2>/dev/null)"; then
+      SENTRY_TOKEN_REASON="SENTRY_AUTH_TOKEN_FULLSCOPE could not be read from fleet-secrets"
+      return 1
     fi
+    token="$(printf '%s' "$raw" | tr -d '\r')"
+  fi
+  if [[ -z "$token" && -n "${SENTRY_AUTH_TOKEN:-}" ]]; then
+    # The legacy slot is a fallback only, and only when it holds a real token.
+    token="$SENTRY_AUTH_TOKEN"
+  fi
+  case "$token" in
+    "")
+      SENTRY_TOKEN_REASON="SENTRY_AUTH_TOKEN_FULLSCOPE is unset"
+      return 1
+      ;;
+    *://*|*@*)
+      # A DSN in the token slot is exactly the defect this lane had:  the
+      # upload is refused in milliseconds and the job stays green.
+      SENTRY_TOKEN_REASON="the token looks like a DSN, not an API token"
+      return 1
+      ;;
+  esac
+  SENTRY_API_TOKEN="$token"
+  return 0
+}
+
+# Record a Sentry failure.  The ship itself is never blocked:  the TestFlight
+# upload has already succeeded by the time this runs.  What changes is that the
+# failure is an ::error:: annotation and a marker file, so the run shows red
+# and nobody has to read a warning line to find it.
+sentry_report_failure() {
+  local message="$1"
+  log "warning: sentry: ${message}"
+  SENTRY_UPLOAD_FAILED=1
+  if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+    echo "::error title=Sentry upload::${message}"
+    mkdir -p "$(dirname "$(sentry_failure_marker)")" 2>/dev/null || true
+    # The marker is bookkeeping:  a failed write must not abort the ship under
+    # set -e, because that would destroy a release that has not happened yet.
+    # The ::error:: annotation above is the trace either way.
+    printf '%s\n' "${message}" >>"$(sentry_failure_marker)" 2>/dev/null \
+      || log "warning: sentry: could not write the failure marker; the ::error:: annotation is the only trace"
   fi
 }
 
+# The project the events land in is the one in the DSN, because SENTRY_DSN is
+# one shared fleet key and it moves between projects.  A standard DSN ends in
+# a numeric project id and sentry-cli needs the slug, so an id is resolved
+# through the Sentry API.  A slug is used as it stands.
+#
+# The org comes from the DSN's own host (o<org id>.ingest.sentry.io), so a
+# DSN minted in another org resolves too;  the fleet slug is the fallback for a
+# host that carries no numeric org id.
+#
+# A resolution that fails is REPORTED through SENTRY_DSN_PROJECT_ERROR:  a
+# silent empty result drops the DSN project from the upload list, which is
+# exactly the "the dSYM landed in the wrong project" defect this lane exists to
+# fix (CC-200), and it would leave the run green.
+SENTRY_DSN_PROJECT_ERROR=""
+sentry_dsn_project() {
+  local raw="${SENTRY_DSN:-}"
+  SENTRY_DSN_PROJECT_ERROR=""
+  : >"${LOG_DIR}/sentry-dsn-project.error"
+  [[ -n "$raw" ]] || return 0
+  local last="${raw##*/}"
+  [[ "$last" != "$raw" ]] || return 0
+  case "$last" in
+    *[!0-9]*)
+      printf '%s' "$last"
+      return 0
+      ;;
+  esac
+  # Numeric:  ask the API for the slug.  The token never enters the command
+  # line:  it is handed to curl on stdin, so a process listing cannot read it.
+  local host org slug body
+  host="$(printf '%s' "$raw" | sed -E 's#^https?://[^@/]+@##; s#/.*$##')"
+  if [[ -z "$host" ]]; then
+    SENTRY_DSN_PROJECT_ERROR="the host could not be read from the DSN"
+    printf '%s' "$SENTRY_DSN_PROJECT_ERROR" >"${LOG_DIR}/sentry-dsn-project.error"
+    return 1
+  fi
+  local org_id=""
+  if [[ "$host" =~ ^o([0-9]+)\. ]]; then
+    org_id="${BASH_REMATCH[1]}"
+  fi
+  for org in "$org_id" "simple-with-us"; do
+    [[ -n "$org" ]] || continue
+    body="$(curl -fsS -H @- "https://${host}/api/0/organizations/${org}/projects/${last}/" \
+      <<<"Authorization: Bearer ${SENTRY_API_TOKEN}" 2>/dev/null)" || body=""
+    slug="$(printf '%s' "$body" | python3 -c 'import json,sys
+try:
+    print(json.load(sys.stdin).get("slug",""))
+except Exception:
+    print("")' 2>/dev/null)" || slug=""
+    if [[ -n "$slug" ]]; then
+      printf '%s' "$slug"
+      return 0
+    fi
+  done
+  SENTRY_DSN_PROJECT_ERROR="the project id ${last} in the DSN could not be resolved to a Sentry project slug"
+  printf '%s' "$SENTRY_DSN_PROJECT_ERROR" >"${LOG_DIR}/sentry-dsn-project.error"
+  return 1
+}
+
+# The projects the dSYM and the Size Analysis build go to.  The DSN's project
+# first, then the app's own project, and never the same project twice.
+sentry_project_list() {
+  local app_project="$1" dsn_project="$2"
+  if [[ -n "$dsn_project" && "$dsn_project" != "$app_project" ]]; then
+    printf '%s\n' "$dsn_project"
+  fi
+  printf '%s\n' "$app_project"
+}
+
 # After a successful archive: upload dSYMs and Size Analysis.  Never fail the
-# TestFlight ship if Sentry is missing or the upload errors.
+# TestFlight ship if Sentry is missing or the upload errors, but every miss is
+# reported as an ::error:: so the run shows red (CC-200).
 upload_sentry_artifacts() {
   local project archive
   project="$(sentry_project_for_app)"
@@ -550,47 +695,74 @@ upload_sentry_artifacts() {
     log "sentry: archive missing; skipping artifact upload"
     return 0
   fi
-  load_sentry_auth
-  if [[ -z "${SENTRY_AUTH_TOKEN:-}" ]]; then
-    log "sentry: SENTRY_AUTH_TOKEN unset; skipping dSYM / Size Analysis upload"
+  if ! load_sentry_auth; then
+    sentry_report_failure "no Sentry API token, so no dSYM and no Size Analysis build was uploaded:  ${SENTRY_TOKEN_REASON}.  Set SENTRY_AUTH_TOKEN_FULLSCOPE (the API token, not the DSN)."
     return 0
   fi
   if ! command -v sentry-cli >/dev/null 2>&1; then
     log "sentry: sentry-cli not on PATH; trying official installer"
-    if ! curl -sL https://sentry.io/get-cli/ | SENTRY_CLI_VERSION="" bash >/dev/null 2>&1; then
-      log "warning: sentry-cli install failed; TestFlight ship continues"
+    if ! curl -sL https://sentry.io/get-cli/ | SENTRY_CLI_VERSION="" bash >"${LOG_DIR}/sentry-cli-install.log" 2>&1; then
+      sentry_report_failure "sentry-cli could not be installed, so no dSYM and no Size Analysis build was uploaded; see ${LOG_DIR}/sentry-cli-install.log"
       return 0
     fi
     export PATH="${HOME}/.sentry-cli:${PATH}:/opt/homebrew/bin"
   fi
   if ! command -v sentry-cli >/dev/null 2>&1; then
-    log "warning: sentry-cli still missing; skipping artifact upload"
+    sentry_report_failure "sentry-cli is missing, so no dSYM and no Size Analysis build was uploaded"
     return 0
   fi
-  log "sentry: uploading debug files for project=${project} (token length ${#SENTRY_AUTH_TOKEN})"
-  set +e
-  SENTRY_ORG=simple-with-us SENTRY_PROJECT="$project" \
-    sentry-cli debug-files upload --include-sources "$archive" \
-    >"${LOG_DIR}/sentry-debug-files.log" 2>&1
-  local dif_rc=$?
-  set -e
-  if [[ $dif_rc -eq 0 ]]; then
-    log "sentry: debug-files upload ok"
-  else
-    log "warning: sentry debug-files upload rc=${dif_rc}; see ${LOG_DIR}/sentry-debug-files.log"
+  local dsn_project projects p
+  if ! dsn_project="$(sentry_dsn_project)"; then
+    # Without the DSN project the dSYM lands in the app's own project only,
+    # which is the defect this lane exists to fix, so the run goes red rather
+    # than going quietly wrong.
+    # Command substitution runs in a subshell, so the function persists the
+    # reason in LOG_DIR rather than in the parent shell's variable.
+    if [[ -s "${LOG_DIR}/sentry-dsn-project.error" ]]; then
+      SENTRY_DSN_PROJECT_ERROR="$(cat "${LOG_DIR}/sentry-dsn-project.error" 2>/dev/null)" || true
+    fi
+    sentry_report_failure "the Sentry project named by the DSN could not be resolved, so the dSYM and the Size Analysis build can only go to ${project}:  ${SENTRY_DSN_PROJECT_ERROR}"
+    dsn_project=""
   fi
-  log "sentry: Size Analysis build upload for project=${project}"
-  set +e
-  SENTRY_ORG=simple-with-us SENTRY_PROJECT="$project" \
-    sentry-cli build upload "$archive" \
-    >"${LOG_DIR}/sentry-build-upload.log" 2>&1
-  local build_rc=$?
-  set -e
-  if [[ $build_rc -eq 0 ]]; then
-    log "sentry: build upload ok"
-  else
-    log "warning: sentry build upload rc=${build_rc}; see ${LOG_DIR}/sentry-build-upload.log"
-  fi
+  projects="$(sentry_project_list "$project" "$dsn_project")"
+  while IFS= read -r p; do
+    [[ -n "$p" ]] || continue
+    log "sentry: uploading debug files for project=${p}"
+    set +e
+    # Source bundles are a PER-PROJECT artifact:  uploading them to the DSN
+    # project gives the app's own project no source context for a minified
+    # stack, so every project in the list gets them.
+    SENTRY_ORG=simple-with-us SENTRY_PROJECT="$p" SENTRY_AUTH_TOKEN="$SENTRY_API_TOKEN" \
+      sentry-cli debug-files upload --include-sources "$archive" \
+      >"${LOG_DIR}/sentry-debug-files-${p}.log" 2>&1
+    local dif_rc=$?
+    set -e
+    if [[ $dif_rc -eq 0 ]]; then
+      log "sentry: debug-files upload ok for project=${p}"
+    else
+      sentry_report_failure "sentry debug-files upload failed for project=${p} (rc=${dif_rc}); see ${LOG_DIR}/sentry-debug-files-${p}.log"
+    fi
+    if [[ -z "$dsn_project" || "$p" == "$dsn_project" ]]; then
+      # The Size Analysis quota is 100 builds a month on the sponsored plan and
+      # every build upload spends one of them.  The events land in the DSN
+      # project, so that is the project that needs the Size Analysis build;
+      # the app's own project gets the dSYMs only.
+      log "sentry: Size Analysis build upload for project=${p}"
+      set +e
+      SENTRY_ORG=simple-with-us SENTRY_PROJECT="$p" SENTRY_AUTH_TOKEN="$SENTRY_API_TOKEN" \
+        sentry-cli build upload "$archive" \
+        >"${LOG_DIR}/sentry-build-upload-${p}.log" 2>&1
+      local build_rc=$?
+      set -e
+      if [[ $build_rc -eq 0 ]]; then
+        log "sentry: build upload ok for project=${p}"
+      else
+        sentry_report_failure "sentry build upload failed for project=${p} (rc=${build_rc}); see ${LOG_DIR}/sentry-build-upload-${p}.log"
+      fi
+    else
+      log "sentry: skipping the Size Analysis build upload for project=${p}; the DSN project (${dsn_project}) holds the events and the quota is 100 builds a month"
+    fi
+  done <<<"$projects"
   return 0
 }
 
@@ -1498,6 +1670,24 @@ release_archive_lock() {
   rmdir "$ARCHIVE_LOCK_DIR" 2>/dev/null || true
 }
 
+# What each ensure-tf-ready exit code means.  Kept in its own file so the
+# wording is testable without an App Store Connect round trip, and so the rc=5
+# branch can name the real cause (no internal tester group) instead of the
+# export-compliance wording that never applied to it.
+#
+# The helper is loaded here, in the ship body, and not at the top of the
+# script:  the prelude of this script is cut and sourced on its own by the
+# credential tests, and the prelude carries only safe top-level shapes.
+load_tf_ready_outcome() {
+  local helper="${FLEET_DIR}/tf-ready-outcome.sh"
+  if [[ ! -f "$helper" ]]; then
+    echo "missing ${helper}" >&2
+    return 1
+  fi
+  # shellcheck source=scripts/ios-fleet/tf-ready-outcome.sh
+  source "$helper"
+}
+
 # After a successful upload, declare export compliance if the IPA omitted
 # ITSAppUsesNonExemptEncryption. Otherwise TestFlight stays
 # MISSING_EXPORT_COMPLIANCE and the phone never sees the build (ST 1.0.1/2
@@ -1538,6 +1728,38 @@ ensure_tf_ready() {
     log "warning: if the phone never gets this build, declare compliance by hand in App Store Connect"
     if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
       echo "::warning::ensure-tf-ready could not find uploaded build ${BUILD_NUM} for ${BUNDLE_ID}; export compliance not declared"
+    fi
+    return 0
+  fi
+  if [[ $rc -eq 5 || $rc -eq 6 ]]; then
+    # rc=5 is READ AND ZERO ON THE INTERNAL PATH: the build was found, Apple
+    # finished processing it, and export compliance WAS declared (the compliance
+    # PATCH lands before the readiness poll, so the poll's enc=false is the
+    # answered state).  The count behind the code is the count of INTERNAL
+    # TestFlight testers in internal groups with access to all builds, so rc=5
+    # means this app has no internal group and zero internal testers can install
+    # the build.  rc=6 is the same situation with the count unreadable, so
+    # installability on the internal path is unverified rather than known-zero.
+    #
+    # It says nothing about external testers: a build assigned to an external
+    # group reaches that group, subject to Apple's beta review of the build.
+    # CodeCaps iOS 1.0.263 / build 281 was in exactly that state on
+    # 2026-10-25: no internal group, and at the same time assigned to the
+    # existing Public Beta external group.
+    #
+    # The generic export-compliance wording never applied to either code, and
+    # it is why 14 green ships reached nobody (GH #1018) and why CodeCaps iOS
+    # 1.0.263 / build 281 shipped with a green job on 2026-10-25 and a
+    # warning about the wrong thing.
+    if ! load_tf_ready_outcome; then
+      log "warning: the ensure-tf-ready outcome helper is missing, so exit code ${rc} has no wording"
+      return 0
+    fi
+    while IFS= read -r line; do
+      [[ -n "$line" ]] && log "$line"
+    done <<< "$(tf_ready_outcome_lines "$rc")"
+    if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+      echo "::warning::$(tf_ready_outcome_annotation "$rc" "$BUNDLE_ID" "$BUILD_NUM")"
     fi
     return 0
   fi

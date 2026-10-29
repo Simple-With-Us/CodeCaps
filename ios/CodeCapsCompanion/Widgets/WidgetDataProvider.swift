@@ -42,6 +42,19 @@ public struct CodeCapsWidgetEntry: TimelineEntry {
         configuration?.windowPick ?? .mostUrgent
     }
 
+    public var detailLevel: WidgetDetailLevel { configuration?.detailLevel ?? .automatic }
+
+    /// A presentation scope, not an account identity. Identical configurations
+    /// share the selected detail and the Back action clears only this scope.
+    public var detailScope: String {
+        [configuration?.plan?.id ?? "all", rowLayout.rawValue,
+         quotasPerProvider.rawValue, windowPick.rawValue, detailLevel.rawValue].joined(separator: "|")
+    }
+    public var selectedDetail: WidgetPlatformItem? {
+        guard let id = UserDefaults(suiteName: WidgetSnapshotStore.appGroupId)?.string(forKey: "widgetDetail:" + detailScope) else { return nil }
+        return platforms.first { $0.id == id }
+    }
+
     /// Primary platform to display in single-provider focus widgets.
     /// Prefers the platform nearest to cap (lowest remaining percent), or the first platform.
     public var primaryPlatform: WidgetPlatformItem? {

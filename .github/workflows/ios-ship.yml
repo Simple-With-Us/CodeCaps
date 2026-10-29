@@ -207,13 +207,14 @@ jobs:
       - name: Load Sentry ship secrets (Infisical, then repository secrets)
         uses: ./.github/actions/infisical-secrets
         with:
-          names: SENTRY_DSN SENTRY_AUTH_TOKEN
+          names: SENTRY_DSN SENTRY_AUTH_TOKEN SENTRY_AUTH_TOKEN_FULLSCOPE
           project-id: ${{ secrets.INFISICAL_FLEET_OPS_PROJECT_ID }}
           client-id: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID || secrets.INFISICAL_CLIENT_ID }}
           client-secret: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET || secrets.INFISICAL_CLIENT_SECRET }}
         env:
           GH_FALLBACK_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           GH_FALLBACK_SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          GH_FALLBACK_SENTRY_AUTH_TOKEN_FULLSCOPE: ${{ secrets.SENTRY_AUTH_TOKEN_FULLSCOPE }}
 
       # Do not use `secrets.*` in `if:` -- GitHub's dispatch parser rejects it
       # (`Unrecognized named-value: secrets`) and the whole workflow dies at 0s.
@@ -290,6 +291,7 @@ jobs:
           bash "$GITHUB_WORKSPACE/scripts/ios-install-appstore-profiles.sh"
 
       - name: Ship CodeCaps to TestFlight
+        id: ship
         env:
           IOS_TF_RELEASE_NOTES: "1"
           IOS_MANUAL_SIGN: "1"
@@ -341,3 +343,34 @@ jobs:
         with:
           path: ~/.cache/ios-fleet
           key: ios-fleet-state-codecaps-ios-${{ github.run_id }}-${{ github.run_attempt }}
+
+      # A failed Sentry upload used to be one warning line inside a green job,
+      # which is how CodeCaps iOS 1.0.263 / build 281 shipped with no dSYM and
+      # no Size Analysis build and nothing showed red (CC-200).  The ship
+      # script records every miss in this marker file, and this step turns it
+      # into a red run.
+      #
+      # It runs LAST, after the ship-state cache is saved, so a red run can
+      # neither block the release that already happened nor make the next
+      # scheduled ship repeat itself:  the cache is what the gate diffs
+      # against, and it is saved with `if: always()` above.
+      - name: Sentry artifact upload status
+        if: always()
+        run: |
+          marker="$GITHUB_WORKSPACE/.ios-ship-sentry-failed"
+          if [ -f "$marker" ]; then
+            if [ "${{ steps.ship.outcome }}" = "success" ]; then
+              echo "::error title=Sentry upload::the dSYM / Size Analysis upload failed, so iOS crash symbolication is broken for this build.  The TestFlight upload itself succeeded."
+            else
+              echo "::error title=Sentry upload::the dSYM / Size Analysis upload failed, and the ship step did not succeed either, so this build may never have reached TestFlight.  See the ship step output for the real cause."
+            fi
+            while IFS= read -r line; do
+              echo "  ${line}"
+            done <"$marker"
+            exit 1
+          fi
+          if [ "${{ steps.ship.outcome }}" = "success" ]; then
+            echo "Sentry dSYM and Size Analysis upload succeeded."
+          else
+            echo "The ship step did not succeed (result: ${{ steps.ship.outcome }}), so the Sentry upload status is unknown.  See the ship step output for the real cause."
+          fi

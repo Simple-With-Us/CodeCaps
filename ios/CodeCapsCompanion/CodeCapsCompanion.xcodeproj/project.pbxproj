@@ -35,6 +35,7 @@
 		346906A2DDABDF60AF9D4F62 /* alarm-submarine.wav in Resources */ = {isa = PBXBuildFile; fileRef = 5F63EE805947E5707E2A0C3F /* alarm-submarine.wav */; };
 		3AB7A6CDA67C38224B7CBE08 /* QuotaWindowCaption.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CCA8CD80D52183E869EAE7A /* QuotaWindowCaption.swift */; };
 		3C07D53C4EFEE8F91EEDDEC7 /* ResetAlarmCadence.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B76200EBE871E29BAC8A41B /* ResetAlarmCadence.swift */; };
+		40671F4102901DEC3F71D17D /* WidgetDetailIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBEA6F1A4CFAF2D12556922F /* WidgetDetailIntent.swift */; };
 		41F6AE401AE48C11EDDA4B80 /* SentryTelemetry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50C98744F4C98CE0C6227834 /* SentryTelemetry.swift */; };
 		4A84751C143F11619F941B8C /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = 897AB651A949F8B5454F5C3C /* Sentry */; };
 		4BBB6BFF85C4F547B32A3035 /* QuotaWindowCaption.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CCA8CD80D52183E869EAE7A /* QuotaWindowCaption.swift */; };
@@ -77,6 +78,7 @@
 		C48D9F8052E4F39044504C84 /* CompanionQuotaModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1371DB889435F70346FB6AF /* CompanionQuotaModel.swift */; };
 		C7498C0ACDD5320564DE32B0 /* WidgetPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 716F800EA9DEDFC597BD08BB /* WidgetPresentation.swift */; };
 		CADE19D9C4D7A21C22D894AC /* UsageAlertPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9E8877EA13789E3986BFEF9 /* UsageAlertPreferences.swift */; };
+		CBA4A987CB8B7B3813356509 /* WidgetDetailIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBEA6F1A4CFAF2D12556922F /* WidgetDetailIntent.swift */; };
 		D3C30EA2E4A6B59A22E086DB /* WidgetDataProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = F281E65EF7010842967CD100 /* WidgetDataProvider.swift */; };
 		D403E6C85AA58126F1F15557 /* WidgetPlatformDisplay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F3FDD012180112242E80DF3 /* WidgetPlatformDisplay.swift */; };
 		D88D34F03E978D88086FFCAE /* SentryTelemetry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50C98744F4C98CE0C6227834 /* SentryTelemetry.swift */; };
@@ -174,6 +176,7 @@
 		C1371DB889435F70346FB6AF /* CompanionQuotaModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionQuotaModel.swift; sourceTree = "<group>"; };
 		C2EA171A442F77D9348C68D4 /* InfoMac.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = InfoMac.plist; sourceTree = "<group>"; };
 		C679EF2BE96C94E938E56DC1 /* CodeCapsCompanionMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CodeCapsCompanionMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		CBEA6F1A4CFAF2D12556922F /* WidgetDetailIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetDetailIntent.swift; sourceTree = "<group>"; };
 		D4A7E538557D6D936242BE41 /* FleetSourceDisagreement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = FleetSourceDisagreement.swift; path = ../../Sources/QuotaCore/FleetSourceDisagreement.swift; sourceTree = "<group>"; };
 		D5FD1EFF75431229A669FC5A /* ResetAlarmTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ResetAlarmTracker.swift; path = ../../Sources/QuotaCore/ResetAlarmTracker.swift; sourceTree = "<group>"; };
 		D7A7EF5A19DFD2299052F4DE /* WidgetWindowRows.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetWindowRows.swift; sourceTree = "<group>"; };
@@ -296,6 +299,7 @@
 				10FF587176549AAC4A616E3B /* InfoMac.plist */,
 				72DB68669C8EFB8E9045184C /* WidgetConfigurationIntent.swift */,
 				F281E65EF7010842967CD100 /* WidgetDataProvider.swift */,
+				CBEA6F1A4CFAF2D12556922F /* WidgetDetailIntent.swift */,
 				716F800EA9DEDFC597BD08BB /* WidgetPresentation.swift */,
 				0A40D20353A8D6C1D9E9D349 /* WidgetViews.swift */,
 				D7A7EF5A19DFD2299052F4DE /* WidgetWindowRows.swift */,
@@ -562,6 +566,7 @@
 				3C07D53C4EFEE8F91EEDDEC7 /* ResetAlarmCadence.swift in Sources */,
 				0FB40BD33AB5375F6C02ACFC /* WidgetConfigurationIntent.swift in Sources */,
 				AB8C667473DF14CCF7B48F2A /* WidgetDataProvider.swift in Sources */,
+				CBA4A987CB8B7B3813356509 /* WidgetDetailIntent.swift in Sources */,
 				D403E6C85AA58126F1F15557 /* WidgetPlatformDisplay.swift in Sources */,
 				C7498C0ACDD5320564DE32B0 /* WidgetPresentation.swift in Sources */,
 				C1B3C6C3651687B8283C75CD /* WidgetSnapshotFetcher.swift in Sources */,
@@ -583,6 +588,7 @@
 				BBE95186FD35EC37DBF13D51 /* ResetAlarmCadence.swift in Sources */,
 				A90E0EF383B2CDF27263BAF0 /* WidgetConfigurationIntent.swift in Sources */,
 				D3C30EA2E4A6B59A22E086DB /* WidgetDataProvider.swift in Sources */,
+				40671F4102901DEC3F71D17D /* WidgetDetailIntent.swift in Sources */,
 				A27D61CE3DC2A52A0B83E662 /* WidgetPlatformDisplay.swift in Sources */,
 				F3C6891672DADC0AD9667E90 /* WidgetPresentation.swift in Sources */,
 				689104F1DF3DDC7C7F75D168 /* WidgetSnapshotFetcher.swift in Sources */,

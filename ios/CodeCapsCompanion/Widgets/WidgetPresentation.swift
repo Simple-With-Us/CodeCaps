@@ -10,6 +10,7 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
     public let label: String
     public let cadence: String
     public let remainingPercent: Double?
+    public let absoluteRemaining: Double?
     public let resetAt: Date?
     public let isExhausted: Bool
     public let isMasked: Bool
@@ -46,12 +47,14 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
         isMasked: Bool = false,
         observedAt: Date? = nil,
         barQualifier: String = "",
-        isExtraAllowance: Bool = false
+        isExtraAllowance: Bool = false,
+        absoluteRemaining: Double? = nil
     ) {
         self.id = id
         self.label = label
         self.cadence = cadence
         self.remainingPercent = remainingPercent
+        self.absoluteRemaining = absoluteRemaining
         self.resetAt = resetAt
         self.isExhausted = isExhausted
         self.isMasked = isMasked
@@ -89,11 +92,20 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
     }
 
     public var displayPercent: String {
-        WidgetPresentation.displayPercent(percent: remainingPercent, isMasked: isMasked)
+        if !isMasked, remainingPercent == nil, let count = absoluteRemaining, count.isFinite, count >= 0 {
+            return "\(count.formatted(.number.precision(.fractionLength(0...2)))) left"
+        }
+        return WidgetPresentation.displayPercent(percent: remainingPercent, isMasked: isMasked)
+    }
+
+    /// A count without a known denominator is available quantity, not a percentage.
+    public var isCountOnly: Bool {
+        !isMasked && remainingPercent == nil && absoluteRemaining?.isFinite == true && (absoluteRemaining ?? -1) >= 0
     }
 
     public var statusColor: Color {
-        WidgetPresentation.statusColor(percent: remainingPercent, isMasked: isMasked)
+        if isCountOnly { return (absoluteRemaining ?? 0) > 0 ? .primary : WidgetPresentation.statusColor(percent: 0, isMasked: false) }
+        return WidgetPresentation.statusColor(percent: remainingPercent, isMasked: isMasked)
     }
 
     public func countdown(now: Date = Date()) -> String {
@@ -102,7 +114,8 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
 
     /// Compact cadence token for the caption under a bar: `5h`, `7d`, `1m`.
     public var cadenceToken: String {
-        WidgetPresentation.shortCadence(cadence: cadence, label: label)
+        let token = WidgetPresentation.shortCadence(cadence: cadence, label: label)
+        return token == "+" ? (isExtraAllowance ? "Extra" : "Limit") : token
     }
 
     /// The caption this window's bar prints.
@@ -131,7 +144,8 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
             isMasked: isMasked,
             observedAt: observedAt,
             barQualifier: qualifier,
-            isExtraAllowance: isExtraAllowance
+            isExtraAllowance: isExtraAllowance,
+            absoluteRemaining: absoluteRemaining
         )
     }
 
@@ -279,6 +293,13 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
             .min { ($0.resetAt ?? .distantFuture) < ($1.resetAt ?? .distantFuture) }
     }
 
+    /// A separate extra balance remains visible even while the weekly window
+    /// is spent. This does not change whether the weekly window is at cap.
+    public var usableMuseExtra: WidgetWindowItem? {
+        guard providerKey == "muse-assist" else { return nil }
+        return windows.first { $0.isExtraAllowance && !$0.isMasked && (($0.remainingPercent ?? 0) > 0 || ($0.absoluteRemaining ?? 0) > 0) }
+    }
+
     /// Whether this plan is at its cap on any window it reports honestly.
     /// Owner 2026-10-11: a capped plan shows no bars and says so in words.
     public var isAtCap: Bool { atCapWindow() != nil }
@@ -305,9 +326,11 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
         let pool = visible.isEmpty ? windows : visible
         switch pick {
         case .mostHeadroom:
-            return pool.max {
-                ($0.remainingPercent ?? 100, $0.resetAt ?? .distantFuture)
-                    < ($1.remainingPercent ?? 100, $1.resetAt ?? .distantFuture)
+            // Counts have no denominator and cannot be ranked as 100% headroom.
+            let comparable = pool.filter { $0.remainingPercent?.isFinite == true }
+            return (comparable.isEmpty ? pool : comparable).max {
+                ($0.remainingPercent ?? -1, $0.resetAt ?? .distantFuture)
+                    < ($1.remainingPercent ?? -1, $1.resetAt ?? .distantFuture)
             }
         case .resetsSoonest:
             return pool.min {
@@ -331,7 +354,7 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
     /// or if one of the windows carries no reading or reset date.
     public func dualWindows() -> (window1: WidgetWindowItem, window2: WidgetWindowItem)? {
         guard windows.count >= 2 else { return nil }
-        let visible = windows.filter { !$0.isMasked && ($0.remainingPercent != nil || $0.resetAt != nil) }
+        let visible = windows.filter { !$0.isMasked && ($0.remainingPercent != nil || $0.absoluteRemaining != nil || $0.resetAt != nil) }
         guard visible.count >= 2 else { return nil }
         return (visible[0], visible[1])
     }
@@ -503,6 +526,7 @@ public enum WidgetPresentation {
         let machine: String?
         let producerInstanceId: String?
         let remainingUnknown: Bool?
+        let absoluteRemaining: Double?
         let plan: String?
         let planName: String?
         let planMetadata: PlanMetadata?
@@ -518,7 +542,7 @@ public enum WidgetPresentation {
         private enum CodingKeys: String, CodingKey {
             case id, provider, providerKey, label, remainingPercent, isExhausted
             case modelType, modelId, window, resetAt, occurredAt, source, machine
-            case producerInstanceId, remainingUnknown, plan, planName, planMetadata
+            case producerInstanceId, remainingUnknown, absoluteRemaining, plan, planName, planMetadata
             case planDetectedName, planUserName, planUserCostUsd, planUserRenewalDateText
             case planUserSubtitle, planShowCostAndRenewal, planHasMismatch, planUserUpdatedAt
         }
@@ -540,6 +564,7 @@ public enum WidgetPresentation {
             machine = try container.decodeIfPresent(String.self, forKey: .machine)
             producerInstanceId = try container.decodeIfPresent(String.self, forKey: .producerInstanceId)
             remainingUnknown = try container.decodeIfPresent(Bool.self, forKey: .remainingUnknown)
+            absoluteRemaining = try container.decodeIfPresent(Double.self, forKey: .absoluteRemaining)
             plan = try container.decodeIfPresent(String.self, forKey: .plan)
             planName = try container.decodeIfPresent(String.self, forKey: .planName)
             planMetadata = try container.decodeIfPresent(PlanMetadata.self, forKey: .planMetadata)
@@ -796,6 +821,7 @@ public enum WidgetPresentation {
             }
             if (w.remainingUnknown == true || lowLabel.contains("plan details"))
                 && w.remainingPercent == nil
+                && w.absoluteRemaining == nil
                 && parseDate(from: w.resetAt) == nil
                 && !QuotaWindowVocabulary.isExtraAllowanceLabel(w.label) {
                 return false
@@ -847,7 +873,8 @@ public enum WidgetPresentation {
                 isExhausted: exhausted,
                 isMasked: false,
                 observedAt: observed,
-                isExtraAllowance: isExtraAllowance
+                isExtraAllowance: isExtraAllowance,
+                absoluteRemaining: w.absoluteRemaining
             )
 
             // One window per cadence, and the freshest one.  The payload

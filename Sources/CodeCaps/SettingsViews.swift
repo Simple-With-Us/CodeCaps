@@ -159,6 +159,13 @@ struct SettingsMenuBarPage: View {
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
 
+                        // Owner 2026-10-28: the name is the first thing the
+                        // width ladder drops, and the room it takes is worth
+                        // more to the meters.  Off by default.
+                        Toggle("Show Provider Names In PiP", isOn: $model.pipShowProviderNames)
+                            .help("Print the platform name beside its logo in the PiP HUD." + sentenceGap + "Off keeps that room for the meters.")
+                            .accessibilityLabel("Show Provider Names In PiP")
+
                         Text("Pinned Quotas (Default: Lowest 2 Remaining)")
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(.secondary)

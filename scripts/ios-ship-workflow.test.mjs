@@ -374,9 +374,105 @@ test("scheduled gate and key handoff shell tests pass", () => {
   }
 });
 
+// CC-200: the iOS lane never reached Sentry.  Two defects, both quiet.  The
+// token in SENTRY_AUTH_TOKEN was the DSN, and a DSN is not an API token, so
+// sentry-cli refused it in about seventy milliseconds.  The project was the
+// app's own, while the events land in the project the shared fleet DSN names,
+// so a dSYM in the wrong project never matches an event.  The failure was a
+// warning line inside a green job.
+const shipScript = read("scripts/ios-fleet/ship-testflight.sh");
+
+test("the iOS lane loads the Sentry API token, not the DSN", () => {
+  assert.match(code, /SENTRY_AUTH_TOKEN_FULLSCOPE/);
+  assert.match(shipScript, /SENTRY_AUTH_TOKEN_FULLSCOPE/);
+  // The full-scope token is the one sentry-cli accepts, and it is the one the
+  // workflow hands over.  The DSN must never reach the token slot.
+  assert.match(shipScript, /\*:\/\/\*\|\*@\*/);
+  assert.match(shipScript, /looks like a DSN, not an API token/);
+});
+
+test("the iOS lane uploads to the DSN project as well as the app's own", () => {
+  assert.match(shipScript, /sentry_dsn_project/);
+  assert.match(shipScript, /sentry_project_list/);
+  assert.match(shipScript, /SENTRY_PROJECT="\$p"/);
+  // The DSN project is not the same thing as the app's project, so both are
+  // uploaded to, and the same project is never uploaded to twice.
+  assert.match(shipScript, /\$dsn_project" != "\$app_project"/);
+});
+
+test("a failed Sentry upload is an error annotation and a red run", () => {
+  assert.match(shipScript, /::error title=Sentry upload::/);
+  assert.match(shipScript, /sentry_report_failure/);
+  assert.match(shipScript, /\.ios-ship-sentry-failed/);
+  // The workflow turns the marker into a failed step, and it is the LAST
+  // step, after the ship-state cache is saved, so a red run can neither block
+  // the release that already happened nor make the next ship repeat itself.
+  assert.match(code, /Sentry artifact upload status/);
+  assert.match(code, /\.ios-ship-sentry-failed/);
+  assert.match(code, /exit 1/);
+  const shipSteps = code.split(/- name:/);
+  const statusIndex = shipSteps.findIndex((s) => /Sentry artifact upload status/.test(s));
+  const cacheIndex = shipSteps.findIndex((s) => /Save ship-state cache/.test(s));
+  assert.ok(statusIndex > 0 && cacheIndex > 0, "the ship job has both steps");
+  assert.ok(statusIndex > cacheIndex, "the Sentry status step runs after the ship-state cache is saved");
+});
+
+test("the Sentry status step never claims a TestFlight upload that never ran", () => {
+  // The marker is written before the export and the upload, so a marker can
+  // exist for a run that never uploaded anything.  The claim has to come from
+  // the ship step's own outcome, not from the mere presence of the marker.
+  assert.match(code, /- name: Ship CodeCaps to TestFlight\n\s+id: ship\b/);
+  assert.match(code, /steps\.ship\.outcome\s*\}\}" = "success"/);
+  assert.ok(
+    (code.match(/steps\.ship\.outcome/g) || []).length >= 2,
+    "the status step must read the ship step's outcome in both branches",
+  );
+});
+
+test("the Sentry upload keeps the token out of argv and reports every miss", () => {
+  // The token reaches curl on stdin, so a process listing cannot read it.
+  assert.match(shipScript, /-H @-/);
+  assert.match(shipScript, /<<<"Authorization: Bearer \$\{SENTRY_API_TOKEN\}"/);
+  assert.doesNotMatch(shipScript, /curl[^\n]*Bearer/);
+  assert.doesNotMatch(shipScript, /-H "Authorization: Bearer/);
+
+  // A credential that cannot be resolved is reported by name and fails the
+  // resolution, instead of becoming an empty token that looks like a success.
+  assert.ok(shipScript.includes("could not be read from fleet-secrets"));
+  assert.match(shipScript, /load_sentry_auth\(\) \{[\s\S]*?return 1/);
+
+  // Source bundles are a per-project artifact, so every project gets them.
+  assert.match(shipScript, /debug-files upload --include-sources "\$archive"/);
+  assert.doesNotMatch(shipScript, /debug-files upload "\$archive"/);
+
+  // The Size Analysis quota is 100 builds a month, so only the project that
+  // holds the events spends one.
+  assert.ok(shipScript.includes('if [[ -z "$dsn_project" || "$p" == "$dsn_project" ]]; then'));
+
+  // A DSN project that cannot be resolved is reported:  dropping it silently
+  // is the defect the lane exists to fix.
+  assert.ok(shipScript.includes("the Sentry project named by the DSN could not be resolved"));
+
+  // The marker write is guarded:  a bookkeeping failure must not abort the
+  // ship under set -e.
+  assert.ok(shipScript.includes('>>"$(sentry_failure_marker)" 2>/dev/null'));
+});
+
 test("upload-only never forwards the (from IPA) placeholder to the manifest publisher", () => {
   const ship = read("scripts/ios-fleet/ship-testflight.sh");
   const guard = ship.indexOf('"${MARKETING:-}" == "(from IPA)" || "${BUILD_NUM:-}" == "(from IPA)"');
   const publish = ship.indexOf('bash "${FLEET_DIR}/publish-ios-versions.sh"');
   assert.ok(guard > 0 && publish > guard, "placeholder guard must come before the publisher call");
+});
+
+test("Sentry error-file read failure cannot abort a ship under errexit", () => {
+  const restore = shipScript.match(/if \[\[ -s "\$\{LOG_DIR\}\/sentry-dsn-project\.error" \]\]; then[\s\S]*?\n    fi/)[0];
+  const script = `set -e
+LOG_DIR=$(mktemp -d)
+trap 'rm -rf "$LOG_DIR"' EXIT
+printf 'reason' >"$LOG_DIR/sentry-dsn-project.error"
+cat() { return 1; }
+${restore}
+echo continued`;
+  assert.match(execFileSync("bash", ["-c", script], {encoding:"utf8"}), /continued/);
 });
