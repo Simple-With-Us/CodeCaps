@@ -29,4 +29,39 @@ final class WidgetPlatformDisplayTests: XCTestCase {
             )
         }
     }
+
+    func testMuseAssistUsableExtraSpeaksForTheCardHeadline() {
+        let readings = [
+            CardHeadline.Reading(isMuseAssistExtra: false, isMasked: false, remainingPercent: 0),
+            CardHeadline.Reading(isMuseAssistExtra: true, isMasked: false, remainingPercent: 82)
+        ]
+        XCTAssertEqual(CardHeadline.percent(readings), 82)
+    }
+
+    func testSpentExtraAndMaskedReadingsDoNotSpeakForTheHeadline() {
+        XCTAssertEqual(CardHeadline.percent([
+            CardHeadline.Reading(isMuseAssistExtra: false, isMasked: false, remainingPercent: 0),
+            CardHeadline.Reading(isMuseAssistExtra: true, isMasked: false, remainingPercent: 0)
+        ]), 0)
+        XCTAssertEqual(CardHeadline.percent([
+            CardHeadline.Reading(isMuseAssistExtra: false, isMasked: false, remainingPercent: 40),
+            CardHeadline.Reading(isMuseAssistExtra: true, isMasked: true, remainingPercent: 82)
+        ]), 40)
+        XCTAssertNil(CardHeadline.percent([]))
+    }
+
+    func testOtherProvidersKeepTheLowestReading() {
+        XCTAssertEqual(CardHeadline.percent([
+            CardHeadline.Reading(isMuseAssistExtra: false, isMasked: false, remainingPercent: 90),
+            CardHeadline.Reading(isMuseAssistExtra: false, isMasked: false, remainingPercent: 19)
+        ]), 19)
+    }
+
+    func testUpdatedStampNamesTheDayWhenItIsNotToday() {
+        let now = Date(timeIntervalSince1970: 1_793_000_000)
+        let yesterday = now.addingTimeInterval(-86_400)
+        XCTAssertEqual(UpdatedStamp.label(now, now: now), now.formatted(date: .omitted, time: .shortened))
+        XCTAssertNotEqual(UpdatedStamp.label(yesterday, now: now),
+                          yesterday.formatted(date: .omitted, time: .shortened))
+    }
 }

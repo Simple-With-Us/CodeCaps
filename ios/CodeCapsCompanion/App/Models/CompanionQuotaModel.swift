@@ -596,11 +596,20 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
     /// spent reports whatever it last saw, and the card put that on its
     /// headline while the label beside it said "n/a".
     public func cardRemainingPercent(scope: CompanionSourceScope, now: Date = Date()) -> Double? {
-        cardWindows(scope: scope, now: now)
-            .filter { !$0.isMasked }
-            .compactMap(\.remainingPercent)
-            .filter { $0.isFinite }
-            .min()
+        let readings = cardWindows(scope: scope, now: now).map { window in
+            CardHeadline.Reading(
+                isMuseAssistExtra: providerKey == "muse-assist"
+                    && QuotaWindowVocabulary.isMuseAssistExtra(
+                        providerKey: providerKey,
+                        windowToken: nil,
+                        label: window.label,
+                        resetAt: window.resetAt
+                    ),
+                isMasked: window.isMasked,
+                remainingPercent: window.remainingPercent
+            )
+        }
+        return CardHeadline.percent(readings)
     }
 
     public func cardDisplayPercent(scope: CompanionSourceScope, now: Date = Date()) -> String {

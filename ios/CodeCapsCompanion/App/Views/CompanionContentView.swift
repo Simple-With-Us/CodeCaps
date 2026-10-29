@@ -176,7 +176,7 @@ public struct CompanionContentView: View {
             Spacer(minLength: 4)
 
             if let updated = model.lastUpdated {
-                Text(updated.formatted(date: .omitted, time: .shortened))
+                Text(UpdatedStamp.label(updated))
                     .font(.caption2)
                     .italic()
                     .foregroundStyle(.secondary)
@@ -809,7 +809,7 @@ public struct CompanionContentView: View {
                 } footer: {
                     VStack(alignment: .leading, spacing: 4) {
                         if let updated = model.lastUpdated {
-                            Text("Last updated \(updated.formatted(date: .omitted, time: .shortened))")
+                            Text("Last updated \(UpdatedStamp.label(updated))")
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
