@@ -49,6 +49,17 @@ test('dotted builds count by their first numeric component', () => {
 test('floors wider than a safe integer ride through as digit strings', () => {
   assert.deepEqual(next({...input, extraFloors: ['202610290940']}), {build: '202610290941'});
 });
+test('a result wider than 12 digits throws instead of planning an unshippable build', () => {
+  // 13..19-digit floors and builds would plan a build the 12-digit ship gate
+  // rejects, so the planner fails closed with a clear error.
+  assert.throws(() => next({...input, extraFloors: ['1234567890123']}), /planned build exceeds 12 digits/);
+  assert.throws(() => next({...input, extraFloors: ['1234567890123456789']}), /planned build exceeds 12 digits/);
+  assert.throws(() => next({...input, iosBuilds: ['1234567890123']}), /planned build exceeds 12 digits/);
+  assert.throws(() => next({...input, macBuilds: ['123456789012345678']}), /planned build exceeds 12 digits/);
+  // Boundary: the widest 12-digit max still plans one above it, which is 13
+  // digits wide and throws.
+  assert.throws(() => next({...input, iosBuilds: ['999999999999']}), /planned build exceeds 12 digits/);
+});
 test('malformed inventory throws before computing', () => {
   for (const bad of [null, 'NaN', '1.2.3.4', 42, '', ' 1000', 'v1']) {
     assert.throws(() => next({...input, iosBuilds: [bad]}), /malformed build inventory/);

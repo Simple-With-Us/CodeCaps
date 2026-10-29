@@ -992,10 +992,12 @@ asc_next_shared_build() {
       logerr "asc-shared-build: pairedBuildFeed $feed held no numeric <sparkle:version>; failing closed"
       return 1
     fi
-    # Numeric, >= 1, <= 18 digits.  Compared as a string: an 18-digit floor is
-    # wider than 64 bits, so bash arithmetic cannot hold it.
-    if [[ "${#max}" -gt 18 || ! "$max" =~ [1-9] ]]; then
-      logerr "asc-shared-build: pairedBuildFeed $feed floor $max is not a 1..18 digit integer >= 1; failing closed"
+    # Numeric, >= 1, <= 12 digits.  Compared as a string: a stamp-scale floor
+    # is wider than 32 bits, so bash arithmetic cannot hold it.  Anything wider
+    # can only plan a build the 12-digit ship gate rejects, so it fails closed
+    # here with the feed URL and value named.
+    if [[ "${#max}" -gt 12 || ! "$max" =~ [1-9] ]]; then
+      logerr "asc-shared-build: pairedBuildFeed $feed floor $max is not a 1..12 digit integer >= 1; failing closed"
       return 1
     fi
     floor="$max"

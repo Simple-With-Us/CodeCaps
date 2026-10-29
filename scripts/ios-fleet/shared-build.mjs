@@ -7,7 +7,8 @@
 // timestamp-style builds included) of the app on iOS and of its paired macOS
 // app, plus every extra floor (Sparkle pairedBuildFeed max).  No 1000 floor
 // and no 9999 cap.  A rebuild of the same commit still goes up, because M
-// then holds the last build.
+// then holds the last build.  A result wider than 12 digits throws: the ship
+// gate only accepts 12-digit builds, so planning one wider can never ship.
 export function nextSharedBuild({iosBuilds, macBuilds, extraFloors = [], complete, mergeStamp}) {
   if (complete !== true || !Array.isArray(iosBuilds) || !Array.isArray(macBuilds)) {
     throw new Error('complete build inventory required');
@@ -44,5 +45,7 @@ export function nextSharedBuild({iosBuilds, macBuilds, extraFloors = [], complet
     if (highest === null || candidate > highest) highest = candidate;
   }
   const next = highest === null ? stamp : (highest + 1n > stamp ? highest + 1n : stamp);
-  return {build: String(next)};
+  const build = String(next);
+  if (build.length > 12) throw new Error('planned build exceeds 12 digits');
+  return {build};
 }

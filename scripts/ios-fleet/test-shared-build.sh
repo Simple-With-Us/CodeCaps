@@ -6,8 +6,9 @@
 # Covers:
 #   1. whitespace-padded <sparkle:version> values join the plan
 #   2. a non-https pairedBuildFeed is refused before curl runs
-#   3. a feed floor that is not a 1..18 digit integer >= 1 fails closed with
-#      the URL named (and 9999, once capped, now joins the plan)
+#   3. a feed floor that is not a 1..12 digit integer >= 1 fails closed with
+#      the URL and value named (13..19-digit floors can only plan a build the
+#      12-digit ship gate rejects; 9999 and stamp-scale floors join the plan)
 #   4. a configured feed with zero numeric versions fails closed with a message
 #   5. a macOS entry with no forward pairing is matched by reverse lookup
 #   6. the merge stamp is the committer date of HEAD in America/Chicago
@@ -214,12 +215,32 @@ check "19-digit floor exits 1" "1" "$RANGE_RC"
 check "19-digit floor prints no build" "" "$RANGE_OUT"
 RANGE_LOG="$(cat "$RANGE_ERR")"
 contains "range rejection names the URL" "https://example.com/range.xml" "$RANGE_LOG"
-contains "range rejection names the range" "1..18 digit" "$RANGE_LOG"
+contains "range rejection names the range" "1..12 digit" "$RANGE_LOG"
+contains "range rejection names the value" "1234567890123456789" "$RANGE_LOG"
 if [[ -f "${TMP}/asc_args.txt" ]]; then
   echo "  FAIL: ASC client ran for an out-of-range floor"
   FAIL=$((FAIL + 1))
 else
   echo "  ok  : ASC client never ran for an out-of-range floor"
+  PASS=$((PASS + 1))
+fi
+# A 13-digit floor was accepted under the old 1..18 cap but can only plan a
+# build the 12-digit ship gate rejects, so it fails closed too.
+export FAKE_FEED_XML='<rss><channel><item><sparkle:version>1234567890123</sparkle:version></item></channel></rss>'
+WIDE_ERR="${TMP}/wide.err"
+WIDE_OUT="$(run_helper "${TMP}/apps-range.json" rangeapp com.example.range iOS 2>"$WIDE_ERR")"
+WIDE_RC=$?
+check "13-digit floor exits 1" "1" "$WIDE_RC"
+check "13-digit floor prints no build" "" "$WIDE_OUT"
+WIDE_LOG="$(cat "$WIDE_ERR")"
+contains "13-digit rejection names the URL" "https://example.com/range.xml" "$WIDE_LOG"
+contains "13-digit rejection names the value" "1234567890123" "$WIDE_LOG"
+contains "13-digit rejection names the range" "1..12 digit" "$WIDE_LOG"
+if [[ -f "${TMP}/asc_args.txt" ]]; then
+  echo "  FAIL: ASC client ran for a 13-digit floor"
+  FAIL=$((FAIL + 1))
+else
+  echo "  ok  : ASC client never ran for a 13-digit floor"
   PASS=$((PASS + 1))
 fi
 export FAKE_FEED_XML='<rss><channel><item><sparkle:version>0</sparkle:version></item></channel></rss>'
@@ -228,7 +249,7 @@ ZERO_OUT="$(run_helper "${TMP}/apps-range.json" rangeapp com.example.range iOS 2
 ZERO_RC=$?
 check "zero floor exits 1" "1" "$ZERO_RC"
 check "zero floor prints no build" "" "$ZERO_OUT"
-contains "zero rejection names the range" "1..18 digit" "$(cat "$ZERO_ERR")"
+contains "zero rejection names the range" "1..12 digit" "$(cat "$ZERO_ERR")"
 # 9999 was refused under the old 1..9998 cap; now it joins the plan, as does
 # a stamp-scale floor.
 export FAKE_FEED_XML='<rss><channel><item><sparkle:version>9999</sparkle:version></item></channel></rss>'
