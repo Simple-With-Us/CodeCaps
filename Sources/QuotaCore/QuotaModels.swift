@@ -453,7 +453,7 @@ public enum QuotaLocalScope {
         expectedProviderKeys: [String]
     ) -> [QuotaWindow] {
         let expected = Set(expectedProviderKeys)
-        groups.flatMap(\.windows).filter { candidate in
+        return groups.flatMap(\.windows).filter { candidate in
             let key = candidate.canonicalProviderKey
             return !localProviders.contains(key)
                 && !adoptedReadingKeys.contains(key)
