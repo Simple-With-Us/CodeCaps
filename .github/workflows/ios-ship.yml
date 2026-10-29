@@ -40,8 +40,12 @@ name: iOS TestFlight ship (GitHub-hosted macOS)
 # installed App Store profiles.  Xcode's provisioning service rejects this API
 # key, so the job must not ask it to create or update profiles.
 #
-# Versioning is 1.0.<commit count>, and CFBundleVersion is that same integer
-# (owner 2026-10-18); UTC timestamps are retired.  Bundle `com.simplewithus.codecaps.ios`, team `CC8UTF7ATG`.
+# Versioning is the fixed marketing version 0.1.0 with ONE shared
+# merge-timestamp build per release (owner 2026-10-29): max(S, M + 1), where S
+# is the committer date of HEAD in America/Chicago as YYYYMMDDHHMM and M is the
+# highest build the app and its pair hold.  The plan-build step computes that
+# value once; the ship step reuses it through --build and never plans its own.
+# Bundle `com.simplewithus.codecaps.ios`, team `CC8UTF7ATG`.
 #
 # WHY THERE IS A `schedule:` TRIGGER
 # A PR merged by github-actions[bot] (auto-merge armed with GITHUB_TOKEN) lands
@@ -325,6 +329,22 @@ jobs:
           source scripts/ios-load-asc-key.sh
           bash "$GITHUB_WORKSPACE/scripts/ios-install-appstore-profiles.sh"
 
+      # The release's ONE build number, computed once (owner 2026-10-29).
+      # Every ship step of this release reuses the value below through --build;
+      # no ship step plans its own.  The rate gate and the same-HEAD skip still
+      # live in the ship script, so when the gate skips, nothing is uploaded.
+      - name: Plan the release build (once per release)
+        id: plan-build
+        run: |
+          source scripts/ios-load-asc-key.sh
+          build="$(bash scripts/ios-fleet/ship-testflight.sh codecaps --repo-root "$GITHUB_WORKSPACE" --plan-build-only)"
+          if ! printf '%s' "$build" | grep -qE '^[1-9][0-9]{11}$'; then
+            echo "::error::plan-build did not print a 12-digit merge-timestamp build."
+            exit 1
+          fi
+          echo "build=${build}" >>"$GITHUB_OUTPUT"
+          echo "Planned release build: ${build}"
+
       - name: Ship CodeCaps to TestFlight
         id: ship
         env:
@@ -339,7 +359,7 @@ jobs:
           IOS_VERSIONS_PUBLISH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           source scripts/ios-load-asc-key.sh
-          bash scripts/ios-ship-testflight.sh
+          bash scripts/ios-ship-testflight.sh --build "${{ steps.plan-build.outputs.build }}"
 
       - name: Sync standing TestFlight testers
         if: success()

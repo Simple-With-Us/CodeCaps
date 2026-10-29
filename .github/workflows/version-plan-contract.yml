@@ -61,7 +61,7 @@ jobs:
           node --check scripts/ios-fleet/asc-api.mjs
           bash -n scripts/ios-fleet/ship-testflight.sh
           node --test scripts/ios-fleet/version-plan.test.mjs
-      - name: Fleet shared build counter (offline)
+      - name: Fleet shared merge-timestamp build (offline)
         run: |
           node --test scripts/ios-fleet/shared-build.test.mjs
           bash scripts/ios-fleet/test-shared-build.sh

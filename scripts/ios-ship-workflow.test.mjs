@@ -115,7 +115,12 @@ test("ios-ship.yml ships automatically on a merge that touches the native tree",
   // What to Test is mandatory and published, never dry-rendered.
   assert.match(code, /IOS_TF_RELEASE_NOTES:\s*"1"/);
   // Ship through the wrapper that runs ship-testflight.sh (ensure-tf-ready inside).
-  assert.match(code, /bash scripts\/ios-ship-testflight\.sh\s*$/m);
+  // The build is computed ONCE by the plan-build step and handed to the ship
+  // through --build; the ship never plans its own (owner 2026-10-29).
+  assert.match(code, /id: plan-build/);
+  assert.match(code, /--plan-build-only/);
+  assert.match(code, /echo "build=\$\{build\}" >>"\$GITHUB_OUTPUT"/);
+  assert.match(code, /bash scripts\/ios-ship-testflight\.sh --build "\$\{\{ steps\.plan-build\.outputs\.build \}\}"/);
   assert.match(read("scripts/ios-fleet/ship-testflight.sh"), /ensure-tf-ready/);
   // Hosted macOS with the stable-Xcode guard, never a self-hosted label.
   assert.match(code, /runs-on:\s*macos-latest/);
