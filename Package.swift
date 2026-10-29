@@ -14,7 +14,7 @@ let package = Package(
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.10.0"),
         // Crash reporting and telemetry for the codecaps Sentry project
         // (org simple-with-us).  Pinned to the fleet-wide sentry-cocoa major.
-        .package(url: "https://github.com/getsentry/sentry-cocoa", from: "9.30.2"),
+        .package(url: "https://github.com/getsentry/sentry-cocoa", from: "9.31.0"),
     ],
     targets: [
         .target(name: "QuotaCore", linkerSettings: [.linkedLibrary("sqlite3")]),
