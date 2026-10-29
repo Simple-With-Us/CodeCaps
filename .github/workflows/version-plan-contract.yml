@@ -22,6 +22,7 @@ on:
       - 'scripts/ios-fleet/version-plan.test.mjs'
       - 'scripts/ios-fleet/shared-build.mjs'
       - 'scripts/ios-fleet/shared-build.test.mjs'
+      - 'scripts/ios-fleet/test-shared-build.sh'
       - 'scripts/ios-fleet/test-version-plan-contract.mjs'
       - 'scripts/ios-fleet/ship-testflight.sh'
       - 'scripts/ios-fleet/asc-api.mjs'
@@ -32,6 +33,7 @@ on:
       - 'scripts/ios-fleet/version-plan.test.mjs'
       - 'scripts/ios-fleet/shared-build.mjs'
       - 'scripts/ios-fleet/shared-build.test.mjs'
+      - 'scripts/ios-fleet/test-shared-build.sh'
       - 'scripts/ios-fleet/test-version-plan-contract.mjs'
       - 'scripts/ios-fleet/ship-testflight.sh'
       - 'scripts/ios-fleet/asc-api.mjs'
@@ -60,7 +62,9 @@ jobs:
           bash -n scripts/ios-fleet/ship-testflight.sh
           node --test scripts/ios-fleet/version-plan.test.mjs
       - name: Fleet shared build counter (offline)
-        run: node --test scripts/ios-fleet/shared-build.test.mjs
+        run: |
+          node --test scripts/ios-fleet/shared-build.test.mjs
+          bash scripts/ios-fleet/test-shared-build.sh
       - name: The version plan the ship actually applies (AFC-517)
         run: |
           #  The rules the ship applies live in the client and the ship

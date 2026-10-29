@@ -2533,16 +2533,16 @@ async function main() {
     const bundleId = restArgs[0] || "";
     const rest = restArgs.slice(1);
     if (!bundleId) {
-      console.error("Usage: node asc-api.mjs next-shared-build <bundleId> [macBundleId] [floor...]");
+      console.error("Usage: node asc-api.mjs next-shared-build <bundleId> [pairedBundleId] [floor...]");
       process.exit(2);
     }
     // A pure-integer second arg is a floor, not a bundle id (bundle ids are
-    // never bare integers), so a caller with no mac app passes only floors.
-    let macBundleId = "";
+    // never bare integers), so a caller with no paired app passes only floors.
+    let pairedBundleId = "";
     let floorArgs = [];
     if (rest.length > 0) {
       if (/^[0-9]+$/.test(rest[0])) floorArgs = rest;
-      else { macBundleId = rest[0] || ""; floorArgs = rest.slice(1); }
+      else { pairedBundleId = rest[0] || ""; floorArgs = rest.slice(1); }
     }
     const extraFloors = [];
     for (const f of floorArgs) {
@@ -2558,14 +2558,14 @@ async function main() {
       process.exit(2);
     }
     const appId = app.appId;
-    let macAppId = "";
-    if (macBundleId && macBundleId !== bundleId) {
-      const mac = await appIdForBundle(macBundleId);
-      if (!mac.ok) {
-        console.error(`next-shared-build: mac app not found for bundle ${macBundleId}: ${mac.error}`);
+    let pairedAppId = "";
+    if (pairedBundleId && pairedBundleId !== bundleId) {
+      const paired = await appIdForBundle(pairedBundleId);
+      if (!paired.ok) {
+        console.error(`next-shared-build: paired app not found for bundle ${pairedBundleId}: ${paired.error}`);
         process.exit(2);
       }
-      macAppId = mac.appId;
+      pairedAppId = paired.appId;
     }
     async function allBuilds(forAppId, platform) {
       const out = [];
@@ -2584,18 +2584,33 @@ async function main() {
         url = res.parsed.links?.next || "";
       }
       if (url) {
-        console.error("next-shared-build: incomplete pagination");
+        console.error("next-shared-build: more than 100 pages of builds; incomplete pagination");
         process.exit(2);
       }
       return out;
     }
     // The paired app joins the counter with its builds on BOTH platforms, so
     // the counter is the same whichever of the two apps is the one shipping.
-    let iosBuilds = await allBuilds(appId, "IOS");
-    let macBuilds = await allBuilds(appId, "MAC_OS");
-    if (macAppId) {
-      iosBuilds = iosBuilds.concat(await allBuilds(macAppId, "IOS"));
-      macBuilds = macBuilds.concat(await allBuilds(macAppId, "MAC_OS"));
+    // iosBuilds = IOS(app) + IOS(paired), macBuilds = MAC_OS(app) + MAC_OS(paired).
+    // The inventories are independent, so they are read concurrently.
+    let iosBuilds;
+    let macBuilds;
+    if (pairedAppId && pairedAppId !== appId) {
+      const [iosMain, macMain, iosPaired, macPaired] = await Promise.all([
+        allBuilds(appId, "IOS"),
+        allBuilds(appId, "MAC_OS"),
+        allBuilds(pairedAppId, "IOS"),
+        allBuilds(pairedAppId, "MAC_OS")
+      ]);
+      iosBuilds = iosMain.concat(iosPaired);
+      macBuilds = macMain.concat(macPaired);
+    } else {
+      const [iosMain, macMain] = await Promise.all([
+        allBuilds(appId, "IOS"),
+        allBuilds(appId, "MAC_OS")
+      ]);
+      iosBuilds = iosMain;
+      macBuilds = macMain;
     }
     try {
       const planned = nextSharedBuild({iosBuilds, macBuilds, extraFloors, complete: true});
