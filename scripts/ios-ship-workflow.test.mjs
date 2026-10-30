@@ -41,7 +41,7 @@ function onBlock(yml) {
 
 /** Push-path list entries, accepting single quotes, double quotes or no quotes. */
 function extractPushPathEntries(block) {
-  return [...block.matchAll(/^\s+-\s+['"]?([^'"\s]+)['"]?\s*(?:#.*)?$/gm)].map((m) => m[1]);
+  return [...block.matchAll(/^\s+-\s+(?:'([^']+)'|"([^"]+)"|(\S+))\s*(?:#.*)?$/gm)].map((m) => m[1] ?? m[2] ?? m[3]);
 }
 
 /** The `on.push.paths` entries (including any `!` exclusions), in order. */
@@ -56,7 +56,7 @@ function pushPaths() {
 
 /** `--path-prefix` values, accepting single quotes, double quotes or no quotes. */
 function extractGatePrefixes(block) {
-  return [...block.matchAll(/--path-prefix\s+['"]?([^'"\s\\]+)['"]?(?:[ \t]*#[^\n]*)?/g)].map((m) => m[1]);
+  return [...block.matchAll(/--path-prefix\s+(?:'([^']+)'|"([^"]+)"|([^\s\\]+))/g)].map((m) => m[1] ?? m[2] ?? m[3]);
 }
 
 /** The scheduled gate step that calls scheduled-ship-gate.sh. */
@@ -182,15 +182,15 @@ test("push paths trigger on the native tree and not on test-only changes", () =>
 test("path extractors accept single, double and unquoted values, ignoring trailing comments", () => {
   assert.deepEqual(
     extractPushPathEntries(
-      "      - 'ios/A/**'\n      - \"Sources/B.swift\"\n      - Sources/C.swift\n      - 'ios/D/**' # why it ships\n",
+      "      - 'ios/A/**'\n      - \"Sources/B.swift\"\n      - Sources/C.swift\n      - 'ios/D/**' # why it ships\n      - 'my dir/E.swift'\n      - \"my dir/F.swift\"\n",
     ),
-    ["ios/A/**", "Sources/B.swift", "Sources/C.swift", "ios/D/**"],
+    ["ios/A/**", "Sources/B.swift", "Sources/C.swift", "ios/D/**", "my dir/E.swift", "my dir/F.swift"],
   );
   assert.deepEqual(
     extractGatePrefixes(
-      "--path-prefix 'ios/A/' \\\n--path-prefix \"Sources/B.swift\" \\\n--path-prefix Sources/C.swift\n--path-prefix 'ios/D/' # why it is watched\n",
+      "--path-prefix 'ios/A/' \\\n--path-prefix \"Sources/B.swift\" \\\n--path-prefix Sources/C.swift\n--path-prefix 'ios/D/' # why it is watched\n--path-prefix 'my dir/' \\\n--path-prefix \"my dir/G.swift\"\n",
     ),
-    ["ios/A/", "Sources/B.swift", "Sources/C.swift", "ios/D/"],
+    ["ios/A/", "Sources/B.swift", "Sources/C.swift", "ios/D/", "my dir/", "my dir/G.swift"],
   );
 });
 
