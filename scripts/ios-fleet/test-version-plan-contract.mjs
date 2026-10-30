@@ -388,80 +388,137 @@ test("a rejected key is named by key id and source, with nothing from the key (A
 });
 
 test("the client and the module agree on the next shared build", async () => {
-  //  The iOS train holds a four-digit build and a timestamp build the counter
-  //  ignores; the macOS train holds one four-digit build.  The floor on the
-  //  command line sits above both, so it decides the answer.
+  //  The iOS train holds a small build and a timestamp build the plan counts;
+  //  the macOS train holds one small build.  The stamp sits below the highest
+  //  build, so M + 1 decides the answer.
+  const STAMP = "202610010000";
   const iosBuilds = ["1004", "202610110355"];
   const macBuilds = ["1007"];
   const state = {
     trains: [
-      { id: "t-ios", version: "1.0.1", builds: iosBuilds },
-      { id: "t-mac", version: "1.0.1", builds: macBuilds, platform: "MAC_OS" }
+      { id: "t-ios", version: "0.1.0", builds: iosBuilds },
+      { id: "t-mac", version: "0.1.0", builds: macBuilds, platform: "MAC_OS" }
     ]
   };
-  const expected = nextSharedBuild({ iosBuilds, macBuilds, extraFloors: [1009], complete: true }).build;
-  assert.equal(expected, "1010", `the fixture does not let the floor decide: ${expected}`);
+  const expected = nextSharedBuild({ iosBuilds, macBuilds, extraFloors: ["1009"], complete: true, mergeStamp: STAMP }).build;
+  assert.equal(expected, "202610110356", `the fixture does not let M + 1 decide: ${expected}`);
 
-  await withStub(state, async ({ base, requests }) => {
-    const result = await run(["next-shared-build", BUNDLE, "1009"], base);
+  //  Both plan names run the same read, so both are held to the module.
+  for (const name of ["next-shared-build", "plan-release-build"]) {
+    await withStub(state, async ({ base, requests }) => {
+      const result = await run([name, BUNDLE, "1009", "--merge-stamp", STAMP], base);
+      assert.equal(result.code, 0, `the client failed:\n${result.stderr}`);
+      assert.equal(
+        result.stdout.trim(),
+        expected,
+        `the client printed ${result.stdout.trim()}, the module says ${expected}`
+      );
+
+      //  One inventory read per platform:  every build is read and counted.
+      const iosQueries = requests.filter(
+        (r) => r.startsWith("/v1/builds?") && r.includes("filter[preReleaseVersion.platform]=IOS")
+      );
+      const macQueries = requests.filter(
+        (r) => r.startsWith("/v1/builds?") && r.includes("filter[preReleaseVersion.platform]=MAC_OS")
+      );
+      assert.equal(
+        iosQueries.length,
+        1,
+        `expected one iOS builds query, saw ${iosQueries.length}: ${iosQueries.join(", ")}`
+      );
+      assert.equal(
+        macQueries.length,
+        1,
+        `expected one macOS builds query, saw ${macQueries.length}: ${macQueries.join(", ")}`
+      );
+    });
+  }
+});
+
+test("the merge stamp wins when it sits above every build", async () => {
+  const STAMP = "202610290930";
+  const state = {
+    trains: [
+      { id: "t-ios", version: "0.1.0", builds: ["1004"] },
+      { id: "t-mac", version: "0.1.0", builds: ["1007"], platform: "MAC_OS" }
+    ]
+  };
+  await withStub(state, async ({ base }) => {
+    const result = await run(["plan-release-build", BUNDLE, "1009", "--merge-stamp", STAMP], base);
     assert.equal(result.code, 0, `the client failed:\n${result.stderr}`);
-    assert.equal(
-      result.stdout.trim(),
-      expected,
-      `the client printed ${result.stdout.trim()}, the module says ${expected}`
-    );
-
-    //  One inventory read per platform:  the iOS timestamp build is filtered
-    //  by the counter, not by a narrower query.
-    const iosQueries = requests.filter(
-      (r) => r.startsWith("/v1/builds?") && r.includes("filter[preReleaseVersion.platform]=IOS")
-    );
-    const macQueries = requests.filter(
-      (r) => r.startsWith("/v1/builds?") && r.includes("filter[preReleaseVersion.platform]=MAC_OS")
-    );
-    assert.equal(
-      iosQueries.length,
-      1,
-      `expected one iOS builds query, saw ${iosQueries.length}: ${iosQueries.join(", ")}`
-    );
-    assert.equal(
-      macQueries.length,
-      1,
-      `expected one macOS builds query, saw ${macQueries.length}: ${macQueries.join(", ")}`
-    );
+    assert.equal(result.stdout.trim(), STAMP, `the client printed ${result.stdout.trim()}, the stamp is ${STAMP}`);
+  });
+  //  A fresh app with no builds at all plans the stamp itself.
+  await withStub({ trains: [] }, async ({ base }) => {
+    const result = await run(["plan-release-build", BUNDLE, "--merge-stamp", STAMP], base);
+    assert.equal(result.code, 0, `the client failed:\n${result.stderr}`);
+    assert.equal(result.stdout.trim(), STAMP, `the client printed ${result.stdout.trim()}, the stamp is ${STAMP}`);
   });
 });
 
-test("next-shared-build unions IOS and MAC_OS across both paired apps", async () => {
-  //  Each of the four inventories holds a distinct build.  The paired app's
-  //  iOS build is the highest, so the answer proves IOS(paired) joined:
-  //  without it the max would be the paired macOS build and next 1401.
+test("the plan commands refuse a missing or malformed merge stamp", async () => {
+  await withStub({ trains: [] }, async ({ base }) => {
+    for (const name of ["next-shared-build", "plan-release-build"]) {
+      let result = await run([name, BUNDLE], base);
+      assert.equal(result.code, 2, `expected exit 2 without a stamp, got ${result.code}:\n${result.stderr}`);
+      assert.equal(result.stdout.trim(), "", "a refused plan must print no build");
+      for (const bad of ["123", "022610290930", "20261029093012", "20261029093a"]) {
+        result = await run([name, BUNDLE, "--merge-stamp", bad], base);
+        assert.equal(result.code, 2, `expected exit 2 for stamp ${bad}, got ${result.code}:\n${result.stderr}`);
+        assert.equal(result.stdout.trim(), "", "a refused plan must print no build");
+      }
+    }
+  });
+});
+
+test("a malformed build in the inventory fails the plan closed", async () => {
+  const state = {
+    trains: [{ id: "t-ios", version: "0.1.0", builds: ["202610290930", "NaN"] }]
+  };
+  await withStub(state, async ({ base }) => {
+    const result = await run(["plan-release-build", BUNDLE, "--merge-stamp", "202610010000"], base);
+    assert.equal(result.code, 3, `expected exit 3 on malformed inventory, got ${result.code}:\n${result.stderr}`);
+    assert.ok(
+      /malformed build inventory/.test(result.stderr),
+      `the failure named no reason:\n${result.stderr}`
+    );
+    assert.equal(result.stdout.trim(), "", "a failed plan must print no build");
+  });
+});
+
+test("plan-release-build unions IOS and MAC_OS across both paired apps", async () => {
+  //  Each of the four inventories holds a distinct stamp-scale build above S.
+  //  The paired app's iOS build is the highest, so the answer proves
+  //  IOS(paired) joined:  without it the max would be the paired macOS build
+  //  and next 202610290933.
+  const STAMP = "202610290900";
   const PAIRED_BUNDLE = "com.example.paired";
   const PAIRED_APP = "app-2";
   const state = {
     trains: [
-      { id: "t-main-ios", version: "1.0.1", builds: ["1100"], platform: "IOS" },
-      { id: "t-main-mac", version: "1.0.1", builds: ["1200"], platform: "MAC_OS" }
+      { id: "t-main-ios", version: "0.1.0", builds: ["202610290930"], platform: "IOS" },
+      { id: "t-main-mac", version: "0.1.0", builds: ["202610290931"], platform: "MAC_OS" }
     ],
     paired: {
       bundle: PAIRED_BUNDLE,
       appId: PAIRED_APP,
       trains: [
-        { id: "t-pair-ios", version: "1.0.1", builds: ["1500"], platform: "IOS" },
-        { id: "t-pair-mac", version: "1.0.1", builds: ["1400"], platform: "MAC_OS" }
+        { id: "t-pair-ios", version: "0.1.0", builds: ["202610290935"], platform: "IOS" },
+        { id: "t-pair-mac", version: "0.1.0", builds: ["202610290932"], platform: "MAC_OS" }
       ]
     }
   };
   const expected = nextSharedBuild({
-    iosBuilds: ["1100", "1500"],
-    macBuilds: ["1200", "1400"],
+    iosBuilds: ["202610290930", "202610290935"],
+    macBuilds: ["202610290931", "202610290932"],
     extraFloors: [],
-    complete: true
+    complete: true,
+    mergeStamp: STAMP
   }).build;
-  assert.equal(expected, "1501", `the fixture does not let paired iOS decide: ${expected}`);
+  assert.equal(expected, "202610290936", `the fixture does not let paired iOS decide: ${expected}`);
 
   await withStub(state, async ({ base, requests }) => {
-    const result = await run(["next-shared-build", BUNDLE, PAIRED_BUNDLE], base);
+    const result = await run(["plan-release-build", BUNDLE, PAIRED_BUNDLE, "--merge-stamp", STAMP], base);
     assert.equal(result.code, 0, `the client failed:\n${result.stderr}`);
     assert.equal(
       result.stdout.trim(),
@@ -490,27 +547,28 @@ test("next-shared-build unions IOS and MAC_OS across both paired apps", async ()
   //  proves MAC_OS(paired) joined too.
   const state2 = {
     trains: [
-      { id: "t-main-ios", version: "1.0.1", builds: ["1100"], platform: "IOS" },
-      { id: "t-main-mac", version: "1.0.1", builds: ["1200"], platform: "MAC_OS" }
+      { id: "t-main-ios", version: "0.1.0", builds: ["202610290930"], platform: "IOS" },
+      { id: "t-main-mac", version: "0.1.0", builds: ["202610290931"], platform: "MAC_OS" }
     ],
     paired: {
       bundle: PAIRED_BUNDLE,
       appId: PAIRED_APP,
       trains: [
-        { id: "t-pair-ios", version: "1.0.1", builds: ["1150"], platform: "IOS" },
-        { id: "t-pair-mac", version: "1.0.1", builds: ["1600"], platform: "MAC_OS" }
+        { id: "t-pair-ios", version: "0.1.0", builds: ["202610290932"], platform: "IOS" },
+        { id: "t-pair-mac", version: "0.1.0", builds: ["202610290940"], platform: "MAC_OS" }
       ]
     }
   };
   const expected2 = nextSharedBuild({
-    iosBuilds: ["1100", "1150"],
-    macBuilds: ["1200", "1600"],
+    iosBuilds: ["202610290930", "202610290932"],
+    macBuilds: ["202610290931", "202610290940"],
     extraFloors: [],
-    complete: true
+    complete: true,
+    mergeStamp: STAMP
   }).build;
-  assert.equal(expected2, "1601", `the fixture does not let paired macOS decide: ${expected2}`);
+  assert.equal(expected2, "202610290941", `the fixture does not let paired macOS decide: ${expected2}`);
   await withStub(state2, async ({ base }) => {
-    const result = await run(["next-shared-build", BUNDLE, PAIRED_BUNDLE], base);
+    const result = await run(["plan-release-build", BUNDLE, PAIRED_BUNDLE, "--merge-stamp", STAMP], base);
     assert.equal(result.code, 0, `the client failed:\n${result.stderr}`);
     assert.equal(
       result.stdout.trim(),
@@ -520,15 +578,24 @@ test("next-shared-build unions IOS and MAC_OS across both paired apps", async ()
   });
 });
 
-test("next-shared-build reads its inventories concurrently and fails closed past the page cap", async () => {
+test("the plan commands read their inventories concurrently and fail closed past the page cap", async () => {
   //  The independent inventories are fetched with Promise.all, not serial
-  //  awaits.  Pinned so a later edit cannot serialize them again.
+  //  awaits.  Pinned so a later edit cannot serialize them again.  Both plan
+  //  names share one block, so one pin covers both; the slice stops at the
+  //  next command so a later Promise.all cannot satisfy it.
   const { readFileSync } = await import("node:fs");
   const clientText = readFileSync(script, "utf8");
-  const sharedSection = clientText.slice(clientText.indexOf('method === "next-shared-build"'));
+  assert.ok(
+    clientText.includes('method === "plan-release-build"'),
+    "plan-release-build is not a client command"
+  );
+  const sharedSection = clientText.slice(
+    clientText.indexOf('method === "next-shared-build"'),
+    clientText.indexOf('method === "max-platform-build"')
+  );
   assert.ok(
     sharedSection.includes("Promise.all"),
-    "next-shared-build does not fetch its inventories with Promise.all"
+    "the plan commands do not fetch their inventories with Promise.all"
   );
 
   //  Past the 100-page cap the client fails closed (exit 2 with a message)
@@ -559,7 +626,7 @@ test("next-shared-build reads its inventories concurrently and fails closed past
   const base = `http://127.0.0.1:${server.address().port}`;
   let result;
   try {
-    result = await run(["next-shared-build", BUNDLE], base);
+    result = await run(["plan-release-build", BUNDLE, "--merge-stamp", "202610290930"], base);
   } finally {
     server.close();
   }
@@ -569,4 +636,61 @@ test("next-shared-build reads its inventories concurrently and fails closed past
     `the cap failure named no reason:\n${result.stderr}`
   );
   assert.equal(result.stdout.trim(), "", "a capped inventory must print no build");
+});
+
+test("max-platform-build reports one platform of one app record", async () => {
+  //  Each platform holds a distinct highest build, so each answer proves the
+  //  other platform was not consulted:  the iOS max is below the macOS max.
+  const state = {
+    trains: [
+      { id: "t-ios", version: "0.1.0", builds: ["1004", "202610290930"], platform: "IOS" },
+      { id: "t-mac", version: "0.1.0", builds: ["202610290935"], platform: "MAC_OS" }
+    ]
+  };
+  await withStub(state, async ({ base, requests }) => {
+    let result = await run(["max-platform-build", BUNDLE, "IOS"], base);
+    assert.equal(result.code, 0, `the client failed:\n${result.stderr}`);
+    assert.equal(result.stdout.trim(), "202610290930", `the client printed ${result.stdout.trim()}`);
+    result = await run(["max-platform-build", BUNDLE, "MAC_OS"], base);
+    assert.equal(result.code, 0, `the client failed:\n${result.stderr}`);
+    assert.equal(result.stdout.trim(), "202610290935", `the client printed ${result.stdout.trim()}`);
+    //  The platform defaults to IOS.
+    result = await run(["max-platform-build", BUNDLE], base);
+    assert.equal(result.code, 0, `the client failed:\n${result.stderr}`);
+    assert.equal(result.stdout.trim(), "202610290930", `the client printed ${result.stdout.trim()}`);
+    //  One inventory read per call:  no paired app is ever consulted.
+    const buildsQueries = requests.filter((r) => r.startsWith("/v1/builds?"));
+    assert.equal(
+      buildsQueries.length,
+      3,
+      `expected one builds query per call, saw ${buildsQueries.length}: ${buildsQueries.join(", ")}`
+    );
+  });
+  //  A platform holding no build reports 0.
+  await withStub({
+    trains: [{ id: "t-mac", version: "0.1.0", builds: ["202610290935"], platform: "MAC_OS" }]
+  }, async ({ base }) => {
+    const result = await run(["max-platform-build", BUNDLE, "IOS"], base);
+    assert.equal(result.code, 0, `the client failed:\n${result.stderr}`);
+    assert.equal(result.stdout.trim(), "0", `the client printed ${result.stdout.trim()}`);
+  });
+});
+
+test("max-platform-build refuses a bad platform and fails closed on malformed builds", async () => {
+  await withStub({ trains: [] }, async ({ base }) => {
+    const result = await run(["max-platform-build", BUNDLE, "TV_OS"], base);
+    assert.equal(result.code, 2, `expected exit 2 for a bad platform, got ${result.code}:\n${result.stderr}`);
+    assert.equal(result.stdout.trim(), "", "a refused query must print no max");
+  });
+  await withStub({
+    trains: [{ id: "t-ios", version: "0.1.0", builds: ["oops"] }]
+  }, async ({ base }) => {
+    const result = await run(["max-platform-build", BUNDLE, "IOS"], base);
+    assert.equal(result.code, 3, `expected exit 3 on malformed inventory, got ${result.code}:\n${result.stderr}`);
+    assert.ok(
+      /malformed build inventory/.test(result.stderr),
+      `the failure named no reason:\n${result.stderr}`
+    );
+    assert.equal(result.stdout.trim(), "", "a failed query must print no max");
+  });
 });

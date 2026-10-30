@@ -24,6 +24,8 @@
  *   node asc-api.mjs latest-build-seq <bundleId> <prefix> [platform] [appleId]
  *   node asc-api.mjs latest-marketing-patch <bundleId> <prefix> [platform]
  *   node asc-api.mjs build-floor <bundleId> <version> [platform]
+ *   node asc-api.mjs plan-release-build <bundleId> [pairedBundleId] [floor...] --merge-stamp <S>
+ *   node asc-api.mjs max-platform-build <bundleId> [IOS|MAC_OS]
  *
  * Prints the raw JSON response to stdout. Caller is responsible for not
  * echoing anything secret-shaped from the response (ASC responses don't
@@ -2518,22 +2520,43 @@ async function main() {
     process.exit(0);
   }
 
-  // Read-only, fully paged shared four-digit counter (owner, Oct 28 2026):
-  // next = max(every iOS build on ALL trains, every macOS build on ALL trains,
-  // every extra floor, 999) + 1, floored at 1000.  iOS UTC timestamp builds are
-  // ignored by the planner (those trains are closed); macOS builds all count.
+  // Read-only, fully paged shared merge-timestamp build (owner, Oct 29 2026):
+  // next = max(S, M + 1), a plain integer, where S is the committer date of
+  // the commit being built (HEAD) in America/Chicago as YYYYMMDDHHMM and M is
+  // the highest first numeric component among EVERY build (expired included,
+  // all trains, old timestamp-style builds included) of the app on iOS and of
+  // its paired macOS app, plus every extra floor (Sparkle pairedBuildFeed max).
+  //
+  // next-shared-build is the historical name; plan-release-build is the same
+  // read run under the name the release's plan-build step calls.  Both take
+  // the stamp on the command line, so one upstream step computes the value
+  // once per release and every platform ship reuses it.
   //
   // Two ships at once would read the same inventory and pick the same N.  The
   // CI ship is serialised (ios-ship.yml concurrency group, cancel-in-progress
   // false), and a duplicate CFBundleVersion is refused by App Store Connect at
   // upload, so the loser fails loudly and nothing is promoted.  Do not run a
   // local ship while the workflow is running.
-  if (method === "next-shared-build") {
+  if (method === "next-shared-build" || method === "plan-release-build") {
     const restArgs = process.argv.slice(3);
-    const bundleId = restArgs[0] || "";
-    const rest = restArgs.slice(1);
-    if (!bundleId) {
-      console.error("Usage: node asc-api.mjs next-shared-build <bundleId> [pairedBundleId] [floor...]");
+    let mergeStamp = "";
+    const positionals = [];
+    for (let i = 0; i < restArgs.length; i++) {
+      if (restArgs[i] === "--merge-stamp") {
+        mergeStamp = restArgs[i + 1] || "";
+        i++;
+      } else {
+        positionals.push(restArgs[i]);
+      }
+    }
+    const bundleId = positionals[0] || "";
+    const rest = positionals.slice(1);
+    if (!bundleId || !mergeStamp) {
+      console.error(`Usage: node asc-api.mjs ${method} <bundleId> [pairedBundleId] [floor...] --merge-stamp <YYYYMMDDHHMM>`);
+      process.exit(2);
+    }
+    if (!/^[1-9][0-9]{11}$/.test(mergeStamp)) {
+      console.error(`${method}: merge stamp ${JSON.stringify(mergeStamp)} is not a 12-digit YYYYMMDDHHMM stamp`);
       process.exit(2);
     }
     // A pure-integer second arg is a floor, not a bundle id (bundle ids are
@@ -2546,15 +2569,17 @@ async function main() {
     }
     const extraFloors = [];
     for (const f of floorArgs) {
-      if (!/^[0-9]+$/.test(f) || !Number.isSafeInteger(Number(f))) {
-        console.error(`next-shared-build: floor ${JSON.stringify(f)} is not a non-negative safe integer`);
+      if (!/^[0-9]+$/.test(f)) {
+        console.error(`${method}: floor ${JSON.stringify(f)} is not a non-negative integer`);
         process.exit(2);
       }
-      extraFloors.push(Number(f));
+      // Floors ride through as digit strings: a Sparkle max can be wider than
+      // a safe integer, and the planner compares with BigInt.
+      extraFloors.push(f);
     }
     const app = await appIdForBundle(bundleId);
     if (!app.ok) {
-      console.error(`next-shared-build: app not found for bundle ${bundleId}: ${app.error}`);
+      console.error(`${method}: app not found for bundle ${bundleId}: ${app.error}`);
       process.exit(2);
     }
     const appId = app.appId;
@@ -2562,7 +2587,7 @@ async function main() {
     if (pairedBundleId && pairedBundleId !== bundleId) {
       const paired = await appIdForBundle(pairedBundleId);
       if (!paired.ok) {
-        console.error(`next-shared-build: paired app not found for bundle ${pairedBundleId}: ${paired.error}`);
+        console.error(`${method}: paired app not found for bundle ${pairedBundleId}: ${paired.error}`);
         process.exit(2);
       }
       pairedAppId = paired.appId;
@@ -2573,24 +2598,24 @@ async function main() {
       for (let page = 0; page < 100 && url; page++) {
         const res = await ascGet(url);
         if (!res.ok) {
-          console.error(`next-shared-build: inventory unavailable (HTTP ${res.status})`);
+          console.error(`${method}: inventory unavailable (HTTP ${res.status})`);
           failExit(res.status);
         }
         if (!Array.isArray(res.parsed?.data)) {
-          console.error("next-shared-build: inventory unavailable");
+          console.error(`${method}: inventory unavailable`);
           process.exit(2);
         }
         for (const b of res.parsed.data) out.push(b?.attributes?.version);
         url = res.parsed.links?.next || "";
       }
       if (url) {
-        console.error("next-shared-build: more than 100 pages of builds; incomplete pagination");
+        console.error(`${method}: more than 100 pages of builds; incomplete pagination`);
         process.exit(2);
       }
       return out;
     }
-    // The paired app joins the counter with its builds on BOTH platforms, so
-    // the counter is the same whichever of the two apps is the one shipping.
+    // The paired app joins the plan with its builds on BOTH platforms, so
+    // the plan is the same whichever of the two apps is the one shipping.
     // iosBuilds = IOS(app) + IOS(paired), macBuilds = MAC_OS(app) + MAC_OS(paired).
     // The inventories are independent, so they are read concurrently.
     let iosBuilds;
@@ -2613,13 +2638,65 @@ async function main() {
       macBuilds = macMain;
     }
     try {
-      const planned = nextSharedBuild({iosBuilds, macBuilds, extraFloors, complete: true});
-      console.error(`next-shared-build: ${iosBuilds.length} iOS build(s) + ${macBuilds.length} macOS build(s) inspected; ignored ${planned.ignoredIos} iOS timestamp build(s); next is ${planned.build}`);
+      const planned = nextSharedBuild({iosBuilds, macBuilds, extraFloors, complete: true, mergeStamp});
+      console.error(`${method}: ${iosBuilds.length} iOS build(s) + ${macBuilds.length} macOS build(s) inspected; merge stamp ${mergeStamp}; next is ${planned.build}`);
       console.log(planned.build);
     } catch (error) {
-      console.error(`next-shared-build: ${error.message}`);
+      console.error(`${method}: ${error.message}`);
       process.exit(3);
     }
+    process.exit(0);
+  }
+
+  // The highest first numeric component among every build of one app record on
+  // one platform (expired included, all trains), or 0 when the platform holds
+  // no build.  Read-only and fully paged.  A fixed-mode --build is accepted
+  // only above this number, so the paired platform can reuse the planned value
+  // while this platform can never repeat one of its own.
+  if (method === "max-platform-build") {
+    const bundleId = process.argv[3] || "";
+    const platform = process.argv[4] || "IOS";
+    if (!bundleId || (platform !== "IOS" && platform !== "MAC_OS")) {
+      console.error("Usage: node asc-api.mjs max-platform-build <bundleId> [IOS|MAC_OS]");
+      process.exit(2);
+    }
+    const app = await appIdForBundle(bundleId);
+    if (!app.ok) {
+      console.error(`max-platform-build: app not found for bundle ${bundleId}: ${app.error}`);
+      process.exit(2);
+    }
+    const out = [];
+    let url = `/v1/builds?filter[app]=${app.appId}&filter[preReleaseVersion.platform]=${platform}&limit=200`;
+    for (let page = 0; page < 100 && url; page++) {
+      const res = await ascGet(url);
+      if (!res.ok) {
+        console.error(`max-platform-build: inventory unavailable (HTTP ${res.status})`);
+        failExit(res.status);
+      }
+      if (!Array.isArray(res.parsed?.data)) {
+        console.error("max-platform-build: inventory unavailable");
+        process.exit(2);
+      }
+      for (const b of res.parsed.data) out.push(b?.attributes?.version);
+      url = res.parsed.links?.next || "";
+    }
+    if (url) {
+      console.error("max-platform-build: more than 100 pages of builds; incomplete pagination");
+      process.exit(2);
+    }
+    // The same shape the planner accepts; BigInt keeps wide stamps exact.
+    const BUILD_RE = /^[0-9]+(\.[0-9]+){0,2}$/;
+    let highest = null;
+    for (const value of out) {
+      if (typeof value !== "string" || !BUILD_RE.test(value)) {
+        console.error("max-platform-build: malformed build inventory");
+        process.exit(3);
+      }
+      const first = BigInt(value.split(".")[0]);
+      if (highest === null || first > highest) highest = first;
+    }
+    console.error(`max-platform-build: ${out.length} ${platform} build(s) inspected; max is ${highest === null ? "0" : String(highest)}`);
+    console.log(highest === null ? "0" : String(highest));
     process.exit(0);
   }
 
