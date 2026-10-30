@@ -1027,24 +1027,31 @@ struct PipWidgetView: View {
     private func verticalRows(detail: PipMetrics.Detail, visible: Int, overflows: Bool,
                               expandedCadence: Bool, peerRows: [DisplaySection],
                               available: CGFloat) -> some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            VStack(spacing: 0) {
-                ForEach(Array(targetRows.prefix(max(1, visible)))) { row in
-                    pipRow(row, detail: detail, expandedCadence: expandedCadence, peerRows: peerRows,
-                           available: available)
+        VStack(spacing: 0) {
+            // Every pinned row is in the scroll view.  Only the ones that fit
+            // used to be, so the hint below promised a scroll that had nothing
+            // to scroll to (owner, 2026-10-30).
+            ScrollView(.vertical, showsIndicators: overflows) {
+                VStack(spacing: 0) {
+                    ForEach(targetRows) { row in
+                        pipRow(row, detail: detail, expandedCadence: expandedCadence, peerRows: peerRows,
+                               available: available)
+                    }
                 }
-                if overflows {
-                    // Say so, rather than letting a pinned row look absent.
-                    Text("\(targetRows.count - max(1, visible)) more pinned — scroll")
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(background.countdownInk)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.top, 2)
-                }
-                Spacer(minLength: 0)
+                .padding(.horizontal, PipMetrics.padding)
+                .padding(.vertical, PipMetrics.bodyVerticalPadding)
             }
-            .padding(.horizontal, PipMetrics.padding)
-            .padding(.vertical, PipMetrics.bodyVerticalPadding)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            if overflows {
+                // Say so, rather than letting a pinned row look absent.  It
+                // sits under the scroll view so it never scrolls away itself.
+                Text("\(targetRows.count - max(1, visible)) more pinned — scroll")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(background.countdownInk)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, PipMetrics.padding)
+                    .padding(.bottom, 2)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(background.fill)
@@ -1058,11 +1065,14 @@ struct PipWidgetView: View {
         let status = PipWidgetController.readingStatus(for: row, now: model.now, issue: issue,
                                                        disabledSources: model.disabledSources,
                                                        peerRows: peerRows)
-        let meters = Array(
+        // A row that only has room for one of its two meters keeps the one
+        // with the least remaining, not whichever came first (owner,
+        // 2026-10-30).
+        let meters = QuotaWindowPresentation.collapsedMeters(
             PipWidgetController.meterSnapshots(for: row, now: model.now, issue: issue,
                                                disabledSources: model.disabledSources,
-                                               peerRows: peerRows)
-                .prefix(detail.maxMeters)
+                                               peerRows: peerRows),
+            limit: detail.maxMeters
         )
 
         let spiking = status == nil && model.hasActiveRunawayAnomaly(for: row)
@@ -1183,9 +1193,12 @@ struct PipWidgetView: View {
                               peerRows: [DisplaySection], height: CGFloat,
                               width: CGFloat) -> some View {
         let issue = model.issues[row.providerKey]
-        let windows = PipWidgetController.currentWindows(for: row, now: model.now, issue: issue,
-                                                         disabledSources: model.disabledSources,
-                                                         peerRows: peerRows)
+        // The platform's own 5-hour and 7-day windows first, then its
+        // per-model windows such as Fable (owner, 2026-10-30).
+        let windows = QuotaWindowPresentation.primaryFirst(
+            PipWidgetController.currentWindows(for: row, now: model.now, issue: issue,
+                                               disabledSources: model.disabledSources,
+                                               peerRows: peerRows))
         let status = PipWidgetController.readingStatus(for: row, now: model.now, issue: issue,
                                                        disabledSources: model.disabledSources,
                                                        peerRows: peerRows)
@@ -1240,14 +1253,15 @@ struct PipWidgetView: View {
 
     /// One window in the expanded platform detail.
     ///
-    /// One line: the cadence caption, the percentage, the bar, the countdown.
-    /// The bar is narrower than the panel and the numbers sit on either side
-    /// of it, because the owner asked for the percentage and the time
-    /// remaining to be rearranged rather than stacked (owner, 2026-10-28).
+    /// One line: the cadence caption, the model name if the window belongs to
+    /// one model, the bar, then the percentage and the countdown.  The
+    /// percentage sits after the bar as it does on every other surface
+    /// (owner, 2026-10-30).
     ///
     /// The label is dropped when it only restates the caption -- "5-hour"
     /// beside "5h" says the same thing twice -- and kept when it names
-    /// something the caption cannot, such as a model.
+    /// something the caption cannot.  A per-model window is always named by
+    /// its model, because its own label is often only the cadence.
     private func detailWindowRow(_ snapshot: QuotaWindowSnapshot, detail: PipMetrics.Detail,
                                   available: CGFloat) -> some View {
         let metrics = QuotaBarMetrics(snapshot: snapshot, now: model.now)
@@ -1255,13 +1269,14 @@ struct PipWidgetView: View {
         let isExtra = isMuseAssistExtra(snapshot)
         let cd = isExtra ? "extra" : (detail.usesCompactCountdown ? glanceResetCompactCountdown(snapshot.resetAt, now: model.now) : glanceResetCountdown(snapshot.resetAt, now: model.now))
         let cadenceCaption = glanceMeterCaption(snapshot)
-        let label = cleanWindowLabel(snapshot.window.label)
+        let modelName = snapshot.window.subModelName
+        let label = modelName ?? cleanWindowLabel(snapshot.window.label)
         // The line gives way before the panel clips: the countdown goes
         // first, then the label, and the bar takes whatever is left.
         let showsCountdown = !cd.isEmpty && available >= PipMetrics.detailRowMinWidthWithCountdown
         let labelBudget = max(0, available - PipMetrics.detailRowMinWidth - PipMetrics.meterSpacing
                               - (showsCountdown ? PipMetrics.meterSpacing + PipMetrics.countdownWidth : 0))
-        let showLabel = !detailLabelRedundant(caption: cadenceCaption, label: label)
+        let showLabel = (modelName != nil || !detailLabelRedundant(caption: cadenceCaption, label: label))
             && labelBudget >= PipMetrics.detailLabelMinWidth
         let labelWidth = min(labelBudget, PipMetrics.detailLabelMaxWidth)
 
@@ -1279,12 +1294,6 @@ struct PipWidgetView: View {
                     .frame(maxWidth: labelWidth, alignment: .leading)
             }
 
-            Text(remaining.map { "\(Int($0.rounded()))%" } ?? "—")
-                .font(.system(size: 10, weight: .bold, design: .rounded).monospacedDigit())
-                .foregroundStyle(background.ink)
-                .lineLimit(1)
-                .fixedSize()
-
             QuotaUsageBar(
                 metrics: metrics,
                 height: 5,
@@ -1292,6 +1301,12 @@ struct PipWidgetView: View {
                 markerHeight: 11
             )
             .frame(minWidth: PipMetrics.barMinWidth, maxWidth: PipMetrics.detailBarMaxWidth)
+
+            Text(remaining.map { "\(Int($0.rounded()))%" } ?? "—")
+                .font(.system(size: 10, weight: .bold, design: .rounded).monospacedDigit())
+                .foregroundStyle(background.ink)
+                .lineLimit(1)
+                .frame(width: PipMetrics.percentWidth, alignment: .leading)
 
             if showsCountdown {
                 Text(cd)
