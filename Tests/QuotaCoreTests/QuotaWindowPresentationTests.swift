@@ -93,6 +93,14 @@ final class QuotaWindowPresentationTests: XCTestCase {
                        "The reader's model id names the window when its label is only the cadence")
     }
 
+    func testModelNameKeepsTheReadersCasing() {
+        let gpt = snapshot(id: "seven_day_gpt", remaining: 40, model: "GPT-4o")
+        XCTAssertEqual(gpt.window.subModelName, "GPT-4o",
+                       "An acronym model id must not be lower-cased into Gpt-4o")
+        let snake = snapshot(id: "seven_day_fable_max", remaining: 40, model: "fable_max")
+        XCTAssertEqual(snake.window.subModelName, "Fable Max")
+    }
+
     func testModelNameComesFromTheReadersLabelWhenItHasOne() {
         let argon = snapshot(id: "argon-7d", remaining: 50, provider: "google-antigravity",
                              via: "antigravity", model: "argon", label: "Gemini 4 Argon · 7-day")

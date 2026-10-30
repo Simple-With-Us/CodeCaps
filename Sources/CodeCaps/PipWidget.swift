@@ -338,12 +338,22 @@ enum PipMetrics {
                + horizontalPeek
     }
 
+    /// The "N more pinned — scroll" line under the rows: a 9pt line plus its
+    /// bottom padding.
+    static let overflowHintHeight: CGFloat = 13
+
     /// How many rows fit in `height` without clipping, never fewer than one.
+    ///
+    /// When the rows overflow, the overflow hint sits under them and takes its
+    /// height from the rows, so the count the hint reports is the count that
+    /// is actually out of view.
     static func visibleRowCount(total: Int, height: CGFloat) -> Int {
         guard total > 0 else { return 0 }
         let available = height - bodyVerticalPadding * 2 - topDragAreaHeight
         guard available >= rowHeight else { return 1 }
-        return min(total, max(1, Int(available / rowHeight)))
+        let fit = Int(available / rowHeight)
+        if fit >= total { return total }
+        return max(1, Int((available - overflowHintHeight) / rowHeight))
     }
 
     /// The panel size that shows every pinned row at the richest level the

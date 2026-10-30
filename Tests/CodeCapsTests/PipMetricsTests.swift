@@ -409,6 +409,16 @@ final class PipMetricsTests: XCTestCase {
                              "The floor should still hold one whole row, not a sliver of one")
     }
 
+    func testOverflowHintTakesItsHeightFromTheRows() {
+        // A panel fitted for three rows that holds four: the hint under the
+        // rows needs room too, so only two rows are fully in view and the
+        // hint says two more, not one (review, 2026-10-30).
+        let fitted = PipMetrics.fitSize(rowCount: 3, hasDualMeterRow: false)
+        XCTAssertEqual(PipMetrics.visibleRowCount(total: 4, height: fitted.height), 2)
+        XCTAssertEqual(PipMetrics.visibleRowCount(total: 3, height: fitted.height), 3,
+                       "Rows that all fit draw no hint, so they keep the whole height")
+    }
+
     func testVisibleRowCountNeverReturnsZeroForRealRows() {
         XCTAssertEqual(PipMetrics.visibleRowCount(total: 3, height: 1), 1,
                        "A HUD shrunk to nothing is still a HUD, so one row survives")

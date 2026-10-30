@@ -21,11 +21,18 @@ extension QuotaWindow {
         for candidate in [modelType, modelId] {
             let raw = (candidate ?? "")
                 .replacingOccurrences(of: "_", with: " ")
-                .replacingOccurrences(of: "-", with: " ")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            if !raw.isEmpty { return raw.capitalized }
+            if !raw.isEmpty { return Self.initialCapped(raw) }
         }
         return nil
+    }
+
+    /// Each word's first letter upper-cased and the rest left as the reader
+    /// wrote it, so "fable" reads "Fable" while "GPT-4o" keeps its casing.
+    private static func initialCapped(_ text: String) -> String {
+        text.split(separator: " ", omittingEmptySubsequences: true)
+            .map { String($0.prefix(1)).uppercased() + String($0.dropFirst()) }
+            .joined(separator: " ")
     }
 }
 
