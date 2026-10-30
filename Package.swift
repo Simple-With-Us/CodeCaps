@@ -11,7 +11,7 @@ let package = Package(
     dependencies: [
         // In-app auto-update from signed releases CI publishes on every merge
         // to main.  See docs/AUTO-UPDATE.md.
-        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.10.0"),
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.10.1"),
         // Crash reporting and telemetry for the codecaps Sentry project
         // (org simple-with-us).  Pinned to the fleet-wide sentry-cocoa major.
         .package(url: "https://github.com/getsentry/sentry-cocoa", from: "9.31.0"),
