@@ -41,7 +41,7 @@ function onBlock(yml) {
 
 /** Push-path list entries, accepting single quotes, double quotes or no quotes. */
 function extractPushPathEntries(block) {
-  return [...block.matchAll(/^\s+-\s+['"]?([^'"\s]+)['"]?\s*$/gm)].map((m) => m[1]);
+  return [...block.matchAll(/^\s+-\s+['"]?([^'"\s]+)['"]?\s*(?:#.*)?$/gm)].map((m) => m[1]);
 }
 
 /** The `on.push.paths` entries (including any `!` exclusions), in order. */
@@ -56,7 +56,7 @@ function pushPaths() {
 
 /** `--path-prefix` values, accepting single quotes, double quotes or no quotes. */
 function extractGatePrefixes(block) {
-  return [...block.matchAll(/--path-prefix\s+['"]?([^'"\s\\]+)['"]?/g)].map((m) => m[1]);
+  return [...block.matchAll(/--path-prefix\s+['"]?([^'"\s\\]+)['"]?(?:[ \t]*#[^\n]*)?/g)].map((m) => m[1]);
 }
 
 /** The scheduled gate step that calls scheduled-ship-gate.sh. */
@@ -179,18 +179,18 @@ test("push paths trigger on the native tree and not on test-only changes", () =>
   assert.equal(triggers("README.md", paths), false);
 });
 
-test("path extractors accept single, double and unquoted values", () => {
+test("path extractors accept single, double and unquoted values, ignoring trailing comments", () => {
   assert.deepEqual(
     extractPushPathEntries(
-      "      - 'ios/A/**'\n      - \"Sources/B.swift\"\n      - Sources/C.swift\n",
+      "      - 'ios/A/**'\n      - \"Sources/B.swift\"\n      - Sources/C.swift\n      - 'ios/D/**' # why it ships\n",
     ),
-    ["ios/A/**", "Sources/B.swift", "Sources/C.swift"],
+    ["ios/A/**", "Sources/B.swift", "Sources/C.swift", "ios/D/**"],
   );
   assert.deepEqual(
     extractGatePrefixes(
-      "--path-prefix 'ios/A/' \\\n--path-prefix \"Sources/B.swift\" \\\n--path-prefix Sources/C.swift\n",
+      "--path-prefix 'ios/A/' \\\n--path-prefix \"Sources/B.swift\" \\\n--path-prefix Sources/C.swift\n--path-prefix 'ios/D/' # why it is watched\n",
     ),
-    ["ios/A/", "Sources/B.swift", "Sources/C.swift"],
+    ["ios/A/", "Sources/B.swift", "Sources/C.swift", "ios/D/"],
   );
 });
 
