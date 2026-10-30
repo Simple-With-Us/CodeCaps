@@ -39,6 +39,11 @@ function onBlock(yml) {
   return withoutComments(m[1]);
 }
 
+/** Push-path list entries, accepting single quotes, double quotes or no quotes. */
+function extractPushPathEntries(block) {
+  return [...block.matchAll(/^\s+-\s+(?:'([^']+)'|"([^"]+)"|(\S+))\s*(?:#.*)?$/gm)].map((m) => m[1] ?? m[2] ?? m[3]);
+}
+
 /** The `on.push.paths` entries (including any `!` exclusions), in order. */
 function pushPaths() {
   const on = onBlock(workflow);
@@ -46,12 +51,24 @@ function pushPaths() {
   assert.ok(push, "on.push must exist");
   const paths = push[1].match(/^ {4}paths:\n((?: {6}.*\n|\n)*)/m);
   assert.ok(paths, "on.push.paths must exist");
-  return [...paths[1].matchAll(/^ {6}- '([^']+)'$/gm)].map((m) => m[1]);
+  return extractPushPathEntries(paths[1]);
+}
+
+/** `--path-prefix` values, accepting single quotes, double quotes or no quotes. */
+function extractGatePrefixes(block) {
+  return [...block.matchAll(/--path-prefix\s+(?:'([^']+)'|"([^"]+)"|([^\s\\]+))/g)].map((m) => m[1] ?? m[2] ?? m[3]);
+}
+
+/** The scheduled gate step that calls scheduled-ship-gate.sh. */
+function gateBlock() {
+  const gate = code.split(/- name:/).find((s) => s.includes("scheduled-ship-gate.sh"));
+  assert.ok(gate, "ios-ship.yml must call scheduled-ship-gate.sh");
+  return gate;
 }
 
 /** Every `--path-prefix` argument the scheduled gate is called with. */
 function gatePrefixes() {
-  return [...code.matchAll(/--path-prefix '([^']+)'/g)].map((m) => m[1]);
+  return extractGatePrefixes(gateBlock());
 }
 
 /** Shared files the iOS and widget targets compile, from project.yml. */
@@ -160,6 +177,21 @@ test("push paths trigger on the native tree and not on test-only changes", () =>
   assert.equal(triggers("scripts/ios-fleet/test-scheduled-ship-gate.sh", paths), false);
   assert.equal(triggers("Sources/CodeCaps/AppDelegate.swift", paths), false);
   assert.equal(triggers("README.md", paths), false);
+});
+
+test("path extractors accept single, double and unquoted values, ignoring trailing comments", () => {
+  assert.deepEqual(
+    extractPushPathEntries(
+      "      - 'ios/A/**'\n      - \"Sources/B.swift\"\n      - Sources/C.swift\n      - 'ios/D/**' # why it ships\n      - 'my dir/E.swift'\n      - \"my dir/F.swift\"\n",
+    ),
+    ["ios/A/**", "Sources/B.swift", "Sources/C.swift", "ios/D/**", "my dir/E.swift", "my dir/F.swift"],
+  );
+  assert.deepEqual(
+    extractGatePrefixes(
+      "--path-prefix 'ios/A/' \\\n--path-prefix \"Sources/B.swift\" \\\n--path-prefix Sources/C.swift\n--path-prefix 'ios/D/' # why it is watched\n--path-prefix 'my dir/' \\\n--path-prefix \"my dir/G.swift\"\n",
+    ),
+    ["ios/A/", "Sources/B.swift", "Sources/C.swift", "ios/D/", "my dir/", "my dir/G.swift"],
+  );
 });
 
 test("ASC credentials come from Fleet-OPS /asc, never the stale repository secrets", () => {
