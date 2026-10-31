@@ -1,4 +1,5 @@
 import Foundation
+import QuotaCore
 import XCTest
 @testable import CodeCaps
 
@@ -60,6 +61,29 @@ final class SnapshotWriteDrainTests: XCTestCase {
         XCTAssertFalse(lateCompleted)
     }
 
+    func testRestartReopensAdmissionAndNextDrainWaitsForNewWrites() async throws {
+        let name = "cc196-resume-queue-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defaults.set(false, forKey: "localEnabled")
+        defaults.set(false, forKey: SourceRefreshPreference.providerEnabled)
+        defaults.set(false, forKey: SourceRefreshPreference.sessionEnabled)
+        defer { defaults.removePersistentDomain(forName: name) }
+        let model = MonitorModel(defaults: defaults)
+        model.skipsSnapshotIOForTesting = true
+        model.stop()
+        let firstDrained = await model.flushSnapshotWrites()
+        XCTAssertTrue(firstDrained)
+        XCTAssertTrue(model.snapshotWritesClosedForTermination)
+        model.start()
+        XCTAssertFalse(model.snapshotWritesClosedForTermination)
+        var resumedCompleted = false
+        model.enqueueSnapshotWrite({}, completion: { _ in resumedCompleted = true })
+        model.stop()
+        let secondDrained = await model.flushSnapshotWrites()
+        XCTAssertTrue(secondDrained)
+        XCTAssertTrue(resumedCompleted)
+    }
+
     func testDeadlineDoesNotJoinStuckWriteAndLateCompletionIsSafe() async {
         var release: CheckedContinuation<Void, Never>?
         var completed = false
@@ -93,6 +117,7 @@ final class SnapshotTerminationIntegrationTests: XCTestCase {
         XCTAssertTrue(delegate.contains("snapshotFlushTask = Task { @MainActor in await model.flushSnapshotWrites() }"))
         XCTAssertTrue(delegate.contains("_ = await flush?.value"))
         XCTAssertFalse(delegate.contains("guard !snapshotTerminationPending"))
+        XCTAssertTrue(delegate.contains("_ = await flush?.value\n            snapshotFlushTask = nil\n            sender.reply"))
         XCTAssertTrue(delegate.contains("sender.reply(toApplicationShouldTerminate: true)"))
         XCTAssertTrue(delegate.contains("return .terminateLater"))
         let model = try source("MonitorModel.swift")

@@ -373,6 +373,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         let flush = snapshotFlushTask
         Task { @MainActor in
             _ = await flush?.value
+            snapshotFlushTask = nil
             sender.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater
