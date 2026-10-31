@@ -420,6 +420,7 @@ final class MonitorModel: ObservableObject {
     /// actor and hang the UI (BOTFLEET-5B); each write now runs off-main, in
     /// order, after the one before it.
     private var snapshotWriteChain: Task<Void, Never>?
+    private(set) var snapshotWritesClosedForTermination = false
     @Published private(set) var now = Date()
 
     // Local & Remote Reading
@@ -1394,8 +1395,8 @@ final class MonitorModel: ObservableObject {
     /// Suspend instead of blocking the main actor, which queued completions need.
     /// The caller may terminate after the deadline even if filesystem I/O is stuck.
     func flushSnapshotWrites(timeout: Duration = .seconds(2)) async -> Bool {
+        snapshotWritesClosedForTermination = true
         let chain = snapshotWriteChain
-        snapshotWriteChain = nil
         return await SnapshotWriteDrain.wait(for: chain, timeout: timeout)
     }
 
@@ -2878,6 +2879,7 @@ final class MonitorModel: ObservableObject {
     /// write, then reports success back on the main actor.
     func enqueueSnapshotWrite(_ work: @escaping @Sendable () throws -> Void,
                                       completion: @escaping @MainActor @Sendable (Bool) -> Void) {
+        guard !snapshotWritesClosedForTermination else { return }
         let previous = snapshotWriteChain
         snapshotWriteChain = Task.detached(priority: .utility) {
             await previous?.value

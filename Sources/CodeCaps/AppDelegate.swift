@@ -363,14 +363,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         DispatchQueue.main.async { [weak self] in self?.navigatingPlanWarning = false }
     }
 
-    private var snapshotTerminationPending = false
+    private var snapshotFlushTask: Task<Bool, Never>?
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard !snapshotTerminationPending else { return .terminateLater }
-        snapshotTerminationPending = true
-        model.stop()
+        if snapshotFlushTask == nil {
+            model.stop()
+            snapshotFlushTask = Task { @MainActor in await model.flushSnapshotWrites() }
+        }
+        let flush = snapshotFlushTask
         Task { @MainActor in
-            _ = await model.flushSnapshotWrites()
+            _ = await flush?.value
             sender.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater

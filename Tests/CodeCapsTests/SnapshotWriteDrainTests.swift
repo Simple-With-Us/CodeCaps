@@ -41,6 +41,25 @@ final class SnapshotWriteDrainTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: file), "ordered snapshot")
     }
 
+    func testFlushClosesQueueBeforeSuspendingAndPreservesPriorOrdering() async throws {
+        let name = "cc196-closed-queue-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defaults.set(false, forKey: "localEnabled")
+        defer { defaults.removePersistentDomain(forName: name) }
+        let model = MonitorModel(defaults: defaults)
+        model.skipsSnapshotIOForTesting = true
+        var firstCompleted = false
+        var lateCompleted = false
+        model.enqueueSnapshotWrite({}, completion: { _ in firstCompleted = true })
+        let drain = Task { @MainActor in await model.flushSnapshotWrites() }
+        while !model.snapshotWritesClosedForTermination { await Task.yield() }
+        model.enqueueSnapshotWrite({}, completion: { _ in lateCompleted = true })
+        let drained = await drain.value
+        XCTAssertTrue(drained)
+        XCTAssertTrue(firstCompleted)
+        XCTAssertFalse(lateCompleted)
+    }
+
     func testDeadlineDoesNotJoinStuckWriteAndLateCompletionIsSafe() async {
         var release: CheckedContinuation<Void, Never>?
         var completed = false
@@ -71,7 +90,9 @@ final class SnapshotTerminationIntegrationTests: XCTestCase {
     func testTerminationDefersReplyUntilAsyncFlushWithoutBlockingMainActor() throws {
         let delegate = try source("AppDelegate.swift")
         XCTAssertTrue(delegate.contains("func applicationShouldTerminate("))
-        XCTAssertTrue(delegate.contains("_ = await model.flushSnapshotWrites()"))
+        XCTAssertTrue(delegate.contains("snapshotFlushTask = Task { @MainActor in await model.flushSnapshotWrites() }"))
+        XCTAssertTrue(delegate.contains("_ = await flush?.value"))
+        XCTAssertFalse(delegate.contains("guard !snapshotTerminationPending"))
         XCTAssertTrue(delegate.contains("sender.reply(toApplicationShouldTerminate: true)"))
         XCTAssertTrue(delegate.contains("return .terminateLater"))
         let model = try source("MonitorModel.swift")
