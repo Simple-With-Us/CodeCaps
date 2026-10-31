@@ -420,6 +420,7 @@ final class MonitorModel: ObservableObject {
     /// actor and hang the UI (BOTFLEET-5B); each write now runs off-main, in
     /// order, after the one before it.
     private var snapshotWriteChain: Task<Void, Never>?
+    private(set) var snapshotWritesClosedForTermination = false
     @Published private(set) var now = Date()
 
     // Local & Remote Reading
@@ -1353,6 +1354,10 @@ final class MonitorModel: ObservableObject {
     }
 
     func start() {
+        // Termination is terminal for this process, even after a drain timeout.
+        // A future cancelled-quit feature must define recovery without letting
+        // old filesystem writes race newer snapshots. Do not reopen admission.
+        guard !snapshotWritesClosedForTermination else { return }
         hasStarted = true
         refresh()
         scheduleSourceTimers()
@@ -1389,6 +1394,14 @@ final class MonitorModel: ObservableObject {
         refreshTimer?.invalidate()
         sessionFileTimer?.invalidate()
         clockTimer?.invalidate()
+    }
+
+    /// Suspend instead of blocking the main actor, which queued completions need.
+    /// The caller may terminate after the deadline even if filesystem I/O is stuck.
+    func flushSnapshotWrites(timeout: Duration = .seconds(2)) async -> Bool {
+        snapshotWritesClosedForTermination = true
+        let chain = snapshotWriteChain
+        return await SnapshotWriteDrain.wait(for: chain, timeout: timeout)
     }
 
     /// Fires only while something is at risk, so the forecast keeps measuring a
@@ -1781,7 +1794,7 @@ final class MonitorModel: ObservableObject {
             localWindows = []
             updateActiveAnomalies([])
             activePlanChanges = []
-            if !skipsSnapshotIOForTesting { try? LocalQuotaSnapshot.remove() }
+            if !skipsSnapshotIOForTesting { enqueueHandoffWrite(windows: nil) }
             rebuildLocalState(recordSamples: false)
         }
         refresh()
@@ -2811,14 +2824,13 @@ final class MonitorModel: ObservableObject {
         guard !skipsSnapshotIOForTesting else { return }
         let marks = exportedCustomMarks()
         let stamp = now
-        let order = platformOrder
         enqueueSnapshotWrite({
             try LocalQuotaSnapshot.writeWidgetSnapshot(windows: windows, customMarks: marks, now: stamp)
         }, completion: { [weak self] succeeded in
             guard let self else { return }
             if succeeded {
                 self.widgetSharingError = nil
-                UserDefaults(suiteName: LocalQuotaSnapshot.appGroupId)?.set(order, forKey: "platformOrder")
+                UserDefaults(suiteName: LocalQuotaSnapshot.appGroupId)?.set(self.platformOrder, forKey: "platformOrder")
                 #if canImport(WidgetKit)
                 WidgetCenter.shared.reloadAllTimelines()
                 #endif
@@ -2869,8 +2881,9 @@ final class MonitorModel: ObservableObject {
 
     /// Runs `work` on a background executor after every previously enqueued
     /// write, then reports success back on the main actor.
-    private func enqueueSnapshotWrite(_ work: @escaping @Sendable () throws -> Void,
+    func enqueueSnapshotWrite(_ work: @escaping @Sendable () throws -> Void,
                                       completion: @escaping @MainActor @Sendable (Bool) -> Void) {
+        guard !snapshotWritesClosedForTermination else { return }
         let previous = snapshotWriteChain
         snapshotWriteChain = Task.detached(priority: .utility) {
             await previous?.value
