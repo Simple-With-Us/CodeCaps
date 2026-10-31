@@ -1354,9 +1354,10 @@ final class MonitorModel: ObservableObject {
     }
 
     func start() {
-        // A resumed model starts a new termination lifecycle. Keep the old
-        // chain so resumed writes remain ordered behind any unfinished I/O.
-        snapshotWritesClosedForTermination = false
+        // Termination is terminal for this process, even after a drain timeout.
+        // A future cancelled-quit feature must define recovery without letting
+        // old filesystem writes race newer snapshots. Do not reopen admission.
+        guard !snapshotWritesClosedForTermination else { return }
         hasStarted = true
         refresh()
         scheduleSourceTimers()

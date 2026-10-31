@@ -363,19 +363,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         DispatchQueue.main.async { [weak self] in self?.navigatingPlanWarning = false }
     }
 
-    private var snapshotFlushTask: Task<Bool, Never>?
+    private let snapshotTerminationDrain = SnapshotTerminationDrain()
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        if snapshotFlushTask == nil {
-            model.stop()
-            snapshotFlushTask = Task { @MainActor in await model.flushSnapshotWrites() }
-        }
-        let flush = snapshotFlushTask
-        Task { @MainActor in
-            _ = await flush?.value
-            snapshotFlushTask = nil
-            sender.reply(toApplicationShouldTerminate: true)
-        }
+        // This app has no cancelled-quit/resume path: every request replies true.
+        snapshotTerminationDrain.request(
+            stop: { model.stop() },
+            flush: { [self] in await model.flushSnapshotWrites() },
+            reply: { sender.reply(toApplicationShouldTerminate: true) })
         return .terminateLater
     }
 

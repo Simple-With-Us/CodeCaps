@@ -34,3 +34,25 @@ enum SnapshotWriteDrain {
         }
     }
 }
+
+/// One terminal lifecycle per process, with no cancellation or resume path.
+/// Retaining the completed task is intentional: no stale callback can clear a
+/// newer drain because a newer drain is never created after termination starts.
+@MainActor
+final class SnapshotTerminationDrain {
+    private var task: Task<Bool, Never>?
+
+    func request(stop: () -> Void,
+                 flush: @escaping @MainActor () async -> Bool,
+                 reply: @escaping @MainActor () -> Void) {
+        if task == nil {
+            stop()
+            task = Task { @MainActor in await flush() }
+        }
+        guard let task else { return }
+        Task { @MainActor in
+            _ = await task.value
+            reply()
+        }
+    }
+}

@@ -61,8 +61,8 @@ final class SnapshotWriteDrainTests: XCTestCase {
         XCTAssertFalse(lateCompleted)
     }
 
-    func testRestartReopensAdmissionAndNextDrainWaitsForNewWrites() async throws {
-        let name = "cc196-resume-queue-" + UUID().uuidString
+    func testTerminationCannotRestartOrAdmitMoreWrites() async throws {
+        let name = "cc196-terminal-queue-" + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
         defaults.set(false, forKey: "localEnabled")
         defaults.set(false, forKey: SourceRefreshPreference.providerEnabled)
@@ -71,17 +71,43 @@ final class SnapshotWriteDrainTests: XCTestCase {
         let model = MonitorModel(defaults: defaults)
         model.skipsSnapshotIOForTesting = true
         model.stop()
-        let firstDrained = await model.flushSnapshotWrites()
-        XCTAssertTrue(firstDrained)
-        XCTAssertTrue(model.snapshotWritesClosedForTermination)
+        let drained = await model.flushSnapshotWrites()
+        XCTAssertTrue(drained)
         model.start()
-        XCTAssertFalse(model.snapshotWritesClosedForTermination)
-        var resumedCompleted = false
-        model.enqueueSnapshotWrite({}, completion: { _ in resumedCompleted = true })
-        model.stop()
+        XCTAssertTrue(model.snapshotWritesClosedForTermination)
+        var ran = false
+        model.enqueueSnapshotWrite({}, completion: { _ in ran = true })
         let secondDrained = await model.flushSnapshotWrites()
         XCTAssertTrue(secondDrained)
-        XCTAssertTrue(resumedCompleted)
+        XCTAssertFalse(ran)
+    }
+
+    func testRepeatedTerminationCallbacksShareOneDrainAndEachReply() async {
+        let termination = SnapshotTerminationDrain()
+        var stops = 0
+        var flushes = 0
+        var replies = 0
+        var release: CheckedContinuation<Bool, Never>?
+        let flush: @MainActor () async -> Bool = {
+            flushes += 1
+            return await withCheckedContinuation { release = $0 }
+        }
+        termination.request(stop: { stops += 1 }, flush: flush, reply: { replies += 1 })
+        termination.request(stop: { stops += 1 }, flush: flush, reply: { replies += 1 })
+        while release == nil { await Task.yield() }
+        XCTAssertEqual(stops, 1)
+        XCTAssertEqual(flushes, 1)
+        XCTAssertEqual(replies, 0)
+        release?.resume(returning: true)
+        while replies < 2 { await Task.yield() }
+        XCTAssertEqual(replies, 2)
+        // A callback arriving after completion cannot create a newer generation
+        // for a stale waiter to clear, or invoke a new flush/stop.
+        termination.request(stop: { stops += 1 }, flush: flush, reply: { replies += 1 })
+        while replies < 3 { await Task.yield() }
+        XCTAssertEqual(stops, 1)
+        XCTAssertEqual(flushes, 1)
+        XCTAssertEqual(replies, 3)
     }
 
     func testDeadlineDoesNotJoinStuckWriteAndLateCompletionIsSafe() async {
@@ -114,10 +140,9 @@ final class SnapshotTerminationIntegrationTests: XCTestCase {
     func testTerminationDefersReplyUntilAsyncFlushWithoutBlockingMainActor() throws {
         let delegate = try source("AppDelegate.swift")
         XCTAssertTrue(delegate.contains("func applicationShouldTerminate("))
-        XCTAssertTrue(delegate.contains("snapshotFlushTask = Task { @MainActor in await model.flushSnapshotWrites() }"))
-        XCTAssertTrue(delegate.contains("_ = await flush?.value"))
-        XCTAssertFalse(delegate.contains("guard !snapshotTerminationPending"))
-        XCTAssertTrue(delegate.contains("_ = await flush?.value\n            snapshotFlushTask = nil\n            sender.reply"))
+        XCTAssertTrue(delegate.contains("private let snapshotTerminationDrain = SnapshotTerminationDrain()"))
+        XCTAssertTrue(delegate.contains("snapshotTerminationDrain.request("))
+        XCTAssertFalse(delegate.contains("snapshotFlushTask"))
         XCTAssertTrue(delegate.contains("sender.reply(toApplicationShouldTerminate: true)"))
         XCTAssertTrue(delegate.contains("return .terminateLater"))
         let model = try source("MonitorModel.swift")
