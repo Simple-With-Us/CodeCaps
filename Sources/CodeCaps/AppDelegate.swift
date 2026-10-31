@@ -363,6 +363,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         DispatchQueue.main.async { [weak self] in self?.navigatingPlanWarning = false }
     }
 
+    private var snapshotTerminationPending = false
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !snapshotTerminationPending else { return .terminateLater }
+        snapshotTerminationPending = true
+        model.stop()
+        Task { @MainActor in
+            _ = await model.flushSnapshotWrites()
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+
     func applicationWillTerminate(_ notification: Notification) { model.stop() }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
