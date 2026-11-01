@@ -133,7 +133,7 @@ jobs:
         if: github.event_name != 'pull_request'
         uses: ./.github/actions/infisical-secrets
         with:
-          names: MAC_CERT_P12_BASE64 MAC_CERT_PASSWORD SENTRY_DSN SENTRY_AUTH_TOKEN SENTRY_AUTH_TOKEN_FULLSCOPE
+          names: MAC_CERT_P12_BASE64 MAC_CERT_PASSWORD SENTRY_DSN SENTRY_DSN_CODECAPS SENTRY_AUTH_TOKEN SENTRY_AUTH_TOKEN_FULLSCOPE
           project-id: ${{ secrets.INFISICAL_FLEET_OPS_PROJECT_ID }}
           client-id: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID || secrets.INFISICAL_CLIENT_ID }}
           client-secret: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET || secrets.INFISICAL_CLIENT_SECRET }}
@@ -141,8 +141,34 @@ jobs:
           GH_FALLBACK_MAC_CERT_P12_BASE64: ${{ secrets.MAC_CERT_P12_BASE64 }}
           GH_FALLBACK_MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
           GH_FALLBACK_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          GH_FALLBACK_SENTRY_DSN_CODECAPS: ${{ secrets.SENTRY_DSN_CODECAPS }}
           GH_FALLBACK_SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           GH_FALLBACK_SENTRY_AUTH_TOKEN_FULLSCOPE: ${{ secrets.SENTRY_AUTH_TOKEN_FULLSCOPE }}
+
+      # The macOS app reports into its own Sentry project, `codecaps`, the
+      # same as the iOS ship (ios-ship.yml "Use the CodeCaps Sentry DSN").
+      # The shared fleet SENTRY_DSN names `botfleet`, so without this step the
+      # Mac app's events (com.jays.agent-bar.mac) land in the BotFleet
+      # project.  SENTRY_DSN_CODECAPS becomes the SENTRY_DSN that
+      # build_and_run.sh stamps into Info.plist and that the dSYM upload
+      # reads.  A missing one falls back to the shared DSN with an ::error::
+      # annotation, but never blocks the release.  The value is masked by the
+      # fetch above and is never printed here.
+      - name: Use the CodeCaps Sentry DSN
+        if: github.event_name != 'pull_request'
+        run: |
+          set +o xtrace
+          set -euo pipefail
+          if [ -n "${SENTRY_DSN_CODECAPS:-}" ]; then
+            {
+              echo "SENTRY_DSN<<SENTRY_DSN_CODECAPS_EOF"
+              printf '%s\n' "$SENTRY_DSN_CODECAPS"
+              echo "SENTRY_DSN_CODECAPS_EOF"
+            } >>"$GITHUB_ENV"
+            echo "SENTRY_DSN now comes from SENTRY_DSN_CODECAPS (Sentry project codecaps)."
+          else
+            echo "::error title=Sentry DSN::SENTRY_DSN_CODECAPS is missing from Infisical Fleet-OPS prod / and from the repository secrets, so this Mac build falls back to the shared fleet SENTRY_DSN and its events land in the botfleet project, not codecaps."
+          fi
 
       # The tooling and the staging script run in ONE step on purpose.  The
       # tooling installs the Infisical CLI and the fleet's reader onto the
