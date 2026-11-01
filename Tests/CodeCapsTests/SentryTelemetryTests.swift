@@ -38,9 +38,20 @@ final class SentryTelemetryTests: XCTestCase {
             "https://example.invalid/2")
     }
 
-    func testFailedRequestCaptureCoversOnlyFirstPartyHosts() {
-        let hosts = SentryTelemetry.firstPartyFailedRequestHosts
-        XCTAssertTrue(hosts.contains("codecaps.simplewithus.com"))
-        XCTAssertFalse(hosts.contains { $0.contains("cursor.sh") })
+    func testDropsFailedRequestsFromThirdPartyProviderAPIs() {
+        // Control: the same failed-request event against our own host is kept.
+        XCTAssertFalse(SentryTelemetry.isThirdPartyFailedRequest(
+            url: "https://codecaps.simplewithus.com/api/v2/ingest", exceptionTypes: ["HTTPClientError"]))
+        XCTAssertTrue(SentryTelemetry.isThirdPartyFailedRequest(
+            url: "https://api2.cursor.sh/aiserver.v1.DashboardService/GetSandUsageStatus",
+            exceptionTypes: ["HTTPClientError"]))
+        XCTAssertTrue(SentryTelemetry.isThirdPartyFailedRequest(
+            url: "https://api.anthropic.com/api/oauth/usage", exceptionTypes: ["HTTPClientError"]))
+        // A real exception that merely carries a provider URL is not dropped.
+        XCTAssertFalse(SentryTelemetry.isThirdPartyFailedRequest(
+            url: "https://api2.cursor.sh/x", exceptionTypes: ["DecodingError"]))
+        // A look-alike host is not a suffix match.
+        XCTAssertFalse(SentryTelemetry.isThirdPartyFailedRequest(
+            url: "https://notcursor.sh/x", exceptionTypes: ["HTTPClientError"]))
     }
 }
