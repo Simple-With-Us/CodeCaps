@@ -16,6 +16,13 @@ import Sentry
 /// off and credential-like query parameters are redacted on-device before an
 /// event leaves the Mac.
 enum SentryTelemetry {
+    /// Hosts whose 5xx responses Sentry records as failed requests.  Only our
+    /// own backend is listed.  The quota readers also call third-party provider
+    /// APIs (api2.cursor.sh, Anthropic, OpenAI, x.ai, MiniMax, Grok), and an
+    /// outage there already shows as a missing reading.  It is not a CodeCaps
+    /// bug, and it flooded BOTFLEET-2Z with about 960 upstream 500 and 503s.
+    static let firstPartyFailedRequestHosts: [String] = ["codecaps.simplewithus.com"]
+
     static func start(environment: [String: String] = ProcessInfo.processInfo.environment) {
         guard let dsn = resolvedDSN(environment: environment) else { return }
         let isDebug: Bool = {
@@ -38,6 +45,7 @@ enum SentryTelemetry {
             options.appHangTimeoutInterval = 2.0
             options.enableCaptureFailedRequests = true
             options.failedRequestStatusCodes = [HttpStatusCodeRange(min: 500, max: 599)]
+            options.failedRequestTargets = firstPartyFailedRequestHosts
             options.sendDefaultPii = false
             options.beforeSend = { event in
                 sanitize(event)

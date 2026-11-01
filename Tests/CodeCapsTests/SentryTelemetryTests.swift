@@ -37,4 +37,10 @@ final class SentryTelemetryTests: XCTestCase {
             SentryTelemetry.usableDSN("\n https://example.invalid/2 \t"),
             "https://example.invalid/2")
     }
+
+    func testFailedRequestCaptureCoversOnlyFirstPartyHosts() {
+        let hosts = SentryTelemetry.firstPartyFailedRequestHosts
+        XCTAssertTrue(hosts.contains("codecaps.simplewithus.com"))
+        XCTAssertFalse(hosts.contains { $0.contains("cursor.sh") })
+    }
 }
