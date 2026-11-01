@@ -382,6 +382,35 @@ test("ship state cache is keyed apart from the Mac ship", () => {
   for (const k of keys) assert.equal(k, "ios-fleet-state-codecaps-ios-", `bare prefix ${k} also matches the Mac ship cache`);
 });
 
+test("the ship job clears a stale archive lock restored from the ship-state cache", () => {
+  // scripts/ios-fleet/ship-testflight.sh takes an mkdir lock at
+  // ~/.cache/ios-fleet/archive.lockdir.  Hosted runners are single-use, so a
+  // lockdir restored from the cache is always stale; left in place the next
+  // ship waits on it until "archive lock timeout".  The lock must be cleared
+  // right after the ship job restores the cache, before the plan-build step
+  // first runs the ship script, and removed again before the cache is saved
+  // so a cancelled run never persists it.
+  const shipStart = code.search(/^  ship:/m);
+  assert.ok(shipStart >= 0, "ios-ship.yml must declare a ship job");
+  const steps = code.slice(shipStart).split(/- name:/);
+  const lockRm = 'rm -rf "${HOME}/.cache/ios-fleet/archive.lockdir"';
+
+  const restore = steps.findIndex((s) => /Restore ship-state cache/.test(s));
+  const clear = steps.findIndex((s) => /Clear stale archive lock from ship-state cache/.test(s));
+  const plan = steps.findIndex((s) => /id: plan-build/.test(s));
+  assert.ok(restore >= 0 && clear >= 0 && plan >= 0, "the ship job has restore, lock-clear and plan-build steps");
+  assert.equal(clear, restore + 1, "the lock-clear step runs immediately after the ship-state cache is restored");
+  assert.ok(clear < plan, "the lock is cleared before the plan-build step runs ship-testflight.sh");
+  assert.ok(steps[clear].includes(lockRm), "the lock-clear step removes the archive lockdir");
+  assert.match(steps[clear], /if \[ -e /, "the lock-clear step checks whether a stale lock exists");
+
+  const save = steps.findIndex((s) => /Save ship-state cache/.test(s));
+  assert.ok(save > 0, "the ship job saves the ship-state cache");
+  const beforeSave = steps[save - 1];
+  assert.match(beforeSave, /if: always\(\)/, "the step before the cache save runs even when the ship is cancelled");
+  assert.ok(beforeSave.includes(lockRm), "the archive lock is removed before the ship-state cache is saved");
+});
+
 test("the marketing train is 1.0.N and release notes use the owner clock", () => {
   const apps = JSON.parse(read("scripts/ios-fleet/apps.json"));
   assert.match(apps.apps.codecaps.marketingVersionDefault, /^1\.0\.\d+$/);

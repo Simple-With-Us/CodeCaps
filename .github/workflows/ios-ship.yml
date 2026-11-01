@@ -189,6 +189,20 @@ jobs:
             ios-fleet-state-codecaps-ios-${{ github.run_id }}-
             ios-fleet-state-codecaps-ios-
 
+      - name: Clear stale archive lock from ship-state cache
+        run: |
+          # A cancelled ship can save ship-testflight.sh's mkdir lock
+          # (archive.lockdir) into the ship-state cache.  Hosted runners are
+          # single-use, so no other ship can hold it when this job starts;
+          # left in place it blocks this run until "archive lock timeout".
+          lockdir="${HOME}/.cache/ios-fleet/archive.lockdir"
+          if [ -e "$lockdir" ]; then
+            rm -rf "${HOME}/.cache/ios-fleet/archive.lockdir"
+            echo "Stale archive lock found and removed."
+          else
+            echo "No stale archive lock found."
+          fi
+
       - name: Assert stable Xcode (never beta)
         run: |
           echo "DEVELOPER_DIR=${DEVELOPER_DIR}"
@@ -391,6 +405,13 @@ jobs:
           if [ "$rc" -ne 0 ]; then
             echo "::warning title=TestFlight standing testers::tester sync exited ${rc}; see the standing-testers lines above.  The TestFlight upload itself succeeded."
           fi
+
+      # Never persist the archive lock: a cancelled ship can leave it held,
+      # and saving it would hand the next run a stale lock to wait on.
+      - name: Remove archive lock before saving ship-state cache
+        if: always()
+        run: |
+          rm -rf "${HOME}/.cache/ios-fleet/archive.lockdir"
 
       - name: Save ship-state cache
         if: always()
