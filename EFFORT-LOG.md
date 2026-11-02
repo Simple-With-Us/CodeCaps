@@ -6,7 +6,7 @@
 ## 2026-10-06 — Infisical three-field setup [dot, draft validation pending]
 
 - Lane: `dot/infisical-project-selector`.  Owner-approved task-note reservation because the board app picker omits CodeCaps; no board claim exists.
-- Coordination: [app scope](https://simplewithus.slack.com/archives/C0C6NFR5QRJ/p1791272490794519), [fleet reservation](https://simplewithus.slack.com/archives/C0BEZDJDNKV/p1791272598316679); FLEET-PROTOCOL.md read.  Fresh main `14760c2`; PR #175 has no changed-file overlap.  PR #163 shares AppDelegate but its window-layering hunks are independent of the Infisical lifecycle methods.
+- Coordination: [app scope](https://simplewithus.slack.com/archives/C0C6NFR5QRJ/p1791272490794519), [fleet reservation](https://simplewithus.slack.com/archives/C0BEZDJDNKV/p1791272598316679); fleet coordination protocol read.  Fresh main `14760c2`; PR #175 has no changed-file overlap.  PR #163 shares AppDelegate but its window-layering hunks are independent of the Infisical lifecycle methods.
 - Editable Client ID, Client Secret, and Project ID; atomic Keychain setup, explicit nonblank Project ID with no legacy fallback, isolated candidate validation, revision-fenced network results, and interrupted-operation tests.
 - Draft PR: https://github.com/Simple-With-Us/CodeCaps/pull/177 .  Owner explicitly chooses to re-enter Project ID; no fixed project is retained.
 - Scope excludes telemetry, real credential/grant changes, quota mode changes, merge, and deployment.  Existing local endpoint/token protections are unchanged.
@@ -16,7 +16,7 @@
 
 ## 2026-10-03 — Independent Provider and File Refresh [CODEX, PR #142]
 
-repo: CodeCaps; pre-work claim: posted to #Work-In-Progress after reading FLEET-PROTOCOL.md; Lane: `codex/independent-source-refresh`; Board `4bcf84f1`; GitHub #137; PR #142 open on this branch (depends on #139; refs #136).
+repo: CodeCaps; pre-work claim: posted to the fleet coordination channel after reading its protocol; Lane: `codex/independent-source-refresh`; Board `4bcf84f1`; GitHub #137; PR #142 open on this branch (depends on #139; refs #136).
 
 - Added `CodexSessionQuotaReader` for bounded passive Codex session JSONL reads with exact account identity, incremental append tracking, symlink-safe paths, and original event timestamps.  Unchanged files do not invoke provider, Fleet, upload, or download work.
 - Split Settings → Sources & Fleet into independent **Provider Checks** and **Codex Session File Checks** toggles with separate 1-, 3-, 5-, and 15-minute intervals (five-minute provider default, one-minute file default).  Manual refresh runs both enabled paths; disabling one source preserves the other when possible.
@@ -118,7 +118,7 @@ Lane: `ag/arrow-nav-and-board-parity`.
 - Console window minimum size: bumped `Metrics.consoleMin` in `QuotaComponents.swift` from 820 × 560 to 880 × 600 per app-wide design audit finding F-07 (issue #41).
 - iOS companion settings presentation: added `.presentationDetents([.medium, .large])` to the settings sheet on iOS in `CompanionContentView.swift` so the underlying quota list remains visible (finding F-05, issue #41).
 - Unit tests: added `ConsoleNavigationTests.swift` covering `Metrics.consoleMin`, page serialization round-trip, and settings page filtering; all 581 tests green in `swift test`.
-- AGENTS.md coordination protocol: documented inter-agent coordination stanzas, `#Work-In-Progress` header formats, and per-bot routing policies per fleet instruction.
+- AGENTS.md coordination protocol: documented inter-agent coordination stanzas, fleet coordination header formats, and per-bot routing policies per fleet instruction.
 - Board & issue reconciliation: conducted full board review against shipping codebase.  Verified and reconciled completed work: closed issue #44 (iOS preview sound shipped in #65) and issue #57 (public site screenshots redrawn by Claude on Sep 30); resolved 17 open board items confirmed landed in previous PRs (#40, #43, #53, #65, #67, #74, #75, #103, #109, #110, #111, #112, #113, #115, #117, #118).
 
 ---

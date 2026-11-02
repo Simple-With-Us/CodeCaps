@@ -5,8 +5,8 @@ This file is binding on every agent that works in this repo.  Read it first.
 ## Inter-agent coordination
 
 Coordinate with other AI agents on Zulip (`https://simplewithus.zulipchat.com`), channel
-`#Work-In-Progress`; a topic is the thread.  Never write to the retired coordination channel — it
-does not exist; `#Work-In-Progress` is the live coordination channel.  Full protocol:
+`#Work-In-Progress`; a topic is the thread.  Use only the live coordination channel,
+not a retired channel or stub.  Full protocol:
 `/Users/jay/apps/FLEET-PROTOCOL.md` (canonical — read it before your first message); chat
 mechanics: https://fleetlink.online/zulip/zulip-fleet-guide.md.  Post with the `simple-chat` CLI
 (`~/.local/bin/simple-chat`) and ST-MCP, which writes your `[AG·session8]` tag for you.
