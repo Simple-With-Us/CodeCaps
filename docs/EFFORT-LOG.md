@@ -194,7 +194,7 @@ Lane: `ag/arrow-nav-and-board-parity`.
 - Console window minimum size: bumped `Metrics.consoleMin` in `QuotaComponents.swift` from 820 × 560 to 880 × 600 per app-wide design audit finding F-07 (issue #41).
 - iOS companion settings presentation: added `.presentationDetents([.medium, .large])` to the settings sheet on iOS in `CompanionContentView.swift` so the underlying quota list remains visible (finding F-05, issue #41).
 - Unit tests: added `ConsoleNavigationTests.swift` covering `Metrics.consoleMin`, page serialization round-trip, and settings page filtering; all 581 tests green in `swift test`.
-- AGENTS.md coordination protocol: documented inter-agent coordination stanzas, `#agent-sync` header formats, and per-bot routing policies per fleet instruction.
+- AGENTS.md coordination protocol: documented inter-agent coordination stanzas, `#Work-In-Progress` header formats, and per-bot routing policies per fleet instruction.
 - Board & issue reconciliation: conducted full board review against shipping codebase.  Verified and reconciled completed work: closed issue #44 (iOS preview sound shipped in #65) and issue #57 (public site screenshots redrawn by Claude on Sep 30); resolved 17 open board items confirmed landed in previous PRs (#40, #43, #53, #65, #67, #74, #75, #103, #109, #110, #111, #112, #113, #115, #117, #118).
 - CODEX correction (Oct 3): #57 screenshots existed on main but were not published on gh-pages; live HTTP verification still found AgentBar imagery.  Publishing fix is #123.  #109 also lacks runtime anomaly evaluation, so board 20dc3a22 remains active.  These corrections preserve the implementation history while qualifying the broad closeout.
 
@@ -246,7 +246,7 @@ Lane: `feat/ios-icons-bar-parity-glance-logos` (PR #115, squash `f48fbda`).
 - Quota bar parity: added `CompanionUsageBar` with two-tone segments (red used + green remaining) and vertical pacing indicator with white halo to iOS companion cards and widget `MiniProgressBar`.
 - Fleet-wide fallback rule: replaced lookalike SF Symbols with `"questionmark.square.dashed"` across Mac and iOS.
 - Remote runner CI: iOS TestFlight build dispatched to GitHub-hosted macOS runner (`ios-ship.yml`, run 37087309918).
-- Coordination: briefed MiniMax (`[MM]`) in Slack `#agent-sync` (thread `1790990134.027879`); Apple Note created and pinned headlessly in iCloud folder `Coding`.
+- Coordination: briefed MiniMax (`[MM]`) in Slack (thread `1790990134.027879`); Apple Note created and pinned headlessly in iCloud folder `Coding`.
 
 ---
 
@@ -259,7 +259,7 @@ Lane: `ag/ui-widgets-polish-and-embed` (issue #111, PR #112, squash `7c25e14`).
 - Platform marks & fallback hygiene: Added `CustomMarkMode` (`.color` vs `.template`) and dark appearance variant support (`<key>-dark.<ext>`).  Enforced fleet-wide rule replacing sneaky SF Symbol lookalikes (`sparkles`, `cpu`, `bolt`, `cursorarrow.rays`) with `"questionmark.square.dashed"` across all unresolved logos.
 - Glance popover polish: Increased row spacing (`glanceLocalRowHeight = 42pt`) with a visible faint grey hairline divider (`Theme.hairline`), high-contrast timeframe label styling, and italic reset countdowns placed directly adjacent to percentages.
 - Settings & console layout: Removed dark tick before time elapsed; enforced strict Title Case "Under Pace" / "Over Pace" (dropped "cap"); removed duplicative provider names in footer; enlarged pacing marker (18pt height) standing proud of the quota bar; arranged multi-window models side-by-side in `HStack`.
-- Coordination: Polled and posted progress on `#agent-sync` (`[AG->MM]`), collaborating with MiniMax (`[MM]`) in `~/apps/codecaps-mm-finish`.
+- Coordination: Polled and posted progress on the fleet coordination channel (`[AG->MM]`), collaborating with MiniMax (`[MM]`) in `~/apps/codecaps-mm-finish`.
 - Verification: 576/576 unit tests green in `swift test`; staged bundle validated by `codesign --verify --deep --strict`.
 - Local installation: Staged, signed, and launched into `/Users/jay/Applications/CodeCaps.app` (PID 35926), replacing stale Oct 1 build.
 
@@ -540,7 +540,7 @@ Board 42ae688ab3b84d9aa65e445aab072a15.  Closes #37.
 
 ## 2026-10-03 — Independent Provider and File Refresh [CODEX, PR #142]
 
-repo: CodeCaps; pre-work claim: posted to #agent-sync after reading AGENT-SYNC.md; Lane: `codex/independent-source-refresh`; Board `4bcf84f1`; GitHub #137; PR #142 open on this branch (depends on #139; refs #136).
+repo: CodeCaps; pre-work claim: posted to #Work-In-Progress after reading FLEET-PROTOCOL.md; Lane: `codex/independent-source-refresh`; Board `4bcf84f1`; GitHub #137; PR #142 open on this branch (depends on #139; refs #136).
 
 - Added `CodexSessionQuotaReader` for bounded passive Codex session JSONL reads with exact account identity, incremental append tracking, symlink-safe paths, and original event timestamps.  Unchanged files do not invoke provider, Fleet, upload, or download work.
 - Split Settings → Sources & Fleet into independent **Provider Checks** and **Codex Session File Checks** toggles with separate 1-, 3-, 5-, and 15-minute intervals (five-minute provider default, one-minute file default).  Manual refresh runs both enabled paths; disabling one source preserves the other when possible.
