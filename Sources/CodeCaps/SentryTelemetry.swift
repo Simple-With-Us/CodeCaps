@@ -42,7 +42,7 @@ enum SentryTelemetry {
             options.beforeSend = { event in
                 if isThirdPartyFailedRequest(
                     url: event.request?.url,
-                    exceptionTypes: event.exceptions?.map(\.type) ?? []
+                    exceptionTypes: event.exceptions?.compactMap { $0.type } ?? []
                 ) { return nil }
                 return sanitize(event)
             }
