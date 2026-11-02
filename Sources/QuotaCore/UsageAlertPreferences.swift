@@ -31,8 +31,13 @@ public struct CompanionPushRemovalAcknowledgment: Decodable {
 }
 
 /// Stable categories shared by Mac, companion, and remote notification payloads.
+///
+/// Raw values are the stable alert-kind identifiers every delivery channel
+/// selects on — including a future per-kind channel opt-in — so a case's
+/// raw value must never be renamed once shipped.
 public enum UsageAlertKind: String, CaseIterable, Codable, Sendable, Identifiable {
     case anomaly, runaway, vendorReset, quotaReset, quotaExhaustion
+    case museCodeBurn, museCodeContributorBelow100
 
     public var id: String { rawValue }
     public var title: String {
@@ -42,6 +47,8 @@ public enum UsageAlertKind: String, CaseIterable, Codable, Sendable, Identifiabl
         case .vendorReset: return "Vendor Quota Resets"
         case .quotaReset: return "Scheduled Quota Resets"
         case .quotaExhaustion: return "Quota Exhaustion"
+        case .museCodeBurn: return "Muse Burn"
+        case .museCodeContributorBelow100: return "Muse Contributor Share"
         }
     }
     public var detail: String {
@@ -51,6 +58,8 @@ public enum UsageAlertKind: String, CaseIterable, Codable, Sendable, Identifiabl
         case .vendorReset: return "A provider restores quota before its scheduled reset."
         case .quotaReset: return "A quota window resets on schedule."
         case .quotaExhaustion: return "A quota window reaches its limit."
+        case .museCodeBurn: return "Muse token burn passes the plugin threshold on standard models."
+        case .museCodeContributorBelow100: return "A standard Muse model handles any tokens."
         }
     }
 }
@@ -96,7 +105,14 @@ public struct UsageAlertPreferences: Codable, Equatable, Sendable {
                             resetEnabled: Bool, resetSound: ResetAlarmSound,
                             runawayEnabled: Bool = false) -> Self {
         if let data = defaults.data(forKey: key),
-           let saved = try? JSONDecoder().decode(Self.self, from: data) {
+           var saved = try? JSONDecoder().decode(Self.self, from: data) {
+            // Kinds added after the owner's preferences were first saved
+            // start from their shipped default rather than the subscript's
+            // disabled fallback, until the owner changes them.
+            for kind in [UsageAlertKind.museCodeBurn, .museCodeContributorBelow100]
+            where saved.options[kind.rawValue] == nil {
+                saved[kind] = UsageAlertOption(enabled: true)
+            }
             return saved
         }
         var result = Self()
@@ -106,6 +122,10 @@ public struct UsageAlertPreferences: Codable, Equatable, Sendable {
             case .quotaReset, .vendorReset: enabled = resetEnabled
             case .anomaly, .runaway: enabled = runawayEnabled
             case .quotaExhaustion: enabled = false
+            // The Muse monitor is the feature these kinds exist for, so
+            // they ship enabled; the owner can turn either off in
+            // Alerts & Alarms without touching the other.
+            case .museCodeBurn, .museCodeContributorBelow100: enabled = true
             }
             result[kind] = UsageAlertOption(enabled: enabled, sound: resetSound)
         }

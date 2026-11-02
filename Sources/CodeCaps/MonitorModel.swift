@@ -354,6 +354,47 @@ final class MonitorModel: ObservableObject {
         dismissedPlanChangeIds.insert(id)
     }
     @Published public private(set) var runawayAlertHistory: [RunawayAlertRecord] = []
+
+    // MARK: - Muse Plugin
+
+    /// Latest Muse session-store reading, for the Plugins section.
+    @Published private(set) var museCodeReport: MuseCodeSessionReport?
+    @Published private(set) var museCodeIssue: String?
+    /// The alerts the current reading produces.  Both stay visible on the
+    /// plugin page whether or not their delivery is inside a cooldown.
+    @Published private(set) var museCodeBurnAlert: MuseCodeBurnMonitor.BurnAlert?
+    @Published private(set) var museCodeContributorAlert: MuseCodeBurnMonitor.ContributorAlert?
+    @Published private(set) var museCodeBridgeStatus: String?
+    /// Token threshold for the burn alert in the trailing 90-minute window.
+    /// A per-user tunable, so it stays in UserDefaults like the burn-rate
+    /// multipliers (see INFISICAL.md), never in Infisical.
+    @Published var museCodeBurnThresholdTokens: Int {
+        didSet {
+            defaults.set(museCodeBurnThresholdTokens, forKey: "museCodeBurnThresholdTokens")
+            if let museCodeReport { evaluateMuseCodeAlerts(report: museCodeReport) }
+        }
+    }
+    /// Ships on: the warning is the feature the plugin exists for.  Either
+    /// alert kind can still be turned off on its own in Alerts & Alarms.
+    @Published var museCodeBurnAlertsEnabled: Bool {
+        didSet {
+            defaults.set(museCodeBurnAlertsEnabled, forKey: "museCodeBurnAlertsEnabled")
+            if museCodeBurnAlertsEnabled {
+                Task { await alarmManager.requestNotificationPermission() }
+                if let museCodeReport { evaluateMuseCodeAlerts(report: museCodeReport) }
+            } else {
+                museCodeBurnAlert = nil
+                museCodeContributorAlert = nil
+            }
+        }
+    }
+    /// Whether the plugin also posts its session token events to Usage
+    /// Monitor through the sync endpoint.  Off by default: the local monitor
+    /// is the feature; the bridge is provenance for the server.
+    @Published var museCodeUsageBridgeEnabled: Bool {
+        didSet { defaults.set(museCodeUsageBridgeEnabled, forKey: "museCodeUsageBridgeEnabled") }
+    }
+
     public var resetAlertHistory: [ResetAlertRecord] {
         alarmManager.alertHistory
     }
@@ -555,6 +596,16 @@ final class MonitorModel: ObservableObject {
 
     public let alarmManager: ResetAlarmManager
 
+    /// App-level alert fan-out.  Producers emit `CodeCapsAlertEvent`s here
+    /// and registered channels deliver them; today the only channel is the
+    /// local alert surface, and a future channel registers here once rather
+    /// than inside any producer.
+    lazy var alertDispatcher: CodeCapsAlertDispatcher = {
+        let dispatcher = CodeCapsAlertDispatcher()
+        dispatcher.register(LocalAlertChannel(manager: alarmManager))
+        return dispatcher
+    }()
+
     private let presentsPipWindows: Bool
     private let defaults: UserDefaults
     private let burnRateHistoryURL: URL
@@ -577,6 +628,13 @@ final class MonitorModel: ObservableObject {
     var settingsWriteForTesting: (@MainActor (String, String) async throws -> Void)?
     var pushForTesting: (@MainActor ([QuotaWindow], URL, String?, QuotaSyncFormat) async throws -> QuotaPublishResult)?
     var runawayNotificationForTesting: ((BurnRateNotification) -> Void)?
+    var museCodeReadForTesting: (@MainActor () async -> MuseCodeSessionResult?)?
+    var museCodePublishForTesting: (@MainActor ([[String: Any]], URL, String?) async throws -> MuseCodeIngestSummary)?
+    var museCodeTokenReadForTesting: (@MainActor () async -> String?)?
+    private var lastMuseCodeBurnAlertAt: Double = 0
+    private var museCodeContributorBelow100Active = false
+    private var museCodeRequest: Task<Void, Never>?
+    private let museCodePoster = MuseCodeSessionPoster()
     var exhaustionNotificationForTesting: ((String, String) -> Void)?
     var exhaustionHistoryURLForTesting: URL?
     var skipsSnapshotIOForTesting = false
@@ -719,6 +777,12 @@ final class MonitorModel: ObservableObject {
         syncEndpoint = defaults.string(forKey: "syncEndpoint") ?? ""
         syncFormat = QuotaSyncFormat(rawValue: defaults.string(forKey: "syncFormat") ?? "") ?? .usageMonitorV2
         remoteAlertRelayEnabled = defaults.bool(forKey: "remoteAlertRelayEnabled")
+        museCodeBurnThresholdTokens = defaults.object(forKey: "museCodeBurnThresholdTokens") as? Int
+            ?? MuseCodeBurnMonitor.defaultThresholdTokens
+        museCodeBurnAlertsEnabled = defaults.object(forKey: "museCodeBurnAlertsEnabled") as? Bool ?? true
+        museCodeUsageBridgeEnabled = defaults.bool(forKey: "museCodeUsageBridgeEnabled")
+        lastMuseCodeBurnAlertAt = defaults.double(forKey: "museCodeBurnLastSent")
+        museCodeContributorBelow100Active = defaults.bool(forKey: "museCodeContributorBelow100Active")
 
         alarmManager = ResetAlarmManager(defaults: defaults)
 
@@ -2457,6 +2521,7 @@ final class MonitorModel: ObservableObject {
             let widgetCandidates = unifiedMerged + split.groups.flatMap(\.windows)
             self.publishWidgetSnapshot(candidates: widgetCandidates)
             self.refreshRunawayUsageState(recordSamples: local != nil)
+            self.refreshMuseCodePlugin()
             self.refreshExhaustionWarnings(windows: widgetCandidates, now: self.now)
             self.alarmManager.evaluate(observations: self.resetAlarmObservationsForCurrentReadings(), now: self.now)
             self.evaluatePipLowQuota()
@@ -2628,6 +2693,7 @@ final class MonitorModel: ObservableObject {
         let widgetCandidates = unifiedMerged + split.groups.flatMap(\.windows)
         publishWidgetSnapshot(candidates: widgetCandidates)
         refreshRunawayUsageState(recordSamples: recordSamples)
+        refreshMuseCodePlugin()
         refreshExhaustionWarnings(windows: widgetCandidates, now: now)
         alarmManager.evaluate(observations: resetAlarmObservationsForCurrentReadings(), now: now)
         evaluatePipLowQuota()
@@ -3029,6 +3095,159 @@ final class MonitorModel: ObservableObject {
         }
         lastRunawayAlertAt = lastRunawayAlertAt.filter { now.timeIntervalSince1970 - $0.value <= 30 * 86_400 }
         defaults.set(lastRunawayAlertAt, forKey: "runawayAlertLastSent")
+    }
+
+    // MARK: - Muse Plugin Evaluation
+
+    /// Reads the Muse session store alongside the quota refresh paths and
+    /// applies the result.  Mirrors the session-file reader's test guard: an
+    /// injected quota read must not silently start a real file scan in an
+    /// offline test.
+    func refreshMuseCodePlugin() {
+        guard localEnabled else {
+            museCodeReport = nil
+            museCodeIssue = nil
+            museCodeBurnAlert = nil
+            museCodeContributorAlert = nil
+            return
+        }
+        if museCodeReadForTesting == nil,
+           skipsSnapshotIOForTesting || localReadForTesting != nil || localResultForTesting != nil
+                || serverFetchForTesting != nil { return }
+        guard museCodeRequest == nil else { return }
+        let readForTesting = museCodeReadForTesting
+        museCodeRequest = Task { [weak self] in
+            let result: MuseCodeSessionResult?
+            if let readForTesting {
+                result = await readForTesting()
+            } else {
+                result = await Task.detached(priority: .utility) {
+                    MuseCodeSessionReader().read()
+                }.value
+            }
+            guard let self else { return }
+            self.museCodeRequest = nil
+            guard !Task.isCancelled else { return }
+            if let result { self.applyMuseCodeResult(result) }
+        }
+    }
+
+    /// Applies one session-store reading: page state first, then the alert
+    /// events, then the optional Usage Monitor bridge.
+    func applyMuseCodeResult(_ result: MuseCodeSessionResult) {
+        museCodeReport = result.report
+        museCodeIssue = result.issue
+        guard let report = result.report else {
+            museCodeBurnAlert = nil
+            museCodeContributorAlert = nil
+            return
+        }
+        evaluateMuseCodeAlerts(report: report)
+        if museCodeUsageBridgeEnabled {
+            Task { [weak self] in await self?.postMuseCodeBridge(report: report) }
+        }
+    }
+
+    private func evaluateMuseCodeAlerts(report: MuseCodeSessionReport) {
+        guard museCodeBurnAlertsEnabled else {
+            museCodeBurnAlert = nil
+            museCodeContributorAlert = nil
+            return
+        }
+        let burn = MuseCodeBurnMonitor.evaluateBurn(report: report,
+                                                     thresholdTokens: museCodeBurnThresholdTokens)
+        museCodeBurnAlert = burn
+        if let burn,
+           now.timeIntervalSince1970 - lastMuseCodeBurnAlertAt >= MuseCodeBurnMonitor.alertCooldown {
+            lastMuseCodeBurnAlertAt = now.timeIntervalSince1970
+            defaults.set(lastMuseCodeBurnAlertAt, forKey: "museCodeBurnLastSent")
+            alertDispatcher.emit(CodeCapsAlertEvent(
+                kind: .museCodeBurn, title: burn.title, body: burn.body,
+                identifier: "codecaps.musecode.burn", occurredAt: report.generatedAt))
+        }
+        // The contributor finding is its own alert kind, independent of the
+        // burn threshold: it fires once when standard models appear and
+        // re-arms only when contributor share returns to 100%, so a channel
+        // that subscribes to the finding itself (the planned SMS channel is
+        // the expected one) never has to piggyback on the burn alert.
+        let contributor = MuseCodeBurnMonitor.evaluateContributor(report: report)
+        museCodeContributorAlert = contributor
+        if let contributor {
+            if !museCodeContributorBelow100Active {
+                museCodeContributorBelow100Active = true
+                defaults.set(true, forKey: "museCodeContributorBelow100Active")
+                alertDispatcher.emit(CodeCapsAlertEvent(
+                    kind: .museCodeContributorBelow100, title: contributor.title,
+                    body: contributor.body, identifier: "codecaps.musecode.contributor",
+                    occurredAt: report.generatedAt))
+            }
+        } else if museCodeContributorBelow100Active {
+            museCodeContributorBelow100Active = false
+            defaults.set(false, forKey: "museCodeContributorBelow100Active")
+        }
+    }
+
+    /// Posts the reading's per-session token deltas to Usage Monitor under
+    /// the verified `muse-code` contract: the contract endpoint, the
+    /// muse-code scoped producer token from its own Keychain service, and
+    /// only the positive delta since the previous observation — a session's
+    /// latest snapshot total is cumulative, so posting totals would
+    /// double-count.  Baselines persist only after every batch is
+    /// acknowledged; a failed post retries the same deltas next refresh,
+    /// and the stable event ids make the server dedupe any that did land.
+    private func postMuseCodeBridge(report: MuseCodeSessionReport) async {
+        guard !report.latestObservations.isEmpty else {
+            museCodeBridgeStatus = "No Muse sessions to post."
+            return
+        }
+        let plan = MuseCodeDeltaPlanner.plan(observations: report.latestObservations,
+                                              previous: loadMuseCodeIngestState())
+        guard !plan.events.isEmpty else {
+            saveMuseCodeIngestState(plan.updated)
+            museCodeBridgeStatus = "No new Muse tokens to post."
+            return
+        }
+        let endpoint = MuseCodeSessionIngest.endpoint
+        let token: String?
+        if let museCodeTokenReadForTesting {
+            token = await museCodeTokenReadForTesting()
+        } else {
+            token = await TokenStore.read(server: endpoint.absoluteString,
+                                          service: TokenStore.museCodeIngestService)
+                .map(sanitizedToken(_:))
+        }
+        guard let token, !token.isEmpty else {
+            museCodeBridgeStatus = "Bridge needs the muse-code ingest token saved in CodeCaps."
+            return
+        }
+        let events = plan.events.map {
+            MuseCodeSessionIngest.event(observation: $0.observation, delta: $0.delta)
+        }
+        do {
+            let summary: MuseCodeIngestSummary
+            if let museCodePublishForTesting {
+                summary = try await museCodePublishForTesting(events, endpoint, token)
+            } else {
+                summary = try await museCodePoster.publish(events: events, to: endpoint, token: token)
+            }
+            saveMuseCodeIngestState(plan.updated)
+            museCodeBridgeStatus = "Posted \(summary.sent) token events: \(summary.persisted) persisted, \(summary.duplicates) duplicates, \(summary.rejected) rejected."
+        } catch {
+            museCodeBridgeStatus = "Bridge failed: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)"
+        }
+    }
+
+    private func loadMuseCodeIngestState() -> [String: MuseCodeSessionObservation] {
+        guard let data = defaults.data(forKey: "museCodeIngestObservations"),
+              let decoded = try? JSONDecoder().decode([String: MuseCodeSessionObservation].self,
+                                                      from: data) else { return [:] }
+        return decoded
+    }
+
+    private func saveMuseCodeIngestState(_ state: [String: MuseCodeSessionObservation]) {
+        if let data = try? JSONEncoder().encode(state) {
+            defaults.set(data, forKey: "museCodeIngestObservations")
+        }
     }
 
     private func appendRunawayAlert(_ record: RunawayAlertRecord) {
