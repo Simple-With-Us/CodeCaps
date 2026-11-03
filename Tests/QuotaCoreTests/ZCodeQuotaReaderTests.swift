@@ -33,7 +33,8 @@ final class ZCodeQuotaReaderTests: XCTestCase {
         // percentage is the USED share; the row shows what remains.
         XCTAssertEqual(fiveHour.remainingPercent, 60)
         XCTAssertEqual(fiveHour.absoluteRemaining, 600)
-        XCTAssertEqual(fiveHour.absoluteLimit, 1000)
+        // The cap is remaining + consumed; currentValue alone is usage.
+        XCTAssertEqual(fiveHour.absoluteLimit, 1600)
         XCTAssertEqual(fiveHour.quotaUnit, "credits")
         XCTAssertEqual(fiveHour.planName, "GLM Coding Pro")
         XCTAssertNotNil(fiveHour.resetAt)
@@ -77,6 +78,24 @@ final class ZCodeQuotaReaderTests: XCTestCase {
         let result = await read(#"{"code":500,"msg":"boom"}"#)
         XCTAssertTrue(result.windows.isEmpty)
         XCTAssertEqual(result.issues["zcode"], "ZCode quota service is unavailable.")
+    }
+
+    func testTransportErrorFallsThroughToSecondCredential() async {
+        let result = await ZCodeQuotaReader(
+            now: { Date(timeIntervalSince1970: 0) },
+            credentials: { ["oauth:zai:access_token": "tok", "oauth:bigmodel:access_token": "bm-tok"] },
+            fetch: { request in
+                if request.url?.host == "api.z.ai" { throw URLError(.notConnectedToInternet) }
+                let response = HTTPURLResponse(
+                    url: URL(string: "https://bigmodel.cn/api/monitor/usage/quota/limit")!,
+                    statusCode: 200, httpVersion: nil, headerFields: nil
+                )!
+                return (Data(#"{"code":200,"data":{"level":"max","limits":[{"type":"TOKENS_LIMIT","unit":6,"percentage":5}]}}"#.utf8), response)
+            }
+        ).read()
+        XCTAssertTrue(result.issues.isEmpty)
+        XCTAssertEqual(result.windows.count, 1)
+        XCTAssertEqual(result.windows[0].quotaUnit, "tokens")
     }
 
     func testFallsBackToBigModelCredential() async {

@@ -43,8 +43,16 @@ public struct KimiQuotaReader: Sendable {
                 return LocalQuotaResult()
             }
             var lastStatus = 0
+            var sawTransportError = false
             for url in Self.usageURLs {
-                let result = try await Self.fetchUsage(url: url, token: token, fetch: fetch)
+                let result: KimiHTTPPayload
+                do {
+                    result = try await Self.fetchUsage(url: url, token: token, fetch: fetch)
+                } catch {
+                    // One unreachable host must not mask a healthy second one.
+                    sawTransportError = true
+                    continue
+                }
                 lastStatus = result.statusCode
                 if result.statusCode == 401 || result.statusCode == 403 {
                     continue // try the other documented host before blaming the login
@@ -64,7 +72,9 @@ public struct KimiQuotaReader: Sendable {
             if lastStatus == 401 || lastStatus == 403 {
                 return LocalQuotaResult(issues: ["kimi": "Kimi session was rejected; sign in again in Kimi Code."])
             }
-            return LocalQuotaResult(issues: ["kimi": "Kimi quota service is unavailable."])
+            return LocalQuotaResult(issues: ["kimi": sawTransportError
+                ? "Kimi quota service could not be reached."
+                : "Kimi quota service is unavailable."])
         } catch is CancellationError {
             return LocalQuotaResult(issues: ["kimi": "Kimi quota refresh was cancelled."])
         } catch {
@@ -208,20 +218,23 @@ private extension KimiQuotaReader {
                 ?? home.appendingPathComponent(".kimi"),
         ]
         let manager = FileManager.default
+        // Newest credential across BOTH roots: a fresh sign-in in the second
+        // root must beat a stale file in the first.
+        var candidates: [URL] = []
         for root in roots {
             let directory = root.appendingPathComponent("credentials")
             if let names = try? manager.contentsOfDirectory(atPath: directory.path) {
-                let candidates = names.filter { $0.hasSuffix(".json") }
+                candidates += names.filter { $0.hasSuffix(".json") }
                     .map { directory.appendingPathComponent($0) }
-                    .sorted { lhs, rhs in
-                        let l = (try? manager.attributesOfItem(atPath: lhs.path)[.modificationDate] as? Date) ?? nil
-                        let r = (try? manager.attributesOfItem(atPath: rhs.path)[.modificationDate] as? Date) ?? nil
-                        return (l ?? .distantPast) > (r ?? .distantPast)
-                    }
-                for candidate in candidates {
-                    if let token = credentialToken(at: candidate) { return token }
-                }
             }
+        }
+        candidates.sort { lhs, rhs in
+            let l = (try? manager.attributesOfItem(atPath: lhs.path)[.modificationDate] as? Date) ?? nil
+            let r = (try? manager.attributesOfItem(atPath: rhs.path)[.modificationDate] as? Date) ?? nil
+            return (l ?? .distantPast) > (r ?? .distantPast)
+        }
+        for candidate in candidates {
+            if let token = credentialToken(at: candidate) { return token }
         }
         for root in roots {
             if let token = configToken(root: root) { return token }
@@ -245,10 +258,21 @@ private extension KimiQuotaReader {
            let text = String(data: data, encoding: .utf8) {
             for line in text.split(separator: "\n") {
                 let trimmed = line.trimmingCharacters(in: .whitespaces)
-                guard trimmed.hasPrefix("api_key"), let equals = trimmed.firstIndex(of: "=") else { continue }
-                let value = trimmed[trimmed.index(after: equals)...]
-                    .trimmingCharacters(in: .whitespaces)
-                    .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+                guard let equals = trimmed.firstIndex(of: "=") else { continue }
+                let key = trimmed[trimmed.startIndex..<equals].trimmingCharacters(in: .whitespaces)
+                guard key == "api_key" else { continue }
+                let raw = trimmed[trimmed.index(after: equals)...].trimmingCharacters(in: .whitespaces)
+                // Quoted values keep everything to their closing quote;
+                // bare values end at an inline `#` comment.
+                let value: String
+                if raw.hasPrefix("\""), let close = raw.dropFirst().firstIndex(of: "\"") {
+                    value = String(raw.dropFirst()[..<close])
+                } else if raw.hasPrefix("'"), let close = raw.dropFirst().firstIndex(of: "'") {
+                    value = String(raw.dropFirst()[..<close])
+                } else {
+                    value = raw.split(separator: "#", maxSplits: 1).first
+                        .map { String($0).trimmingCharacters(in: .whitespaces) } ?? ""
+                }
                 if validToken(value) { return value }
             }
         }
@@ -302,7 +326,8 @@ private extension KimiQuotaReader {
     }
 
     static func int(_ value: Any?) -> Int? {
-        guard let number = number(value) else { return nil }
+        guard let number = number(value), number.isFinite,
+              number >= Double(Int.min), number <= Double(Int.max) else { return nil }
         return Int(number)
     }
 }

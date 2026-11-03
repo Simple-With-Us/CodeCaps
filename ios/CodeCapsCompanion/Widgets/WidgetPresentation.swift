@@ -1161,6 +1161,11 @@ public enum WidgetPresentation {
         if pKey.contains("minimax") || prov.contains("minimax") {
             return ("minimax", "MiniMax", "minimax")
         }
+        // Before the legacy substring rules: any "code"-bearing id (for
+        // example local-mac:zcode:...) would otherwise land on Muse Code.
+        if pKey.contains("zcode") || prov.contains("zcode") || pKey == "z.ai" || prov == "z.ai" || id.contains("zcode") {
+            return ("zcode", "ZCode", "zcode")
+        }
         if pKey.contains("muse-assist") || prov.contains("muse-assist") || prov.contains("muse assist") || id.contains("assist") {
             return ("muse-assist", "Muse Assist", "muse-assist")
         }

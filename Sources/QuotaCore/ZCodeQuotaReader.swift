@@ -47,7 +47,14 @@ public struct ZCodeQuotaReader: Sendable {
             for candidate in candidates {
                 guard let token = store[candidate.key], Self.validToken(token) else { continue }
                 sawCredential = true
-                let result = try await Self.fetchQuota(url: candidate.url, token: token, fetch: fetch)
+                let result: ZCodeHTTPPayload
+                do {
+                    result = try await Self.fetchQuota(url: candidate.url, token: token, fetch: fetch)
+                } catch {
+                    // One unreachable endpoint must not mask a healthy second
+                    // account.
+                    continue
+                }
                 if result.statusCode == 401 || result.statusCode == 403 {
                     rejected = true
                     continue
@@ -152,7 +159,11 @@ private extension ZCodeQuotaReader {
             let descriptor = descriptor(type: type, unit: unit)
             let percentage = number(limit["percentage"])
             let remaining = number(limit["remaining"])
-            let cap = number(limit["currentValue"]) ?? number(limit["number"])
+            // currentValue is the CONSUMED amount and number is the window
+            // length; the cap only exists when the payload names a remaining
+            // figure, as remaining + used.
+            let used = number(limit["currentValue"])
+            let cap: Double? = remaining.flatMap { r in used.map { r + $0 } }
             let percent: Double?
             if let percentage {
                 percent = min(100, max(0, 100 - percentage))
@@ -190,7 +201,7 @@ private extension ZCodeQuotaReader {
         switch unit {
         case 3: return ("5-hour limit", "5h", unitLabel)
         case 6: return ("Weekly limit", "weekly", unitLabel)
-        default: return ("Usage limit", "monthly", unitLabel)
+        default: return ("Usage limit", "unspecified", unitLabel)
         }
     }
 

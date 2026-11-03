@@ -74,6 +74,35 @@ final class KimiQuotaReaderTests: XCTestCase {
             fetch: { _ in throw URLError(.notConnectedToInternet) }
         ).read()
         XCTAssertTrue(result.windows.isEmpty)
-        XCTAssertEqual(result.issues["kimi"], "Kimi quota service is unavailable.")
+        XCTAssertEqual(result.issues["kimi"], "Kimi quota service could not be reached.")
+    }
+
+    func testTransportErrorFallsThroughToSecondHost() async {
+        let result = await KimiQuotaReader(
+            now: { Date(timeIntervalSince1970: 0) },
+            accessToken: { "token" },
+            fetch: { request in
+                if request.url?.host == "api.kimi.com" { throw URLError(.cannotFindHost) }
+                let response = HTTPURLResponse(
+                    url: URL(string: "https://api.kimi.ai/coding/v1/usages")!,
+                    statusCode: 200, httpVersion: nil, headerFields: nil
+                )!
+                return (Data(#"{"usage":{"limit":100,"used":25}}"#.utf8), response)
+            }
+        ).read()
+        XCTAssertTrue(result.issues.isEmpty)
+        XCTAssertEqual(result.windows.count, 1)
+        XCTAssertEqual(result.windows[0].remainingPercent, 75)
+    }
+
+    func testConfigTomlRequiresExactKeyAndStripsInlineComment() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        try """
+        api_key_backup = "wrong-token"
+        api_key = "sk-test-token" # rotated
+        """.write(to: home.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8)
+        XCTAssertEqual(KimiQuotaReader.configToken(root: home), "sk-test-token")
     }
 }
