@@ -22,13 +22,34 @@ final class ProviderMarkTripletTests: XCTestCase {
         "google-antigravity", "antigravity",
         "google-antigravity:gemini", "google-antigravity:third-party", "gemini",
         "xai", "grok", "grok-cli", "grok-bot",
-        "minimax", "muse", "muse-assist", "muse-code", "cursor",
+        "minimax", "muse", "muse-assist", "muse-code", "cursor", "kimi", "zcode",
         "github-copilot", "copilot",
     ]
 
     override func setUp() {
         super.setUp()
         PlatformLogoImage.invalidateCaches()
+    }
+
+    func testCompanionCatalogCarriesKimiAndZAIAssets() throws {
+        let catalog = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("ios/CodeCapsCompanion/Assets.xcassets")
+        let sourceRoot = catalog.deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Sources/CodeCaps/Resources/ProviderMarks")
+        for (asset, file, source) in [("provider-kimi", "provider-kimi.svg", "kimi-color.svg"),
+                                      ("provider-zai", "provider-zai.svg", "zai.svg")] {
+            let imageset = catalog.appendingPathComponent("\(asset).imageset")
+            let image = imageset.appendingPathComponent(file)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: image.path),
+                          "\(asset).imageset is missing its vector logo")
+            XCTAssertTrue(FileManager.default.fileExists(atPath: imageset.appendingPathComponent("Contents.json").path),
+                          "\(asset).imageset is missing Contents.json")
+            let copiedVector = try Data(contentsOf: image)
+            let suppliedVector = try Data(contentsOf: sourceRoot.appendingPathComponent(source))
+            XCTAssertEqual(copiedVector, suppliedVector,
+                           "\(asset) must use the byte-exact supplied vector")
+        }
     }
 
     /// The companion's asset catalog must carry every provider the model can
