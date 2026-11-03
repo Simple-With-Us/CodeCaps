@@ -2,27 +2,231 @@ import Foundation
 import XCTest
 @testable import QuotaCore
 
+/// The reader walks ZCode's own project-token chain before the quota call,
+/// so every stub routes by request path and can record what was sent.
 final class ZCodeQuotaReaderTests: XCTestCase {
+    private final class Recorder: @unchecked Sendable {
+        private let lock = NSLock()
+        private var seen: [URLRequest] = []
+        func add(_ request: URLRequest) { lock.lock(); seen.append(request); lock.unlock() }
+        func snapshot() -> [URLRequest] { lock.lock(); defer { lock.unlock() }; return seen }
+    }
+
+    private let customerJSON = #"{"code":200,"data":{"organizations":[{"organizationId":"o1","organizationName":"默认机构","projects":[{"projectId":"p1","projectName":"默认项目","projectType":1}]}]}}"#
+    private let keysJSON = #"{"code":200,"data":[{"name":"zcode-api-key","apiKey":"key-id-1"}]}"#
+    private let mintJSON = #"{"code":200,"data":{"enable":true,"accessToken":"proj-tok","expiresAt":9999999999,"expiresIn":3600}}"#
+
+    private struct Stub {
+        var quotaJSON: String
+        var quotaStatus: Int = 200
+        var customerJSON: String?
+        var customerStatus: Int = 200
+        var keysJSON: String?
+        var keysStatus: Int = 200
+        var mintJSON: String?
+        var mintStatus: Int = 200
+    }
+
     private func read(
-        _ json: String,
-        status: Int = 200,
-        store: [String: String]? = ["oauth:zai:access_token": "tok"]
+        _ stub: Stub,
+        store: [String: String]? = ["oauth:zai:access_token": "tok"],
+        recorder: Recorder? = nil
     ) async -> LocalQuotaResult {
-        await ZCodeQuotaReader(
+        let customer = customerJSON
+        let keys = keysJSON
+        let mint = mintJSON
+        return await ZCodeQuotaReader(
             now: { Date(timeIntervalSince1970: 0) },
             credentials: { store ?? [:] },
-            fetch: { _ in
+            zcodeClientVersion: { "3.16.3" },
+            fetch: { request in
+                recorder?.add(request)
+                let path = request.url?.path ?? ""
+                let body: String
+                let status: Int
+                if path.hasSuffix("/api/biz/customer/getCustomerInfo") {
+                    body = stub.customerJSON ?? customer
+                    status = stub.customerStatus
+                } else if path.hasSuffix("/access_tokens") {
+                    body = stub.mintJSON ?? mint
+                    status = stub.mintStatus
+                } else if path.contains("/api_keys") {
+                    body = stub.keysJSON ?? keys
+                    status = stub.keysStatus
+                } else {
+                    body = stub.quotaJSON
+                    status = stub.quotaStatus
+                }
                 let response = HTTPURLResponse(
-                    url: URL(string: "https://api.z.ai/api/monitor/usage/quota/limit")!,
+                    url: request.url!,
                     statusCode: status, httpVersion: nil, headerFields: nil
                 )!
-                return (Data(json.utf8), response)
+                return (Data(body.utf8), response)
             }
         ).read()
     }
 
+    // MARK: - Chain contract
+
+    func testChainSendsTheContractCredentials() async {
+        let recorder = Recorder()
+        let result = await read(Stub(quotaJSON: #"{"code":200,"data":{"level":"pro","limits":[{"type":"CREDIT_LIMIT","unit":3,"percentage":40,"currentValue":1000,"remaining":600}]}}"#), recorder: recorder)
+        XCTAssertEqual(result.windows.count, 1)
+        let requests = recorder.snapshot()
+        XCTAssertEqual(requests.count, 4, "customerInfo, key list, mint, quota - in that order")
+        XCTAssertTrue(requests[0].url!.path.hasSuffix("/api/biz/customer/getCustomerInfo"))
+        XCTAssertEqual(requests[0].value(forHTTPHeaderField: "authorization"), "tok", "customerInfo is tried with the raw login token first")
+        XCTAssertEqual(requests[1].url!.path, "/api/biz/v1/organization/o1/projects/p1/api_keys")
+        XCTAssertEqual(requests[1].httpMethod, "GET")
+        XCTAssertEqual(requests[1].value(forHTTPHeaderField: "authorization"), "Bearer tok", "personal key management keeps the z.ai Bearer form")
+        XCTAssertTrue(requests[2].url!.path.hasSuffix("/api_keys/key-id-1/access_tokens"))
+        XCTAssertEqual(requests[2].httpMethod, "POST")
+        XCTAssertEqual(requests[2].value(forHTTPHeaderField: "authorization"), "Bearer tok", "the mint is Bearer for both families")
+        let mintBody = (try? JSONSerialization.jsonObject(with: requests[2].httpBody ?? Data())) as? [String: Any]
+        XCTAssertEqual(mintBody?["clientType"] as? String, "zcode")
+        XCTAssertEqual(mintBody?["clientVersion"] as? String, "3.16.3")
+        XCTAssertEqual(requests[3].url!.path, "/api/monitor/usage/quota/limit")
+        XCTAssertEqual(requests[3].value(forHTTPHeaderField: "authorization"), "Bearer proj-tok", "the quota call presents the minted project token, never the raw login token")
+    }
+
+    private final class AnswerBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var answers: [(Int, String)]
+        init(_ answers: [(Int, String)]) { self.answers = answers }
+        func next(fallback: (Int, String)) -> (Int, String) {
+            lock.lock(); defer { lock.unlock() }
+            return answers.isEmpty ? fallback : answers.removeFirst()
+        }
+    }
+
+    func testCustomerInfoRetriesBearerOnlyAfterAnAuthRejection() async {
+        let recorder = Recorder()
+        let customer = customerJSON
+        let keys = keysJSON
+        let mint = mintJSON
+        let answers = AnswerBox([(401, "{}"), (200, customer)])
+        let result = await ZCodeQuotaReader(
+            now: { Date(timeIntervalSince1970: 0) },
+            credentials: { ["oauth:zai:access_token": "tok"] },
+            zcodeClientVersion: { "3.16.3" },
+            fetch: { request in
+                recorder.add(request)
+                let path = request.url?.path ?? ""
+                var body = ""
+                var status = 200
+                if path.hasSuffix("/api/biz/customer/getCustomerInfo") {
+                    let answer = answers.next(fallback: (200, customer))
+                    status = answer.0
+                    body = answer.1
+                } else if path.hasSuffix("/access_tokens") {
+                    body = mint
+                } else if path.contains("/api_keys") {
+                    body = keys
+                } else {
+                    body = #"{"code":200,"data":{"limits":[{"type":"CREDIT_LIMIT","unit":3,"percentage":10,"remaining":900,"currentValue":100}]}}"#
+                }
+                let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!
+                return (Data(body.utf8), response)
+            }
+        ).read()
+        XCTAssertEqual(result.windows.count, 1)
+        let headers = recorder.snapshot()
+            .filter { $0.url!.path.hasSuffix("/api/biz/customer/getCustomerInfo") }
+            .map { $0.value(forHTTPHeaderField: "authorization") }
+        XCTAssertEqual(headers, ["tok", "Bearer tok"], "raw first, Bearer only after the HTTP 401")
+    }
+
+    func testCustomerInfoRejectedOnBothFormsMeansSignInAgain() async {
+        let result = await read(Stub(quotaJSON: "{}", customerStatus: 401))
+        XCTAssertTrue(result.windows.isEmpty)
+        XCTAssertEqual(result.issues["zcode"], "ZCode session was rejected; sign in again in ZCode.")
+    }
+
+    func testBigmodelChainUsesRawKeyListAuthAndNoFallback() async {
+        let recorder = Recorder()
+        let result = await read(
+            Stub(quotaJSON: #"{"code":200,"data":{"level":"max","limits":[{"type":"TOKENS_LIMIT","unit":6,"percentage":5}]}}"#),
+            store: ["oauth:bigmodel:access_token": "bm-tok"],
+            recorder: recorder
+        )
+        XCTAssertEqual(result.windows.count, 1)
+        let requests = recorder.snapshot()
+        XCTAssertEqual(requests.count, 4, "no Bearer retry for bigmodel: the bracket agrees on raw customerInfo there")
+        XCTAssertEqual(requests[0].url!.host, "bigmodel.cn")
+        XCTAssertEqual(requests[0].value(forHTTPHeaderField: "authorization"), "bm-tok")
+        XCTAssertEqual(requests[1].value(forHTTPHeaderField: "authorization"), "bm-tok", "bigmodel key management is the raw token")
+        XCTAssertEqual(requests[2].value(forHTTPHeaderField: "authorization"), "Bearer bm-tok")
+        XCTAssertEqual(requests[3].value(forHTTPHeaderField: "authorization"), "Bearer proj-tok")
+    }
+
+    // MARK: - Honest account issues (never a mutation)
+
+    func testMissingNamedKeyIsAnIssueAndNeverCreates() async {
+        let recorder = Recorder()
+        let result = await read(Stub(quotaJSON: "{}", keysJSON: #"{"code":200,"data":[{"name":"other-key","apiKey":"k2"}]}"#), recorder: recorder)
+        XCTAssertTrue(result.windows.isEmpty)
+        XCTAssertEqual(result.issues["zcode"], "ZCode account has no coding-plan API key yet; open ZCode once to finish the coding-plan setup.")
+        let creations = recorder.snapshot().filter { $0.url!.path.hasSuffix("/api_keys") && $0.httpMethod == "POST" }
+        XCTAssertTrue(creations.isEmpty, "the reader lists keys only; it never creates one")
+    }
+
+    func testDisabledTokenIsAnIssue() async {
+        let result = await read(Stub(quotaJSON: "{}", mintJSON: #"{"code":200,"data":{"enable":false}}"#))
+        XCTAssertEqual(result.issues["zcode"], "ZCode reports the coding-plan token disabled.")
+    }
+
+    func testMintKeyGoneIsAnIssue() async {
+        let result = await read(Stub(quotaJSON: "{}", mintJSON: #"{"code":404,"msg":"gone"}"#))
+        XCTAssertEqual(result.issues["zcode"], "ZCode's coding-plan key no longer exists; sign in again in ZCode.")
+    }
+
+    func testNoPersonalProjectIsAnIssue() async {
+        let teams = #"{"code":200,"data":{"organizations":[{"organizationId":"o9","organizationName":"团队","projects":[{"projectId":"p9","projectName":"团队项目","projectType":2}]}]}}"#
+        let result = await read(Stub(quotaJSON: "{}", customerJSON: teams))
+        XCTAssertEqual(result.issues["zcode"], "ZCode sign-in has no selectable personal project.")
+    }
+
+    func testQuotaRejectedAfterMintMeansSignInAgain() async {
+        let result = await read(Stub(quotaJSON: "{}", quotaStatus: 401))
+        XCTAssertTrue(result.windows.isEmpty)
+        XCTAssertEqual(result.issues["zcode"], "ZCode session was rejected; sign in again in ZCode.")
+    }
+
+    func testChainAccountIssueFallsThroughToAHealthySecondAccount() async {
+        let customer = customerJSON
+        let keys = keysJSON
+        let mint = mintJSON
+        let result = await ZCodeQuotaReader(
+            now: { Date(timeIntervalSince1970: 0) },
+            credentials: { ["oauth:zai:access_token": "tok", "oauth:bigmodel:access_token": "bm-tok"] },
+            zcodeClientVersion: { "3.16.3" },
+            fetch: { request in
+                let host = request.url?.host ?? ""
+                let path = request.url?.path ?? ""
+                let body: String
+                if path.hasSuffix("/api/biz/customer/getCustomerInfo") {
+                    body = host == "api.z.ai"
+                        ? #"{"code":200,"data":{"organizations":[]}}"#
+                        : customer
+                } else if path.hasSuffix("/access_tokens") {
+                    body = mint
+                } else if path.contains("/api_keys") {
+                    body = keys
+                } else {
+                    body = #"{"code":200,"data":{"level":"max","limits":[{"type":"TOKENS_LIMIT","unit":6,"percentage":5}]}}"#
+                }
+                let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                return (Data(body.utf8), response)
+            }
+        ).read()
+        XCTAssertEqual(result.windows.count, 1, "a broken z.ai chain must not mask a working bigmodel account")
+        XCTAssertEqual(result.windows[0].quotaUnit, "tokens")
+    }
+
+    // MARK: - Quota payload mapping (unchanged contract)
+
     func testCreditLimitsBecomeFiveHourAndWeeklyWindows() async {
-        let result = await read(#"{"code":200,"msg":"ok","data":{"level":"pro","limits":[{"type":"CREDIT_LIMIT","unit":3,"number":5,"percentage":40,"currentValue":1000,"remaining":600,"nextResetTime":1762531200000},{"type":"CREDIT_LIMIT","unit":6,"percentage":90,"currentValue":5000,"remaining":500}]}}"#)
+        let result = await read(Stub(quotaJSON: #"{"code":200,"msg":"ok","data":{"level":"pro","limits":[{"type":"CREDIT_LIMIT","unit":3,"number":5,"percentage":40,"currentValue":1000,"remaining":600,"nextResetTime":1762531200000},{"type":"CREDIT_LIMIT","unit":6,"percentage":90,"currentValue":5000,"remaining":500}]}}"#))
         XCTAssertTrue(result.issues.isEmpty)
         XCTAssertEqual(result.windows.count, 2)
         let fiveHour = result.windows[0]
@@ -46,7 +250,7 @@ final class ZCodeQuotaReaderTests: XCTestCase {
     }
 
     func testTimeLimitIsTheMonthlyToolQuota() async {
-        let result = await read(#"{"code":0,"data":{"level":"lite","limits":[{"type":"TIME_LIMIT","unit":5,"percentage":100}]}}"#)
+        let result = await read(Stub(quotaJSON: #"{"code":0,"data":{"level":"lite","limits":[{"type":"TIME_LIMIT","unit":5,"percentage":100}]}}"#))
         let window = result.windows[0]
         XCTAssertEqual(window.label, "MCP tool calls")
         XCTAssertEqual(window.window, "monthly")
@@ -57,13 +261,13 @@ final class ZCodeQuotaReaderTests: XCTestCase {
     }
 
     func testMissingCredentialIsSilent() async {
-        let result = await read("{}", store: nil)
+        let result = await read(Stub(quotaJSON: "{}"), store: nil)
         XCTAssertTrue(result.windows.isEmpty)
         XCTAssertTrue(result.issues.isEmpty)
     }
 
     func testNoPlanMessageIsAnIssue() async {
-        let result = await read(#"{"code":500,"msg":"当前用户不存在coding plan"}"#)
+        let result = await read(Stub(quotaJSON: #"{"code":500,"msg":"当前用户不存在coding plan"}"#))
         XCTAssertTrue(result.windows.isEmpty)
         XCTAssertEqual(result.issues["zcode"], "No GLM Coding Plan is active on this ZCode account.")
     }
@@ -72,13 +276,13 @@ final class ZCodeQuotaReaderTests: XCTestCase {
         // Live-verified account state: a signed-in account whose plan exposes
         // no quota windows answers 200 with an empty limits array. That must
         // read as an empty account, never as "unavailable" or a full quota.
-        let result = await read(#"{"code":200,"data":{"limits":[]}}"#)
+        let result = await read(Stub(quotaJSON: #"{"code":200,"data":{"limits":[]}}"#))
         XCTAssertTrue(result.windows.isEmpty)
         XCTAssertEqual(result.issues["zcode"], "ZCode returned no quota windows for this account.")
     }
 
     func testUnparseableLimitsReportNoReadableQuota() async {
-        let result = await read(#"{"code":200,"data":{"limits":[{"unit":6}]}}"#)
+        let result = await read(Stub(quotaJSON: #"{"code":200,"data":{"limits":[{"unit":6}]}}"#))
         XCTAssertTrue(result.windows.isEmpty)
         XCTAssertEqual(result.issues["zcode"], "ZCode returned no readable quota.")
     }
@@ -86,10 +290,10 @@ final class ZCodeQuotaReaderTests: XCTestCase {
     func testMissingLimitsKeyReportsNoReadableQuota() async {
         // A 200 envelope whose data omits limits (or mistypes it) is a
         // malformed payload, not a truthful empty account.
-        let missing = await read(#"{"code":200,"data":{}}"#)
+        let missing = await read(Stub(quotaJSON: #"{"code":200,"data":{}}"#))
         XCTAssertTrue(missing.windows.isEmpty)
         XCTAssertEqual(missing.issues["zcode"], "ZCode returned no readable quota.")
-        let mistyped = await read(#"{"code":200,"data":{"limits":"none"}}"#)
+        let mistyped = await read(Stub(quotaJSON: #"{"code":200,"data":{"limits":"none"}}"#))
         XCTAssertTrue(mistyped.windows.isEmpty)
         XCTAssertEqual(mistyped.issues["zcode"], "ZCode returned no readable quota.")
     }
@@ -104,28 +308,40 @@ final class ZCodeQuotaReaderTests: XCTestCase {
     }
 
     func testRejectedSessionIsAnIssue() async {
-        let result = await read("{}", status: 401)
+        let result = await read(Stub(quotaJSON: "{}", quotaStatus: 401))
         XCTAssertTrue(result.windows.isEmpty)
         XCTAssertEqual(result.issues["zcode"], "ZCode session was rejected; sign in again in ZCode.")
     }
 
     func testEnvelopeFailureWithoutDataIsUnavailable() async {
-        let result = await read(#"{"code":500,"msg":"boom"}"#)
+        let result = await read(Stub(quotaJSON: #"{"code":500,"msg":"boom"}"#))
         XCTAssertTrue(result.windows.isEmpty)
         XCTAssertEqual(result.issues["zcode"], "ZCode quota service is unavailable.")
     }
 
     func testTransportErrorFallsThroughToSecondCredential() async {
+        let customer = customerJSON
+        let keys = keysJSON
+        let mint = mintJSON
         let result = await ZCodeQuotaReader(
             now: { Date(timeIntervalSince1970: 0) },
             credentials: { ["oauth:zai:access_token": "tok", "oauth:bigmodel:access_token": "bm-tok"] },
+            zcodeClientVersion: { "3.16.3" },
             fetch: { request in
                 if request.url?.host == "api.z.ai" { throw URLError(.notConnectedToInternet) }
-                let response = HTTPURLResponse(
-                    url: URL(string: "https://bigmodel.cn/api/monitor/usage/quota/limit")!,
-                    statusCode: 200, httpVersion: nil, headerFields: nil
-                )!
-                return (Data(#"{"code":200,"data":{"level":"max","limits":[{"type":"TOKENS_LIMIT","unit":6,"percentage":5}]}}"#.utf8), response)
+                let path = request.url?.path ?? ""
+                let body: String
+                if path.hasSuffix("/api/biz/customer/getCustomerInfo") {
+                    body = customer
+                } else if path.hasSuffix("/access_tokens") {
+                    body = mint
+                } else if path.contains("/api_keys") {
+                    body = keys
+                } else {
+                    body = #"{"code":200,"data":{"level":"max","limits":[{"type":"TOKENS_LIMIT","unit":6,"percentage":5}]}}"#
+                }
+                let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                return (Data(body.utf8), response)
             }
         ).read()
         XCTAssertTrue(result.issues.isEmpty)
@@ -135,7 +351,7 @@ final class ZCodeQuotaReaderTests: XCTestCase {
 
     func testFallsBackToBigModelCredential() async {
         let result = await read(
-            #"{"code":200,"data":{"level":"max","limits":[{"type":"TOKENS_LIMIT","unit":6,"percentage":5}]}}"#,
+            Stub(quotaJSON: #"{"code":200,"data":{"level":"max","limits":[{"type":"TOKENS_LIMIT","unit":6,"percentage":5}]}}"#),
             store: ["oauth:bigmodel:access_token": "bm-tok"]
         )
         XCTAssertEqual(result.windows.count, 1)
