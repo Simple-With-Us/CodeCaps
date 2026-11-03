@@ -252,7 +252,7 @@ private extension KimiQuotaReader {
         return token
     }
 
-    static func configToken(root: URL) -> String? {
+    internal static func configToken(root: URL) -> String? {
         if let data = try? Data(contentsOf: root.appendingPathComponent("config.toml"), options: .mappedIfSafe),
            data.count <= Self.maxCredentialBytes,
            let text = String(data: data, encoding: .utf8) {
