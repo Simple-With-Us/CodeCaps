@@ -37,7 +37,14 @@ public struct CompanionPushRemovalAcknowledgment: Decodable {
 /// raw value must never be renamed once shipped.
 public enum UsageAlertKind: String, CaseIterable, Codable, Sendable, Identifiable {
     case anomaly, runaway, vendorReset, quotaReset, quotaExhaustion
-    case museCodeBurn, museCodeContributorBelow100
+    // Renamed before the plugin's first release: this kind was
+    // `museCodeContributorBelow100` while the finding was a contributor
+    // token share.  The finding is now event-based (a session on a standard
+    // model), so the identifier names that instead.  Preferences are stored
+    // keyed by raw-value strings, so an install that saved options under
+    // the old key simply never reads that entry again, and `load` backfills
+    // this kind from its shipped default — no migration is needed.
+    case museCodeBurn, museCodeStandardSession
 
     public var id: String { rawValue }
     public var title: String {
@@ -48,7 +55,7 @@ public enum UsageAlertKind: String, CaseIterable, Codable, Sendable, Identifiabl
         case .quotaReset: return "Scheduled Quota Resets"
         case .quotaExhaustion: return "Quota Exhaustion"
         case .museCodeBurn: return "Muse Burn"
-        case .museCodeContributorBelow100: return "Muse Contributor Share"
+        case .museCodeStandardSession: return "Muse Standard Sessions"
         }
     }
     public var detail: String {
@@ -59,7 +66,7 @@ public enum UsageAlertKind: String, CaseIterable, Codable, Sendable, Identifiabl
         case .quotaReset: return "A quota window resets on schedule."
         case .quotaExhaustion: return "A quota window reaches its limit."
         case .museCodeBurn: return "Muse token burn passes the plugin threshold on standard models."
-        case .museCodeContributorBelow100: return "A standard Muse model handles any tokens."
+        case .museCodeStandardSession: return "A Muse session starts on, or switches to, a standard model."
         }
     }
 }
@@ -109,7 +116,7 @@ public struct UsageAlertPreferences: Codable, Equatable, Sendable {
             // Kinds added after the owner's preferences were first saved
             // start from their shipped default rather than the subscript's
             // disabled fallback, until the owner changes them.
-            for kind in [UsageAlertKind.museCodeBurn, .museCodeContributorBelow100]
+            for kind in [UsageAlertKind.museCodeBurn, .museCodeStandardSession]
             where saved.options[kind.rawValue] == nil {
                 saved[kind] = UsageAlertOption(enabled: true)
             }
@@ -125,7 +132,7 @@ public struct UsageAlertPreferences: Codable, Equatable, Sendable {
             // The Muse monitor is the feature these kinds exist for, so
             // they ship enabled; the owner can turn either off in
             // Alerts & Alarms without touching the other.
-            case .museCodeBurn, .museCodeContributorBelow100: enabled = true
+            case .museCodeBurn, .museCodeStandardSession: enabled = true
             }
             result[kind] = UsageAlertOption(enabled: enabled, sound: resetSound)
         }

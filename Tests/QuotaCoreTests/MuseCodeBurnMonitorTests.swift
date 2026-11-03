@@ -4,55 +4,67 @@ import XCTest
 final class MuseCodeBurnMonitorTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
+    /// A reading whose window totals `total` tokens, `contributor` of them
+    /// on a contributor session; the rest, when any, sit on one standard
+    /// session, which is what the burn rule's presence test reads.
     private func report(total: Int, contributor: Int,
                         standardModel: String = "muse-wonder-1.0") -> MuseCodeSessionReport {
-        var models = [MuseCodeModelUsage(modelId: "muse-spark-1.3-contributor",
-                                          tokens: contributor, segmentCount: 1, sessionCount: 1)]
+        var models: [MuseCodeModelUsage] = []
+        var observations: [MuseCodeSessionObservation] = []
+        if contributor > 0 {
+            models.append(MuseCodeModelUsage(modelId: "muse-spark-1.3-contributor",
+                                              tokens: contributor, segmentCount: 1, sessionCount: 1))
+            observations.append(MuseCodeSessionObservation(
+                sessionId: "s-contributor", snapshotId: "snap-c",
+                modelId: "muse-spark-1.3-contributor", totalTokens: contributor,
+                segmentKey: "seg-c", observedAt: now))
+        }
         if total > contributor {
             models.append(MuseCodeModelUsage(modelId: standardModel, tokens: total - contributor,
                                               segmentCount: 1, sessionCount: 1))
+            observations.append(MuseCodeSessionObservation(
+                sessionId: "s-standard", snapshotId: "snap-s",
+                modelId: standardModel, totalTokens: total - contributor,
+                segmentKey: "seg-s", observedAt: now))
         }
         let window = MuseCodeWindowUsage(windowMinutes: 90, totalTokens: total,
                                           contributorTokens: contributor,
                                           contributorShare: total > 0 ? Double(contributor) / Double(total) : nil,
-                                          activeSessions: 1, models: models)
-        return MuseCodeSessionReport(generatedAt: now, windows: [window])
+                                          activeSessions: observations.count, models: models)
+        return MuseCodeSessionReport(generatedAt: now, windows: [window],
+                                       latestObservations: observations)
     }
 
-    func testBurnFiresOverThresholdWithStandardModelsPresent() {
+    func testBurnFiresOverThresholdWithStandardSessionPresent() {
         let alert = MuseCodeBurnMonitor.evaluateBurn(
             report: report(total: 5_000_000, contributor: 4_000_000),
             thresholdTokens: MuseCodeBurnMonitor.defaultThresholdTokens)
         let burn = try? XCTUnwrap(alert)
         XCTAssertNotNil(burn)
         XCTAssertEqual(burn?.totalTokens, 5_000_000)
-        XCTAssertEqual(burn?.contributorShare, 0.8)
-        XCTAssertEqual(burn?.standardModels.map(\.modelId), ["muse-wonder-1.0"])
+        XCTAssertEqual(burn?.standardSessions.map(\.sessionId), ["s-standard"])
+        XCTAssertEqual(burn?.standardSessions.map(\.modelId), ["muse-wonder-1.0"])
+        XCTAssertTrue(burn?.body.contains("s-standard") == true,
+                      "the warning names the standard session present")
         XCTAssertTrue(burn?.body.contains("muse-wonder-1.0") == true,
-                      "the warning names the standard models present")
-        XCTAssertTrue(burn?.body.contains("1,000,000") == true,
-                      "the warning carries the standard model's token count")
+                      "the warning names the standard model present")
     }
 
-    func testBurnSuppressedAtFullContributorShare() {
+    func testBurnSuppressedOverThresholdWithNoStandardSessions() {
         let report = report(total: 9_000_000, contributor: 9_000_000)
         XCTAssertNil(MuseCodeBurnMonitor.evaluateBurn(
-            report: report, thresholdTokens: MuseCodeBurnMonitor.defaultThresholdTokens))
-        XCTAssertNil(MuseCodeBurnMonitor.evaluateContributor(report: report))
+            report: report, thresholdTokens: MuseCodeBurnMonitor.defaultThresholdTokens),
+                     "a heavy window with zero standard-model sessions does not fire, however it is shared")
         XCTAssertEqual(MuseCodeBurnMonitor.status(report: report, issue: nil,
                                                    thresholdTokens: 4_000_000),
                        .allContributor(totalTokens: 9_000_000))
     }
 
-    func testBurnSuppressedBelowThresholdButContributorFindingStillFires() {
+    func testBurnSuppressedBelowThresholdWithStandardSessionPresent() {
         let report = report(total: 3_000_000, contributor: 2_000_000)
         XCTAssertNil(MuseCodeBurnMonitor.evaluateBurn(
             report: report, thresholdTokens: MuseCodeBurnMonitor.defaultThresholdTokens),
-                     "below the threshold the combined burn rule stays silent")
-        let contributor = MuseCodeBurnMonitor.evaluateContributor(report: report)
-        XCTAssertNotNil(contributor,
-                        "the contributor finding is its own event, not a side effect of the burn rule")
-        XCTAssertEqual(contributor?.standardModels.map(\.modelId), ["muse-wonder-1.0"])
+                     "below the threshold the combined burn rule stays silent; the standard session is the detector kind's event, not this one's")
         XCTAssertEqual(MuseCodeBurnMonitor.status(report: report, issue: nil,
                                                    thresholdTokens: 4_000_000),
                        .belowThreshold(totalTokens: 3_000_000))
@@ -78,7 +90,7 @@ final class MuseCodeBurnMonitorTests: XCTestCase {
         let report = report(total: 5_000_000, contributor: 4_000_000)
         guard case .warning(let alert) = MuseCodeBurnMonitor.status(
             report: report, issue: nil, thresholdTokens: 4_000_000) else {
-            return XCTFail("an over-threshold mixed window is a warning state")
+            return XCTFail("an over-threshold window with a standard session is a warning state")
         }
         XCTAssertEqual(alert.totalTokens, 5_000_000)
     }

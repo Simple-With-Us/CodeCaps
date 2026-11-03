@@ -47,11 +47,11 @@ final class MuseCodePluginTests: XCTestCase {
 
     func testAlertKindsHaveStableIdentifiersAndShipEnabled() {
         XCTAssertEqual(UsageAlertKind.museCodeBurn.rawValue, "museCodeBurn")
-        XCTAssertEqual(UsageAlertKind.museCodeContributorBelow100.rawValue,
-                       "museCodeContributorBelow100")
+        XCTAssertEqual(UsageAlertKind.museCodeStandardSession.rawValue,
+                       "museCodeStandardSession")
         let manager = ResetAlarmManager(defaults: defaults)
         XCTAssertTrue(manager.preferences[.museCodeBurn].enabled)
-        XCTAssertTrue(manager.preferences[.museCodeContributorBelow100].enabled)
+        XCTAssertTrue(manager.preferences[.museCodeStandardSession].enabled)
     }
 
     // MARK: - Monitor glue
@@ -66,31 +66,51 @@ final class MuseCodePluginTests: XCTestCase {
         return (model, spy)
     }
 
+    /// A reading whose window totals `total` tokens, `contributor` of them
+    /// on a contributor session; the rest, when any, sit on a standard
+    /// session.  Callers may pass explicit observations instead — the bridge
+    /// tests do — in which case they are used as given.
     private func result(total: Int, contributor: Int,
-                        observations: [MuseCodeSessionObservation] = []) -> MuseCodeSessionResult {
-        var models = [MuseCodeModelUsage(modelId: "muse-spark-1.3-contributor",
-                                          tokens: contributor, segmentCount: 1, sessionCount: 1)]
+                        observations: [MuseCodeSessionObservation]? = nil) -> MuseCodeSessionResult {
+        var models: [MuseCodeModelUsage] = []
+        var derived: [MuseCodeSessionObservation] = []
+        if contributor > 0 {
+            models.append(MuseCodeModelUsage(modelId: "muse-spark-1.3-contributor",
+                                              tokens: contributor, segmentCount: 1, sessionCount: 1))
+            derived.append(MuseCodeSessionObservation(
+                sessionId: "s-contributor", snapshotId: "snap-c",
+                modelId: "muse-spark-1.3-contributor", totalTokens: contributor,
+                segmentKey: "seg-c", observedAt: Date()))
+        }
         if total > contributor {
             models.append(MuseCodeModelUsage(modelId: "muse-wonder-1.0", tokens: total - contributor,
                                               segmentCount: 1, sessionCount: 1))
+            derived.append(MuseCodeSessionObservation(
+                sessionId: "s-standard", snapshotId: "snap-s",
+                modelId: "muse-wonder-1.0", totalTokens: total - contributor,
+                segmentKey: "seg-s", observedAt: Date()))
         }
         let window = MuseCodeWindowUsage(
             windowMinutes: 90, totalTokens: total, contributorTokens: contributor,
             contributorShare: total > 0 ? Double(contributor) / Double(total) : nil,
-            activeSessions: 1, models: models)
+            activeSessions: models.count, models: models)
         return MuseCodeSessionResult(
             report: MuseCodeSessionReport(generatedAt: Date(), windows: [window],
-                                           latestObservations: observations),
+                                           latestObservations: observations ?? derived),
             issue: nil)
     }
 
     func testOverThresholdMixedReadingEmitsBothAlertKinds() {
         let (model, spy) = makeModel()
         model.applyMuseCodeResult(result(total: 5_000_000, contributor: 4_000_000))
-        XCTAssertEqual(spy.events.map(\.kind), [.museCodeBurn, .museCodeContributorBelow100])
+        model.applyMuseCodeResult(result(total: 5_000_000, contributor: 4_000_000))
+        XCTAssertEqual(spy.events.map(\.kind), [.museCodeBurn, .museCodeStandardSession],
+                       "the repeat reading re-fires neither kind: burn is in cooldown, the session is already reported")
         XCTAssertNotNil(model.museCodeBurnAlert)
-        XCTAssertNotNil(model.museCodeContributorAlert)
+        XCTAssertEqual(model.museCodeStandardSessionAlert?.sessionId, "s-standard")
         XCTAssertTrue(spy.events.first?.body.contains("muse-wonder-1.0") == true)
+        XCTAssertTrue(spy.events.last?.body.contains("s-standard") == true,
+                      "the standard-session event names the session")
     }
 
     func testAllContributorReadingEmitsNothing() {
@@ -98,30 +118,53 @@ final class MuseCodePluginTests: XCTestCase {
         model.applyMuseCodeResult(result(total: 9_000_000, contributor: 9_000_000))
         XCTAssertTrue(spy.events.isEmpty)
         XCTAssertNil(model.museCodeBurnAlert)
-        XCTAssertNil(model.museCodeContributorAlert)
+        XCTAssertNil(model.museCodeStandardSessionAlert)
     }
 
-    func testBelowThresholdReadingEmitsOnlyTheContributorKind() {
+    func testBelowThresholdReadingEmitsOnlyTheStandardSessionKind() {
         let (model, spy) = makeModel()
         model.applyMuseCodeResult(result(total: 3_000_000, contributor: 2_000_000))
-        XCTAssertEqual(spy.events.map(\.kind), [.museCodeContributorBelow100],
-                       "the contributor finding is its own event, not a burn side effect")
+        XCTAssertEqual(spy.events.map(\.kind), [.museCodeStandardSession],
+                       "the standard-session finding is its own event, not a burn side effect")
         XCTAssertNil(model.museCodeBurnAlert)
-        XCTAssertNotNil(model.museCodeContributorAlert)
+        XCTAssertNotNil(model.museCodeStandardSessionAlert)
     }
 
-    func testContributorEventIsEdgeTriggeredAndRearmsOnRecovery() {
+    func testStandardSessionEventFiresOnSwitchAndRefiresAfterRecovery() {
         let (model, spy) = makeModel()
-        model.applyMuseCodeResult(result(total: 5_000_000, contributor: 4_000_000))
-        model.applyMuseCodeResult(result(total: 5_000_000, contributor: 4_000_000))
-        XCTAssertEqual(spy.events.filter { $0.kind == .museCodeContributorBelow100 }.count, 1,
-                       "a continuing finding does not re-fire")
-        XCTAssertEqual(spy.events.filter { $0.kind == .museCodeBurn }.count, 1,
-                       "the burn alert is inside its cooldown")
-        model.applyMuseCodeResult(result(total: 5_000_000, contributor: 5_000_000))
-        model.applyMuseCodeResult(result(total: 5_000_000, contributor: 4_000_000))
-        XCTAssertEqual(spy.events.filter { $0.kind == .museCodeContributorBelow100 }.count, 2,
-                       "recovery to 100% contributor re-arms the finding")
+        func reading(modelId: String) -> MuseCodeSessionResult {
+            let observation = MuseCodeSessionObservation(
+                sessionId: "s1", snapshotId: "snap", modelId: modelId,
+                totalTokens: 100, segmentKey: "seg", observedAt: Date())
+            return result(total: 100,
+                          contributor: modelId.hasSuffix("-contributor") ? 100 : 0,
+                          observations: [observation])
+        }
+        model.applyMuseCodeResult(reading(modelId: "muse-spark-1.3-contributor"))
+        XCTAssertTrue(spy.events.isEmpty)
+        model.applyMuseCodeResult(reading(modelId: "muse-wonder-1.0"))
+        model.applyMuseCodeResult(reading(modelId: "muse-wonder-1.0"))
+        XCTAssertEqual(spy.events.filter { $0.kind == .museCodeStandardSession }.count, 1,
+                       "the switch fires once; staying on the standard model does not refire")
+        model.applyMuseCodeResult(reading(modelId: "muse-spark-1.3-contributor"))
+        model.applyMuseCodeResult(reading(modelId: "muse-wonder-1.0"))
+        XCTAssertEqual(spy.events.filter { $0.kind == .museCodeStandardSession }.count, 2,
+                       "returning to a contributor model re-arms the session")
+        XCTAssertEqual(model.museCodeStandardSessionAlert?.sessionId, "s1")
+    }
+
+    func testStandardSessionStateSurvivesModelRecreation() {
+        let (model, spy) = makeModel()
+        model.applyMuseCodeResult(result(total: 3_000_000, contributor: 2_000_000))
+        XCTAssertEqual(spy.events.filter { $0.kind == .museCodeStandardSession }.count, 1)
+        // A fresh model over the same defaults stands in for an app
+        // relaunch: the persisted detector state must keep the already
+        // reported standard session from firing again.
+        let (relaunched, relaunchedSpy) = makeModel()
+        relaunched.applyMuseCodeResult(result(total: 3_000_000, contributor: 2_000_000))
+        XCTAssertTrue(relaunchedSpy.events.isEmpty,
+                      "the standard session was already reported before the relaunch")
+        XCTAssertNil(relaunched.museCodeStandardSessionAlert)
     }
 
     func testDisabledAlertsEmitNothing() {
@@ -130,6 +173,7 @@ final class MuseCodePluginTests: XCTestCase {
         model.applyMuseCodeResult(result(total: 5_000_000, contributor: 4_000_000))
         XCTAssertTrue(spy.events.isEmpty)
         XCTAssertNil(model.museCodeBurnAlert)
+        XCTAssertNil(model.museCodeStandardSessionAlert)
     }
 
     // MARK: - Bridge

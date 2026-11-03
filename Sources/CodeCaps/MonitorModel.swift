@@ -363,7 +363,10 @@ final class MonitorModel: ObservableObject {
     /// The alerts the current reading produces.  Both stay visible on the
     /// plugin page whether or not their delivery is inside a cooldown.
     @Published private(set) var museCodeBurnAlert: MuseCodeBurnMonitor.BurnAlert?
-    @Published private(set) var museCodeContributorAlert: MuseCodeBurnMonitor.ContributorAlert?
+    /// The most recent standard-session event the detector fired.  Unlike
+    /// the burn alert this is an event, not a state: it stays on the page
+    /// (with its observed time in the body) until a newer event replaces it.
+    @Published private(set) var museCodeStandardSessionAlert: MuseCodeStandardSessionEvent?
     @Published private(set) var museCodeBridgeStatus: String?
     /// Token threshold for the burn alert in the trailing 90-minute window.
     /// A per-user tunable, so it stays in UserDefaults like the burn-rate
@@ -384,7 +387,7 @@ final class MonitorModel: ObservableObject {
                 if let museCodeReport { evaluateMuseCodeAlerts(report: museCodeReport) }
             } else {
                 museCodeBurnAlert = nil
-                museCodeContributorAlert = nil
+                museCodeStandardSessionAlert = nil
             }
         }
     }
@@ -632,7 +635,14 @@ final class MonitorModel: ObservableObject {
     var museCodePublishForTesting: (@MainActor ([[String: Any]], URL, String?) async throws -> MuseCodeIngestSummary)?
     var museCodeTokenReadForTesting: (@MainActor () async -> String?)?
     private var lastMuseCodeBurnAlertAt: Double = 0
-    private var museCodeContributorBelow100Active = false
+    /// The standard-session detector's tracked state, persisted across
+    /// launches with the same JSON-in-UserDefaults pattern as the bridge
+    /// baselines, so a session already reported does not refire after a
+    /// restart.  An earlier build persisted a
+    /// `museCodeContributorBelow100Active` bool for the share-based edge
+    /// trigger; that key is abandoned unread.
+    private var museCodeStandardSessionDetector = MuseCodeStandardSessionDetector()
+    private static let museCodeDetectorKey = "museCodeStandardSessionDetector"
     private var museCodeRequest: Task<Void, Never>?
     private let museCodePoster = MuseCodeSessionPoster()
     var exhaustionNotificationForTesting: ((String, String) -> Void)?
@@ -782,7 +792,10 @@ final class MonitorModel: ObservableObject {
         museCodeBurnAlertsEnabled = defaults.object(forKey: "museCodeBurnAlertsEnabled") as? Bool ?? true
         museCodeUsageBridgeEnabled = defaults.bool(forKey: "museCodeUsageBridgeEnabled")
         lastMuseCodeBurnAlertAt = defaults.double(forKey: "museCodeBurnLastSent")
-        museCodeContributorBelow100Active = defaults.bool(forKey: "museCodeContributorBelow100Active")
+        if let data = defaults.data(forKey: Self.museCodeDetectorKey),
+           let saved = try? JSONDecoder().decode(MuseCodeStandardSessionDetector.self, from: data) {
+            museCodeStandardSessionDetector = saved
+        }
 
         alarmManager = ResetAlarmManager(defaults: defaults)
 
@@ -3108,7 +3121,7 @@ final class MonitorModel: ObservableObject {
             museCodeReport = nil
             museCodeIssue = nil
             museCodeBurnAlert = nil
-            museCodeContributorAlert = nil
+            museCodeStandardSessionAlert = nil
             return
         }
         if museCodeReadForTesting == nil,
@@ -3139,7 +3152,7 @@ final class MonitorModel: ObservableObject {
         museCodeIssue = result.issue
         guard let report = result.report else {
             museCodeBurnAlert = nil
-            museCodeContributorAlert = nil
+            museCodeStandardSessionAlert = nil
             return
         }
         evaluateMuseCodeAlerts(report: report)
@@ -3151,7 +3164,7 @@ final class MonitorModel: ObservableObject {
     private func evaluateMuseCodeAlerts(report: MuseCodeSessionReport) {
         guard museCodeBurnAlertsEnabled else {
             museCodeBurnAlert = nil
-            museCodeContributorAlert = nil
+            museCodeStandardSessionAlert = nil
             return
         }
         let burn = MuseCodeBurnMonitor.evaluateBurn(report: report,
@@ -3166,24 +3179,30 @@ final class MonitorModel: ObservableObject {
                 identifier: "codecaps.musecode.burn", occurredAt: report.generatedAt))
         }
         // The contributor finding is its own alert kind, independent of the
-        // burn threshold: it fires once when standard models appear and
-        // re-arms only when contributor share returns to 100%, so a channel
-        // that subscribes to the finding itself (the planned SMS channel is
-        // the expected one) never has to piggyback on the burn alert.
-        let contributor = MuseCodeBurnMonitor.evaluateContributor(report: report)
-        museCodeContributorAlert = contributor
-        if let contributor {
-            if !museCodeContributorBelow100Active {
-                museCodeContributorBelow100Active = true
-                defaults.set(true, forKey: "museCodeContributorBelow100Active")
-                alertDispatcher.emit(CodeCapsAlertEvent(
-                    kind: .museCodeContributorBelow100, title: contributor.title,
-                    body: contributor.body, identifier: "codecaps.musecode.contributor",
-                    occurredAt: report.generatedAt))
-            }
-        } else if museCodeContributorBelow100Active {
-            museCodeContributorBelow100Active = false
-            defaults.set(false, forKey: "museCodeContributorBelow100Active")
+        // burn threshold, and it is an event, not a share: the detector
+        // fires once when a session starts on a standard model or switches
+        // to one, and re-arms per session when it returns to a contributor
+        // model, so a channel that subscribes to the finding itself (the
+        // planned SMS channel is the expected one) never has to piggyback
+        // on the burn alert.  Each event carries its own notification
+        // identifier, so two sessions' events never replace each other.
+        let events = museCodeStandardSessionDetector.observe(
+            report.latestObservations.map(MuseCodeSessionModelObservation.init))
+        saveMuseCodeDetectorState()
+        if let latest = events.last {
+            museCodeStandardSessionAlert = latest
+        }
+        for event in events {
+            alertDispatcher.emit(CodeCapsAlertEvent(
+                kind: .museCodeStandardSession, title: event.title, body: event.body,
+                identifier: "codecaps.musecode.standard-session.\(event.sessionId)",
+                occurredAt: event.observedAt))
+        }
+    }
+
+    private func saveMuseCodeDetectorState() {
+        if let data = try? JSONEncoder().encode(museCodeStandardSessionDetector) {
+            defaults.set(data, forKey: Self.museCodeDetectorKey)
         }
     }
 

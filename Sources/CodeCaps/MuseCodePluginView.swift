@@ -78,7 +78,7 @@ struct MuseCodeMonitorPage: View {
                             .background(Theme.warning, in: Capsule())
                     }
                 }
-                Text("Deterministic monitoring of Muse token burn and contributor model share on this Mac.")
+                Text("Deterministic monitoring of Muse token burn and standard-model sessions on this Mac.")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -99,8 +99,8 @@ struct MuseCodeMonitorPage: View {
                 }
                 if let alert = model.museCodeBurnAlert {
                     row("Burn Alert", alert.body)
-                } else if let alert = model.museCodeContributorAlert {
-                    row("Contributor Alert", alert.body)
+                } else if let alert = model.museCodeStandardSessionAlert {
+                    row("Standard Session Alert", alert.body)
                 }
             }
             .padding(16)
@@ -199,9 +199,9 @@ struct MuseCodeMonitorPage: View {
                             in: 100_000...50_000_000, step: 100_000)
                         .labelsHidden()
                 }
-                Text("Two alert kinds: museCodeBurn fires when burn passes the threshold on standard models."
+                Text("Two alert kinds: museCodeBurn fires when burn passes the threshold while a session is on a standard model."
                     + sentenceGap
-                    + "museCodeContributorBelow100 fires on its own when a standard model handles any tokens, whatever the burn rate.")
+                    + "museCodeStandardSession fires on its own the moment a session starts on, or switches to, a standard model, whatever the burn rate.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
