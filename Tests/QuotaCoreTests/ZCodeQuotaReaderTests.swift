@@ -83,6 +83,26 @@ final class ZCodeQuotaReaderTests: XCTestCase {
         XCTAssertEqual(result.issues["zcode"], "ZCode returned no readable quota.")
     }
 
+    func testMissingLimitsKeyReportsNoReadableQuota() async {
+        // A 200 envelope whose data omits limits (or mistypes it) is a
+        // malformed payload, not a truthful empty account.
+        let missing = await read(#"{"code":200,"data":{}}"#)
+        XCTAssertTrue(missing.windows.isEmpty)
+        XCTAssertEqual(missing.issues["zcode"], "ZCode returned no readable quota.")
+        let mistyped = await read(#"{"code":200,"data":{"limits":"none"}}"#)
+        XCTAssertTrue(mistyped.windows.isEmpty)
+        XCTAssertEqual(mistyped.issues["zcode"], "ZCode returned no readable quota.")
+    }
+
+    func testCancellationIsNotReportedAsTransportFailure() async {
+        let result = await ZCodeQuotaReader(
+            now: { Date(timeIntervalSince1970: 0) },
+            credentials: { ["oauth:zai:access_token": "tok"] },
+            fetch: { _ in throw CancellationError() }
+        ).read()
+        XCTAssertEqual(result.issues["zcode"], "ZCode quota refresh was cancelled.")
+    }
+
     func testRejectedSessionIsAnIssue() async {
         let result = await read("{}", status: 401)
         XCTAssertTrue(result.windows.isEmpty)

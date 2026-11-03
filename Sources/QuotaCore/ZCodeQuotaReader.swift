@@ -50,6 +50,10 @@ public struct ZCodeQuotaReader: Sendable {
                 let result: ZCodeHTTPPayload
                 do {
                     result = try await Self.fetchQuota(url: candidate.url, token: token, fetch: fetch)
+                } catch is CancellationError {
+                    // Cooperative cancellation is not a transport failure;
+                    // rethrow so the outer catch reports the cancellation.
+                    throw CancellationError()
                 } catch {
                     // One unreachable endpoint must not mask a healthy second
                     // account.
@@ -69,8 +73,10 @@ public struct ZCodeQuotaReader: Sendable {
                     // A 200 envelope with an empty limits array is a truthful
                     // account state (no quota windows on this plan), not a
                     // parse failure; say so instead of claiming unreadability.
-                    let rawLimits = data["limits"] as? [[String: Any]] ?? []
-                    let message = rawLimits.isEmpty
+                    let rawLimits = data["limits"] as? [[String: Any]]
+                    // Only an observed empty array is the truthful empty
+                    // state; a missing or mistyped limits value is unreadable.
+                    let message = (rawLimits?.isEmpty == true)
                         ? "ZCode returned no quota windows for this account."
                         : "ZCode returned no readable quota."
                     return LocalQuotaResult(issues: ["zcode": message])

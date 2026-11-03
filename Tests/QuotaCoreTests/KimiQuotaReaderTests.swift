@@ -55,6 +55,22 @@ final class KimiQuotaReaderTests: XCTestCase {
         XCTAssertTrue(result.issues.isEmpty)
     }
 
+    func testCancellationIsNotReportedAsTransportFailure() async {
+        let result = await KimiQuotaReader(
+            now: { Date(timeIntervalSince1970: 0) },
+            accessToken: { "tok" },
+            fetch: { _ in throw CancellationError() }
+        ).read()
+        XCTAssertEqual(result.issues["kimi"], "Kimi quota refresh was cancelled.")
+    }
+
+    func testIntRejectsOutOfRangeAndFractionalValues() {
+        XCTAssertNil(KimiQuotaReader.int(pow(2.0, 63.0)))
+        XCTAssertNil(KimiQuotaReader.int(5.5))
+        XCTAssertEqual(KimiQuotaReader.int(5.0), 5)
+        XCTAssertEqual(KimiQuotaReader.int(0.0), 0)
+    }
+
     func testRejectedSessionIsAnIssue() async {
         let result = await read("{}", status: 401)
         XCTAssertTrue(result.windows.isEmpty)

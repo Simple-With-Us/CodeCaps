@@ -48,6 +48,10 @@ public struct KimiQuotaReader: Sendable {
                 let result: KimiHTTPPayload
                 do {
                     result = try await Self.fetchUsage(url: url, token: token, fetch: fetch)
+                } catch is CancellationError {
+                    // Cooperative cancellation is not a transport failure;
+                    // rethrow so the outer catch reports the cancellation.
+                    throw CancellationError()
                 } catch {
                     // One unreachable host must not mask a healthy second one.
                     sawTransportError = true
@@ -325,10 +329,11 @@ private extension KimiQuotaReader {
         return number.doubleValue
     }
 
-    static func int(_ value: Any?) -> Int? {
+    internal static func int(_ value: Any?) -> Int? {
         guard let number = number(value), number.isFinite,
-              number >= Double(Int.min), number <= Double(Int.max) else { return nil }
-        return Int(number)
+              number >= Double(Int.min), number <= Double(Int.max),
+              let exact = Int(exactly: number) else { return nil }
+        return exact
     }
 }
 
