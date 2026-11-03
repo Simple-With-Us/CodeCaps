@@ -652,6 +652,7 @@ final class MonitorModel: ObservableObject {
     var museCodeTokenSaveForTesting: (@MainActor (String) async throws -> Void)?
     var museCodeTokenDeleteForTesting: (@MainActor () async throws -> Void)?
     var museCodeTokenReauthorizeForTesting: (@MainActor () async -> String?)?
+    var museCodeAlertSynchronizeForTesting: (@MainActor (String) -> Bool)?
     private var museCodeBridgeGeneration: UInt64 = 0
     private var museCodeBridgeTask: Task<Void, Never>?
     private var museCodePendingBridgeReport: MuseCodeSessionReport?
@@ -3235,12 +3236,13 @@ final class MonitorModel: ObservableObject {
         museCodeBurnAlert = burn
         if let burn,
            now.timeIntervalSince1970 - lastMuseCodeBurnAlertAt >= MuseCodeBurnMonitor.alertCooldown {
-            lastMuseCodeBurnAlertAt = now.timeIntervalSince1970
-            defaults.set(lastMuseCodeBurnAlertAt, forKey: "museCodeBurnLastSent")
-            guard defaults.synchronize() else { return }
-            alertDispatcher.emit(CodeCapsAlertEvent(
-                kind: .museCodeBurn, title: burn.title, body: burn.body,
-                identifier: "codecaps.musecode.burn." + UUID().uuidString, occurredAt: report.generatedAt))
+            let candidateSentAt = now.timeIntervalSince1970
+            if saveMuseCodeAlertState(candidateSentAt, key: "museCodeBurnLastSent") {
+                lastMuseCodeBurnAlertAt = candidateSentAt
+                alertDispatcher.emit(CodeCapsAlertEvent(
+                    kind: .museCodeBurn, title: burn.title, body: burn.body,
+                    identifier: "codecaps.musecode.burn." + UUID().uuidString, occurredAt: report.generatedAt))
+            }
         }
         // The contributor finding is its own alert kind, independent of the
         // burn threshold, and it is an event, not a share: the detector
@@ -3250,9 +3252,11 @@ final class MonitorModel: ObservableObject {
         // planned SMS channel is the expected one) never has to piggyback
         // on the burn alert.  Each event carries its own notification
         // identifier, so two sessions' events never replace each other.
-        let events = museCodeStandardSessionDetector.observe(
-            report.currentModelObservations)
-        guard saveMuseCodeDetectorState() else { return }
+        var candidateDetector = museCodeStandardSessionDetector
+        let events = candidateDetector.observe(report.currentModelObservations)
+        guard let data = try? JSONEncoder().encode(candidateDetector),
+              saveMuseCodeAlertState(data, key: Self.museCodeDetectorKey) else { return }
+        museCodeStandardSessionDetector = candidateDetector
         if let latest = events.last {
             museCodeStandardSessionAlert = latest
         }
@@ -3264,10 +3268,18 @@ final class MonitorModel: ObservableObject {
         }
     }
 
-    private func saveMuseCodeDetectorState() -> Bool {
-        guard let data = try? JSONEncoder().encode(museCodeStandardSessionDetector) else { return false }
-        defaults.set(data, forKey: Self.museCodeDetectorKey)
-        return defaults.synchronize()
+    /// Failed persistence leaves both the live detector/throttle and the cached
+    /// defaults at their previous state, so a later poll can attempt the event.
+    private func saveMuseCodeAlertState(_ value: Any, key: String) -> Bool {
+        let previous = defaults.object(forKey: key)
+        defaults.set(value, forKey: key)
+        let saved = museCodeAlertSynchronizeForTesting?(key) ?? defaults.synchronize()
+        guard saved else {
+            if let previous { defaults.set(previous, forKey: key) }
+            else { defaults.removeObject(forKey: key) }
+            return false
+        }
+        return true
     }
 
     /// One worker plans, posts, and commits baselines in order.

@@ -58,11 +58,18 @@ final class PlatformLogoResourceTests: XCTestCase {
         let kimiStandard = try XCTUnwrap(PlatformLogoImage.load(providerKey: "kimi", style: .standard))
         XCTAssertFalse(kimiStandard.isTemplate, "Kimi Standard must preserve its supplied blue artwork")
         let colorPixels = try XCTUnwrap(kimiStandard.representations.first as? NSBitmapImageRep)
-        let bluePixel = (0..<colorPixels.pixelsHigh).lazy.flatMap { y in
-            (0..<colorPixels.pixelsWide).lazy.compactMap { x in
-                colorPixels.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB)
+        var bluePixel: NSColor?
+        pixelRows: for y in 0..<colorPixels.pixelsHigh {
+            for x in 0..<colorPixels.pixelsWide {
+                guard let color: NSColor = colorPixels.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else {
+                    continue
+                }
+                if color.alphaComponent > 0.95 && color.blueComponent > color.redComponent * 1.5 {
+                    bluePixel = color
+                    break pixelRows
+                }
             }
-        }.first { $0.alphaComponent > 0.95 && $0.blueComponent > $0.redComponent * 1.5 }
+        }
         XCTAssertNotNil(bluePixel, "Kimi Standard must contain the supplied blue mark")
         XCTAssertTrue(try XCTUnwrap(PlatformLogoImage.load(providerKey: "kimi", style: .template)).isTemplate)
 

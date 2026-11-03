@@ -35,6 +35,12 @@ final class TwilioSMSClientTests: XCTestCase {
         XCTAssertFalse(form.contains("fixture-secret"))
     }
 
+    func testFormEncodingEscapesUnicodeAsUTF8Bytes() throws {
+        let request = try TwilioSMSClient.request(title: "café ☃️", body: "naïve", credentials: credentials)
+        let form = try XCTUnwrap(String(data: try XCTUnwrap(request.httpBody), encoding: .utf8))
+        XCTAssertTrue(form.contains("CodeCaps%3A%20caf%C3%A9%20%E2%98%83%EF%B8%8F%0Ana%C3%AFve"))
+    }
+
     func testMessageIsBoundedAndInvalidConfigurationNeverCreatesARequest() throws {
         let request = try TwilioSMSClient.request(title: String(repeating: "x", count: 500), body: "body", credentials: credentials)
         let form = String(data: request.httpBody!, encoding: .utf8)!
