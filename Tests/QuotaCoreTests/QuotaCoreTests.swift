@@ -107,13 +107,14 @@ final class QuotaCoreTests: XCTestCase {
     }
 
     func testPlatformSectionsHiddenProvidersStillFilteredWithManifest() {
-        // The `hidden` set drops retired keys even when the manifest names them.
+        // The `hidden` set drops retired keys even when the server names them.
+        // (Kimi used to be the example here; it is a live provider again.)
         let groups = [
-            QuotaProviderGroup(provider: "kimi", providerLabel: "Kimi", via: nil, expected: true, windows: [], sortOrder: 0, iconHint: nil, terms: nil)
+            QuotaProviderGroup(provider: "windsurf", providerLabel: "Windsurf", via: nil, expected: true, windows: [], sortOrder: 0, iconHint: nil, terms: nil)
         ]
         let response = QuotaResponse(generatedAt: "", windows: [], providerGroups: groups)
         let sections = response.platformSections(now: now)
-        XCTAssertFalse(sections.contains { $0.providerKey == "kimi" })
+        XCTAssertFalse(sections.contains { $0.providerKey == "windsurf" })
     }
 
     func testPlatformSectionsFutureKeyStillAppearsAfterManifest() {
@@ -153,7 +154,7 @@ final class QuotaCoreTests: XCTestCase {
     }
 
     func testUnusedPlatformsStayHiddenEvenWhenServerReportsThem() {
-        let hidden = ["kimi", "windsurf", "deepseek", "gemini-cli"]
+        let hidden = ["windsurf", "deepseek", "gemini-cli"]
         let windows = hidden.map { key in
             QuotaWindow(id: key, provider: key, label: "Quota", remainingPercent: 30, occurredAt: "2023-11-14T22:13:20Z")
         }
