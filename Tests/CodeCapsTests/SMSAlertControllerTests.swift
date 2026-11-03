@@ -112,6 +112,29 @@ final class SMSAlertControllerTests: XCTestCase {
         XCTAssertEqual(transport.count, 0)
     }
 
+    func testForgetCancelsAnInFlightSMSRequest() async {
+        let (defaults, suite) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let vault = SMSCredentialFixture()
+        let requestStarted = expectation(description: "SMS transport started")
+        let transport = SMSBlockingTransportFixture { requestStarted.fulfill() }
+        let coordinator = SMSAlertCoordinator(persistence: .userDefaults(defaults, key: "fixture-history"),
+                                              client: transport.client)
+        let controller = SMSAlertController(defaults: defaults, credentialAccess: vault.access, coordinator: coordinator)
+        _ = await controller.saveSetup(configuration: credentials.configuration, apiKeySecret: credentials.apiKeySecret)
+        controller.preferences["museCodeBurn"] = true
+        let delivery = controller.deliver(kind: "museCodeBurn", title: "Fixture", body: "Fixture", eventID: "event")
+        await fulfillment(of: [requestStarted], timeout: 1)
+
+        await controller.forgetSetup()
+        await delivery?.value
+
+        XCTAssertTrue(transport.wasCancelled)
+        XCTAssertFalse(transport.completed)
+        XCTAssertFalse(controller.hasSavedSetup)
+        XCTAssertEqual(controller.status, "Twilio setup forgotten.")
+    }
+
     func testForgetClearsSetupButKeepsDedupeHistoryAndReauthorizationIsExplicit() async {
         let (defaults, suite) = makeDefaults()
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -139,6 +162,50 @@ private final class SMSCredentialFixture {
         .init(load: { self.loads += 1; return self.credentials },
               save: { self.credentials = $0 }, clear: { self.credentials = nil },
               reauthorize: { self.reauthorizations += 1; return self.credentials })
+    }
+}
+
+private final class SMSBlockingTransportFixture: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancellationObserved = false
+    private var requestCompleted = false
+    private let onStart: @Sendable () -> Void
+
+    init(onStart: @escaping @Sendable () -> Void) { self.onStart = onStart }
+
+    var wasCancelled: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return cancellationObserved
+    }
+
+    var completed: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return requestCompleted
+    }
+
+    private func markCancelled() {
+        lock.lock(); defer { lock.unlock() }
+        cancellationObserved = true
+    }
+
+    private func markCompleted() {
+        lock.lock(); defer { lock.unlock() }
+        requestCompleted = true
+    }
+
+    var client: TwilioSMSClient {
+        TwilioSMSClient(transport: { [self] request in
+            onStart()
+            do {
+                try await Task.sleep(nanoseconds: 30_000_000_000)
+                markCompleted()
+            } catch {
+                markCancelled()
+                throw error
+            }
+            return (Data(#"{"sid":"SMdddddddddddddddddddddddddddddddd","status":"queued"}"#.utf8),
+                    HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!)
+        })
     }
 }
 
