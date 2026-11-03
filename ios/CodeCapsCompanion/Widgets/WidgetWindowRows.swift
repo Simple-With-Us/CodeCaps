@@ -399,7 +399,7 @@ struct PlanGrid: View {
                         )
                     }
                     }
-                    if let detailScope {
+                    if let detailScope, platform.hasModelDetails {
                         Button(intent: ShowWidgetPlanDetailIntent(planID: platform.id, overviewKey: detailScope)) {
                             Image(systemName: "info.circle").font(.system(size: 11))
                         }

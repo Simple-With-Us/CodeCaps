@@ -6,14 +6,19 @@ final class ZCodeQuotaReaderTests: XCTestCase {
     private func read(
         _ json: String,
         status: Int = 200,
-        store: [String: String]? = ["oauth:zai:access_token": "tok"]
+        credential: ZCodeQuotaCredential? = .init(region: .zAI, apiKey: "fixture-api-key")
     ) async -> LocalQuotaResult {
         await ZCodeQuotaReader(
             now: { Date(timeIntervalSince1970: 0) },
-            credentials: { store ?? [:] },
-            fetch: { _ in
+            credential: { credential },
+            fetch: { request in
+                XCTAssertEqual(request.url, credential?.region.quotaURL)
+                let authorization = request.value(forHTTPHeaderField: "authorization")
+                if status == 401, let key = credential?.apiKey {
+                    XCTAssertTrue(authorization == key || authorization == "Bearer " + key)
+                } else { XCTAssertEqual(authorization, credential?.apiKey) }
                 let response = HTTPURLResponse(
-                    url: URL(string: "https://api.z.ai/api/monitor/usage/quota/limit")!,
+                    url: request.url!,
                     statusCode: status, httpVersion: nil, headerFields: nil
                 )!
                 return (Data(json.utf8), response)
@@ -27,7 +32,7 @@ final class ZCodeQuotaReaderTests: XCTestCase {
         XCTAssertEqual(result.windows.count, 2)
         let fiveHour = result.windows[0]
         XCTAssertEqual(fiveHour.providerKey, "zcode")
-        XCTAssertEqual(fiveHour.providerLabel, "ZCode")
+        XCTAssertEqual(fiveHour.providerLabel, "Z.ai")
         XCTAssertEqual(fiveHour.label, "5-hour limit")
         XCTAssertEqual(fiveHour.window, "5h")
         // percentage is the USED share; the row shows what remains.
@@ -56,16 +61,16 @@ final class ZCodeQuotaReaderTests: XCTestCase {
         XCTAssertTrue(window.skip)
     }
 
-    func testMissingCredentialIsSilent() async {
-        let result = await read("{}", store: nil)
+    func testMissingCredentialReportsSetupNeededWithoutFetching() async {
+        let result = await read("{}", credential: nil)
         XCTAssertTrue(result.windows.isEmpty)
-        XCTAssertTrue(result.issues.isEmpty)
+        XCTAssertTrue(result.issues["zcode"]?.contains("setup is needed") == true)
     }
 
     func testNoPlanMessageIsAnIssue() async {
         let result = await read(#"{"code":500,"msg":"当前用户不存在coding plan"}"#)
         XCTAssertTrue(result.windows.isEmpty)
-        XCTAssertEqual(result.issues["zcode"], "No GLM Coding Plan is active on this ZCode account.")
+        XCTAssertEqual(result.issues["zcode"], "No GLM Coding Plan is active on this account.")
     }
 
     func testEmptyLimitsReportNoWindowsForAccount() async {
@@ -74,13 +79,13 @@ final class ZCodeQuotaReaderTests: XCTestCase {
         // read as an empty account, never as "unavailable" or a full quota.
         let result = await read(#"{"code":200,"data":{"limits":[]}}"#)
         XCTAssertTrue(result.windows.isEmpty)
-        XCTAssertEqual(result.issues["zcode"], "ZCode returned no quota windows for this account.")
+        XCTAssertEqual(result.issues["zcode"], "Z.ai returned no quota windows for this account.")
     }
 
     func testUnparseableLimitsReportNoReadableQuota() async {
         let result = await read(#"{"code":200,"data":{"limits":[{"unit":6}]}}"#)
         XCTAssertTrue(result.windows.isEmpty)
-        XCTAssertEqual(result.issues["zcode"], "ZCode returned no readable quota.")
+        XCTAssertEqual(result.issues["zcode"], "Z.ai returned no readable quota.")
     }
 
     func testMissingLimitsKeyReportsNoReadableQuota() async {
@@ -88,55 +93,51 @@ final class ZCodeQuotaReaderTests: XCTestCase {
         // malformed payload, not a truthful empty account.
         let missing = await read(#"{"code":200,"data":{}}"#)
         XCTAssertTrue(missing.windows.isEmpty)
-        XCTAssertEqual(missing.issues["zcode"], "ZCode returned no readable quota.")
+        XCTAssertEqual(missing.issues["zcode"], "Z.ai returned no readable quota.")
         let mistyped = await read(#"{"code":200,"data":{"limits":"none"}}"#)
         XCTAssertTrue(mistyped.windows.isEmpty)
-        XCTAssertEqual(mistyped.issues["zcode"], "ZCode returned no readable quota.")
+        XCTAssertEqual(mistyped.issues["zcode"], "Z.ai returned no readable quota.")
     }
 
     func testCancellationIsNotReportedAsTransportFailure() async {
         let result = await ZCodeQuotaReader(
             now: { Date(timeIntervalSince1970: 0) },
-            credentials: { ["oauth:zai:access_token": "tok"] },
+            credential: { .init(region: .zAI, apiKey: "fixture-api-key") },
             fetch: { _ in throw CancellationError() }
         ).read()
-        XCTAssertEqual(result.issues["zcode"], "ZCode quota refresh was cancelled.")
+        XCTAssertEqual(result.issues["zcode"], "Z.ai quota refresh was cancelled.")
     }
 
     func testRejectedSessionIsAnIssue() async {
         let result = await read("{}", status: 401)
         XCTAssertTrue(result.windows.isEmpty)
-        XCTAssertEqual(result.issues["zcode"], "ZCode session was rejected; sign in again in ZCode.")
+        XCTAssertEqual(result.issues["zcode"], "The saved Coding Plan API key was rejected.")
     }
 
     func testEnvelopeFailureWithoutDataIsUnavailable() async {
         let result = await read(#"{"code":500,"msg":"boom"}"#)
         XCTAssertTrue(result.windows.isEmpty)
-        XCTAssertEqual(result.issues["zcode"], "ZCode quota service is unavailable.")
+        XCTAssertEqual(result.issues["zcode"], "Z.ai quota service is unavailable.")
     }
 
-    func testTransportErrorFallsThroughToSecondCredential() async {
-        let result = await ZCodeQuotaReader(
-            now: { Date(timeIntervalSince1970: 0) },
-            credentials: { ["oauth:zai:access_token": "tok", "oauth:bigmodel:access_token": "bm-tok"] },
+    func testTransportFailureNeverSendsTheKeyToAnotherRegion() async {
+        let counter = ZCodeRequestCounter()
+        let result = await ZCodeQuotaReader(credential: { .init(region: .zAI, apiKey: "fixture-api-key") },
             fetch: { request in
-                if request.url?.host == "api.z.ai" { throw URLError(.notConnectedToInternet) }
-                let response = HTTPURLResponse(
-                    url: URL(string: "https://bigmodel.cn/api/monitor/usage/quota/limit")!,
-                    statusCode: 200, httpVersion: nil, headerFields: nil
-                )!
-                return (Data(#"{"code":200,"data":{"level":"max","limits":[{"type":"TOKENS_LIMIT","unit":6,"percentage":5}]}}"#.utf8), response)
-            }
-        ).read()
-        XCTAssertTrue(result.issues.isEmpty)
-        XCTAssertEqual(result.windows.count, 1)
-        XCTAssertEqual(result.windows[0].quotaUnit, "tokens")
+                await counter.increment()
+                XCTAssertEqual(request.url?.host, "api.z.ai")
+                throw URLError(.notConnectedToInternet)
+            }).read()
+        XCTAssertTrue(result.windows.isEmpty)
+        XCTAssertEqual(result.issues["zcode"], "Z.ai quota service is unavailable.")
+        let count = await counter.count
+        XCTAssertEqual(count, 1)
     }
 
-    func testFallsBackToBigModelCredential() async {
+    func testBigModelKeyUsesOnlyItsPairedRegionalEndpoint() async {
         let result = await read(
             #"{"code":200,"data":{"level":"max","limits":[{"type":"TOKENS_LIMIT","unit":6,"percentage":5}]}}"#,
-            store: ["oauth:bigmodel:access_token": "bm-tok"]
+            credential: .init(region: .bigModel, apiKey: "bigmodel-fixture-key")
         )
         XCTAssertEqual(result.windows.count, 1)
         XCTAssertEqual(result.windows[0].quotaUnit, "tokens")
@@ -144,15 +145,48 @@ final class ZCodeQuotaReaderTests: XCTestCase {
     }
     func testURLCancellationDoesNotTryAnotherAuthenticationFormOrAccount() async {
         let counter = ZCodeRequestCounter()
-        let result = await ZCodeQuotaReader(credentials: {
-            ["oauth:zai:access_token": "fixture-token", "oauth:bigmodel:access_token": "other-fixture-token"]
+        let result = await ZCodeQuotaReader(credential: {
+            .init(region: .zAI, apiKey: "fixture-api-key")
         }, fetch: { _ in
             await counter.increment()
             throw URLError(.cancelled)
         }).read()
-        XCTAssertEqual(result.issues["zcode"], "ZCode quota refresh was cancelled.")
+        XCTAssertEqual(result.issues["zcode"], "Z.ai quota refresh was cancelled.")
         let count = await counter.count
         XCTAssertEqual(count, 1)
+    }
+
+    func testDefaultReaderNeedsExplicitSetupAndNeverAttemptsOAuthOrQuotaCalls() async {
+        let result = await ZCodeQuotaReader(fetch: { _ in
+            XCTFail("No explicit Coding Plan key means no request")
+            throw URLError(.badURL)
+        }).read()
+        XCTAssertTrue(result.windows.isEmpty)
+        XCTAssertTrue(result.issues["zcode"]?.contains("setup is needed") == true)
+    }
+
+    func testInvalidSavedKeyCannotReachTransport() async {
+        var invalid = ZCodeQuotaCredential(region: .zAI, apiKey: "fixture-key")
+        invalid.apiKey = "first\nsecond"
+        let saved = invalid
+        let result = await ZCodeQuotaReader(credential: { saved }, fetch: { _ in
+            XCTFail("An invalid saved key must not reach quota transport")
+            throw URLError(.badURL)
+        }).read()
+        XCTAssertTrue(result.windows.isEmpty)
+        XCTAssertTrue(result.issues["zcode"]?.contains("setup is needed") == true)
+    }
+
+    func testRejectedKeyCannotFallBackToAnotherRegion() async {
+        let counter = ZCodeRequestCounter()
+        let result = await ZCodeQuotaReader(credential: { .init(region: .zAI, apiKey: "fixture-api-key") }, fetch: { request in
+            await counter.increment()
+            XCTAssertEqual(request.url?.host, "api.z.ai")
+            return (Data("{}".utf8), HTTPURLResponse(url: request.url!, statusCode: 401, httpVersion: nil, headerFields: nil)!)
+        }).read()
+        let count = await counter.count
+        XCTAssertEqual(count, 2)
+        XCTAssertEqual(result.issues["zcode"], "The saved Coding Plan API key was rejected.")
     }
 
 }

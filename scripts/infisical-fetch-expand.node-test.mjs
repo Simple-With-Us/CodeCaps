@@ -12,14 +12,11 @@ import { isUnresolvedReference, run } from "./infisical-fetch.mjs";
 const REFERENCE = "${prod.global-api-keys.SENTINEL_KEY_ref_3c9e}";
 const RESOLVED = "sentinel-resolved-value-5d1a";
 
-/** Stub Infisical: login succeeds, the list call returns the fixture secrets
- * and records every list URL so a test can assert on the query string. */
+/** Stub Infisical: the list call returns the fixture secrets and records
+ * every list URL so a test can assert on the query string. */
 function stubFetch(vaultSecrets, listUrls = []) {
   return async (url) => {
     const u = String(url);
-    if (u.includes("/api/v1/auth/universal-auth/login")) {
-      return { ok: true, json: async () => ({ accessToken: "test-token", expiresIn: 3600 }) };
-    }
     if (u.includes("/api/v3/secrets/raw")) {
       listUrls.push(u);
       return {
@@ -37,21 +34,17 @@ function baseEnv(githubEnv, names) {
   return {
     INFISICAL_NAMES: names,
     INFISICAL_PROJECT_ID: "proj",
-    INFISICAL_CLIENT_ID: "id",
-    INFISICAL_CLIENT_SECRET: "secret",
+    INFISICAL_SERVICE_TOKEN: "st.test-id.test-secret",
     GITHUB_ENV: githubEnv,
   };
 }
 
-test("the secrets request carries the bearer token from the login", async () => {
+test("the secrets request carries the full scoped service token as its bearer without login", async () => {
   const dir = mkdtempSync(join(tmpdir(), "ops818-fetch-"));
   try {
     const authHeaders = [];
     const stub = async (url, options) => {
       const u = String(url);
-      if (u.includes("/api/v1/auth/universal-auth/login")) {
-        return { ok: true, json: async () => ({ accessToken: "test-token", expiresIn: 3600 }) };
-      }
       if (u.includes("/api/v3/secrets/raw")) {
         authHeaders.push(options && options.headers && options.headers.authorization);
         return { ok: true, json: async () => ({ secrets: [{ secretKey: "FOO", secretValue: RESOLVED }] }) };
@@ -61,7 +54,7 @@ test("the secrets request carries the bearer token from the login", async () => 
     await run({ env: baseEnv(join(dir, "env"), "FOO"), fetchImpl: stub, log: () => {} });
     // A broken token has to fail the request, and a test that ignored the
     // header would not have noticed.
-    assert.deepEqual(authHeaders, ["Bearer test-token"]);
+    assert.deepEqual(authHeaders, ["Bearer st.test-id.test-secret"]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

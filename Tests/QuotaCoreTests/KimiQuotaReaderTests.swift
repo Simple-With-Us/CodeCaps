@@ -144,6 +144,29 @@ final class KimiQuotaReaderTests: XCTestCase {
         XCTAssertNil(KimiQuotaReader.readLocalAccessToken(home: home, environment: [:]), "a CR/LF in the value is not a credential")
     }
 
+    func testConfigTomlCRLFSelectsApprovedKimiKeyAcrossProvidersAndComments() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let lines = [
+            "# provider credentials",
+            "[providers.anthropic]",
+            "type = \"anthropic\"",
+            "base_url = \"https://api.anthropic.com/v1\"",
+            "api_key = \"other-provider-fixture\"",
+            "[providers.\"managed:kimi-code\"]",
+            "type = \"kimi\"",
+            "base_url = \"https://api.kimi.com/coding/v1\"",
+            "# api_key = \"commented-out-fixture\"",
+            "api_key = \"kimi-crlf-fixture\""
+        ]
+        try (lines.joined(separator: "\r\n") + "\r\n").write(
+            to: home.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8
+        )
+
+        XCTAssertEqual(KimiQuotaReader.configToken(root: home), "kimi-crlf-fixture")
+    }
+
     func testConfigTomlRequiresExactKeyAndStripsInlineComment() throws {
         let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)

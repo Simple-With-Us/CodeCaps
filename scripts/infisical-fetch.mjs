@@ -1,10 +1,8 @@
-// Copied from Simple-With-Us/BotFleet scripts/infisical-fetch.mjs, in step with
-// BotFleet's main at b91fa490e7e7 on 2026-10-21, together with
-// .github/actions/infisical-secrets, so the Mac release workflow reads its
-// signing certificate the way BotFleet's release.yml does.  Keep the two copies
-// in step until the fleet has a shared action.
+// Originated from Simple-With-Us/BotFleet scripts/infisical-fetch.mjs and its
+// composite action.  CodeCaps uses direct scoped service-token auth per owner
+// policy; keep the masking and fallback behavior covered by local contract tests.
 //
-// CI-side Infisical fetch: universal-auth login, one bulk secrets list, then
+// CI-side Infisical fetch: direct scoped service-token auth, one bulk list, then
 // per requested name mask + export into $GITHUB_ENV -- falling back to a
 // same-named GH_FALLBACK_<NAME> step env var, warning when a name stays
 // empty everywhere, and failing only for a name listed in `required`.
@@ -36,28 +34,6 @@ function stripTrailingSlash(url) {
   return String(url ?? "").replace(/\/+$/, "");
 }
 
-/** POST .../api/v1/auth/universal-auth/login -- returns the bearer token
- * string only.  Body is built with JSON.stringify, never string
- * interpolation, so a client secret containing a quote cannot break the
- * request shape. */
-export async function loginUniversalAuth({ siteUrl, clientId, clientSecret, fetchImpl = fetch, timeoutMs = 30_000 }) {
-  const res = await fetchImpl(`${siteUrl}/api/v1/auth/universal-auth/login`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ clientId, clientSecret }),
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-  if (!res.ok) {
-    throw new Error(`Infisical login failed: HTTP ${res.status}`);
-  }
-  const body = await res.json();
-  const token = body && body.accessToken;
-  if (!token) {
-    throw new Error("Infisical login response carried no accessToken");
-  }
-  return token;
-}
-
 /** GET .../api/v3/secrets/raw for the whole path in one call -- returns a
  * Map<secretKey, secretValue>.  viewSecretValue is always "true" here; this
  * script only ever runs where values are needed (it exists to populate
@@ -67,7 +43,7 @@ export async function loginUniversalAuth({ siteUrl, clientId, clientSecret, fetc
  * reference such as ${prod.some-folder.NAME} (the Fleet-OPS root, OPS-818) comes
  * back as the referenced value.  With "false" the literal reference string
  * would land in GITHUB_ENV as if it were the credential.  Expanding needs the
- * reading identity to be able to read the referenced folder too. */
+ * scoped service token to read the referenced folder too. */
 export async function listSecretsRaw({ siteUrl, token, projectId, environment, secretPath, fetchImpl = fetch, timeoutMs = 30_000 }) {
   const qs = new URLSearchParams({
     workspaceId: projectId,
@@ -137,7 +113,7 @@ export function writeGithubEnvValue(path, name, value, appendFileImpl = appendFi
 
 /** A value that is still a bare Infisical reference such as
  * ${prod.some-folder.NAME}: the server did not expand it (target missing, or
- * the reading identity cannot read the referenced folder).  Exporting it would
+ * the scoped service token cannot read the referenced folder).  Exporting it would
  * hand a workflow the literal reference string as if it were the credential. */
 export const UNRESOLVED_REFERENCE = /^\$\{[^}]+\}$/;
 
@@ -148,12 +124,15 @@ export function isUnresolvedReference(value) {
 /** Resolves the vault snapshot (empty map when unconfigured or the fetch
  * failed) -- never throws; a failure is reported through `log` and the
  * caller proceeds on GH_FALLBACK_<NAME> alone. */
-async function resolveVaultValues({ siteUrl, projectId, clientId, clientSecret, environment, secretPath, fetchImpl, log }) {
-  if (!projectId || !clientId || !clientSecret) {
+async function resolveVaultValues({ siteUrl, projectId, token, environment, secretPath, fetchImpl, log }) {
+  if (!projectId || !token) {
+    return new Map();
+  }
+  if (!token.startsWith("st.")) {
+    log("::warning::Infisical service token is not configured; using GitHub secret fallbacks only.");
     return new Map();
   }
   try {
-    const token = await loginUniversalAuth({ siteUrl, clientId, clientSecret, fetchImpl });
     return await listSecretsRaw({ siteUrl, token, projectId, environment, secretPath, fetchImpl });
   } catch (err) {
     // Never interpolate the raw error body -- Infisical error payloads have
@@ -172,11 +151,10 @@ export async function run({ env = process.env, fetchImpl = fetch, log = (line) =
   const projectId = env.INFISICAL_PROJECT_ID || "";
   const environment = env.INFISICAL_ENVIRONMENT || "prod";
   const secretPath = env.INFISICAL_SECRET_PATH || "/";
-  const clientId = env.INFISICAL_CLIENT_ID || "";
-  const clientSecret = env.INFISICAL_CLIENT_SECRET || "";
+  const token = env.INFISICAL_SERVICE_TOKEN || "";
   const githubEnvPath = env.GITHUB_ENV || "";
 
-  const vaultValues = await resolveVaultValues({ siteUrl, projectId, clientId, clientSecret, environment, secretPath, fetchImpl, log });
+  const vaultValues = await resolveVaultValues({ siteUrl, projectId, token, environment, secretPath, fetchImpl, log });
 
   const missingRequired = [];
   const unresolved = [];
@@ -198,7 +176,7 @@ export async function run({ env = process.env, fetchImpl = fetch, log = (line) =
     if (isUnresolvedReference(value)) {
       // Name the KEY only -- never the value, even though it is a reference.
       unresolved.push(name);
-      log(`::error::${name} is still an unresolved Infisical secret reference after the ${environment} export; check the target exists and the CI identity can read the referenced folder.`);
+      log(`::error::${name} is still an unresolved Infisical secret reference after the ${environment} export; check the target exists and the scoped service token can read the referenced folder.`);
       continue;
     }
     maskValue(value, log);

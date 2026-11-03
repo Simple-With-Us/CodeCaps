@@ -27,3 +27,15 @@ Only newly detected events enter SMS delivery.  A persistent hashed reservation
 ## Verification
 
 Run swift build and swift test on macOS.  Tests cover reset corrections and scheduled rollovers, quit choices, disabled-reader non-invocation, Muse transition persistence and burn gating, SMS routing with local methods off, Keychain isolation, and durable deduplication.  Tests use private defaults, fake credentials, and injected transports.  No iOS simulator is used.
+
+## Provider Authentication And Optional Infisical
+
+Kimi config fallback selects only an explicit Kimi coding provider with an approved coding URL.  The reader preserves long OAuth and JSON API keys, accepts finite numeric-string counters, and stops fallback after cancellation.
+
+Z.ai / BigModel quota checks use an explicitly saved coding-plan API key, with a region-paired endpoint and separate build-scoped Keychain record.  CodeCaps does not send ZCode OAuth tokens to the coding-plan quota API or create account API credentials.
+
+Infisical remains optional.  Its setup stores multiple labeled Keychain bindings by project, environment, folder, authentication method, and intended read or write use.  Service tokens are sent intact as Bearer credentials; app-local machine identities remain an explicit option.  A write binding must be selected independently and match the active read scope.  Existing single-identity records migrate in memory to read-only bindings.
+
+Release automation uses one scoped read service token for Fleet-OPS prod / and /asc, with no Universal Auth fallback.  Replacement token binding and workflow publication must be verified before release.
+
+Native validation before the companion follow-up: swift build passed; swift test executed 1,563 tests with 10 skipped and zero failures.  The automation contract suite passed 79 tests.
