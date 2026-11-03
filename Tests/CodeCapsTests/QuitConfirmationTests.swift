@@ -4,6 +4,26 @@ import XCTest
 @testable import CodeCaps
 
 final class QuitConfirmationTests: XCTestCase {
+    @MainActor
+    func testOnlyManagedContentWindowsAreSelectedForHiding() {
+        func window(_ style: NSWindow.StyleMask = [.titled]) -> NSWindow {
+            NSWindow(contentRect: .zero, styleMask: style, backing: .buffered, defer: false)
+        }
+        let console = window()
+        let glance = window()
+        let status = window()
+        status.level = .statusBar
+        let popup = window()
+        popup.level = .popUpMenu
+        let system = window([])
+        let unrelated = window()
+        let selected = QuitConfirmationPolicy.windowsToHide(managed: [console, nil, glance, status, popup, system])
+        XCTAssertEqual(selected.map(ObjectIdentifier.init), [console, glance].map(ObjectIdentifier.init))
+        XCTAssertFalse(selected.contains { $0 === unrelated })
+        XCTAssertFalse(console.isVisible, "Selection alone must not show or hide windows")
+        XCTAssertTrue(QuitConfirmationPolicy.shouldShowStatusItem(displayMode: .dock, keepRunningOverride: true))
+    }
+
     func testAlertResponsesChooseTheExpectedQuitAction() {
         XCTAssertEqual(QuitConfirmationChoice(response: .alertFirstButtonReturn), .closeAndKeepRunning)
         XCTAssertEqual(QuitConfirmationChoice(response: .alertSecondButtonReturn), .quit)
