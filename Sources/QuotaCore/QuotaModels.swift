@@ -1006,7 +1006,7 @@ enum QuotaProviders {
 
     // deepseek is retired as a quota provider (no local reader ever existed for it);
     // hidden also drops any server-pulled window that still canonicalizes to it.
-    static let hidden: Set<String> = ["kimi", "windsurf", "deepseek", "gemini-cli"]
+    static let hidden: Set<String> = ["windsurf", "deepseek", "gemini-cli"]
 
     static let expected: [Expected] = [
         Expected(key: "anthropic", label: "Claude", via: nil),
@@ -1020,6 +1020,8 @@ enum QuotaProviders {
         Expected(key: "minimax", label: "MiniMax", via: nil),
         Expected(key: "muse-assist", label: "Muse Assist", via: nil),
         Expected(key: "muse-code", label: "Muse Code", via: nil),
+        Expected(key: "kimi", label: "Kimi", via: nil),
+        Expected(key: "zcode", label: "ZCode", via: nil),
     ]
 
     static func canonicalKey(provider: String, providerKey: String?, via: String?) -> String {
@@ -1054,6 +1056,7 @@ enum QuotaProviders {
             // "no report" while the data sat in the handoff, correctly formed.
             "muse": "muse-assist", "muse-cli": "muse-assist", "muse-sdk": "muse-assist",
             "kimi": "kimi", "moonshot": "kimi", "moonshot-ai": "kimi",
+            "zcode": "zcode", "z.ai": "zcode", "z-ai": "zcode", "zai": "zcode", "glm": "zcode", "glm-coding": "zcode",
             "gemini-cli": "gemini-cli",
             "copilot": "github-copilot", "github-copilot": "github-copilot", "github_copilot": "github-copilot",
             "windsurf": "windsurf", "codeium": "windsurf",

@@ -3300,8 +3300,10 @@ final class MonitorModel: ObservableObject {
         // EXTRA Grok Bot source beside Cursor DashboardService; `source: "gbu"`
         // so Settings can rank/disable it without replacing the Cursor reader.
         async let gbu = GbuQuotaReader().read()
+        async let kimi = KimiQuotaReader().read()
+        async let zcode = ZCodeQuotaReader().read()
         async let antigravity = AntigravitySummaryReader().read()
-        let results = await [primary, cursor, copilot, grokBot, gbu]
+        let results = await [primary, cursor, copilot, grokBot, gbu, kimi, zcode]
         let summary = await antigravity
         var windows = results.flatMap(\.windows)
         var issues = results.reduce(into: [String: String]()) { $0.merge($1.issues) { _, next in next } }
