@@ -13,3 +13,6 @@
 # other rule stays active, and a real credential in this repository is still
 # caught.
 053e42631eaf6389365bbb37dedb2d67143ca2f6:scripts/install-release-secrets-tooling.sh:generic-api-key:38
+
+# The flagged line validates a runtime-supplied secret and contains no secret value.  This exception pins only its commit, path, rule, and line.
+0aeb73d1c51baabd9a26fa13d807b10bb22cc693:Sources/QuotaCore/TwilioSMSClient.swift:generic-api-key:76

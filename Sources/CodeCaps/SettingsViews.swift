@@ -483,7 +483,8 @@ struct SettingsSourcesFleetPage: View {
     private func readerRow(_ reader: ReaderStatus) -> some View {
         let section = model.sections.first { $0.providerKey == reader.providerKey }
         let issue = model.issues[reader.providerKey]
-        let healthy = issue == nil && !(section?.windows.isEmpty ?? true)
+        let optionalEnabled = reader.optionalReaderID.map(model.isOptionalQuotaReaderEnabled) ?? true
+        let healthy = optionalEnabled && issue == nil && !(section?.windows.isEmpty ?? true)
         // A reader whose credential is on this Mac but unreadable by this
         // build gets a button rather than a sentence it cannot act on.
         let needsConsent = model.consentNeeded.contains(reader.providerKey)
@@ -498,12 +499,28 @@ struct SettingsSourcesFleetPage: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 8)
-                Image(systemName: healthy ? "checkmark.circle" : "exclamationmark.triangle")
-                    .font(.system(size: 12))
-                    .foregroundStyle(healthy ? Theme.accent : Theme.warning)
-                    .accessibilityHidden(true)
+                if let readerID = reader.optionalReaderID {
+                    Toggle("", isOn: Binding(
+                        get: { model.isOptionalQuotaReaderEnabled(readerID) },
+                        set: { model.setOptionalQuotaReaderEnabled($0, readerID: readerID) }))
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .controlSize(.mini)
+                        .help(optionalEnabled ? "Turn Off \(reader.label) Quota Reads" : "Turn On \(reader.label) Quota Reads")
+                        .accessibilityLabel("Read \(reader.label) Quota")
+                } else {
+                    Image(systemName: healthy ? "checkmark.circle" : "exclamationmark.triangle")
+                        .font(.system(size: 12))
+                        .foregroundStyle(healthy ? Theme.accent : Theme.warning)
+                        .accessibilityHidden(true)
+                }
             }
-            if let issue {
+            if !optionalEnabled {
+                Text("Quota reads are off for this provider.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if let issue {
                 Text(issue)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
@@ -938,11 +955,12 @@ private struct ReauthorizeCaption: View {
     }
 }
 
-/// The seven local readers, named by the credential they actually read.
+/// Local quota readers, named by the credential they actually read.
 struct ReaderStatus {
     let providerKey: String
     let label: String
     let source: String
+    var optionalReaderID: String? = nil
 
     static let all: [ReaderStatus] = [
         ReaderStatus(providerKey: "anthropic", label: "Claude", source: "Claude Code credentials"),
@@ -953,6 +971,8 @@ struct ReaderStatus {
         ReaderStatus(providerKey: "grok", label: "Grok", source: "Grok CLI credentials"),
         ReaderStatus(providerKey: "grok-bot", label: "Grok Bot", source: "Cursor app session"),
         ReaderStatus(providerKey: "minimax", label: "MiniMax", source: "MiniMax CLI credentials"),
+        ReaderStatus(providerKey: "kimi", label: "Kimi", source: "Kimi Code credentials", optionalReaderID: "kimi"),
+        ReaderStatus(providerKey: "zcode", label: "Z.ai / ZCode", source: "ZCode credentials", optionalReaderID: "zcode"),
     ]
 }
 
@@ -1389,6 +1409,7 @@ struct SettingsNotificationsPage: View {
                             .frame(width: 200, alignment: .leading)
                         Toggle("Notification", isOn: alertBinding(kind, \.notification))
                         Toggle("Popup", isOn: alertBinding(kind, \.popup))
+                        SMSAlertKindToggle(controller: model.smsAlerts, kindID: kind.rawValue)
                         Picker("Sound", selection: Binding(
                             get: { model.alarmManager.preferences[kind].sound },
                             set: { model.alarmManager.setSound($0, for: kind) })) {
@@ -1408,6 +1429,7 @@ struct SettingsNotificationsPage: View {
                      + "Quota Exhausted alerts when \(QuotaCapRule.spentThreshold.formatted(.number.precision(.fractionLength(0...1))))% or less remains." + sentenceGap
                      + "Provider bells choose which scheduled and vendor resets alert on this Mac.")
             }
+            SMSSettingsView(controller: model.smsAlerts)
             if let row = model.displaySections.first(where: {
                 $0.providerKey == model.runawayAlertHistory.first?.providerKey
             }) ?? model.displaySections.first {

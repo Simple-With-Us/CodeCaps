@@ -69,8 +69,10 @@ struct ProviderMarkView: View {
                 .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
         } else if let asset = assetName(for: providerKey), let image = bundledImage(named: asset) {
             image
+                .renderingMode(asset == "provider-zai" ? .template : .original)
                 .resizable()
                 .scaledToFit()
+                .foregroundStyle(.primary)
                 .frame(width: size, height: size)
                 .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
         } else {
@@ -140,6 +142,8 @@ struct ProviderMarkView: View {
         if low.contains("openai") || low.contains("codex") { return "provider-openai" }
         if low.contains("cursor") { return "provider-cursor" }
         if low.contains("minimax") { return "provider-minimax" }
+        if low.contains("kimi") { return "provider-kimi" }
+        if ["zcode", "z.ai", "z-ai", "zai"].contains(where: { low.contains($0) }) { return "provider-zai" }
         if low.contains("copilot") { return "provider-copilot" }
         if low.contains("muse-assist") || low.contains("muse_assist") { return "provider-muse-assist" }
         if low.contains("muse-code") || low.contains("muse_code") { return "provider-muse-code" }

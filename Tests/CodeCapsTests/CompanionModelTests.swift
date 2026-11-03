@@ -96,6 +96,18 @@ final class CompanionModelTests: XCTestCase {
 
     // MARK: - App Group & Hygiene
 
+    func testCompanionMapsKimiAndZAIProviderAliasesToLogos() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(source.contains(#"if key.contains("kimi") { return "provider-kimi" }"#))
+        XCTAssertTrue(source.contains(#"["zcode", "z.ai", "z-ai", "zai"].contains(where: { key.contains($0) }) { return "provider-zai" }"#))
+        let widgets = try String(contentsOf: URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("ios/CodeCapsCompanion/Widgets/WidgetViews.swift"), encoding: .utf8)
+        XCTAssertTrue(widgets.contains(#"if low.contains("kimi") { return "provider-kimi" }"#))
+        XCTAssertTrue(widgets.contains(#"["zcode", "z.ai", "z-ai", "zai"].contains(where: { low.contains($0) }) { return "provider-zai" }"#))
+        XCTAssertTrue(widgets.contains(#"asset == "provider-zai" ? .template : .original"#))
+    }
+
     func testCompanionResolvesCanonicalPlatformDisplayTitles() throws {
         let source = try readCompanionModelSource()
         XCTAssertTrue(
