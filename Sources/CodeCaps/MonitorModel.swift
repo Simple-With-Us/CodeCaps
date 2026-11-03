@@ -3306,17 +3306,27 @@ final class MonitorModel: ObservableObject {
             museCodePendingBridgeReport = report
         }
         guard museCodeBridgeTask == nil, !museCodeIngestTokenBusy else { return }
-        museCodeBridgeTask = Task { [weak self] in
+        let workerGeneration = museCodeBridgeGeneration
+        museCodeBridgeTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            while self.museCodeUsageBridgeEnabled, !self.museCodeIngestTokenBusy,
+            defer {
+                self.museCodeBridgeTask = nil
+                if self.museCodeUsageBridgeEnabled, !self.museCodeIngestTokenBusy,
+                   let pending = self.museCodePendingBridgeReport {
+                    self.enqueueMuseCodeBridge(report: pending)
+                }
+            }
+            while workerGeneration == self.museCodeBridgeGeneration,
+                  self.museCodeUsageBridgeEnabled, !self.museCodeIngestTokenBusy,
                   let next = self.museCodePendingBridgeReport {
                 self.museCodePendingBridgeReport = nil
-                let generation = self.museCodeBridgeGeneration
-                let completed = await self.postMuseCodeBridge(report: next, generation: generation)
+                let completed = await self.postMuseCodeBridge(report: next, generation: workerGeneration)
+                // A credential or enablement change invalidates this worker.  Its defer
+                // starts a fresh main-actor worker for any newer pending report.
+                guard workerGeneration == self.museCodeBridgeGeneration else { break }
                 // Failure waits for a later refresh; it never retries immediately.
                 if !completed { break }
             }
-            self.museCodeBridgeTask = nil
         }
     }
 
