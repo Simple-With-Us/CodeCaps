@@ -462,13 +462,22 @@ public struct ResetAlarmTracker: Sendable {
         }
         if window.identity == nil { window.identity = observation.identity }
         window.lastSeenAt = now
-        if let period = observation.periodSeconds { window.periodSeconds = period }
 
         // A reading older than one already processed cannot say anything new.
         if let observed = observedAt, let last = window.lastObservedAt, observed < last {
             state.windows[key] = window
             return nil
         }
+
+        // A producer may reuse a window ID while switching its cadence.  Its reset time and remaining percentage no longer share the old baseline.  Keep the new reading as a baseline instead of comparing across periods.
+        if let observedPeriod = observation.periodSeconds,
+           let previousPeriod = window.periodSeconds,
+           abs(observedPeriod - previousPeriod) > ResetAlarmPolicy.resetDriftTolerance {
+            state.windows[key] = firstReading()
+            return nil
+        }
+
+        if let period = observation.periodSeconds { window.periodSeconds = period }
 
         let readAt = observedAt ?? now
         var isReset = false
@@ -487,13 +496,17 @@ public struct ResetAlarmTracker: Sendable {
                     : max(ResetAlarmPolicy.resetDriftTolerance,
                           window.periodSeconds.map { $0 * ResetAlarmPolicy.earlyResetShareOfPeriod }
                               ?? ResetAlarmPolicy.earlyResetUnknownPeriod)
-                // A provider that resets early may move the reset time by less
-                // than `required`; the percentage jumping back up settles it.
+                // A correction is not proof of restored quota when a readable percentage stays flat or falls; allow an unmeasured scheduled rollover only after the old end passes.
                 var climbed = false
                 if let reading, let last = window.lastRemaining {
                     climbed = reading >= last + ResetAlarmPolicy.earlyResetRiseMargin
                 }
-                if jump > required || (jump > ResetAlarmPolicy.resetDriftTolerance && climbed) {
+                let rose = reading.flatMap { current in
+                    window.lastRemaining.map { current > $0 + ResetAlarmPolicy.riseEpsilon }
+                } ?? false
+                let resetHasQuotaEvidence = rose || (hasPassed && reading == nil)
+                if (jump > required && resetHasQuotaEvidence)
+                    || (jump > ResetAlarmPolicy.resetDriftTolerance && climbed) {
                     isReset = true
                     // When the window had *not* reached its own scheduled end,
                     // any reset is an early / mid-cycle vendor restore rather than
