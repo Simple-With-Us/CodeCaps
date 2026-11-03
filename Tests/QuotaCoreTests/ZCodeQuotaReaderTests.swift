@@ -68,6 +68,21 @@ final class ZCodeQuotaReaderTests: XCTestCase {
         XCTAssertEqual(result.issues["zcode"], "No GLM Coding Plan is active on this ZCode account.")
     }
 
+    func testEmptyLimitsReportNoWindowsForAccount() async {
+        // Live-verified account state: a signed-in account whose plan exposes
+        // no quota windows answers 200 with an empty limits array. That must
+        // read as an empty account, never as "unavailable" or a full quota.
+        let result = await read(#"{"code":200,"data":{"limits":[]}}"#)
+        XCTAssertTrue(result.windows.isEmpty)
+        XCTAssertEqual(result.issues["zcode"], "ZCode returned no quota windows for this account.")
+    }
+
+    func testUnparseableLimitsReportNoReadableQuota() async {
+        let result = await read(#"{"code":200,"data":{"limits":[{"unit":6}]}}"#)
+        XCTAssertTrue(result.windows.isEmpty)
+        XCTAssertEqual(result.issues["zcode"], "ZCode returned no readable quota.")
+    }
+
     func testRejectedSessionIsAnIssue() async {
         let result = await read("{}", status: 401)
         XCTAssertTrue(result.windows.isEmpty)

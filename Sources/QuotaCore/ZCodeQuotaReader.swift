@@ -66,7 +66,14 @@ public struct ZCodeQuotaReader: Sendable {
                 guard Self.envelopeSucceeded(root), let data = root["data"] as? [String: Any] else { continue }
                 let windows = Self.parse(data, observedAt: now())
                 if windows.isEmpty {
-                    return LocalQuotaResult(issues: ["zcode": "ZCode returned no readable quota."])
+                    // A 200 envelope with an empty limits array is a truthful
+                    // account state (no quota windows on this plan), not a
+                    // parse failure; say so instead of claiming unreadability.
+                    let rawLimits = data["limits"] as? [[String: Any]] ?? []
+                    let message = rawLimits.isEmpty
+                        ? "ZCode returned no quota windows for this account."
+                        : "ZCode returned no readable quota."
+                    return LocalQuotaResult(issues: ["zcode": message])
                 }
                 let issues = windows.allSatisfy { $0.remainingPercent == nil }
                     ? ["zcode": "ZCode returned no readable quota."]
