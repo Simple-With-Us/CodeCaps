@@ -1,106 +1,89 @@
-import CryptoKit
 import Foundation
 
-/// Reads the GLM Coding Plan quota behind the local ZCode sign-in.
-///
-/// ZCode keeps its OAuth business tokens in `~/.zcode/v2/credentials.json`,
-/// each value sealed as `enc:v1:<iv>.<tag>.<ciphertext>` with AES-256-GCM
-/// under a key derived from a per-machine, non-secret fallback string
-/// (ZCode's own `credentialCipherProvider.ts`: SHA-256 of
-/// `zcode-credential-fallback:darwin:<home>:<user>`, overridable through
-/// `ZCODE_CREDENTIAL_SECRET`).  The monitor endpoint takes the credential
-/// verbatim in the `authorization` header — ZCode's own client deliberately
-/// adds no `Bearer` prefix.  Decrypted values never leave this type; when the
-/// store cannot be read or opened the reader says so and publishes nothing.
+/// One explicitly supplied Coding Plan key and its inseparable regional endpoint.
+public enum ZCodeQuotaRegion: String, Codable, CaseIterable, Equatable, Sendable, Identifiable {
+    case zAI = "zai"
+    case bigModel = "bigmodel"
+    public var id: String { rawValue }
+    public var title: String { self == .zAI ? "Z.ai" : "BigModel" }
+    public var quotaURL: URL {
+        switch self {
+        case .zAI: return URL(string: "https://api.z.ai/api/monitor/usage/quota/limit")!
+        case .bigModel: return URL(string: "https://bigmodel.cn/api/monitor/usage/quota/limit")!
+        }
+    }
+}
+
+public struct ZCodeQuotaCredential: Codable, Equatable, Sendable {
+    public var region: ZCodeQuotaRegion
+    public var apiKey: String
+
+    public init(region: ZCodeQuotaRegion, apiKey: String) {
+        self.region = region
+        self.apiKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    public var isValid: Bool {
+        !apiKey.isEmpty && apiKey.utf8.count <= 8_192
+            && apiKey.unicodeScalars.allSatisfy { $0.value >= 33 && $0.value <= 126 }
+    }
+}
+
+/// Reads quota only with an explicitly supplied Coding Plan API key.
+/// ZCode's OAuth business tokens are not quota credentials and are never read here.
 public struct ZCodeQuotaReader: Sendable {
     private let now: @Sendable () -> Date
-    private let credentials: @Sendable () -> [String: String]
+    private let credential: @Sendable () async -> ZCodeQuotaCredential?
     private let fetch: @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)
 
     private static let maxResponseBytes = 262_144
-    private static let maxCredentialBytes = 1_048_576
     private static let timeout: TimeInterval = 15
 
     public init(
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
         now: @escaping @Sendable () -> Date = { Date() },
-        credentials: (@Sendable () -> [String: String])? = nil,
+        credential: (@Sendable () async -> ZCodeQuotaCredential?)? = nil,
         fetch: (@Sendable (URLRequest) async throws -> (Data, HTTPURLResponse))? = nil
     ) {
         self.now = now
-        let home = homeDirectory.standardizedFileURL
-        self.credentials = credentials ?? { Self.readLocalCredentials(home: home) }
+        self.credential = credential ?? { nil }
         self.fetch = fetch ?? Self.makeFetcher()
     }
 
     public func read() async -> LocalQuotaResult {
         do {
             try Task.checkCancellation()
-            let store = credentials()
-            // z.ai first: the desktop sign-in is a Z.ai account; the BigModel
-            // token is the China-side equivalent of the same plan.
-            let candidates: [(key: String, url: URL)] = [
-                ("oauth:zai:access_token", URL(string: "https://api.z.ai/api/monitor/usage/quota/limit")!),
-                ("oauth:bigmodel:access_token", URL(string: "https://bigmodel.cn/api/monitor/usage/quota/limit")!),
-            ]
-            var sawCredential = false
-            var rejected = false
-            for candidate in candidates {
-                try Task.checkCancellation()
-                guard let token = store[candidate.key], Self.validToken(token) else { continue }
-                sawCredential = true
-                let result: ZCodeHTTPPayload
-                do {
-                    result = try await Self.fetchQuota(url: candidate.url, token: token, fetch: fetch)
-                } catch is CancellationError {
-                    // Cooperative cancellation is not a transport failure;
-                    // rethrow so the outer catch reports the cancellation.
-                    throw CancellationError()
-                } catch {
-                    if Task.isCancelled || (error as? URLError)?.code == .cancelled { throw CancellationError() }
-                    // One unreachable endpoint must not mask a healthy second
-                    // account.
-                    continue
-                }
-                if result.statusCode == 401 || result.statusCode == 403 {
-                    rejected = true
-                    continue
-                }
-                guard (200..<300).contains(result.statusCode), let root = result.root else { continue }
-                if let noPlan = Self.noPlanMessage(root) {
-                    return LocalQuotaResult(issues: ["zcode": noPlan])
-                }
-                guard Self.envelopeSucceeded(root), let data = root["data"] as? [String: Any] else { continue }
-                let windows = Self.parse(data, observedAt: now())
-                if windows.isEmpty {
-                    // A 200 envelope with an empty limits array is a truthful
-                    // account state (no quota windows on this plan), not a
-                    // parse failure; say so instead of claiming unreadability.
-                    let rawLimits = data["limits"] as? [[String: Any]]
-                    // Only an observed empty array is the truthful empty
-                    // state; a missing or mistyped limits value is unreadable.
-                    let message = (rawLimits?.isEmpty == true)
-                        ? "ZCode returned no quota windows for this account."
-                        : "ZCode returned no readable quota."
-                    return LocalQuotaResult(issues: ["zcode": message])
-                }
-                let issues = windows.allSatisfy { $0.remainingPercent == nil }
-                    ? ["zcode": "ZCode returned no readable quota."]
-                    : [:]
-                return LocalQuotaResult(windows: windows, issues: issues)
+            guard let credential = await credential(), credential.isValid else {
+                return LocalQuotaResult(issues: ["zcode": "Z.ai quota setup is needed.\u{00A0} Save a Coding Plan API key in Sources & Fleet."])
             }
-            if !sawCredential {
-                // No ZCode sign-in on this Mac: the product is absent, not broken.
-                return LocalQuotaResult()
+            try Task.checkCancellation()
+            let result = try await Self.fetchQuota(url: credential.region.quotaURL, token: credential.apiKey, fetch: fetch)
+            if result.statusCode == 401 || result.statusCode == 403 {
+                return LocalQuotaResult(issues: ["zcode": "The saved Coding Plan API key was rejected."])
             }
-            if rejected {
-                return LocalQuotaResult(issues: ["zcode": "ZCode session was rejected; sign in again in ZCode."])
+            guard (200..<300).contains(result.statusCode), let root = result.root else {
+                return LocalQuotaResult(issues: ["zcode": "Z.ai quota service is unavailable."])
             }
-            return LocalQuotaResult(issues: ["zcode": "ZCode quota service is unavailable."])
+            if let noPlan = Self.noPlanMessage(root) { return LocalQuotaResult(issues: ["zcode": noPlan]) }
+            guard Self.envelopeSucceeded(root), let data = root["data"] as? [String: Any] else {
+                return LocalQuotaResult(issues: ["zcode": "Z.ai quota service is unavailable."])
+            }
+            let windows = Self.parse(data, observedAt: now(), region: credential.region)
+            if windows.isEmpty {
+                let rawLimits = data["limits"] as? [[String: Any]]
+                let message = rawLimits?.isEmpty == true
+                    ? "Z.ai returned no quota windows for this account." : "Z.ai returned no readable quota."
+                return LocalQuotaResult(issues: ["zcode": message])
+            }
+            let issues = windows.allSatisfy { $0.remainingPercent == nil }
+                ? ["zcode": "Z.ai returned no readable quota."] : [:]
+            return LocalQuotaResult(windows: windows, issues: issues)
         } catch is CancellationError {
-            return LocalQuotaResult(issues: ["zcode": "ZCode quota refresh was cancelled."])
+            return LocalQuotaResult(issues: ["zcode": "Z.ai quota refresh was cancelled."])
         } catch {
-            return LocalQuotaResult(issues: ["zcode": "ZCode quota service is unavailable."])
+            if Task.isCancelled || (error as? URLError)?.code == .cancelled {
+                return LocalQuotaResult(issues: ["zcode": "Z.ai quota refresh was cancelled."])
+            }
+            return LocalQuotaResult(issues: ["zcode": "Z.ai quota service is unavailable."])
         }
     }
 }
@@ -149,7 +132,7 @@ private extension ZCodeQuotaReader {
     static func noPlanMessage(_ root: [String: Any]) -> String? {
         let message = (root["msg"] as? String) ?? (root["message"] as? String) ?? ""
         if message.contains("不存在coding plan") || message.contains("没有资格") {
-            return "No GLM Coding Plan is active on this ZCode account."
+            return "No GLM Coding Plan is active on this account."
         }
         return nil
     }
@@ -160,7 +143,7 @@ private extension ZCodeQuotaReader {
     /// `unit: 3` is the rolling five-hour window, `unit: 6` the weekly one —
     /// and TIME_LIMIT is the monthly tool-call quota.  `percentage` is the
     /// USED share; CodeCaps rows show what remains.
-    static func parse(_ data: [String: Any], observedAt: Date) -> [QuotaWindow] {
+    static func parse(_ data: [String: Any], observedAt: Date, region: ZCodeQuotaRegion) -> [QuotaWindow] {
         let observed = ISO8601DateFormatter().string(from: observedAt)
         let plan = (data["level"] as? String).flatMap { level -> String? in
             guard !level.isEmpty, level.utf8.count <= 40,
@@ -192,7 +175,7 @@ private extension ZCodeQuotaReader {
             let exhausted = percent == 0
             windows.append(QuotaWindow(
                 id: "local-mac:zcode:\(type.lowercased())-\(unit.map(String.init) ?? "x")",
-                provider: "ZCode", providerKey: "zcode", providerLabel: "ZCode",
+                provider: region.title, providerKey: "zcode", providerLabel: region.title,
                 sourceApp: "local-mac", label: descriptor.label,
                 remainingPercent: percent,
                 absoluteRemaining: remaining, absoluteLimit: cap,
@@ -225,63 +208,6 @@ private extension ZCodeQuotaReader {
     static func resetTimestamp(_ value: Any?) -> String? {
         guard let milliseconds = number(value), milliseconds > 0 else { return nil }
         return ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: milliseconds / 1000))
-    }
-
-    // MARK: - Local credential store
-
-    /// Decrypts the values of `~/.zcode/v2/credentials.json`.  Any entry that
-    /// fails to open is dropped rather than failing the whole store, and a
-    /// store that yields no usable values reads as "not signed in".
-    static func readLocalCredentials(home: URL) -> [String: String] {
-        let environment = ProcessInfo.processInfo.environment
-        let base = environment["ZCODE_DATA_BASE_DIR"].map { URL(fileURLWithPath: $0) } ?? home
-        let file = base.appendingPathComponent(".zcode/v2/credentials.json")
-        guard let data = try? Data(contentsOf: file, options: .mappedIfSafe),
-              data.count <= Self.maxCredentialBytes,
-              let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return [:]
-        }
-        let secret = environment["ZCODE_CREDENTIAL_SECRET"]
-            ?? "zcode-credential-fallback:darwin:\(home.path):\(NSUserName())"
-        let key = SymmetricKey(data: Data(SHA256.hash(data: Data(secret.utf8))))
-        var store: [String: String] = [:]
-        for (name, value) in raw {
-            guard let text = value as? String else { continue }
-            if let opened = decrypt(text, key: key) {
-                store[name] = opened
-            } else if !text.hasPrefix("enc:v1:"), validToken(text) {
-                store[name] = text
-            }
-        }
-        return store
-    }
-
-    /// Opens one `enc:v1:<iv>.<tag>.<ciphertext>` value (AES-256-GCM, 12-byte
-    /// nonce, 16-byte tag; base64url segments, in ZCode's own order).
-    static func decrypt(_ value: String, key: SymmetricKey) -> String? {
-        let prefix = "enc:v1:"
-        guard value.hasPrefix(prefix) else { return nil }
-        let parts = value.dropFirst(prefix.count).split(separator: ".", omittingEmptySubsequences: false)
-        guard parts.count == 3,
-              let nonceData = base64url(parts[0]), nonceData.count == 12,
-              let tagData = base64url(parts[1]), tagData.count == 16,
-              let ciphertext = base64url(parts[2]), !ciphertext.isEmpty,
-              let nonce = try? AES.GCM.Nonce(data: nonceData),
-              let box = try? AES.GCM.SealedBox(nonce: nonce, ciphertext: ciphertext, tag: tagData),
-              let opened = try? AES.GCM.open(box, using: key) else {
-            return nil
-        }
-        return String(data: opened, encoding: .utf8)
-    }
-
-    static func base64url(_ text: Substring) -> Data? {
-        var base64 = text.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
-        base64 += String(repeating: "=", count: (4 - base64.count % 4) % 4)
-        return Data(base64Encoded: base64)
-    }
-
-    static func validToken(_ token: String) -> Bool {
-        !token.isEmpty && token.utf8.count <= 8_192 && !token.contains("\r") && !token.contains("\n")
     }
 
     static func makeFetcher() -> @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse) {

@@ -572,8 +572,7 @@ test('an installer failure still runs the consumer and clears the key', async ()
       GITHUB_ENV: envFile,
       ASC_STAGING_ROOT: staging,
       INFISICAL_PROJECT_ID: 'test-project-id',
-      INFISICAL_CLIENT_ID: 'test-client-id',
-      INFISICAL_CLIENT_SECRET: 'test-client-secret',
+      INFISICAL_SERVICE_TOKEN: 'st.test-id.test-secret',
     };
     // Nothing from the shell that runs the suite may stand in for the
     // credentials or the token the failed install never produced.
@@ -617,23 +616,23 @@ test('a broken reader is reported as a reader fault, not as a missing credential
       ...process.env,
       HOME: home,
       PATH: '/usr/bin:/bin',
-      INFISICAL_TOKEN: 'test-token',
-      INFISICAL_FLEET_OPS_PROJECT_ID: '11111111-2222-3333-4444-555555555555',
+      INFISICAL_SERVICE_TOKEN: 'st.test-id.test-secret',
+      INFISICAL_PROJECT_ID: '11111111-2222-3333-4444-555555555555',
     };
 
     // A reader that cannot authenticate:  the token is at fault, and the
     // message has to say so instead of blaming the vault permissions.
     // The reader's own text is passed through for the diagnosis, so the
     // stub repeats the token in it:  the token must not reach the log.
-    const rejected = writeStubReader(dir, 4, 'fleet-secrets: fetch-failed:  exit-1 for test-token');
+    const rejected = writeStubReader(dir, 4, 'fleet-secrets: fetch-failed:  exit-1 for st.test-id.test-secret');
     const rejectedResult = await runScript(script, { env: { ...base, FLEET_SECRETS: rejected }, args: ['check-reader'] });
     assert.notEqual(rejectedResult.code, 0, 'a reader that cannot authenticate must fail the check');
-    assert.match(rejectedResult.stderr, /access token was rejected/, 'the message must name the token');
+    assert.match(rejectedResult.stderr, /service token was rejected/, 'the message must name the token');
     assert.doesNotMatch(rejectedResult.stderr, /Missing ASC_KEY_ID/, 'a reader fault must not read as a missing credential');
-    assert.ok(!rejectedResult.stderr.includes('test-token'), 'the access token must not reach the log');
-    assert.ok(!rejectedResult.stdout.includes('test-token'), 'the access token must not reach the log');
-    assert.ok(!rejectedResult.stderr.includes('test-tok'), 'no slice of a short access token may reach the log');
-    assert.ok(!rejectedResult.stdout.includes('test-tok'), 'no slice of a short access token may reach the log');
+    assert.ok(!rejectedResult.stderr.includes('st.test-id.test-secret'), 'the access token must not reach the log');
+    assert.ok(!rejectedResult.stdout.includes('st.test-id.test-secret'), 'the access token must not reach the log');
+    assert.ok(!rejectedResult.stderr.includes('st.test-id'), 'no slice of a short access token may reach the log');
+    assert.ok(!rejectedResult.stdout.includes('st.test-id'), 'no slice of a short access token may reach the log');
     assert.match(rejectedResult.stderr, /fetch-failed:  exit-1 for <redacted>/, 'a token too short to have a hidden middle is redacted outright');
 
     // A reader that refuses the request:  the tooling is at fault.
@@ -677,10 +676,10 @@ test('a broken reader is reported as a reader fault, not as a missing credential
     // No token in the environment:  the reader would fail the way a rejected
     // token fails, so the absent token is named before the reader is asked.
     const noToken = { ...base, FLEET_SECRETS: working };
-    delete noToken.INFISICAL_TOKEN;
+    delete noToken.INFISICAL_SERVICE_TOKEN;
     const noTokenResult = await runScript(script, { env: noToken, args: ['check-reader'] });
     assert.notEqual(noTokenResult.code, 0, 'a check without a token must fail');
-    assert.match(noTokenResult.stderr, /no Infisical access token in the environment/, 'the message must name the absent token');
+    assert.match(noTokenResult.stderr, /read service token is not set/, 'the message must name the absent token');
     assert.doesNotMatch(noTokenResult.stderr, /was rejected/, 'an absent token is not a rejected one');
 
     // No reader at all is a tooling fault, and it is named as one.
@@ -692,52 +691,65 @@ test('a broken reader is reported as a reader fault, not as a missing credential
   }
 });
 
-/** A literal string for a regular expression.  The preview carries an ellipsis
- * and angle brackets, neither of which is a metacharacter, but the helper keeps
- * a future preview from changing the meaning of the pattern. */
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
+test('the full scoped service token reaches the fleet reader unchanged', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'asc-token-passthrough-'));
+  try {
+    const script = fileURLToPath(new URL('install-release-secrets-tooling.sh', import.meta.url));
+    const home = join(dir, 'home');
+    mkdirSync(home, { recursive: true });
+    const capture = join(dir, 'captured-token');
+    const reader = join(dir, 'reader');
+    const serviceToken = 'st.synthetic-id.secret-value';
+    writeFileSync(reader, `#!/bin/bash
+printf '%s' "$INFISICAL_TOKEN" > "$TOKEN_CAPTURE_PATH"
+printf '%s\n' ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8
+`, { mode: 0o755 });
+    const result = await runScript(script, {
+      env: {
+        ...process.env,
+        HOME: home,
+        PATH: '/usr/bin:/bin',
+        INFISICAL_SERVICE_TOKEN: serviceToken,
+        INFISICAL_PROJECT_ID: '11111111-2222-3333-4444-555555555555',
+        TOKEN_CAPTURE_PATH: capture,
+        FLEET_SECRETS: reader
+      },
+      args: ['check-reader']
+    });
 
-test('a credential is previewed only when the middle of it is really hidden', async () => {
+    assert.equal(result.code, 0, 'a reader accepting the supplied token must pass');
+    assert.equal(readFileSync(capture, 'utf8'), serviceToken, 'the full `st.` token is passed unchanged');
+    assert.ok(!result.stdout.includes(serviceToken), 'the token must not reach stdout');
+    assert.ok(!result.stderr.includes(serviceToken), 'the token must not reach stderr');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('scoped service tokens of different lengths are redacted whole', async () => {
   const script = fileURLToPath(new URL('install-release-secrets-tooling.sh', import.meta.url));
+  const bodies = ['x', 'abcdefghijkl', 'abcdefghijklmnopqrstuvwxyz0123'];
 
-  // The two slices the preview is built from cover twelve characters between
-  // them, so a value of twelve characters or fewer is reconstructed in full
-  // by the two of them together.  Thirteen is the first length with a middle
-  // left over, and it is the boundary the helper has to hold.  The hidden
-  // middle of each case is a string that does not occur in the prose around
-  // it, so a leak of it is a leak and not a coincidence.
-  const cases = [
-    { token: 'abcdefghij', preview: '<redacted>', hidden: 'abcdefghij' },
-    { token: 'abcdefghijkl', preview: '<redacted>', hidden: 'abcdefghijkl' },
-    { token: 'abcdefghZijkl', preview: 'abcdefgh…ijkl', hidden: 'Z' },
-    { token: 'abcdefghijklmnopqrstuvwxyz0123', preview: 'abcdefgh…0123', hidden: 'ijklmnopqrstuvwxyz' }
-  ];
-
-  for (const { token, preview, hidden } of cases) {
-    const dir = mkdtempSync(join(tmpdir(), 'asc-preview-'));
+  for (const body of bodies) {
+    const dir = mkdtempSync(join(tmpdir(), 'asc-token-redaction-'));
     try {
       const home = join(dir, 'home');
       mkdirSync(home, { recursive: true });
+      const serviceToken = `st.test-id.${body}`;
       const base = {
         ...process.env,
         HOME: home,
         PATH: '/usr/bin:/bin',
-        INFISICAL_TOKEN: token,
-        INFISICAL_FLEET_OPS_PROJECT_ID: '11111111-2222-3333-4444-555555555555'
+        INFISICAL_SERVICE_TOKEN: serviceToken,
+        INFISICAL_PROJECT_ID: '11111111-2222-3333-4444-555555555555'
       };
-
-      // The reader repeats the token in its own error text, which is the text
-      // the failure carries, so the token is in the log unless it is masked.
-      const rejected = writeStubReader(dir, 4, `fleet-secrets: fetch-failed:  exit-1 for ${token}`);
+      const rejected = writeStubReader(dir, 4, `fleet-secrets: fetch-failed:  exit-1 for ${serviceToken}`);
       const result = await runScript(script, { env: { ...base, FLEET_SECRETS: rejected }, args: ['check-reader'] });
 
       assert.notEqual(result.code, 0, 'a reader that cannot authenticate must fail the check');
-      assert.ok(!result.stderr.includes(token), `the access token must not reach the log (${token.length} characters)`);
-      assert.ok(!result.stdout.includes(token), `the access token must not reach stdout (${token.length} characters)`);
-      assert.match(result.stderr, new RegExp(`fetch-failed:  exit-1 for ${escapeRegExp(preview)}`), `the failure carries the preview of a ${token.length} character token`);
-      assert.ok(!result.stderr.includes(hidden), `the hidden middle must stay hidden (${token.length} characters)`);
+      assert.ok(!result.stderr.includes(serviceToken), 'the full service token must not reach stderr');
+      assert.ok(!result.stdout.includes(serviceToken), 'the full service token must not reach stdout');
+      assert.match(result.stderr, /fetch-failed:  exit-1 for <redacted>/, 'the entire service token is replaced');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -778,21 +790,21 @@ test('a credential that carries an ampersand is never expanded back into the log
     // and later an ampersand in it expands to the text that matched, which
     // here would be the whole credential.  The ampersand sits in the first
     // eight characters, so it is in the part of the value a preview shows.
-    const token = 'abc&efghijklmnopqrst';
+    const token = 'st.test-id.abc&efghijklmnopqrst';
     const base = {
       ...process.env,
       HOME: home,
       PATH: '/usr/bin:/bin',
-      INFISICAL_TOKEN: token,
-      INFISICAL_FLEET_OPS_PROJECT_ID: '11111111-2222-3333-4444-555555555555'
+      INFISICAL_SERVICE_TOKEN: token,
+      INFISICAL_PROJECT_ID: '11111111-2222-3333-4444-555555555555'
     };
     const rejected = writeStubReader(dir, 4, `fleet-secrets: fetch-failed:  exit-1 for ${token}`);
 
     for (const shell of shells()) {
       const result = await runScript(script, { env: { ...base, FLEET_SECRETS: rejected }, args: ['check-reader'], shell });
       assert.notEqual(result.code, 0, 'a reader that cannot authenticate must fail the check');
-      assert.ok(!result.stderr.includes(token), `the access token must not reach the log (${shell})`);
-      assert.ok(!result.stdout.includes(token), `the access token must not reach stdout (${shell})`);
+      assert.ok(!result.stderr.includes(token), `the service token must not reach the log (${shell})`);
+      assert.ok(!result.stdout.includes(token), `the service token must not reach stdout (${shell})`);
       assert.ok(!result.stderr.includes('&'), `no ampersand may reach the log (${shell})`);
     }
   } finally {
@@ -800,36 +812,31 @@ test('a credential that carries an ampersand is never expanded back into the log
   }
 });
 
-test('the long lived client credentials are redacted whole', async () => {
+test('the scoped service token is redacted whole', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'asc-client-'));
   try {
     const script = fileURLToPath(new URL('install-release-secrets-tooling.sh', import.meta.url));
     const home = join(dir, 'home');
     mkdirSync(home, { recursive: true });
 
-    // The client id and the client secret stand for months and the runner
-    // masks them by value, so a preview of either would defeat that masking
-    // and put twelve characters of a standing credential in a public log.
-    const clientId = 'client-id-abcdefghijklmnop';
-    const clientSecret = 'client-secret-abcdefghijklmnop';
+    // The service token is a standing credential, so even a preview of it
+    // must not reach the Actions log.
+    const serviceToken = 'st.client-id.secret-abcdefghijklmnop';
     const base = {
       ...process.env,
       HOME: home,
       PATH: '/usr/bin:/bin',
-      INFISICAL_CLIENT_ID: clientId,
-      INFISICAL_CLIENT_SECRET: clientSecret,
-      INFISICAL_TOKEN: 'abcdefghijklmnopqrstuvwxyz0123',
-      INFISICAL_FLEET_OPS_PROJECT_ID: '11111111-2222-3333-4444-555555555555'
+      INFISICAL_SERVICE_TOKEN: serviceToken,
+      INFISICAL_PROJECT_ID: 'test-project-id'
     };
-    const rejected = writeStubReader(dir, 4, `fleet-secrets: fetch-failed:  exit-1 for ${clientId} and ${clientSecret}`);
+    const rejected = writeStubReader(dir, 4, `fleet-secrets: fetch-failed: exit-1 for ${serviceToken}`);
     const result = await runScript(script, { env: { ...base, FLEET_SECRETS: rejected }, args: ['check-reader'] });
 
     assert.notEqual(result.code, 0, 'a reader that cannot authenticate must fail the check');
-    assert.ok(!result.stderr.includes(clientId), 'the client id must not reach the log');
-    assert.ok(!result.stderr.includes(clientSecret), 'the client secret must not reach the log');
-    assert.ok(!result.stderr.includes('client-id-abc'), 'no slice of the client id may reach the log');
-    assert.ok(!result.stderr.includes('client-sec'), 'no slice of the client secret may reach the log');
-    assert.match(result.stderr, /for <redacted>/, 'the credentials are redacted whole');
+    assert.ok(!result.stderr.includes(serviceToken), 'the service token must not reach the log');
+    assert.ok(!result.stderr.includes('st.client-id'), 'no service-token prefix may reach the log');
+    assert.ok(!result.stderr.includes('secret-abc'), 'no service-token secret slice may reach the log');
+    assert.match(result.stderr, /for <redacted>/, 'the service token is redacted whole');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -846,8 +853,8 @@ test('a name the environment carries as whitespace is still required in the vaul
       ...process.env,
       HOME: home,
       PATH: '/usr/bin:/bin',
-      INFISICAL_TOKEN: 'abcdefghijklmnopqrstuvwxyz0123',
-      INFISICAL_FLEET_OPS_PROJECT_ID: '11111111-2222-3333-4444-555555555555'
+      INFISICAL_SERVICE_TOKEN: 'st.test-id.test-secret',
+      INFISICAL_PROJECT_ID: '11111111-2222-3333-4444-555555555555'
     };
 
     // The consumer trims a value and refuses one that holds nothing but

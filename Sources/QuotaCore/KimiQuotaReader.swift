@@ -268,8 +268,8 @@ private extension KimiQuotaReader {
             var providers: [(name: String, fields: [String: String])] = []
             var currentName: String?
             var fields: [String: String] = [:]
-            for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
-                let trimmed = line.trimmingCharacters(in: .whitespaces)
+            for line in text.split(whereSeparator: \.isNewline) {
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
                 if trimmed.hasPrefix("[") {
                     if let currentName { providers.append((currentName, fields)) }
                     currentName = providerTableName(trimmed)
@@ -339,14 +339,14 @@ private extension KimiQuotaReader {
     }
 
     private static func tomlString(_ raw: String) -> String? {
-        let value = raw.trimmingCharacters(in: .whitespaces)
+        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let quote = value.first, quote == "\"" || quote == "'" else { return nil }
         var escaped = false
         for index in value.indices.dropFirst() {
             let character = value[index]
             if quote == "\"", character == "\\", !escaped { escaped = true; continue }
             if character == quote, !escaped {
-                let tail = value[value.index(after: index)...].trimmingCharacters(in: .whitespaces)
+                let tail = value[value.index(after: index)...].trimmingCharacters(in: .whitespacesAndNewlines)
                 guard tail.isEmpty || tail.hasPrefix("#") else { return nil }
                 if quote == "'" { return String(value[value.index(after: value.startIndex)..<index]) }
                 let encoded = String(value[...index])

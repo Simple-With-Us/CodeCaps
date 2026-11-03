@@ -25,18 +25,12 @@ function tempGithubEnv() {
   return { dir, path: join(dir, "github_env") };
 }
 
-/** A stub fetch standing in for Infisical: login always succeeds, the list
- * call returns exactly the fixture secrets given. Neither ever touches the
- * network. */
+/** A stub fetch standing in for Infisical: the list call returns exactly
+ * the fixture secrets given. It rejects any unexpected auth endpoint and never
+ * touches the network. */
 function stubFetch(vaultSecrets) {
   return async (url) => {
     const u = String(url);
-    if (u.includes("/api/v1/auth/universal-auth/login")) {
-      return {
-        ok: true,
-        json: async () => ({ accessToken: "test-token", expiresIn: 3600 }),
-      };
-    }
     if (u.includes("/api/v3/secrets/raw")) {
       return {
         ok: true,
@@ -62,8 +56,7 @@ test("a name present in the vault is masked and written to GITHUB_ENV", async ()
       env: {
         INFISICAL_NAMES: "FOO",
         INFISICAL_PROJECT_ID: "proj",
-        INFISICAL_CLIENT_ID: "id",
-        INFISICAL_CLIENT_SECRET: "secret",
+        INFISICAL_SERVICE_TOKEN: "st.test-id.test-secret",
         GITHUB_ENV: path,
       },
       fetchImpl: stubFetch({ FOO: SENTINEL_PRESENT }),
@@ -94,8 +87,7 @@ test("a name missing from the vault falls back to GH_FALLBACK_<NAME>", async () 
       env: {
         INFISICAL_NAMES: "BAR",
         INFISICAL_PROJECT_ID: "proj",
-        INFISICAL_CLIENT_ID: "id",
-        INFISICAL_CLIENT_SECRET: "secret",
+        INFISICAL_SERVICE_TOKEN: "st.test-id.test-secret",
         GH_FALLBACK_BAR: SENTINEL_FALLBACK,
         GITHUB_ENV: path,
       },
@@ -120,8 +112,7 @@ test("a name missing from both the vault and the fallback warns and is absent", 
       env: {
         INFISICAL_NAMES: "BAZ",
         INFISICAL_PROJECT_ID: "proj",
-        INFISICAL_CLIENT_ID: "id",
-        INFISICAL_CLIENT_SECRET: "secret",
+        INFISICAL_SERVICE_TOKEN: "st.test-id.test-secret",
         GITHUB_ENV: path,
       },
       fetchImpl: stubFetch({}),
@@ -156,8 +147,7 @@ test("a missing required name rejects instead of silently continuing", async () 
             INFISICAL_NAMES: "QUX",
             INFISICAL_REQUIRED: "QUX",
             INFISICAL_PROJECT_ID: "proj",
-            INFISICAL_CLIENT_ID: "id",
-            INFISICAL_CLIENT_SECRET: "secret",
+            INFISICAL_SERVICE_TOKEN: "st.test-id.test-secret",
             GITHUB_ENV: path,
           },
           fetchImpl: stubFetch({}),
@@ -181,8 +171,7 @@ test("every line in a mixed run is either an add-mask carrier or a warning, neve
       env: {
         INFISICAL_NAMES: "FOO BAZ",
         INFISICAL_PROJECT_ID: "proj",
-        INFISICAL_CLIENT_ID: "id",
-        INFISICAL_CLIENT_SECRET: "secret",
+        INFISICAL_SERVICE_TOKEN: "st.test-id.test-secret",
         GITHUB_ENV: path,
       },
       fetchImpl: stubFetch({ FOO: SENTINEL_PRESENT }),
@@ -200,7 +189,7 @@ test("every line in a mixed run is either an add-mask carrier or a warning, neve
   }
 });
 
-test("no configured identity resolves purely from GH_FALLBACK_<NAME>, with no fetch call", async () => {
+test("no configured service token resolves purely from GH_FALLBACK_<NAME>, with no fetch call", async () => {
   const { dir, path } = tempGithubEnv();
   try {
     const { lines, log } = collectLines();
@@ -232,8 +221,7 @@ test("every line of a multi-line value gets its own ::add-mask:: and is never pr
       env: {
         INFISICAL_NAMES: "MAC_CERT_P12_BASE64",
         INFISICAL_PROJECT_ID: "proj",
-        INFISICAL_CLIENT_ID: "id",
-        INFISICAL_CLIENT_SECRET: "secret",
+        INFISICAL_SERVICE_TOKEN: "st.test-id.test-secret",
         GITHUB_ENV: path,
       },
       fetchImpl: stubFetch({ MAC_CERT_P12_BASE64: SENTINEL_MULTILINE }),

@@ -613,6 +613,7 @@ final class MonitorModel: ObservableObject {
 
     public let alarmManager: ResetAlarmManager
     let smsAlerts: SMSAlertController
+    let zAIQuotaSetup: ZAIQuotaSetupController
 
     /// App-level alert fan-out.  Producers emit `CodeCapsAlertEvent`s here
     /// and registered channels deliver them; today the only channel is the
@@ -704,6 +705,7 @@ final class MonitorModel: ObservableObject {
     /// model redraws when All or a provider's bell flips.
     private var alarmChanges: AnyCancellable?
     private var smsChanges: AnyCancellable?
+    private var zAIQuotaChanges: AnyCancellable?
     /// Re-checks the saved-token states when `TokenStore` gains a token nobody
     /// was waiting for, so the Re-Authorize button clears without a refresh.
     private var tokenChanges: AnyCancellable?
@@ -826,6 +828,7 @@ final class MonitorModel: ObservableObject {
 
         alarmManager = ResetAlarmManager(defaults: defaults)
         smsAlerts = SMSAlertController(defaults: defaults)
+        zAIQuotaSetup = ZAIQuotaSetupController(defaults: defaults)
 
         appearance = AppAppearance(rawValue: defaults.string(forKey: "appearance") ?? "") ?? .system
         glanceView = GlanceViewMode(rawValue: defaults.string(forKey: "glanceView") ?? "") ?? .fromMac
@@ -845,6 +848,8 @@ final class MonitorModel: ObservableObject {
         smsChanges = smsAlerts.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
         }
+        zAIQuotaChanges = zAIQuotaSetup.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        zAIQuotaSetup.changed = { [weak self] in self?.zAIQuotaSetupChanged() }
         alarmManager.additionalDelivery = { [weak self] kind, title, body, identifier in
             self?.smsAlerts.deliver(kind: kind.rawValue, title: title, body: body, eventID: identifier)
         }
@@ -1237,6 +1242,18 @@ final class MonitorModel: ObservableObject {
             rebuildLocalState(recordSamples: false)
         }
         if providerChecksEnabled || serverEnabled { refreshProviderChecks() }
+    }
+
+    private func zAIQuotaSetupChanged() {
+        invalidateRefresh()
+        if let providerResult {
+            self.providerResult = LocalQuotaResult(
+                windows: providerResult.windows.filter { $0.canonicalProviderKey != "zcode" },
+                issues: providerResult.issues.filter { $0.key != "zcode" },
+                consentNeeded: providerResult.consentNeeded.subtracting(["zcode"]))
+            rebuildLocalState(recordSamples: false)
+        }
+        if localEnabled && providerChecksEnabled && isOptionalQuotaReaderEnabled("zcode") { refreshProviderChecks() }
     }
 
     func setSourceEnabled(_ enabled: Bool, _ source: String, for providerKey: String) {
@@ -3486,7 +3503,10 @@ final class MonitorModel: ObservableObject {
     private nonisolated static func readLocalSources(
         preferences: QuotaReaderPreferences = .init()
     ) async -> LocalQuotaResult {
-        async let registered = LocalQuotaReaderRegistry.builtIn.read(preferences: preferences)
+        let registry = LocalQuotaReaderRegistry.configured(zCodeCredentialProvider: {
+            await ZAIQuotaCredentialStore.shared.load()
+        })
+        async let registered = registry.read(preferences: preferences)
         async let antigravity = AntigravitySummaryReader().read()
         var result = await registered
         let summary = await antigravity

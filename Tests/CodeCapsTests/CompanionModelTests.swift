@@ -8,6 +8,45 @@ import QuotaCore
 /// Mirrors the companion contract used on iOS so behavioral regressions
 /// are caught directly in the standard `swift test` suite.
 final class CompanionModelTests: XCTestCase {
+    @MainActor
+    func testSharedProjectionMatchesActualMacMetersForSanitizedScreenshotRows() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let stamp = ISO8601DateFormatter().string(from: now)
+        let reset = ISO8601DateFormatter().string(from: now.addingTimeInterval(3600))
+        func window(_ id: String, _ provider: String, _ token: String?, _ percent: Double?,
+                    model: String? = nil, label: String = "Quota") -> QuotaWindow {
+            QuotaWindow(id: id, provider: provider, providerKey: provider, modelId: model, label: label,
+                remainingPercent: percent, remainingUnknown: percent == nil, resetAt: reset,
+                window: token, occurredAt: stamp, source: "CodeCaps")
+        }
+        let fixtures = [
+            [window("minimax:plan", "minimax", nil, nil, label: "Plan"),
+             window("minimax:5h", "minimax", "5h", 92, model: "general"),
+             window("minimax:7d", "minimax", "7d", 74, model: "general")],
+            [window("claude:plan", "anthropic", nil, nil, label: "Plan"),
+             window("claude:5h", "anthropic", "5h", 80),
+             window("claude:missing", "anthropic", "7d", nil),
+             window("claude:7d", "anthropic", "7d", 0),
+             window("claude:fable", "anthropic", "7d", 0, model: "fable")]
+        ]
+        for windows in fixtures {
+            let section = QuotaResponse(generatedAt: stamp, windows: windows).platformSections(now: now)
+                .first { !$0.windows.isEmpty }!
+            let mac = DisplaySection.rows(for: section, now: now)[0]
+            let pair = glanceMeterPair(for: mac, now: now)
+            let macIDs = [pair.short?.window.id, pair.long?.window.id].compactMap { $0 }
+            let readings = windows.map {
+                QuotaCardProjection.Reading(id: $0.id, providerKey: $0.canonicalProviderKey, label: $0.label,
+                    window: $0.window, modelId: $0.modelId, remainingPercent: $0.boundedRemainingPercent,
+                    resetAt: $0.resetDate, reportedAt: $0.occurredDate, source: $0.source)
+            }
+            let companionIDs = QuotaCardProjection.selectedIndices(in: readings, now: now)
+                .filter { readings[$0].detailName == nil }.map { readings[$0].id }
+            XCTAssertEqual(companionIDs, macIDs)
+            XCTAssertEqual(companionIDs.count, 2)
+        }
+    }
+
     func testPhoneNonfiniteReadingGuardsRemainAtTextAndBarBoundaries() throws {
         let source = try readCompanionModelSource()
         XCTAssertTrue(source.contains("guard let remainingPercent, remainingPercent.isFinite else { return \"—\" }"))
@@ -316,8 +355,8 @@ final class CompanionModelTests: XCTestCase {
     func testAntigravityRowSelectsDrivingObservationWithoutAveraging() throws {
         let source = try readCompanionModelSource()
         XCTAssertTrue(
-            source.contains("(left.remainingPercent ?? 101) < (right.remainingPercent ?? 101)"),
-            "a tie between two models of one shared pool must take the lower value"
+            source.contains("QuotaCardProjection.selectedPoolIndices(in: facts, poolKey: poolKey, now: now)"),
+            "the companion must use the shared pool resolver tested for lower-value ties"
         )
         XCTAssertFalse(
             source.contains("remainingPercent) / Double("),
@@ -340,8 +379,8 @@ final class CompanionModelTests: XCTestCase {
     func testNonAntigravityPlatformsKeepTheirOwnWindows() throws {
         let source = try readCompanionModelSource()
         XCTAssertTrue(
-            source.contains("let modelQualifier = (w.modelId ?? \"\").lowercased()"),
-            "buildPlatformSection must still fold ordinary platforms by model-qualified cadence"
+            source.contains("let cadenceKey = reading(w).allowanceKey"),
+            "ordinary provider windows must use shared allowance identity, preserving named model details"
         )
     }
 
@@ -710,14 +749,10 @@ final class CompanionModelTests: XCTestCase {
 
     func testMiniMaxConsolidationToTwoWindows() throws {
         let source = try readCompanionModelSource()
-        XCTAssertTrue(
-            source.contains(#"let isMiniMax = providerKey.lowercased().contains("minimax")"#),
-            "MiniMax must be identified during platform section building"
-        )
-        XCTAssertTrue(
-            source.contains("let effectiveQualifier = isMiniMax ? \"\" : modelQualifier"),
-            "MiniMax must not split cadences by modelQualifier, collapsing into two primary windows"
-        )
+        XCTAssertTrue(source.contains("let cadenceKey = reading(w).allowanceKey"),
+                      "MiniMax model names must not create duplicate allowance rows")
+        XCTAssertTrue(source.contains("QuotaCardProjection.preferredIndex(in: [reading(current), reading(candidate)], now: now)"),
+                      "MiniMax and other providers must share measured Mac/source precedence")
     }
 
     func testCompanionMeterUsesHyphenatedCaptionsNotPopoverTags() throws {
@@ -926,11 +961,11 @@ final class CompanionModelTests: XCTestCase {
             "the phone must pick the freshest five-hour window, not the first one in payload order"
         )
         XCTAssertTrue(
-            source.contains("if isFresher(w, than: weeklyWin) { weeklyWin = w }"),
+            source.contains("let weeklyWin = selected.first { Self.antigravityPeriod(of: $0) == \"weekly\" }"),
             "the phone's weekly window must be the freshest one that matches"
         )
         XCTAssertTrue(
-            source.contains("if isFresher(w, than: fiveHourWin) { fiveHourWin = w }"),
+            source.contains("let fiveHourWin = selected.first { Self.antigravityPeriod(of: $0) == \"5h\" }"),
             "the phone's five-hour window must be the freshest one that matches"
         )
         XCTAssertTrue(

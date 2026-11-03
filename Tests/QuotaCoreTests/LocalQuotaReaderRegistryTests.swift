@@ -86,4 +86,25 @@ final class LocalQuotaReaderRegistryTests: XCTestCase {
         XCTAssertEqual(result.issues["same"], "last")
         XCTAssertEqual(result.consentNeeded, ["first", "second"])
     }
+    func testDisabledZAIReaderDoesNotResolveItsSavedKey() async {
+        let calls = InvocationCounter()
+        let registry = LocalQuotaReaderRegistry(registrations: [
+            LocalQuotaReaderRegistration(id: "zcode", label: "Z.ai", isOptional: true) {
+                ZCodeQuotaReader(credential: {
+                    calls.increment()
+                    return .init(region: .zAI, apiKey: "fixture-api-key")
+                }, fetch: { _ in
+                    XCTFail("Disabled optional reader must not make quota requests")
+                    throw URLError(.badURL)
+                })
+            }
+        ])
+        var preferences = QuotaReaderPreferences()
+        preferences.setEnabled(false, for: "zcode")
+        let result = await registry.read(preferences: preferences)
+        XCTAssertEqual(calls.value(), 0)
+        XCTAssertTrue(result.issues.isEmpty)
+        XCTAssertTrue(result.windows.isEmpty)
+    }
+
 }

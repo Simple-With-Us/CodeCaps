@@ -77,13 +77,13 @@ test('Sparkle reads the ASC credentials through the fleet reader, never reposito
   // direct loader must not be called from a workflow at all.
   assert.doesNotMatch(loader, /node scripts\/infisical-fetch\.mjs/);
   // The step is a single call to the tooling, and the tooling runs the
-  // consumer in the same process tree, so the minted token reaches it
+  // consumer in the same process tree, so the supplied service token reaches it
   // through its environment and never through a file.
   assert.match(loader, /run: \|[\s\S]*bash scripts\/install-release-secrets-tooling\.sh/);
   const tooling = read('scripts/install-release-secrets-tooling.sh');
   assert.match(tooling, /node "\$repo_root\/scripts\/stage-asc-key\.mjs"/);
   assert.doesNotMatch(tooling, /release-secrets-env\.sh/);
-  // The minted token must never reach the log.  The guard names every output
+  // The supplied service token must never reach the log.  The guard names every output
   // helper the script has, because a regression that printed through `say` or
   // `fail` would leak the token while a guard that only matched `printf`
   // still passed.
@@ -97,14 +97,18 @@ test('Sparkle reads the ASC credentials through the fleet reader, never reposito
   // is sent to fix vault permissions when the fault is the tooling.
   assert.match(tooling, /check_reader/);
   assert.match(tooling, /names --path \/asc/);
-  // The proof is a step of the install, after the token is minted, and the
+  // The proof is a step of the install, after the token is configured, and the
   // install is called before the consumer.  The order is asserted at the
   // call site:  the guard inside the function body only says the function
   // would prove the reader, not that the release calls it first.
   const installStart = tooling.indexOf('install_tooling() {');
   assert.notEqual(installStart, -1, 'the install has to be one function');
   const installBody = tooling.slice(installStart, tooling.indexOf('\n}\n', installStart));
-  assert.match(installBody, /mint_token \|\| return 1[\s\S]*check_reader \|\| return 1/);
+  assert.match(installBody, /configure_service_token \|\| return 1[\s\S]*install_infisical_cli \|\| return 1[\s\S]*install_fleet_secrets \|\| return 1[\s\S]*check_reader \|\| return 1/);
+  assert.match(tooling, /INFISICAL_CLI_VERSION="0\.44\.4"/);
+  assert.match(tooling, /INFISICAL_CLI_SHA256_arm64=/);
+  assert.match(tooling, /INFISICAL_CLI_SHA256_x86_64=/);
+  assert.doesNotMatch(tooling, /mint_token|universal-auth|INFISICAL_CLIENT_ID|INFISICAL_CLIENT_SECRET/);
   const installCall = tooling.indexOf('install_tooling || install_rc=$?');
   const consumerCall = tooling.indexOf('node "$repo_root/scripts/stage-asc-key.mjs"');
   assert.notEqual(installCall, -1, 'the release has to call the install');
@@ -148,17 +152,25 @@ test('Sparkle reads the ASC credentials through the fleet reader, never reposito
   // reads, and the staging script owns the folder inside it.
   assert.match(loader, /Load and stage the ASC credentials \(Fleet-OPS prod \/asc\)/);
   assert.match(stage, /SECRET_FOLDER = '\/asc'/);
-  assert.match(loader, /INFISICAL_CLIENT_ID: \$\{\{ secrets\.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID \|\| secrets\.INFISICAL_CLIENT_ID \}\}/);
-  assert.match(loader, /INFISICAL_CLIENT_SECRET: \$\{\{ secrets\.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET \|\| secrets\.INFISICAL_CLIENT_SECRET \}\}/);
-  // The bare Infisical CLI is gone: it prints the value to stdout, and its
-  // only install path is macOS-only.
+  assert.match(loader, /INFISICAL_PROJECT_ID: \$\{\{ secrets\.INFISICAL_FLEET_OPS_PROJECT_ID \}\}/);
+  assert.match(loader, /INFISICAL_SERVICE_TOKEN: \$\{\{ secrets\.INFISICAL_CODECAPS_CI_READ_SERVICE_TOKEN \}\}/);
+  const action = read('.github/actions/infisical-secrets/action.yml');
+  assert.match(action, /service-token:/);
+  assert.match(action, /INFISICAL_SERVICE_TOKEN: \$\{\{ inputs\.service-token \}\}/);
+  assert.doesNotMatch(action, /client-id:|client-secret:|universal-auth|INFISICAL_CLIENT_ID|INFISICAL_CLIENT_SECRET/);
+  assert.match(read('scripts/cursor-cloud-start.sh'), /INFISICAL_CODECAPS_PROD_ROOT_READ_SERVICE_TOKEN/);
+  assert.match(read('scripts/cursor-cloud-start.sh'), /authorization:\s*"Bearer "\s*\+\s*token/);
+  assert.doesNotMatch(read('scripts/cursor-cloud-start.sh'), /universal-auth|INFISICAL_CLIENT_ID|INFISICAL_CLIENT_SECRET/);
+  assert.doesNotMatch(loader, /INFISICAL_CLIENT_ID|INFISICAL_CLIENT_SECRET|UNIVERSAL_AUTH/);
+  // Workflows never call the CLI to print secret values.  The pinned CLI is
+  // installed only as the backend required by the fleet-secrets reader.
   for (const file of [workflow, iosShip]) {
     assert.doesNotMatch(file, /infisical secrets get/);
     assert.doesNotMatch(file, /infisical\/get-cli/);
   }
   assert.match(tooling, /stage-asc-key\.mjs/);
-  assert.match(loader, /Missing \$name in Fleet-OPS prod \/asc; verify the CI identity has read access to Fleet-OPS prod \/asc\./);
-  assert.match(loader, /Missing ASC key material in Fleet-OPS prod \/asc; verify the CI identity has read access to Fleet-OPS prod \/asc\./);
+  assert.match(loader, /Missing \$name in Fleet-OPS prod \/asc; verify the scoped \/asc read service token has access to Fleet-OPS prod \/asc\./);
+  assert.match(loader, /Missing ASC key material in Fleet-OPS prod \/asc; verify the scoped \/asc read service token has access to Fleet-OPS prod \/asc\./);
   assert.match(code, /NOTARY_KEY_PATH: \$\{\{ env.ASC_KEY_PATH \}\}/);
   assert.match(code, /NOTARY_KEY_ID: \$\{\{ env.ASC_KEY_ID \}\}/);
   assert.match(code, /NOTARY_ISSUER_ID: \$\{\{ env.ASC_ISSUER_ID \}\}/);

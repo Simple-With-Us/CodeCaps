@@ -91,6 +91,8 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
         return (observedAt ?? .distantPast) > (other.observedAt ?? .distantPast)
     }
 
+    public var isModelDetail: Bool { label == "Fable limit" || label == "Argon limit" }
+
     public var displayPercent: String {
         if !isMasked, remainingPercent == nil, let count = absoluteRemaining, count.isFinite, count >= 0 {
             return "\(count.formatted(.number.precision(.fractionLength(0...2)))) left"
@@ -272,8 +274,12 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
         return max(0.0, min(1.0, pct / 100.0))
     }
 
+    public var primaryWindows: [WidgetWindowItem] { windows.filter { !$0.isModelDetail } }
+    public var detailWindows: [WidgetWindowItem] { windows.filter(\.isModelDetail) }
+    public var hasModelDetails: Bool { !detailWindows.isEmpty }
+
     public var elapsedFraction: Double? {
-        windows.compactMap { $0.elapsedFraction() }.first
+        primaryWindows.compactMap { $0.elapsedFraction() }.first
     }
 
     /// The window whose exhausted allowance caps this plan, honouring masked
@@ -286,7 +292,7 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
     /// provider read "At Cap" beside bars the app had already recovered (owner,
     /// Oct-22-2026).
     public func atCapWindow(now: Date = Date()) -> WidgetWindowItem? {
-        windows
+        primaryWindows
             .filter { $0.isFresh(now: now) || (WidgetPresentation.isAtCap(percent: $0.remainingPercent, isExhausted: $0.isExhausted) && $0.resetAt != nil && $0.resetAt! > now) }
             .filter { !$0.isMasked && $0.remainingPercent != nil }
             .filter { WidgetPresentation.isAtCap(percent: $0.remainingPercent, isExhausted: $0.isExhausted) }
@@ -321,9 +327,9 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
     /// A masked window can never win `.mostUrgent`, since "we cannot see this
     /// one" is not urgency.
     public func controllingWindow(_ pick: WidgetWindowPick = .mostUrgent) -> WidgetWindowItem? {
-        guard !windows.isEmpty else { return nil }
-        let visible = windows.filter { !$0.isMasked }
-        let pool = visible.isEmpty ? windows : visible
+        guard !primaryWindows.isEmpty else { return nil }
+        let visible = primaryWindows.filter { !$0.isMasked }
+        let pool = visible.isEmpty ? primaryWindows : visible
         switch pick {
         case .mostHeadroom:
             // Counts have no denominator and cannot be ranked as 100% headroom.
@@ -337,6 +343,10 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
                 ($0.resetAt ?? .distantFuture) < ($1.resetAt ?? .distantFuture)
             }
         case .mostUrgent:
+            if providerKey == "muse-assist", let weekly = pool.first(where: { !$0.isExtraAllowance }) {
+                if QuotaCapRule.isAtCap(remainingPercent: weekly.remainingPercent), let extra = usableMuseExtra { return extra }
+                return weekly
+            }
             return pool.min {
                 // Least remaining first; soonest reset breaks the tie.
                 let lhs = $0.remainingPercent ?? 100
@@ -353,8 +363,8 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
     /// this returns the pair (shortest period first).  Returns nil if the plan does not have two distinct windows
     /// or if one of the windows carries no reading or reset date.
     public func dualWindows() -> (window1: WidgetWindowItem, window2: WidgetWindowItem)? {
-        guard windows.count >= 2 else { return nil }
-        let visible = windows.filter { !$0.isMasked && ($0.remainingPercent != nil || $0.absoluteRemaining != nil || $0.resetAt != nil) }
+        guard primaryWindows.count >= 2 else { return nil }
+        let visible = primaryWindows.filter { !$0.isMasked && ($0.remainingPercent != nil || $0.absoluteRemaining != nil || $0.resetAt != nil) }
         guard visible.count >= 2 else { return nil }
         return (visible[0], visible[1])
     }
@@ -383,8 +393,8 @@ public enum WidgetPresentation {
 
     public static func displayPercent(percent: Double?, isMasked: Bool) -> String {
         if isMasked { return "n/a" }
-        guard let percent else { return "—" }
-        return "\(Int(percent.rounded()))%"
+        guard let percent, percent.isFinite else { return "—" }
+        return "\(Int(min(100, max(0, percent)).rounded()))%"
     }
 
     public static func statusColor(percent: Double?, isMasked: Bool) -> Color {
@@ -522,6 +532,8 @@ public enum WidgetPresentation {
         let window: String?
         let resetAt: String?
         let occurredAt: String?
+        let reportedAt: String?
+        let via: String?
         let source: String?
         let machine: String?
         let producerInstanceId: String?
@@ -541,7 +553,7 @@ public enum WidgetPresentation {
 
         private enum CodingKeys: String, CodingKey {
             case id, provider, providerKey, label, remainingPercent, isExhausted
-            case modelType, modelId, window, resetAt, occurredAt, source, machine
+            case modelType, modelId, window, resetAt, occurredAt, reportedAt, via, source, machine
             case producerInstanceId, remainingUnknown, absoluteRemaining, plan, planName, planMetadata
             case planDetectedName, planUserName, planUserCostUsd, planUserRenewalDateText
             case planUserSubtitle, planShowCostAndRenewal, planHasMismatch, planUserUpdatedAt
@@ -560,6 +572,8 @@ public enum WidgetPresentation {
             window = try container.decodeIfPresent(String.self, forKey: .window)
             resetAt = try container.decodeIfPresent(String.self, forKey: .resetAt)
             occurredAt = try container.decodeIfPresent(String.self, forKey: .occurredAt)
+            reportedAt = try container.decodeIfPresent(String.self, forKey: .reportedAt)
+            via = try container.decodeIfPresent(String.self, forKey: .via)
             source = try container.decodeIfPresent(String.self, forKey: .source)
             machine = try container.decodeIfPresent(String.self, forKey: .machine)
             producerInstanceId = try container.decodeIfPresent(String.self, forKey: .producerInstanceId)
@@ -727,11 +741,11 @@ public enum WidgetPresentation {
         if !antigravityWindows.isEmpty {
             let geminiWindows = antigravityWindows.filter {
                 let s = ($0.id + " " + $0.label + " " + ($0.modelType ?? "") + " " + ($0.modelId ?? "")).lowercased()
-                return s.contains("gemini")
+                return s.contains("gemini") || s.contains("argon")
             }
             let thirdPartyWindows = antigravityWindows.filter {
                 let s = ($0.id + " " + $0.label + " " + ($0.modelType ?? "") + " " + ($0.modelId ?? "")).lowercased()
-                return !s.contains("gemini")
+                return !s.contains("gemini") && !s.contains("argon")
             }
 
             if let item = consolidateAntigravityPool(
@@ -776,6 +790,16 @@ public enum WidgetPresentation {
         return platforms
     }
 
+    private static func quotaReading(_ wire: WireRawWindow, providerKey: String) -> QuotaCardProjection.Reading {
+        QuotaCardProjection.Reading(id: wire.id, providerKey: providerKey, label: wire.label,
+            window: wire.window, modelId: wire.modelId, modelType: wire.modelType,
+            remainingPercent: wire.remainingUnknown == true ? nil : wire.remainingPercent,
+                absoluteRemaining: wire.absoluteRemaining,
+            resetAt: parseDate(from: wire.resetAt),
+            reportedAt: parseDate(from: wire.reportedAt) ?? parseDate(from: wire.occurredAt),
+            source: wire.source, via: wire.via)
+    }
+
     /// Build a single WidgetPlatformItem from a window group + manifest hints.
     private static func buildPlatformItem(
         id: String,
@@ -803,123 +827,36 @@ public enum WidgetPresentation {
             }
         }
 
-        var windowByCadence: [String: WidgetWindowItem] = [:]
-        var cadenceOrder: [String] = []
-        var childWindows: [WidgetWindowItem] = []
-
-        // A copy of a period that ended before the last refresh is not a
-        // reading, so it never becomes a row here either.  The rule is the
-        // shared one, the same the Mac and the phone ask, so the three
-        // surfaces cannot drift apart, and it is asked with the reading's own
-        // observation time.  It only judges copies:  this Mac's own reading
-        // keeps its row, so an expired one greys out instead of vanishing.
         let liveWindows = rawWindows.filter { w in
-            let lowId = w.id.lowercased()
-            let lowLabel = w.label.lowercased()
-            if lowId.hasSuffix(":plan-metadata") || lowLabel == "plan details" {
-                return false
-            }
-            if (w.remainingUnknown == true || lowLabel.contains("plan details"))
-                && w.remainingPercent == nil
-                && w.absoluteRemaining == nil
-                && parseDate(from: w.resetAt) == nil
-                && !QuotaWindowVocabulary.isExtraAllowanceLabel(w.label) {
-                return false
-            }
-            if QuotaWindowVocabulary.isOwnDeviceWindow(id: w.id,
-                                                        source: w.source,
-                                                        machine: w.machine,
-                                                        producerInstanceId: w.producerInstanceId,
-                                                        ownInstanceId: ownInstanceId) {
-                return true
-            }
-            return !QuotaFreshnessRule.isDeadCopy(observedAt: parseDate(from: w.occurredAt),
-                                                  resetAt: parseDate(from: w.resetAt),
-                                                  now: now)
+            let reading = quotaReading(w, providerKey: providerKey)
+            guard reading.isQuota else { return false }
+            if QuotaWindowVocabulary.isOwnDeviceWindow(id: w.id, source: w.source, machine: w.machine,
+                producerInstanceId: w.producerInstanceId, ownInstanceId: ownInstanceId) { return true }
+            return !QuotaFreshnessRule.isDeadCopy(observedAt: reading.reportedAt, resetAt: reading.resetAt, now: now)
         }
-
-        for w in liveWindows {
-            let parsedReset = parseDate(from: w.resetAt)
-            let observed = parseDate(from: w.occurredAt)
-            let cadence = formatCadence(w.label, window: w.window, resetAt: parsedReset)
-            let pct = w.remainingPercent
-            // The one shared rule decides, as it does on the phone and on the
-            // Mac:  a reading outranks the export's stale exhausted word, and
-            // the word is the fallback for a window that reports no figure.
-            let exhausted = QuotaCapRule.isExhausted(remainingPercent: pct,
-                                                      providerSaysExhausted: w.isExhausted ?? false)
-            let displayLabel = QuotaWindowVocabulary.windowLabel(
-                windowToken: w.window,
-                existingLabel: w.label.isEmpty ? cadence : w.label,
-                resetAt: parsedReset
-            )
-            //  The extra-allowance identity is read off the wire label, not
-            //  off the display label:  the display copy rewrites an extra
-            //  allowance into the same "Other limit" text every unknown
-            //  window gets, so by the time the qualifier is resolved the
-            //  difference is gone.
-            let isExtraAllowance = QuotaWindowVocabulary.isExtraAllowance(
-                providerKey: providerKey,
-                label: w.label,
-                windowToken: w.window
-            )
-
-            let item = WidgetWindowItem(
-                id: w.id,
-                label: displayLabel,
-                cadence: cadence,
-                remainingPercent: pct,
-                resetAt: parsedReset,
-                isExhausted: exhausted,
-                isMasked: false,
-                observedAt: observed,
-                isExtraAllowance: isExtraAllowance,
-                absoluteRemaining: w.absoluteRemaining
-            )
-
-            // One window per cadence, and the freshest one.  The payload
-            // carries a fleet copy beside the local window, and the fleet copy
-            // is often days old, so taking the first one in payload order let a
-            // stale copy win and the widget show figures the app had already
-            // replaced (owner, Oct-22-2026).
-            let cadenceKey = cadence.lowercased()
-            if let current = windowByCadence[cadenceKey] {
-                if item.isFresher(than: current, now: now) {
-                    windowByCadence[cadenceKey] = item
-                }
-            } else {
-                cadenceOrder.append(cadenceKey)
-                windowByCadence[cadenceKey] = item
-            }
+        let readings = liveWindows.map { quotaReading($0, providerKey: providerKey) }
+        let childWindows = QuotaCardProjection.selectedIndices(in: readings, now: now).map { index in
+            let w = liveWindows[index]
+            let reading = readings[index]
+            return WidgetWindowItem(id: w.id, label: reading.displayLabel,
+                cadence: formatCadence(w.label, window: w.window, resetAt: reading.resetAt),
+                remainingPercent: reading.remainingPercent, resetAt: reading.resetAt,
+                isExhausted: QuotaCapRule.isExhausted(remainingPercent: reading.remainingPercent,
+                                                     providerSaysExhausted: w.isExhausted ?? false),
+                observedAt: reading.reportedAt,
+                isExtraAllowance: QuotaWindowVocabulary.isExtraAllowance(providerKey: providerKey,
+                    label: w.label, windowToken: w.window), absoluteRemaining: w.absoluteRemaining)
         }
-        childWindows = cadenceOrder.compactMap { windowByCadence[$0] }
-
-        // Standardize cadence order: shorter periods (e.g. 5-hour) precede longer periods (e.g. weekly).
-        childWindows.sort { left, right in
-            let lPeriod = ResetAlarmCadence.periodSeconds(token: left.cadence, label: left.label) ?? 86400
-            let rPeriod = ResetAlarmCadence.periodSeconds(token: right.cadence, label: right.label) ?? 86400
-            if lPeriod != rPeriod {
-                return lPeriod < rPeriod
-            }
-            return left.id < right.id
-        }
-
-        // The headline reads the fresh windows, the way the Mac's dashboard row
-        // does:  a stale reading says how the plan looked when it was taken.
-        // The last known reading stands in when nothing is fresh, so a row with
-        // no live reading still shows what it last knew, beside the time it
-        // was taken.
-        let freshWindows = childWindows.filter { $0.isFresh(now: now) }
-        let freshPercent = freshWindows.compactMap(\.remainingPercent).min()
-        let lastKnownPercent = childWindows.compactMap(\.remainingPercent).min()
-        // Only a fresh window may cap the plan.
-        let atCap = freshWindows.first {
-            WidgetPresentation.isAtCap(percent: $0.remainingPercent, isExhausted: $0.isExhausted)
-        }
-        let controllingPct = atCap?.remainingPercent ?? freshPercent ?? lastKnownPercent
-        let isExhausted = atCap != nil
-        let nearestReset = childWindows.compactMap(\.resetAt).filter { $0 > now }.min()
-            ?? childWindows.compactMap(\.resetAt).min()
+        let primary = childWindows.filter { !$0.isModelDetail }
+        let fresh = primary.filter { $0.isFresh(now: now) }
+        let headline = fresh.isEmpty ? primary : fresh
+        let controllingPct = CardHeadline.percent(headline.map {
+            CardHeadline.Reading(isMuseAssistExtra: providerKey == "muse-assist" && $0.isExtraAllowance,
+                isMasked: $0.isMasked, remainingPercent: $0.remainingPercent)
+        })
+        let isExhausted = fresh.contains { QuotaCapRule.isAtCap(remainingPercent: $0.remainingPercent) }
+        let nearestReset = primary.compactMap(\.resetAt).filter { $0 > now }.min()
+            ?? primary.compactMap(\.resetAt).min()
 
         let automaticPlan = rawWindows.compactMap(\.planName).first(where: { !$0.isEmpty })
             ?? rawWindows.compactMap(\.plan).first(where: { !$0.isEmpty })
@@ -980,7 +917,7 @@ public enum WidgetPresentation {
                                                         ownInstanceId: ownInstanceId) {
                 return true
             }
-            return !QuotaFreshnessRule.isDeadCopy(observedAt: parseDate(from: w.occurredAt),
+            return !QuotaFreshnessRule.isDeadCopy(observedAt: parseDate(from: w.reportedAt) ?? parseDate(from: w.occurredAt),
                                                   resetAt: parseDate(from: w.resetAt),
                                                   now: now)
         }
@@ -997,7 +934,7 @@ public enum WidgetPresentation {
         /// shared rule.
         func isFresh(_ window: WireRawWindow?) -> Bool {
             guard let window else { return false }
-            return QuotaFreshnessRule.isFresh(observedAt: parseDate(from: window.occurredAt),
+            return QuotaFreshnessRule.isFresh(observedAt: parseDate(from: window.reportedAt) ?? parseDate(from: window.occurredAt),
                                               resetAt: parseDate(from: window.resetAt),
                                               now: now)
         }
@@ -1015,18 +952,10 @@ public enum WidgetPresentation {
                 > (parseDate(from: current.occurredAt) ?? .distantPast)
         }
 
-        for w in windows {
-            let label = (w.label + " " + (w.window ?? "")).lowercased()
-            if label.contains("5h") || label.contains("5-hour") {
-                if isFresher(w, than: fiveHourWin) {
-                    fiveHourWin = w
-                }
-            } else if label.contains("7d") || label.contains("weekly") || label.contains("1w") {
-                if isFresher(w, than: weeklyWin) {
-                    weeklyWin = w
-                }
-            }
-        }
+        let readings = windows.map { quotaReading($0, providerKey: "google-antigravity") }
+        let selected = QuotaCardProjection.selectedPoolIndices(in: readings, poolKey: poolKey, now: now).map { windows[$0] }
+        fiveHourWin = selected.first { QuotaCardProjection.antigravityPeriod(quotaReading($0, providerKey: "google-antigravity")) == "5h" }
+        weeklyWin = selected.first { QuotaCardProjection.antigravityPeriod(quotaReading($0, providerKey: "google-antigravity")) == "weekly" }
 
         let weeklyPct = weeklyWin?.remainingPercent
         // Only a fresh window may spend the pool.  A pool copy that is days old
@@ -1052,7 +981,7 @@ public enum WidgetPresentation {
                 resetAt: reset,
                 isExhausted: fiveHourSpent,
                 isMasked: weeklyExhausted,
-                observedAt: parseDate(from: f.occurredAt)
+                observedAt: parseDate(from: f.reportedAt) ?? parseDate(from: f.occurredAt)
             ))
         }
 
@@ -1070,23 +999,22 @@ public enum WidgetPresentation {
                 resetAt: reset,
                 isExhausted: weeklyExhausted,
                 isMasked: false,
-                observedAt: parseDate(from: w.occurredAt)
+                observedAt: parseDate(from: w.reportedAt) ?? parseDate(from: w.occurredAt)
             ))
         }
 
-        let validPercents = [fiveHourWin?.remainingPercent, weeklyWin?.remainingPercent].compactMap { $0 }
-        // The headline reads the fresh windows, the way the Mac's dashboard row
-        // does, and falls back to the last known reading when nothing is fresh.
-        let freshPercents = [
-            fiveHourWin.flatMap { isFresh($0) ? $0.remainingPercent : nil },
-            weeklyWin.flatMap { isFresh($0) ? $0.remainingPercent : nil }
-        ].compactMap { $0 }
-        let controllingPct = freshPercents.min() ?? validPercents.min() ?? windows.compactMap(\.remainingPercent).min()
-        // The pool rule the phone applies:  a weekly the provider reports as
-        // spent spends the pool even when the five-hour window beside it still
-        // reports a healthy reading, and the controlling reading decides every
-        // other case.
-        let isExhausted = weeklyExhausted || QuotaCapRule.isAtCap(remainingPercent: freshPercents.min())
+        let primary = childWindows
+        let fresh = primary.filter { $0.isFresh(now: now) && !$0.isMasked }
+        let fallback = primary.filter { !$0.isMasked }
+        let controllingPct = (fresh.isEmpty ? fallback : fresh).compactMap(\.remainingPercent).min()
+        let isExhausted = weeklyExhausted || QuotaCapRule.isAtCap(remainingPercent: fresh.compactMap(\.remainingPercent).min())
+        let detailReports = windows.filter { quotaReading($0, providerKey: "google-antigravity").detailName == "Argon" }
+        if !detailReports.isEmpty {
+            let details = buildPlatformItem(id: "argon", providerKey: "google-antigravity", title: title,
+                iconHint: iconHint, defaultWindowLabel: nil, rawWindows: detailReports, now: now,
+                ownInstanceId: ownInstanceId)
+            childWindows += details.detailWindows
+        }
 
         let nearestReset = childWindows.compactMap(\.resetAt).filter { $0 > now }.min()
             ?? childWindows.compactMap(\.resetAt).min()
@@ -1169,7 +1097,7 @@ public enum WidgetPresentation {
         if pKey.contains("muse-assist") || prov.contains("muse-assist") || prov.contains("muse assist") || id.contains("assist") {
             return ("muse-assist", "Muse Assist", "muse-assist")
         }
-        if pKey.contains("muse-code") || prov.contains("muse-code") || prov.contains("muse code") || id.contains("code") {
+        if pKey.contains("muse-code") || prov.contains("muse-code") || prov.contains("muse code") || id.hasPrefix("local-mac:muse-code:") {
             return ("muse-code", "Muse Code", "muse-code")
         }
         if pKey.contains("muse") || prov.contains("muse") {
@@ -1184,7 +1112,7 @@ public enum WidgetPresentation {
         if pKey.contains("grok") || prov.contains("grok") || pKey.contains("xai") || prov.contains("xai") {
             return ("xai", "Grok", "xai")
         }
-        let fallbackKey = (raw.providerKey ?? raw.provider).trimmingCharacters(in: .whitespacesAndNewlines)
+        let fallbackKey = canonicalManifestKey(provider: raw.providerKey ?? raw.provider, via: raw.via)
         let key = fallbackKey.isEmpty ? "other" : fallbackKey
         let title = WidgetPlatformDisplay.title(canonicalKey: key, wireProvider: raw.provider)
         return (key, title, fallbackKey.isEmpty ? key : fallbackKey)
