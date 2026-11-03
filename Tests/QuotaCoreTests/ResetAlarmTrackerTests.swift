@@ -476,10 +476,10 @@ final class ResetAlarmTrackerTests: XCTestCase {
 
         let scheduledAt = weeklyEnd + hour
         let scheduled = tracker.process(
-            [reading("general", period: 7 * day, resetAt: weeklyEnd + 7 * day, remaining: 70,
+            [reading("general", period: 7 * day, resetAt: weeklyEnd + 7 * day, remaining: 100,
                      observedAt: scheduledAt, provider: "minimax", label: "7d")],
             now: scheduledAt)
-        XCTAssertEqual(scheduled.map(\.reason), [.newPeriod], "A later weekly rollover remains a scheduled reset even if usage fell.")
+        XCTAssertEqual(scheduled.map(\.reason), [.newPeriod], "A later weekly rollover with quota restored remains a scheduled reset.")
     }
 
     func testPreEndResetTimeCorrectionWithoutQuotaRiseIsNotAnAlarm() {

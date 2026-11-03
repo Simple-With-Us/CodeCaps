@@ -462,7 +462,7 @@ struct SettingsSourcesFleetPage: View {
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Most provider quotas use each CLI's existing local sign-in." + sentenceGap
-                     + "Z.ai Coding Plan quota reads use the API key you save here.")
+                     + "Z.ai Coding Plan quota reads use your ZCode sign-in, or the regional API key you save here.")
                 Text("Provider Checks use existing local sign-ins and provider quota endpoints." + sentenceGap
                      + "Copilot uses your existing GitHub CLI sign-in.")
                 Text("Codex Session File Checks: 1 local quota source." + sentenceGap
