@@ -36,6 +36,7 @@ final class SMSAlertController: ObservableObject {
     private let credentialAccess: SMSCredentialAccess
     private let coordinator: SMSAlertCoordinator
     private var setupRevision: UInt64 = 0
+    private var deliveryTasks: [UUID: Task<Void, Never>] = [:]
 
     init(defaults: UserDefaults, credentialAccess: SMSCredentialAccess? = nil,
          coordinator: SMSAlertCoordinator? = nil) {
@@ -54,26 +55,32 @@ final class SMSAlertController: ObservableObject {
     func deliver(kind: String, title: String, body: String, eventID: String) -> Task<Void, Never>? {
         guard preferences[kind], hasSavedSetup else { return nil }
         let revision = setupRevision
-        return Task { [weak self] in
+        let deliveryID = UUID()
+        let task = Task { @MainActor [weak self] in
             guard let self else { return }
-            let credentials = await credentialAccess.load()
-            guard revision == setupRevision, preferences[kind], hasSavedSetup else { return }
-            let result = await coordinator.send(eventID: eventID, kind: kind, title: title, body: body,
-                                                 preferences: preferences, credentials: credentials)
-            guard revision == setupRevision else { return }
+            defer { self.deliveryTasks.removeValue(forKey: deliveryID) }
+            guard !Task.isCancelled else { return }
+            let credentials = await self.credentialAccess.load()
+            guard !Task.isCancelled, revision == self.setupRevision,
+                  self.preferences[kind], self.hasSavedSetup else { return }
+            let result = await self.coordinator.send(eventID: eventID, kind: kind, title: title, body: body,
+                                                      preferences: self.preferences, credentials: credentials)
+            guard !Task.isCancelled, revision == self.setupRevision else { return }
             switch result {
-            case .accepted: status = "Text accepted by Twilio."
-            case .failed(let failure): status = failure.localizedDescription
+            case .accepted: self.status = "Text accepted by Twilio."
+            case .failed(let failure): self.status = failure.localizedDescription
             case .disabled, .duplicate: break
             }
         }
+        deliveryTasks[deliveryID] = task
+        return task
     }
 
     @discardableResult
     func saveSetup(configuration: TwilioSMSConfiguration, apiKeySecret: String) async -> Bool {
         guard !isWorking else { return false }
         isWorking = true
-        setupRevision &+= 1
+        invalidateDeliveries()
         defer { isWorking = false }
         do {
             var secret = apiKeySecret.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -100,7 +107,7 @@ final class SMSAlertController: ObservableObject {
     func forgetSetup() async {
         guard !isWorking else { return }
         isWorking = true
-        setupRevision &+= 1
+        invalidateDeliveries()
         defer { isWorking = false }
         do {
             try await credentialAccess.clear()
@@ -117,7 +124,7 @@ final class SMSAlertController: ObservableObject {
     func reauthorizeSavedSetup() async {
         guard !isWorking else { return }
         isWorking = true
-        setupRevision &+= 1
+        invalidateDeliveries()
         defer { isWorking = false }
         guard let credentials = await credentialAccess.reauthorize(),
               (try? credentials.validate()) != nil else {
@@ -126,6 +133,13 @@ final class SMSAlertController: ObservableObject {
         }
         remember(credentials.configuration)
         status = "Saved Twilio setup authorized."
+    }
+
+    private func invalidateDeliveries() {
+        setupRevision &+= 1
+        let active = Array(deliveryTasks.values)
+        deliveryTasks.removeAll()
+        active.forEach { $0.cancel() }
     }
 
     private func remember(_ config: TwilioSMSConfiguration) {
