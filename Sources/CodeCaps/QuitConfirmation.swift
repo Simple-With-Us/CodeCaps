@@ -31,3 +31,12 @@ extension QuitConfirmationPolicy {
         displayMode != .dock || keepRunningOverride
     }
 }
+
+@MainActor
+extension QuitConfirmationPolicy {
+    static func windowsToHide(managed: [NSWindow?]) -> [NSWindow] {
+        managed.compactMap { $0 }.filter {
+            $0.styleMask.contains(.titled) && $0.level != .statusBar && $0.level != .popUpMenu
+        }
+    }
+}
