@@ -214,7 +214,7 @@ private extension KimiQuotaReader {
 
     /// Newest credential JSON under the two documented roots, then the
     /// `api_key` lines of `config.toml` / `config.json` as a last resort.
-    static func readLocalAccessToken(home: URL) -> String? {
+    internal static func readLocalAccessToken(home: URL) -> String? {
         let roots = [
             ProcessInfo.processInfo.environment["KIMI_CODE_HOME"].map { URL(fileURLWithPath: $0) }
                 ?? home.appendingPathComponent(".kimi-code"),
@@ -249,7 +249,11 @@ private extension KimiQuotaReader {
     static func credentialToken(at url: URL) -> String? {
         guard let data = try? Data(contentsOf: url, options: .mappedIfSafe), data.count <= Self.maxCredentialBytes,
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-        guard let token = string(root["access_token"]), validToken(token) else { return nil }
+        // Extract the raw string, NOT via the label-capped string() helper:
+        // that helper caps at 160 bytes for display names, and a real OAuth
+        // access token is routinely far longer - routing it through the cap
+        // silently read a signed-in account as "no local sign-in".
+        guard let token = root["access_token"] as? String, validToken(token) else { return nil }
         // A token whose recorded expiry has passed is only going to earn a
         // 401; the CLI refreshes it on next use, so report the stored one
         // anyway and let the server answer.
