@@ -79,7 +79,7 @@ public struct LocalQuotaReaderRegistry: Sendable {
     /// allows future providers without a dynamic code loader.
     public static let builtIn = configured(zCodeCredentialProvider: { nil })
 
-    /// The optional Z.ai factory resolves its own saved key only when selected.
+    /// The optional Z.ai factory resolves its saved regional key when selected, otherwise using the ZCode sign-in chain.
     public static func configured(
         zCodeCredentialProvider: @escaping @Sendable () async -> ZCodeQuotaCredential?
     ) -> LocalQuotaReaderRegistry {
