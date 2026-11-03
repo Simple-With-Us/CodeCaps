@@ -491,21 +491,19 @@ public struct ResetAlarmTracker: Sendable {
             let hasPassed = readAt >= previousReset.addingTimeInterval(-60)
             if let reported = observation.resetAt {
                 let jump = reported.timeIntervalSince(previousReset)
-                let required = hasPassed
-                    ? ResetAlarmPolicy.resetDriftTolerance
-                    : max(ResetAlarmPolicy.resetDriftTolerance,
-                          window.periodSeconds.map { $0 * ResetAlarmPolicy.earlyResetShareOfPeriod }
-                              ?? ResetAlarmPolicy.earlyResetUnknownPeriod)
-                // A correction is not proof of restored quota when a readable percentage stays flat or falls; allow an unmeasured scheduled rollover only after the old end passes.
-                var climbed = false
-                if let reading, let last = window.lastRemaining {
-                    climbed = reading >= last + ResetAlarmPolicy.earlyResetRiseMargin
-                }
-                let rose = reading.flatMap { current in
-                    window.lastRemaining.map { current > $0 + ResetAlarmPolicy.riseEpsilon }
+                // A deadline correction needs a substantial quota rise or an elapsed full cadence.
+                let climbed = reading.flatMap { current in
+                    window.lastRemaining.map { current >= $0 + ResetAlarmPolicy.earlyResetRiseMargin }
                 } ?? false
-                let resetHasQuotaEvidence = rose || (hasPassed && reading == nil)
-                if (jump > required && resetHasQuotaEvidence)
+                let advancedFullCadence = window.periodSeconds.map { period in
+                    // Calendar months range from 28 to 31 days; fixed cadences use drift tolerance.
+                    let tolerance = ResetAlarmPolicy.resetDriftTolerance
+                    if (28 * 86_400...31 * 86_400).contains(period) {
+                        return jump >= 28 * 86_400 - tolerance && jump <= 31 * 86_400 + tolerance
+                    }
+                    return abs(jump - period) <= tolerance
+                } ?? false
+                if (hasPassed && advancedFullCadence)
                     || (jump > ResetAlarmPolicy.resetDriftTolerance && climbed) {
                     isReset = true
                     // When the window had *not* reached its own scheduled end,
@@ -549,8 +547,10 @@ public struct ResetAlarmTracker: Sendable {
             }
             // The old period is over and the percentage went back up, even
             // though the reader has not published the next reset time yet.
-            if !isReset, hasPassed, let reading, let last = window.lastRemaining,
-               reading > last + ResetAlarmPolicy.riseEpsilon {
+            if !isReset, hasPassed,
+               observation.resetAt.map({ $0 <= previousReset + ResetAlarmPolicy.resetDriftTolerance }) ?? true,
+               let reading, let last = window.lastRemaining,
+               reading >= last + ResetAlarmPolicy.earlyResetRiseMargin {
                 isReset = true
                 nextResetAt = observation.resetAt.flatMap { $0 > readAt ? $0 : nil }
             }
@@ -591,7 +591,7 @@ public struct ResetAlarmTracker: Sendable {
             //  - the quota jumps to full from anything less.
             //  - the quota was nearly spent and is now nearly untouched.
             if !isReset, !hasPassed, let reading, let last = window.lastRemaining {
-                let jumpedToFull = reading >= 99.5 && last < 99.5
+                let jumpedToFull = reading >= 99.5 && reading >= last + ResetAlarmPolicy.earlyResetRiseMargin
                 let surgedMidWindow = last < 80.0 && reading >= 95.0
                 // "Held still" and "slid with the clock" are two separate
                 // questions, and asking them as two separate questions keeps
@@ -657,7 +657,7 @@ public struct ResetAlarmTracker: Sendable {
                 nextResetAt = reported
             }
             if let reading, let last = window.lastRemaining {
-                let jumpedToFull = reading >= 99.5 && last < 99.5
+                let jumpedToFull = reading >= 99.5 && reading >= last + ResetAlarmPolicy.earlyResetRiseMargin
                 let surgedMidWindow = last < 80.0 && reading >= 95.0
                 if jumpedToFull || surgedMidWindow {
                     isReset = true
