@@ -171,13 +171,17 @@ public struct AntigravitySummaryReader: Sendable {
     }
 
     private static func fetch(_ request: URLRequest) async throws -> Data {
-        let delegate = LocalTLSDelegate(); let config = URLSessionConfiguration.ephemeral; config.timeoutIntervalForRequest = request.timeoutInterval; config.timeoutIntervalForResource = request.timeoutInterval; config.httpCookieStorage = nil; config.urlCache = nil
-        let session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil); defer { session.invalidateAndCancel() }
-        let (bytes, response) = try await session.bytes(for: request)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw SummaryError.unavailable }
-        var data = Data(); data.reserveCapacity(16_384)
-        for try await byte in bytes { guard data.count < 1_048_576 else { throw SummaryError.tooLarge }; data.append(byte) }
-        return data
+        do {
+            let (data, response) = try await BoundedHTTPFetch.data(for: request, timeout: request.timeoutInterval, maxBytes: 1_048_576, delegate: LocalTLSDelegate())
+            guard (200..<300).contains(response.statusCode) else { throw SummaryError.unavailable }
+            return data
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let failure as BoundedHTTPFetch.Failure where failure == .tooLarge {
+            throw SummaryError.tooLarge
+        } catch {
+            throw SummaryError.unavailable
+        }
     }
 
     private enum SummaryError: Error { case unavailable, tooLarge, malformed }

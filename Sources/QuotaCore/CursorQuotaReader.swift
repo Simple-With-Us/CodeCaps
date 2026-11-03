@@ -360,21 +360,13 @@ private extension CursorQuotaReader {
 
     static func makeFetcher() -> @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse) {
         return { request in
-            let delegate = CursorNoRedirectDelegate()
-            let config = URLSessionConfiguration.ephemeral
-            config.httpCookieStorage = nil; config.urlCache = nil; config.requestCachePolicy = .reloadIgnoringLocalCacheData
-            config.timeoutIntervalForRequest = timeout; config.timeoutIntervalForResource = timeout
-            let session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
-            defer { session.invalidateAndCancel() }
-            let (bytes, response) = try await session.bytes(for: request)
-            guard let http = response as? HTTPURLResponse else { throw CursorQuotaError.unavailable }
-            if let length = http.value(forHTTPHeaderField: "Content-Length"), let count = Int(length), count > maxResponseBytes { throw CursorQuotaError.unavailable }
-            var data = Data(); data.reserveCapacity(16_384)
-            for try await byte in bytes {
-                guard data.count < maxResponseBytes else { throw CursorQuotaError.unavailable }
-                data.append(byte)
+            do {
+                return try await BoundedHTTPFetch.data(for: request, timeout: timeout, maxBytes: maxResponseBytes)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                throw CursorQuotaError.unavailable
             }
-            return (data, http)
         }
     }
 
@@ -410,6 +402,3 @@ private extension CursorQuotaReader {
 
 private let cursorSQLiteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
-private final class CursorNoRedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
-    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) { completionHandler(nil) }
-}
