@@ -25,11 +25,13 @@ public struct MuseCodeTokenSegment: Equatable, Sendable {
         self.sourceLastId = sourceLastId
     }
 
-    /// The segment's identity inside its session, matching the dedupe key the
-    /// survey scripts use: (sourceRange first id, last id, model, total).
+    /// The segment's identity inside its session is its exact source range and model.  Its total is a high-water
+    /// value, not part of identity, when both boundaries exist.  If either boundary is absent, the total remains
+    /// in the key because the reader cannot safely prove those observations belong to the same segment.
     public var dedupeKey: String {
-        [sourceFirstId ?? "", sourceLastId ?? "", modelId, String(totalTokens)]
-            .joined(separator: "\u{1}")
+        var parts = [sourceFirstId ?? "", sourceLastId ?? "", modelId]
+        if sourceFirstId == nil || sourceLastId == nil { parts.append(String(totalTokens)) }
+        return parts.joined(separator: "\u{1}")
     }
 
     public var isContributor: Bool { modelId.hasSuffix("-contributor") }
@@ -361,11 +363,23 @@ public struct MuseCodeSessionReader: Sendable {
         // that ends mid-window leaves only the segments still on disk.  Every
         // total this aggregation produces is therefore a floor, not an exact
         // count — the plugin page says so wherever it shows these numbers.
-        var seen = Set<String>()
-        var segments: [MuseCodeTokenSegment] = []
-        for segment in raw.sorted(by: { $0.observedAt < $1.observedAt }) {
-            guard seen.insert(segment.sessionId + "\u{1}" + segment.dedupeKey).inserted else { continue }
-            segments.append(segment)
+        var highWaterBySegment: [String: MuseCodeTokenSegment] = [:]
+        for candidate in raw {
+            let key = candidate.sessionId + "\u{1}" + candidate.dedupeKey
+            guard let current = highWaterBySegment[key] else {
+                highWaterBySegment[key] = candidate
+                continue
+            }
+            if candidate.totalTokens > current.totalTokens
+                || (candidate.totalTokens == current.totalTokens && candidate.observedAt > current.observedAt) {
+                highWaterBySegment[key] = candidate
+            }
+        }
+        let segments = highWaterBySegment.values.sorted { left, right in
+            if left.observedAt != right.observedAt { return left.observedAt < right.observedAt }
+            if left.sessionId != right.sessionId { return left.sessionId < right.sessionId }
+            if left.modelId != right.modelId { return left.modelId < right.modelId }
+            return left.dedupeKey < right.dedupeKey
         }
         let horizon = now.addingTimeInterval(futureTolerance)
         let windows = windowMinutes.map { minutes -> MuseCodeWindowUsage in

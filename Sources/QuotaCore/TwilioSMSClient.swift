@@ -152,7 +152,20 @@ public struct TwilioSMSClient: Sendable {
     }
 
     private static func formEncode(_ value: String) -> String {
-        value.addingPercentEncoding(withAllowedCharacters: CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~"))!
+        let hex = Array("0123456789ABCDEF".utf8)
+        var encoded: [UInt8] = []
+        encoded.reserveCapacity(value.utf8.count)
+        for byte in value.utf8 {
+            switch byte {
+            case 48...57, 65...90, 97...122, 45, 46, 95, 126:
+                encoded.append(byte)
+            default:
+                encoded.append(37)
+                encoded.append(hex[Int(byte >> 4)])
+                encoded.append(hex[Int(byte & 0x0F)])
+            }
+        }
+        return String(decoding: encoded, as: UTF8.self)
     }
 
     public static let liveTransport: Transport = { request in

@@ -35,6 +35,7 @@ public struct ZCodeQuotaReader: Sendable {
 
     public func read() async -> LocalQuotaResult {
         do {
+            try Task.checkCancellation()
             let store = credentials()
             // z.ai first: the desktop sign-in is a Z.ai account; the BigModel
             // token is the China-side equivalent of the same plan.
@@ -45,6 +46,7 @@ public struct ZCodeQuotaReader: Sendable {
             var sawCredential = false
             var rejected = false
             for candidate in candidates {
+                try Task.checkCancellation()
                 guard let token = store[candidate.key], Self.validToken(token) else { continue }
                 sawCredential = true
                 let result: ZCodeHTTPPayload
@@ -55,6 +57,7 @@ public struct ZCodeQuotaReader: Sendable {
                     // rethrow so the outer catch reports the cancellation.
                     throw CancellationError()
                 } catch {
+                    if Task.isCancelled || (error as? URLError)?.code == .cancelled { throw CancellationError() }
                     // One unreachable endpoint must not mask a healthy second
                     // account.
                     continue
@@ -117,6 +120,7 @@ private extension ZCodeQuotaReader {
         // readers disagree and prepend `Bearer`, so a bare-credential 401 is
         // retried once with the prefix before the session is called rejected.
         for attempt in 0..<2 {
+            try Task.checkCancellation()
             var request = URLRequest(url: url)
             request.httpMethod = "GET"
             request.cachePolicy = .reloadIgnoringLocalCacheData

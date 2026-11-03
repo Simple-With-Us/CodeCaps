@@ -221,6 +221,52 @@ final class MuseCodePluginTests: XCTestCase {
         XCTAssertEqual(Set(ids).count, 2)
     }
 
+    func testFailedBurnPersistenceDoesNotBlockStandardAlertOrConsumeTheBurnCooldown() {
+        let (model, spy) = makeModel()
+        var burnSaveFails = true
+        model.museCodeAlertSynchronizeForTesting = { key in
+            !(key == "museCodeBurnLastSent" && burnSaveFails)
+        }
+        model.applyMuseCodeResult(result(total: 5_000_000, contributor: 4_000_000))
+        XCTAssertEqual(spy.events.map(\.kind), [.museCodeStandardSession])
+        XCTAssertNil(defaults.object(forKey: "museCodeBurnLastSent"))
+        burnSaveFails = false
+        model.applyMuseCodeResult(result(total: 5_000_000, contributor: 4_000_000))
+        model.applyMuseCodeResult(result(total: 5_000_000, contributor: 4_000_000))
+        XCTAssertEqual(spy.events.map(\.kind), [.museCodeStandardSession, .museCodeBurn])
+    }
+
+    func testFailedDetectorPersistenceLeavesTheStandardEventEligibleWithoutRepeatingBurn() {
+        let (model, spy) = makeModel()
+        var detectorSaveFails = true
+        model.museCodeAlertSynchronizeForTesting = { key in
+            !(key == "museCodeStandardSessionDetector" && detectorSaveFails)
+        }
+        model.applyMuseCodeResult(result(total: 5_000_000, contributor: 4_000_000))
+        XCTAssertEqual(spy.events.map(\.kind), [.museCodeBurn])
+        XCTAssertNil(defaults.object(forKey: "museCodeStandardSessionDetector"))
+        detectorSaveFails = false
+        model.applyMuseCodeResult(result(total: 5_000_000, contributor: 4_000_000))
+        model.applyMuseCodeResult(result(total: 5_000_000, contributor: 4_000_000))
+        XCTAssertEqual(spy.events.map(\.kind), [.museCodeBurn, .museCodeStandardSession])
+    }
+
+    func testPersistenceFailureDoesNotConsumeAContributorToStandardRearmAcrossRecreation() {
+        let (model, spy) = makeModel()
+        let contributor = MuseCodeSessionObservation(sessionId: "s1", snapshotId: "contributor",
+            modelId: "muse-spark-contributor", totalTokens: 100, segmentKey: "segment", observedAt: Date())
+        let standard = MuseCodeSessionObservation(sessionId: "s1", snapshotId: "standard",
+            modelId: "muse-wonder", totalTokens: 100, segmentKey: "segment", observedAt: Date())
+        model.applyMuseCodeResult(result(total: 100, contributor: 100, observations: [contributor]))
+        model.museCodeAlertSynchronizeForTesting = { _ in false }
+        model.applyMuseCodeResult(result(total: 100, contributor: 0, observations: [standard]))
+        XCTAssertTrue(spy.events.isEmpty)
+        let (relaunched, relaunchedSpy) = makeModel()
+        relaunched.applyMuseCodeResult(result(total: 100, contributor: 0, observations: [standard]))
+        relaunched.applyMuseCodeResult(result(total: 100, contributor: 0, observations: [standard]))
+        XCTAssertEqual(relaunchedSpy.events.map(\.kind), [.museCodeStandardSession])
+    }
+
     // MARK: - Bridge
 
     func testBridgePostsDeltasOnceAndAdvancesBaseline() async {

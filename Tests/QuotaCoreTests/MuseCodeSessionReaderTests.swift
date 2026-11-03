@@ -29,6 +29,46 @@ final class MuseCodeSessionReaderTests: XCTestCase {
         XCTAssertEqual(report.segments.count, 2)
     }
 
+    func testAggregateUsesHighWaterForRepeatedCumulativeRange() {
+        let first = segment(model: "muse-wonder-1.0", tokens: 100,
+                            minutesAgo: 10, first: "first", last: "last")
+        let updated = segment(model: "muse-wonder-1.0", tokens: 200,
+                              minutesAgo: 8, first: "first", last: "last")
+        let stale = segment(model: "muse-wonder-1.0", tokens: 150,
+                            minutesAgo: 5, first: "first", last: "last")
+
+        let report = MuseCodeSessionReader.aggregate(
+            segments: [first, updated, stale], sessionActivity: ["s1": now], now: now)
+
+        XCTAssertEqual(report.window(minutes: 90)?.totalTokens, 200,
+                       "cumulative snapshots of one exact source range contribute only their high-water total")
+        XCTAssertEqual(report.window(minutes: 90)?.models.first?.segmentCount, 1)
+        XCTAssertEqual(report.segments.first?.totalTokens, 200,
+                       "a later stale snapshot cannot replace the segment high-water")
+    }
+
+    func testAggregateSumsDistinctRangesSessionsAndModelSwitches() {
+        let segments = [
+            segment(session: "s1", model: "muse-wonder-1.0", tokens: 100,
+                    minutesAgo: 10, first: "shared-start", last: "range-one"),
+            segment(session: "s1", model: "muse-wonder-1.0", tokens: 50,
+                    minutesAgo: 9, first: "shared-start", last: "range-two"),
+            segment(session: "s1", model: "muse-spark-1.3-contributor", tokens: 25,
+                    minutesAgo: 8, first: "shared-start", last: "range-one"),
+            segment(session: "s2", model: "muse-wonder-1.0", tokens: 70,
+                    minutesAgo: 7, first: "shared-start", last: "range-one"),
+        ]
+
+        let report = MuseCodeSessionReader.aggregate(
+            segments: segments, sessionActivity: ["s1": now, "s2": now], now: now)
+
+        XCTAssertEqual(report.window(minutes: 90)?.totalTokens, 245)
+        XCTAssertEqual(report.window(minutes: 90)?.models.first(where: { $0.modelId == "muse-wonder-1.0" })?.tokens, 220)
+        XCTAssertEqual(report.window(minutes: 90)?.models.first(where: { $0.modelId == "muse-spark-1.3-contributor" })?.tokens, 25)
+        XCTAssertEqual(report.window(minutes: 90)?.models.first(where: { $0.modelId == "muse-wonder-1.0" })?.sessionCount, 2)
+        XCTAssertEqual(report.segments.count, 4)
+    }
+
     func testAggregateWindowsAndContributorShare() {
         let segments = [
             segment(model: "muse-spark-1.3-contributor", tokens: 3_000_000,

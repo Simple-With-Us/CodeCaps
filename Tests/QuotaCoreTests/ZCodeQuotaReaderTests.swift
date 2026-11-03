@@ -142,4 +142,23 @@ final class ZCodeQuotaReaderTests: XCTestCase {
         XCTAssertEqual(result.windows[0].quotaUnit, "tokens")
         XCTAssertEqual(result.windows[0].planName, "GLM Coding Max")
     }
+    func testURLCancellationDoesNotTryAnotherAuthenticationFormOrAccount() async {
+        let counter = ZCodeRequestCounter()
+        let result = await ZCodeQuotaReader(credentials: {
+            ["oauth:zai:access_token": "fixture-token", "oauth:bigmodel:access_token": "other-fixture-token"]
+        }, fetch: { _ in
+            await counter.increment()
+            throw URLError(.cancelled)
+        }).read()
+        XCTAssertEqual(result.issues["zcode"], "ZCode quota refresh was cancelled.")
+        let count = await counter.count
+        XCTAssertEqual(count, 1)
+    }
+
+}
+
+
+private actor ZCodeRequestCounter {
+    var count = 0
+    func increment() { count += 1 }
 }
