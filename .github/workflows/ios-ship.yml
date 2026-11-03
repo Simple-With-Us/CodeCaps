@@ -229,8 +229,8 @@ jobs:
         with:
           names: SENTRY_DSN SENTRY_DSN_CODECAPS SENTRY_AUTH_TOKEN SENTRY_AUTH_TOKEN_FULLSCOPE
           project-id: ${{ secrets.INFISICAL_FLEET_OPS_PROJECT_ID }}
-          client-id: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID || secrets.INFISICAL_CLIENT_ID }}
-          client-secret: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET || secrets.INFISICAL_CLIENT_SECRET }}
+          secret-path: /
+          service-token: ${{ secrets.INFISICAL_CODECAPS_CI_READ_SERVICE_TOKEN }}
         env:
           GH_FALLBACK_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           GH_FALLBACK_SENTRY_DSN_CODECAPS: ${{ secrets.SENTRY_DSN_CODECAPS }}
@@ -276,10 +276,10 @@ jobs:
       # single-line and go to GITHUB_ENV; the multiline private key is staged
       # to a mode-600 file and only ASC_KEY_PATH is exported.
       #
-      # The tooling and the staging script run in ONE step on purpose.  The
-      # tooling installs the Infisical CLI and the fleet's reader onto the
-      # runner, mints the access token they use, and runs the staging script
-      # in the same process tree, so the token never touches a file.  The
+      # The tooling and the staging script run in ONE step on purpose.  The
+      # tooling installs the fleet's reader and passes it the scoped service
+      # token directly through its environment.  The staging script runs in the
+      # same process tree, so the token never touches a file.  The
       # staging script is what resolves the three ASC values, and it writes
       # the private key to a mode-600 file: the key is never an environment
       # variable of a step, and only that file's path and the two identifiers
@@ -291,8 +291,7 @@ jobs:
       - name: Load and stage the ASC credentials (Fleet-OPS prod /asc)
         env:
           INFISICAL_PROJECT_ID: ${{ secrets.INFISICAL_FLEET_OPS_PROJECT_ID }}
-          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID || secrets.INFISICAL_CLIENT_ID }}
-          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET || secrets.INFISICAL_CLIENT_SECRET }}
+          INFISICAL_SERVICE_TOKEN: ${{ secrets.INFISICAL_CODECAPS_CI_READ_SERVICE_TOKEN }}
         run: |
           set +o xtrace
           set -euo pipefail
@@ -304,12 +303,12 @@ jobs:
           set -euo pipefail
           for name in ASC_KEY_ID ASC_ISSUER_ID; do
             if [ -z "${!name:-}" ]; then
-              echo "::error::Missing $name in Fleet-OPS prod /asc; verify the CI identity has read access to Fleet-OPS prod /asc." >&2
+              echo "::error::Missing $name in Fleet-OPS prod /asc; verify the scoped /asc read service token has access to Fleet-OPS prod /asc." >&2
               exit 1
             fi
           done
           if [ -z "${ASC_KEY_PATH:-}" ] || [ ! -s "${ASC_KEY_PATH:-}" ]; then
-            echo '::error::Missing ASC key material in Fleet-OPS prod /asc; verify the CI identity has read access to Fleet-OPS prod /asc.' >&2
+            echo '::error::Missing ASC key material in Fleet-OPS prod /asc; verify the scoped /asc read service token has access to Fleet-OPS prod /asc.' >&2
             exit 1
           fi
       - name: Import signing identity
