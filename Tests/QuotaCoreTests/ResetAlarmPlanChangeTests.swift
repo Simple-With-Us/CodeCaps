@@ -201,10 +201,15 @@ final class ResetAlarmPlanChangeTests: XCTestCase {
         let later = t0 + 2 * self.hour
         let events = tracker.process(weekly(at: later, resetAt: t0 + 11 * self.day, remaining: 40), now: later)
 
-        XCTAssertEqual(events.count, 1, "the early period end still has to be reported")
-        XCTAssertFalse(events[0].isVendorReset, "a quota that fell is not a refill")
-        XCTAssertFalse(events[0].isPlanChange, "a quota that fell is not a plan change")
-        XCTAssertNotEqual(events[0].reason, .planChange, "no event may claim the quota rose")
+        XCTAssertTrue(events.isEmpty, "a future-end correction with falling quota is not a reset")
+
+        // Adopt the corrected end, then still report its actual scheduled rollover.
+        let scheduled = t0 + 11 * self.day + 60
+        let rollover = tracker.process(weekly(at: scheduled, resetAt: scheduled + 7 * self.day,
+                                              remaining: 35), now: scheduled)
+        XCTAssertEqual(rollover.map(\.windowId), ["7d"])
+        XCTAssertFalse(rollover.first?.isVendorReset ?? true)
+        XCTAssertFalse(rollover.first?.isPlanChange ?? true)
     }
 
     // MARK: The words
