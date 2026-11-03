@@ -126,4 +126,44 @@ final class InfisicalIdentityStoreTests: XCTestCase {
         XCTAssertNil(InfisicalIdentityStore.load(bundleIdentifier: "com.jays.agent-bar.mac.test"))
     }
 
+    func testV1MigrationPreservesMachineReadsButNeverInfersWriteAccess() throws {
+        let service = "com.jays.agent-bar.mac.test.infisical-identity"
+        let legacy = #"{"version":1,"identity":{"clientId":"legacy-id","clientSecret":"legacy-secret","projectId":"project-A"}}"#
+        vault["\(service)/setup-v1"] = legacy
+        let setup = try XCTUnwrap(InfisicalIdentityStore.loadSetup(bundleIdentifier: "com.jays.agent-bar.mac.test"))
+        XCTAssertEqual(setup.bindings.count, 1)
+        XCTAssertEqual(setup.configuration?.readBinding.authentication, .machineIdentity)
+        XCTAssertEqual(setup.configuration?.readBinding.environment, "prod")
+        XCTAssertEqual(setup.configuration?.readBinding.secretPath, "/")
+        XCTAssertEqual(setup.configuration?.readBinding.clientSecret, "legacy-secret")
+        XCTAssertNil(setup.writeBindingID)
+        XCTAssertNil(setup.configuration?.writeBinding)
+        XCTAssertEqual(vault["\(service)/setup-v1"], legacy, "Startup migration must not rewrite working credentials")
+    }
+
+    func testV2RetainsMultipleScopesAndIndependentSelectionsInOneKeychainRecord() throws {
+        let read = InfisicalBinding(id: "read", label: "Project A Read", projectId: "project-A", environment: "qa",
+            secretPath: "/codecaps", access: .read, serviceToken: "st.fixture.read-secret")
+        var write = read
+        write.id = "write"; write.label = "Project A Write"; write.access = .write; write.serviceToken = "st.fixture.write-secret"
+        let other = InfisicalBinding(id: "other", label: "Other Project", projectId: "project-B", environment: "prod",
+            secretPath: "/shared", access: .read, serviceToken: "st.fixture.other-secret")
+        let setup = InfisicalSetup(bindings: [read, write, other], readBindingID: read.id, writeBindingID: write.id)
+        try InfisicalIdentityStore.saveSetup(setup, bundleIdentifier: "com.jays.agent-bar.mac.test")
+        XCTAssertEqual(InfisicalIdentityStore.loadSetup(bundleIdentifier: "com.jays.agent-bar.mac.test"), setup)
+        XCTAssertEqual(vault.count, 1)
+        XCTAssertNil(InfisicalIdentityStore.load(bundleIdentifier: "com.jays.agent-bar.mac.test"))
+    }
+
+    func testMismatchedWriteBindingNeverReplacesTheSavedSetup() throws {
+        let identity = InfisicalIdentityStore.Identity(clientId: "id", clientSecret: "secret", projectId: "project-A")
+        try InfisicalIdentityStore.save(identity, bundleIdentifier: "com.jays.agent-bar.mac.test")
+        var setup = try XCTUnwrap(InfisicalIdentityStore.loadSetup(bundleIdentifier: "com.jays.agent-bar.mac.test"))
+        var write = setup.bindings[0]
+        write.id = "write"; write.access = .write; write.secretPath = "/another-folder"
+        setup.bindings.append(write); setup.writeBindingID = write.id
+        XCTAssertThrowsError(try InfisicalIdentityStore.saveSetup(setup, bundleIdentifier: "com.jays.agent-bar.mac.test"))
+        XCTAssertEqual(InfisicalIdentityStore.load(bundleIdentifier: "com.jays.agent-bar.mac.test"), identity)
+    }
+
 }

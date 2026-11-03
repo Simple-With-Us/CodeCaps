@@ -77,28 +77,35 @@ public struct LocalQuotaReaderRegistry: Sendable {
 
     /// The concrete built-ins stay explicit while the typed registration seam
     /// allows future providers without a dynamic code loader.
-    public static let builtIn = LocalQuotaReaderRegistry(registrations: [
-        LocalQuotaReaderRegistration(id: "local-primary", label: "Built-In Provider Sessions",
-                                     configurationMetadata: ["providers": "anthropic,openai,grok,minimax,google-antigravity"]) {
-            LocalQuotaReader()
-        },
-        LocalQuotaReaderRegistration(id: "cursor", label: "Cursor", configurationMetadata: ["providerKey": "cursor"]) {
-            CursorQuotaReader()
-        },
-        LocalQuotaReaderRegistration(id: "github-copilot", label: "GitHub Copilot", configurationMetadata: ["providerKey": "github-copilot"]) {
-            CopilotQuotaReader()
-        },
-        LocalQuotaReaderRegistration(id: "grok-bot", label: "Grok Bot", configurationMetadata: ["providerKey": "grok-bot"]) {
-            GrokBotQuotaReader()
-        },
-        LocalQuotaReaderRegistration(id: "gbu", label: "Grok Build Usage", configurationMetadata: ["providerKey": "grok-bot"]) {
-            GbuQuotaReader()
-        },
-        LocalQuotaReaderRegistration(id: "kimi", label: "Kimi", configurationMetadata: ["providerKey": "kimi"], isOptional: true) {
-            KimiQuotaReader()
-        },
-        LocalQuotaReaderRegistration(id: "zcode", label: "Z.ai / ZCode", configurationMetadata: ["providerKey": "zcode"], isOptional: true) {
-            ZCodeQuotaReader()
-        },
-    ])
+    public static let builtIn = configured(zCodeCredentialProvider: { nil })
+
+    /// The optional Z.ai factory resolves its own saved key only when selected.
+    public static func configured(
+        zCodeCredentialProvider: @escaping @Sendable () async -> ZCodeQuotaCredential?
+    ) -> LocalQuotaReaderRegistry {
+        LocalQuotaReaderRegistry(registrations: [
+            LocalQuotaReaderRegistration(id: "local-primary", label: "Built-In Provider Sessions",
+                                         configurationMetadata: ["providers": "anthropic,openai,grok,minimax,google-antigravity"]) {
+                LocalQuotaReader()
+            },
+            LocalQuotaReaderRegistration(id: "cursor", label: "Cursor", configurationMetadata: ["providerKey": "cursor"]) {
+                CursorQuotaReader()
+            },
+            LocalQuotaReaderRegistration(id: "github-copilot", label: "GitHub Copilot", configurationMetadata: ["providerKey": "github-copilot"]) {
+                CopilotQuotaReader()
+            },
+            LocalQuotaReaderRegistration(id: "grok-bot", label: "Grok Bot", configurationMetadata: ["providerKey": "grok-bot"]) {
+                GrokBotQuotaReader()
+            },
+            LocalQuotaReaderRegistration(id: "gbu", label: "Grok Build Usage", configurationMetadata: ["providerKey": "grok-bot"]) {
+                GbuQuotaReader()
+            },
+            LocalQuotaReaderRegistration(id: "kimi", label: "Kimi", configurationMetadata: ["providerKey": "kimi"], isOptional: true) {
+                KimiQuotaReader()
+            },
+            LocalQuotaReaderRegistration(id: "zcode", label: "Z.ai / ZCode", configurationMetadata: ["providerKey": "zcode"], isOptional: true) {
+                ZCodeQuotaReader(credential: zCodeCredentialProvider)
+            },
+        ])
+    }
 }

@@ -240,11 +240,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         // Install persisted configuration synchronously on the main actor.
         // A delayed startup task must never restore A after Dashboard saved B.
         let settings = InfisicalSettings.shared
-        guard let identity = InfisicalIdentityStore.load() else {
+        guard let configuration = InfisicalIdentityStore.loadSetup()?.configuration else {
             settings.clearConfiguration()
             return
         }
-        settings.configure(identity.configuration)
+        settings.configure(configuration)
         refreshInfisicalSettings()
     }
 
