@@ -28,7 +28,6 @@ ICON_MAKER="$ROOT_DIR/script/make_icon.swift"
 ICON_FILE="AppIcon.icns"
 INSTALL_DIR="$HOME/Applications"
 INSTALLED_APP="$INSTALL_DIR/$APP_NAME.app"
-VERSION_FILE="$ROOT_DIR/VERSION"
 ZIP_FILE="$DIST_DIR/$APP_NAME.zip"
 DMG_FILE="$DIST_DIR/$APP_NAME.dmg"
 NOTARY_PROFILE="${CODECAPS_NOTARY_PROFILE:-${AGENTBAR_NOTARY_PROFILE:-agentbar-notary}}"
@@ -112,10 +111,10 @@ usage: script/build_and_run.sh [mode]
   --package also signs with the hardened runtime and a secure timestamp and
   prints the notarytool command; --release is the mode that actually notarizes.
 
-  Versions: CFBundleShortVersionString is unified as <prefix>.<commit_count>
-  per fleet standard (prefix from VERSION file, default 1.0; commit count from
-  `git rev-list --count HEAD`).  CFBundleVersion is `git rev-list --count HEAD`,
-  giving macOS and iOS the identical monotonic build number.
+  Versions: release builds use the fixed marketing version from the iOS app
+  registry, preserving a higher released App Store version when ASC reports one.  CFBundleVersion comes from the shared iOS/Mac planner as a 12-digit Chicago
+  merge timestamp, raised above every existing app and Sparkle build.  A release
+  fails closed when ASC or the paired Sparkle build inventory cannot be read.  Local non-release builds use the commit's Chicago timestamp and registry version.
 
   Auto-update: Sparkle.framework is embedded in Contents/Frameworks and signed
   inside-out.  A build with the release identifier carries the update feed and
@@ -441,23 +440,39 @@ sign_app_bundle() {
   fi
 }
 
-# The marketing version is unified as <prefix>.<commit_count> per fleet standard,
-# where prefix is drawn from the VERSION file (defaulting to 1.0) and commit count
-# is monotonic across all git commits.
+VERSION_PLAN_READY=0
+BUILD_MARKETING_VERSION=""
+BUILD_BUNDLE_VERSION=""
+
+prepare_build_versions() {
+  [[ "$VERSION_PLAN_READY" -eq 1 ]] && return 0
+  local mode="offline" plan_output
+  [[ "$MODE" != "--release" ]] || mode="release"
+  if ! command -v node >/dev/null 2>&1; then
+    echo "error: Node.js is required to plan CodeCaps build versions." >&2
+    return 1
+  fi
+  if ! plan_output="$(node "$ROOT_DIR/scripts/mac-release-version.mjs" "$mode" "$ROOT_DIR")"; then
+    echo "error: CodeCaps build version plan is unavailable; no bundle was built." >&2
+    return 1
+  fi
+  IFS=$'\t' read -r BUILD_MARKETING_VERSION BUILD_BUNDLE_VERSION <<< "$plan_output"
+  if [[ ! "$BUILD_MARKETING_VERSION" =~ ^[0-9]+(\.[0-9]+){0,2}$ \
+        || ! "$BUILD_BUNDLE_VERSION" =~ ^[1-9][0-9]{11}$ ]]; then
+    echo "error: CodeCaps build version planner returned invalid metadata." >&2
+    return 1
+  fi
+  VERSION_PLAN_READY=1
+}
+
 short_version() {
-  local version=""
-  [[ ! -f "$VERSION_FILE" ]] || version="$(/usr/bin/sed -e 's/[[:space:]]//g' -e '/^$/d' "$VERSION_FILE" | /usr/bin/head -n 1)"
-  local prefix="${version:-1.0}"
-  prefix="$(printf '%s' "$prefix" | /usr/bin/awk -F. '{ if (NF >= 2) print $1"."$2; else print $1".0" }')"
-  local count=""
-  count="$(bundle_version)"
-  printf '%s.%s\n' "$prefix" "$count"
+  prepare_build_versions || exit 1
+  printf '%s\n' "$BUILD_MARKETING_VERSION"
 }
 
 bundle_version() {
-  local count=""
-  count="$(/usr/bin/git -C "$ROOT_DIR" rev-list --count HEAD 2>/dev/null || true)"
-  printf '%s\n' "${count:-1}"
+  prepare_build_versions || exit 1
+  printf '%s\n' "$BUILD_BUNDLE_VERSION"
 }
 
 bundle_identifier() {
@@ -526,6 +541,7 @@ assert_resource_bundle_reachable() {
 }
 
 build_and_stage() {
+  prepare_build_versions || exit 1
   local arch_flags=()
   if [[ "$UNIVERSAL" == "1" ]]; then
     local arch
