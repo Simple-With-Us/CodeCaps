@@ -88,6 +88,32 @@ final class ResetAlarmPlanChangeTests: XCTestCase {
         XCTAssertFalse(events[0].isPlanChange)
     }
 
+    func testMidWindowRestoreFromLowNinetiesToFullStillCountsAsAVendorReset() {
+        var tracker = ResetAlarmTracker()
+        let weekEnd = t0 + 7 * day
+        _ = tracker.process(weekly(at: t0, resetAt: weekEnd, remaining: 92), now: t0)
+
+        let later = t0 + 2 * hour
+        let events = tracker.process(weekly(at: later, resetAt: weekEnd, remaining: 100), now: later)
+
+        XCTAssertEqual(events.count, 1)
+        XCTAssertTrue(events[0].isVendorReset, "a full refill remains a vendor reset even after some intervening use")
+    }
+
+    func testPreExpirySmallDeadlineNudgeAndTenPointRiseIsNotAReset() {
+        var tracker = ResetAlarmTracker()
+        let oldEnd = t0 + 5 * day
+        _ = tracker.process(weekly(at: t0, resetAt: oldEnd, remaining: 72), now: t0)
+
+        let later = t0 + hour
+        let nudgedEnd = oldEnd + 16 * 60
+        let events = tracker.process(weekly(at: later, resetAt: nudgedEnd, remaining: 84), now: later)
+
+        XCTAssertTrue(events.isEmpty, "a 16-minute nudge is not a weekly reset even when quota rises by ten points")
+        XCTAssertEqual(tracker.state.windows[ResetAlarmTracker.windowKey(scope: "local", providerId: "musecode", windowId: "7d")]?.periodResetAt,
+                       nudgedEnd)
+    }
+
     /// The line itself.  The floor is 95 rather than 99 because the first
     /// reading after a reset can already carry a little usage.
     func testTheLevelTheQuotaLandsAtDecidesWhichNameItGets() {
