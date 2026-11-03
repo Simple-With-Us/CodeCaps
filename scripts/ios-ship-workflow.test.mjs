@@ -416,9 +416,9 @@ test("the ship job clears a stale archive lock restored from the ship-state cach
   assert.ok(beforeSave.includes(lockRm), "the archive lock is removed before the ship-state cache is saved");
 });
 
-test("the marketing train is 1.0.N and release notes use the owner clock", () => {
+test("the marketing version stays at 0.1.0 and release notes use the owner clock", () => {
   const apps = JSON.parse(read("scripts/ios-fleet/apps.json"));
-  assert.match(apps.apps.codecaps.marketingVersionDefault, /^1\.0\.\d+$/);
+  assert.equal(apps.apps.codecaps.marketingVersionDefault, "0.1.0");
 
   const src = read("scripts/ios-fleet/asc-api.mjs");
   const fn = src.match(/function centralTimestamp[\s\S]*?\n}\n/)[0];
