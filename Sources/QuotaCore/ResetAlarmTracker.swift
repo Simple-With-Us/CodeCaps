@@ -496,8 +496,7 @@ public struct ResetAlarmTracker: Sendable {
                     : max(ResetAlarmPolicy.resetDriftTolerance,
                           window.periodSeconds.map { $0 * ResetAlarmPolicy.earlyResetShareOfPeriod }
                               ?? ResetAlarmPolicy.earlyResetUnknownPeriod)
-                // A provider that resets early may move the reset time by less
-                // than `required`; the percentage jumping back up settles it.
+                // A correction is not proof of restored quota when a readable percentage stays flat or falls; allow an unmeasured scheduled rollover only after the old end passes.
                 var climbed = false
                 if let reading, let last = window.lastRemaining {
                     climbed = reading >= last + ResetAlarmPolicy.earlyResetRiseMargin
@@ -505,7 +504,8 @@ public struct ResetAlarmTracker: Sendable {
                 let rose = reading.flatMap { current in
                     window.lastRemaining.map { current > $0 + ResetAlarmPolicy.riseEpsilon }
                 } ?? false
-                if (jump > required && (hasPassed || rose))
+                let resetHasQuotaEvidence = rose || (hasPassed && reading == nil)
+                if (jump > required && resetHasQuotaEvidence)
                     || (jump > ResetAlarmPolicy.resetDriftTolerance && climbed) {
                     isReset = true
                     // When the window had *not* reached its own scheduled end,
