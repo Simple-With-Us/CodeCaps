@@ -2,7 +2,7 @@
 set -euo pipefail
 
 MODE="${1:-run}"
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 PACKAGE_DIR="$ROOT_DIR"
 DIST_DIR="$PACKAGE_DIR/dist"
 APP_NAME="CodeCaps"
