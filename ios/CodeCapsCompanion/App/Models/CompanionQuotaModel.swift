@@ -2538,6 +2538,11 @@ public final class CompanionQuotaModel: ObservableObject {
         if pKey.contains("minimax") || prov.contains("minimax") {
             return ("minimax", "MiniMax", "minimax")
         }
+        // Before the legacy substring rules: any "code"-bearing id (for
+        // example local-mac:zcode:...) would otherwise land on Muse Code.
+        if pKey.contains("zcode") || prov.contains("zcode") || pKey == "z.ai" || prov == "z.ai" || id.contains("zcode") {
+            return ("zcode", "ZCode", "zcode")
+        }
         if pKey.contains("muse-assist") || prov.contains("muse-assist") || prov.contains("muse assist") || id.contains("assist") {
             return ("muse-assist", "Muse Assist", "muse-assist")
         }
@@ -2583,6 +2588,7 @@ public final class CompanionQuotaModel: ObservableObject {
             "grok-bot": "grok-bot", "grok bot": "grok-bot", "grokbot": "grok-bot",
             "minimax": "minimax", "minimax-code": "minimax",
             "kimi": "kimi", "moonshot": "kimi", "moonshot-ai": "kimi",
+            "zcode": "zcode", "z.ai": "zcode", "z-ai": "zcode", "zai": "zcode", "glm": "zcode", "glm-coding": "zcode",
             "gemini-cli": "gemini-cli",
             "copilot": "github-copilot", "github-copilot": "github-copilot", "github_copilot": "github-copilot",
             "windsurf": "windsurf", "codeium": "windsurf",

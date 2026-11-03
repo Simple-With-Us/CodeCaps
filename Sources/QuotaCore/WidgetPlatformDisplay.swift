@@ -17,6 +17,7 @@ public enum WidgetPlatformDisplay {
         "muse-assist": "Muse Assist",
         "muse-code": "Muse Code",
         "kimi": "Kimi",
+        "zcode": "ZCode",
         "github-copilot": "GitHub Copilot",
         "windsurf": "Windsurf",
         "gemini-cli": "Gemini CLI",

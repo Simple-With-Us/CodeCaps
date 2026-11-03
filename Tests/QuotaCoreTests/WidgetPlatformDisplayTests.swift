@@ -15,7 +15,7 @@ final class WidgetPlatformDisplayTests: XCTestCase {
     func testNoCanonicalPlatformTitleIsRawLowercaseProviderId() {
         let slugs = [
             "cursor", "anthropic", "openai", "minimax", "xai", "grok-bot",
-            "muse-assist", "muse-code", "google-antigravity", "kimi",
+            "muse-assist", "muse-code", "google-antigravity", "kimi", "zcode",
         ]
         for slug in slugs {
             let title = WidgetPlatformDisplay.title(
