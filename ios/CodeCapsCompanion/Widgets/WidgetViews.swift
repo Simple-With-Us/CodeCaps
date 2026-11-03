@@ -69,8 +69,10 @@ struct ProviderMarkView: View {
                 .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
         } else if let asset = assetName(for: providerKey), let image = bundledImage(named: asset) {
             image
+                .renderingMode(asset == "provider-zai" ? .template : .original)
                 .resizable()
                 .scaledToFit()
+                .foregroundStyle(.primary)
                 .frame(width: size, height: size)
                 .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
         } else {
@@ -140,6 +142,8 @@ struct ProviderMarkView: View {
         if low.contains("openai") || low.contains("codex") { return "provider-openai" }
         if low.contains("cursor") { return "provider-cursor" }
         if low.contains("minimax") { return "provider-minimax" }
+        if low.contains("kimi") { return "provider-kimi" }
+        if ["zcode", "z.ai", "z-ai", "zai"].contains(where: { low.contains($0) }) { return "provider-zai" }
         if low.contains("copilot") { return "provider-copilot" }
         if low.contains("muse-assist") || low.contains("muse_assist") { return "provider-muse-assist" }
         if low.contains("muse-code") || low.contains("muse_code") { return "provider-muse-code" }
@@ -634,7 +638,7 @@ struct ProviderFocusView: View {
                         if entry.quotasPerProvider == .oneQuota, let controlling = platform.controllingWindow(pick) {
                             return [controlling]
                         }
-                        return platform.windows
+                        return platform.primaryWindows
                     }()
 
                     if let atCap, platform.usableMuseExtra == nil {
@@ -873,10 +877,10 @@ struct WidgetPlanDetailView: View {
                 Spacer()
             }
             Text(platform.title).font(.headline)
-            ForEach(Array(platform.windows.prefix(4))) { window in
+            ForEach(platform.detailWindows) { window in
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 8) {
-                        Text(window.cadenceToken).font(.caption.bold())
+                        Text(window.label).font(.caption.bold())
                         Text(window.displayPercent).font(.subheadline.bold()).foregroundStyle(window.statusColor)
                         Text(window.countdown().isEmpty ? "—" : window.countdown())
                             .font(.caption).foregroundStyle(.secondary)
@@ -886,12 +890,6 @@ struct WidgetPlanDetailView: View {
                         hasReading: !window.isMasked && window.remainingPercent?.isFinite == true, height: 5)
                     if window.isStale() { Text("Reading is stale").font(.caption2).foregroundStyle(.secondary) }
                 }
-            }
-            if platform.windows.count > 4 {
-                Text("+\(platform.windows.count - 4) more windows in CodeCaps").font(.caption2).foregroundStyle(.secondary)
-            }
-            if let plan = platform.planMetadata?.detectedPlanName, !plan.isEmpty {
-                Text(plan).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 0)
         }

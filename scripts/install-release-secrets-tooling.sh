@@ -1,26 +1,11 @@
 #!/usr/bin/env bash
-# Install the credential tooling the release workflows read Fleet-OPS with,
-# mint the Infisical access token that tooling uses, and run the consumer that
-# resolves the credentials.
+# Install the pinned Infisical CLI and fleet-owned `fleet-secrets` reader, pass
+# the reader a read-only service token scoped to Fleet-OPS prod /asc, prove it
+# can list that folder's names, and run scripts/stage-asc-key.mjs.
 #
-# It installs two things:
-#
-#   * the Infisical CLI, pinned to version 0.44.4.  The release tarball is
-#     checked against the pinned SHA-256 of the asset before it is unpacked,
-#     so a moved or rebuilt asset fails the step instead of installing
-#     something nobody reviewed.
-#   * the fleet's `fleet-secrets` reader, taken from the pinned commit of the
-#     public AI-Fleet-Coordinator repository and installed with the upstream
-#     installer, so the runner ends up with the layout every fleet Mac has.
-#
-# It then mints an Infisical access token with universal auth, proves that the
-# fleet's reader can use that token, and runs scripts/stage-asc-key.mjs, the
-# only thing in the release that reads a credential.
-#
-# The token never touches a file.  It is minted into a shell variable, it is
-# exported into the environment of the consumer, and the consumer runs in this
-# same process tree.  It is never echoed, never printed, never written to
-# $GITHUB_ENV and never written to disk.
+# The full service token is supplied by the workflow, stays in process memory,
+# and is passed directly as INFISICAL_TOKEN to the reader.  It is never echoed,
+# written to a file, or written to $GITHUB_ENV.
 #
 # The reader is proven before the consumer runs, because the consumer cannot
 # tell a broken reader from a missing credential: it reads a failed lookup as
@@ -29,25 +14,11 @@
 # when the fault is the tooling.  The proof is read-only: it lists the names
 # in Fleet-OPS prod /asc and never a value.
 #
-# The names the workflow already uses are mapped here onto the names the
-# reader and the CLI expect:
-#
-#   INFISICAL_PROJECT_ID     ->  INFISICAL_FLEET_OPS_PROJECT_ID
-#   INFISICAL_CLIENT_ID      ->  INFISICAL_UNIVERSAL_AUTH_CLIENT_ID
-#   INFISICAL_CLIENT_SECRET  ->  INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET
-#
+# The workflow supplies INFISICAL_PROJECT_ID and INFISICAL_SERVICE_TOKEN.
+# This script maps the project id to the reader's expected environment name.
 # Run: bash scripts/install-release-secrets-tooling.sh
 set +o xtrace
 set -euo pipefail
-
-# The replacement in a bash substitution is a pattern, and in bash 5.2 and
-# later an ampersand in it expands to the text that matched, which here would
-# be the credential itself.  The option is turned off where the shell has it,
-# and the preview refuses a value that could put one in the replacement, so
-# neither shell can expand one back into the secret.
-if shopt -q patsub_replacement 2>/dev/null; then
-  shopt -u patsub_replacement
-fi
 
 INFISICAL_CLI_VERSION="0.44.4"
 INFISICAL_CLI_SHA256_arm64="02ccd2ce6e1d80eeafb06022697fe7f3c6434ba757b31590f2ff8f88d6ccaf51"
@@ -79,71 +50,25 @@ fail() {
   return 1
 }
 
-# The SHA-256 of a file, with the two tools a runner may have.
+# Reader diagnostics are captured, but the service token is still redacted if
+# an upstream tool echoes it into stderr.
+scrub() {
+  local text="$1"
+  if [ -n "${INFISICAL_SERVICE_TOKEN:-}" ]; then
+    text="${text//"$INFISICAL_SERVICE_TOKEN"/<redacted>}"
+  fi
+  if [ -n "${INFISICAL_TOKEN:-}" ]; then
+    text="${text//"$INFISICAL_TOKEN"/<redacted>}"
+  fi
+  printf '%s' "$text"
+}
+
 sha256_of() {
   if command -v shasum >/dev/null 2>&1; then
     shasum -a 256 "$1" | awk '{print $1}'
   else
     sha256sum "$1" | awk '{print $1}'
   fi
-}
-
-# A masked preview of a credential:  the first eight characters and the last
-# four, with an ellipsis between them.  It is not reversible, because the
-# ellipsis stands for the part that is not shown, and it names the value that
-# was rejected so an operator can tell which one it was without being handed
-# the value (rule 43).
-#
-# The preview is only a preview when the middle of the value is really hidden.
-# The two slices cover twelve characters between them, so a value of twelve
-# characters or fewer would be reconstructed in full by the two of them
-# together; those are redacted outright instead.  The message that carries the
-# preview names the credential, so an operator still knows which value was
-# refused without any part of the value being shown.
-#
-# The preview also has to be an ordinary string.  The replacement in a bash
-# substitution is a pattern, and in bash 5.2 and later an ampersand in it
-# expands to the text that matched, which here would be the credential
-# itself.  A value that could put one in the preview is refused, so the
-# preview can only ever be text.
-mask() {
-  local value="$1"
-  case "$value" in
-    *[\&]*) printf '%s' "<redacted>"; return ;;
-  esac
-  if [ "${#value}" -le 12 ]; then
-    printf '%s' "<redacted>"
-    return
-  fi
-  printf '%s…%s' "${value:0:8}" "${value: -4}"
-}
-
-# A tool's own error text, with the client id, the client secret and the
-# access token taken out of it.  A failed login or a failed read must be
-# diagnosable from the log, and no part of the identity belongs in a log.
-# The token is minted fresh for every job, so a slice of it would identify
-# nothing an operator can act on; the diagnosis names the fault instead.
-#
-# The client id and the client secret are long lived and the runner masks
-# them by value, so they are redacted whole:  a preview of either would
-# defeat that masking and put twelve characters of a standing credential in
-# a public log.  The access token is minted for one job, so it may carry a
-# preview, and that preview is what tells the operator which value was
-# refused.
-scrub() {
-  local text="$1" masked redacted
-  redacted='<redacted>'
-  if [ -n "${INFISICAL_CLIENT_ID:-}" ]; then
-    text="${text//"$INFISICAL_CLIENT_ID"/${redacted}}"
-  fi
-  if [ -n "${INFISICAL_CLIENT_SECRET:-}" ]; then
-    text="${text//"$INFISICAL_CLIENT_SECRET"/${redacted}}"
-  fi
-  if [ -n "${INFISICAL_TOKEN:-}" ]; then
-    masked="$(mask "$INFISICAL_TOKEN")"
-    text="${text//"$INFISICAL_TOKEN"/${masked}}"
-  fi
-  printf '%s' "$text"
 }
 
 install_infisical_cli() {
@@ -168,8 +93,6 @@ install_infisical_cli() {
   actual="$(sha256_of "$work/$asset")"
   [ "$actual" = "$expected" ] \
     || { fail "the Infisical CLI $asset does not match the pinned checksum"; return 1; }
-  # The release publishes the same checksum in its own list.  A disagreement
-  # means the asset moved, and the step fails rather than installing it.
   if curl -fsSL "$base/checksums-darwin.txt" -o "$work/checksums.txt" 2>/dev/null; then
     published="$(awk -v a="$asset" '$2 == a { print $1 }' "$work/checksums.txt")"
     if [ -n "$published" ] && [ "$published" != "$expected" ]; then
@@ -205,40 +128,24 @@ install_fleet_secrets() {
   say "installed: fleet-secrets ($FLEET_READER_COMMIT) -> $TOOLS_DIR/fleet-secrets"
 }
 
-mint_token() {
-  local status token project_id
-  project_id="${INFISICAL_PROJECT_ID:-}"
+configure_service_token() {
+  local project_id token
+  project_id="${INFISICAL_PROJECT_ID:-${INFISICAL_FLEET_OPS_PROJECT_ID:-}}"
   [ -n "$project_id" ] || { fail "the Fleet-OPS Infisical project id is not set"; return 1; }
-  [ -n "${INFISICAL_CLIENT_ID:-}" ] \
-    || { fail "the Infisical universal auth client id is not set"; return 1; }
-  [ -n "${INFISICAL_CLIENT_SECRET:-}" ] \
-    || { fail "the Infisical universal auth client secret is not set"; return 1; }
-
-  export INFISICAL_UNIVERSAL_AUTH_CLIENT_ID="$INFISICAL_CLIENT_ID"
-  export INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET="$INFISICAL_CLIENT_SECRET"
-  export INFISICAL_DISABLE_UPDATE_CHECK="true"
-
-  # The token is minted into a shell variable and stays there.  It is read
-  # from the command's output, which never reaches the log, and it is never
-  # written to a file.
-  status=0
-  token="$("$TOOLS_DIR/infisical" login --method=universal-auth --plain --silent 2>"$work/login.err")" || status=$?
-  if [ "$status" -ne 0 ]; then
-    say "the Infisical CLI refused the universal auth login (exit $status); the client id or the client secret was refused: $(scrub "$(cat "$work/login.err")")"
-    fail "no Infisical access token was minted"
-    return 1
-  fi
+  token="${INFISICAL_SERVICE_TOKEN:-}"
+  [ -n "$token" ] || { fail "the Fleet-OPS /asc read service token is not set"; return 1; }
   case "$token" in
-    "") fail "the Infisical CLI returned no access token"; return 1 ;;
-    *[[:space:]]*) fail "the Infisical CLI returned an access token that is not a single line"; return 1 ;;
+    st.*.*) ;;
+    *) fail "the Fleet-OPS /asc credential is not a full Infisical service token"; return 1 ;;
   esac
-
-  # The token and the project id are the session the consumer inherits.  The
-  # client secret stays out of it: the token is the identity from here on.
+  case "$token" in
+    *[[:space:]]*) fail "the Fleet-OPS /asc service token is not a single line"; return 1 ;;
+  esac
   export INFISICAL_TOKEN="$token"
   export INFISICAL_FLEET_OPS_PROJECT_ID="$project_id"
   export PATH="$TOOLS_DIR:$PATH"
-  say "minted: an Infisical access token for the consumer"
+  unset INFISICAL_SERVICE_TOKEN
+  say "configured: read-only Infisical service token for Fleet-OPS prod /asc"
 }
 
 # The reader is proven before the consumer runs.  The consumer reads a failed
@@ -248,8 +155,8 @@ mint_token() {
 # names the fault instead.
 #
 # The proof is read-only and lists names, never values: `fleet-secrets names
-# --path /asc` is the fleet's own reader, and it carries the minted token
-# through INFISICAL_TOKEN.
+# --path /asc` is the fleet's own reader, and it carries the scoped service
+# token through INFISICAL_TOKEN.
 #
 # The reader's exit codes are its own: 2 is a refused configuration, 4 is a
 # fetch or auth failure and 5 is an unresolved reference in the vault.  A
@@ -307,7 +214,7 @@ check_reader() {
       fail "the fleet-secrets reader refused to read Fleet-OPS prod /asc (exit 2); the reader or its configuration is at fault, not the vault permissions: ${detail}"
       ;;
     4)
-      fail "the fleet-secrets reader could not read Fleet-OPS prod /asc (exit 4); the minted Infisical access token was rejected or the vault was unreachable: ${detail}"
+      fail "the fleet-secrets reader could not read Fleet-OPS prod /asc (exit 4); the service token was rejected or the vault was unreachable: ${detail}"
       ;;
     *)
       fail "the fleet-secrets reader failed to list Fleet-OPS prod /asc (exit ${status}); the reader is at fault: ${detail}"
@@ -317,30 +224,23 @@ check_reader() {
 }
 
 install_tooling() {
+  configure_service_token || return 1
   install_infisical_cli || return 1
   install_fleet_secrets || return 1
-  mint_token || return 1
   check_reader || return 1
 }
 
-# The reader can be proved on its own, with a token the caller already holds.
-# An operator runs it to test a reader or a token without running a release
-# step, and the contract test drives it with a stubbed reader:
+# The reader can be proved on its own with the caller-supplied scoped token.
+# The contract test drives this path with a stubbed reader:
 #
-#   INFISICAL_TOKEN=... INFISICAL_FLEET_OPS_PROJECT_ID=... \
+#   INFISICAL_SERVICE_TOKEN=st.<id>.<secret> INFISICAL_PROJECT_ID=... \
 #     bash scripts/install-release-secrets-tooling.sh check-reader
 #
-# Without an argument the script does the whole release job: install the
-# tooling, mint the token, prove the reader and run the consumer.
+# Without an argument the script configures that token, installs the reader,
+# proves the read scope, and runs the consumer.
 if [ "${1:-}" = "check-reader" ]; then
   export PATH="$TOOLS_DIR:$PATH"
-  # Without a token the reader falls back to sources a runner does not have
-  # and fails the way a rejected token fails, so an absent token is named
-  # before the reader is asked.
-  if [ -z "${INFISICAL_TOKEN:-}" ]; then
-    fail "no Infisical access token in the environment; export INFISICAL_TOKEN and INFISICAL_FLEET_OPS_PROJECT_ID before proving the reader"
-    exit 1
-  fi
+  configure_service_token || exit 1
   check_reader || exit 1
   exit 0
 fi
