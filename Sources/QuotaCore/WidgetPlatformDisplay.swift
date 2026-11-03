@@ -233,12 +233,15 @@ public enum QuotaCardProjection {
     }
 
     public static func antigravityPeriod(_ reading: Reading) -> String? {
-        let token = (reading.window ?? "").lowercased().replacingOccurrences(of: " ", with: "")
-        let label = reading.label.lowercased()
+        let token = (reading.window ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased().replacingOccurrences(of: " ", with: "")
+        let label = reading.label.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let weeklyLabels: Set<String> = ["weekly", "week", "7-day", "7 day", "7-day window", "7 day window"]
+        let fiveHourLabels: Set<String> = ["5h", "5hr", "5-hour", "5 hours", "5-hour window", "5 hour window", "five_hour"]
         if ["weekly", "week", "1w", "7d", "168h", "10080m"].contains(token)
-            || label.contains("weekly") || label.contains("week") { return "weekly" }
+            || weeklyLabels.contains(label) { return "weekly" }
         if ["5h", "5hr", "5-hour", "5hours", "300m"].contains(token)
-            || label.contains("5h") || label.contains("5-hour") || label.contains("five_hour") { return "5h" }
+            || fiveHourLabels.contains(label) { return "5h" }
         return nil
     }
 
