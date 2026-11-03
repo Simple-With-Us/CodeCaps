@@ -1,6 +1,6 @@
 // Credential-free contract and mocked notarization preflight tests.
 import assert from 'node:assert/strict';
-import {readFileSync, mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync, readdirSync} from 'node:fs';
+import {readFileSync, mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync, readdirSync, symlinkSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -354,6 +354,22 @@ test('Mac shared build planning includes the registered paired app before its fe
     ['com.example.ios', 'com.example.mac', '73', '--merge-stamp', '202611030600']);
   assert.deepEqual(releaseBuildPlannerArgs({bundleId: 'com.example.ios'}, '73', '202611030600'),
     ['com.example.ios', '73', '--merge-stamp', '202611030600']);
+});
+
+test('the build root resolves task-lane symlinks before invoking the version planner', () => {
+  const temporary = mkdtempSync(join(tmpdir(), 'codecaps-build-root-'));
+  const alias = join(temporary, 'lane');
+  try {
+    symlinkSync(root, alias, 'dir');
+    const script = 'ROOT_DIR="$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd -P)"\nnode "$ROOT_DIR/scripts/mac-release-version.mjs" offline "$ROOT_DIR"\n';
+    const result = spawnSync('bash', ['-c', script], {
+      encoding: 'utf8', env: {...process.env, SCRIPT_PATH: join(alias, 'script', 'build_and_run.sh')},
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /^0\.1\.0\t[1-9][0-9]{11}\n$/);
+  } finally {
+    rmSync(temporary, {recursive: true, force: true});
+  }
 });
 
 test('the build script accepts approved short marketing versions and caches the one planner result', () => {
