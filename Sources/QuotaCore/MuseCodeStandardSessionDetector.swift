@@ -47,7 +47,15 @@ public struct MuseCodeStandardSessionEvent: Equatable, Sendable {
     public var body: String {
         "Session \(sessionId) is running on the standard model \(modelId)."
             + sentenceGap
-            + "Observed at \(observedAt.formatted(date: .abbreviated, time: .standard))."
+            + "Observed at \(Self.centralTimestamp(observedAt))."
+    }
+
+    private static func centralTimestamp(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "America/Chicago")
+        formatter.dateFormat = "MMM d, yyyy h:mm a"
+        return formatter.string(from: date)
     }
 }
 

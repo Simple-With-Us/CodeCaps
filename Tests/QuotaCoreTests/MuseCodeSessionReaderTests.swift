@@ -72,7 +72,8 @@ final class MuseCodeSessionReaderTests: XCTestCase {
     }
 
     private func writeSnapshot(home: URL, session: String, name: String,
-                               usage: [String: Any]?, modified: Date, headId: String = "x") throws {
+                               usage: [String: Any]?, modified: Date, headId: String = "x",
+                               nullTokenUsage: Bool = false) throws {
         let directory = home
             .appendingPathComponent(".local/share/muse/sessions/.msp-view-g6/\(session)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -80,6 +81,10 @@ final class MuseCodeSessionReaderTests: XCTestCase {
         if let usage {
             let root: [String: Any] = ["continuation": ["view_materialization":
                                         ["current_state": ["tokenUsage": usage]]]]
+            try JSONSerialization.data(withJSONObject: root).write(to: url)
+        } else if nullTokenUsage {
+            let root: [String: Any] = ["continuation": ["view_materialization":
+                                        ["current_state": ["tokenUsage": NSNull()]]]]
             try JSONSerialization.data(withJSONObject: root).write(to: url)
         } else {
             try Data("not json".utf8).write(to: url)
@@ -126,12 +131,73 @@ final class MuseCodeSessionReaderTests: XCTestCase {
                        "session-b's newest file is three hours old, so it is not active")
         XCTAssertEqual(report.segments.count, 3, "the duplicate snapshot adds no segment")
         XCTAssertEqual(report.latestObservations.map(\.sessionId), ["session-a"])
+        XCTAssertEqual(report.currentModelObservations.map(\.sessionId), ["session-a"],
+                       "stale session-b is not exposed as a currently active model")
         let observation = report.latestObservations.first
         XCTAssertEqual(observation?.snapshotId, "4",
                        "HEAD names an unknown id here, so the newest parsed snapshot is the latest")
         XCTAssertEqual(observation?.modelId, "muse-wonder-1.0")
         XCTAssertEqual(observation?.totalTokens, 500)
         XCTAssertEqual(observation?.segmentKey, "a3")
+    }
+
+    func testCurrentModelUsesNullHeadWithoutBackfillingAndPreservesHistoricalUsage() throws {
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        try writeSnapshot(home: home, session: "session-current", name: "snapshot-1.json",
+                          usage: usage(model: "muse-wonder-1.0", tokens: 4_250,
+                                       first: "old-first", last: "old-last"),
+                          modified: now.addingTimeInterval(-3 * 60), headId: "1")
+        try writeSnapshot(home: home, session: "session-current", name: "snapshot-2.json",
+                          usage: nil, modified: now.addingTimeInterval(-2 * 60), headId: "2",
+                          nullTokenUsage: true)
+
+        let nullHead = try XCTUnwrap(MuseCodeSessionReader(homeDirectory: home, now: { self.now })
+            .read().report)
+        XCTAssertEqual(nullHead.currentModelObservations.count, 1)
+        XCTAssertNil(nullHead.currentModelObservations.first?.modelId,
+                     "HEAD's null tokenUsage means the current model is unknown, not the older standard model")
+        XCTAssertEqual(nullHead.window(minutes: 90)?.totalTokens, 4_250,
+                       "a missing current model does not erase older valid token usage")
+
+        try writeSnapshot(home: home, session: "session-current", name: "snapshot-3.json",
+                          usage: usage(model: "muse-spark-1.3-contributor", tokens: 800,
+                                       first: "contrib-first", last: "contrib-last"),
+                          modified: now.addingTimeInterval(-60), headId: "3")
+        let contributor = try XCTUnwrap(MuseCodeSessionReader(homeDirectory: home, now: { self.now })
+            .read().report)
+        XCTAssertEqual(contributor.currentModelObservations.first?.modelId,
+                       "muse-spark-1.3-contributor")
+        XCTAssertEqual(contributor.window(minutes: 90)?.totalTokens, 5_050)
+
+        try writeSnapshot(home: home, session: "session-current", name: "snapshot-4.json",
+                          usage: usage(model: "muse-wonder-2.0", tokens: 200,
+                                       first: "standard-first", last: "standard-last"),
+                          modified: now, headId: "4")
+        let standard = try XCTUnwrap(MuseCodeSessionReader(homeDirectory: home, now: { self.now })
+            .read().report)
+        XCTAssertEqual(standard.currentModelObservations.first?.modelId, "muse-wonder-2.0")
+        XCTAssertEqual(standard.window(minutes: 90)?.totalTokens, 5_250)
+    }
+
+    func testReaderKeepsNewestSnapshotsAndHeadBeyondParsingCap() throws {
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        for index in 0...512 {
+            try writeSnapshot(home: home, session: "session-many", name: "snapshot-\(index).json",
+                              usage: usage(model: "muse-model-\(index)", tokens: 1,
+                                           first: "first-\(index)", last: "last-\(index)"),
+                              modified: now.addingTimeInterval(Double(index - 512)),
+                              headId: "512")
+        }
+
+        let report = try XCTUnwrap(MuseCodeSessionReader(homeDirectory: home, now: { self.now })
+            .read().report)
+        XCTAssertEqual(report.currentModelObservations.first?.modelId, "muse-model-512")
+        XCTAssertEqual(report.window(minutes: 90)?.totalTokens, 512,
+                       "the newest 512 snapshots are retained for bounded usage parsing")
+        XCTAssertTrue(report.segments.contains { $0.modelId == "muse-model-512" },
+                      "the HEAD snapshot is always included in the bounded scan")
     }
 
     func testReaderLatestObservationFollowsHeadSnapshotId() throws {

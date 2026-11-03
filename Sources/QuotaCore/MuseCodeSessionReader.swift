@@ -126,14 +126,20 @@ public struct MuseCodeSessionReport: Equatable, Sendable {
     public let windows: [MuseCodeWindowUsage]
     public let segments: [MuseCodeTokenSegment]
     public let latestObservations: [MuseCodeSessionObservation]
+    /// The model each active session is on now, including a nil model when
+    /// its latest snapshot has no model-bearing tokenUsage.  Kept separate
+    /// from token observations, which require valid cumulative usage data.
+    public let currentModelObservations: [MuseCodeSessionModelObservation]
 
     public init(generatedAt: Date, windows: [MuseCodeWindowUsage],
                 segments: [MuseCodeTokenSegment] = [],
-                latestObservations: [MuseCodeSessionObservation] = []) {
+                latestObservations: [MuseCodeSessionObservation] = [],
+                currentModelObservations: [MuseCodeSessionModelObservation] = []) {
         self.generatedAt = generatedAt
         self.windows = windows
         self.segments = segments
         self.latestObservations = latestObservations
+        self.currentModelObservations = currentModelObservations
     }
 
     public func window(minutes: Int) -> MuseCodeWindowUsage? {
@@ -195,6 +201,7 @@ public struct MuseCodeSessionReader: Sendable {
         var segments: [MuseCodeTokenSegment] = []
         var activity: [String: Date] = [:]
         var observations: [MuseCodeSessionObservation] = []
+        var modelObservations: [MuseCodeSessionModelObservation] = []
         let entries = (try? FileManager.default.contentsOfDirectory(
             at: root, includingPropertiesForKeys: [.isDirectoryKey, .contentModificationDateKey])) ?? []
         let sessionDirs = entries
@@ -215,11 +222,42 @@ public struct MuseCodeSessionReader: Sendable {
             // test the survey scripts use.
             guard let newest = dated.map(\.modified).max(), newest >= cutoff else { continue }
             activity[sessionId] = newest
-            let snapshots = dated
+            let allSnapshots = dated
                 .filter { $0.url.lastPathComponent.hasPrefix("snapshot-")
-                    && $0.url.pathExtension == "json" && $0.modified >= cutoff }
-                .sorted { $0.modified < $1.modified }
-                .prefix(Self.maxSnapshotsPerSession)
+                    && $0.url.pathExtension == "json" }
+            let headId = Self.headSnapshotId(in: dated)
+            let headSnapshot = headId.flatMap { id in
+                allSnapshots.first { Self.snapshotId(from: $0.url) == id }
+            }
+            // Retain the newest snapshots that can contribute to the 90-minute
+            // window.  Always add HEAD even when the store contains more than the
+            // parsing cap, so it cannot be lost behind older snapshots.
+            var selected = Array(allSnapshots
+                .filter { $0.modified >= cutoff }
+                .sorted { $0.modified > $1.modified }
+                .prefix(Self.maxSnapshotsPerSession))
+            if let headSnapshot, !selected.contains(where: { $0.url == headSnapshot.url }) {
+                if selected.count == Self.maxSnapshotsPerSession { selected.removeLast() }
+                selected.append(headSnapshot)
+            }
+            let snapshots = selected.sorted { $0.modified < $1.modified }
+            let currentSnapshot: (url: URL, modified: Date, size: Int)?
+            if let headId {
+                // A valid HEAD id is authoritative. If its file is absent, the
+                // current model is unknown; never substitute an older model.
+                currentSnapshot = headSnapshot
+            } else {
+                currentSnapshot = allSnapshots.max { $0.modified < $1.modified }
+            }
+            if let currentSnapshot {
+                modelObservations.append(MuseCodeSessionModelObservation(
+                    sessionId: sessionId,
+                    modelId: Self.currentModel(in: currentSnapshot.url, size: currentSnapshot.size),
+                    observedAt: currentSnapshot.modified))
+            } else {
+                modelObservations.append(MuseCodeSessionModelObservation(
+                    sessionId: sessionId, modelId: nil, observedAt: newest))
+            }
             var parsed: [(snapshotId: String?, segment: MuseCodeTokenSegment)] = []
             for snapshot in snapshots {
                 if let segment = Self.segment(sessionId: sessionId, url: snapshot.url,
@@ -230,7 +268,6 @@ public struct MuseCodeSessionReader: Sendable {
             }
             // The session's latest observation, for the bridge: the snapshot
             // HEAD.json names when it was parsed, otherwise the newest one.
-            let headId = Self.headSnapshotId(in: dated)
             let chosen = parsed.first { $0.snapshotId != nil && $0.snapshotId == headId }
                 ?? parsed.max { $0.segment.observedAt < $1.segment.observedAt }
             if let chosen {
@@ -246,6 +283,7 @@ public struct MuseCodeSessionReader: Sendable {
         return MuseCodeSessionResult(
             report: Self.aggregate(segments: segments, sessionActivity: activity,
                                    latestObservations: observations.sorted { $0.sessionId < $1.sessionId },
+                                   currentModelObservations: modelObservations.sorted { $0.sessionId < $1.sessionId },
                                    now: instant),
             issue: nil)
     }
@@ -263,6 +301,19 @@ public struct MuseCodeSessionReader: Sendable {
               let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               let id = root["latest_snapshot_id"] as? String, !id.isEmpty else { return nil }
         return id
+    }
+
+    private static func currentModel(in url: URL, size: Int) -> String? {
+        guard size > 0, size <= maxSnapshotBytes,
+              let data = try? Data(contentsOf: url),
+              let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let continuation = root["continuation"] as? [String: Any],
+              let materialization = continuation["view_materialization"] as? [String: Any],
+              let state = materialization["current_state"] as? [String: Any],
+              let usage = state["tokenUsage"] as? [String: Any],
+              let modelId = usage["modelId"] as? String,
+              !modelId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return modelId
     }
 
     private static func modification(of url: URL) -> Date {
@@ -303,6 +354,7 @@ public struct MuseCodeSessionReader: Sendable {
     public static func aggregate(segments raw: [MuseCodeTokenSegment],
                                  sessionActivity: [String: Date],
                                  latestObservations: [MuseCodeSessionObservation] = [],
+                                 currentModelObservations: [MuseCodeSessionModelObservation] = [],
                                  now: Date) -> MuseCodeSessionReport {
         // The stores rotate snapshots aggressively: a segment whose snapshot
         // file has already been rotated away is invisible here, and a session
@@ -347,6 +399,7 @@ public struct MuseCodeSessionReader: Sendable {
             generatedAt: now,
             windows: windows,
             segments: segments.filter { $0.observedAt >= cutoff90 && $0.observedAt <= horizon },
-            latestObservations: latestObservations)
+            latestObservations: latestObservations,
+            currentModelObservations: currentModelObservations)
     }
 }

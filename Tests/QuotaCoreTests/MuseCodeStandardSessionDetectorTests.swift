@@ -25,6 +25,13 @@ final class MuseCodeStandardSessionDetectorTests: XCTestCase {
                       "the alert payload names the model")
     }
 
+    func testEventBodyUsesCentralTwelveHourTime() {
+        let observedAt = ISO8601DateFormatter().date(from: "2026-11-03T12:00:00Z")!
+        let event = MuseCodeStandardSessionEvent(sessionId: "s1", modelId: standardModel,
+                                                 observedAt: observedAt)
+        XCTAssertTrue(event.body.contains("Observed at Nov 3, 2026 6:00 AM."))
+    }
+
     func testSameStandardSessionRepolledDoesNotRefire() {
         var detector = MuseCodeStandardSessionDetector()
         XCTAssertEqual(detector.observe([observation("s1", standardModel)]).count, 1)

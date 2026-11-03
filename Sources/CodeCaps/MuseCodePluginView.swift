@@ -21,6 +21,7 @@ struct MuseCodePluginPage: View {
 /// per-model split, and the deterministic monitor's state and controls.
 struct MuseCodeMonitorPage: View {
     @ObservedObject var model: MonitorModel
+    @State private var ingestToken = ""
 
     /// The standard-session kind's popup option, offered here beside the
     /// feature it belongs to.  It is the same preference the Alerts &
@@ -237,6 +238,30 @@ struct MuseCodeMonitorPage: View {
             Eyebrow("USAGE MONITOR BRIDGE")
             VStack(alignment: .leading, spacing: 12) {
                 Toggle("Post Token Events To Usage Monitor", isOn: $model.museCodeUsageBridgeEnabled)
+                SecureField("Muse Ingest Token", text: $ingestToken)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(model.museCodeIngestTokenBusy)
+                HStack {
+                    Button("Save Token") {
+                        Task { if await model.saveMuseCodeIngestToken(ingestToken) { ingestToken = "" } }
+                    }
+                    .disabled(ingestToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    Button("Re-Authorize Saved Token") {
+                        Task { await model.reauthorizeMuseCodeIngestToken() }
+                    }
+                    Button("Forget Token") {
+                        Task {
+                            await model.forgetMuseCodeIngestToken()
+                            if !model.museCodeHasSavedIngestToken { ingestToken = "" }
+                        }
+                    }
+                    .disabled(!model.museCodeHasSavedIngestToken)
+                    if model.museCodeIngestTokenBusy { ProgressView().controlSize(.small) }
+                }
+                .disabled(model.museCodeIngestTokenBusy)
+                if let tokenStatus = model.museCodeIngestTokenStatus {
+                    Text(tokenStatus).font(.system(size: 11)).foregroundStyle(.secondary)
+                }
                 row("Bridge Status", model.museCodeBridgeStatus ?? "Not posted yet")
                 Text("Posts each session's new tokens since the last reading to Usage Monitor, as muse-code token events."
                     + sentenceGap

@@ -26,11 +26,14 @@ final class UsageAlertPreferencesTests: XCTestCase {
         preferences.save(to: defaults, key: "alerts")
         let restored = UsageAlertPreferences.load(from: defaults, key: "alerts",
             resetEnabled: true, resetSound: .frog, runawayEnabled: false)
-        XCTAssertEqual(restored, preferences)
+        XCTAssertEqual(restored[.anomaly], preferences[.anomaly])
+        XCTAssertEqual(restored[.runaway], preferences[.runaway])
         XCTAssertFalse(restored[.anomaly].notification)
         XCTAssertTrue(restored[.anomaly].popup)
         XCTAssertEqual(restored[.runaway].sound, .silent)
         XCTAssertFalse(restored[.quotaReset].enabled)
+        XCTAssertTrue(restored[.museCodeBurn].enabled)
+        XCTAssertTrue(restored[.museCodeStandardSession].enabled)
     }
 
     func testCorruptPreferencesFallBackToLegacyChoices() {

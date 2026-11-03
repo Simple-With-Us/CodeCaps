@@ -32,7 +32,8 @@ final class MuseCodeBurnMonitorTests: XCTestCase {
                                           contributorShare: total > 0 ? Double(contributor) / Double(total) : nil,
                                           activeSessions: observations.count, models: models)
         return MuseCodeSessionReport(generatedAt: now, windows: [window],
-                                       latestObservations: observations)
+                                       latestObservations: observations,
+                                       currentModelObservations: observations.map(MuseCodeSessionModelObservation.init))
     }
 
     func testBurnFiresOverThresholdWithStandardSessionPresent() {
@@ -94,4 +95,15 @@ final class MuseCodeBurnMonitorTests: XCTestCase {
         }
         XCTAssertEqual(alert.totalTokens, 5_000_000)
     }
+    func testHistoricalStandardTokensDoNotSatisfyCurrentPresenceWhenHeadModelIsNil() {
+        let historical = report(total: 5_000_000, contributor: 4_000_000)
+        let current = MuseCodeSessionReport(generatedAt: now, windows: historical.windows,
+            latestObservations: historical.latestObservations,
+            currentModelObservations: [.init(sessionId: "s-standard", modelId: nil, observedAt: now)])
+        XCTAssertNil(MuseCodeBurnMonitor.evaluateBurn(report: current, thresholdTokens: 4_000_000))
+        XCTAssertTrue(MuseCodeBurnMonitor.standardSessions(in: current).isEmpty)
+        XCTAssertEqual(MuseCodeBurnMonitor.status(report: current, issue: nil, thresholdTokens: 4_000_000),
+                       .currentModelsUnknown(totalTokens: 5_000_000))
+    }
+
 }

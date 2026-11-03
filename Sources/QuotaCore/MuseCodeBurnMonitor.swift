@@ -75,6 +75,7 @@ public enum MuseCodeBurnMonitor {
         case noActivity
         case belowThreshold(totalTokens: Int)
         case allContributor(totalTokens: Int)
+        case currentModelsUnknown(totalTokens: Int)
         case warning(BurnAlert)
 
         public var text: String {
@@ -83,6 +84,7 @@ public enum MuseCodeBurnMonitor {
             case .noActivity: return "No Muse activity in the last 90 minutes"
             case .belowThreshold: return "Below the burn threshold"
             case .allContributor: return "All sessions on contributor models"
+            case .currentModelsUnknown: return "Current session models unavailable"
             case .warning: return "Burn threshold exceeded on standard models"
             }
         }
@@ -92,7 +94,7 @@ public enum MuseCodeBurnMonitor {
     /// test over the reading's latest per-session observations.
     public static func standardSessions(in report: MuseCodeSessionReport) -> [MuseCodeStandardSessionEvent] {
         MuseCodeStandardSessionDetector.standardSessions(
-            in: report.latestObservations.map(MuseCodeSessionModelObservation.init))
+            in: report.currentModelObservations)
     }
 
     /// The combined rule.  "Exceeds" is strict: a window exactly at the
@@ -120,6 +122,11 @@ public enum MuseCodeBurnMonitor {
             return .warning(alert)
         }
         if standardSessions(in: report).isEmpty {
+            guard !report.currentModelObservations.isEmpty,
+                  report.currentModelObservations.allSatisfy({ observation in
+                      guard let model = observation.modelId, !model.isEmpty else { return false }
+                      return MuseCodeStandardSessionDetector.isContributor(modelId: model)
+                  }) else { return .currentModelsUnknown(totalTokens: window.totalTokens) }
             return .allContributor(totalTokens: window.totalTokens)
         }
         return .belowThreshold(totalTokens: window.totalTokens)

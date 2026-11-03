@@ -66,7 +66,7 @@ public enum MuseCodeSessionIngest {
 
 /// One positive delta the bridge owes the server, with the observation it
 /// came from.
-public struct MuseCodePlannedEvent: Equatable, Sendable {
+public struct MuseCodePlannedEvent: Codable, Equatable, Sendable {
     public let observation: MuseCodeSessionObservation
     public let delta: Int
 
@@ -89,10 +89,14 @@ public enum MuseCodeDeltaPlanner {
         var updated = previous
         var events: [MuseCodePlannedEvent] = []
         for observation in observations {
-            let prior = previous[observation.sessionId]
+            guard observation.totalTokens >= 0 else { continue }
+            let prior = updated[observation.sessionId]
+            // A rotated or delayed snapshot must never rewind an acknowledged baseline.
+            if let prior, observation.observedAt < prior.observedAt { continue }
             let delta: Int
             if let prior, prior.segmentKey == observation.segmentKey,
                prior.modelId == observation.modelId {
+                guard observation.totalTokens >= prior.totalTokens else { continue }
                 delta = observation.totalTokens - prior.totalTokens
             } else {
                 // First observation of the session, a segment reset, or a
@@ -171,9 +175,11 @@ public struct MuseCodeSessionPoster: Sendable {
         }
     }
 
-    public func publish(events: [[String: Any]], to endpoint: URL, token: String?) async throws -> MuseCodeIngestSummary {
+    public func publish(events: [[String: Any]], to endpoint: URL, token: String?,
+                        shouldContinue: @Sendable () async -> Bool = { true }) async throws -> MuseCodeIngestSummary {
         var summary = MuseCodeIngestSummary()
         for batch in MuseCodeSessionIngest.eventBatches(events: events) {
+            guard await shouldContinue() else { throw CancellationError() }
             var request = URLRequest(url: endpoint)
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "content-type")

@@ -96,12 +96,32 @@ final class MuseCodeSessionIngestTests: XCTestCase {
         XCTAssertEqual(plan.events.first?.observation.modelId, "muse-spark-1.3-contributor")
     }
 
-    func testDecreasedTotalInSameSegmentEmitsNothingAndRebaselines() {
+    func testDecreasedTotalInSameSegmentPreservesHighWaterMark() {
         let previous = ["s1": observation(total: 700)]
         let plan = MuseCodeDeltaPlanner.plan(
             observations: [observation(snapshot: "snap2", total: 400)], previous: previous)
         XCTAssertTrue(plan.events.isEmpty, "a negative delta is never posted")
-        XCTAssertEqual(plan.updated["s1"]?.totalTokens, 400)
+        XCTAssertEqual(plan.updated["s1"]?.totalTokens, 700)
+    }
+
+    func testLowerCounterThenRecoveryNeverBillsTheSameTokensAgain() {
+        let previous = ["s1": observation(total: 1_000)]
+        let lower = MuseCodeDeltaPlanner.plan(
+            observations: [observation(snapshot: "snap2", total: 900)], previous: previous)
+        let recovered = MuseCodeDeltaPlanner.plan(
+            observations: [observation(snapshot: "snap3", total: 1_000)], previous: lower.updated)
+        XCTAssertTrue(lower.events.isEmpty)
+        XCTAssertTrue(recovered.events.isEmpty)
+        XCTAssertEqual(recovered.updated["s1"]?.totalTokens, 1_000)
+    }
+
+    func testOlderModelOrSegmentCannotRewindAnAcknowledgedObservation() {
+        let previous = ["s1": observation(snapshot: "new", total: 1_000, segment: "new-segment", minutesAgo: 1)]
+        let delayed = MuseCodeDeltaPlanner.plan(
+            observations: [observation(snapshot: "old", total: 900, segment: "old-segment", minutesAgo: 5)],
+            previous: previous)
+        XCTAssertTrue(delayed.events.isEmpty)
+        XCTAssertEqual(delayed.updated, previous)
     }
 
     // MARK: - Poster

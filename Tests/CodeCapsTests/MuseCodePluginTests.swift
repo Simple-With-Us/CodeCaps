@@ -124,7 +124,8 @@ final class MuseCodePluginTests: XCTestCase {
             activeSessions: models.count, models: models)
         return MuseCodeSessionResult(
             report: MuseCodeSessionReport(generatedAt: Date(), windows: [window],
-                                           latestObservations: observations ?? derived),
+                                           latestObservations: observations ?? derived,
+                                           currentModelObservations: (observations ?? derived).map(MuseCodeSessionModelObservation.init)),
             issue: nil)
     }
 
@@ -179,6 +180,8 @@ final class MuseCodePluginTests: XCTestCase {
         XCTAssertEqual(spy.events.filter { $0.kind == .museCodeStandardSession }.count, 2,
                        "returning to a contributor model re-arms the session")
         XCTAssertEqual(model.museCodeStandardSessionAlert?.sessionId, "s1")
+        let eventIDs = spy.events.filter { $0.kind == .museCodeStandardSession }.map(\.identifier)
+        XCTAssertEqual(Set(eventIDs).count, 2)
     }
 
     func testStandardSessionStateSurvivesModelRecreation() {
@@ -202,6 +205,20 @@ final class MuseCodePluginTests: XCTestCase {
         XCTAssertTrue(spy.events.isEmpty)
         XCTAssertNil(model.museCodeBurnAlert)
         XCTAssertNil(model.museCodeStandardSessionAlert)
+    }
+
+    func testTwoBurnCooldownOccurrencesHaveDifferentIDsAndRepeatedPollIsSilent() {
+        let (model, spy) = makeModel()
+        let first = Date()
+        model.injectForTests(sections: [], now: first)
+        model.applyMuseCodeResult(result(total: 5_000_000, contributor: 4_000_000))
+        model.applyMuseCodeResult(result(total: 5_000_000, contributor: 4_000_000))
+        XCTAssertEqual(spy.events.filter { $0.kind == .museCodeBurn }.count, 1)
+        model.injectForTests(sections: [], now: first.addingTimeInterval(MuseCodeBurnMonitor.alertCooldown + 1))
+        model.applyMuseCodeResult(result(total: 5_000_000, contributor: 4_000_000))
+        let ids = spy.events.filter { $0.kind == .museCodeBurn }.map(\.identifier)
+        XCTAssertEqual(ids.count, 2)
+        XCTAssertEqual(Set(ids).count, 2)
     }
 
     // MARK: - Bridge

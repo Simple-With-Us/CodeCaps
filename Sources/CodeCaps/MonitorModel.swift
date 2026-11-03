@@ -395,8 +395,21 @@ final class MonitorModel: ObservableObject {
     /// Monitor through the sync endpoint.  Off by default: the local monitor
     /// is the feature; the bridge is provenance for the server.
     @Published var museCodeUsageBridgeEnabled: Bool {
-        didSet { defaults.set(museCodeUsageBridgeEnabled, forKey: "museCodeUsageBridgeEnabled") }
+        didSet {
+            defaults.set(museCodeUsageBridgeEnabled, forKey: "museCodeUsageBridgeEnabled")
+            guard oldValue != museCodeUsageBridgeEnabled else { return }
+            museCodeBridgeGeneration &+= 1
+            if museCodeUsageBridgeEnabled, let museCodeReport {
+                enqueueMuseCodeBridge(report: museCodeReport)
+            } else {
+                museCodePendingBridgeReport = nil
+                museCodeBridgeStatus = "Bridge off."
+            }
+        }
     }
+    @Published private(set) var museCodeHasSavedIngestToken: Bool
+    @Published private(set) var museCodeIngestTokenStatus: String?
+    @Published private(set) var museCodeIngestTokenBusy = false
 
     public var resetAlertHistory: [ResetAlertRecord] {
         alarmManager.alertHistory
@@ -634,6 +647,13 @@ final class MonitorModel: ObservableObject {
     var museCodeReadForTesting: (@MainActor () async -> MuseCodeSessionResult?)?
     var museCodePublishForTesting: (@MainActor ([[String: Any]], URL, String?) async throws -> MuseCodeIngestSummary)?
     var museCodeTokenReadForTesting: (@MainActor () async -> String?)?
+    var museCodeTokenSaveForTesting: (@MainActor (String) async throws -> Void)?
+    var museCodeTokenDeleteForTesting: (@MainActor () async throws -> Void)?
+    var museCodeTokenReauthorizeForTesting: (@MainActor () async -> String?)?
+    private var museCodeBridgeGeneration: UInt64 = 0
+    private var museCodeBridgeTask: Task<Void, Never>?
+    private var museCodePendingBridgeReport: MuseCodeSessionReport?
+    var museCodeBridgeTaskForTesting: Task<Void, Never>? { museCodeBridgeTask }
     private var lastMuseCodeBurnAlertAt: Double = 0
     /// The standard-session detector's tracked state, persisted across
     /// launches with the same JSON-in-UserDefaults pattern as the bridge
@@ -644,6 +664,7 @@ final class MonitorModel: ObservableObject {
     private var museCodeStandardSessionDetector = MuseCodeStandardSessionDetector()
     private static let museCodeDetectorKey = "museCodeStandardSessionDetector"
     private var museCodeRequest: Task<Void, Never>?
+    private var museCodeReadGeneration: UInt64 = 0
     private let museCodePoster = MuseCodeSessionPoster()
     var exhaustionNotificationForTesting: ((String, String) -> Void)?
     var exhaustionHistoryURLForTesting: URL?
@@ -791,6 +812,7 @@ final class MonitorModel: ObservableObject {
             ?? MuseCodeBurnMonitor.defaultThresholdTokens
         museCodeBurnAlertsEnabled = defaults.object(forKey: "museCodeBurnAlertsEnabled") as? Bool ?? true
         museCodeUsageBridgeEnabled = defaults.bool(forKey: "museCodeUsageBridgeEnabled")
+        museCodeHasSavedIngestToken = defaults.bool(forKey: "museCodeHasSavedIngestToken")
         lastMuseCodeBurnAlertAt = defaults.double(forKey: "museCodeBurnLastSent")
         if let data = defaults.data(forKey: Self.museCodeDetectorKey),
            let saved = try? JSONDecoder().decode(MuseCodeStandardSessionDetector.self, from: data) {
@@ -1859,6 +1881,9 @@ final class MonitorModel: ObservableObject {
     /// instead of waiting for a save.
     func setLocalEnabled(_ value: Bool) {
         guard value != localEnabled else { return }
+        museCodeReadGeneration &+= 1
+        museCodeRequest?.cancel()
+        museCodeRequest = nil
         invalidateRefresh()
         invalidateSessionFileRefresh()
         localEnabled = value
@@ -3126,8 +3151,10 @@ final class MonitorModel: ObservableObject {
         }
         if museCodeReadForTesting == nil,
            skipsSnapshotIOForTesting || localReadForTesting != nil || localResultForTesting != nil
+                || sessionFileReadForTesting != nil || sessionAccountIDForTesting != nil
                 || serverFetchForTesting != nil { return }
         guard museCodeRequest == nil else { return }
+        let generation = museCodeReadGeneration
         let readForTesting = museCodeReadForTesting
         museCodeRequest = Task { [weak self] in
             let result: MuseCodeSessionResult?
@@ -3139,8 +3166,9 @@ final class MonitorModel: ObservableObject {
                 }.value
             }
             guard let self else { return }
+            guard generation == self.museCodeReadGeneration else { return }
             self.museCodeRequest = nil
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, self.localEnabled else { return }
             if let result { self.applyMuseCodeResult(result) }
         }
     }
@@ -3156,9 +3184,7 @@ final class MonitorModel: ObservableObject {
             return
         }
         evaluateMuseCodeAlerts(report: report)
-        if museCodeUsageBridgeEnabled {
-            Task { [weak self] in await self?.postMuseCodeBridge(report: report) }
-        }
+        if museCodeUsageBridgeEnabled { enqueueMuseCodeBridge(report: report) }
     }
 
     private func evaluateMuseCodeAlerts(report: MuseCodeSessionReport) {
@@ -3174,9 +3200,10 @@ final class MonitorModel: ObservableObject {
            now.timeIntervalSince1970 - lastMuseCodeBurnAlertAt >= MuseCodeBurnMonitor.alertCooldown {
             lastMuseCodeBurnAlertAt = now.timeIntervalSince1970
             defaults.set(lastMuseCodeBurnAlertAt, forKey: "museCodeBurnLastSent")
+            guard defaults.synchronize() else { return }
             alertDispatcher.emit(CodeCapsAlertEvent(
                 kind: .museCodeBurn, title: burn.title, body: burn.body,
-                identifier: "codecaps.musecode.burn", occurredAt: report.generatedAt))
+                identifier: "codecaps.musecode.burn." + UUID().uuidString, occurredAt: report.generatedAt))
         }
         // The contributor finding is its own alert kind, independent of the
         // burn threshold, and it is an event, not a share: the detector
@@ -3187,86 +3214,201 @@ final class MonitorModel: ObservableObject {
         // on the burn alert.  Each event carries its own notification
         // identifier, so two sessions' events never replace each other.
         let events = museCodeStandardSessionDetector.observe(
-            report.latestObservations.map(MuseCodeSessionModelObservation.init))
-        saveMuseCodeDetectorState()
+            report.currentModelObservations)
+        guard saveMuseCodeDetectorState() else { return }
         if let latest = events.last {
             museCodeStandardSessionAlert = latest
         }
         for event in events {
             alertDispatcher.emit(CodeCapsAlertEvent(
                 kind: .museCodeStandardSession, title: event.title, body: event.body,
-                identifier: "codecaps.musecode.standard-session.\(event.sessionId)",
+                identifier: "codecaps.musecode.standard-session.\(event.sessionId)." + UUID().uuidString,
                 occurredAt: event.observedAt))
         }
     }
 
-    private func saveMuseCodeDetectorState() {
-        if let data = try? JSONEncoder().encode(museCodeStandardSessionDetector) {
-            defaults.set(data, forKey: Self.museCodeDetectorKey)
+    private func saveMuseCodeDetectorState() -> Bool {
+        guard let data = try? JSONEncoder().encode(museCodeStandardSessionDetector) else { return false }
+        defaults.set(data, forKey: Self.museCodeDetectorKey)
+        return defaults.synchronize()
+    }
+
+    /// One worker plans, posts, and commits baselines in order.
+    private func enqueueMuseCodeBridge(report: MuseCodeSessionReport) {
+        guard museCodeUsageBridgeEnabled else { return }
+        if museCodePendingBridgeReport == nil || report.generatedAt >= museCodePendingBridgeReport!.generatedAt {
+            museCodePendingBridgeReport = report
+        }
+        guard museCodeBridgeTask == nil, !museCodeIngestTokenBusy else { return }
+        museCodeBridgeTask = Task { [weak self] in
+            guard let self else { return }
+            while self.museCodeUsageBridgeEnabled, !self.museCodeIngestTokenBusy,
+                  let next = self.museCodePendingBridgeReport {
+                self.museCodePendingBridgeReport = nil
+                let generation = self.museCodeBridgeGeneration
+                let completed = await self.postMuseCodeBridge(report: next, generation: generation)
+                // Failure waits for a later refresh; it never retries immediately.
+                if !completed { break }
+            }
+            self.museCodeBridgeTask = nil
         }
     }
 
-    /// Posts the reading's per-session token deltas to Usage Monitor under
-    /// the verified `muse-code` contract: the contract endpoint, the
-    /// muse-code scoped producer token from its own Keychain service, and
-    /// only the positive delta since the previous observation — a session's
-    /// latest snapshot total is cumulative, so posting totals would
-    /// double-count.  Baselines persist only after every batch is
-    /// acknowledged; a failed post retries the same deltas next refresh,
-    /// and the stable event ids make the server dedupe any that did land.
-    private func postMuseCodeBridge(report: MuseCodeSessionReport) async {
-        guard !report.latestObservations.isEmpty else {
-            museCodeBridgeStatus = "No Muse sessions to post."
-            return
-        }
-        let plan = MuseCodeDeltaPlanner.plan(observations: report.latestObservations,
-                                              previous: loadMuseCodeIngestState())
-        guard !plan.events.isEmpty else {
-            saveMuseCodeIngestState(plan.updated)
-            museCodeBridgeStatus = "No new Muse tokens to post."
-            return
-        }
-        let endpoint = MuseCodeSessionIngest.endpoint
-        let token: String?
-        if let museCodeTokenReadForTesting {
-            token = await museCodeTokenReadForTesting()
-        } else {
-            token = await TokenStore.read(server: endpoint.absoluteString,
-                                          service: TokenStore.museCodeIngestService)
-                .map(sanitizedToken(_:))
-        }
-        guard let token, !token.isEmpty else {
-            museCodeBridgeStatus = "Bridge needs the muse-code ingest token saved in CodeCaps."
-            return
-        }
-        let events = plan.events.map {
-            MuseCodeSessionIngest.event(observation: $0.observation, delta: $0.delta)
-        }
+    private func canPostMuseCodeBridge(generation: UInt64) -> Bool {
+        museCodeUsageBridgeEnabled && !museCodeIngestTokenBusy && generation == museCodeBridgeGeneration
+    }
+
+    /// The pending plan is saved before I/O and replayed with its exact event IDs.
+    /// A newer snapshot cannot change the quantity of an uncertain earlier post.
+    private func postMuseCodeBridge(report: MuseCodeSessionReport, generation: UInt64,
+                                    showNoNewStatus: Bool = true) async -> Bool {
+        guard canPostMuseCodeBridge(generation: generation) else { return true }
         do {
+            var checkpoint = try loadMuseCodeBridgeCheckpoint()
+            let replayingPending = checkpoint.pending != nil
+            if checkpoint.pending == nil {
+                let plan = MuseCodeDeltaPlanner.plan(observations: report.latestObservations,
+                                                     previous: checkpoint.observations)
+                guard !plan.events.isEmpty else {
+                    checkpoint.observations = plan.updated
+                    try saveMuseCodeBridgeCheckpoint(checkpoint)
+                    if showNoNewStatus {
+                        museCodeBridgeStatus = report.latestObservations.isEmpty
+                            ? "No Muse sessions to post." : "No new Muse tokens to post."
+                    }
+                    return true
+                }
+                checkpoint.pending = MuseCodeBridgeCheckpoint.Pending(events: plan.events, updated: plan.updated)
+                try saveMuseCodeBridgeCheckpoint(checkpoint)
+            }
+            guard let pending = checkpoint.pending else { return false }
+            let token: String?
+            if let museCodeTokenReadForTesting { token = await museCodeTokenReadForTesting() }
+            else {
+                token = await TokenStore.read(server: MuseCodeSessionIngest.endpoint.absoluteString,
+                                               service: TokenStore.museCodeIngestService)
+            }
+            guard canPostMuseCodeBridge(generation: generation) else { return true }
+            guard let token = token.map(sanitizedToken(_:)), !token.isEmpty else {
+                museCodeBridgeStatus = "Save the Muse ingest token in the bridge setup."
+                return false
+            }
+            let events = pending.events.map { MuseCodeSessionIngest.event(observation: $0.observation, delta: $0.delta) }
             let summary: MuseCodeIngestSummary
             if let museCodePublishForTesting {
-                summary = try await museCodePublishForTesting(events, endpoint, token)
+                summary = try await museCodePublishForTesting(events, MuseCodeSessionIngest.endpoint, token)
             } else {
-                summary = try await museCodePoster.publish(events: events, to: endpoint, token: token)
+                summary = try await museCodePoster.publish(events: events, to: MuseCodeSessionIngest.endpoint, token: token,
+                    shouldContinue: { [weak self] in
+                        await self?.canPostMuseCodeBridge(generation: generation) == true
+                    })
             }
-            saveMuseCodeIngestState(plan.updated)
+            guard summary.sent == events.count, summary.rejected == 0 else {
+                if canPostMuseCodeBridge(generation: generation) {
+                    museCodeBridgeStatus = "Usage Monitor rejected token events.\u{00A0} Pending events were retained."
+                }
+                return false
+            }
+            // Baselines belong to the immutable receiver and producer, not its token.
+            // Acknowledged old-token work must not be counted again after rotation.
+            checkpoint.observations = pending.updated
+            checkpoint.pending = nil
+            try saveMuseCodeBridgeCheckpoint(checkpoint)
+            guard canPostMuseCodeBridge(generation: generation) else { return true }
             museCodeBridgeStatus = "Posted \(summary.sent) token events: \(summary.persisted) persisted, \(summary.duplicates) duplicates, \(summary.rejected) rejected."
+            if replayingPending {
+                return await postMuseCodeBridge(report: report, generation: generation, showNoNewStatus: false)
+            }
+            return true
         } catch {
-            museCodeBridgeStatus = "Bridge failed: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)"
+            guard canPostMuseCodeBridge(generation: generation) else { return true }
+            museCodeBridgeStatus = "Bridge submission could not be confirmed.\u{00A0} The saved pending events will be checked on the next refresh."
+            return false
         }
     }
 
-    private func loadMuseCodeIngestState() -> [String: MuseCodeSessionObservation] {
-        guard let data = defaults.data(forKey: "museCodeIngestObservations"),
-              let decoded = try? JSONDecoder().decode([String: MuseCodeSessionObservation].self,
-                                                      from: data) else { return [:] }
-        return decoded
+    private func loadMuseCodeBridgeCheckpoint() throws -> MuseCodeBridgeCheckpoint {
+        if let data = defaults.data(forKey: "museCodeIngestCheckpoint") {
+            guard data.count <= 8_388_608 else { throw MuseCodeBridgeCheckpoint.Failure.invalid }
+            let checkpoint = try JSONDecoder().decode(MuseCodeBridgeCheckpoint.self, from: data)
+            guard checkpoint.hasExpectedScope else { throw MuseCodeBridgeCheckpoint.Failure.invalid }
+            return checkpoint
+        }
+        var checkpoint = MuseCodeBridgeCheckpoint()
+        if let data = defaults.data(forKey: "museCodeIngestObservations") {
+            checkpoint.observations = try JSONDecoder().decode([String: MuseCodeSessionObservation].self, from: data)
+        }
+        guard checkpoint.hasExpectedScope else { throw MuseCodeBridgeCheckpoint.Failure.invalid }
+        return checkpoint
     }
 
-    private func saveMuseCodeIngestState(_ state: [String: MuseCodeSessionObservation]) {
-        if let data = try? JSONEncoder().encode(state) {
-            defaults.set(data, forKey: "museCodeIngestObservations")
+    private func saveMuseCodeBridgeCheckpoint(_ checkpoint: MuseCodeBridgeCheckpoint) throws {
+        defaults.set(try JSONEncoder().encode(checkpoint), forKey: "museCodeIngestCheckpoint")
+        guard defaults.synchronize() else { throw MuseCodeBridgeCheckpoint.Failure.persistence }
+    }
+
+    @discardableResult
+    func saveMuseCodeIngestToken(_ raw: String) async -> Bool {
+        guard !museCodeIngestTokenBusy else { return false }
+        let token = sanitizedToken(raw)
+        guard !token.isEmpty else { museCodeIngestTokenStatus = "Enter the Muse ingest token."; return false }
+        museCodeIngestTokenBusy = true
+        museCodeBridgeGeneration &+= 1
+        defer { finishMuseCodeTokenChange() }
+        do {
+            if let museCodeTokenSaveForTesting { try await museCodeTokenSaveForTesting(token) }
+            else {
+                try await TokenStore.save(token, server: MuseCodeSessionIngest.endpoint.absoluteString,
+                                           service: TokenStore.museCodeIngestService)
+            }
+            museCodeHasSavedIngestToken = true
+            defaults.set(true, forKey: "museCodeHasSavedIngestToken")
+            museCodeIngestTokenStatus = "Muse ingest token saved."
+            return true
+        } catch { museCodeIngestTokenStatus = "Keychain could not save the Muse ingest token."; return false }
+    }
+
+    func reauthorizeMuseCodeIngestToken() async {
+        guard !museCodeIngestTokenBusy else { return }
+        museCodeIngestTokenBusy = true
+        museCodeBridgeGeneration &+= 1
+        defer { finishMuseCodeTokenChange() }
+        let token: String?
+        if let museCodeTokenReauthorizeForTesting { token = await museCodeTokenReauthorizeForTesting() }
+        else {
+            token = await TokenStore.readAllowingInteraction(server: MuseCodeSessionIngest.endpoint.absoluteString,
+                                                             service: TokenStore.museCodeIngestService)
         }
+        guard let token, !sanitizedToken(token).isEmpty else {
+            museCodeIngestTokenStatus = "The saved Muse ingest token is unavailable in Keychain."
+            return
+        }
+        museCodeHasSavedIngestToken = true
+        defaults.set(true, forKey: "museCodeHasSavedIngestToken")
+        museCodeIngestTokenStatus = "Saved Muse ingest token authorized."
+    }
+
+    func forgetMuseCodeIngestToken() async {
+        guard !museCodeIngestTokenBusy else { return }
+        museCodeIngestTokenBusy = true
+        museCodeBridgeGeneration &+= 1
+        defer { finishMuseCodeTokenChange() }
+        do {
+            if let museCodeTokenDeleteForTesting { try await museCodeTokenDeleteForTesting() }
+            else {
+                try await TokenStore.delete(server: MuseCodeSessionIngest.endpoint.absoluteString,
+                                             service: TokenStore.museCodeIngestService)
+            }
+            museCodeHasSavedIngestToken = false
+            defaults.removeObject(forKey: "museCodeHasSavedIngestToken")
+            museCodeUsageBridgeEnabled = false
+            museCodeIngestTokenStatus = "Muse ingest token forgotten."
+        } catch { museCodeIngestTokenStatus = "Keychain could not forget the Muse ingest token." }
+    }
+
+    private func finishMuseCodeTokenChange() {
+        museCodeIngestTokenBusy = false
+        if museCodeUsageBridgeEnabled, let museCodeReport { enqueueMuseCodeBridge(report: museCodeReport) }
     }
 
     private func appendRunawayAlert(_ record: RunawayAlertRecord) {
