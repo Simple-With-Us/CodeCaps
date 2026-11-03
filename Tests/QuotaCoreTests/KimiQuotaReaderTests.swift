@@ -111,6 +111,38 @@ final class KimiQuotaReaderTests: XCTestCase {
         XCTAssertEqual(result.windows[0].remainingPercent, 75)
     }
 
+    func testCredentialFileAcceptsRealLengthOauthToken() throws {
+        // Regression: the shared label helper caps at 160 bytes, which read a
+        // real signed-in account (OAuth tokens are routinely far longer) as
+        // "no local sign-in" - empty windows with no issue.  The credential
+        // path must use only the token predicate (8 KB, no CR/LF).
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let credentials = home.appendingPathComponent(".kimi-code/credentials")
+        try FileManager.default.createDirectory(at: credentials, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let token = "eyJ" + String(repeating: "a", count: 500)
+        try """
+        {"access_token": "\(token)", "refresh_token": "r", "expires_at": 1, "scope": "s", "token_type": "Bearer", "expires_in": 1}
+        """.write(to: credentials.appendingPathComponent("kimi-code.json"), atomically: true, encoding: .utf8)
+        XCTAssertEqual(KimiQuotaReader.readLocalAccessToken(home: home), token)
+    }
+
+    func testCredentialFileRejectsOversizedAndMultilineTokens() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let credentials = home.appendingPathComponent(".kimi-code/credentials")
+        try FileManager.default.createDirectory(at: credentials, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let oversized = String(repeating: "a", count: 8_193)
+        try """
+        {"access_token": "\(oversized)"}
+        """.write(to: credentials.appendingPathComponent("kimi-code.json"), atomically: true, encoding: .utf8)
+        XCTAssertNil(KimiQuotaReader.readLocalAccessToken(home: home), "beyond the 8 KB token bound is not a credential")
+        try """
+        {"access_token": "line1\nline2"}
+        """.write(to: credentials.appendingPathComponent("kimi-code.json"), atomically: true, encoding: .utf8)
+        XCTAssertNil(KimiQuotaReader.readLocalAccessToken(home: home), "a CR/LF in the value is not a credential")
+    }
+
     func testConfigTomlRequiresExactKeyAndStripsInlineComment() throws {
         let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
