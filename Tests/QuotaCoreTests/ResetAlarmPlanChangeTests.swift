@@ -244,6 +244,61 @@ final class ResetAlarmPlanChangeTests: XCTestCase {
         XCTAssertEqual(rollover.first?.endedPeriodResetAt, correctedDeadline)
     }
 
+    func testPassedStaleWeeklyDeadlineAdoptsFlatAndSmallFluctuationsSilently() {
+        for balance in [72.0, 73.0, 74.0] {
+            var tracker = ResetAlarmTracker()
+            let oldEnd = t0 + 25 * 60
+            let nextEnd = oldEnd + 5 * day + 9 * hour
+            _ = tracker.process(weekly(at: t0, resetAt: oldEnd, remaining: 72, provider: "minimax"), now: t0)
+            let later = t0 + 32 * 60
+            XCTAssertTrue(tracker.process(weekly(at: later, resetAt: nextEnd, remaining: balance, provider: "minimax"), now: later).isEmpty)
+            let key = ResetAlarmTracker.windowKey(scope: "local", providerId: "minimax", windowId: "7d")
+            XCTAssertEqual(tracker.state.windows[key]?.periodResetAt, nextEnd)
+            XCTAssertEqual(tracker.state.windows[key]?.lastRemaining, balance)
+            XCTAssertTrue(tracker.process(weekly(at: later + 60, resetAt: nextEnd, remaining: balance, provider: "minimax"), now: later + 60).isEmpty)
+        }
+    }
+
+    func testFleetWeeklyFutureDeadlineCorrectionsNeverTreatSmallDriftAsMidwindowRestore() {
+        for balance in [72.0, 73.0, 74.0] {
+            var tracker = ResetAlarmTracker()
+            let oldEnd = t0 + day
+            func fleet(at time: Date, end: Date, value: Double) -> ResetAlarmObservation {
+                ResetAlarmObservation(scope: "Mac.Jays.Services", providerId: "minimax", providerTitle: "MiniMax",
+                    windowId: "7d", windowLabel: "7d", periodSeconds: 7 * day,
+                    resetAt: end, remainingPercent: value, observedAt: time)
+            }
+            _ = tracker.process([fleet(at: t0, end: oldEnd, value: 72)], now: t0)
+            let later = t0 + hour
+            XCTAssertTrue(tracker.process([fleet(at: later, end: oldEnd + 5 * day, value: balance)], now: later).isEmpty)
+            let key = ResetAlarmTracker.windowKey(scope: "Mac.Jays.Services", providerId: "minimax", windowId: "7d")
+            XCTAssertEqual(tracker.state.windows[key]?.periodResetAt, oldEnd + 5 * day)
+            XCTAssertEqual(tracker.state.windows[key]?.lastRemaining, balance)
+        }
+    }
+
+    func testFlatFullQuotaStillReportsElapsedWeeklyAndCalendarMonthRollovers() {
+        for (period, advance) in [(7 * day, 7 * day), (30 * day, 28 * day), (30 * day, 31 * day)] {
+            var tracker = ResetAlarmTracker()
+            let end = t0 + hour
+            _ = tracker.process([reading("cadence", period: period, resetAt: end, remaining: 100, observedAt: t0)], now: t0)
+            let later = end + 60
+            let events = tracker.process([reading("cadence", period: period, resetAt: end + advance, remaining: 100, observedAt: later)], now: later)
+            XCTAssertEqual(events.count, 1)
+            XCTAssertEqual(events.first?.reason, .newPeriod)
+        }
+    }
+
+    func testFiveHourFlatQuotaRolloverRetainsNearCapNotificationPolicy() {
+        var tracker = ResetAlarmTracker()
+        let end = t0 + hour
+        _ = tracker.process([reading("5h", period: 5 * hour, resetAt: end, remaining: 10, observedAt: t0)], now: t0)
+        let later = end + 60
+        let events = tracker.process([reading("5h", period: 5 * hour, resetAt: end + 5 * hour, remaining: 10, observedAt: later)], now: later)
+        XCTAssertEqual(events.count, 1)
+        XCTAssertEqual(events.first?.reason, .newPeriod)
+    }
+
     // MARK: The words
 
     func testAPlanChangeIsAnnouncedUnderItsOwnName() {
