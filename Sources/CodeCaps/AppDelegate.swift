@@ -408,7 +408,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         updateStatus()
         popover.performClose(nil)
         lowerConsole()
-        for window in NSApp.windows { window.orderOut(nil) }
+        for window in QuitConfirmationPolicy.windowsToHide(managed: [consoleWindow, floatingGlance]) {
+            window.orderOut(nil)
+        }
         applyActivationPolicy()
     }
 
