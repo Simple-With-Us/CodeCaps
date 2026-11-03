@@ -214,7 +214,7 @@ private extension KimiQuotaReader {
 
     /// Newest credential JSON under the two documented roots, then the
     /// `api_key` lines of `config.toml` / `config.json` as a last resort.
-    static func readLocalAccessToken(home: URL) -> String? {
+    internal static func readLocalAccessToken(home: URL) -> String? {
         let roots = [
             ProcessInfo.processInfo.environment["KIMI_CODE_HOME"].map { URL(fileURLWithPath: $0) }
                 ?? home.appendingPathComponent(".kimi-code"),

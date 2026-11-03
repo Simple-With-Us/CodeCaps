@@ -138,7 +138,7 @@ final class KimiQuotaReaderTests: XCTestCase {
         """.write(to: credentials.appendingPathComponent("kimi-code.json"), atomically: true, encoding: .utf8)
         XCTAssertNil(KimiQuotaReader.readLocalAccessToken(home: home), "beyond the 8 KB token bound is not a credential")
         try """
-        {"access_token": "line1\nline2"}
+        {"access_token": "line1\\nline2"}
         """.write(to: credentials.appendingPathComponent("kimi-code.json"), atomically: true, encoding: .utf8)
         XCTAssertNil(KimiQuotaReader.readLocalAccessToken(home: home), "a CR/LF in the value is not a credential")
     }
