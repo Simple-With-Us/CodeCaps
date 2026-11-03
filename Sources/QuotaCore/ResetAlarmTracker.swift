@@ -503,8 +503,21 @@ public struct ResetAlarmTracker: Sendable {
                     }
                     return abs(jump - period) <= tolerance
                 } ?? false
+                let preExpiryJumpThreshold = window.periodSeconds.map { period in
+                    max(ResetAlarmPolicy.resetDriftTolerance,
+                        period * ResetAlarmPolicy.earlyResetShareOfPeriod)
+                } ?? ResetAlarmPolicy.earlyResetUnknownPeriod
+                let requiredJump = hasPassed
+                    ? ResetAlarmPolicy.resetDriftTolerance
+                    : preExpiryJumpThreshold
+                let strongQuotaRestore = reading.flatMap { current in
+                    window.lastRemaining.map { current >= $0 + ResetAlarmPolicy.vendorRestoreRise }
+                } ?? false
+                let substantialRiseWithShortPreExpiryJump = !hasPassed
+                    && jump > ResetAlarmPolicy.resetDriftTolerance && strongQuotaRestore
                 if (hasPassed && advancedFullCadence)
-                    || (jump > ResetAlarmPolicy.resetDriftTolerance && climbed) {
+                    || (jump > requiredJump && climbed)
+                    || substantialRiseWithShortPreExpiryJump {
                     isReset = true
                     // When the window had *not* reached its own scheduled end,
                     // any reset is an early / mid-cycle vendor restore rather than
@@ -591,7 +604,7 @@ public struct ResetAlarmTracker: Sendable {
             //  - the quota jumps to full from anything less.
             //  - the quota was nearly spent and is now nearly untouched.
             if !isReset, !hasPassed, let reading, let last = window.lastRemaining {
-                let jumpedToFull = reading >= 99.5 && reading >= last + ResetAlarmPolicy.earlyResetRiseMargin
+                let jumpedToFull = reading >= 99.5 && last < 99.5
                 let surgedMidWindow = last < 80.0 && reading >= 95.0
                 // "Held still" and "slid with the clock" are two separate
                 // questions, and asking them as two separate questions keeps
@@ -657,7 +670,7 @@ public struct ResetAlarmTracker: Sendable {
                 nextResetAt = reported
             }
             if let reading, let last = window.lastRemaining {
-                let jumpedToFull = reading >= 99.5 && reading >= last + ResetAlarmPolicy.earlyResetRiseMargin
+                let jumpedToFull = reading >= 99.5 && last < 99.5
                 let surgedMidWindow = last < 80.0 && reading >= 95.0
                 if jumpedToFull || surgedMidWindow {
                     isReset = true
