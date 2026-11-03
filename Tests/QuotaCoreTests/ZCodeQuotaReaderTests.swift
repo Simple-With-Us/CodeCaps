@@ -223,6 +223,50 @@ final class ZCodeQuotaReaderTests: XCTestCase {
         XCTAssertEqual(result.windows[0].quotaUnit, "tokens")
     }
 
+    func testNoPlanFallsThroughToAHealthySecondAccount() async {
+        let customer = customerJSON
+        let keys = keysJSON
+        let mint = mintJSON
+        let result = await ZCodeQuotaReader(
+            now: { Date(timeIntervalSince1970: 0) },
+            credentials: { ["oauth:zai:access_token": "tok", "oauth:bigmodel:access_token": "bm-tok"] },
+            zcodeClientVersion: { "3.16.3" },
+            fetch: { request in
+                let host = request.url?.host ?? ""
+                let path = request.url?.path ?? ""
+                let body: String
+                if path.hasSuffix("/api/biz/customer/getCustomerInfo") {
+                    body = customer
+                } else if path.hasSuffix("/access_tokens") {
+                    body = mint
+                } else if path.contains("/api_keys") {
+                    body = keys
+                } else {
+                    body = host == "api.z.ai"
+                        ? #"{"code":500,"msg":"当前用户不存在coding plan"}"#
+                        : #"{"code":200,"data":{"level":"max","limits":[{"type":"TOKENS_LIMIT","unit":6,"percentage":5}]}}"#
+                }
+                let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                return (Data(body.utf8), response)
+            }
+        ).read()
+        XCTAssertEqual(result.windows.count, 1, "z.ai's no-plan answer must not mask bigmodel's quota")
+        XCTAssertEqual(result.windows[0].quotaUnit, "tokens")
+    }
+
+    func testEnvelopeAuthFailureOnRawAttemptNeverSwapsTheHeader() async {
+        // ZCode's client treats a non-success envelope as an invalid response,
+        // not an auth signal: only HTTP 401/403 triggers the Bearer retry.
+        let recorder = Recorder()
+        let result = await read(
+            Stub(quotaJSON: "{}", customerJSON: #"{"code":401,"msg":"unauthorized"}"#),
+            recorder: recorder
+        )
+        XCTAssertEqual(result.issues["zcode"], "ZCode quota service is unavailable.")
+        let customerCalls = recorder.snapshot().filter { $0.url!.path.hasSuffix("/api/biz/customer/getCustomerInfo") }
+        XCTAssertEqual(customerCalls.count, 1, "an envelope-level failure is not an auth rejection: no Bearer retry")
+    }
+
     // MARK: - Quota payload mapping (unchanged contract)
 
     func testCreditLimitsBecomeFiveHourAndWeeklyWindows() async {

@@ -152,6 +152,9 @@ public struct ZCodeQuotaReader: Sendable {
         let url = URL(string: "\(account.origin)/api/biz/customer/getCustomerInfo")!
         // The single bracket-unstable header: raw first, `Bearer` only after
         // an HTTP auth rejection, and never for the bigmodel family.
+        // The retry trigger is deliberately HTTP-only: ZCode's own client
+        // treats a non-success envelope as an invalid response, not an auth
+        // signal, so a 200 with a failed envelope never swaps the header form.
         let forms = account.family == .zai ? [login, "Bearer \(login)"] : [login]
         for (index, header) in forms.enumerated() {
             let payload = try await request("GET", url: url, authorization: header)
@@ -186,6 +189,8 @@ public struct ZCodeQuotaReader: Sendable {
             }
             return (organizationId, projectId)
         }
+        // Unreachable (every iteration returns or throws) but required: the
+        // compiler cannot prove the loop never completes normally.
         throw Flow.rejected
     }
 
@@ -242,8 +247,10 @@ public struct ZCodeQuotaReader: Sendable {
         let payload = try await request("GET", url: url, authorization: "Bearer \(token)")
         if payload.statusCode == 401 || payload.statusCode == 403 { throw Flow.rejected }
         guard (200..<300).contains(payload.statusCode), let root = payload.root else { throw Flow.unavailable }
+        // Account truths are thrown, not returned: read() records the issue
+        // and still tries the second account, which may be healthy.
         if let noPlan = Self.noPlanMessage(root) {
-            return LocalQuotaResult(issues: ["zcode": noPlan])
+            throw Flow.account(noPlan)
         }
         guard Self.envelopeSucceeded(root), let data = root["data"] as? [String: Any] else { throw Flow.unavailable }
         let windows = Self.parse(data, observedAt: now())
@@ -257,7 +264,7 @@ public struct ZCodeQuotaReader: Sendable {
             let message = (rawLimits?.isEmpty == true)
                 ? "ZCode returned no quota windows for this account."
                 : "ZCode returned no readable quota."
-            return LocalQuotaResult(issues: ["zcode": message])
+            throw Flow.account(message)
         }
         let issues = windows.allSatisfy { $0.remainingPercent == nil }
             ? ["zcode": "ZCode returned no readable quota."]
