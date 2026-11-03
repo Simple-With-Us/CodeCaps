@@ -54,6 +54,34 @@ final class MuseCodePluginTests: XCTestCase {
         XCTAssertTrue(manager.preferences[.museCodeStandardSession].enabled)
     }
 
+    func testStandardSessionPopupShipsOffAndPersistsWhenEnabled() {
+        let manager = ResetAlarmManager(defaults: defaults)
+        XCTAssertFalse(manager.preferences[.museCodeStandardSession].popup,
+                       "the popup warning is opt-in and ships off")
+        var option = manager.preferences[.museCodeStandardSession]
+        option.popup = true
+        manager.preferences[.museCodeStandardSession] = option
+        let reloaded = ResetAlarmManager(defaults: defaults)
+        XCTAssertTrue(reloaded.preferences[.museCodeStandardSession].popup,
+                      "the plugin page and Alerts & Alarms edit one stored preference")
+    }
+
+    func testStandardSessionDeliveryCarriesThePopupOption() {
+        let (model, spy) = makeModel()
+        var delivered: [(kind: UsageAlertKind, option: UsageAlertOption)] = []
+        model.alarmManager.onUsageDelivery = { kind, _, _, option in
+            delivered.append((kind, option))
+        }
+        var option = model.alarmManager.preferences[.museCodeStandardSession]
+        option.popup = true
+        model.alarmManager.preferences[.museCodeStandardSession] = option
+        model.applyMuseCodeResult(result(total: 3_000_000, contributor: 2_000_000))
+        XCTAssertEqual(spy.events.map(\.kind), [.museCodeStandardSession])
+        XCTAssertEqual(delivered.map(\.kind), [.museCodeStandardSession])
+        XCTAssertTrue(delivered.first?.option.popup == true,
+                      "delivery reads the same popup option the plugin toggle sets")
+    }
+
     // MARK: - Monitor glue
 
     private func makeModel() -> (MonitorModel, SpyAlertChannel) {

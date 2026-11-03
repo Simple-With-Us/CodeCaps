@@ -22,6 +22,19 @@ struct MuseCodePluginPage: View {
 struct MuseCodeMonitorPage: View {
     @ObservedObject var model: MonitorModel
 
+    /// The standard-session kind's popup option, offered here beside the
+    /// feature it belongs to.  It is the same preference the Alerts &
+    /// Alarms page edits — one stored option behind both surfaces — and
+    /// it ships off: the popup is opt-in.
+    private var standardSessionPopupBinding: Binding<Bool> {
+        Binding(get: { model.alarmManager.preferences[.museCodeStandardSession].popup },
+                set: { value in
+                    var option = model.alarmManager.preferences[.museCodeStandardSession]
+                    option.popup = value
+                    model.alarmManager.preferences[.museCodeStandardSession] = option
+                })
+    }
+
     private var window90: MuseCodeWindowUsage? { model.museCodeReport?.window(minutes: 90) }
     private var window60: MuseCodeWindowUsage? { model.museCodeReport?.window(minutes: 60) }
 
@@ -189,6 +202,13 @@ struct MuseCodeMonitorPage: View {
             Eyebrow("ALERTS")
             VStack(alignment: .leading, spacing: 12) {
                 Toggle("Muse Alerts", isOn: $model.museCodeBurnAlertsEnabled)
+                Toggle("Popup Warning For Standard Sessions", isOn: standardSessionPopupBinding)
+                Text("When the popup warning is on, a standard-session alert also opens a popup window naming the session and its model."
+                    + sentenceGap
+                    + "It is off by default and is the same switch as the Popup toggle for Muse Standard Sessions in Alerts & Alarms.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 12) {
                     Text("Burn Threshold")
                         .font(.system(size: 13, weight: .medium))
