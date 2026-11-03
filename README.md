@@ -6,7 +6,7 @@ A macOS menu bar app for supported AI plan usage and quota windows.  It can shar
 
 ## Why This Exists
 
-CodeCaps reads available usage and quota windows from supported AI apps and CLIs already signed in on this Mac — no provider API key is entered into CodeCaps.  Optional push and pull connections can show readings from other configured Macs in one Glance popover.
+CodeCaps reads available usage and quota windows from supported AI apps and CLIs already signed in on this Mac.  Optional Z.ai coding-plan quota checks use a key saved in this build's Keychain.  Optional push and pull connections can show readings from other configured Macs in one Glance popover.
 
 CodeCaps keeps local readings visible in the menu bar.  If you run a collector, it can also bring multiple Macs into one view.
 
@@ -18,7 +18,7 @@ Engineered with the proactive safeguards you'll come to rely on:
 - **Visual Usage History & Trend Graphs**: Dive into rich local usage history graphs.  Inspect how your quota drains over time, evaluate burn pacing, and see anomaly alert markers directly on your timeline.
 - **Low-Quota Picture-in-Picture (PiP)**: Keep high-priority quotas visible in an on-top floating micro-HUD.  Set PiP to open automatically whenever any provider's quota runs low, so you're never caught off-guard mid-prompt.
 - **Dual-Window Cadence & Smart Reset Alarms**: Monitor 5-hour rapid windows alongside weekly/monthly plan allowances.  Reset alarms alert you on major period rollovers, and notify on short windows only when you're actually near the cap.
-- **Zero API Keys**: Reads local CLI and application sessions directly on your Mac.  No provider API key is ever entered into CodeCaps (provider CLIs keep their own credentials), and CodeCaps never exports provider sign-in tokens.
+- **Local Sign-Ins And Optional Keys**: Reads supported CLI and application sessions directly on your Mac.  Z.ai coding-plan checks offer an explicit API key stored in Keychain; CodeCaps never exports provider sign-in tokens.
 
 ## What It Shows
 
@@ -210,7 +210,7 @@ Console's sidebar has eight Settings pages.
 
 ## Privacy
 
-- Never asks for a provider API key; each CLI's own credential file, Keychain item, or session database is reused as-is.
+- Reuses supported local CLI credentials and session stores.  Optional Z.ai coding-plan keys stay in a separate build-scoped Keychain item.
 - Nothing leaves this Mac until you turn on push or pull and enter an endpoint yourself; fields are empty by default.
 - The Push Token and Read Token are the only two secrets stored, both in the Keychain.
 - Endpoints are validated as above (HTTPS, loopback-only HTTP, no embedded credentials/query/fragment).
