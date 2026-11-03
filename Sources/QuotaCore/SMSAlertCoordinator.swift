@@ -72,6 +72,7 @@ public actor SMSAlertCoordinator {
             try persistence.save(JSONEncoder().encode(updated))
             history = updated
         } catch { return .failed(.persistence) }
+        guard !Task.isCancelled else { return .failed(.uncertain) }
         do {
             try await client.send(title: title, body: body, credentials: credentials)
             return .accepted
