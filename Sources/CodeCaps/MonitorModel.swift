@@ -552,8 +552,10 @@ final class MonitorModel: ObservableObject {
     @Published var disabledSources: Set<String> {
         didSet { defaults.set(Array(disabledSources), forKey: "disabledSources") }
     }
+    @Published private(set) var optionalQuotaReaderPreferences: QuotaReaderPreferences
 
     public let alarmManager: ResetAlarmManager
+    let smsAlerts: SMSAlertController
 
     private let presentsPipWindows: Bool
     private let defaults: UserDefaults
@@ -611,6 +613,7 @@ final class MonitorModel: ObservableObject {
     /// Re-publishes the alarm manager's changes, so a view that observes this
     /// model redraws when All or a provider's bell flips.
     private var alarmChanges: AnyCancellable?
+    private var smsChanges: AnyCancellable?
     /// Re-checks the saved-token states when `TokenStore` gains a token nobody
     /// was waiting for, so the Re-Authorize button clears without a refresh.
     private var tokenChanges: AnyCancellable?
@@ -700,6 +703,7 @@ final class MonitorModel: ObservableObject {
             sourceRank = [:]
         }
         disabledSources = Set((defaults.stringArray(forKey: "disabledSources") ?? []))
+        optionalQuotaReaderPreferences = QuotaReaderPreferences.load(from: defaults)
         localEnabled = defaults.object(forKey: "localEnabled") as? Bool ?? true
         glanceLogosFollowAccent = defaults.bool(forKey: "glanceLogosFollowAccent")
         pipBackground = PipBackground(rawValue: defaults.string(forKey: "pipBackground") ?? "") ?? .black
@@ -721,6 +725,7 @@ final class MonitorModel: ObservableObject {
         remoteAlertRelayEnabled = defaults.bool(forKey: "remoteAlertRelayEnabled")
 
         alarmManager = ResetAlarmManager(defaults: defaults)
+        smsAlerts = SMSAlertController(defaults: defaults)
 
         appearance = AppAppearance(rawValue: defaults.string(forKey: "appearance") ?? "") ?? .system
         glanceView = GlanceViewMode(rawValue: defaults.string(forKey: "glanceView") ?? "") ?? .fromMac
@@ -736,6 +741,12 @@ final class MonitorModel: ObservableObject {
         pacingColorHighlights = defaults.object(forKey: "pacingColorHighlights") as? Bool ?? true
         alarmChanges = alarmManager.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
+        }
+        smsChanges = smsAlerts.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
+        alarmManager.additionalDelivery = { [weak self] kind, title, body, identifier in
+            self?.smsAlerts.deliver(kind: kind.rawValue, title: title, body: body, eventID: identifier)
         }
         tokenChanges = NotificationCenter.default.publisher(for: TokenStore.tokenBecameAvailable)
             .receive(on: DispatchQueue.main)
@@ -1104,6 +1115,28 @@ final class MonitorModel: ObservableObject {
         guard target >= 0 && target < current.count else { return }
         current.swapAt(idx, target)
         sourceRank[key] = current
+    }
+
+    func isOptionalQuotaReaderEnabled(_ readerID: String) -> Bool {
+        optionalQuotaReaderPreferences.isEnabled(readerID)
+    }
+
+    func setOptionalQuotaReaderEnabled(_ enabled: Bool, readerID: String) {
+        guard LocalQuotaReaderRegistry.builtIn.optionalRegistrations.contains(where: { $0.id == readerID }),
+              optionalQuotaReaderPreferences.isEnabled(readerID) != enabled else { return }
+        var preferences = optionalQuotaReaderPreferences
+        preferences.setEnabled(enabled, for: readerID)
+        optionalQuotaReaderPreferences = preferences
+        preferences.save(to: defaults)
+        invalidateRefresh()
+        if !enabled, let providerResult {
+            self.providerResult = LocalQuotaResult(
+                windows: providerResult.windows.filter { $0.canonicalProviderKey != readerID },
+                issues: providerResult.issues.filter { $0.key != readerID },
+                consentNeeded: providerResult.consentNeeded.subtracting([readerID]))
+            rebuildLocalState(recordSamples: false)
+        }
+        if providerChecksEnabled || serverEnabled { refreshProviderChecks() }
     }
 
     func setSourceEnabled(_ enabled: Bool, _ source: String, for providerKey: String) {
@@ -2121,7 +2154,9 @@ final class MonitorModel: ObservableObject {
         } else if let localResultForTesting {
             windowsToPush = AntigravityQuotaGroups.normalize(localResultForTesting.windows)
         } else {
-            windowsToPush = AntigravityQuotaGroups.normalize(await Self.readLocalSources().windows)
+            let readerPreferences = optionalQuotaReaderPreferences
+            windowsToPush = AntigravityQuotaGroups.normalize(
+                await Self.readLocalSources(preferences: readerPreferences).windows)
         }
         guard isCurrentPushSettings(generation, endpoint: targetEndpoint, format: targetFormat) else {
             return (false, "Push cancelled because sharing was disabled or its settings changed.")
@@ -2290,6 +2325,7 @@ final class MonitorModel: ObservableObject {
         let useLocal = localEnabled && providerChecksEnabled
         let useServer = serverEnabled
         let currentEndpoint = endpoint
+        let readerPreferences = optionalQuotaReaderPreferences
         request = Task { [weak self] in
             let resultForTesting = self?.localResultForTesting
             let localReadForTesting = self?.localReadForTesting
@@ -2297,7 +2333,8 @@ final class MonitorModel: ObservableObject {
             async let localRead: LocalQuotaResult? = {
                 guard useLocal else { return nil }
                 if let localReadForTesting { return await localReadForTesting() }
-                return await Self.readLocalResult(useLocal: useLocal, testingResult: resultForTesting)
+                return await Self.readLocalResult(useLocal: useLocal, testingResult: resultForTesting,
+                                                  preferences: readerPreferences)
             }()
             var newServer: QuotaResponse?
             var failure: String?
@@ -3054,39 +3091,34 @@ final class MonitorModel: ObservableObject {
         "\(providerKey)\u{1f}\(windowId)"
     }
 
-    private nonisolated static func readLocalSources() async -> LocalQuotaResult {
-        async let primary = LocalQuotaReader().read()
-        async let cursor = CursorQuotaReader().read()
-        async let copilot = CopilotQuotaReader().read()
-        async let grokBot = GrokBotQuotaReader().read()
-        // EXTRA Grok Bot source beside Cursor DashboardService; `source: "gbu"`
-        // so Settings can rank/disable it without replacing the Cursor reader.
-        async let gbu = GbuQuotaReader().read()
-        async let kimi = KimiQuotaReader().read()
-        async let zcode = ZCodeQuotaReader().read()
+    private nonisolated static func readLocalSources(
+        preferences: QuotaReaderPreferences = .init()
+    ) async -> LocalQuotaResult {
+        async let registered = LocalQuotaReaderRegistry.builtIn.read(preferences: preferences)
         async let antigravity = AntigravitySummaryReader().read()
-        let results = await [primary, cursor, copilot, grokBot, gbu, kimi, zcode]
+        var result = await registered
         let summary = await antigravity
-        var windows = results.flatMap(\.windows)
-        var issues = results.reduce(into: [String: String]()) { $0.merge($1.issues) { _, next in next } }
+        var windows = result.windows
+        var issues = result.issues
         if summary.windows.contains(where: { $0.boundedRemainingPercent != nil }) {
             windows.removeAll { $0.canonicalProviderKey == "google-antigravity" }
             windows += summary.windows
             issues["google-antigravity"] = nil
         }
-        let consentNeeded = results.reduce(into: Set<String>()) { $0.formUnion($1.consentNeeded) }
+        result = LocalQuotaResult(windows: windows, issues: issues,
+                                  consentNeeded: result.consentNeeded)
         // One reader's "could not read" placeholder says nothing when another
         // reader of the same provider has a reading (Grok Bot's gbu and
         // DashboardService), and used to be drawn as an empty second bar.
-        return LocalQuotaResult(windows: windows, issues: issues, consentNeeded: consentNeeded)
-            .droppingSupersededPlaceholders()
+        return result.droppingSupersededPlaceholders()
     }
 
     private nonisolated static func readLocalResult(useLocal: Bool,
-                                                    testingResult: LocalQuotaResult?) async -> LocalQuotaResult? {
+                                                    testingResult: LocalQuotaResult?,
+                                                    preferences: QuotaReaderPreferences) async -> LocalQuotaResult? {
         guard useLocal else { return nil }
         if let testingResult { return testingResult }
-        return await readLocalSources()
+        return await readLocalSources(preferences: preferences)
     }
 }
 
