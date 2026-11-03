@@ -251,8 +251,18 @@ fi
 install_rc=0
 install_tooling || install_rc=$?
 
+cleanup_rc=0
+if [ "${GITHUB_REPOSITORY:-}" = "Simple-With-Us/CodeCaps" ] \
+  && [ "${GITHUB_WORKFLOW:-}" = "iOS TestFlight ship (GitHub-hosted macOS)" ] \
+  && [ "${GITHUB_REF:-}" = "refs/heads/main" ] \
+  && [ "$install_rc" -eq 0 ]; then
+  node "$repo_root/scripts/ios-fleet/expire-obsolete-codecaps-versions.mjs" \
+    com.simplewithus.codecaps.ios 0.1.0 --apply || cleanup_rc=$?
+fi
+
 stage_rc=0
 node "$repo_root/scripts/stage-asc-key.mjs" || stage_rc=$?
 
 if [ "$install_rc" -ne 0 ]; then exit "$install_rc"; fi
+if [ "$cleanup_rc" -ne 0 ]; then exit "$cleanup_rc"; fi
 exit "$stage_rc"
