@@ -617,10 +617,9 @@ build_and_stage() {
     local arch
     for arch in "${UNIVERSAL_ARCHS[@]}"; do arch_flags+=(--arch "$arch"); done
     if ! swift build --package-path "$PACKAGE_DIR" --configuration "$CONFIGURATION" --jobs "${CODECAPS_BUILD_JOBS:-2}" "${arch_flags[@]}"; then
-      echo "warning: the universal build failed; falling back to this machine's architecture only." >&2
-      echo "warning: the resulting artifact will not run on every supported Mac." >&2
-      UNIVERSAL=0
-      arch_flags=()
+      echo "error: the universal build failed; refusing to fall back to this machine's architecture only." >&2
+      echo "error: a single-architecture artifact would not run on every supported Mac and must not be packaged or released." >&2
+      exit 1
     fi
   fi
   if [[ "$UNIVERSAL" != "1" ]]; then
@@ -774,6 +773,12 @@ prune_other_copies() {
 package_dist() {
   CONFIGURATION="release"
   UNIVERSAL=1
+  # CFBundleVersion is `git rev-list --count HEAD`; a shallow clone would
+  # silently make every packaged build number 1 and strand Sparkle updates.
+  if [[ "$(/usr/bin/git -C "$ROOT_DIR" rev-parse --is-shallow-repository 2>/dev/null || echo false)" == "true" ]]; then
+    echo "error: refusing to package from a shallow clone; CFBundleVersion would be wrong. Fetch full history (fetch-depth: 0) first." >&2
+    exit 1
+  fi
   # A distributed build needs the hardened runtime and a secure timestamp, or
   # notarization rejects it.  --package stops here; --release goes on to
   # notarize what this produced.
