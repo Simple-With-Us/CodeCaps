@@ -309,7 +309,18 @@ struct SettingsPlatformsPage: View {
             // of 226 (seven platforms) clipped the last row by 14pt.
             .frame(height: max(240, CGFloat(orderedKeys.count) * 30 + 16))
 
-            HStack {
+            HStack(spacing: 8) {
+                // Visible equivalents of the Option+Command arrow shortcuts
+                // above: drag-to-reorder alone cannot be operated with a
+                // keyboard or VoiceOver (Slice 4, FIX-A11Y-KEYBOARD).
+                Button("Move Up") { moveSelection(by: -1) }
+                    .disabled(selection == nil || selection == orderedKeys.first)
+                    .help("Move Up")
+                    .accessibilityLabel("Move Up")
+                Button("Move Down") { moveSelection(by: 1) }
+                    .disabled(selection == nil || selection == orderedKeys.last)
+                    .help("Move Down")
+                    .accessibilityLabel("Move Down")
                 Spacer()
                 Button("Reset Default Order") { model.resetPlatformOrder() }
                     .help("Reset Default Order")
@@ -367,6 +378,8 @@ struct SettingsSourcesFleetPage: View {
     @State private var reauthorizingPull = false
     @State private var pullMessage: String?
     @State private var pullSucceeded = false
+    @State private var confirmingForgetPush = false
+    @State private var confirmingForgetRead = false
     @State private var allowingClaude = false
     @State private var claudeConsentMessage: String?
     @State private var claudeConsentSucceeded = false
@@ -730,20 +743,29 @@ private struct ReauthorizeCaption: View {
                 }
                 if model.hasSavedSyncToken {
                     Button("Forget Push Token", role: .destructive) {
-                        Task {
-                            do {
-                                try await model.forgetSyncServer()
-                                syncToken = ""
-                                pushSucceeded = true
-                                pushMessage = "Push token removed."
-                            } catch {
-                                pushSucceeded = false
-                                pushMessage = error.localizedDescription
-                            }
-                        }
+                        confirmingForgetPush = true
                     }
                     .help("Forget Push Token")
                     .accessibilityLabel("Forget Push Token")
+                    .confirmationDialog("Forget the saved push token?",
+                                        isPresented: $confirmingForgetPush, titleVisibility: .visible) {
+                        Button("Forget Push Token", role: .destructive) {
+                            Task {
+                                do {
+                                    try await model.forgetSyncServer()
+                                    syncToken = ""
+                                    pushSucceeded = true
+                                    pushMessage = "Push token removed."
+                                } catch {
+                                    pushSucceeded = false
+                                    pushMessage = error.localizedDescription
+                                }
+                            }
+                        }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("CodeCaps will stop pushing quotas until a new token is saved." + sentenceGap + "The token is removed from your Keychain.")
+                    }
                 }
                 Spacer()
                 if pushing { ProgressView().controlSize(.small) }
@@ -850,20 +872,29 @@ private struct ReauthorizeCaption: View {
                 }
                 if model.hasSavedToken {
                     Button("Forget Read Token", role: .destructive) {
-                        Task {
-                            do {
-                                try await model.forgetServer()
-                                pullToken = ""
-                                pullSucceeded = true
-                                pullMessage = "Read token removed."
-                            } catch {
-                                pullSucceeded = false
-                                pullMessage = error.localizedDescription
-                            }
-                        }
+                        confirmingForgetRead = true
                     }
                     .help("Forget Read Token")
                     .accessibilityLabel("Forget Read Token")
+                    .confirmationDialog("Forget the saved read token?",
+                                        isPresented: $confirmingForgetRead, titleVisibility: .visible) {
+                        Button("Forget Read Token", role: .destructive) {
+                            Task {
+                                do {
+                                    try await model.forgetServer()
+                                    pullToken = ""
+                                    pullSucceeded = true
+                                    pullMessage = "Read token removed."
+                                } catch {
+                                    pullSucceeded = false
+                                    pullMessage = error.localizedDescription
+                                }
+                            }
+                        }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("CodeCaps will stop pulling fleet quotas until a new token is saved." + sentenceGap + "The token is removed from your Keychain.")
+                    }
                 }
                 Spacer()
                 if pulling { ProgressView().controlSize(.small) }
@@ -969,26 +1000,32 @@ private struct AccentPicker: View {
             Text("Accent")
                 .font(.system(size: 12))
             ForEach(AccentChoice.allCases) { choice in
-                Circle()
-                    .fill(Color(nsColor: NSColor(name: nil) {
-                        $0.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-                            ? NSColor(srgbRed: CGFloat((choice.darkHex >> 16) & 0xFF) / 255,
-                                      green: CGFloat((choice.darkHex >> 8) & 0xFF) / 255,
-                                      blue: CGFloat(choice.darkHex & 0xFF) / 255, alpha: 1)
-                            : NSColor(srgbRed: CGFloat((choice.lightHex >> 16) & 0xFF) / 255,
-                                      green: CGFloat((choice.lightHex >> 8) & 0xFF) / 255,
-                                      blue: CGFloat(choice.lightHex & 0xFF) / 255, alpha: 1)
-                    }))
-                    .frame(width: 18, height: 18)
-                    .overlay(
-                        Circle().strokeBorder(.primary.opacity(model.accent == choice ? 1 : 0),
-                                              lineWidth: model.accent == choice ? 2 : 0)
-                    )
-                    .contentShape(Circle())
-                    .onTapGesture { model.accent = choice }
-                    .help(choice.title)
-                    .accessibilityLabel(choice.title)
-                    .accessibilityAddTraits(model.accent == choice ? [.isSelected] : [])
+                // A real Button: a tap gesture on a shape is invisible to
+                // keyboard focus and VoiceOver control search (Slice 4).
+                // The swatch stays 18pt; the hit area is 28pt.
+                Button { model.accent = choice } label: {
+                    Circle()
+                        .fill(Color(nsColor: NSColor(name: nil) {
+                            $0.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+                                ? NSColor(srgbRed: CGFloat((choice.darkHex >> 16) & 0xFF) / 255,
+                                          green: CGFloat((choice.darkHex >> 8) & 0xFF) / 255,
+                                          blue: CGFloat(choice.darkHex & 0xFF) / 255, alpha: 1)
+                                : NSColor(srgbRed: CGFloat((choice.lightHex >> 16) & 0xFF) / 255,
+                                          green: CGFloat((choice.lightHex >> 8) & 0xFF) / 255,
+                                          blue: CGFloat(choice.lightHex & 0xFF) / 255, alpha: 1)
+                        }))
+                        .frame(width: 18, height: 18)
+                        .overlay(
+                            Circle().strokeBorder(.primary.opacity(model.accent == choice ? 1 : 0),
+                                                  lineWidth: model.accent == choice ? 2 : 0)
+                        )
+                        .frame(width: 28, height: 28)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .help(choice.title)
+                .accessibilityLabel(choice.title)
+                .accessibilityAddTraits(model.accent == choice ? [.isSelected, .isButton] : [.isButton])
             }
             Spacer(minLength: 0)
         }

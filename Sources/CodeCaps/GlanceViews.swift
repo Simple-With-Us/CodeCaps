@@ -459,6 +459,7 @@ final class GlanceOcclusionState: ObservableObject {
 }
 
 struct MarqueeText: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let text: String
     var font: Font = .system(size: 13, weight: .bold, design: .rounded)
     var color: Color = Theme.warning
@@ -484,9 +485,9 @@ struct MarqueeText: View {
                     .foregroundStyle(color)
                     .lineLimit(1)
                     .fixedSize()
-                    .offset(x: needsScroll && !isPaused ? offset : 0)
+                    .offset(x: needsScroll && !effectivePaused ? offset : 0)
 
-                if needsScroll && !isPaused {
+                if needsScroll && !effectivePaused {
                     Text(text)
                         .font(font)
                         .foregroundStyle(color)
@@ -520,8 +521,15 @@ struct MarqueeText: View {
             .onChange(of: isPaused) { _, _ in
                 restartAnimation(needsScroll: textWidth > (available - 6), width: textWidth)
             }
+            .onChange(of: reduceMotion) { _, _ in
+                restartAnimation(needsScroll: textWidth > (available - 6), width: textWidth)
+            }
         }
     }
+
+    /// Reduce Motion stills the scroll: the text rests at its leading
+    /// edge, truncated, instead of sliding forever (Slice 4, MOTION-01).
+    private var effectivePaused: Bool { isPaused || reduceMotion }
 
     private func restartAnimation(needsScroll: Bool, width: CGFloat) {
         // A fresh token invalidates any start still pending in the 1.2 s
@@ -533,13 +541,13 @@ struct MarqueeText: View {
         reset.disablesAnimations = true
         withTransaction(reset) { offset = 0 }
         isAnimating = false
-        guard needsScroll && width > 0 && !isPaused else { return }
+        guard needsScroll && width > 0 && !effectivePaused else { return }
 
         let cycleDistance = width + gap
         let duration = Double(cycleDistance) / speed
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-            guard animationToken == token, !isPaused else { return }
+            guard animationToken == token, !effectivePaused else { return }
             isAnimating = true
             withAnimation(.linear(duration: duration).repeatForever(autoreverses: false)) {
                 offset = -cycleDistance
@@ -2157,6 +2165,8 @@ struct GlanceRow: View {
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 0) {
@@ -2175,7 +2185,7 @@ struct GlanceRow: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .animation(.easeInOut(duration: 0.18), value: isExpanded)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: isExpanded)
     }
 
     /// The logo and the name.  The row's tooltip belongs here (and to the
@@ -2226,8 +2236,28 @@ struct GlanceRow: View {
     }
 
     /// The logo, the name, the two meters and the chevron: the part a tap
-    /// expands, and the part VoiceOver reads as one element.
+    /// expands, and the part VoiceOver reads as one element.  Expandable
+    /// rows are real Buttons so Full Keyboard Access and VoiceOver can
+    /// operate them; a bare tap gesture is invisible to both (Slice 4,
+    /// FIX-A11Y-KEYBOARD).  Rows that cannot expand stay plain elements.
+    @ViewBuilder
     private var rowBody: some View {
+        if canExpand {
+            Button { onTap?() } label: { rowContent }
+                .buttonStyle(.plain)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(row.title)
+                .accessibilityValue(spokenValue)
+                .accessibilityHint(isExpanded ? "Double-tap to collapse." : "Double-tap to expand.")
+        } else {
+            rowContent
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(row.title)
+                .accessibilityValue(spokenValue)
+        }
+    }
+
+    private var rowContent: some View {
         HStack(spacing: 0) {
             nameBlock
             Spacer().frame(width: Metrics.glanceColumnGap)
@@ -2273,15 +2303,6 @@ struct GlanceRow: View {
             }
         }
         .contentShape(Rectangle())
-        .onTapGesture {
-            if canExpand {
-                onTap?()
-            }
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(row.title)
-        .accessibilityValue(spokenValue)
-        .accessibilityHint(canExpand ? (isExpanded ? "Double-tap to collapse." : "Double-tap to expand.") : "")
     }
 
     /// The row's tooltip: the issue when there is one, and for a fleet row
@@ -2299,7 +2320,11 @@ struct GlanceRow: View {
             Image(systemName: isAlarmEnabled ? "bell.fill" : "bell")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(isAlarmEnabled ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(Theme.faint))
-                .frame(width: Metrics.glanceAlarmBellWidth, height: Metrics.glanceAlarmBellWidth)
+                // 28pt hit area in the 16pt slot: the row's width budget
+                // is pinned by Metrics.glanceRowIntrinsicWidth, so the
+                // extra area is centred overlap, not layout (FIX-HIT-TARGET).
+                .frame(width: 28, height: 28)
+                .padding(.horizontal, (Metrics.glanceAlarmBellWidth - 28) / 2)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
