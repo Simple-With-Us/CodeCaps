@@ -89,6 +89,39 @@ final class QuotaWindowPairingTests: XCTestCase {
         XCTAssertNil(pair.long)
     }
 
+    /// The owner's live complaint, kept as a test:  "how does MM have a 1d
+    /// quota bar?"
+    ///
+    /// These are MiniMax's rows as the server held them on 2026-11-04:  the
+    /// five-hour window at 85, the coding plan's four-hour view of the same
+    /// allowance at 86, the weekly window at 52, the video allowance's weekly
+    /// window at 100, and the video allowance itself at 100 on a one-day
+    /// window.  The two video windows are the supplementary video allowance,
+    /// which the shared rule excludes, and the row the owner routes on is the
+    /// five-hour and the weekly window.
+    func testTheLiveMiniMaxRowIsTheFiveHourAndTheWeeklyWindow() {
+        let pair = QuotaWindowPairing.meterPair([
+            candidate("5-hour window", percent: 85, isShort: true),
+            candidate("coding plan (all models)", percent: 86, isShort: true),
+            candidate("general (weekly window)", percent: 52, isShort: false),
+            candidate("video (weekly window)", percent: 100, isShort: false, excluded: true),
+            candidate("video", percent: 100, isShort: false, excluded: true),
+        ])
+        XCTAssertEqual(pair.short?.id, "5-hour window")
+        XCTAssertEqual(pair.long?.id, "general (weekly window)")
+    }
+
+    /// The one-day window is excluded because it is MiniMax's video
+    /// allowance, which is not the limit the plan is sold on.
+    func testTheVideoAllowanceIsExcludedByTheSharedCapRule() {
+        XCTAssertTrue(QuotaCapRule.isSupplementaryVideoQuota(
+            providerKey: "minimax", modelId: "video", label: "Video"))
+        XCTAssertTrue(QuotaCapRule.isSupplementaryVideoQuota(
+            providerKey: "minimax", label: "video (weekly window)"))
+        XCTAssertFalse(QuotaCapRule.isSupplementaryVideoQuota(
+            providerKey: "minimax", label: "5-hour window"))
+    }
+
     func testNoCandidatesGiveNoPair() {
         let pair = QuotaWindowPairing.meterPair([])
         XCTAssertNil(pair.short)
