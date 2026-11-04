@@ -295,3 +295,19 @@ test('the Sentry upload keeps the full-scope token away from the installer and r
   assert.match(sentry, /SENTRY_AUTH_TOKEN="\$TOKEN" SENTRY_PROJECT="\$project" \\\n\s+sentry-cli debug-files upload /);
   assert.match(sentry, /\*:\/\/\*\|\*@\*\)\n[^\n]*looks like a DSN[^\n]*\n\s+exit 1/);
 });
+
+test('universal packaging fails closed and never falls back to one architecture', () => {
+  const build = read('script/build_and_run.sh');
+  assert.doesNotMatch(build, /falling back to this machine's architecture/);
+  assert.match(build, /refusing to fall back to this machine's architecture only/);
+  assert.match(build, /universal build is missing \$wanted/);
+  assert.match(build, /lipo -archs/);
+});
+
+test('packaging refuses a shallow clone so CFBundleVersion cannot collapse to 1', () => {
+  const build = read('script/build_and_run.sh');
+  assert.match(build, /rev-parse --is-shallow-repository/);
+  assert.match(build, /refusing to package from a shallow clone/);
+  // The release workflow already checks out full history for the count.
+  assert.match(code, /fetch-depth: 0/);
+});

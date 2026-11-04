@@ -166,3 +166,17 @@ test("the gate replaces a cancelled run by re-running it, not by dispatching a s
   assert.doesNotMatch(script, /actions\/workflows\/.*\/dispatches/);
   assert.doesNotMatch(script, /-f ref=/);
 });
+
+test("actions/checkout is SHA-pinned, not a floating tag", () => {
+  const code = withoutComments(swiftCi);
+  assert.doesNotMatch(code, /actions\/checkout@v\d/);
+  const pins = code.match(/actions\/checkout@[0-9a-f]{40} # v7/g) ?? [];
+  assert.equal(pins.length, 2, "both checkout steps must carry the full SHA pin");
+});
+
+test("the companion XcodeGen install is version and digest pinned", () => {
+  const code = withoutComments(swiftCi);
+  assert.match(code, /XCODEGEN_VERSION: "2\.46\.0"/);
+  assert.match(code, /XCODEGEN_SHA256: "[0-9a-f]{64}"/);
+  assert.match(code, /shasum -a 256 -c -/);
+});
