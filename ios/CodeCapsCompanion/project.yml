@@ -181,6 +181,8 @@ targets:
         group: Shared
       - path: ../../Sources/QuotaCore/CompanionReadTokenStore.swift
         group: Shared
+      - path: ../../Sources/QuotaCore/QuotaWindowPairing.swift
+        group: Shared
     dependencies:
       - target: CodeCapsWidgetsMac
         embed: true
@@ -232,6 +234,8 @@ targets:
       - path: ../../Sources/QuotaCore/WidgetSnapshotFetcher.swift
         group: Shared
       - path: ../../Sources/QuotaCore/CompanionReadTokenStore.swift
+        group: Shared
+      - path: ../../Sources/QuotaCore/QuotaWindowPairing.swift
         group: Shared
     entitlements:
       path: Generated/CodeCapsWidgetsMac.entitlements
