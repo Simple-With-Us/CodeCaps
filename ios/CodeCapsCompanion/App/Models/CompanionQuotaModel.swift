@@ -1336,6 +1336,14 @@ public final class CompanionQuotaModel: ObservableObject {
         }
     }
 
+    /// Newest moment the readings themselves were reported (wire
+    /// `reportedAt`, else `occurredAt`, per window), never the fetch time:
+    /// a successful pull of old data must not make it look fresh.
+    private var latestObservedAt: Date? {
+        items.flatMap { $0.windows + $0.duplicateWindows }
+            .compactMap(\.reportedAt).max()
+    }
+
     public func refresh() async {
         guard !isRefreshing else { return }
         isRefreshing = true
@@ -1346,40 +1354,58 @@ public final class CompanionQuotaModel: ObservableObject {
         let requestedEndpoint = syncEndpoint
         let requestedToken = syncToken
 
-        // Attempt endpoint fetch if configured
-        if let url = URL(string: requestedEndpoint), !requestedEndpoint.isEmpty {
+        // Attempt endpoint fetch if configured.  Go through the shared
+        // fetcher the widgets use: it refuses non-HTTPS (loopback HTTP
+        // aside) and cross-origin redirects, sanitizes the token, and caps
+        // the body, so the Bearer [REDACTED] cannot leak to a redirected origin
+        // and a huge response cannot stall or exhaust the app.
+        if !requestedEndpoint.isEmpty {
             do {
-                var req = URLRequest(url: url)
-                if !requestedToken.isEmpty {
-                    req.setValue("Bearer \(requestedToken)", forHTTPHeaderField: "Authorization")
-                }
-                let (data, response) = try await URLSession.shared.data(for: req)
+                let data = try await WidgetSnapshotFetcher.fetch(
+                    endpoint: requestedEndpoint,
+                    bearerToken: requestedToken
+                )
                 guard requestedRevision == syncConfigurationRevision,
                       requestedEndpoint == syncEndpoint,
                       requestedToken == syncToken else { return }
-                if let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) {
-                    if parseSnapshot(data: data) {
-                        let widgetSnapshotSaved = saveLocalSnapshot(data: data)
-                        lastError = widgetSnapshotSaved
-                            ? nil
-                            : "Quota readings loaded, but widget sharing is unavailable." + sentenceGap
-                                + "Install the latest CodeCaps build and reopen the app."
-                        lastUpdated = hasDataSource ? Date() : nil
-                        return
-                    }
-                    failure = "The sync endpoint returned an invalid quota snapshot." + sentenceGap
-                        + "Check the endpoint response and try again."
-                } else {
-                    let status = (response as? HTTPURLResponse)?.statusCode
-                    failure = "The sync endpoint answered \(status.map(String.init) ?? "unexpectedly")." + sentenceGap
+                if parseSnapshot(data: data) {
+                    let widgetSnapshotSaved = saveLocalSnapshot(data: data)
+                    lastError = widgetSnapshotSaved
+                        ? nil
+                        : "Quota readings loaded, but widget sharing is unavailable." + sentenceGap
+                            + "Install the latest CodeCaps build and reopen the app."
+                    lastUpdated = hasDataSource ? latestObservedAt : nil
+                    return
+                }
+                failure = "The sync endpoint returned an invalid quota snapshot." + sentenceGap
+                    + "Check the endpoint response and try again."
+            } catch let error as WidgetSnapshotFetcher.FetchError {
+                guard requestedRevision == syncConfigurationRevision,
+                      requestedEndpoint == syncEndpoint,
+                      requestedToken == syncToken else { return }
+                switch error {
+                case .unacceptableStatus(let status):
+                    failure = "The sync endpoint answered \(status)." + sentenceGap
                         + "Check the endpoint and token in CodeCaps Settings."
+                case .invalidHTTPSURL:
+                    failure = "The sync endpoint URL is not allowed." + sentenceGap
+                        + "Use an HTTPS endpoint (or loopback HTTP) without credentials, a query, or a fragment."
+                case .invalidToken:
+                    failure = "The sync token is not usable." + sentenceGap
+                        + "Paste the token again in CodeCaps Settings."
+                case .responseTooLarge:
+                    failure = "The sync endpoint response is too large." + sentenceGap
+                        + "Check the endpoint response and try again."
+                case .nonHTTPResponse:
+                    failure = "The sync endpoint did not answer with HTTP." + sentenceGap
+                        + "Check the endpoint and try again."
                 }
             } catch {
                 guard requestedRevision == syncConfigurationRevision,
                       requestedEndpoint == syncEndpoint,
                       requestedToken == syncToken else { return }
                 failure = "Could not reach the sync endpoint." + sentenceGap
-                    + error.localizedDescription
+                    + "Check the endpoint and token in CodeCaps Settings."
             }
         }
 
@@ -1393,8 +1419,8 @@ public final class CompanionQuotaModel: ObservableObject {
             lastError = "No quota readings yet." + sentenceGap
                 + "Add a sync endpoint, or open CodeCaps on your Mac."
         }
-        if lastUpdated == nil && hasDataSource {
-            lastUpdated = Date()
+        if hasDataSource, let latestObservedAt {
+            lastUpdated = latestObservedAt
         }
     }
 
@@ -2760,7 +2786,11 @@ public final class CompanionQuotaModel: ObservableObject {
         // 1. First check shared App Group container
         if let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: Self.appGroupId) {
             let sharedFile = container.appendingPathComponent("quota-windows.json")
-            if let data = try? Data(contentsOf: sharedFile) {
+            if FileManager.default.fileExists(atPath: sharedFile.path) {
+                // The App Group file is authoritative once it exists: a
+                // malformed or empty copy means the source currently has
+                // nothing valid, not that an older store should resurrect.
+                guard let data = try? Data(contentsOf: sharedFile) else { return }
                 if parseSnapshot(data: data) {
                     if self.lastUpdated == nil,
                        let attrs = try? FileManager.default.attributesOfItem(atPath: sharedFile.path),
@@ -2769,6 +2799,7 @@ public final class CompanionQuotaModel: ObservableObject {
                     }
                     return
                 }
+                return
             }
         }
 

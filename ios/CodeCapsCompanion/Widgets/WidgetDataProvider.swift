@@ -165,15 +165,19 @@ public enum WidgetSnapshotStore {
         let order = defaults.stringArray(forKey: "platformOrder") ?? []
         let manifest = readPersistedManifest(defaults: defaults)
 
-        // 1. App Group container
+        // 1. App Group container.  Once this file exists it is authoritative:
+        // a malformed or empty copy means the source currently has nothing
+        // valid, and must not let an older store below resurrect stale rows.
         if let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupId) {
             let file = container.appendingPathComponent("quota-windows.json")
-            if let data = try? Data(contentsOf: file) {
-                if let parsed = decodeSnapshot(data, platformOrder: order, now: now, manifest: manifest) {
-                    let attrs = try? FileManager.default.attributesOfItem(atPath: file.path)
-                    let modDate = observedAt(in: data) ?? (attrs?[.modificationDate] as? Date)
-                    return (parsed, modDate, parsed.isEmpty)
+            if FileManager.default.fileExists(atPath: file.path) {
+                guard let data = try? Data(contentsOf: file),
+                      let parsed = decodeSnapshot(data, platformOrder: order, now: now, manifest: manifest) else {
+                    return ([], nil, true)
                 }
+                let attrs = try? FileManager.default.attributesOfItem(atPath: file.path)
+                let modDate = observedAt(in: data) ?? (attrs?[.modificationDate] as? Date)
+                return (parsed, modDate, parsed.isEmpty)
             }
         }
 

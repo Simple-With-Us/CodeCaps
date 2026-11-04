@@ -17,6 +17,9 @@ struct ShowWidgetPlanDetailIntent: AppIntent {
         let key = "widgetDetail:" + overviewKey
         if planID.isEmpty { defaults.removeObject(forKey: key) }
         else { defaults.set(planID, forKey: key) }
+        // Without this the stored selection only takes effect at the next
+        // scheduled timeline reload, so the tap appears to do nothing.
+        WidgetCenter.shared.reloadAllTimelines()
         return .result()
     }
 }

@@ -106,6 +106,51 @@ final class WidgetSnapshotFetcherTests: XCTestCase {
         }
     }
 
+    func testFetchRejectsQueryFragmentAndUserinfoEndpoints() async {
+        for endpoint in [
+            "https://quotas.example.test/api/snapshot?token=secret",
+            "https://quotas.example.test/api/snapshot#frag",
+            "https://user:pass@quotas.example.test/api/snapshot",
+        ] {
+            do {
+                _ = try await WidgetSnapshotFetcher.fetch(
+                    endpoint: endpoint,
+                    bearerToken: "test-token",
+                    configuration: stubConfiguration()
+                )
+                XCTFail("Endpoint must be rejected: \(endpoint)")
+            } catch {
+                XCTAssertEqual(error as? WidgetSnapshotFetcher.FetchError, .invalidHTTPSURL, endpoint)
+            }
+        }
+    }
+
+    func testFetchAllowsLoopbackHTTPAndSanitizesQuotedToken() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer [REDACTED]")
+            return .init(statusCode: 200, data: Data("{}".utf8))
+        }
+        let data = try await WidgetSnapshotFetcher.fetch(
+            endpoint: "http://127.0.0.1:8787/api/snapshot",
+            bearerToken: "  \"test-token\"  ",
+            configuration: stubConfiguration()
+        )
+        XCTAssertEqual(data, Data("{}".utf8))
+    }
+
+    func testFetchRejectsTokenWithNewline() async {
+        do {
+            _ = try await WidgetSnapshotFetcher.fetch(
+                endpoint: "https://quotas.example.test/api/snapshot",
+                bearerToken: "bad\ntoken",
+                configuration: stubConfiguration()
+            )
+            XCTFail("A token carrying a newline must not reach a header")
+        } catch {
+            XCTAssertEqual(error as? WidgetSnapshotFetcher.FetchError, .invalidToken)
+        }
+    }
+
     private func stubConfiguration() -> URLSessionConfiguration {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubURLProtocol.self]
