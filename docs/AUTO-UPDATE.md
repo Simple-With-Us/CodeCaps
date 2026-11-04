@@ -43,7 +43,7 @@ A `--dev` build (identifier `com.jays.agent-bar.mac.dev`) gets none of them, so 
 
 ## Versions
 
-`CFBundleVersion` is `git rev-list --count HEAD`, so every squash merge to `main` raises it by one, and Sparkle compares that number.  CI checks out with `fetch-depth: 0`; a shallow clone would make every build number 1.  `CFBundleShortVersionString` is `<prefix>.<commit_count>` (prefix from `VERSION`, default `1.0`), matching the fleet's unified 1.#.### standard across macOS and iOS.  A local build from a feature branch can carry a higher count than `main`; that copy simply waits until `main` passes it.
+`CFBundleVersion` is the fleet's shared merge-timestamp build: `max(S, M + 1)`, where `S` is the committer date of the commit being built (HEAD, the squash-merge commit on `main`) in America/Chicago as `YYYYMMDDHHMM` and `M` is the highest build the app has already published, read from its live appcast. Sparkle compares that number, and it only ever moves forward.  `CFBundleShortVersionString` is the app's fixed marketing version from the `VERSION` file (`0.1.0`) — the same version the iOS companion ships, so the two apps of one product read the same.  The release plans the number once per release (`scripts/plan-mac-release-build.mjs`) and hands it to `build_and_run.sh` through `CODECAPS_BUILD_NUMBER`; the iOS ship computes the same `S` from the same commit, so one merge gives both apps one number.  A local build from a feature branch plans its own number from that branch's HEAD; it simply waits until `main` passes it.
 
 ## Keys
 
