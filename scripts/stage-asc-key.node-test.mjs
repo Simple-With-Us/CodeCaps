@@ -47,6 +47,7 @@ function baseEnv(dir, overrides = {}) {
   return {
     GITHUB_ENV: join(dir, 'env'),
     ASC_STAGING_ROOT: join(dir, 'staging'),
+    INFISICAL_TOKEN: 'st.synthetic-id.synthetic-secret',
     ...overrides,
   };
 }
@@ -531,6 +532,24 @@ test('a reader that reports an unresolved reference is not read as a missing cre
     );
     assert.ok(!realLines.some((l) => l.includes('Missing ASC_KEY_ID')), 'a reference must not read as a missing credential');
     assertNoKeySurvives(env.GITHUB_ENV);
+  } finally {
+    if (saved === undefined) delete process.env.FLEET_SECRETS;
+    else process.env.FLEET_SECRETS = saved;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the real Infisical fallback fails closed without an explicit service token', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'asc-stage-no-token-'));
+  const saved = process.env.FLEET_SECRETS;
+  try {
+    process.env.FLEET_SECRETS = writeStubReader(dir, 0, '', ['ASC_KEY_ID', 'ASC_ISSUER_ID', 'ASC_KEY_P8']);
+    const env = baseEnv(dir, { INFISICAL_TOKEN: '' });
+    await assert.rejects(
+      run({ env, log: () => {} }),
+      /explicit Infisical service token has read access/,
+    );
+    assert.equal(existsSync(env.GITHUB_ENV), false, 'a refused lookup must not create an environment file');
   } finally {
     if (saved === undefined) delete process.env.FLEET_SECRETS;
     else process.env.FLEET_SECRETS = saved;

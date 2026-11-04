@@ -29,6 +29,8 @@ public struct ResetAlarmObservation: Equatable, Sendable {
     public var periodSeconds: TimeInterval?
     /// When the current period ends.
     public var resetAt: Date?
+    /// When the current period began, when the provider reports it explicitly.
+    public var periodStartAt: Date?
     /// Percentage remaining, or `nil` when the reading is unknown or must not
     /// be believed (an Antigravity five-hour window under a spent weekly cap).
     public var remainingPercent: Double?
@@ -50,6 +52,7 @@ public struct ResetAlarmObservation: Equatable, Sendable {
         windowLabel: String,
         periodSeconds: TimeInterval?,
         resetAt: Date?,
+        periodStartAt: Date? = nil,
         remainingPercent: Double?,
         observedAt: Date?,
         identity: String? = nil
@@ -61,6 +64,7 @@ public struct ResetAlarmObservation: Equatable, Sendable {
         self.windowLabel = windowLabel
         self.periodSeconds = periodSeconds
         self.resetAt = resetAt
+        self.periodStartAt = periodStartAt
         self.remainingPercent = remainingPercent
         self.observedAt = observedAt
         self.identity = identity
@@ -138,6 +142,8 @@ public struct ResetAlarmTrackerState: Codable, Equatable, Sendable {
     public struct Window: Codable, Equatable, Sendable {
         /// When the current period ends, as last reported.
         public var periodResetAt: Date?
+        /// When the current period began, when the provider reports it explicitly.
+        public var periodStartAt: Date?
         /// The lowest percentage remaining observed in the current period.
         public var minimumRemaining: Double?
         /// The latest known percentage remaining.
@@ -152,6 +158,7 @@ public struct ResetAlarmTrackerState: Codable, Equatable, Sendable {
 
         public init(
             periodResetAt: Date?,
+            periodStartAt: Date? = nil,
             minimumRemaining: Double?,
             lastRemaining: Double?,
             lastObservedAt: Date?,
@@ -160,6 +167,7 @@ public struct ResetAlarmTrackerState: Codable, Equatable, Sendable {
             identity: String? = nil
         ) {
             self.periodResetAt = periodResetAt
+            self.periodStartAt = periodStartAt
             self.minimumRemaining = minimumRemaining
             self.lastRemaining = lastRemaining
             self.lastObservedAt = lastObservedAt
@@ -440,6 +448,7 @@ public struct ResetAlarmTracker: Sendable {
 
         func firstReading() -> ResetAlarmTrackerState.Window {
             .init(periodResetAt: observation.resetAt,
+                  periodStartAt: observation.periodStartAt,
                   minimumRemaining: reading,
                   lastRemaining: reading,
                   lastObservedAt: observedAt,
@@ -503,6 +512,17 @@ public struct ResetAlarmTracker: Sendable {
                     }
                     return abs(jump - period) <= tolerance
                 } ?? false
+                // Some providers publish both sides of the period.  When they
+                // do, an end-time correction by one cadence is not enough to
+                // prove a reset: their explicit start must advance too.  This
+                // prevents MiniMax's corrected weekly deadline from repeatedly
+                // announcing a new week while its weekly period is unchanged.
+                let explicitStartConfirmsPeriod = {
+                    guard let current = observation.periodStartAt,
+                          let previous = window.periodStartAt,
+                          let period = window.periodSeconds else { return true }
+                    return current.timeIntervalSince(previous) >= period - ResetAlarmPolicy.resetDriftTolerance
+                }()
                 let preExpiryJumpThreshold = window.periodSeconds.map { period in
                     max(ResetAlarmPolicy.resetDriftTolerance,
                         period * ResetAlarmPolicy.earlyResetShareOfPeriod)
@@ -515,7 +535,7 @@ public struct ResetAlarmTracker: Sendable {
                 } ?? false
                 let substantialRiseWithShortPreExpiryJump = !hasPassed
                     && jump > ResetAlarmPolicy.resetDriftTolerance && strongQuotaRestore
-                if (hasPassed && advancedFullCadence)
+                if (hasPassed && advancedFullCadence && explicitStartConfirmsPeriod)
                     || (jump > requiredJump && climbed)
                     || substantialRiseWithShortPreExpiryJump {
                     isReset = true
@@ -604,7 +624,8 @@ public struct ResetAlarmTracker: Sendable {
             //  - the quota jumps to full from anything less.
             //  - the quota was nearly spent and is now nearly untouched.
             if !isReset, !hasPassed, let reading, let last = window.lastRemaining {
-                let jumpedToFull = reading >= 99.5 && last < 99.5
+                let jumpedToFull = reading >= 99.5
+                    && last <= 99.5 - ResetAlarmPolicy.riseEpsilon
                 let surgedMidWindow = last < 80.0 && reading >= 95.0
                 // "Held still" and "slid with the clock" are two separate
                 // questions, and asking them as two separate questions keeps
@@ -670,7 +691,8 @@ public struct ResetAlarmTracker: Sendable {
                 nextResetAt = reported
             }
             if let reading, let last = window.lastRemaining {
-                let jumpedToFull = reading >= 99.5 && last < 99.5
+                let jumpedToFull = reading >= 99.5
+                    && last <= 99.5 - ResetAlarmPolicy.riseEpsilon
                 let surgedMidWindow = last < 80.0 && reading >= 95.0
                 if jumpedToFull || surgedMidWindow {
                     isReset = true
@@ -741,6 +763,9 @@ public struct ResetAlarmTracker: Sendable {
                 window.minimumRemaining = min(window.minimumRemaining ?? reading, reading)
                 window.lastRemaining = reading
             }
+        }
+        if let periodStartAt = observation.periodStartAt {
+            window.periodStartAt = periodStartAt
         }
         // Assigned unconditionally, so it always means "the stamp carried by the
         // previous reading" and is nil when that reading was unstamped.  Only

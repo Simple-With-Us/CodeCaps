@@ -2390,13 +2390,15 @@ public final class CompanionQuotaModel: ObservableObject {
     /// pool because of it.
     private static func antigravityPeriod(of w: WireRawWindow) -> String? {
         let token = (w.window ?? "").lowercased().replacingOccurrences(of: " ", with: "")
-        let label = w.label.lowercased()
+        let label = w.label.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let weeklyLabels: Set<String> = ["weekly", "week", "7-day", "7 day", "7-day window", "7 day window"]
+        let fiveHourLabels: Set<String> = ["5h", "5hr", "5-hour", "5 hours", "5-hour window", "5 hour window", "five_hour"]
         if ["weekly", "week", "1w", "7d", "168h", "10080m"].contains(token)
-            || label.contains("weekly") || label.contains("week") {
+            || weeklyLabels.contains(label) {
             return "weekly"
         }
         if ["5h", "5hr", "5-hour", "5hours", "300m"].contains(token)
-            || label.contains("5h") || label.contains("5-hour") || label.contains("five_hour") {
+            || fiveHourLabels.contains(label) {
             return "5h"
         }
         return nil

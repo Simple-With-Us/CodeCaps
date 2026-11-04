@@ -100,6 +100,17 @@ final class ResetAlarmPlanChangeTests: XCTestCase {
         XCTAssertTrue(events[0].isVendorReset, "a full refill remains a vendor reset even after some intervening use")
     }
 
+    func testNearFullRoundingWobbleIsNotReportedAsVendorReset() {
+        var tracker = ResetAlarmTracker()
+        let weekEnd = t0 + 7 * day
+        _ = tracker.process(weekly(at: t0, resetAt: weekEnd, remaining: 99.4), now: t0)
+
+        let later = t0 + 2 * hour
+        let events = tracker.process(weekly(at: later, resetAt: weekEnd, remaining: 99.6), now: later)
+
+        XCTAssertTrue(events.isEmpty, "a sub-point rounding wobble near full is not evidence of a vendor reset")
+    }
+
     func testPreExpirySmallDeadlineNudgeAndTenPointRiseIsNotAReset() {
         var tracker = ResetAlarmTracker()
         let oldEnd = t0 + 5 * day
@@ -268,6 +279,35 @@ final class ResetAlarmPlanChangeTests: XCTestCase {
         XCTAssertEqual(rollover.map(\.windowId), ["local-mac:minimax:general:weekly"])
         XCTAssertEqual(rollover.first?.reason, .newPeriod)
         XCTAssertEqual(rollover.first?.endedPeriodResetAt, correctedDeadline)
+    }
+
+    func testMiniMaxWeeklyDeadlineCorrectionNeedsAnAdvancedExplicitPeriodStart() {
+        var tracker = ResetAlarmTracker()
+        let week = 7 * day
+        let periodStart = t0 - 6 * day
+        let staleEnd = t0 + hour
+        let correctedEnd = staleEnd + week
+        func minimax(at observedAt: Date, start: Date, end: Date, remaining: Double) -> ResetAlarmObservation {
+            ResetAlarmObservation(scope: "local", providerId: "minimax", providerTitle: "MiniMax",
+                windowId: "general:weekly", windowLabel: "7d", periodSeconds: week,
+                resetAt: end, periodStartAt: start, remainingPercent: remaining, observedAt: observedAt)
+        }
+
+        _ = tracker.process([minimax(at: t0, start: periodStart, end: staleEnd, remaining: 26)], now: t0)
+        let correctionAt = staleEnd + 60
+        let correction = tracker.process(
+            [minimax(at: correctionAt, start: periodStart, end: correctedEnd, remaining: 26)], now: correctionAt)
+        XCTAssertTrue(correction.isEmpty)
+
+        let repeated = correctionAt + hour
+        XCTAssertTrue(tracker.process(
+            [minimax(at: repeated, start: periodStart, end: correctedEnd, remaining: 26)], now: repeated).isEmpty)
+
+        let rolloverAt = correctedEnd + 60
+        let rollover = tracker.process(
+            [minimax(at: rolloverAt, start: periodStart + week, end: correctedEnd + week, remaining: 24)], now: rolloverAt)
+        XCTAssertEqual(rollover.map(\.windowId), ["general:weekly"])
+        XCTAssertEqual(rollover.first?.reason, .newPeriod)
     }
 
     func testPassedStaleWeeklyDeadlineAdoptsFlatAndSmallFluctuationsSilently() {

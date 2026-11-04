@@ -106,7 +106,7 @@
 #
 # Secrets (never printed):
 #   ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8  (env first, e.g. CI; else Infisical via
-#   `fleet-secrets get` from Fleet-OPS /asc: ASC_KEY_ID, ASC_ISSUER_ID and the .p8 in ASC_KEY_P8,
+#   `fleet-secrets get` with an explicit Infisical service token from Fleet-OPS /asc: ASC_KEY_ID, ASC_ISSUER_ID and the .p8 in ASC_KEY_P8,
 #   written to a 0600 temp file and deleted on exit)
 #   A named ASC_KEY_PATH is not a credential source at all:  it is ignored, so
 #   a stale or foreign path in an operator's shell can never decide which
@@ -295,11 +295,21 @@ resolve_project() {
 }
 
 # fs_get NAME FOLDER -> value on stdout (never logged); non-zero when absent.
+has_infisical_service_token() {
+  [[ "${INFISICAL_TOKEN:-}" =~ ^st\.[^[:space:].]+\.[^[:space:].]+$ ]]
+}
+
 fs_get() {
-  local v bin="$FLEET_SECRETS_BIN"
+  local v token="${INFISICAL_TOKEN:-}" bin="$FLEET_SECRETS_BIN"
+  has_infisical_service_token || return 1
   [[ -x "$bin" ]] || bin="$(command -v fleet-secrets 2>/dev/null || true)"
   [[ -n "$bin" && -x "$bin" ]] || return 1
-  v="$("$bin" get "$1" --path "$2" 2>/dev/null </dev/null)" || return 1
+  local -a scoped_env=("PATH=${PATH:-/usr/bin:/bin}" "HOME=${HOME:-/tmp}" "INFISICAL_TOKEN=$token")
+  local name
+  for name in INFISICAL_FLEET_OPS_PROJECT_ID INFISICAL_PROJECT_ID INFISICAL_ENVIRONMENT INFISICAL_SITE_URL INFISICAL_API_URL TMPDIR LANG LC_ALL; do
+    [[ -n "${!name:-}" ]] && scoped_env+=("$name=${!name}")
+  done
+  v="$(env -i "${scoped_env[@]}" "$bin" get "$1" --path "$2" 2>/dev/null </dev/null)" || return 1
   [[ -n "$v" ]] || return 1
   printf '%s' "$v"
 }
@@ -427,6 +437,7 @@ asc_client() {
 asc_credential_available() {
   [[ -n "${APPLE_API_KEY_ID:-}" && -n "${APPLE_API_ISSUER_ID:-}" && -n "${APPLE_API_KEY_P8_BASE64:-}" ]] && return 0
   [[ -n "${ASC_KEY_ID:-}" && -n "${ASC_ISSUER_ID:-}" && -n "${ASC_KEY_P8:-}" ]] && return 0
+  has_infisical_service_token || return 1
   [[ -n "${FLEET_SECRETS_BIN:-}" && -x "$FLEET_SECRETS_BIN" ]] && return 0
   command -v fleet-secrets >/dev/null 2>&1 && return 0
   return 1
@@ -587,15 +598,18 @@ load_sentry_auth() {
   local token="" raw=""
   if [[ -n "${SENTRY_AUTH_TOKEN_FULLSCOPE:-}" ]]; then
     token="$SENTRY_AUTH_TOKEN_FULLSCOPE"
-  elif command -v fleet-secrets &>/dev/null; then
+  elif has_infisical_service_token && { [[ -x "${FLEET_SECRETS_BIN:-}" ]] || command -v fleet-secrets &>/dev/null; }; then
     # The reader's exit status is captured on its own:  in a pipeline the
     # status would be the one of the last stage, so a failed read would look
     # like a successful read of an empty secret.
-    if ! raw="$(fleet-secrets get SENTRY_AUTH_TOKEN_FULLSCOPE 2>/dev/null)"; then
+    if ! raw="$(fs_get SENTRY_AUTH_TOKEN_FULLSCOPE / 2>/dev/null)"; then
       SENTRY_TOKEN_REASON="SENTRY_AUTH_TOKEN_FULLSCOPE could not be read from fleet-secrets"
       return 1
     fi
     token="$(printf '%s' "$raw" | tr -d '\r')"
+  elif [[ -x "${FLEET_SECRETS_BIN:-}" ]] || command -v fleet-secrets &>/dev/null; then
+    SENTRY_TOKEN_REASON="an explicit Infisical service token is required; machine identity is disabled for CodeCaps automation"
+    return 1
   fi
   if [[ -z "$token" && -n "${SENTRY_AUTH_TOKEN:-}" ]]; then
     # The legacy slot is a fallback only, and only when it holds a real token.
@@ -1075,8 +1089,8 @@ asc_latest_marketing_patch() {
     logerr "asc-patch: node not on PATH; cannot verify against App Store Connect"
     return 1
   fi
-  if [[ -z "${ASC_KEY_ID:-}" && -z "${APPLE_API_KEY_ID:-}" && ! -x "$FLEET_SECRETS_BIN" ]] && ! command -v fleet-secrets >/dev/null 2>&1; then
-    logerr "asc-patch: no ASC_* in env and no fleet-secrets; cannot verify against App Store Connect"
+  if ! asc_credential_available; then
+    logerr "asc-patch: no ASC credential or explicit Infisical service token; cannot verify against App Store Connect"
     return 1
   fi
   set +e
@@ -1135,8 +1149,8 @@ asc_build_floor() {
     logerr "asc-floor: node not on PATH; cannot verify against App Store Connect"
     return 1
   fi
-  if [[ -z "${ASC_KEY_ID:-}" && -z "${APPLE_API_KEY_ID:-}" && ! -x "$FLEET_SECRETS_BIN" ]] && ! command -v fleet-secrets >/dev/null 2>&1; then
-    logerr "asc-floor: no ASC_* in env and no fleet-secrets; cannot verify against App Store Connect"
+  if ! asc_credential_available; then
+    logerr "asc-floor: no ASC credential or explicit Infisical service token; cannot verify against App Store Connect"
     return 1
   fi
   errfile="$(mktemp "${TMPDIR:-/tmp}/ios-fleet-floor.XXXXXX" 2>/dev/null || printf '')"

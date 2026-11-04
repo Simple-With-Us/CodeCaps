@@ -416,14 +416,31 @@ test("the ship job clears a stale archive lock restored from the ship-state cach
   assert.ok(beforeSave.includes(lockRm), "the archive lock is removed before the ship-state cache is saved");
 });
 
-test("the marketing version stays at 0.1.0 and release notes use the owner clock", () => {
+test("the fixed marketing version is 0.1.0 and release notes use the owner clock", () => {
   const apps = JSON.parse(read("scripts/ios-fleet/apps.json"));
+  assert.equal(apps.apps.codecaps.fixedMarketingVersion, "0.1.0");
   assert.equal(apps.apps.codecaps.marketingVersionDefault, "0.1.0");
 
   const src = read("scripts/ios-fleet/asc-api.mjs");
   const fn = src.match(/function centralTimestamp[\s\S]*?\n}\n/)[0];
   assert.doesNotMatch(fn, /\bCT\b[`"']/);
   assert.match(fn, /toLowerCase\(\)/);
+});
+
+test("the iOS ship expires obsolete versions before staging the signing key", () => {
+  const installer = read("scripts/install-release-secrets-tooling.sh");
+  const cleanup = read("scripts/ios-fleet/expire-obsolete-codecaps-versions.mjs");
+  assert.match(installer, /GITHUB_REPOSITORY:-\}" = "Simple-With-Us\/CodeCaps"/);
+  assert.match(installer, /GITHUB_WORKFLOW:-\}" = "iOS TestFlight ship \(GitHub-hosted macOS\)"/);
+  assert.match(installer, /GITHUB_REF:-\}" = "refs\/heads\/main"/);
+  assert.match(installer, /expire-obsolete-codecaps-versions[\s\S]*--apply/);
+  assert.match(cleanup, /const APP_BUNDLE = "com\.simplewithus\.codecaps\.ios"/);
+  assert.match(cleanup, /const KEEP_VERSION = "0\.1\.0"/);
+  assert.match(cleanup, /deletableVersionStates/);
+  assert.match(cleanup, /reviewSubmissions\?filter\[platform\]=IOS/);
+  assert.match(cleanup, /DELETE", `\/v1\/reviewSubmissionItems\//);
+  assert.match(cleanup, /DELETE", `\/v1\/appStoreVersions\//);
+  assert.match(cleanup, /PATCH", `\/v1\/builds\//);
 });
 
 test("scheduled gate and key handoff shell tests pass", () => {
