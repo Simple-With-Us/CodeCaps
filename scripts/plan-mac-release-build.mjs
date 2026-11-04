@@ -38,7 +38,7 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { nextFloorBuild } from "./ios-fleet/shared-build.mjs";
 
@@ -48,6 +48,13 @@ const APP_KEY = "codecaps";
 const FEED_TIMEOUT_MS = 30_000;
 const MAX_FEED_BYTES = 5_000_000;
 const MAX_REDIRECTS = 5;
+// The release feed is a GitHub release asset, so the chain runs from
+// github.com to release-assets.githubusercontent.com.  A redirect to any other
+// host is refused:  the feed is fetched by a release runner, and a feed that
+// could steer it at an arbitrary https target would be a way to make the
+// runner fetch something else.
+const FEED_HOST = "github.com";
+const FEED_ASSET_HOST_SUFFIX = ".githubusercontent.com";
 
 /**
  * The merge stamp S of HEAD: the committer date of the commit being built,
@@ -99,17 +106,41 @@ export function publishedBuilds(appcast) {
 }
 
 /**
- * The app's fixed marketing version, read from the same file the iOS ship
- * reads it from, so the two apps cannot drift apart.
+ * One app's entry in the fleet config, parsed at the boundary.
+ *
+ * Hand-written checks, not zod:  the release runners run `node` before any
+ * `pnpm install`, so `import "zod"` fails there (the same reason
+ * scripts/ios-fleet/asc-api.mjs parses by hand).  Every value read out of
+ * this file is checked where it is used as well, so a malformed config stops
+ * the release instead of shipping a bad version.
  */
-export function marketingVersion(appsJsonPath = APPS_JSON, appKey = APP_KEY) {
+function readAppEntry(appsJsonPath, appKey) {
   let parsed;
   try {
     parsed = JSON.parse(readFileSync(appsJsonPath, "utf8"));
   } catch {
     throw new Error(`could not read ${appsJsonPath}`);
   }
-  const value = parsed?.apps?.[appKey]?.fixedMarketingVersion;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`${appsJsonPath} is not a JSON object`);
+  }
+  const apps = parsed.apps;
+  if (!apps || typeof apps !== "object" || Array.isArray(apps)) {
+    throw new Error(`${appsJsonPath} has no apps object`);
+  }
+  const app = apps[appKey];
+  if (!app || typeof app !== "object" || Array.isArray(app)) {
+    throw new Error(`${appsJsonPath} has no apps.${appKey} entry`);
+  }
+  return app;
+}
+
+/**
+ * The app's fixed marketing version, read from the same file the iOS ship
+ * reads it from, so the two apps cannot drift apart.
+ */
+export function marketingVersion(appsJsonPath = APPS_JSON, appKey = APP_KEY) {
+  const value = readAppEntry(appsJsonPath, appKey).fixedMarketingVersion;
   if (typeof value !== "string" || !/^[0-9]+\.[0-9]+\.[0-9]+$/.test(value.trim())) {
     throw new Error(`apps.${appKey}.fixedMarketingVersion is missing or malformed`);
   }
@@ -118,8 +149,7 @@ export function marketingVersion(appsJsonPath = APPS_JSON, appKey = APP_KEY) {
 
 /** The live appcast URL the release floors its build number on. */
 export function feedUrl(appsJsonPath = APPS_JSON, appKey = APP_KEY) {
-  const parsed = JSON.parse(readFileSync(appsJsonPath, "utf8"));
-  const url = parsed?.apps?.[appKey]?.pairedBuildFeed;
+  const url = readAppEntry(appsJsonPath, appKey).pairedBuildFeed;
   if (typeof url !== "string" || !url.startsWith("https://")) {
     throw new Error(`apps.${appKey}.pairedBuildFeed is missing or not an https URL`);
   }
@@ -135,15 +165,68 @@ export function planBuild({mergeStamp: stamp, publishedBuilds: builds}) {
 }
 
 /**
+ * The body of the appcast, read under a hard size limit.
+ *
+ * The limit is enforced while the body streams, not after it has been read
+ * whole:  a feed that is far larger than the limit would otherwise be
+ * buffered in full before anything noticed, which is exactly the cost the
+ * limit exists to stop.  A declared Content-Length over the limit is refused
+ * before a single byte is read.
+ */
+async function readBoundedBody(response, url) {
+  const declared = response.headers?.get?.("content-length");
+  const declaredBytes = declared === null || declared === undefined ? Number.NaN : Number(declared);
+  if (Number.isFinite(declaredBytes) && declaredBytes > MAX_FEED_BYTES) {
+    throw new Error(`the appcast at ${url} declares ${declaredBytes} bytes, over the ${MAX_FEED_BYTES} byte limit`);
+  }
+  const body = response.body;
+  if (!body || typeof body.getReader !== "function") {
+    // A response without a readable stream (a test double) is read whole and
+    // measured afterwards.
+    const text = await response.text();
+    if (Buffer.byteLength(text, "utf8") > MAX_FEED_BYTES) {
+      throw new Error(`the appcast at ${url} is larger than ${MAX_FEED_BYTES} bytes`);
+    }
+    return text;
+  }
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  let bytes = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value?.byteLength ?? 0;
+      if (bytes > MAX_FEED_BYTES) {
+        throw new Error(`the appcast at ${url} is larger than ${MAX_FEED_BYTES} bytes`);
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    // The body is abandoned, not drained:  draining it is the cost the limit
+    // exists to stop.
+    try {
+      await reader.cancel();
+    } catch {
+      // Already closed.
+    }
+  }
+  return text + decoder.decode();
+}
+
+/**
  * The appcast, fetched over https only.
  *
  * The release feed is a GitHub "latest release" download URL, which answers
  * with a redirect to the asset, so the redirect is followed by hand:  every
- * hop has to be https, the number of hops is bounded, and the body is
- * time- and size-bounded.  A feed that cannot be read stops the release
- * rather than let it plan a build number from nothing.
+ * hop has to be https, the host has to be one the release trusts, the number
+ * of hops is bounded, and the body is time- and size-bounded.  A feed that
+ * cannot be read stops the release rather than let it plan a build number
+ * from nothing.
  */
-async function fetchAppcast(url, fetchImpl = fetch) {
+export async function fetchAppcast(url, fetchImpl = fetch) {
+  const originHost = new URL(url).hostname;
   let current = url;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
     if (!current.startsWith("https://")) {
@@ -156,17 +239,19 @@ async function fetchAppcast(url, fetchImpl = fetch) {
     if (response.status >= 300 && response.status < 400) {
       const location = response.headers.get("location");
       if (!location) throw new Error(`the appcast at ${current} redirected without a location`);
-      current = new URL(location, current).toString();
+      const next = new URL(location, current).toString();
+      const host = new URL(next).hostname;
+      const trusted = host === originHost || host === FEED_HOST || host.endsWith(FEED_ASSET_HOST_SUFFIX);
+      if (!trusted) {
+        throw new Error(`the appcast at ${current} redirected to an unexpected host`);
+      }
+      current = next;
       continue;
     }
     if (!response.ok) {
       throw new Error(`the appcast at ${current} answered ${response.status}`);
     }
-    const text = await response.text();
-    if (text.length > MAX_FEED_BYTES) {
-      throw new Error(`the appcast at ${current} is larger than ${MAX_FEED_BYTES} bytes`);
-    }
-    return text;
+    return await readBoundedBody(response, current);
   }
   throw new Error(`the appcast at ${url} redirected more than ${MAX_REDIRECTS} times`);
 }
@@ -195,7 +280,12 @@ async function main(argv) {
   process.stdout.write(`${build}\n`);
 }
 
-if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
+// The entry point is compared through pathToFileURL, because import.meta.url
+// is an absolute, percent-encoded file URL and process.argv[1] is a plain
+// path:  a path with a space in it makes the two differ, and the planner
+// would then never run and would exit quietly with no output.
+const entryPoint = process.argv[1];
+if (entryPoint && import.meta.url === pathToFileURL(entryPoint).href) {
   main(process.argv.slice(2)).catch((error) => {
     console.error(`[plan-mac-release-build] ${error instanceof Error ? error.message : String(error)}`);
     process.exit(1);

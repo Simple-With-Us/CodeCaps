@@ -248,7 +248,7 @@ embed_plugins() {
   if xcodebuild -project "$xcode_proj" -scheme CodeCapsCompanionMac -configuration Release -jobs "${CODECAPS_BUILD_JOBS:-2}" \
       -derivedDataPath "$widget_symroot/DerivedData" \
       CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
-      MARKETING_VERSION="$(short_version)" CURRENT_PROJECT_VERSION="$(bundle_version)" \
+      MARKETING_VERSION="$MARKETING_VERSION" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
       SYMROOT="$widget_symroot" build; then
     local appex_src="$widget_symroot/Release/CodeCapsWidgets.appex"
     if [[ ! -d "$appex_src" ]]; then
@@ -468,25 +468,70 @@ short_version() {
   fi
   if ! printf '%s' "$version" | /usr/bin/grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
     echo "error: the marketing version '$version' is not a X.Y.Z version." >&2
-    exit 1
+    # return, not exit:  this runs inside a command substitution, and an exit
+    # there kills the subshell only, so the build would carry on with an
+    # empty version string.
+    return 1
   fi
   printf '%s\n' "$version"
 }
 
+# The fleet's shared merge-timestamp stamp:  the committer date of HEAD in
+# America/Chicago as YYYYMMDDHHMM.  The same rule the iOS ship uses, so one
+# merge gives both apps one build number.
+merge_stamp() {
+  TZ=America/Chicago /usr/bin/git -C "$ROOT_DIR" show -s --format=%cd --date=format-local:%Y%m%d%H%M HEAD 2>/dev/null
+}
+
 bundle_version() {
-  local number=""
+  local number="" stamp=""
   if [[ -n "${CODECAPS_BUILD_NUMBER:-}" ]]; then
     number="$CODECAPS_BUILD_NUMBER"
   else
     # The same rule the iOS ship uses to compute its merge stamp, so one merge
     # gives both apps the same number.
-    number="$(TZ=America/Chicago /usr/bin/git -C "$ROOT_DIR" show -s --format=%cd --date=format-local:%Y%m%d%H%M HEAD 2>/dev/null || true)"
+    number="$(merge_stamp || true)"
   fi
-  if ! printf '%s' "$number" | /usr/bin/grep -qE '^[1-9][0-9]+$'; then
-    echo "error: the build number '$number' is not a positive integer." >&2
-    exit 1
+  if ! printf '%s' "$number" | /usr/bin/grep -qE '^[1-9][0-9]{11}$'; then
+    echo "error: the build number '$number' is not a 12-digit merge-timestamp build." >&2
+    return 1
+  fi
+  # A build number below the stamp of the commit being built moves the
+  # published feed backwards, and a number that goes backwards strands every
+  # installed copy on the old build (docs/AUTO-UPDATE.md).  The release
+  # planner already floors on max(S, M+1);  this is the second lock, and it
+  # fails closed.
+  stamp="$(merge_stamp || true)"
+  if [[ -n "$stamp" ]] && [[ "$number" -lt "$stamp" ]]; then
+    echo "error: the build number '$number' is below the merge stamp '$stamp' of HEAD." >&2
+    return 1
   fi
   printf '%s\n' "$number"
+}
+
+# The app's two version numbers, resolved once and checked before anything is
+# built.
+#
+# Both numbers used to be read at each use site, inside a command
+# substitution, where a validation failure exits the subshell only:  the build
+# carried on and shipped an app with an empty version string.  They are
+# resolved here instead, and a bad number stops the build.
+resolve_versions() {
+  if [[ -n "${_CODECAPS_VERSIONS_RESOLVED:-}" ]]; then
+    return 0
+  fi
+  local version number
+  if ! version="$(short_version)"; then
+    echo "error: the marketing version is not usable; refusing to build." >&2
+    exit 1
+  fi
+  if ! number="$(bundle_version)"; then
+    echo "error: the build number is not usable; refusing to build." >&2
+    exit 1
+  fi
+  MARKETING_VERSION="$version"
+  BUILD_NUMBER="$number"
+  _CODECAPS_VERSIONS_RESOLVED=1
 }
 
 bundle_identifier() {
@@ -555,6 +600,10 @@ assert_resource_bundle_reachable() {
 }
 
 build_and_stage() {
+  # The app's version numbers are resolved and checked before anything is
+  # built, so a bad number stops the build instead of shipping an empty
+  # version string.
+  resolve_versions
   local arch_flags=()
   if [[ "$UNIVERSAL" == "1" ]]; then
     local arch
@@ -617,9 +666,9 @@ build_and_stage() {
   <key>CFBundleIconFile</key>
   <string>$ICON_FILE</string>
   <key>CFBundleShortVersionString</key>
-  <string>$(short_version)</string>
+  <string>$MARKETING_VERSION</string>
   <key>CFBundleVersion</key>
-  <string>$(bundle_version)</string>
+  <string>$BUILD_NUMBER</string>
   <key>CFBundleIdentifier</key>
   <string>$BUNDLE_ID</string>
   <key>CFBundleName</key>
@@ -832,7 +881,7 @@ release_dist() {
   echo "Release artifacts in $DIST_DIR"
   echo "  $APP_NAME.zip  $zip_sha"
   echo "  $APP_NAME.dmg  $dmg_sha"
-  echo "  version $(short_version) (build $(bundle_version))"
+  echo "  version $MARKETING_VERSION (build $BUILD_NUMBER)"
 }
 
 case "$MODE" in
