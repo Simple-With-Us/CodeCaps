@@ -129,8 +129,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          # CFBundleVersion is `git rev-list --count HEAD`, which needs the
-          # whole history.  A shallow clone would make every build number 1.
+          # The build number is the committer date of HEAD, so the history has
+          # to be there:  a shallow clone would leave the merge stamp of some
+          # older commit, or none at all.
           fetch-depth: 0
 
       - name: Load the Developer ID certificate (Infisical, then repository secrets)
