@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		034780ECDDEB89E523E7E1B7 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = DF46F01EE0931315955EE9AF /* Assets.xcassets */; };
 		056BC4016EE14B5CDADD58E1 /* alarm-glass.wav in Resources */ = {isa = PBXBuildFile; fileRef = 185B2FA090E97F0B48E3E9A8 /* alarm-glass.wav */; };
+		0A3D4BA570CF142D2952123D /* WidgetSnapshotFetcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DE3A7D9C36FF286A082F60E /* WidgetSnapshotFetcher.swift */; };
 		0BA20AB9771ACD744FE1DA95 /* CodeCapsWidgetsMac.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 1981252E1F614DC809CAB013 /* CodeCapsWidgetsMac.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		0BDDE676F287EA3372B9D24B /* CompanionQuotaModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1371DB889435F70346FB6AF /* CompanionQuotaModel.swift */; };
 		0FB40BD33AB5375F6C02ACFC /* WidgetConfigurationIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72DB68669C8EFB8E9045184C /* WidgetConfigurationIntent.swift */; };
@@ -87,6 +88,7 @@
 		D6FA10004BE2F8DC5AE85B18 /* QuotaWindowPairing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D26851E2C6B60002FEF802A /* QuotaWindowPairing.swift */; };
 		D88D34F03E978D88086FFCAE /* SentryTelemetry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50C98744F4C98CE0C6227834 /* SentryTelemetry.swift */; };
 		DA221384FC017A40031C0446 /* ResetAlarmMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5ECFD3E9DC2728ACB5FB5488 /* ResetAlarmMessage.swift */; };
+		DB134DCCC477EB2E396E8F05 /* WidgetSnapshotFetcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DE3A7D9C36FF286A082F60E /* WidgetSnapshotFetcher.swift */; };
 		DD572CC08FCFC7414D7236B7 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = DF46F01EE0931315955EE9AF /* Assets.xcassets */; };
 		E0EE20CDC3987E143A3FCB48 /* ResetAlarmTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5FD1EFF75431229A669FC5A /* ResetAlarmTracker.swift */; };
 		E38B758D8183E576DEE41A6C /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 13B67B47EAC3ED255FDB0018 /* PrivacyInfo.xcprivacy */; };
@@ -532,6 +534,7 @@
 				41F6AE401AE48C11EDDA4B80 /* SentryTelemetry.swift in Sources */,
 				CADE19D9C4D7A21C22D894AC /* UsageAlertPreferences.swift in Sources */,
 				BE0C14400B9E798CA08168F7 /* WidgetPlatformDisplay.swift in Sources */,
+				DB134DCCC477EB2E396E8F05 /* WidgetSnapshotFetcher.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -558,6 +561,7 @@
 				D88D34F03E978D88086FFCAE /* SentryTelemetry.swift in Sources */,
 				6BF5A6C33EC9F93F7354379F /* UsageAlertPreferences.swift in Sources */,
 				33D335245DED8229722048BA /* WidgetPlatformDisplay.swift in Sources */,
+				0A3D4BA570CF142D2952123D /* WidgetSnapshotFetcher.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

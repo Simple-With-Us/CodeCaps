@@ -240,7 +240,8 @@ public struct CodeCapsIntentProvider: AppIntentTimelineProvider {
         by configuration: SelectQuotaIntent
     ) -> [WidgetPlatformItem] {
         guard let wanted = configuration.plan?.id else { return platforms }
-        let match = platforms.filter { $0.id == wanted }
-        return match.isEmpty ? platforms : match
+        // Empty when the configured plan is gone: falling back to every
+        // platform would resurrect a deleted plan as an unconfigured widget.
+        return platforms.filter { $0.id == wanted }
     }
 }
