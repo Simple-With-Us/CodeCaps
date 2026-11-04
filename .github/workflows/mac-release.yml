@@ -268,7 +268,8 @@ jobs:
       # America/Chicago as YYYYMMDDHHMM and M is the highest build the app has
       # already published (read from its live Sparkle appcast).  The iOS ship
       # computes the same S from the same commit, so one merge gives both apps
-      # one number.
+      # one number whenever the merge stamp is the highest either side has
+      # used.
       - name: Plan the release build (once per release)
         if: steps.gate.outputs.publish == 'true'
         run: |

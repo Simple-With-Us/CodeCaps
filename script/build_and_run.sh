@@ -120,7 +120,8 @@ usage: script/build_and_run.sh [mode]
   already published, overridable with CODECAPS_BUILD_NUMBER.  The release
   plans that number once per release (scripts/plan-mac-release-build.mjs) and
   hands it over, so the macOS app and the iOS companion of one merge carry
-  the same number.
+  the same number whenever the merge stamp is the highest either side has
+  used.
 
   Auto-update: Sparkle.framework is embedded in Contents/Frameworks and signed
   inside-out.  A build with the release identifier carries the update feed and
@@ -457,7 +458,8 @@ sign_app_bundle() {
 # raised above every build this app has already published.  The release
 # plans that number once per release (scripts/plan-mac-release-build.mjs) and
 # hands it over in CODECAPS_BUILD_NUMBER;  a local build plans its own from
-# HEAD, so the two apps of one merge land on the same number.
+# HEAD, so the two apps of one merge land on the same number whenever the
+# merge stamp is the highest either side has used.
 short_version() {
   local version=""
   if [[ -n "${CODECAPS_MARKETING_VERSION:-}" ]]; then
@@ -478,7 +480,8 @@ short_version() {
 
 # The fleet's shared merge-timestamp stamp:  the committer date of HEAD in
 # America/Chicago as YYYYMMDDHHMM.  The same rule the iOS ship uses, so one
-# merge gives both apps one build number.
+# merge gives both apps one build number whenever the merge stamp is the
+# highest either side has used.
 merge_stamp() {
   TZ=America/Chicago /usr/bin/git -C "$ROOT_DIR" show -s --format=%cd --date=format-local:%Y%m%d%H%M HEAD 2>/dev/null
 }
