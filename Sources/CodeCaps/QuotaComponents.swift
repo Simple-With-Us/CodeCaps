@@ -182,9 +182,12 @@ enum Theme {
         highContrast ? dyn(NSColor.black, NSColor.white) : dyn(hex(0x1F2B3A), hex(0xE8ECF1))
     }
     /// The owner's high-contrast choice, read on every resolve so a change
-    /// takes effect without relaunching.
+    /// takes effect without relaunching.  The system Increase Contrast
+    /// setting counts too: turning it on in System Settings must strengthen
+    /// the same tokens instead of being ignored (Slice 4, CONTRAST-01).
     static var highContrast: Bool {
         UserDefaults.standard.bool(forKey: "highContrast")
+            || NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
     }
 
     /// High contrast drops the soft navy-grey for pure black/white, so text is
@@ -202,9 +205,14 @@ enum Theme {
     /// owner's accent choice: a pale accent (lemon, sky, lime) as small text or
     /// a checkmark on a light surface fails contrast.
     static let success = dyn(hex(0x1E7B3A), hex(0x6EE7A0))
-    static let background: Color = highContrastBackground
-    static let surface: Color = highContrastSurface
-    static let hairline: Color = highContrast
+    // Computed, not `let`: a `let` freezes the high-contrast branch at
+    // first access, so toggling High Contrast (in-app or system) after
+    // launch changed `ink` but left surfaces and hairlines stale until
+    // relaunch (Slice 4, FIX-THEME).  Every token that branches on
+    // `highContrast` is therefore a `var`.
+    static var background: Color { highContrastBackground }
+    static var surface: Color { highContrastSurface }
+    static var hairline: Color { highContrast
         // AG's #112 raised the default hairline from 6%/10% to 12%/18%, which
         // is the better default and is kept.  High contrast is pushed further
         // on top of it: the owner had high contrast on and said there was
@@ -235,7 +243,7 @@ enum Theme {
 
     /// Unfilled portion of any progress bar.  A black 6% track disappears on a
     /// dark surface, so this is a token rather than a literal at each call site.
-    static let track: Color = highContrast
+    static var track: Color { highContrast
         ? dyn(NSColor.black.withAlphaComponent(0.55), NSColor.white.withAlphaComponent(0.62))
         : dyn(NSColor.black.withAlphaComponent(0.08), NSColor.white.withAlphaComponent(0.14))
 
@@ -253,19 +261,19 @@ enum Theme {
     }
 
     /// The outline of a small header control: the From Mac / From Fleet switch.
-    static let controlBorder: Color = highContrast
+    static var controlBorder: Color { highContrast
         ? dyn(NSColor.black.withAlphaComponent(0.92), NSColor.white.withAlphaComponent(0.95))
         : dyn(NSColor.black.withAlphaComponent(0.16), NSColor.white.withAlphaComponent(0.22))
 
     /// The filled track a segmented control sits on, so an unselected segment
     /// reads as "not chosen" rather than as an outlined box.  Owner 2026-10-10.
-    static let controlTrack: Color = highContrast
+    static var controlTrack: Color { highContrast
         ? dyn(NSColor.black.withAlphaComponent(0.10), NSColor.white.withAlphaComponent(0.16))
         : dyn(NSColor.black.withAlphaComponent(0.06), NSColor.white.withAlphaComponent(0.10))
 
     /// A control that is present but off, such as an unchecked row bell:
     /// visible enough to find, quiet enough not to read as a setting.
-    static let faint: Color = highContrast
+    static var faint: Color { highContrast
         ? dyn(NSColor.black.withAlphaComponent(0.88), NSColor.white.withAlphaComponent(0.92))
         : dyn(NSColor.black.withAlphaComponent(0.26), NSColor.white.withAlphaComponent(0.30))
 
@@ -336,7 +344,7 @@ enum Theme {
     /// dark accent on the dark rows surface produced a rail that disappeared.
     /// This is a token with a floor rather than a computed alpha, because the
     /// failure was the floor being zero.
-    static let sliderTrack: Color = highContrast
+    static var sliderTrack: Color { highContrast
         ? dyn(NSColor.black.withAlphaComponent(0.45), NSColor.white.withAlphaComponent(0.55))
         : dyn(NSColor.black.withAlphaComponent(0.20), NSColor.white.withAlphaComponent(0.28))
 

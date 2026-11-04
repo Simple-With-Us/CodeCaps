@@ -804,8 +804,8 @@ struct PipWidgetView: View {
                             .frame(width: 1)
                             .frame(height: PipMetrics.rowHeight)
                     }
-                    pipRow(row, detail: detail, expandedCadence: expandedCadence, peerRows: peerRows,
-                           available: rowWidth)
+                    pipRowButton(row, detail: detail, expandedCadence: expandedCadence, peerRows: peerRows,
+                                 available: rowWidth)
                         .frame(width: rowWidth, alignment: .leading)
                 }
             }
@@ -949,9 +949,12 @@ struct PipWidgetView: View {
     /// Close, or Back when a platform detail is open.  It floats over the
     /// rows' top-right corner and appears only on hover, so it never occupies
     /// permanent space above the numbers.
+    // Always rendered: hover only fades it visually.  Removing it from
+    // the tree when the pointer left made Close/Settings unreachable to
+    // VoiceOver and Full Keyboard Access (Slice 4, FIX-A11Y-KEYBOARD).
     @ViewBuilder
     private var floatingControl: some View {
-        if isHovering {
+        Group {
             if detailRow == nil {
                 HStack(spacing: 5) {
                     settingsButton
@@ -961,6 +964,7 @@ struct PipWidgetView: View {
                 backButton
             }
         }
+        .opacity(isHovering ? 1 : 0)
     }
 
     private var settingsButton: some View {
@@ -985,7 +989,7 @@ struct PipWidgetView: View {
                         .foregroundStyle(background.ink.opacity(0.85))
                 }
             }
-            .frame(width: 18, height: 18)
+            .frame(width: 28, height: 28)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -1006,7 +1010,7 @@ struct PipWidgetView: View {
                     .font(.system(size: 8, weight: .bold))
                     .foregroundStyle(Color.black.opacity(0.75))
             }
-            .frame(width: 18, height: 18)
+            .frame(width: 28, height: 28)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -1028,7 +1032,7 @@ struct PipWidgetView: View {
                     .font(.system(size: 10, weight: .semibold))
             }
             .foregroundStyle(background.ink.opacity(0.75))
-            .frame(height: 18)
+            .frame(minWidth: 44, minHeight: 28)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -1074,8 +1078,8 @@ struct PipWidgetView: View {
             ScrollView(.vertical, showsIndicators: overflows) {
                 VStack(spacing: 0) {
                     ForEach(targetRows) { row in
-                        pipRow(row, detail: detail, expandedCadence: expandedCadence, peerRows: peerRows,
-                               available: available)
+                        pipRowButton(row, detail: detail, expandedCadence: expandedCadence, peerRows: peerRows,
+                                     available: available)
                     }
                 }
                 .padding(.horizontal, PipMetrics.padding)
@@ -1219,10 +1223,21 @@ struct PipWidgetView: View {
         .frame(height: PipMetrics.rowHeight)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
-        .onTapGesture { detailRowId = row.id }
+    }
+
+    /// The row as a control: a real Button so keyboard focus and
+    /// VoiceOver can open the detail.  `pipRow` above stays the pure
+    /// layout; this wrapper owns the interaction (Slice 4).
+    private func pipRowButton(_ row: DisplaySection, detail: PipMetrics.Detail,
+                              expandedCadence: Bool, peerRows: [DisplaySection],
+                              available: CGFloat) -> some View {
+        Button { detailRowId = row.id } label: {
+            pipRow(row, detail: detail, expandedCadence: expandedCadence, peerRows: peerRows,
+                   available: available)
+        }
+        .buttonStyle(.plain)
         .help(row.title)
         .accessibilityLabel("\(row.title) — open details")
-        .accessibilityAddTraits(.isButton)
     }
 
     // MARK: Platform detail
