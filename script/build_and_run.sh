@@ -72,6 +72,11 @@ usage() {
   cat >&2 <<'USAGE'
 usage: script/build_and_run.sh [mode]
 
+  Release numbers fail closed: both CFBundleVersion and the commit count in
+  CFBundleShortVersionString come from `git rev-list --count HEAD`, and a
+  shallow or non-Git checkout stops the build with an error instead of
+  shipping a guessed version.  Fetch full history (fetch-depth: 0) first.
+
   run            (default) build, install to ~/Applications, relaunch it, then
                  delete the dist staging bundle and Trash every other copy
   --install      the same without relaunching
@@ -450,8 +455,10 @@ short_version() {
   [[ ! -f "$VERSION_FILE" ]] || version="$(/usr/bin/sed -e 's/[[:space:]]//g' -e '/^$/d' "$VERSION_FILE" | /usr/bin/head -n 1)"
   local prefix="${version:-1.0}"
   prefix="$(printf '%s' "$prefix" | /usr/bin/awk -F. '{ if (NF >= 2) print $1"."$2; else print $1".0" }')"
-  local count=""
-  count="$(bundle_version)" || return 1
+  local count="${1:-}"
+  if [[ -z "$count" ]]; then
+    count="$(bundle_version)" || return 1
+  fi
   printf '%s.%s\n' "$prefix" "$count"
 }
 
@@ -484,8 +491,10 @@ RELEASE_BUILD_VERSION=""
 
 resolve_release_numbers() {
   local short build
-  short="$(short_version)" || { echo "error: cannot resolve the $APP_NAME release number; refusing to build." >&2; return 1; }
+  # Resolve the commit count once so the marketing version and the build
+  # number can never disagree when HEAD moves between calls.
   build="$(bundle_version)" || { echo "error: cannot resolve the $APP_NAME build number; refusing to build." >&2; return 1; }
+  short="$(short_version "$build")" || { echo "error: cannot resolve the $APP_NAME release number; refusing to build." >&2; return 1; }
   if [[ -z "$short" || -z "$build" ]]; then
     echo "error: the $APP_NAME release numbers are empty; refusing to build." >&2
     return 1
