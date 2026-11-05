@@ -48,8 +48,14 @@ final class SectionsCacheTests: XCTestCase {
         model.injectForTests(sections: response.platformSections(now: now), now: now)
     }
 
+    /// Rows built by a second, never-read model with the same response, clock
+    /// and platform order, so the expected value never comes from the cache
+    /// under test.
     private func freshDisplaySections(_ model: MonitorModel) -> [DisplaySection] {
-        model.sections.flatMap { DisplaySection.rows(for: $0, now: model.now) }
+        let fresh = MonitorModel(defaults: defaults)
+        fresh.platformOrder = model.platformOrder
+        fresh.injectForTests(sections: model.response.platformSections(now: model.now), now: model.now)
+        return fresh.displaySections
     }
 
     func testSectionsFollowEachNewResponse() {
@@ -70,13 +76,22 @@ final class SectionsCacheTests: XCTestCase {
 
     func testSectionsFollowTheClock() {
         let model = MonitorModel(defaults: defaults)
-        let windows = [window(id: "a", remaining: 40)]
-        inject(model, windows, now: Date(timeIntervalSince1970: 1_000_000))
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        inject(model, [window(id: "a", remaining: 40)], now: start)
+        let cached = model.sections
         _ = model.displaySections
 
+        // Move only the clock: the response stays the same, so this checks
+        // the `now` invalidation on its own.
         let later = Date(timeIntervalSince1970: 1_000_000 + 7 * 86_400)
-        inject(model, windows, now: later)
+        XCTAssertNotEqual(
+            model.response.platformSections(now: start),
+            model.response.platformSections(now: later),
+            "fixture must change with the clock for this test to mean anything"
+        )
+        model.injectNowForTests(later)
         XCTAssertEqual(model.now, later)
+        XCTAssertNotEqual(model.sections, cached)
         XCTAssertEqual(model.sections, model.response.platformSections(now: later))
         XCTAssertEqual(model.displaySections, freshDisplaySections(model))
     }

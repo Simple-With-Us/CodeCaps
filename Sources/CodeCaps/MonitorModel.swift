@@ -1161,6 +1161,12 @@ final class MonitorModel: ObservableObject {
         self.issues = issues
     }
 
+    /// Advances the clock alone, without replacing `response`, so a test can
+    /// check that `now` invalidates the sections cache on its own.
+    func injectNowForTests(_ now: Date) {
+        self.now = now
+    }
+
     func injectLocalHistorySourceForTests(_ windows: [QuotaWindow]) {
         localWindows = windows
     }
