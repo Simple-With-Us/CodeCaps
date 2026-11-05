@@ -112,10 +112,16 @@ usage: script/build_and_run.sh [mode]
   --package also signs with the hardened runtime and a secure timestamp and
   prints the notarytool command; --release is the mode that actually notarizes.
 
-  Versions: CFBundleShortVersionString is unified as <prefix>.<commit_count>
-  per fleet standard (prefix from VERSION file, default 1.0; commit count from
-  `git rev-list --count HEAD`).  CFBundleVersion is `git rev-list --count HEAD`,
-  giving macOS and iOS the identical monotonic build number.
+  Versions: CFBundleShortVersionString is the app's fixed marketing version
+  (the VERSION file, default 0.1.0 -- the same version the iOS companion
+  ships), overridable with CODECAPS_MARKETING_VERSION.  CFBundleVersion is
+  the fleet's shared merge-timestamp build:  the committer date of HEAD in
+  America/Chicago as YYYYMMDDHHMM, raised above every build this app has
+  already published, overridable with CODECAPS_BUILD_NUMBER.  The release
+  plans that number once per release (scripts/plan-mac-release-build.mjs) and
+  hands it over, so the macOS app and the iOS companion of one merge carry
+  the same number whenever the merge stamp is the highest either side has
+  used.
 
   Auto-update: Sparkle.framework is embedded in Contents/Frameworks and signed
   inside-out.  A build with the release identifier carries the update feed and
@@ -238,9 +244,12 @@ embed_plugins() {
   fi
   local widget_symroot="$ROOT_DIR/ios/CodeCapsCompanion/build"
   echo "building macOS widget extension (CodeCapsWidgetsMac)..."
+  # The embedded widget carries the app's own version numbers, so the two
+  # bundles of one build never disagree about which build they are.
   if xcodebuild -project "$xcode_proj" -scheme CodeCapsCompanionMac -configuration Release -jobs "${CODECAPS_BUILD_JOBS:-2}" \
       -derivedDataPath "$widget_symroot/DerivedData" \
       CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
+      MARKETING_VERSION="$MARKETING_VERSION" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
       SYMROOT="$widget_symroot" build; then
     local appex_src="$widget_symroot/Release/CodeCapsWidgets.appex"
     if [[ ! -d "$appex_src" ]]; then
@@ -441,23 +450,91 @@ sign_app_bundle() {
   fi
 }
 
-# The marketing version is unified as <prefix>.<commit_count> per fleet standard,
-# where prefix is drawn from the VERSION file (defaulting to 1.0) and commit count
-# is monotonic across all git commits.
+# The marketing version is the app's fixed version, the same one the iOS
+# companion ships, so the two apps of one product read the same.  It comes
+# from the VERSION file (default 0.1.0) and CODECAPS_MARKETING_VERSION
+# overrides it.  The build number is the fleet's shared MERGE-TIMESTAMP
+# number:  the committer date of HEAD in America/Chicago as YYYYMMDDHHMM,
+# raised above every build this app has already published.  The release
+# plans that number once per release (scripts/plan-mac-release-build.mjs) and
+# hands it over in CODECAPS_BUILD_NUMBER;  a local build plans its own from
+# HEAD, so the two apps of one merge land on the same number whenever the
+# merge stamp is the highest either side has used.
 short_version() {
   local version=""
-  [[ ! -f "$VERSION_FILE" ]] || version="$(/usr/bin/sed -e 's/[[:space:]]//g' -e '/^$/d' "$VERSION_FILE" | /usr/bin/head -n 1)"
-  local prefix="${version:-1.0}"
-  prefix="$(printf '%s' "$prefix" | /usr/bin/awk -F. '{ if (NF >= 2) print $1"."$2; else print $1".0" }')"
-  local count=""
-  count="$(bundle_version)"
-  printf '%s.%s\n' "$prefix" "$count"
+  if [[ -n "${CODECAPS_MARKETING_VERSION:-}" ]]; then
+    version="$CODECAPS_MARKETING_VERSION"
+  else
+    [[ ! -f "$VERSION_FILE" ]] || version="$(/usr/bin/sed -e 's/[[:space:]]//g' -e '/^$/d' "$VERSION_FILE" | /usr/bin/head -n 1)"
+    version="${version:-0.1.0}"
+  fi
+  if ! printf '%s' "$version" | /usr/bin/grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+    echo "error: the marketing version '$version' is not a X.Y.Z version." >&2
+    # return, not exit:  this runs inside a command substitution, and an exit
+    # there kills the subshell only, so the build would carry on with an
+    # empty version string.
+    return 1
+  fi
+  printf '%s\n' "$version"
+}
+
+# The fleet's shared merge-timestamp stamp:  the committer date of HEAD in
+# America/Chicago as YYYYMMDDHHMM.  The same rule the iOS ship uses, so one
+# merge gives both apps one build number whenever the merge stamp is the
+# highest either side has used.
+merge_stamp() {
+  TZ=America/Chicago /usr/bin/git -C "$ROOT_DIR" show -s --format=%cd --date=format-local:%Y%m%d%H%M HEAD 2>/dev/null
 }
 
 bundle_version() {
-  local count=""
-  count="$(/usr/bin/git -C "$ROOT_DIR" rev-list --count HEAD 2>/dev/null || true)"
-  printf '%s\n' "${count:-1}"
+  local number="" stamp=""
+  if [[ -n "${CODECAPS_BUILD_NUMBER:-}" ]]; then
+    number="$CODECAPS_BUILD_NUMBER"
+  else
+    # The same rule the iOS ship uses to compute its merge stamp, so one merge
+    # gives both apps the same number.
+    number="$(merge_stamp || true)"
+  fi
+  if ! printf '%s' "$number" | /usr/bin/grep -qE '^[1-9][0-9]{11}$'; then
+    echo "error: the build number '$number' is not a 12-digit merge-timestamp build." >&2
+    return 1
+  fi
+  # A build number below the stamp of the commit being built moves the
+  # published feed backwards, and a number that goes backwards strands every
+  # installed copy on the old build (docs/AUTO-UPDATE.md).  The release
+  # planner already floors on max(S, M+1);  this is the second lock, and it
+  # fails closed.
+  stamp="$(merge_stamp || true)"
+  if [[ -n "$stamp" ]] && [[ "$number" -lt "$stamp" ]]; then
+    echo "error: the build number '$number' is below the merge stamp '$stamp' of HEAD." >&2
+    return 1
+  fi
+  printf '%s\n' "$number"
+}
+
+# The app's two version numbers, resolved once and checked before anything is
+# built.
+#
+# Both numbers used to be read at each use site, inside a command
+# substitution, where a validation failure exits the subshell only:  the build
+# carried on and shipped an app with an empty version string.  They are
+# resolved here instead, and a bad number stops the build.
+resolve_versions() {
+  if [[ -n "${_CODECAPS_VERSIONS_RESOLVED:-}" ]]; then
+    return 0
+  fi
+  local version number
+  if ! version="$(short_version)"; then
+    echo "error: the marketing version is not usable; refusing to build." >&2
+    exit 1
+  fi
+  if ! number="$(bundle_version)"; then
+    echo "error: the build number is not usable; refusing to build." >&2
+    exit 1
+  fi
+  MARKETING_VERSION="$version"
+  BUILD_NUMBER="$number"
+  _CODECAPS_VERSIONS_RESOLVED=1
 }
 
 bundle_identifier() {
@@ -526,6 +603,10 @@ assert_resource_bundle_reachable() {
 }
 
 build_and_stage() {
+  # The app's version numbers are resolved and checked before anything is
+  # built, so a bad number stops the build instead of shipping an empty
+  # version string.
+  resolve_versions
   local arch_flags=()
   if [[ "$UNIVERSAL" == "1" ]]; then
     local arch
@@ -588,9 +669,9 @@ build_and_stage() {
   <key>CFBundleIconFile</key>
   <string>$ICON_FILE</string>
   <key>CFBundleShortVersionString</key>
-  <string>$(short_version)</string>
+  <string>$MARKETING_VERSION</string>
   <key>CFBundleVersion</key>
-  <string>$(bundle_version)</string>
+  <string>$BUILD_NUMBER</string>
   <key>CFBundleIdentifier</key>
   <string>$BUNDLE_ID</string>
   <key>CFBundleName</key>
@@ -803,7 +884,7 @@ release_dist() {
   echo "Release artifacts in $DIST_DIR"
   echo "  $APP_NAME.zip  $zip_sha"
   echo "  $APP_NAME.dmg  $dmg_sha"
-  echo "  version $(short_version) (build $(bundle_version))"
+  echo "  version $MARKETING_VERSION (build $BUILD_NUMBER)"
 }
 
 case "$MODE" in
