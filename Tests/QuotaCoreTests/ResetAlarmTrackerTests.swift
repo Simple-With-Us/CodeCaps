@@ -452,6 +452,60 @@ final class ResetAlarmTrackerTests: XCTestCase {
         XCTAssertEqual(events.first?.isVendorReset, false)
     }
 
+    func testReusedWindowIdWithChangedCadenceStartsANewBaseline() {
+        var tracker = ResetAlarmTracker()
+        let intervalEnd = t0 + 3 * hour
+        _ = tracker.process(
+            [reading("general", period: 5 * hour, resetAt: intervalEnd, remaining: 80,
+                     observedAt: t0, provider: "minimax", label: "5h")],
+            now: t0)
+
+        let switchedAt = t0 + hour
+        let weeklyEnd = t0 + 6 * day
+        let switched = tracker.process(
+            [reading("general", period: 7 * day, resetAt: weeklyEnd, remaining: 75,
+                     observedAt: switchedAt, provider: "minimax", label: "7d")],
+            now: switchedAt)
+
+        XCTAssertTrue(switched.isEmpty, "A reused ID with a new cadence is a new baseline, not a reset.")
+        let key = ResetAlarmTracker.windowKey(scope: "local", providerId: "minimax", windowId: "general")
+        XCTAssertEqual(tracker.state.windows[key]?.periodSeconds, 7 * day)
+        XCTAssertEqual(tracker.state.windows[key]?.periodResetAt, weeklyEnd)
+        XCTAssertEqual(tracker.state.windows[key]?.minimumRemaining, 75)
+        XCTAssertEqual(tracker.state.windows[key]?.lastRemaining, 75)
+
+        let scheduledAt = weeklyEnd + hour
+        let scheduled = tracker.process(
+            [reading("general", period: 7 * day, resetAt: weeklyEnd + 7 * day, remaining: 100,
+                     observedAt: scheduledAt, provider: "minimax", label: "7d")],
+            now: scheduledAt)
+        XCTAssertEqual(scheduled.map(\.reason), [.newPeriod], "A later weekly rollover with quota restored remains a scheduled reset.")
+    }
+
+    func testPreEndResetTimeCorrectionWithoutQuotaRiseIsNotAnAlarm() {
+        for remaining in [75.0, 65.0] {
+            var tracker = ResetAlarmTracker()
+            let initialEnd = t0 + 7 * day
+            _ = tracker.process(
+                [reading("weekly", period: 7 * day, resetAt: initialEnd, remaining: 75,
+                         observedAt: t0, provider: "minimax", label: "7d")],
+                now: t0)
+
+            let correctedAt = t0 + day
+            let correctedEnd = initialEnd + 4 * day
+            let events = tracker.process(
+                [reading("weekly", period: 7 * day, resetAt: correctedEnd, remaining: remaining,
+                         observedAt: correctedAt, provider: "minimax", label: "7d")],
+                now: correctedAt)
+
+            XCTAssertTrue(events.isEmpty, "A forward time correction without quota restoration must not announce a reset.")
+            let key = ResetAlarmTracker.windowKey(scope: "local", providerId: "minimax", windowId: "weekly")
+            XCTAssertEqual(tracker.state.windows[key]?.periodResetAt, correctedEnd)
+            XCTAssertEqual(tracker.state.windows[key]?.minimumRemaining, min(75, remaining))
+            XCTAssertEqual(tracker.state.windows[key]?.lastRemaining, remaining)
+        }
+    }
+
     /// A rise is only new evidence when the period end holds still.  When the
     /// end moves too, the earlier rule already calls it an early reset — a
     /// provider resetting a limit early moves its reset time and the quota

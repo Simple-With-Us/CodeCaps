@@ -30,6 +30,20 @@ final class WidgetPlatformDisplayTests: XCTestCase {
         }
     }
 
+    func testAntigravityPeriodUsesCanonicalTokensAndExactLabels() {
+        func reading(window: String?, label: String) -> QuotaCardProjection.Reading {
+            .init(id: "fixture", providerKey: "google-antigravity", label: label, window: window)
+        }
+
+        XCTAssertEqual(QuotaCardProjection.antigravityPeriod(reading(window: nil, label: " Weekly ")), "weekly")
+        XCTAssertEqual(QuotaCardProjection.antigravityPeriod(reading(window: "1w", label: "usage")), "weekly")
+        XCTAssertEqual(QuotaCardProjection.antigravityPeriod(reading(window: nil, label: "5-hour window")), "5h")
+        XCTAssertEqual(QuotaCardProjection.antigravityPeriod(reading(window: "300m", label: "usage")), "5h")
+        XCTAssertNil(QuotaCardProjection.antigravityPeriod(reading(window: nil, label: "notweekly")))
+        XCTAssertNil(QuotaCardProjection.antigravityPeriod(reading(window: nil, label: "weekend")))
+        XCTAssertNil(QuotaCardProjection.antigravityPeriod(reading(window: nil, label: "not a 5-hour limit")))
+    }
+
     func testMuseAssistUsableExtraSpeaksForTheCardHeadline() {
         let readings = [
             CardHeadline.Reading(isMuseAssistExtra: false, isMasked: false, remainingPercent: 0),

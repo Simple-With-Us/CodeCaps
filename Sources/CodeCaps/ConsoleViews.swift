@@ -8,6 +8,7 @@ enum ConsolePage: Hashable {
     case allPlatforms
     case platform(String)
     case runawayAlerts
+    case plugin(String)
     case settingsMenuBar
     case settingsPlatforms
     case settingsLogoStyle
@@ -19,7 +20,7 @@ enum ConsolePage: Hashable {
 
     var isSettings: Bool {
         switch self {
-        case .allPlatforms, .platform, .runawayAlerts: return false
+        case .allPlatforms, .platform, .runawayAlerts, .plugin: return false
         default: return true
         }
     }
@@ -29,6 +30,7 @@ enum ConsolePage: Hashable {
         case .allPlatforms: return "allPlatforms"
         case .platform(let providerKey): return "platform:" + providerKey
         case .runawayAlerts: return "runawayAlerts"
+        case .plugin(let pluginId): return "plugin:" + pluginId
         case .settingsMenuBar: return "settingsMenuBar"
         case .settingsPlatforms: return "settingsPlatforms"
         case .settingsLogoStyle: return "settingsLogoStyle"
@@ -53,6 +55,9 @@ enum ConsolePage: Hashable {
         case "settingsInfisical": return .settingsInfisical
         case "settingsAbout": return .settingsAbout
         default:
+            if value.hasPrefix("plugin:") {
+                return .plugin(String(value.dropFirst(7)))
+            }
             guard value.hasPrefix("platform:") else { return nil }
             return .platform(String(value.dropFirst(9)))
         }
@@ -63,6 +68,7 @@ enum ConsolePage: Hashable {
         switch self {
         case .allPlatforms: return "All Platforms"
         case .runawayAlerts: return "Runaway Alerts"
+        case .plugin(let pluginId): return CodeCapsPlugin.named(pluginId)?.title ?? "Plugin"
         case .settingsMenuBar: return "Menu Bar & PiP"
         case .settingsPlatforms: return "Platforms"
         case .settingsLogoStyle: return "Logo Style"
@@ -79,6 +85,7 @@ enum ConsolePage: Hashable {
         switch self {
         case .allPlatforms: return "square.grid.2x2"
         case .runawayAlerts: return "flame.fill"
+        case .plugin(let pluginId): return CodeCapsPlugin.named(pluginId)?.symbol ?? "puzzlepiece.extension"
         case .settingsMenuBar: return "menubar.rectangle"
         case .settingsPlatforms: return "square.grid.2x2"
         case .settingsLogoStyle: return "photo.on.rectangle.angled"
@@ -94,6 +101,8 @@ enum ConsolePage: Hashable {
     static let settingsPages: [ConsolePage] = [
         .settingsMenuBar, .settingsPlatforms, .settingsLogoStyle, .settingsSourcesFleet, .settingsNotifications, .settingsAppearance, .settingsInfisical, .settingsAbout,
     ]
+
+    static let pluginPages: [ConsolePage] = CodeCapsPlugin.allCases.map { .plugin($0.id) }
 }
 
 struct AlertNavigation: Equatable {
@@ -188,6 +197,13 @@ final class ConsoleState: ObservableObject {
             return
         }
         if page == .allPlatforms || page == .runawayAlerts {
+            pendingStoredKey = nil
+            awaitingInitialSelection = false
+            return
+        }
+        if case .plugin = page {
+            // A plugin page is local: it never waits on a quota read, and no
+            // source disappearing can invalidate it.
             pendingStoredKey = nil
             awaitingInitialSelection = false
             return
@@ -334,6 +350,9 @@ struct ConsoleView: View {
                         .padding(Metrics.pagePadding)
                 case .runawayAlerts:
                     RunawayAlertsPage(model: model, state: state)
+                        .padding(Metrics.pagePadding)
+                case .plugin(let pluginId):
+                    MuseCodePluginPage(model: model, pluginId: pluginId)
                         .padding(Metrics.pagePadding)
                 case .platform(let key):
                     PlatformDetailPage(model: model, state: state, providerKey: key)
@@ -482,6 +501,7 @@ struct ConsoleSidebar: View {
     private var allPages: [ConsolePage] {
         var pages: [ConsolePage] = [.allPlatforms, .runawayAlerts]
         pages.append(contentsOf: model.displaySections.map { .platform($0.id) })
+        pages.append(contentsOf: ConsolePage.pluginPages)
         pages.append(contentsOf: ConsolePage.settingsPages)
         return pages
     }
@@ -538,6 +558,31 @@ struct ConsoleSidebar: View {
                     }
                 } header: {
                     Eyebrow("QUOTAS")
+                }
+                Section {
+                    ForEach(ConsolePage.pluginPages, id: \.self) { page in
+                        sidebarRow(page: page) {
+                            HStack(spacing: 8) {
+                                Image(systemName: page.symbol)
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(model.museCodeBurnAlert == nil ? Theme.ink : Theme.warning)
+                                    .frame(width: 18)
+                                Text(page.settingsTitle)
+                                    .font(.system(size: 13, weight: .medium))
+                                Spacer(minLength: 4)
+                                if model.museCodeBurnAlert != nil {
+                                    Text("1")
+                                        .font(.system(size: 10, weight: .bold))
+                                        .foregroundStyle(.white)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(Theme.warning, in: Capsule())
+                                }
+                            }
+                        }
+                    }
+                } header: {
+                    Eyebrow("PLUGINS")
                 }
                 Section {
                     ForEach(ConsolePage.settingsPages, id: \.self) { page in

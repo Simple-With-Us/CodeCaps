@@ -40,7 +40,7 @@ Hosting and routing (apexes, hostnames, hosts, deploy paths): see [`Fleet-OPS/do
 CodeCaps is a macOS menu-bar Swift app for **centralized monitoring and
 alerting of every AI subscription plan on your Mac** — usage, quotas, and
 caps across Claude, Codex, Cursor, Antigravity, Grok, MiniMax, and the
-other AI CLIs already signed in.  No provider API key is entered; CodeCaps
+other AI CLIs already signed in.  Optional Z.ai coding-plan keys stay in Keychain; CodeCaps
 uses existing local sign-ins to query supported provider quotas and local
 helpers.  Reading a credential file is not a passive quota-file refresh.  The
 same readings can be pushed to an endpoint you run and pulled back into the

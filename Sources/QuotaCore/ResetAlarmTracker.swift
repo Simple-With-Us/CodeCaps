@@ -462,13 +462,22 @@ public struct ResetAlarmTracker: Sendable {
         }
         if window.identity == nil { window.identity = observation.identity }
         window.lastSeenAt = now
-        if let period = observation.periodSeconds { window.periodSeconds = period }
 
         // A reading older than one already processed cannot say anything new.
         if let observed = observedAt, let last = window.lastObservedAt, observed < last {
             state.windows[key] = window
             return nil
         }
+
+        // A producer may reuse a window ID while switching its cadence.  Its reset time and remaining percentage no longer share the old baseline.  Keep the new reading as a baseline instead of comparing across periods.
+        if let observedPeriod = observation.periodSeconds,
+           let previousPeriod = window.periodSeconds,
+           abs(observedPeriod - previousPeriod) > ResetAlarmPolicy.resetDriftTolerance {
+            state.windows[key] = firstReading()
+            return nil
+        }
+
+        if let period = observation.periodSeconds { window.periodSeconds = period }
 
         let readAt = observedAt ?? now
         var isReset = false
@@ -482,18 +491,33 @@ public struct ResetAlarmTracker: Sendable {
             let hasPassed = readAt >= previousReset.addingTimeInterval(-60)
             if let reported = observation.resetAt {
                 let jump = reported.timeIntervalSince(previousReset)
-                let required = hasPassed
+                // A deadline correction needs a substantial quota rise or an elapsed full cadence.
+                let climbed = reading.flatMap { current in
+                    window.lastRemaining.map { current >= $0 + ResetAlarmPolicy.earlyResetRiseMargin }
+                } ?? false
+                let advancedFullCadence = window.periodSeconds.map { period in
+                    // Calendar months range from 28 to 31 days; fixed cadences use drift tolerance.
+                    let tolerance = ResetAlarmPolicy.resetDriftTolerance
+                    if (28 * 86_400...31 * 86_400).contains(period) {
+                        return jump >= 28 * 86_400 - tolerance && jump <= 31 * 86_400 + tolerance
+                    }
+                    return abs(jump - period) <= tolerance
+                } ?? false
+                let preExpiryJumpThreshold = window.periodSeconds.map { period in
+                    max(ResetAlarmPolicy.resetDriftTolerance,
+                        period * ResetAlarmPolicy.earlyResetShareOfPeriod)
+                } ?? ResetAlarmPolicy.earlyResetUnknownPeriod
+                let requiredJump = hasPassed
                     ? ResetAlarmPolicy.resetDriftTolerance
-                    : max(ResetAlarmPolicy.resetDriftTolerance,
-                          window.periodSeconds.map { $0 * ResetAlarmPolicy.earlyResetShareOfPeriod }
-                              ?? ResetAlarmPolicy.earlyResetUnknownPeriod)
-                // A provider that resets early may move the reset time by less
-                // than `required`; the percentage jumping back up settles it.
-                var climbed = false
-                if let reading, let last = window.lastRemaining {
-                    climbed = reading >= last + ResetAlarmPolicy.earlyResetRiseMargin
-                }
-                if jump > required || (jump > ResetAlarmPolicy.resetDriftTolerance && climbed) {
+                    : preExpiryJumpThreshold
+                let strongQuotaRestore = reading.flatMap { current in
+                    window.lastRemaining.map { current >= $0 + ResetAlarmPolicy.vendorRestoreRise }
+                } ?? false
+                let substantialRiseWithShortPreExpiryJump = !hasPassed
+                    && jump > ResetAlarmPolicy.resetDriftTolerance && strongQuotaRestore
+                if (hasPassed && advancedFullCadence)
+                    || (jump > requiredJump && climbed)
+                    || substantialRiseWithShortPreExpiryJump {
                     isReset = true
                     // When the window had *not* reached its own scheduled end,
                     // any reset is an early / mid-cycle vendor restore rather than
@@ -536,8 +560,10 @@ public struct ResetAlarmTracker: Sendable {
             }
             // The old period is over and the percentage went back up, even
             // though the reader has not published the next reset time yet.
-            if !isReset, hasPassed, let reading, let last = window.lastRemaining,
-               reading > last + ResetAlarmPolicy.riseEpsilon {
+            if !isReset, hasPassed,
+               observation.resetAt.map({ $0 <= previousReset + ResetAlarmPolicy.resetDriftTolerance }) ?? true,
+               let reading, let last = window.lastRemaining,
+               reading >= last + ResetAlarmPolicy.earlyResetRiseMargin {
                 isReset = true
                 nextResetAt = observation.resetAt.flatMap { $0 > readAt ? $0 : nil }
             }

@@ -37,6 +37,7 @@ public struct KimiQuotaReader: Sendable {
 
     public func read() async -> LocalQuotaResult {
         do {
+            try Task.checkCancellation()
             guard let token = accessToken(), !token.isEmpty else {
                 // No local sign-in at all: the product is simply absent, the
                 // same way a missing `gh` binary is not a Copilot error.
@@ -45,6 +46,7 @@ public struct KimiQuotaReader: Sendable {
             var lastStatus = 0
             var sawTransportError = false
             for url in Self.usageURLs {
+                try Task.checkCancellation()
                 let result: KimiHTTPPayload
                 do {
                     result = try await Self.fetchUsage(url: url, token: token, fetch: fetch)
@@ -53,6 +55,7 @@ public struct KimiQuotaReader: Sendable {
                     // rethrow so the outer catch reports the cancellation.
                     throw CancellationError()
                 } catch {
+                    if Task.isCancelled || (error as? URLError)?.code == .cancelled { throw CancellationError() }
                     // One unreachable host must not mask a healthy second one.
                     sawTransportError = true
                     continue
@@ -162,7 +165,7 @@ private extension KimiQuotaReader {
             sourceApp: "local-mac", label: label,
             remainingPercent: percent,
             absoluteRemaining: remaining, absoluteLimit: limit,
-            quotaUnit: "requests",
+            quotaUnit: nil,
             remainingUnknown: percent == nil,
             isExhausted: exhausted,
             resetAt: resetTimestamp(data),
@@ -212,13 +215,15 @@ private extension KimiQuotaReader {
         return nil
     }
 
-    /// Newest credential JSON under the two documented roots, then the
-    /// `api_key` lines of `config.toml` / `config.json` as a last resort.
-    internal static func readLocalAccessToken(home: URL) -> String? {
+    /// Only the CLI's designated Kimi Code credential is eligible, followed by
+    /// an explicitly identified Kimi Code provider with an approved coding URL.
+    internal static func readLocalAccessToken(
+        home: URL, environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> String? {
         let roots = [
-            ProcessInfo.processInfo.environment["KIMI_CODE_HOME"].map { URL(fileURLWithPath: $0) }
+            environment["KIMI_CODE_HOME"].map { URL(fileURLWithPath: $0) }
                 ?? home.appendingPathComponent(".kimi-code"),
-            ProcessInfo.processInfo.environment["KIMI_SHARE_DIR"].map { URL(fileURLWithPath: $0) }
+            environment["KIMI_SHARE_DIR"].map { URL(fileURLWithPath: $0) }
                 ?? home.appendingPathComponent(".kimi"),
         ]
         let manager = FileManager.default
@@ -226,11 +231,8 @@ private extension KimiQuotaReader {
         // root must beat a stale file in the first.
         var candidates: [URL] = []
         for root in roots {
-            let directory = root.appendingPathComponent("credentials")
-            if let names = try? manager.contentsOfDirectory(atPath: directory.path) {
-                candidates += names.filter { $0.hasSuffix(".json") }
-                    .map { directory.appendingPathComponent($0) }
-            }
+            let candidate = root.appendingPathComponent("credentials/kimi-code.json")
+            if manager.fileExists(atPath: candidate.path) { candidates.append(candidate) }
         }
         candidates.sort { lhs, rhs in
             let l = (try? manager.attributesOfItem(atPath: lhs.path)[.modificationDate] as? Date) ?? nil
@@ -262,33 +264,95 @@ private extension KimiQuotaReader {
 
     internal static func configToken(root: URL) -> String? {
         if let data = try? Data(contentsOf: root.appendingPathComponent("config.toml"), options: .mappedIfSafe),
-           data.count <= Self.maxCredentialBytes,
-           let text = String(data: data, encoding: .utf8) {
-            for line in text.split(separator: "\n") {
-                let trimmed = line.trimmingCharacters(in: .whitespaces)
-                guard let equals = trimmed.firstIndex(of: "=") else { continue }
-                let key = trimmed[trimmed.startIndex..<equals].trimmingCharacters(in: .whitespaces)
-                guard key == "api_key" else { continue }
-                let raw = trimmed[trimmed.index(after: equals)...].trimmingCharacters(in: .whitespaces)
-                // Quoted values keep everything to their closing quote;
-                // bare values end at an inline `#` comment.
-                let value: String
-                if raw.hasPrefix("\""), let close = raw.dropFirst().firstIndex(of: "\"") {
-                    value = String(raw.dropFirst()[..<close])
-                } else if raw.hasPrefix("'"), let close = raw.dropFirst().firstIndex(of: "'") {
-                    value = String(raw.dropFirst()[..<close])
-                } else {
-                    value = raw.split(separator: "#", maxSplits: 1).first
-                        .map { String($0).trimmingCharacters(in: .whitespaces) } ?? ""
+           data.count <= Self.maxCredentialBytes, let text = String(data: data, encoding: .utf8) {
+            var providers: [(name: String, fields: [String: String])] = []
+            var currentName: String?
+            var fields: [String: String] = [:]
+            for line in text.split(whereSeparator: \.isNewline) {
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.hasPrefix("[") {
+                    if let currentName { providers.append((currentName, fields)) }
+                    currentName = providerTableName(trimmed)
+                    fields = [:]
+                    continue
                 }
-                if validToken(value) { return value }
+                guard currentName != nil, let equals = trimmed.firstIndex(of: "=") else { continue }
+                let key = trimmed[..<equals].trimmingCharacters(in: .whitespaces)
+                guard ["type", "base_url", "api_key"].contains(key),
+                      let value = tomlString(String(trimmed[trimmed.index(after: equals)...])) else { continue }
+                fields[key] = value
+            }
+            if let currentName { providers.append((currentName, fields)) }
+            for provider in providers {
+                if let token = providerToken(name: provider.name, fields: provider.fields) { return token }
             }
         }
         if let data = try? Data(contentsOf: root.appendingPathComponent("config.json"), options: .mappedIfSafe),
            data.count <= Self.maxCredentialBytes,
-           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let token = string(object["api_key"]) ?? string(object["apiKey"]), validToken(token) {
-            return token
+           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            if let providers = object["providers"] as? [String: Any] {
+                for name in providers.keys.sorted() {
+                    guard let provider = providers[name] as? [String: Any],
+                          let token = providerToken(name: name, object: provider) else { continue }
+                    return token
+                }
+            }
+            // Legacy JSON must identify both the provider and its coding API base.
+            if let token = providerToken(name: object["provider"] as? String ?? "", object: object) { return token }
+        }
+        return nil
+    }
+
+    private static func providerToken(name: String, object: [String: Any]) -> String? {
+        var fields: [String: String] = [:]
+        fields["type"] = object["type"] as? String
+        fields["base_url"] = (object["base_url"] ?? object["baseUrl"]) as? String
+        fields["api_key"] = (object["api_key"] ?? object["apiKey"]) as? String
+        return providerToken(name: name, fields: fields)
+    }
+
+    private static func providerToken(name: String, fields: [String: String]) -> String? {
+        let explicitlyKimi = ["managed:kimi-code", "kimi-code", "kimi"].contains(name) || fields["type"] == "kimi"
+        guard explicitlyKimi, let base = fields["base_url"], approvedCodingBase(base),
+              let token = fields["api_key"], validToken(token) else { return nil }
+        return token
+    }
+
+    private static func approvedCodingBase(_ raw: String) -> Bool {
+        guard let url = URLComponents(string: raw), url.scheme == "https",
+              let host = url.host?.lowercased(), ["api.kimi.com", "api.kimi.ai"].contains(host),
+              url.port == nil || url.port == 443, url.user == nil, url.password == nil,
+              url.query == nil, url.fragment == nil else { return false }
+        return ["/coding/v1", "/coding/v1/"].contains(url.percentEncodedPath)
+    }
+
+    /// A narrow TOML reader accepts only provider tables and quoted scalars.
+    /// Unknown tables, multiline strings, and ambiguous syntax fail closed.
+    private static func providerTableName(_ line: String) -> String? {
+        let pattern = #"^\[\s*providers\s*\.\s*(?:"([^"\\]+)"|'([^']+)'|([A-Za-z0-9_-]+))\s*\]\s*(?:#.*)?$"#
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)) else { return nil }
+        for index in 1...3 {
+            if let range = Range(match.range(at: index), in: line) { return String(line[range]) }
+        }
+        return nil
+    }
+
+    private static func tomlString(_ raw: String) -> String? {
+        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let quote = value.first, quote == "\"" || quote == "'" else { return nil }
+        var escaped = false
+        for index in value.indices.dropFirst() {
+            let character = value[index]
+            if quote == "\"", character == "\\", !escaped { escaped = true; continue }
+            if character == quote, !escaped {
+                let tail = value[value.index(after: index)...].trimmingCharacters(in: .whitespacesAndNewlines)
+                guard tail.isEmpty || tail.hasPrefix("#") else { return nil }
+                if quote == "'" { return String(value[value.index(after: value.startIndex)..<index]) }
+                let encoded = String(value[...index])
+                return try? JSONDecoder().decode(String.self, from: Data(encoded.utf8))
+            }
+            escaped = false
         }
         return nil
     }
@@ -328,9 +392,14 @@ private extension KimiQuotaReader {
     }
 
     static func number(_ value: Any?) -> Double? {
-        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
-              number.doubleValue.isFinite, number.doubleValue >= 0 else { return nil }
-        return number.doubleValue
+        let parsed: Double?
+        if let text = value as? String {
+            parsed = Double(text.trimmingCharacters(in: .whitespacesAndNewlines))
+        } else if let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() {
+            parsed = number.doubleValue
+        } else { parsed = nil }
+        guard let parsed, parsed.isFinite, parsed >= 0 else { return nil }
+        return parsed
     }
 
     internal static func int(_ value: Any?) -> Int? {

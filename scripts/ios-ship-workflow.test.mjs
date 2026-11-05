@@ -212,7 +212,12 @@ test("ASC credentials come from Fleet-OPS /asc, never the stale repository secre
   // the step fell through to the repository copies without saying so.
   assert.doesNotMatch(code, /project-id: \$\{\{ secrets\.INFISICAL_PROJECT_ID \}\}/);
   assert.match(code, /project-id: \$\{\{ secrets\.INFISICAL_FLEET_OPS_PROJECT_ID \}\}/);
-  assert.match(code, /secrets\.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID/);
+  assert.equal(
+    (code.match(/secrets\.INFISICAL_CODECAPS_CI_READ_SERVICE_TOKEN/g) || []).length,
+    2,
+    'the root Sentry loader and /asc key loader share one read service token',
+  );
+  assert.doesNotMatch(code, /INFISICAL_CLIENT_ID|INFISICAL_CLIENT_SECRET|UNIVERSAL_AUTH/);
   assert.doesNotMatch(code, /infisical secrets get/);
   assert.doesNotMatch(code, /infisical\/get-cli/);
   // No new code may talk to the vault directly.
@@ -411,9 +416,9 @@ test("the ship job clears a stale archive lock restored from the ship-state cach
   assert.ok(beforeSave.includes(lockRm), "the archive lock is removed before the ship-state cache is saved");
 });
 
-test("the marketing train is 1.0.N and release notes use the owner clock", () => {
+test("the marketing version stays at 0.1.0 and release notes use the owner clock", () => {
   const apps = JSON.parse(read("scripts/ios-fleet/apps.json"));
-  assert.match(apps.apps.codecaps.marketingVersionDefault, /^1\.0\.\d+$/);
+  assert.equal(apps.apps.codecaps.marketingVersionDefault, "0.1.0");
 
   const src = read("scripts/ios-fleet/asc-api.mjs");
   const fn = src.match(/function centralTimestamp[\s\S]*?\n}\n/)[0];

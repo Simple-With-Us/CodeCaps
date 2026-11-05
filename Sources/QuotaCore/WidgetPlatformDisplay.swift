@@ -114,9 +114,8 @@ public enum WidgetPlatformDisplay {
 /// The one percentage a plan card leads with.
 ///
 /// It is the lowest honest reading on the card, except that a Muse Assist
-/// extra balance that can still be spent speaks for the card:  the weekly
-/// allowance being spent does not stop the plan while the extra balance is
-/// being used, and the weekly row below still shows its own 0%.
+/// extra balance takes over only when the weekly allowance is spent.
+/// The weekly row below still shows its own 0%.
 public enum CardHeadline {
     public struct Reading: Equatable {
         public var isMuseAssistExtra: Bool
@@ -132,11 +131,13 @@ public enum CardHeadline {
 
     public static func percent(_ readings: [Reading]) -> Double? {
         let honest = readings.filter { !$0.isMasked }
+        let primary = honest.filter { !$0.isMuseAssistExtra }.compactMap(\.remainingPercent).filter { $0.isFinite }.min()
         if let extra = honest.first(where: { $0.isMuseAssistExtra }),
-           let percent = extra.remainingPercent, percent.isFinite, percent > 0 {
+           let percent = extra.remainingPercent, percent.isFinite, percent > 0,
+           primary == nil || QuotaCapRule.isAtCap(remainingPercent: primary) {
             return percent
         }
-        return honest.compactMap(\.remainingPercent).filter { $0.isFinite }.min()
+        return primary ?? honest.compactMap(\.remainingPercent).filter { $0.isFinite }.min()
     }
 }
 
@@ -149,5 +150,171 @@ public enum UpdatedStamp {
             return date.formatted(date: .omitted, time: .shortened)
         }
         return date.formatted(date: .abbreviated, time: .shortened)
+    }
+}
+
+
+/// Allowance identity and source selection shared by the companion and widgets.
+public enum QuotaCardProjection {
+    public struct Reading: Equatable, Sendable {
+        public var id: String
+        public var providerKey: String
+        public var label: String
+        public var window: String?
+        public var modelId: String?
+        public var modelType: String?
+        public var remainingPercent: Double?
+        public var absoluteRemaining: Double?
+        public var resetAt: Date?
+        public var reportedAt: Date?
+        public var source: String?
+        public var via: String?
+
+        public init(id: String, providerKey: String, label: String, window: String? = nil,
+                    modelId: String? = nil, modelType: String? = nil,
+                    remainingPercent: Double? = nil, absoluteRemaining: Double? = nil,
+                    resetAt: Date? = nil, reportedAt: Date? = nil,
+                    source: String? = nil, via: String? = nil) {
+            self.id = id
+            self.providerKey = providerKey
+            self.label = label
+            self.window = window
+            self.modelId = modelId
+            self.modelType = modelType
+            self.remainingPercent = remainingPercent
+            self.absoluteRemaining = absoluteRemaining
+            self.resetAt = resetAt
+            self.reportedAt = reportedAt
+            self.source = source
+            self.via = via
+        }
+
+        public var hasReading: Bool {
+            remainingPercent?.isFinite == true
+                || (absoluteRemaining?.isFinite == true && (absoluteRemaining ?? -1) >= 0)
+        }
+
+        /// Only these model limits have a separate detail in the companion.
+        public var detailName: String? {
+            let identity = [id, label, modelId ?? "", modelType ?? ""].joined(separator: " ").lowercased()
+            if providerKey == "anthropic", identity.contains("fable") { return "Fable" }
+            if providerKey == "google-antigravity", identity.contains("argon") { return "Argon" }
+            return nil
+        }
+
+        public var isQuota: Bool {
+            let lower = label.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard !id.lowercased().hasSuffix(":plan-metadata"), lower != "plan details" else { return false }
+            guard !QuotaCapRule.isSupplementaryVideoQuota(providerKey: providerKey, modelId: modelId,
+                                                          modelType: modelType, label: label),
+                  !QuotaCapRule.isScopedPoolAllowance(providerKey: providerKey, id: id, modelId: modelId,
+                                                     modelType: modelType, label: label) else { return false }
+            let subModel = QuotaCapRule.isSubModelLimit(providerKey: providerKey, id: id, modelId: modelId,
+                                                      modelType: modelType, label: label)
+            return !subModel || detailName != nil
+        }
+
+        public var allowanceKey: String {
+            let cadence = QuotaWindowVocabulary.standardCadence(windowToken: window, label: label,
+                                                                 resetAt: resetAt).lowercased()
+            if let detailName { return detailName.lowercased() + ":" + cadence }
+            if QuotaWindowVocabulary.isExtraAllowance(providerKey: providerKey, label: label, windowToken: window) {
+                return "extra:" + cadence
+            }
+            // Primary model names describe observations of the same plan allowance.
+            return cadence
+        }
+
+        public var displayLabel: String {
+            if let detailName { return detailName + " limit" }
+            if QuotaWindowVocabulary.isExtraAllowanceLabel(label) { return label }
+            return QuotaWindowVocabulary.windowLabel(windowToken: window, existingLabel: label, resetAt: resetAt)
+        }
+    }
+
+    public static func antigravityPeriod(_ reading: Reading) -> String? {
+        let token = (reading.window ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased().replacingOccurrences(of: " ", with: "")
+        let label = reading.label.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let weeklyLabels: Set<String> = ["weekly", "week", "7-day", "7 day", "7-day window", "7 day window"]
+        let fiveHourLabels: Set<String> = ["5h", "5hr", "5-hour", "5 hours", "5-hour window", "5 hour window", "five_hour"]
+        if ["weekly", "week", "1w", "7d", "168h", "10080m"].contains(token)
+            || weeklyLabels.contains(label) { return "weekly" }
+        if ["5h", "5hr", "5-hour", "5hours", "300m"].contains(token)
+            || fiveHourLabels.contains(label) { return "5h" }
+        return nil
+    }
+
+    /// Exported pool rows are authoritative; raw model observations fill only absent periods.
+    public static func selectedPoolIndices(in readings: [Reading], poolKey: String, now: Date = Date()) -> [Int] {
+        ["5h", "weekly"].compactMap { period in
+            let indices = readings.indices.filter {
+                readings[$0].detailName == nil && readings[$0].isQuota && antigravityPeriod(readings[$0]) == period
+            }
+            guard let pick = preferredIndex(in: indices.map { readings[$0] }, now: now,
+                canonicalID: "antigravity:" + poolKey + ":" + period) else { return nil }
+            return indices[pick]
+        }
+    }
+
+    /// Prefer measurable, current Mac readings; otherwise use the newest current feed.
+    /// An unknown placeholder never displaces a measured allowance.
+    public static func preferredIndex(in readings: [Reading], now: Date = Date(),
+                                      canonicalID: String? = nil) -> Int? {
+        guard !readings.isEmpty else { return nil }
+        let measured = readings.indices.filter { readings[$0].hasReading }
+        let available = measured.isEmpty ? Array(readings.indices) : measured
+        let fresh = available.filter {
+            QuotaFreshnessRule.isFresh(observedAt: readings[$0].reportedAt, resetAt: readings[$0].resetAt, now: now)
+        }
+        let pool = fresh.isEmpty ? available : fresh
+        if let canonicalID, let canonical = pool.first(where: { readings[$0].id == canonicalID }) {
+            return canonical
+        }
+        let observations = pool.map {
+            FleetQuotaObservation(remainingPercent: readings[$0].remainingPercent,
+                                  reportedAt: readings[$0].reportedAt,
+                                  isMacCodeCapsReading: FleetMacReading.isMacCodeCapsReading(
+                                    id: readings[$0].id, source: readings[$0].source, via: readings[$0].via))
+        }
+        guard let pick = FleetMacReading.pickCardDisplay(from: observations, now: now) else { return pool.first }
+        let chosen = pool[pick.chosenIndex]
+        let chosenIsMac = observations[pick.chosenIndex].isMacCodeCapsReading
+        let tied = pool.indices.filter {
+            readings[pool[$0]].reportedAt == readings[chosen].reportedAt
+                && observations[$0].isMacCodeCapsReading == chosenIsMac
+        }.map { pool[$0] }
+        return tied.min { (readings[$0].remainingPercent ?? .infinity) < (readings[$1].remainingPercent ?? .infinity) } ?? chosen
+    }
+
+    /// One honest row per allowance, primary periods first and model details last.
+    /// Missing readings remain a provider status rather than an empty quota meter.
+    public static func selectedIndices(in readings: [Reading], now: Date = Date()) -> [Int] {
+        var groups: [String: [Int]] = [:]
+        var order: [String] = []
+        for index in readings.indices where readings[index].isQuota {
+            let key = readings[index].allowanceKey
+            if groups[key] == nil { order.append(key) }
+            groups[key, default: []].append(index)
+        }
+        let selected = order.compactMap { key -> Int? in
+            guard let indices = groups[key],
+                  let pick = preferredIndex(in: indices.map { readings[$0] }, now: now) else { return nil }
+            let index = indices[pick]
+            return readings[index].hasReading ? index : nil
+        }
+        return selected.sorted { left, right in
+            let l = readings[left], r = readings[right]
+            if (l.detailName != nil) != (r.detailName != nil) { return l.detailName == nil }
+            if l.providerKey == "muse-assist" {
+                let lExtra = QuotaWindowVocabulary.isExtraAllowance(providerKey: l.providerKey, label: l.label, windowToken: l.window)
+                let rExtra = QuotaWindowVocabulary.isExtraAllowance(providerKey: r.providerKey, label: r.label, windowToken: r.window)
+                if lExtra != rExtra { return !lExtra }
+            }
+            let lp = ResetAlarmCadence.periodSeconds(token: l.window, label: l.label) ?? .infinity
+            let rp = ResetAlarmCadence.periodSeconds(token: r.window, label: r.label) ?? .infinity
+            if lp != rp { return lp < rp }
+            return left < right
+        }
     }
 }

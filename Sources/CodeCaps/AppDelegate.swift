@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import Carbon
 import QuotaCore
 import SwiftUI
 import UserNotifications
@@ -57,6 +58,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     let model = MonitorModel()
     let consoleState = ConsoleState()
     private var statusItem: NSStatusItem?
+    private var keepsMenuBarAccessAfterBackgroundChoice = false
+    private var userConfirmedQuit = false
     private var planWarningCycle = PlanWarningCycle()
     private var navigatingPlanWarning = false
     private var planWarningCheckPending = false
@@ -237,11 +240,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         // Install persisted configuration synchronously on the main actor.
         // A delayed startup task must never restore A after Dashboard saved B.
         let settings = InfisicalSettings.shared
-        guard let identity = InfisicalIdentityStore.load() else {
+        guard let configuration = InfisicalIdentityStore.loadSetup()?.configuration else {
             settings.clearConfiguration()
             return
         }
-        settings.configure(identity.configuration)
+        settings.configure(configuration)
         refreshInfisicalSettings()
     }
 
@@ -366,12 +369,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private let snapshotTerminationDrain = SnapshotTerminationDrain()
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        // This app has no cancelled-quit/resume path: every request replies true.
+        let systemTerminationReason = NSAppleEventManager.shared().currentAppleEvent?
+            .paramDescriptor(forKeyword: kAEQuitReason)?.typeCodeValue
+        if !userConfirmedQuit && QuitConfirmationPolicy.shouldConfirm(
+            systemTerminationReason: systemTerminationReason,
+            automaticInstallInProgress: AppUpdater.shared.isAutomaticInstallInProgress) {
+            switch confirmQuitChoice() {
+            case .closeAndKeepRunning:
+                closeWindowsAndKeepRunning()
+                return .terminateCancel
+            case .quit:
+                userConfirmedQuit = true
+            case .cancel:
+                return .terminateCancel
+            }
+        }
+        beginTerminationDrain(replyTo: sender)
+        return .terminateLater
+    }
+
+    private func confirmQuitChoice() -> QuitConfirmationChoice {
+        let alert = NSAlert()
+        alert.messageText = "Quit CodeCaps?"
+        alert.informativeText = "Close the windows and keep CodeCaps running in the menu bar so quota checks and alerts continue."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Close Window And Keep Running")
+        alert.addButton(withTitle: "Quit CodeCaps")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons.first?.keyEquivalent = "\r"
+        alert.buttons.last?.keyEquivalent = "\u{1b}"
+        NSApp.activate(ignoringOtherApps: true)
+        return QuitConfirmationChoice(response: alert.runModal())
+    }
+
+    private func closeWindowsAndKeepRunning() {
+        keepsMenuBarAccessAfterBackgroundChoice = true
+        ensureStatusItem()
+        updateStatus()
+        popover.performClose(nil)
+        lowerConsole()
+        for window in QuitConfirmationPolicy.windowsToHide(managed: [consoleWindow, floatingGlance]) {
+            window.orderOut(nil)
+        }
+        applyActivationPolicy()
+    }
+
+    private func beginTerminationDrain(replyTo sender: NSApplication) {
         snapshotTerminationDrain.request(
             stop: { model.stop() },
             flush: { [self] in await model.flushSnapshotWrites() },
             reply: { sender.reply(toApplicationShouldTerminate: true) })
-        return .terminateLater
     }
 
     func applicationWillTerminate(_ notification: Notification) { model.stop() }
@@ -384,22 +431,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     private func apply(_ mode: DisplayMode) {
         // AppKit owns only activation and status-item lifetime; content remains SwiftUI.
-        if mode != .dock && statusItem == nil {
-            let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-            item.button?.target = self
-            item.button?.action = #selector(statusItemClicked)
-            item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
-            statusItem = item
+        if QuitConfirmationPolicy.shouldShowStatusItem(displayMode: mode,
+                                                       keepRunningOverride: keepsMenuBarAccessAfterBackgroundChoice) {
+            ensureStatusItem()
         }
         NSApp.setActivationPolicy(mode == .menuBar ? .accessory : .regular)
         if mode == .menuBar { consoleWindow?.orderOut(nil) }
         if mode == .dock {
             popover.performClose(nil)
-            if let item = statusItem { NSStatusBar.system.removeStatusItem(item) }
-            statusItem = nil
+            if !keepsMenuBarAccessAfterBackgroundChoice {
+                if let item = statusItem { NSStatusBar.system.removeStatusItem(item) }
+                statusItem = nil
+            }
             showConsole(page: nil)
         }
         updateStatus()
+    }
+
+    private func ensureStatusItem() {
+        guard statusItem == nil else { return }
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        item.button?.target = self
+        item.button?.action = #selector(statusItemClicked)
+        item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        statusItem = item
     }
 
     /// Keeps the warning window in step with the model.  Called on every
