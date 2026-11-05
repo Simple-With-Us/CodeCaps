@@ -8,6 +8,7 @@ import Foundation
 public struct KimiQuotaReader: Sendable {
     private let now: @Sendable () -> Date
     private let accessToken: @Sendable () -> String?
+    private let storedExpiresAt: @Sendable () -> Date?
     private let fetch: @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)
 
     private static let maxResponseBytes = 262_144
@@ -27,11 +28,18 @@ public struct KimiQuotaReader: Sendable {
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
         now: @escaping @Sendable () -> Date = { Date() },
         accessToken: (@Sendable () -> String?)? = nil,
+        credentialExpiresAt: (@Sendable () -> Date?)? = nil,
         fetch: (@Sendable (URLRequest) async throws -> (Data, HTTPURLResponse))? = nil
     ) {
         self.now = now
         let home = homeDirectory.standardizedFileURL
-        self.accessToken = accessToken ?? { Self.readLocalAccessToken(home: home) }
+        if let accessToken {
+            self.accessToken = accessToken
+            self.storedExpiresAt = credentialExpiresAt ?? { nil }
+        } else {
+            self.accessToken = { Self.readLocalCredential(home: home)?.token }
+            self.storedExpiresAt = credentialExpiresAt ?? { Self.readLocalCredential(home: home)?.expiresAt }
+        }
         self.fetch = fetch ?? Self.makeFetcher()
     }
 
@@ -74,6 +82,14 @@ public struct KimiQuotaReader: Sendable {
                 return LocalQuotaResult(windows: windows, issues: issues)
             }
             if lastStatus == 401 || lastStatus == 403 {
+                // A token the credential file itself marks expired is a
+                // routine refresh wait, not a dead sign-in: the CLI refreshes
+                // it on its next use and this reader then reads the fresh
+                // file.  Only a rejection with no local expiry evidence is
+                // worded as a sign-in problem.
+                if let expiry = storedExpiresAt(), now() >= expiry {
+                    return LocalQuotaResult(issues: ["kimi": "Kimi's stored access token has expired; open Kimi Code to refresh it."])
+                }
                 return LocalQuotaResult(issues: ["kimi": "Kimi session was rejected; sign in again in Kimi Code."])
             }
             return LocalQuotaResult(issues: ["kimi": sawTransportError
@@ -215,6 +231,12 @@ private extension KimiQuotaReader {
     /// Newest credential JSON under the two documented roots, then the
     /// `api_key` lines of `config.toml` / `config.json` as a last resort.
     internal static func readLocalAccessToken(home: URL) -> String? {
+        readLocalCredential(home: home)?.token
+    }
+
+    /// The token plus the expiry the credential records alongside it, so a
+    /// server rejection can be told apart from a locally known expiry.
+    internal static func readLocalCredential(home: URL) -> (token: String, expiresAt: Date?)? {
         let roots = [
             ProcessInfo.processInfo.environment["KIMI_CODE_HOME"].map { URL(fileURLWithPath: $0) }
                 ?? home.appendingPathComponent(".kimi-code"),
@@ -238,15 +260,15 @@ private extension KimiQuotaReader {
             return (l ?? .distantPast) > (r ?? .distantPast)
         }
         for candidate in candidates {
-            if let token = credentialToken(at: candidate) { return token }
+            if let credential = credentialToken(at: candidate) { return credential }
         }
         for root in roots {
-            if let token = configToken(root: root) { return token }
+            if let token = configToken(root: root) { return (token, nil) }
         }
         return nil
     }
 
-    static func credentialToken(at url: URL) -> String? {
+    static func credentialToken(at url: URL) -> (token: String, expiresAt: Date?)? {
         guard let data = try? Data(contentsOf: url, options: .mappedIfSafe), data.count <= Self.maxCredentialBytes,
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
         // Extract the raw string, NOT via the label-capped string() helper:
@@ -257,7 +279,21 @@ private extension KimiQuotaReader {
         // A token whose recorded expiry has passed is only going to earn a
         // 401; the CLI refreshes it on next use, so report the stored one
         // anyway and let the server answer.
-        return token
+        return (token, credentialExpiry(root["expires_at"] ?? root["expiresAt"]))
+    }
+
+    /// The credential's own expiry: epoch seconds (the live file's form),
+    /// epoch milliseconds, or an ISO-8601 stamp.
+    internal static func credentialExpiry(_ value: Any?) -> Date? {
+        if let number = number(value) {
+            if number >= 1_000_000_000_000 { return Date(timeIntervalSince1970: number / 1000) }
+            return Date(timeIntervalSince1970: number)
+        }
+        guard let text = value as? String, !text.isEmpty, text.utf8.count <= 64 else { return nil }
+        let iso = ISO8601DateFormatter()
+        if let date = iso.date(from: text) { return date }
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return iso.date(from: text)
     }
 
     internal static func configToken(root: URL) -> String? {
