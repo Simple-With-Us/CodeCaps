@@ -118,10 +118,39 @@ public struct ZCodeQuotaReader: Sendable {
     private enum Flow: Error {
         /// 401/403 anywhere in the chain: the sign-in itself is rejected.
         case rejected
-        /// Transport failure, non-success envelope, or malformed payload.
-        case unavailable
+        /// Transport failure, non-success envelope, or malformed payload,
+        /// tagged with the failing step and a coarse, privacy-safe category.
+        case unavailable(Step, Category)
         /// A truthful account state to publish (no project, no key, disabled).
         case account(String)
+    }
+
+    /// The chain step a failure belongs to, named after ZCode's own calls.
+    /// The raw values are the whole disclosure: no URLs, no parameters.
+    private enum Step: String {
+        case customerInfo
+        case apiKeys
+        case accessTokens
+        case quota
+    }
+
+    /// Coarse failure category.  Bounded labels only, so repeated refreshes
+    /// produce identical strings and no response body, token, or account
+    /// identifier ever crosses into the issue text.
+    private enum Category {
+        case transport
+        case http(Int)
+        case envelope
+        case malformed
+
+        var label: String {
+            switch self {
+            case .transport: return "transport"
+            case .http(let status): return "http \(status)"
+            case .envelope: return "envelope"
+            case .malformed: return "malformed response"
+            }
+        }
     }
 
     public func read() async -> LocalQuotaResult {
@@ -134,6 +163,7 @@ public struct ZCodeQuotaReader: Sendable {
             var sawCredential = false
             var rejected = false
             var firstAccountIssue: String?
+            var firstUnavailable: (Step, Category)?
             for account in Self.accounts {
                 guard let login = store[account.loginKey], Self.validToken(login) else { continue }
                 sawCredential = true
@@ -149,8 +179,8 @@ public struct ZCodeQuotaReader: Sendable {
                         rejected = true
                     case .account(let message):
                         if firstAccountIssue == nil { firstAccountIssue = message }
-                    case .unavailable:
-                        break
+                    case .unavailable(let step, let category):
+                        if firstUnavailable == nil { firstUnavailable = (step, category) }
                     }
                 } catch {
                     // One unreachable endpoint must not mask a healthy second
@@ -166,6 +196,9 @@ public struct ZCodeQuotaReader: Sendable {
             }
             if rejected {
                 return LocalQuotaResult(issues: ["zcode": "ZCode session was rejected; sign in again in ZCode."])
+            }
+            if let firstUnavailable {
+                return LocalQuotaResult(issues: ["zcode": "ZCode quota service is unavailable (\(firstUnavailable.0.rawValue) step: \(firstUnavailable.1.label))."])
             }
             return LocalQuotaResult(issues: ["zcode": "ZCode quota service is unavailable."])
         } catch is CancellationError {
@@ -194,15 +227,19 @@ public struct ZCodeQuotaReader: Sendable {
         // signal, so a 200 with a failed envelope never swaps the header form.
         let forms = account.family == .zai ? [login, "Bearer \(login)"] : [login]
         for (index, header) in forms.enumerated() {
-            let payload = try await request("GET", url: url, authorization: header)
+            let payload = try await requestStep(.customerInfo, "GET", url: url, authorization: header)
             if payload.statusCode == 401 || payload.statusCode == 403 {
                 if index + 1 < forms.count { continue }
                 throw Flow.rejected
             }
-            guard (200..<300).contains(payload.statusCode),
-                  let data = Self.envelopeData(payload.root) as? [String: Any],
-                  let organizations = data["organizations"] as? [[String: Any]] else {
-                throw Flow.unavailable
+            guard (200..<300).contains(payload.statusCode) else {
+                throw Flow.unavailable(.customerInfo, .http(payload.statusCode))
+            }
+            guard let data = Self.envelopeData(payload.root) as? [String: Any] else {
+                throw Flow.unavailable(.customerInfo, payload.root == nil ? .malformed : .envelope)
+            }
+            guard let organizations = data["organizations"] as? [[String: Any]] else {
+                throw Flow.unavailable(.customerInfo, .malformed)
             }
             // ZCode's own selection, kept exact: non-team projects, the
             // default-named organization/project when present, else first.
@@ -240,11 +277,13 @@ public struct ZCodeQuotaReader: Sendable {
         // Personal key management keeps the family-dependent form across the
         // whole bracket: z.ai Bearer, bigmodel raw.
         let header = account.family == .zai ? "Bearer \(login)" : login
-        let payload = try await request("GET", url: url, authorization: header)
+        let payload = try await requestStep(.apiKeys, "GET", url: url, authorization: header)
         if payload.statusCode == 401 || payload.statusCode == 403 { throw Flow.rejected }
-        guard (200..<300).contains(payload.statusCode),
-              let list = Self.envelopeData(payload.root) as? [[String: Any]] else {
-            throw Flow.unavailable
+        guard (200..<300).contains(payload.statusCode) else {
+            throw Flow.unavailable(.apiKeys, .http(payload.statusCode))
+        }
+        guard let list = Self.envelopeData(payload.root) as? [[String: Any]] else {
+            throw Flow.unavailable(.apiKeys, payload.root == nil ? .malformed : .envelope)
         }
         for entry in list where entry["name"] as? String == "zcode-api-key" {
             if let id = entry["apiKey"] as? String, !id.isEmpty {
@@ -264,16 +303,17 @@ public struct ZCodeQuotaReader: Sendable {
         let url = URL(string: "\(base)/\(Self.pathEscape(keyId))/access_tokens")!
         var body: [String: Any] = ["clientType": "zcode"]
         if let version = zcodeClientVersion() { body["clientVersion"] = version }
-        let payload = try await request("POST", url: url, authorization: "Bearer \(login)", body: body)
+        let payload = try await requestStep(.accessTokens, "POST", url: url, authorization: "Bearer \(login)", body: body)
         if payload.statusCode == 401 || payload.statusCode == 403 { throw Flow.rejected }
-        guard (200..<300).contains(payload.statusCode), let root = payload.root else { throw Flow.unavailable }
+        guard (200..<300).contains(payload.statusCode) else { throw Flow.unavailable(.accessTokens, .http(payload.statusCode)) }
+        guard let root = payload.root else { throw Flow.unavailable(.accessTokens, .malformed) }
         if (root["code"] as? NSNumber)?.intValue == 404 || (root["code"] as? String) == "404" {
             throw Flow.account("ZCode's coding-plan key no longer exists; sign in again in ZCode.")
         }
-        guard let data = Self.envelopeData(root) as? [String: Any] else { throw Flow.unavailable }
-        guard let enable = data["enable"] as? NSNumber else { throw Flow.unavailable }
+        guard let data = Self.envelopeData(root) as? [String: Any] else { throw Flow.unavailable(.accessTokens, .envelope) }
+        guard let enable = data["enable"] as? NSNumber else { throw Flow.unavailable(.accessTokens, .malformed) }
         guard enable.boolValue else { throw Flow.account("ZCode reports the coding-plan token disabled.") }
-        guard let token = data["accessToken"] as? String, Self.validToken(token) else { throw Flow.unavailable }
+        guard let token = data["accessToken"] as? String, Self.validToken(token) else { throw Flow.unavailable(.accessTokens, .malformed) }
         return token
     }
 
@@ -281,15 +321,16 @@ public struct ZCodeQuotaReader: Sendable {
     /// credential form the bracket agrees on for this endpoint.
     private func quota(_ account: Account, token: String) async throws -> LocalQuotaResult {
         let url = URL(string: "\(account.origin)/api/monitor/usage/quota/limit")!
-        let payload = try await request("GET", url: url, authorization: "Bearer \(token)")
+        let payload = try await requestStep(.quota, "GET", url: url, authorization: "Bearer \(token)")
         if payload.statusCode == 401 || payload.statusCode == 403 { throw Flow.rejected }
-        guard (200..<300).contains(payload.statusCode), let root = payload.root else { throw Flow.unavailable }
+        guard (200..<300).contains(payload.statusCode) else { throw Flow.unavailable(.quota, .http(payload.statusCode)) }
+        guard let root = payload.root else { throw Flow.unavailable(.quota, .malformed) }
         // Account truths are thrown, not returned: read() records the issue
         // and still tries the second account, which may be healthy.
         if let noPlan = Self.noPlanMessage(root) {
             throw Flow.account(noPlan)
         }
-        guard Self.envelopeSucceeded(root), let data = root["data"] as? [String: Any] else { throw Flow.unavailable }
+        guard Self.envelopeSucceeded(root), let data = root["data"] as? [String: Any] else { throw Flow.unavailable(.quota, .envelope) }
         let windows = Self.parse(data, observedAt: now())
         if windows.isEmpty {
             // A 200 envelope with an empty limits array is a truthful
@@ -330,6 +371,25 @@ public struct ZCodeQuotaReader: Sendable {
             ? (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
             : nil
         return ZCodeHTTPPayload(statusCode: response.statusCode, root: root)
+    }
+
+    /// One chain step's request, with transport failures tagged at the call
+    /// site so a dead endpoint names its step instead of falling through
+    /// silently.  Cancellation stays cancellation, never a transport report.
+    private func requestStep(
+        _ step: Step,
+        _ method: String,
+        url: URL,
+        authorization: String,
+        body: [String: Any]? = nil
+    ) async throws -> ZCodeHTTPPayload {
+        do {
+            return try await request(method, url: url, authorization: authorization, body: body)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw Flow.unavailable(step, .transport)
+        }
     }
 }
 

@@ -262,7 +262,7 @@ final class ZCodeQuotaReaderTests: XCTestCase {
             Stub(quotaJSON: "{}", customerJSON: #"{"code":401,"msg":"unauthorized"}"#),
             recorder: recorder
         )
-        XCTAssertEqual(result.issues["zcode"], "ZCode quota service is unavailable.")
+        XCTAssertEqual(result.issues["zcode"], "ZCode quota service is unavailable (customerInfo step: envelope).")
         let customerCalls = recorder.snapshot().filter { $0.url!.path.hasSuffix("/api/biz/customer/getCustomerInfo") }
         XCTAssertEqual(customerCalls.count, 1, "an envelope-level failure is not an auth rejection: no Bearer retry")
     }
@@ -360,7 +360,66 @@ final class ZCodeQuotaReaderTests: XCTestCase {
     func testEnvelopeFailureWithoutDataIsUnavailable() async {
         let result = await read(Stub(quotaJSON: #"{"code":500,"msg":"boom"}"#))
         XCTAssertTrue(result.windows.isEmpty)
-        XCTAssertEqual(result.issues["zcode"], "ZCode quota service is unavailable.")
+        XCTAssertEqual(result.issues["zcode"], "ZCode quota service is unavailable (quota step: envelope).")
+    }
+
+    // MARK: - Step/category diagnostics
+
+    func testHttpFailureNamesStepAndStatus() async {
+        let result = await read(Stub(quotaJSON: "{}", customerStatus: 500))
+        XCTAssertTrue(result.windows.isEmpty)
+        XCTAssertEqual(result.issues["zcode"], "ZCode quota service is unavailable (customerInfo step: http 500).")
+    }
+
+    func testMintEnvelopeFailureNamesAccessTokensStep() async {
+        let result = await read(Stub(quotaJSON: "{}", mintJSON: #"{"code":500,"msg":"boom"}"#))
+        XCTAssertEqual(result.issues["zcode"], "ZCode quota service is unavailable (accessTokens step: envelope).")
+    }
+
+    func testMalformedPayloadNamesStep() async {
+        let result = await read(Stub(quotaJSON: "{}", customerJSON: "not json"))
+        XCTAssertEqual(result.issues["zcode"], "ZCode quota service is unavailable (customerInfo step: malformed response).")
+    }
+
+    func testQuotaHttpFailureNamesQuotaStep() async {
+        let result = await read(Stub(quotaJSON: "{}", quotaStatus: 502))
+        XCTAssertEqual(result.issues["zcode"], "ZCode quota service is unavailable (quota step: http 502).")
+    }
+
+    func testTransportFailureNamesStep() async {
+        let result = await ZCodeQuotaReader(
+            now: { Date(timeIntervalSince1970: 0) },
+            credentials: { ["oauth:zai:access_token": "tok"] },
+            zcodeClientVersion: { "3.16.3" },
+            fetch: { _ in throw URLError(.notConnectedToInternet) }
+        ).read()
+        XCTAssertEqual(result.issues["zcode"], "ZCode quota service is unavailable (customerInfo step: transport).")
+    }
+
+    func testFirstUnavailableDetailWinsAcrossCredentials() async {
+        // z.ai answers HTTP 500 at customerInfo; bigmodel is unreachable.
+        // The first account's detail is the one reported.
+        let result = await ZCodeQuotaReader(
+            now: { Date(timeIntervalSince1970: 0) },
+            credentials: { ["oauth:zai:access_token": "tok", "oauth:bigmodel:access_token": "bm-tok"] },
+            zcodeClientVersion: { "3.16.3" },
+            fetch: { request in
+                if request.url?.host == "bigmodel.cn" { throw URLError(.notConnectedToInternet) }
+                let response = HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!
+                return (Data(), response)
+            }
+        ).read()
+        XCTAssertEqual(result.issues["zcode"], "ZCode quota service is unavailable (customerInfo step: http 500).")
+    }
+
+    func testTransportCancellationStillReportsCancelledNotUnavailable() async {
+        // The tagged path must not swallow cancellation into a step report.
+        let result = await ZCodeQuotaReader(
+            now: { Date(timeIntervalSince1970: 0) },
+            credentials: { ["oauth:zai:access_token": "tok"] },
+            fetch: { _ in throw CancellationError() }
+        ).read()
+        XCTAssertEqual(result.issues["zcode"], "ZCode quota refresh was cancelled.")
     }
 
     func testTransportErrorFallsThroughToSecondCredential() async {
