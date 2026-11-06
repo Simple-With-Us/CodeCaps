@@ -1069,6 +1069,14 @@ public struct CompanionMeterView: View {
                 height: 7
             )
             .frame(maxWidth: .infinity)
+
+            if let cue = window.staleReadingCue() {
+                Text(cue)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(CompanionTheme.warning)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }

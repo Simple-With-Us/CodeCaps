@@ -349,6 +349,25 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
         QuotaFreshnessRule.isFresh(observedAt: reportedAt, resetAt: resetAt, now: now)
     }
 
+    /// The "how old is this number" cue for a live-period window whose
+    /// reading is older than the shared freshness threshold.  The number
+    /// stays - it is the last known state, not an invented one - but it is
+    /// labeled stale with when the feed last reported it, the way the Mac's
+    /// dashboard marks a stale reading instead of passing it off as current
+    /// (Muse Code read 35% for days on a stalled pipeline while the plan was
+    /// spent, owner 2026-11-06).  Nil when the reading is fresh; when the
+    /// period has already ended, which the dead-copy path speaks for; when
+    /// the window is masked; when the feed never dated the reading, which is
+    /// unverified rather than stale; or when the plan is at its cap - an
+    /// exhausted allowance is polled rarely by design, so its old reading is
+    /// still believed (`QuotaFreshnessRule`).
+    public func staleReadingCue(now: Date = Date()) -> String? {
+        guard !isMasked, !isExhausted, let reportedAt else { return nil }
+        if let resetAt, resetAt <= now { return nil }
+        guard !QuotaFreshnessRule.isReadingRecent(observedAt: reportedAt, now: now) else { return nil }
+        return "stale \u{00B7} updated \(UpdatedStamp.label(reportedAt, now: now))"
+    }
+
     /// The caption a meter or window row leads with:  the cadence, plus the
     /// model's own name when the cadence alone would leave two of the
     /// platform's bars reading the same - Claude's own weekly and the Fable
