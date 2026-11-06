@@ -296,13 +296,15 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
     /// provider read "At Cap" beside bars the app had already recovered (owner,
     /// Oct-22-2026).
     public func atCapWindow(now: Date = Date()) -> WidgetWindowItem? {
-        windows
+        // A supplementary video quota is not the plan:  an exhausted video
+        // pool never reports the subscription capped (Sentry review, PR
+        // #369).  A platform that reports ONLY video windows keeps them -
+        // they are all it has.
+        let planWindows = windows.filter { !$0.isSupplementaryVideoQuota }
+        let capPool = planWindows.isEmpty ? windows : planWindows
+        return capPool
             .filter { $0.isFresh(now: now) || (WidgetPresentation.isAtCap(percent: $0.remainingPercent, isExhausted: $0.isExhausted) && $0.resetAt != nil && $0.resetAt! > now) }
             .filter { !$0.isMasked && $0.remainingPercent != nil }
-            // A supplementary video quota is not the plan:  an exhausted
-            // video pool never reports the subscription capped (Sentry
-            // review, PR #369).
-            .filter { !$0.isSupplementaryVideoQuota }
             .filter { WidgetPresentation.isAtCap(percent: $0.remainingPercent, isExhausted: $0.isExhausted) }
             .min { ($0.resetAt ?? .distantFuture) < ($1.resetAt ?? .distantFuture) }
     }

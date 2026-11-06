@@ -93,6 +93,23 @@ import AppIntents
   // the plan's own windows holding headroom, no video reading may report
   // the plan capped (Sentry review, PR #369).
   precondition(fxm?.atCapWindow(now: fxNow) == nil, "video rows must never cap the plan")
+  // Cap-state exclusion, exercised at platform level with constructed items
+  // (not wire shapes):  an exhausted video pool never caps a live plan;  an
+  // exhausted plan window caps the plan even beside live video;  a
+  // video-only platform keeps its own cap state through the all-window
+  // fallback (Sentry review, PR #369).
+  let capNow = Date()
+  let planLive = WidgetWindowItem(id:"plan-5h",label:"5-hour window",cadence:"5h",remainingPercent:81,resetAt:capNow.addingTimeInterval(7000))
+  let planSpent = WidgetWindowItem(id:"plan-5h",label:"5-hour window",cadence:"5h",remainingPercent:0,resetAt:capNow.addingTimeInterval(7000))
+  let videoLive = WidgetWindowItem(id:"video-1d",label:"1d window",cadence:"1d",remainingPercent:100,resetAt:capNow.addingTimeInterval(70000),isSupplementaryVideoQuota:true)
+  let videoSpent = WidgetWindowItem(id:"video-1d",label:"1d window",cadence:"1d",remainingPercent:0,resetAt:capNow.addingTimeInterval(70000),isSupplementaryVideoQuota:true)
+  func capPlatform(_ id:String, _ ws:[WidgetWindowItem]) -> WidgetPlatformItem {
+   WidgetPlatformItem(id:id,providerKey:"minimax",title:"MiniMax",subtitle:"",remainingPercent:nil,resetAt:nil,windows:ws)
+  }
+  precondition(capPlatform("spent-video-live-plan",[planLive,videoSpent]).atCapWindow(now:capNow) == nil, "an exhausted video pool must not cap a live plan")
+  precondition(capPlatform("live-video-spent-plan",[planSpent,videoLive]).atCapWindow(now:capNow)?.id == "plan-5h", "an exhausted plan window caps the plan beside live video")
+  precondition(capPlatform("video-only",[videoSpent]).atCapWindow(now:capNow)?.id == "video-1d", "a video-only platform keeps its own cap state via the fallback")
+  print("PASS: cap-state video exclusion - video never caps plan, plan caps itself, video-only falls back")
   let fxc = fx.first { $0.providerKey.contains("copilot") || $0.id.contains("copilot") }
   precondition(fxc?.windows.count == 3, "copilot buckets collapsed: \(fxc?.windows.count ?? -1)")
   precondition(fxc?.windows.contains { $0.remainingPercent == 0 } == true, "the exhausted Premium row must stay visible")
