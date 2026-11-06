@@ -1550,6 +1550,10 @@ public final class CompanionQuotaModel: ObservableObject {
         let planShowCostAndRenewal: Bool?
         let planHasMismatch: Bool?
         let planUserUpdatedAt: Double?
+        /// The server's canonical allowance key (`5h`, `7d`,
+        /// `other:premium_interactions`, ...), normalized across producers by
+        /// Usage Monitor.  Nil only on feeds that predate it.
+        let windowKey: String?
 
         private enum CodingKeys: String, CodingKey {
             case id, provider, providerKey, label, remainingPercent, isExhausted
@@ -1558,6 +1562,7 @@ public final class CompanionQuotaModel: ObservableObject {
             case producerInstanceId, machine, remainingUnknown, plan, planName, planMetadata
             case planDetectedName, planUserName, planUserCostUsd, planUserRenewalDateText
             case planUserSubtitle, planShowCostAndRenewal, planHasMismatch, planUserUpdatedAt
+            case windowKey
         }
 
         init(from decoder: Decoder) throws {
@@ -1601,6 +1606,7 @@ public final class CompanionQuotaModel: ObservableObject {
             planShowCostAndRenewal = try container.decodeIfPresent(Bool.self, forKey: .planShowCostAndRenewal)
             planHasMismatch = try container.decodeIfPresent(Bool.self, forKey: .planHasMismatch)
             planUserUpdatedAt = try container.decodeIfPresent(Double.self, forKey: .planUserUpdatedAt)
+            windowKey = try container.decodeIfPresent(String.self, forKey: .windowKey)
         }
 
         var resolvedPlanMetadata: PlanMetadata? {
@@ -2150,21 +2156,24 @@ public final class CompanionQuotaModel: ObservableObject {
                 label: displayLabel,
                 resetAt: parsedReset
             )
-            // One row per allowance, not per cadence:  a cadence-only key
-            // collapses distinct allowances that share a period - Copilot's
-            // Premium, Chat and Completions buckets are all monthly, and the
-            // exhausted Premium row hid behind a 100% Chat row (QA pixel
-            // review 2026-11-06).  The wire label carries the allowance
-            // identity; fleet and local copies of one allowance come from the
-            // same reader, so they carry the same label and still fold.
-            let allowanceIdentity = w.label
-                .lowercased()
-                .components(separatedBy: .whitespacesAndNewlines)
-                .filter { !$0.isEmpty }
-                .joined(separator: " ")
-            let allowanceKey = allowanceIdentity.isEmpty
-                ? baseAllowanceKey
-                : "\(baseAllowanceKey)|\(allowanceIdentity)"
+            // One row per allowance, keyed on the server's canonical
+            // windowKey when the feed carries it:  Usage Monitor normalizes
+            // every producer's token onto one key, so the codecaps and
+            // collector copies of MiniMax's weekly - "7-day window" beside
+            // "weekly window" in the actual payload - land on one row, while
+            // Copilot's Premium, Chat and Completions buckets carry distinct
+            // keys ("other:premium_interactions", ...) and keep distinct rows
+            // (QA pixel review 2026-11-06: a cadence-only key collapsed the
+            // buckets into one "1m" row and hid an exhausted Premium; a
+            // label-based key then kept duplicate copies of one allowance,
+            // because producers word the same allowance differently).
+            // "other:unknown" means the server could not identify the
+            // allowance, so it falls back to the cadence key rather than
+            // collapsing every unidentified window onto one row.
+            let wireKey = (w.windowKey ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let allowanceKey = (!wireKey.isEmpty && wireKey != "other:unknown")
+                ? wireKey.lowercased()
+                : baseAllowanceKey
             let cadenceKey = effectiveQualifier.isEmpty
                 ? allowanceKey
                 : "\(effectiveQualifier):\(allowanceKey)"

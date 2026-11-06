@@ -392,17 +392,20 @@ final class CompanionModelTests: XCTestCase {
     }
 
     /// QA pixel review 2026-11-06: Copilot's three monthly buckets collapsed
-    /// into one "1m" row and the exhausted Premium hid behind a 100% Chat row.
-    /// The dedupe key must carry the allowance identity, not the cadence alone.
+    /// into one "1m" row and the exhausted Premium hid behind a 100% Chat row;
+    /// the actual payload also carries the same MiniMax allowance worded
+    /// differently per producer ("7-day window" beside "weekly window"), so a
+    /// label key keeps duplicates.  The dedupe must use the server's canonical
+    /// windowKey, which Usage Monitor normalizes across producers.
     func testDistinctAllowancesSharingACadenceKeepTheirOwnRows() throws {
         let source = try readCompanionModelSource()
         XCTAssertTrue(
-            source.contains("let allowanceIdentity = w.label"),
-            "the dedupe key must include the wire label as the allowance identity"
+            source.contains("windowKey = try container.decodeIfPresent(String.self, forKey: .windowKey)"),
+            "the wire window must decode the server's canonical windowKey"
         )
         XCTAssertTrue(
-            source.contains("\\(baseAllowanceKey)|\\(allowanceIdentity)"),
-            "the allowance identity must join the cadence in the dedupe key"
+            source.contains(#"wireKey != "other:unknown""#),
+            "an unidentified allowance must not collapse onto the shared unknown key"
         )
     }
 
