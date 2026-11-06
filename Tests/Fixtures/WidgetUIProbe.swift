@@ -40,16 +40,19 @@ import AppIntents
    WidgetWindowItem(id:"weekly",label:"Weekly",cadence:"7d",remainingPercent:0,resetAt:now.addingTimeInterval(364000)),
    WidgetWindowItem(id:"extra",label:"Extra balance",cadence:"Other limit",remainingPercent:nil,resetAt:nil,isExtraAllowance:true,absoluteRemaining:42)
   ])]
-  platforms.append(WidgetPlatformItem(id:"minimax",providerKey:"minimax",title:"MiniMax",subtitle:"",remainingPercent:5,resetAt:now.addingTimeInterval(300000),windows:[
+  // Selection check only - NOT appended to the gallery array, so the rendered
+  // gallery input stays identical to main (placeholders already include a
+  // MiniMax row; appending this one rendered a duplicate).  The supplementary
+  // video daily never takes a bar from the plan's own windows:  the pair
+  // stays the 5-hour and weekly coding windows (owner 2026-11-06: "Widget
+  // says 1d instead of 7d").
+  let minimaxVideo = WidgetPlatformItem(id:"minimax-video-check",providerKey:"minimax",title:"MiniMax",subtitle:"",remainingPercent:5,resetAt:now.addingTimeInterval(300000),windows:[
    WidgetWindowItem(id:"minimax-5h",label:"5-hour window",cadence:"5h",remainingPercent:81,resetAt:now.addingTimeInterval(7000)),
    WidgetWindowItem(id:"minimax-video",label:"Video",cadence:"1d",remainingPercent:100,resetAt:now.addingTimeInterval(70000)),
    WidgetWindowItem(id:"minimax-7d",label:"weekly window",cadence:"7d",remainingPercent:5,resetAt:now.addingTimeInterval(300000))
-  ]))
-  // The supplementary video daily never takes a bar from the plan's own
-  // windows:  the pair stays the 5-hour and weekly coding windows (owner
-  // 2026-11-06: "Widget says 1d instead of 7d").
-  precondition(platforms[2].dualWindows()?.window1.id == "minimax-5h")
-  precondition(platforms[2].dualWindows()?.window2.id == "minimax-7d")
+  ])
+  precondition(minimaxVideo.dualWindows()?.window1.id == "minimax-5h")
+  precondition(minimaxVideo.dualWindows()?.window2.id == "minimax-7d")
   let edgePlatforms = platforms
   platforms += WidgetPresentation.placeholders
   platforms.append(WidgetPlatformItem(id:"overflow",providerKey:"codex",title:"Overflow plan",subtitle:"",remainingPercent:50,resetAt:nil,windows:[]))
