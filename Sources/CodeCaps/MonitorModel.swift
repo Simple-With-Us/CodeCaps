@@ -364,7 +364,10 @@ final class MonitorModel: ObservableObject {
         didSet { defaults.set(viewLayout.rawValue, forKey: "quotaViewLayout") }
     }
     @Published var platformOrder: [String] {
-        didSet { defaults.set(platformOrder, forKey: "platformOrder") }
+        didSet {
+            defaults.set(platformOrder, forKey: "platformOrder")
+            sectionsCache = nil
+        }
     }
     @Published var platformCustomInfo: [String: PlatformCustomInfo] {
         didSet {
@@ -404,7 +407,9 @@ final class MonitorModel: ObservableObject {
     @Published var customMarkDarkPaths: [String: String] {
         didSet { defaults.set(customMarkDarkPaths, forKey: "customMarkDarkPaths") }
     }
-    @Published private(set) var response = QuotaResponse(generatedAt: "")
+    @Published private(set) var response = QuotaResponse(generatedAt: "") {
+        didSet { sectionsCache = nil }
+    }
     @Published private(set) var isRefreshing = false
     @Published private(set) var lastChecked: Date?
     @Published private(set) var issues: [String: String] = [:]
@@ -421,7 +426,9 @@ final class MonitorModel: ObservableObject {
     /// order, after the one before it.
     private var snapshotWriteChain: Task<Void, Never>?
     private(set) var snapshotWritesClosedForTermination = false
-    @Published private(set) var now = Date()
+    @Published private(set) var now = Date() {
+        didSet { sectionsCache = nil }
+    }
 
     // Local & Remote Reading
     @Published private(set) var localEnabled: Bool
@@ -746,7 +753,28 @@ final class MonitorModel: ObservableObject {
             }
     }
 
+    /// `sections` and `displaySections` are read dozens of times per Glance,
+    /// Console and status-bar update (every row, the runaway footer once per
+    /// anomaly, every menu-bar option).  Rebuilding them on each read ran the
+    /// whole platform pipeline (dedupe, manifest, Antigravity pool matching)
+    /// on the main thread every time, which is the shared cost behind the
+    /// "App hanging for at least 2000 ms" reports on build 312.  They depend
+    /// only on `response`, `now` and `platformOrder`, so they are built once
+    /// and dropped whenever one of those changes.
+    private struct SectionsCache {
+        let sections: [QuotaPlatformSection]
+        var displaySections: [DisplaySection]?
+    }
+    private var sectionsCache: SectionsCache?
+
     var sections: [QuotaPlatformSection] {
+        if let cached = sectionsCache { return cached.sections }
+        let built = buildSections()
+        sectionsCache = SectionsCache(sections: built, displaySections: nil)
+        return built
+    }
+
+    private func buildSections() -> [QuotaPlatformSection] {
         let base = response.platformSections(now: now)
         if platformOrder.isEmpty { return base }
         var orderMap: [String: Int] = [:]
@@ -763,7 +791,10 @@ final class MonitorModel: ObservableObject {
     /// One row per platform, except Antigravity, which is one row per pool.
     /// Every surface that lists platforms reads this rather than `sections`.
     var displaySections: [DisplaySection] {
-        sections.flatMap { DisplaySection.rows(for: $0, now: now) }
+        if let rows = sectionsCache?.displaySections { return rows }
+        let rows = sections.flatMap { DisplaySection.rows(for: $0, now: now) }
+        sectionsCache?.displaySections = rows
+        return rows
     }
 
     func historySamples() -> [AnomalyDetector.Sample] {
@@ -1128,6 +1159,12 @@ final class MonitorModel: ObservableObject {
         )
         self.now = now
         self.issues = issues
+    }
+
+    /// Advances the clock alone, without replacing `response`, so a test can
+    /// check that `now` invalidates the sections cache on its own.
+    func injectNowForTests(_ now: Date) {
+        self.now = now
     }
 
     func injectLocalHistorySourceForTests(_ windows: [QuotaWindow]) {
