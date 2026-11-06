@@ -366,8 +366,10 @@ struct GlancePopover: View {
 
     private var runawayFooterItems: [String] {
         if !model.activeRunawayAnomalies.isEmpty {
+            // Flattened once for all anomalies, not once per anomaly.
+            let displayedWindows = model.displaySections.flatMap { $0.section.windows }
             return model.activeRunawayAnomalies.map { anomaly in
-                let matchingSnapshot = model.displaySections.flatMap { $0.section.windows }
+                let matchingSnapshot = displayedWindows
                     .first { $0.window.id == anomaly.windowId }
                     ?? model.sections.flatMap(\.windows).first { $0.window.id == anomaly.windowId }
                 let windowLabel = matchingSnapshot.map { glanceMeterCaption($0) }
