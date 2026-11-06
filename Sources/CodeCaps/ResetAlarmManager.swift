@@ -824,6 +824,7 @@ func resetAlarmObservations(for row: DisplaySection, scope: String) -> [ResetAla
                 windowLabel: glanceMeterCaption(snapshot),
                 periodSeconds: quotaWindowPeriodSeconds(snapshot),
                 resetAt: snapshot.resetAt,
+                periodStartAt: snapshot.window.periodStartDate,
                 remainingPercent: row.isMasked(snapshot) ? nil : snapshot.remainingPercent,
                 observedAt: snapshot.observedAt,
                 identity: snapshot.window.accountKey)

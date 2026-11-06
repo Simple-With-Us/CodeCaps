@@ -42,7 +42,7 @@ test('Sparkle reads the ASC credentials through the fleet reader, never reposito
   for (const name of ['ASC_KEY_ID', 'ASC_ISSUER_ID', 'ASC_KEY_P8']) {
     assert.doesNotMatch(code, new RegExp(`secrets\\.${name}`));
   }
-  // One handoff, two workflows.  The release path and the iOS ship path must
+  // One handoff, two workflows.  The release path and the iOS ship path must
   // carry the same text, so a fix to one is a fix to the other.
   for (const name of LOADERS) {
     assert.equal(stripGuard(step(workflow, name)), step(iosShip, name), `mac-release and ios-ship disagree on "${name}"`);

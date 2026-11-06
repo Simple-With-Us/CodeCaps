@@ -1,4 +1,5 @@
-const SERVICE_TOKEN_PATTERN = /^st\.[^.\s]+\.[^.\s]+$/;
+// Same shapes as the installer (st.*.*): current three-segment and legacy four-segment.
+const SERVICE_TOKEN_PATTERN = /^st\.[^.\s]+(\.[^.\s]+)+$/;
 
 /** Only an explicit full service token may reach the automation secret reader. */
 export function hasInfisicalServiceToken(env = process.env) {

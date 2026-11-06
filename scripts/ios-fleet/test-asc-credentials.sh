@@ -21,6 +21,7 @@ trap 'HOME="$real_home" rm -rf "$tmp"' EXIT
 export HOME="${tmp}/home"
 export TMPDIR="${tmp}/tmp"
 mkdir -p "$HOME" "$TMPDIR"
+export INFISICAL_TOKEN="st.synthetic-id.synthetic-secret"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
@@ -34,16 +35,18 @@ gen_pem > "${tmp}/other.p8"
 chmod 600 "${tmp}/asc.p8" "${tmp}/other.p8"
 
 # Fake fleet-secrets: prints synthetic values, records the folders it was asked for.
-cat > "${tmp}/fleet-secrets" <<'FAKE'
+cat > "${tmp}/fleet-secrets" <<FAKE
 #!/usr/bin/env bash
-[[ "$1" == get ]] || exit 2
-name="$2"; folder="$4"
-echo "${name} ${folder}" >> "${FAKE_LOG}"
-case "${folder}:${name}" in
+[[ "\${INFISICAL_TOKEN:-}" =~ ^st\.[^[:space:].]+\.[^[:space:].]+$ ]] || exit 9
+[[ -z "\${INFISICAL_CLIENT_ID:-}\${INFISICAL_CLIENT_SECRET:-}\${INFISICAL_MACHINE_IDENTITY_ID:-}" ]] || exit 10
+[[ "\$1" == get ]] || exit 2
+name="\$2"; folder="\$4"
+echo "\${name} \${folder}" >> "${tmp}/fake.log"
+case "\${folder}:\${name}" in
   /asc:ASC_KEY_ID) printf 'ABCDE12345\n' ;;
   /asc:ASC_ISSUER_ID) printf 'issuer-synthetic\n' ;;
-  /asc:ASC_KEY_P8) cat "${FAKE_ASC_PEM}" ;;
-  /authkey-otherkey01-p8:AUTHKEY_OTHERKEY01) cat "${FAKE_OTHER_PEM}" ;;
+  /asc:ASC_KEY_P8) cat "${tmp}/asc.p8" ;;
+  /authkey-otherkey01-p8:AUTHKEY_OTHERKEY01) cat "${tmp}/other.p8" ;;
   *) exit 3 ;;
 esac
 FAKE
@@ -55,7 +58,7 @@ export FAKE_OTHER_PEM="${tmp}/other.p8"
 
 extract() {
   awk '
-    /^fs_get\(\) \{/ || /^load_secrets\(\) \{/ || /^cleanup_asc_tmp\(\) \{/ || /^expand_tilde\(\) \{/ || /^rejected_key_file\(\) \{/ || /^init_rejected_key_file\(\) \{/ || /^rejected_key_label\(\) \{/ || /^asc_rejected_key_label\(\) \{/ || /^asc_rejected_key_sources\(\) \{/ { grab = 1 }
+    /^has_infisical_service_token\(\) \{/ || /^fs_get\(\) \{/ || /^load_secrets\(\) \{/ || /^cleanup_asc_tmp\(\) \{/ || /^expand_tilde\(\) \{/ || /^rejected_key_file\(\) \{/ || /^init_rejected_key_file\(\) \{/ || /^rejected_key_label\(\) \{/ || /^asc_rejected_key_label\(\) \{/ || /^asc_rejected_key_sources\(\) \{/ { grab = 1 }
     grab { print }
     grab && /^\}/ { grab = 0 }
   ' "$script"

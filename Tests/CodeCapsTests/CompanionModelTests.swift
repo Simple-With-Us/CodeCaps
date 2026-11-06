@@ -306,6 +306,14 @@ final class CompanionModelTests: XCTestCase {
         )
     }
 
+    func testCompanionAntigravityPeriodLabelsUseExactCanonicalValues() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(source.contains("weeklyLabels.contains(label)"))
+        XCTAssertTrue(source.contains("fiveHourLabels.contains(label)"))
+        XCTAssertFalse(source.contains("label.contains(\"week\")"))
+        XCTAssertFalse(source.contains("label.contains(\"5h\")"))
+    }
+
     /// The shared-pool rule from `AntigravityQuotaGroups`: a weekly reading has
     /// to be identified explicitly, and a reset's distance is not a duration.
     ///
