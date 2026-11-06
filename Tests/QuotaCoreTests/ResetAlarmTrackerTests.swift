@@ -1062,6 +1062,58 @@ extension ResetAlarmTrackerTests {
     }
 }
 
+// MARK: - Missed periods while the Mac was asleep
+//
+// Owner, 2026-11-06: a roll-immediately provider restarts each period when
+// the last one ends, so a Mac asleep through several periods wakes to an end
+// that moved by a whole multiple of the cadence.  Matching exactly one period
+// missed every one of those rollovers.  A wait-for-usage provider's end does
+// not move on a schedule, so nothing here treats elapsed cadence alone as
+// proof of a reset: the vendor's reported times must have moved.
+
+extension ResetAlarmTrackerTests {
+    /// Two whole 5-hour periods passed while the Mac was asleep; the vendor's
+    /// reported end moved by exactly two cadences.  This must alert.
+    func testAWakeAfterTwoMissedPeriodsAlerts() {
+        var tracker = ResetAlarmTracker()
+        let end = t0 + 5 * self.hour
+        _ = tracker.process(courtesyWindow(resetAt: end, at: t0, remaining: 40), now: t0)
+
+        let wake = t0.addingTimeInterval(11 * self.hour)
+        let rolled = end.addingTimeInterval(2 * 5 * self.hour)
+        let events = tracker.process(courtesyWindow(resetAt: rolled, at: wake, remaining: 100), now: wake)
+
+        XCTAssertEqual(events.count, 1, "a rollover of two whole periods while asleep produced no alert")
+    }
+
+    /// A weekly window that rolled three times while the Mac was away.
+    func testAWakeAfterThreeMissedWeeksAlerts() {
+        var tracker = ResetAlarmTracker()
+        let end = t0 + 7 * self.day
+        _ = tracker.process(courtesyWindow(resetAt: end, at: t0, remaining: 30), now: t0)
+
+        let wake = t0.addingTimeInterval(23 * self.day)
+        let rolled = end.addingTimeInterval(3 * 7 * self.day)
+        let events = tracker.process(courtesyWindow(resetAt: rolled, at: wake, remaining: 100), now: wake)
+
+        XCTAssertEqual(events.count, 1, "a rollover of three whole weeks while away produced no alert")
+    }
+
+    /// The false-positive side: an end that moved by one and a half periods is
+    /// not a whole-period rollover shape, so this rule must not claim it.
+    func testAFractionalAdvanceIsNotClaimedAsMissedPeriods() {
+        var tracker = ResetAlarmTracker()
+        let end = t0 + 5 * self.hour
+        _ = tracker.process(courtesyWindow(resetAt: end, at: t0, remaining: 40), now: t0)
+
+        let wake = t0.addingTimeInterval(11 * self.hour)
+        let drifted = end.addingTimeInterval(5 * self.hour + 90 * 60)
+        XCTAssertTrue(
+            tracker.process(courtesyWindow(resetAt: drifted, at: wake, remaining: 40), now: wake).isEmpty,
+            "a 1.5-period end drift with no quota rise was reported as a reset")
+    }
+}
+
 // MARK: - Courtesy resets
 //
 // Owner request, 2026-10-08: "can't the app tell if usage suddenly jumps to
