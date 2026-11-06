@@ -626,12 +626,27 @@ public struct CompanionContentView: View {
 
     @ViewBuilder
     private var settingsDisplaySections: some View {
+        // Two pools of one provider share a title (Antigravity's Gemini and
+        // Third-Party pools), so a row whose title is not unique also shows
+        // the subtitle its home card carries (owner, 2026-11-06).
+        let duplicatedTitles = Set(model.items.map(\.title).filter { title in
+            model.items.count(where: { $0.title == title }) > 1
+        })
         Section {
             ForEach(model.items) { item in
                 HStack(spacing: 10) {
                     CompanionProviderLogo(item: item, size: 24)
-                    Text(item.title)
-                        .font(.system(size: 14, weight: .medium))
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(item.title)
+                            .font(.system(size: 14, weight: .medium))
+                        if duplicatedTitles.contains(item.title),
+                           let subtitle = item.subtitle, !subtitle.isEmpty {
+                            Text(subtitle)
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
                     Spacer()
                 }
             }

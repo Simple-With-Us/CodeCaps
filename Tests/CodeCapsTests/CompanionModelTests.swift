@@ -788,6 +788,18 @@ final class CompanionModelTests: XCTestCase {
         )
     }
 
+    func testReorderRowShowsPoolSubtitleWhenTitleIsShared() throws {
+        let content = try readCompanionContentViewSource()
+        XCTAssertTrue(
+            content.contains("duplicatedTitles.contains(item.title)"),
+            "a row whose title another row also carries must show its pool subtitle"
+        )
+        XCTAssertTrue(
+            content.contains("let subtitle = item.subtitle"),
+            "the reorder row reuses the home card's own subtitle, never a renamed provider"
+        )
+    }
+
     func testSourceDiscrepancyGatingRequiresAllSourcesMultiSourceAndFreshness() throws {
         let source = try readCompanionModelSource()
         XCTAssertTrue(source.contains("guard scope == .allSources, sourceCount >= 2 else { return [] }"))
