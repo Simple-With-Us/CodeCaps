@@ -340,20 +340,28 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
         guard !windows.isEmpty else { return nil }
         let visible = windows.filter { !$0.isMasked }
         let pool = visible.isEmpty ? windows : visible
+        // A supplementary video quota is not the plan:  it never stands in
+        // for the plan on any pick while the plan reports windows of its own
+        // - a spent video pool at 0% otherwise wins `.mostUrgent` and the
+        // gauge headlines the video figure beside a plan with headroom (QA
+        // focus-small pixel 2026-11-06).  A platform that reports only video
+        // windows keeps them.
+        let planPool = pool.filter { !$0.isSupplementaryVideoQuota }
+        let pickPool = planPool.isEmpty ? pool : planPool
         switch pick {
         case .mostHeadroom:
             // Counts have no denominator and cannot be ranked as 100% headroom.
-            let comparable = pool.filter { $0.remainingPercent?.isFinite == true }
-            return (comparable.isEmpty ? pool : comparable).max {
+            let comparable = pickPool.filter { $0.remainingPercent?.isFinite == true }
+            return (comparable.isEmpty ? pickPool : comparable).max {
                 ($0.remainingPercent ?? -1, $0.resetAt ?? .distantFuture)
                     < ($1.remainingPercent ?? -1, $1.resetAt ?? .distantFuture)
             }
         case .resetsSoonest:
-            return pool.min {
+            return pickPool.min {
                 ($0.resetAt ?? .distantFuture) < ($1.resetAt ?? .distantFuture)
             }
         case .mostUrgent:
-            return pool.min {
+            return pickPool.min {
                 // Least remaining first; soonest reset breaks the tie.
                 let lhs = $0.remainingPercent ?? 100
                 let rhs = $1.remainingPercent ?? 100

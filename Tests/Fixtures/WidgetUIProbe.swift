@@ -109,6 +109,12 @@ import AppIntents
   precondition(capPlatform("spent-video-live-plan",[planLive,videoSpent]).atCapWindow(now:capNow) == nil, "an exhausted video pool must not cap a live plan")
   precondition(capPlatform("live-video-spent-plan",[planSpent,videoLive]).atCapWindow(now:capNow)?.id == "plan-5h", "an exhausted plan window caps the plan beside live video")
   precondition(capPlatform("video-only",[videoSpent]).atCapWindow(now:capNow)?.id == "video-1d", "a video-only platform keeps its own cap state via the fallback")
+  // The gauge/caption path:  the picked window follows the same exclusion -
+  // a spent video pool never wins .mostUrgent beside plan windows, and a
+  // video-only platform still picks its video window (QA focus-small pixel:
+  // gauge headlined video 0% beside a plan at 5%).
+  precondition(capPlatform("spent-video-live-plan",[planLive,videoSpent]).controllingWindow(.mostUrgent)?.id == "plan-5h", "a spent video pool must never win the gauge pick beside plan windows")
+  precondition(capPlatform("video-only",[videoSpent]).controllingWindow(.mostUrgent)?.id == "video-1d", "a video-only platform still picks its video window")
   print("PASS: cap-state video exclusion - video never caps plan, plan caps itself, video-only falls back")
   let fxc = fx.first { $0.providerKey.contains("copilot") || $0.id.contains("copilot") }
   precondition(fxc?.windows.count == 3, "copilot buckets collapsed: \(fxc?.windows.count ?? -1)")
