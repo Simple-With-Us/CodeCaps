@@ -966,3 +966,46 @@ public enum QuotaCapRule {
         return isSubModelLimit(providerKey: providerKey, id: id, modelId: modelId, modelType: modelType, label: label)
     }
 }
+
+/// The model a sub-model quota belongs to, in the provider's own words.
+///
+/// A per-model window such as Claude's Fable weekly limit carries a
+/// cadence-only label ("7-day"), so a surface that hides a label that only
+/// repeats its cadence caption hid the one thing telling the owner which
+/// model the row was (owner, 2026-10-30).  The name comes from the reading
+/// itself: a reader that writes "<model> · <cadence>" already names the
+/// model, and otherwise the model id or type the reader recorded is used.
+///
+/// Nil for a primary window, and for OpenAI's scoped pools, whose labels
+/// already say what they are.
+///
+/// Plain Foundation and no other QuotaCore type, like the rest of this file,
+/// so every companion target already compiles it and the Mac menu bar, the
+/// PiP and the phone cannot drift apart (iOS compile, 2026-11-06).
+public enum SubModelNaming {
+    /// The model a sub-model quota belongs to, answered with the reading's
+    /// own fields, so every surface asks the same question the same way.
+    public static func name(isSubModelLimit: Bool, canonicalProviderKey: String, label: String,
+                            modelType: String?, modelId: String?) -> String? {
+        guard isSubModelLimit, canonicalProviderKey != "openai" else { return nil }
+        if let separator = label.range(of: " · ") {
+            let name = label[..<separator.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
+            if !name.isEmpty { return name }
+        }
+        for candidate in [modelType, modelId] {
+            let raw = (candidate ?? "")
+                .replacingOccurrences(of: "_", with: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !raw.isEmpty { return initialCapped(raw) }
+        }
+        return nil
+    }
+
+    /// Each word's first letter upper-cased and the rest left as the reader
+    /// wrote it, so "fable" reads "Fable" while "GPT-4o" keeps its casing.
+    private static func initialCapped(_ text: String) -> String {
+        text.split(separator: " ", omittingEmptySubsequences: true)
+            .map { String($0.prefix(1)).uppercased() + String($0.dropFirst()) }
+            .joined(separator: " ")
+    }
+}

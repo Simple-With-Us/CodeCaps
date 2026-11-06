@@ -113,10 +113,9 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
     /// what it means, so a window's formatted `cadence` cannot stand in for it.
     public let rawWindowToken: String?
     /// The model a sub-model quota belongs to ("Fable"), in the provider's own
-    /// words, resolved at build time through the shared
-    /// `QuotaWindowPresentation.subModelName`, so the phone names the window
-    /// exactly the way the Mac does.  Nil for a primary window, and in
-    /// snapshots recorded before the phone carried the name.
+    /// words, resolved at build time through the shared `SubModelNaming` rule,
+    /// so the phone names the window exactly the way the Mac does.  Nil for a
+    /// primary window, and in snapshots recorded before the phone carried it.
     public let subModelName: String?
 
     public init(
@@ -2150,7 +2149,7 @@ public final class CompanionQuotaModel: ObservableObject {
                 // The same question the Mac asks, with the reader's own
                 // label, model type and model id:  that is where the "fable"
                 // and "argon" signals live, not in the display label.
-                subModelName: QuotaWindowPresentation.subModelName(
+                subModelName: SubModelNaming.name(
                     isSubModelLimit: capFlags.isSubModelLimit,
                     canonicalProviderKey: providerKey,
                     label: w.label,

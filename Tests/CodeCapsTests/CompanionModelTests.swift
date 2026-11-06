@@ -94,6 +94,18 @@ final class CompanionModelTests: XCTestCase {
         return try String(contentsOf: url, encoding: .utf8)
     }
 
+    private func readQuotaWindowVocabularySource() throws -> String {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()  // Tests/CodeCapsTests
+            .deletingLastPathComponent()  // Tests
+            .deletingLastPathComponent()  // repo root
+            .appendingPathComponent("Sources/QuotaCore/QuotaWindowVocabulary.swift")
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw XCTSkip("QuotaWindowVocabulary.swift is not present at \(url.path)")
+        }
+        return try String(contentsOf: url, encoding: .utf8)
+    }
+
     // MARK: - App Group & Hygiene
 
     func testCompanionResolvesCanonicalPlatformDisplayTitles() throws {
@@ -732,8 +744,13 @@ final class CompanionModelTests: XCTestCase {
             "the window item must carry the resolved model name to the card"
         )
         XCTAssertTrue(
-            source.contains("QuotaWindowPresentation.subModelName("),
+            source.contains("SubModelNaming.name("),
             "the card builder must name a sub-model window through the same shared rule the Mac asks"
+        )
+        let shared = try readQuotaWindowVocabularySource()
+        XCTAssertTrue(
+            shared.contains("public enum SubModelNaming"),
+            "the rule must live where every companion target already compiles it"
         )
         XCTAssertTrue(
             source.contains("label: w.label"),
