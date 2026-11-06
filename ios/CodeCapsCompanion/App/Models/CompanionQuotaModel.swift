@@ -363,12 +363,14 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
     /// An exhausted window keeps the cue too, worded as the last-known age
     /// rather than "stale":  the cap itself stays believed (that is
     /// `QuotaFreshnessRule.isFresh`'s at-cap branch, which exists so a spent
-    /// allowance binds the cap for the rest of its cycle), but nothing in the
-    /// collectors actually skips polling while spent - every reader runs on
-    /// every refresh and restamps `occurredAt`, so an old timestamp on an
-    /// at-cap row means the feed has stopped updating, and the row must not
-    /// read as a fresh confirmation of the cap.  Showing the age changes no
-    /// cap, quota or alarm decision; it only dates the reading.
+    /// allowance binds the cap for the rest of its cycle).  Nothing in this
+    /// repo's readers skips polling while spent - each one runs on every
+    /// refresh and restamps `occurredAt`.  Whether an external feed producer
+    /// polls a spent allowance is not established here, so an old timestamp
+    /// does not prove the feed stopped; it does mean the number has not been
+    /// re-confirmed in that time, and the row must not read as a fresh
+    /// confirmation of the cap.  Showing the age changes no cap, quota or
+    /// alarm decision; it only dates the reading.
     public func staleReadingCue(now: Date = Date()) -> String? {
         guard !isMasked, let reportedAt else { return nil }
         if let resetAt, resetAt <= now { return nil }

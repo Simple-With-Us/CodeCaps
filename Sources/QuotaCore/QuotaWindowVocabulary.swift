@@ -662,11 +662,13 @@ public enum QuotaFreshnessRule {
     /// plan remains capped throughout the active cycle until `resetAt`, so the
     /// last reading of the cycle is believed for the cap even when it is older
     /// than `staleAfter`.  Note this is a cap-binding rule, not a description
-    /// of collector behavior:  no reader skips polling while spent, so a stale
-    /// timestamp on an at-cap row still means the feed stopped updating (an
-    /// earlier wording here claimed collectors skip polling "to avoid
-    /// quota-endpoint churn"; no such skip exists in the readers or the
-    /// refresh paths).  A reading from before this cycle began is not believed.
+    /// of collector behavior:  no reader in this repo skips polling while
+    /// spent (an earlier wording here claimed collectors skip polling "to
+    /// avoid quota-endpoint churn"; no such skip exists in the readers or the
+    /// refresh paths).  What an external producer does is a separate question,
+    /// so a stale timestamp on an at-cap row means the reading has not been
+    /// re-confirmed, not necessarily that polling stopped.  A reading from
+    /// before this cycle began is not believed.
     public static func isFresh(
         observedAt: Date?,
         resetAt: Date?,
