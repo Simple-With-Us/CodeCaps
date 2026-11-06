@@ -296,20 +296,20 @@ resolve_project() {
 
 # fs_get NAME FOLDER -> value on stdout (never logged); non-zero when absent.
 has_infisical_service_token() {
-  [[ "${INFISICAL_TOKEN:-}" =~ ^st\.[^[:space:].]+\.[^[:space:].]+$ ]]
+  # Same shapes as scripts/install-release-secrets-tooling.sh (st.*.*): the
+  # current three-segment token and the legacy four-segment one.
+  [[ "${INFISICAL_TOKEN:-}" =~ ^st\.[^[:space:].]+(\.[^[:space:].]+)+$ ]]
 }
 
 fs_get() {
-  local v token="${INFISICAL_TOKEN:-}" bin="$FLEET_SECRETS_BIN"
+  local v bin="$FLEET_SECRETS_BIN"
   has_infisical_service_token || return 1
   [[ -x "$bin" ]] || bin="$(command -v fleet-secrets 2>/dev/null || true)"
   [[ -n "$bin" && -x "$bin" ]] || return 1
-  local -a scoped_env=("PATH=${PATH:-/usr/bin:/bin}" "HOME=${HOME:-/tmp}" "INFISICAL_TOKEN=$token")
-  local name
-  for name in INFISICAL_FLEET_OPS_PROJECT_ID INFISICAL_PROJECT_ID INFISICAL_ENVIRONMENT INFISICAL_SITE_URL INFISICAL_API_URL TMPDIR LANG LC_ALL; do
-    [[ -n "${!name:-}" ]] && scoped_env+=("$name=${!name}")
-  done
-  v="$(env -i "${scoped_env[@]}" "$bin" get "$1" --path "$2" 2>/dev/null </dev/null)" || return 1
+  # INFISICAL_TOKEN stays in the inherited environment: an env-assignment argv
+  # entry would expose it in the process table.  Only the disabled machine
+  # identity variables are stripped from the child.
+  v="$(env -u INFISICAL_CLIENT_ID -u INFISICAL_CLIENT_SECRET -u INFISICAL_MACHINE_IDENTITY_ID "$bin" get "$1" --path "$2" 2>/dev/null </dev/null)" || return 1
   [[ -n "$v" ]] || return 1
   printf '%s' "$v"
 }
@@ -609,11 +609,13 @@ load_sentry_auth() {
     token="$(printf '%s' "$raw" | tr -d '\r')"
   elif [[ -x "${FLEET_SECRETS_BIN:-}" ]] || command -v fleet-secrets &>/dev/null; then
     SENTRY_TOKEN_REASON="an explicit Infisical service token is required; machine identity is disabled for CodeCaps automation"
-    return 1
+    # Fall through: an explicit SENTRY_AUTH_TOKEN in the environment is still an
+    # approved source, and returning here would discard it.
   fi
   if [[ -z "$token" && -n "${SENTRY_AUTH_TOKEN:-}" ]]; then
     # The legacy slot is a fallback only, and only when it holds a real token.
     token="$SENTRY_AUTH_TOKEN"
+    SENTRY_TOKEN_REASON=""
   fi
   case "$token" in
     "")

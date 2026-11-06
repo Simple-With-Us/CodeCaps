@@ -22,6 +22,19 @@ function read(rel) {
   return readFileSync(join(ROOT, rel), "utf8");
 }
 
+// Hand-written shape checks: this dependency-free script does not import zod,
+// and a malformed apps.json must fail with a configuration error, not a TypeError.
+function readFixedMarketingVersion(raw) {
+  assert.equal(raw !== null && typeof raw === "object" && !Array.isArray(raw), true, "apps config must be an object");
+  const root = raw.apps;
+  assert.equal(root !== null && typeof root === "object" && !Array.isArray(root), true, "apps.apps must be an object");
+  const codecaps = root.codecaps;
+  assert.equal(codecaps !== null && typeof codecaps === "object" && !Array.isArray(codecaps), true, "apps.apps.codecaps must be an object");
+  const version = codecaps.fixedMarketingVersion;
+  assert.equal(typeof version, "string", "apps.apps.codecaps.fixedMarketingVersion must be a string");
+  return version;
+}
+
 function withoutComments(text) {
   return text
     .split("\n")
@@ -418,7 +431,7 @@ test("the ship job clears a stale archive lock restored from the ship-state cach
 
 test("the fixed marketing version is 0.1.0 and release notes use the owner clock", () => {
   const apps = JSON.parse(read("scripts/ios-fleet/apps.json"));
-  assert.equal(apps.apps.codecaps.fixedMarketingVersion, "0.1.0");
+  assert.equal(readFixedMarketingVersion(apps), "0.1.0");
   assert.equal(apps.apps.codecaps.marketingVersionDefault, "0.1.0");
 
   const src = read("scripts/ios-fleet/asc-api.mjs");

@@ -521,7 +521,14 @@ public struct ResetAlarmTracker: Sendable {
                     guard let current = observation.periodStartAt,
                           let previous = window.periodStartAt,
                           let period = window.periodSeconds else { return true }
-                    return current.timeIntervalSince(previous) >= period - ResetAlarmPolicy.resetDriftTolerance
+                    let advance = current.timeIntervalSince(previous)
+                    let tolerance = ResetAlarmPolicy.resetDriftTolerance
+                    // Same band as advancedFullCadence: a calendar-month window accepts a
+                    // 28-to-31-day start advance; fixed cadences use drift tolerance.
+                    if (28 * 86_400...31 * 86_400).contains(period) {
+                        return advance >= 28 * 86_400 - tolerance && advance <= 31 * 86_400 + tolerance
+                    }
+                    return abs(advance - period) <= tolerance
                 }()
                 let preExpiryJumpThreshold = window.periodSeconds.map { period in
                     max(ResetAlarmPolicy.resetDriftTolerance,
