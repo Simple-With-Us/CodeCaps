@@ -20,6 +20,13 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
     /// rewritten into the same "Other limit" copy every unknown window gets,
     /// so the identity travels with the window.
     public let isExtraAllowance: Bool
+    /// True when the window is a provider's supplementary video allowance
+    /// beside the plan rather than inside it.  The identity is captured at
+    /// construction from the wire fields (model id, model type, wire label):
+    /// the display label cannot answer it, because the label rewrite drops
+    /// the video tokens - a "Hailuo" daily arrives here as "1d window"
+    /// (Kody review, PR #367).
+    public let isSupplementaryVideoQuota: Bool
     /// Short distinguishing label for a bar when two bars share one cadence
     /// token (e.g. two "7d" bars).  "Free weekly limit" reads "weekly",
     /// "Additional tokens" reads "additional".  Empty when the row needs no
@@ -48,6 +55,7 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
         observedAt: Date? = nil,
         barQualifier: String = "",
         isExtraAllowance: Bool = false,
+        isSupplementaryVideoQuota: Bool = false,
         absoluteRemaining: Double? = nil
     ) {
         self.id = id
@@ -61,6 +69,7 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
         self.observedAt = observedAt
         self.barQualifier = barQualifier
         self.isExtraAllowance = isExtraAllowance
+        self.isSupplementaryVideoQuota = isSupplementaryVideoQuota
     }
 
     /// Whether the reading is old enough that the widget says when it was
@@ -145,6 +154,7 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
             observedAt: observedAt,
             barQualifier: qualifier,
             isExtraAllowance: isExtraAllowance,
+            isSupplementaryVideoQuota: isSupplementaryVideoQuota,
             absoluteRemaining: absoluteRemaining
         )
     }
@@ -362,9 +372,7 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
         // are available.  MiniMax's video daily otherwise displaces the
         // weekly coding window (owner 2026-11-06: "Widget says 1d instead of
         // 7d").
-        let planWindows = visible.filter {
-            !QuotaCapRule.isSupplementaryVideoQuota(providerKey: providerKey, label: $0.label)
-        }
+        let planWindows = visible.filter { !$0.isSupplementaryVideoQuota }
         let pool = planWindows.count >= 2 ? planWindows : visible
         return (pool[0], pool[1])
     }
@@ -874,6 +882,18 @@ public enum WidgetPresentation {
                 windowToken: w.window
             )
 
+            // The supplementary-video identity is read off the wire fields,
+            // not off the display label, for the same reason as the extra
+            // allowance above:  the label rewrite turns a "Hailuo" daily into
+            // "1d window" and the video tokens are gone by the time
+            // dualWindows would look for them (Kody review, PR #367).
+            let isSupplementaryVideo = QuotaCapRule.isSupplementaryVideoQuota(
+                providerKey: providerKey,
+                modelId: w.modelId,
+                modelType: w.modelType,
+                label: w.label
+            )
+
             let item = WidgetWindowItem(
                 id: w.id,
                 label: displayLabel,
@@ -884,6 +904,7 @@ public enum WidgetPresentation {
                 isMasked: false,
                 observedAt: observed,
                 isExtraAllowance: isExtraAllowance,
+                isSupplementaryVideoQuota: isSupplementaryVideo,
                 absoluteRemaining: w.absoluteRemaining
             )
 

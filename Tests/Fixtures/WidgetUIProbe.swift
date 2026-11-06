@@ -45,10 +45,13 @@ import AppIntents
   // MiniMax row; appending this one rendered a duplicate).  The supplementary
   // video daily never takes a bar from the plan's own windows:  the pair
   // stays the 5-hour and weekly coding windows (owner 2026-11-06: "Widget
-  // says 1d instead of 7d").
+  // says 1d instead of 7d").  The video row here carries the rewritten
+  // display label the widget actually receives ("1d window" - the rewrite
+  // drops the video tokens), so only the carried identity flag keeps it off
+  // a bar (Kody review, PR #367).
   let minimaxVideo = WidgetPlatformItem(id:"minimax-video-check",providerKey:"minimax",title:"MiniMax",subtitle:"",remainingPercent:5,resetAt:now.addingTimeInterval(300000),windows:[
    WidgetWindowItem(id:"minimax-5h",label:"5-hour window",cadence:"5h",remainingPercent:81,resetAt:now.addingTimeInterval(7000)),
-   WidgetWindowItem(id:"minimax-video",label:"Video",cadence:"1d",remainingPercent:100,resetAt:now.addingTimeInterval(70000)),
+   WidgetWindowItem(id:"minimax-video",label:"1d window",cadence:"1d",remainingPercent:100,resetAt:now.addingTimeInterval(70000),isSupplementaryVideoQuota:true),
    WidgetWindowItem(id:"minimax-7d",label:"weekly window",cadence:"7d",remainingPercent:5,resetAt:now.addingTimeInterval(300000))
   ])
   precondition(minimaxVideo.dualWindows()?.window1.id == "minimax-5h")

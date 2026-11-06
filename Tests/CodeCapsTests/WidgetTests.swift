@@ -601,7 +601,7 @@ final class WidgetTests: XCTestCase {
     func testDualWindowsSelectionSkipsSupplementaryVideoQuota() {
         let windows = [
             window("minimax:5h", percent: 81, hoursToReset: 2),
-            FixtureWindow(id: "minimax:video", percent: 100, hoursToReset: 20, masked: false, label: "Video"),
+            FixtureWindow(id: "minimax:video", percent: 100, hoursToReset: 20, masked: false, label: "1d window", isSupplementaryVideoQuota: true),
             window("minimax:7d", percent: 5, hoursToReset: 66)
         ]
         let dual = dualWindows(windows, providerKey: "minimax")
@@ -664,6 +664,9 @@ final class WidgetTests: XCTestCase {
         // A `var`, not a `let`:  a `let` with a default is excluded from the
         // memberwise initializer, and the MiniMax video fixture passes one.
         var label: String = ""
+        // Mirrors WidgetWindowItem.isSupplementaryVideoQuota:  the identity
+        // is carried, not re-derived from the display label.
+        var isSupplementaryVideoQuota: Bool = false
     }
 
     private enum FixtureWindowPick {
@@ -711,9 +714,9 @@ final class WidgetTests: XCTestCase {
         guard pool.count >= 2 else { return nil }
         // Mirrors WidgetPresentation: a MiniMax supplementary video quota
         // never takes a bar from the plan's own windows when two remain.
-        let planWindows = pool.filter {
-            !(providerKey == "minimax" && ($0.label.lowercased().contains("video") || $0.label.lowercased().contains("hailuo")))
-        }
+        // The carried flag decides, not the display label - the label
+        // rewrite drops the video tokens (Kody review, PR #367).
+        let planWindows = pool.filter { !$0.isSupplementaryVideoQuota }
         let pair = planWindows.count >= 2 ? planWindows : pool
         return (pair[0], pair[1])
     }
