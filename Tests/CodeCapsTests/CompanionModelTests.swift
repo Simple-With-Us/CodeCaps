@@ -374,6 +374,38 @@ final class CompanionModelTests: XCTestCase {
         )
     }
 
+    /// QA pixel review 2026-11-06: a fully-at-cap card hides the meters and
+    /// their stale cue, so an old cap reading carried no age anywhere.  The
+    /// cap line must date the reading.
+    func testTheCompanionCardDatesAnOldCapReading() throws {
+        let view = try readCompanionContentViewSource()
+        XCTAssertTrue(
+            view.contains("item.atCapReadingAgeCue(scope: scope)"),
+            "the at-cap layout must render the reading's age when it is old"
+        )
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(source.contains("public func atCapReadingAgeCue(scope: CompanionSourceScope"))
+        XCTAssertTrue(
+            source.contains("QuotaFreshnessRule.isReadingRecent(observedAt: reportedAt, now: now)"),
+            "the cap age cue must use the shared freshness threshold"
+        )
+    }
+
+    /// QA pixel review 2026-11-06: Copilot's three monthly buckets collapsed
+    /// into one "1m" row and the exhausted Premium hid behind a 100% Chat row.
+    /// The dedupe key must carry the allowance identity, not the cadence alone.
+    func testDistinctAllowancesSharingACadenceKeepTheirOwnRows() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains("let allowanceIdentity = w.label"),
+            "the dedupe key must include the wire label as the allowance identity"
+        )
+        XCTAssertTrue(
+            source.contains("\\(baseAllowanceKey)|\\(allowanceIdentity)"),
+            "the allowance identity must join the cadence in the dedupe key"
+        )
+    }
+
     /// The phone must ask the shared rule which window binds the cap.
     ///
     /// The phone's model is not compiled into the macOS test target, so its

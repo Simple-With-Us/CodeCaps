@@ -393,6 +393,12 @@ public struct CompanionContentView: View {
                             Text(atCapSummary)
                                 .font(.system(size: 10))
                                 .foregroundStyle(.secondary)
+                            if let ageCue = item.atCapReadingAgeCue(scope: scope) {
+                                Text(ageCue)
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -416,6 +422,12 @@ public struct CompanionContentView: View {
                         if let exact = item.atCapResetExactTime(scope: scope), !exact.isEmpty {
                             Text(exact)
                                 .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        if let ageCue = item.atCapReadingAgeCue(scope: scope) {
+                            Text(ageCue)
+                                .font(.system(size: 10))
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                         }

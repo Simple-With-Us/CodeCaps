@@ -823,6 +823,22 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
         return reset.formatted(.dateTime.weekday(.abbreviated).hour().minute())
     }
 
+    /// Dates the cap reading when it is old.  A capped card hides the meters,
+    /// so without this line an at-cap row carries no age at all:  the cap
+    /// itself stays believed for the rest of its cycle (that is the shared
+    /// rule's at-cap branch), but an old timestamp means the reading has not
+    /// been re-confirmed, and the line must not pass as a fresh confirmation
+    /// (QA pixel review 2026-11-06: fully-at-cap card showed cap and reset
+    /// with no timestamp).  Nil when the reading is recent or the feed never
+    /// dated it, which is unverified rather than old.  This only dates the
+    /// reading; it changes no cap, quota or alarm decision.
+    public func atCapReadingAgeCue(scope: CompanionSourceScope = .allSources, now: Date = Date()) -> String? {
+        guard let window = atCapWindow(scope: scope, now: now),
+              let reportedAt = window.reportedAt else { return nil }
+        guard !QuotaFreshnessRule.isReadingRecent(observedAt: reportedAt, now: now) else { return nil }
+        return "updated \(UpdatedStamp.label(reportedAt, now: now))"
+    }
+
     public var elapsedFraction: Double? {
         windows.compactMap { $0.elapsedFraction() }.first
     }
@@ -2134,9 +2150,24 @@ public final class CompanionQuotaModel: ObservableObject {
                 label: displayLabel,
                 resetAt: parsedReset
             )
-            let cadenceKey = effectiveQualifier.isEmpty
+            // One row per allowance, not per cadence:  a cadence-only key
+            // collapses distinct allowances that share a period - Copilot's
+            // Premium, Chat and Completions buckets are all monthly, and the
+            // exhausted Premium row hid behind a 100% Chat row (QA pixel
+            // review 2026-11-06).  The wire label carries the allowance
+            // identity; fleet and local copies of one allowance come from the
+            // same reader, so they carry the same label and still fold.
+            let allowanceIdentity = w.label
+                .lowercased()
+                .components(separatedBy: .whitespacesAndNewlines)
+                .filter { !$0.isEmpty }
+                .joined(separator: " ")
+            let allowanceKey = allowanceIdentity.isEmpty
                 ? baseAllowanceKey
-                : "\(effectiveQualifier):\(baseAllowanceKey)"
+                : "\(baseAllowanceKey)|\(allowanceIdentity)"
+            let cadenceKey = effectiveQualifier.isEmpty
+                ? allowanceKey
+                : "\(effectiveQualifier):\(allowanceKey)"
 
             // The shared cap rule needs the window's own label, not the
             // display label:  the Mac reads the reader's own label, and that is
