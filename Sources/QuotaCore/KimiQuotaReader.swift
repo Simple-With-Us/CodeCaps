@@ -80,6 +80,11 @@ public struct KimiQuotaReader: Sendable {
                 guard (200..<300).contains(result.statusCode), let root = result.root else {
                     continue
                 }
+                // A signed-in account with no Kimi Code plan answers 200 with
+                // an empty object (seen live, 2026-11-06).  There is nothing
+                // to monitor, so the product is absent, the same way a missing
+                // sign-in is, rather than a quota CodeCaps failed to read.
+                if root.isEmpty { return LocalQuotaResult() }
                 let windows = Self.parse(root, observedAt: now())
                 if windows.isEmpty {
                     return LocalQuotaResult(issues: ["kimi": "Kimi returned no readable quota."])

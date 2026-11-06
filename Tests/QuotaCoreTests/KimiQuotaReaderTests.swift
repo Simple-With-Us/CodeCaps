@@ -196,6 +196,15 @@ final class KimiQuotaReaderTests: XCTestCase {
         XCTAssertNil(KimiQuotaReader.credentialExpiry(nil))
     }
 
+    /// Seen live on 2026-11-06: a signed-in Kimi account with no Kimi Code plan
+    /// answers `/usages` with 200 and `{}`.  That is "no plan", not an unreadable
+    /// quota, so it stays silent like a missing sign-in.
+    func testEmptyPayloadMeansNoPlanAndIsSilent() async {
+        let result = await read("{}")
+        XCTAssertTrue(result.windows.isEmpty)
+        XCTAssertTrue(result.issues.isEmpty)
+    }
+
     func testUnparseableSuccessIsAnIssueNotAWindow() async {
         let result = await read(#"{"unexpected":true}"#)
         XCTAssertTrue(result.windows.isEmpty)
