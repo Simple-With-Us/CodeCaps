@@ -7,8 +7,7 @@ import Foundation
 /// logs, or refreshes it.  Token contents never leave this type.
 public struct KimiQuotaReader: Sendable {
     private let now: @Sendable () -> Date
-    private let accessToken: @Sendable () -> String?
-    private let storedExpiresAt: @Sendable () -> Date?
+    private let credential: @Sendable () -> (token: String?, expiresAt: Date?)
     private let fetch: @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)
 
     private static let maxResponseBytes = 262_144
@@ -34,18 +33,27 @@ public struct KimiQuotaReader: Sendable {
         self.now = now
         let home = homeDirectory.standardizedFileURL
         if let accessToken {
-            self.accessToken = accessToken
-            self.storedExpiresAt = credentialExpiresAt ?? { nil }
+            if let credentialExpiresAt {
+                self.credential = { (accessToken(), credentialExpiresAt()) }
+            } else {
+                self.credential = { (accessToken(), nil) }
+            }
         } else {
-            self.accessToken = { Self.readLocalCredential(home: home)?.token }
-            self.storedExpiresAt = credentialExpiresAt ?? { Self.readLocalCredential(home: home)?.expiresAt }
+            // One store read per refresh: the token and its expiry must come
+            // from the same snapshot, or a credential the CLI rewrites
+            // mid-refresh pairs a rejected token with the wrong expiry.
+            self.credential = {
+                guard let local = Self.readLocalCredential(home: home) else { return (nil, nil) }
+                return (local.token, local.expiresAt)
+            }
         }
         self.fetch = fetch ?? Self.makeFetcher()
     }
 
     public func read() async -> LocalQuotaResult {
         do {
-            guard let token = accessToken(), !token.isEmpty else {
+            let snapshot = credential()
+            guard let token = snapshot.token, !token.isEmpty else {
                 // No local sign-in at all: the product is simply absent, the
                 // same way a missing `gh` binary is not a Copilot error.
                 return LocalQuotaResult()
@@ -86,8 +94,9 @@ public struct KimiQuotaReader: Sendable {
                 // routine refresh wait, not a dead sign-in: the CLI refreshes
                 // it on its next use and this reader then reads the fresh
                 // file.  Only a rejection with no local expiry evidence is
-                // worded as a sign-in problem.
-                if let expiry = storedExpiresAt(), now() >= expiry {
+                // worded as a sign-in problem.  The expiry is the one taken
+                // alongside the token, never a second store read.
+                if let expiry = snapshot.expiresAt, now() >= expiry {
                     return LocalQuotaResult(issues: ["kimi": "Kimi's stored access token has expired; open Kimi Code to refresh it."])
                 }
                 return LocalQuotaResult(issues: ["kimi": "Kimi session was rejected; sign in again in Kimi Code."])
