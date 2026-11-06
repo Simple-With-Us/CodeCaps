@@ -56,6 +56,41 @@ import AppIntents
   ])
   precondition(minimaxVideo.dualWindows()?.window1.id == "minimax-5h")
   precondition(minimaxVideo.dualWindows()?.window2.id == "minimax-7d")
+
+  // Wire-level checks through the real parse path:  the payload shape the Mac
+  // actually publishes, so construction-time behavior is pinned, not just the
+  // post-construction selection above.
+  let iso = ISO8601DateFormatter()
+  func wireWindow(_ id: String, _ label: String, _ window: String, _ pct: Double, _ resetIn: Double) -> String {
+   "{\"id\":\"\(id)\",\"provider\":\"p\",\"label\":\"\(label)\",\"window\":\"\(window)\",\"remainingPercent\":\(pct),\"resetAt\":\"\(iso.string(from: now.addingTimeInterval(resetIn)))\",\"occurredAt\":\"\(iso.string(from: now))\"}"
+  }
+  // MiniMax: the wire label still carries "Hailuo", so parseSnapshot must
+  // capture the video identity onto the item before the display rewrite, and
+  // the pair must stay the plan's own 5-hour and weekly windows.
+  let mmJSON = "{\"windows\":["
+   + wireWindow("minimax:5h", "5-hour window", "5h", 81, 7000) + ","
+   + wireWindow("minimax:hailuo", "Hailuo", "1d", 100, 70000) + ","
+   + wireWindow("minimax:weekly", "weekly", "7d", 5, 300000)
+   + "]}"
+  let mmPlatforms = WidgetPresentation.parseSnapshot(data: mmJSON.data(using: .utf8)!, now: now)
+  let mm = mmPlatforms.first { $0.id.contains("minimax") || $0.providerKey.contains("minimax") }
+  precondition(mm?.windows.count == 3)
+  precondition(mm?.windows.first { $0.id == "minimax:hailuo" }?.isSupplementaryVideoQuota == true)
+  precondition(mm?.dualWindows()?.window1.id == "minimax:5h")
+  precondition(mm?.dualWindows()?.window2.id == "minimax:weekly")
+  // Copilot: three monthly buckets are three allowances.  A cadence-only
+  // dedupe collapses them into one "1m" row and hides an exhausted Premium
+  // behind a 100% Chat row (QA pixel review 2026-11-06); the wire-label
+  // identity keeps all three.
+  let cpJSON = "{\"windows\":["
+   + wireWindow("local-mac:github-copilot:premium_interactions", "Premium requests", "monthly", 0, 900000) + ","
+   + wireWindow("local-mac:github-copilot:chat", "Chat requests", "monthly", 100, 900000) + ","
+   + wireWindow("local-mac:github-copilot:completions", "Completions", "monthly", 100, 900000)
+   + "]}"
+  let cpPlatforms = WidgetPresentation.parseSnapshot(data: cpJSON.data(using: .utf8)!, now: now)
+  let cp = cpPlatforms.first { $0.providerKey == "github-copilot" || $0.id.contains("copilot") }
+  precondition(cp?.windows.count == 3, "copilot buckets collapsed: \(cp?.windows.count ?? -1)")
+  print("PASS: wire-level MiniMax video identity and Copilot allowance dedupe")
   let edgePlatforms = platforms
   platforms += WidgetPresentation.placeholders
   platforms.append(WidgetPlatformItem(id:"overflow",providerKey:"codex",title:"Overflow plan",subtitle:"",remainingPercent:50,resetAt:nil,windows:[]))

@@ -572,6 +572,12 @@ final class WidgetTests: XCTestCase {
         XCTAssertTrue(presentation.contains("static func shortCadence"))
         XCTAssertTrue(presentation.contains("static func resetCaption"))
         XCTAssertTrue(presentation.contains("func dualWindows()"))
+        // QA pixel review 2026-11-06: a cadence-only dedupe key collapsed
+        // Copilot's three monthly buckets into one "1m" row and hid the
+        // exhausted Premium behind a 100% Chat row.  The widget dedupe must
+        // key on the allowance identity, not the cadence alone.
+        XCTAssertTrue(presentation.contains("let allowanceIdentity = w.label"))
+        XCTAssertTrue(presentation.contains("\\(cadence.lowercased())|\\(allowanceIdentity)"))
     }
 
     func testOverviewViewsPassQuotasPerProviderToPlanGrid() throws {

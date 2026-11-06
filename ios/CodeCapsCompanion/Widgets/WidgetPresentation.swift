@@ -913,7 +913,21 @@ public enum WidgetPresentation {
             // is often days old, so taking the first one in payload order let a
             // stale copy win and the widget show figures the app had already
             // replaced (owner, Oct-22-2026).
-            let cadenceKey = cadence.lowercased()
+            // One row per allowance, not per cadence:  a cadence-only key
+            // collapses distinct allowances that share a period - Copilot's
+            // Premium, Chat and Completions buckets are all monthly, and the
+            // exhausted Premium row hid behind a 100% Chat row (QA pixel
+            // review 2026-11-06).  The wire label carries the allowance
+            // identity; fleet and local copies of one allowance come from the
+            // same reader, so they carry the same label and still merge.
+            let allowanceIdentity = w.label
+                .lowercased()
+                .components(separatedBy: .whitespacesAndNewlines)
+                .filter { !$0.isEmpty }
+                .joined(separator: " ")
+            let cadenceKey = allowanceIdentity.isEmpty
+                ? cadence.lowercased()
+                : "\(cadence.lowercased())|\(allowanceIdentity)"
             if let current = windowByCadence[cadenceKey] {
                 if item.isFresher(than: current, now: now) {
                     windowByCadence[cadenceKey] = item
@@ -1315,22 +1329,44 @@ public enum WidgetPresentation {
                     )
                 ]
             ),
+            // The decisive MiniMax edge case, not a happy-path row:  the
+            // supplementary video daily sits between the plan's own windows
+            // with the rewritten display label the widget actually receives
+            // ("1d window" - the rewrite drops the Hailuo/video tokens) and
+            // the carried identity flag.  A selection regression shows up in
+            // the render as a "1d" bar displacing the weekly coding window
+            // (owner 2026-11-06: "Widget says 1d instead of 7d").
             WidgetPlatformItem(
                 id: "minimax",
                 providerKey: "minimax",
                 title: "MiniMax",
-                subtitle: "5h · 1d",
-                remainingPercent: 91.0,
-                resetAt: now.addingTimeInterval(3600 * 18),
+                subtitle: "5h · 7d",
+                remainingPercent: 5.0,
+                resetAt: now.addingTimeInterval(300000),
                 isExhausted: false,
                 isMasked: false,
                 windows: [
                     WidgetWindowItem(
-                        id: "minimax-daily",
-                        label: "Daily cap",
-                        cadence: "Daily",
-                        remainingPercent: 91.0,
-                        resetAt: now.addingTimeInterval(3600 * 18)
+                        id: "minimax-5h",
+                        label: "5-hour window",
+                        cadence: "5h",
+                        remainingPercent: 81.0,
+                        resetAt: now.addingTimeInterval(7000)
+                    ),
+                    WidgetWindowItem(
+                        id: "minimax-video",
+                        label: "1d window",
+                        cadence: "1d",
+                        remainingPercent: 100.0,
+                        resetAt: now.addingTimeInterval(70000),
+                        isSupplementaryVideoQuota: true
+                    ),
+                    WidgetWindowItem(
+                        id: "minimax-7d",
+                        label: "weekly window",
+                        cadence: "7d",
+                        remainingPercent: 5.0,
+                        resetAt: now.addingTimeInterval(300000)
                     )
                 ]
             ),
