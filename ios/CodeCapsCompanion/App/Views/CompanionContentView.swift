@@ -303,6 +303,13 @@ public struct CompanionContentView: View {
         }
         let atCapWindow = item.atCapWindow(scope: scope)
         let isAtCap = atCapWindow != nil
+        // Two pools of one provider share a title (Antigravity's Gemini and
+        // Third-Party pools), so a collapsed card whose title is not unique
+        // also shows the pool subtitle - the same gate as Settings >
+        // Platform Order (owner, 2026-11-06).
+        let duplicatedTitles = Set(model.items.map(\.title).filter { title in
+            model.items.count(where: { $0.title == title }) > 1
+        })
         let usableMuseExtra = item.providerKey == "muse-assist" ? cardWindows.first(where: {
             QuotaWindowVocabulary.isMuseAssistExtra(providerKey: item.providerKey, windowToken: $0.rawWindowToken, label: $0.label, resetAt: $0.resetAt)
             && (($0.remainingPercent ?? 0) > 0 || ($0.absoluteRemaining ?? 0) > 0)
@@ -321,7 +328,13 @@ public struct CompanionContentView: View {
                             .italic(shouldDimTitle)
                             .foregroundStyle(shouldDimTitle ? Color.primary.opacity(0.45) : .primary)
                     }
-
+                    if duplicatedTitles.contains(item.title),
+                       let subtitle = item.subtitle, !subtitle.isEmpty {
+                        Text(subtitle)
+                            .font(.system(size: 11))
+                            .foregroundStyle(shouldDimTitle ? Color.secondary.opacity(0.45) : .secondary)
+                            .lineLimit(1)
+                    }
                 }
                 Spacer()
                 HStack(spacing: 10) {
