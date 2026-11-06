@@ -392,20 +392,21 @@ final class CompanionModelTests: XCTestCase {
     }
 
     /// QA pixel review 2026-11-06: Copilot's three monthly buckets collapsed
-    /// into one "1m" row and the exhausted Premium hid behind a 100% Chat row;
-    /// the actual payload also carries the same MiniMax allowance worded
-    /// differently per producer ("7-day window" beside "weekly window"), so a
-    /// label key keeps duplicates.  The dedupe must use the server's canonical
-    /// windowKey, which Usage Monitor normalizes across producers.
+    /// into one "1m" row and the exhausted Premium hid behind a 100% Chat row.
+    /// The canonical windowKey is not the identity either:  Chat and
+    /// Completions both read "monthly", and MiniMax's video weekly shares
+    /// "7d" with the plan's weekly, so a windowKey dedupe merges distinct
+    /// allowances.  The dedupe must key on the server's series identity from
+    /// the wire id.
     func testDistinctAllowancesSharingACadenceKeepTheirOwnRows() throws {
         let source = try readCompanionModelSource()
         XCTAssertTrue(
-            source.contains("windowKey = try container.decodeIfPresent(String.self, forKey: .windowKey)"),
-            "the wire window must decode the server's canonical windowKey"
+            source.contains("static func allowanceSeries(forWireId id: String) -> String"),
+            "the model must derive the server's series identity from the wire id"
         )
         XCTAssertTrue(
-            source.contains(#"wireKey != "other:unknown""#),
-            "an unidentified allowance must not collapse onto the shared unknown key"
+            source.contains("Self.allowanceSeries(forWireId: w.id)"),
+            "the dedupe must key on the series identity, not the canonical windowKey"
         )
     }
 
