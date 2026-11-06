@@ -198,6 +198,10 @@ enum Theme {
 
     static let warning = dyn(hex(0xA85C05), hex(0xF0B45A))
     static let danger = dyn(hex(0xBF3339), hex(0xFF6B6B))
+    /// A fixed, readable green for success marks.  It must not follow the
+    /// owner's accent choice: a pale accent (lemon, sky, lime) as small text or
+    /// a checkmark on a light surface fails contrast.
+    static let success = dyn(hex(0x1E7B3A), hex(0x6EE7A0))
     static let background: Color = highContrastBackground
     static let surface: Color = highContrastSurface
     static let hairline: Color = highContrast
