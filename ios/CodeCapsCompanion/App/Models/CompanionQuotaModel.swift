@@ -582,21 +582,6 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
     }
 
     /// Stable key for matching primary and mirror windows on the same allowance.
-    /// The server's allowance identity for a wire window.  Usage Monitor
-    /// deliberately keeps one window per producer for the same allowance;
-    /// the series (`modelId ?? bucketId ?? provider:label` in
-    /// projectQuotaWindows) is the identity those copies share, encoded in
-    /// the wire id as `["producer", <instance>, <series>]` for attributed
-    /// windows or carried as the bare id for legacy ones.
-    static func allowanceSeries(forWireId id: String) -> String {
-        guard id.hasPrefix("["),
-              let data = id.data(using: .utf8),
-              let parts = try? JSONDecoder().decode([String].self, from: data),
-              parts.count == 3, parts[0] == "producer", !parts[2].isEmpty
-        else { return id }
-        return parts[2]
-    }
-
     static func allowanceKey(for window: CompanionWindowItem) -> String {
         window.normalizedWindowKey
     }
@@ -1565,6 +1550,9 @@ public final class CompanionQuotaModel: ObservableObject {
         let planShowCostAndRenewal: Bool?
         let planHasMismatch: Bool?
         let planUserUpdatedAt: Double?
+        /// The server's canonical cadence token, one component of the
+        /// allowance identity - never the identity alone (QA 2026-11-06).
+        let windowKey: String?
         /// The server's canonical allowance key (`5h`, `7d`,
         /// `other:premium_interactions`, ...), normalized across producers by
         /// Usage Monitor.  Nil only on feeds that predate it.
@@ -1576,6 +1564,7 @@ public final class CompanionQuotaModel: ObservableObject {
             case producerInstanceId, machine, remainingUnknown, plan, planName, planMetadata
             case planDetectedName, planUserName, planUserCostUsd, planUserRenewalDateText
             case planUserSubtitle, planShowCostAndRenewal, planHasMismatch, planUserUpdatedAt
+            case windowKey
         }
 
         init(from decoder: Decoder) throws {
@@ -1589,6 +1578,7 @@ public final class CompanionQuotaModel: ObservableObject {
             modelType = try container.decodeIfPresent(String.self, forKey: .modelType)
             modelId = try container.decodeIfPresent(String.self, forKey: .modelId)
             window = try container.decodeIfPresent(String.self, forKey: .window)
+            windowKey = try container.decodeIfPresent(String.self, forKey: .windowKey)
             source = try container.decodeIfPresent(String.self, forKey: .source)
             via = try container.decodeIfPresent(String.self, forKey: .via)
             resetAt = try container.decodeIfPresent(String.self, forKey: .resetAt)
@@ -2173,7 +2163,22 @@ public final class CompanionQuotaModel: ObservableObject {
             // supplementary video weekly shares "7d" with the plan's weekly,
             // so a windowKey dedupe merges distinct allowances (QA
             // 2026-11-06).
-            let allowanceKey = Self.allowanceSeries(forWireId: w.id)
+            // The allowance identity is the triple of video class, aliased
+            // series, and canonical cadence:  video partitions first so a
+            // supplementary video window can never fold into a plan window;
+            // the aliased series joins cross-producer copies of one
+            // allowance (codecaps "general" beside the collector's
+            // "minimax:coding-plan" headline) while keeping Copilot's
+            // distinct buckets apart;  the canonical cadence keeps one
+            // model's 5-hour, daily and weekly windows separate (QA
+            // real-payload fixture 2026-11-06).
+            let isVideoWire = QuotaCapRule.isSupplementaryVideoQuota(
+                providerKey: canonicalManifestKey(provider: w.provider, providerKey: w.providerKey, via: w.via),
+                modelId: w.modelId, modelType: w.modelType, label: w.label)
+            let wireCadence = (w.windowKey ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let allowanceKey = (isVideoWire ? "video|" : "plan|")
+                + Self.normalizedAllowanceSeries(providerKey: providerKey, series: Self.allowanceSeries(forWireId: w.id))
+                + "|" + (wireCadence.isEmpty ? cadence.lowercased() : wireCadence.lowercased())
             let cadenceKey = effectiveQualifier.isEmpty
                 ? allowanceKey
                 : "\(effectiveQualifier):\(allowanceKey)"
@@ -2719,6 +2724,39 @@ public final class CompanionQuotaModel: ObservableObject {
     /// The provider key is canonicalised the way the Mac canonicalises a
     /// window's own provider, so the phone asks `QuotaCapRule` the same
     /// question the Mac asks and the two surfaces skip the same windows.
+    /// The server's allowance identity for a wire window.  Usage Monitor
+    /// deliberately keeps one window per producer for the same allowance;
+    /// the series (`modelId ?? bucketId ?? provider:label` in
+    /// projectQuotaWindows) is the identity those copies share, encoded in
+    /// the wire id as `["producer", <instance>, <series>]` for attributed
+    /// windows or carried as the bare id for legacy ones.
+    static func allowanceSeries(forWireId id: String) -> String {
+        guard id.hasPrefix("["),
+              let data = id.data(using: .utf8),
+              let parts = try? JSONDecoder().decode([String].self, from: data),
+              parts.count == 3, parts[0] == "producer", !parts[2].isEmpty
+        else { return id }
+        return parts[2]
+    }
+
+    /// MiniMax plan-level aliasing, bounded to the producer's own verified
+    /// semantics:  the collector's parser defines the "coding-plan" headline
+    /// as the general model's interval reading
+    /// (scripts/lib/subscription-quota-parsers.mjs), so "general" and
+    /// "coding-plan" name ONE allowance observed under two identities.
+    /// Every other series - including any other MiniMax model - keeps its
+    /// own identity.
+    static func normalizedAllowanceSeries(providerKey: String, series: String) -> String {
+        guard providerKey.lowercased().contains("minimax") else { return series }
+        switch series {
+        case "general", "minimax:general", "minimax:general:weekly",
+             "minimax:coding-plan", "coding-plan":
+            return "minimax:plan"
+        default:
+            return series
+        }
+    }
+
     static func capRuleFlags(
         provider: String,
         providerKey: String?,

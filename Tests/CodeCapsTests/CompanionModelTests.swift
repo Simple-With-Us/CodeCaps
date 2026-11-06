@@ -391,13 +391,14 @@ final class CompanionModelTests: XCTestCase {
         )
     }
 
-    /// QA pixel review 2026-11-06: Copilot's three monthly buckets collapsed
-    /// into one "1m" row and the exhausted Premium hid behind a 100% Chat row.
-    /// The canonical windowKey is not the identity either:  Chat and
-    /// Completions both read "monthly", and MiniMax's video weekly shares
-    /// "7d" with the plan's weekly, so a windowKey dedupe merges distinct
-    /// allowances.  The dedupe must key on the server's series identity from
-    /// the wire id.
+    /// QA 2026-11-06, verified against the real wire capture:  the codecaps
+    /// 5h and the collector weekly share series "general", the collector's
+    /// 5h headline is series "minimax:coding-plan", and Copilot's Chat and
+    /// Completions share the canonical key "monthly".  The dedupe identity
+    /// must be the triple of video class, aliased series, and canonical
+    /// cadence - and the helpers must live on the type that uses them
+    /// (a helper defined on the item type left the model's call dangling,
+    /// compile failure on 9ad6e5f2).
     func testDistinctAllowancesSharingACadenceKeepTheirOwnRows() throws {
         let source = try readCompanionModelSource()
         XCTAssertTrue(
@@ -407,6 +408,14 @@ final class CompanionModelTests: XCTestCase {
         XCTAssertTrue(
             source.contains("Self.allowanceSeries(forWireId: w.id)"),
             "the dedupe must key on the series identity, not the canonical windowKey"
+        )
+        XCTAssertTrue(
+            source.contains("static func normalizedAllowanceSeries(providerKey: String, series: String) -> String"),
+            "MiniMax plan-level aliasing must exist on the model"
+        )
+        XCTAssertTrue(
+            source.contains(#"isVideoWire ? "video|" : "plan|""#),
+            "video windows must partition out of plan identity before dedupe"
         )
     }
 
