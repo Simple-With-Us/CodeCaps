@@ -357,14 +357,25 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
     /// (Muse Code read 35% for days on a stalled pipeline while the plan was
     /// spent, owner 2026-11-06).  Nil when the reading is fresh; when the
     /// period has already ended, which the dead-copy path speaks for; when
-    /// the window is masked; when the feed never dated the reading, which is
-    /// unverified rather than stale; or when the plan is at its cap - an
-    /// exhausted allowance is polled rarely by design, so its old reading is
-    /// still believed (`QuotaFreshnessRule`).
+    /// the window is masked; or when the feed never dated the reading, which
+    /// is unverified rather than stale.
+    ///
+    /// An exhausted window keeps the cue too, worded as the last-known age
+    /// rather than "stale":  the cap itself stays believed (that is
+    /// `QuotaFreshnessRule.isFresh`'s at-cap branch, which exists so a spent
+    /// allowance binds the cap for the rest of its cycle), but nothing in the
+    /// collectors actually skips polling while spent - every reader runs on
+    /// every refresh and restamps `occurredAt`, so an old timestamp on an
+    /// at-cap row means the feed has stopped updating, and the row must not
+    /// read as a fresh confirmation of the cap.  Showing the age changes no
+    /// cap, quota or alarm decision; it only dates the reading.
     public func staleReadingCue(now: Date = Date()) -> String? {
-        guard !isMasked, !isExhausted, let reportedAt else { return nil }
+        guard !isMasked, let reportedAt else { return nil }
         if let resetAt, resetAt <= now { return nil }
         guard !QuotaFreshnessRule.isReadingRecent(observedAt: reportedAt, now: now) else { return nil }
+        if isExhausted {
+            return "at cap \u{00B7} updated \(UpdatedStamp.label(reportedAt, now: now))"
+        }
         return "stale \u{00B7} updated \(UpdatedStamp.label(reportedAt, now: now))"
     }
 

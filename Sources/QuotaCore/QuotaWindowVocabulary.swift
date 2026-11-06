@@ -658,11 +658,15 @@ public enum QuotaFreshnessRule {
     /// A window whose reset has passed is waiting for a fresh reading, so its
     /// old number says nothing about the plan now, and it cannot bind a cap.
     ///
-    /// An exhausted allowance (at its cap) stays at cap until it resets:
-    /// collectors skip polling while spent to avoid quota-endpoint churn, so its
-    /// reading does not update every 30 minutes, but the plan remains capped
-    /// throughout the active cycle until `resetAt`.  A reading from before this
-    /// cycle began is not believed.
+    /// An exhausted allowance (at its cap) stays at cap until it resets:  the
+    /// plan remains capped throughout the active cycle until `resetAt`, so the
+    /// last reading of the cycle is believed for the cap even when it is older
+    /// than `staleAfter`.  Note this is a cap-binding rule, not a description
+    /// of collector behavior:  no reader skips polling while spent, so a stale
+    /// timestamp on an at-cap row still means the feed stopped updating (an
+    /// earlier wording here claimed collectors skip polling "to avoid
+    /// quota-endpoint churn"; no such skip exists in the readers or the
+    /// refresh paths).  A reading from before this cycle began is not believed.
     public static func isFresh(
         observedAt: Date?,
         resetAt: Date?,
