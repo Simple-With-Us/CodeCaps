@@ -574,10 +574,12 @@ final class WidgetTests: XCTestCase {
         XCTAssertTrue(presentation.contains("func dualWindows()"))
         // QA pixel review 2026-11-06: a cadence-only dedupe key collapsed
         // Copilot's three monthly buckets into one "1m" row and hid the
-        // exhausted Premium behind a 100% Chat row.  The widget dedupe must
-        // key on the allowance identity, not the cadence alone.
-        XCTAssertTrue(presentation.contains("let allowanceIdentity = w.label"))
-        XCTAssertTrue(presentation.contains("\\(cadence.lowercased())|\\(allowanceIdentity)"))
+        // exhausted Premium behind a 100% Chat row; the actual payload words
+        // the same MiniMax allowance differently per producer, so a label key
+        // keeps duplicates.  The widget dedupe must use the server's
+        // canonical windowKey, normalized across producers.
+        XCTAssertTrue(presentation.contains("windowKey = try container.decodeIfPresent(String.self, forKey: .windowKey)"))
+        XCTAssertTrue(presentation.contains(#"wireKey != "other:unknown""#))
     }
 
     func testOverviewViewsPassQuotasPerProviderToPlanGrid() throws {

@@ -61,36 +61,43 @@ import AppIntents
   // actually publishes, so construction-time behavior is pinned, not just the
   // post-construction selection above.
   let iso = ISO8601DateFormatter()
-  func wireWindow(_ id: String, _ label: String, _ window: String, _ pct: Double, _ resetIn: Double) -> String {
-   "{\"id\":\"\(id)\",\"provider\":\"p\",\"label\":\"\(label)\",\"window\":\"\(window)\",\"remainingPercent\":\(pct),\"resetAt\":\"\(iso.string(from: now.addingTimeInterval(resetIn)))\",\"occurredAt\":\"\(iso.string(from: now))\"}"
+  func wireWindow(_ id: String, _ label: String, _ window: String, _ pct: Double, _ resetIn: Double, _ windowKey: String, _ age: Double = 0) -> String {
+   "{\"id\":\"\(id)\",\"provider\":\"p\",\"label\":\"\(label)\",\"window\":\"\(window)\",\"remainingPercent\":\(pct),\"resetAt\":\"\(iso.string(from: now.addingTimeInterval(resetIn)))\",\"occurredAt\":\"\(iso.string(from: now.addingTimeInterval(-age)))\",\"windowKey\":\"\(windowKey)\"}"
   }
-  // MiniMax: the wire label still carries "Hailuo", so parseSnapshot must
-  // capture the video identity onto the item before the display rewrite, and
-  // the pair must stay the plan's own 5-hour and weekly windows.
+  // MiniMax, shaped like the actual payload QA reviewed:  the codecaps and
+  // collector producers word the SAME allowance differently ("5-hour window"
+  // beside "Coding plan (all models)", "7-day window" beside "weekly
+  // window"), and the server's canonical windowKey is what says they are one
+  // allowance.  The copies must merge onto one row (the fresher collector
+  // reading wins), the video identity must be captured before the display
+  // rewrite, and the pair must stay the plan's own 5-hour and weekly windows.
   let mmJSON = "{\"windows\":["
-   + wireWindow("minimax:5h", "5-hour window", "5h", 81, 7000) + ","
-   + wireWindow("minimax:hailuo", "Hailuo", "1d", 100, 70000) + ","
-   + wireWindow("minimax:weekly", "weekly", "7d", 5, 300000)
+   + wireWindow("minimax:5h", "5-hour window", "5h", 81, 7000, "5h", 900) + ","
+   + wireWindow("minimax:coding-plan", "Coding plan (all models)", "interval", 77, 7000, "5h") + ","
+   + wireWindow("minimax:weekly", "7-day window", "7d", 5, 300000, "7d", 900) + ","
+   + wireWindow("minimax:weekly-general", "weekly window", "weekly", 4, 300000, "7d") + ","
+   + wireWindow("minimax:hailuo", "Hailuo", "1d", 100, 70000, "1d")
    + "]}"
   let mmPlatforms = WidgetPresentation.parseSnapshot(data: mmJSON.data(using: .utf8)!, now: now)
   let mm = mmPlatforms.first { $0.id.contains("minimax") || $0.providerKey.contains("minimax") }
-  precondition(mm?.windows.count == 3)
+  precondition(mm?.windows.count == 3, "minimax copies did not merge: \(mm?.windows.count ?? -1)")
+  precondition(mm?.windows.contains { $0.id == "minimax:coding-plan" } == true, "the fresher copy should win the 5h row")
+  precondition(mm?.windows.contains { $0.id == "minimax:weekly-general" } == true, "the fresher copy should win the 7d row")
   precondition(mm?.windows.first { $0.id == "minimax:hailuo" }?.isSupplementaryVideoQuota == true)
-  precondition(mm?.dualWindows()?.window1.id == "minimax:5h")
-  precondition(mm?.dualWindows()?.window2.id == "minimax:weekly")
-  // Copilot: three monthly buckets are three allowances.  A cadence-only
-  // dedupe collapses them into one "1m" row and hides an exhausted Premium
-  // behind a 100% Chat row (QA pixel review 2026-11-06); the wire-label
-  // identity keeps all three.
+  precondition(mm?.dualWindows()?.window1.id == "minimax:coding-plan")
+  precondition(mm?.dualWindows()?.window2.id == "minimax:weekly-general")
+  // Copilot: three monthly buckets are three allowances with three canonical
+  // keys.  A cadence-only dedupe collapses them into one "1m" row and hides
+  // an exhausted Premium behind a 100% Chat row (QA pixel review 2026-11-06).
   let cpJSON = "{\"windows\":["
-   + wireWindow("local-mac:github-copilot:premium_interactions", "Premium requests", "monthly", 0, 900000) + ","
-   + wireWindow("local-mac:github-copilot:chat", "Chat requests", "monthly", 100, 900000) + ","
-   + wireWindow("local-mac:github-copilot:completions", "Completions", "monthly", 100, 900000)
+   + wireWindow("local-mac:github-copilot:premium_interactions", "Premium requests", "monthly", 0, 900000, "other:premium_interactions") + ","
+   + wireWindow("local-mac:github-copilot:chat", "Chat requests", "monthly", 100, 900000, "other:chat") + ","
+   + wireWindow("local-mac:github-copilot:completions", "Completions", "monthly", 100, 900000, "other:completions")
    + "]}"
   let cpPlatforms = WidgetPresentation.parseSnapshot(data: cpJSON.data(using: .utf8)!, now: now)
   let cp = cpPlatforms.first { $0.providerKey == "github-copilot" || $0.id.contains("copilot") }
   precondition(cp?.windows.count == 3, "copilot buckets collapsed: \(cp?.windows.count ?? -1)")
-  print("PASS: wire-level MiniMax video identity and Copilot allowance dedupe")
+  print("PASS: wire-level cross-producer merge, MiniMax video identity, Copilot allowance keys")
   let edgePlatforms = platforms
   platforms += WidgetPresentation.placeholders
   platforms.append(WidgetPlatformItem(id:"overflow",providerKey:"codex",title:"Overflow plan",subtitle:"",remainingPercent:50,resetAt:nil,windows:[]))
