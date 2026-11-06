@@ -16,6 +16,7 @@ import AppIntents
   }
   let phone5h = "[\"producer\",\"4f938669-72f9-4386-8808-6408a031ab4d\",\"general\"]"
   let phoneVideo = "[\"producer\",\"4f938669-72f9-4386-8808-6408a031ab4d\",\"video\"]"
+  let macWeekly = "[\"producer\",\"Mac.Jays.Services\",\"general\"]"
 
   // A: spent video (0%, exhausted) beside live plan windows (78% 5h, 5% 7d)
   let pa = load("qa6-harness/qa6-a-spent-video-live-plan.json").first { $0.providerKey == "minimax" }!
@@ -25,6 +26,8 @@ import AppIntents
   precondition(pa.remainingPercent == 5, "A: headline must derive from plan windows (5), not the spent video (0); got \(String(describing: pa.remainingPercent))")
   precondition(pa.isExhausted == false, "A: platform must not read exhausted")
   precondition(pa.dualWindows()?.window1.id == phone5h, "A: pair opens on plan 5h")
+  precondition(pa.controllingWindow(.mostUrgent)?.id == macWeekly, "A: gauge pick is the plan weekly at 5%, never the spent video; got \(String(describing: pa.controllingWindow(.mostUrgent)?.id))")
+  precondition(pa.controllingWindow(.mostHeadroom)?.id == phone5h, "A: most headroom is the plan 5h at 78%")
   print("PASS A: wire spent-video/live-plan - no cap, headline 5%, pair 5h+7d")
 
   // B: spent plan 5h (0%, exhausted) beside live video (100%)
@@ -32,6 +35,7 @@ import AppIntents
   precondition(pb.windows.count == 4, "B: expected 4 rows, got \(pb.windows.map { $0.id })")
   precondition(pb.atCapWindow(now: fxNow)?.id == phone5h, "B: the spent plan 5h must cap the platform; got \(String(describing: pb.atCapWindow(now: fxNow)?.id))")
   precondition(pb.isExhausted == true, "B: platform reads exhausted")
+  precondition(pb.controllingWindow(.mostUrgent)?.id == phone5h, "B: gauge pick is the spent plan 5h at 0%")
   print("PASS B: wire spent-plan/live-video - plan 5h caps the platform")
 
   // C: video-only platform, its one video spent -> all-window fallback keeps the video cap
@@ -40,6 +44,7 @@ import AppIntents
   precondition(pc.windows.first?.isSupplementaryVideoQuota == true, "C: the row is flagged video")
   precondition(pc.atCapWindow(now: fxNow)?.id == phoneVideo, "C: video-only fallback binds the video window; got \(String(describing: pc.atCapWindow(now: fxNow)?.id))")
   precondition(pc.isExhausted == true, "C: platform reads exhausted")
+  precondition(pc.controllingWindow(.mostUrgent)?.id == phoneVideo, "C: video-only gauge pick is the video window")
   print("PASS C: wire video-only spent - fallback keeps the video cap")
 
   // Pixel proof: render the actual widget views per scenario (single-platform

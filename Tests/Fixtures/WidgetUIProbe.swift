@@ -163,12 +163,14 @@ import AppIntents
   precondition(q6a.remainingPercent == 5, "qa6 A: headline derives from plan windows (5), not the spent video (0): \(String(describing: q6a.remainingPercent))")
   precondition(q6a.isExhausted == false, "qa6 A: platform must not read exhausted")
   precondition(q6a.dualWindows()?.window1.id == phone5h, "qa6 A: pair opens on plan 5h")
-  precondition(q6a.controllingWindow(.mostUrgent)?.id == phone5h, "qa6 A: gauge pick stays on the plan 5h, never the spent video")
+  precondition(q6a.controllingWindow(.mostUrgent)?.id == macWeekly, "qa6 A: most urgent is the plan weekly at 5%, never the spent video: \(String(describing: q6a.controllingWindow(.mostUrgent)?.id))")
+  precondition(q6a.controllingWindow(.mostHeadroom)?.id == phone5h, "qa6 A: most headroom is the plan 5h at 78%")
   // B: spent plan 5h (0%) beside live video (100%) - the plan caps itself.
   let q6b = q6load("qa6-b-spent-plan-live-video.json").first { $0.providerKey == "minimax" }!
   precondition(q6b.windows.count == 4, "qa6 B: expected 4 rows, got \(q6b.windows.map { $0.id })")
   precondition(q6b.atCapWindow(now: q6Now)?.id == phone5h, "qa6 B: the spent plan 5h caps the platform: \(String(describing: q6b.atCapWindow(now: q6Now)?.id))")
   precondition(q6b.isExhausted == true, "qa6 B: platform reads exhausted")
+  precondition(q6b.controllingWindow(.mostUrgent)?.id == phone5h, "qa6 B: gauge pick is the spent plan 5h at 0%")
   // C: video-only platform, its one video spent - the all-window fallback
   // keeps the video cap and the gauge picks it.
   let q6c = q6load("qa6-c-video-only-spent.json").first { $0.providerKey == "minimax" }!
