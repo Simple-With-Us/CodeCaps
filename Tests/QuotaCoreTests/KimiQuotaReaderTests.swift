@@ -66,6 +66,49 @@ final class KimiQuotaReaderTests: XCTestCase {
         XCTAssertEqual(result.windows[1].remainingPercent, 90)
     }
 
+    /// The live `/usages` shape: int64 counts quoted as strings, `resetTime`,
+    /// `TIME_UNIT_*` enum names and sibling objects this reader ignores.  The
+    /// counts are synthetic; the shape is the one the Kimi CLI's own parser
+    /// reads (counts through `toInt`, units `TIME_UNIT_MINUTE`, `HOUR`, `DAY`
+    /// and `WEEK`).  Every older fixture here uses bare numbers, which is how
+    /// the reader came to drop every window on the real payload.
+    func testLiveShapeQuotedCountsAndEnumUnits() async {
+        let result = await read(#"{"user":{"userId":"u1","region":"REGION_OVERSEA"},"usage":{"limit":"100","remaining":"69","resetTime":"2026-11-11T01:02:55Z"},"limits":[{"window":{"duration":300,"timeUnit":"TIME_UNIT_MINUTE"},"detail":{"limit":"100","remaining":"40","resetTime":"2026-11-06T22:00:00Z"}}],"parallel":{"limit":"20"},"totalQuota":{"limit":"100","remaining":"100"},"authentication":{"method":"METHOD_OAUTH","scope":"FEATURE_CODING"},"subType":"TYPE_PURCHASE"}"#)
+        XCTAssertTrue(result.issues.isEmpty)
+        XCTAssertEqual(result.windows.count, 2)
+        let weekly = result.windows[0]
+        XCTAssertEqual(weekly.label, "Weekly limit")
+        XCTAssertEqual(weekly.remainingPercent, 69)
+        XCTAssertEqual(weekly.absoluteRemaining, 69)
+        XCTAssertEqual(weekly.absoluteLimit, 100)
+        XCTAssertEqual(weekly.resetAt, "2026-11-11T01:02:55Z")
+        let fiveHour = result.windows[1]
+        XCTAssertEqual(fiveHour.label, "5h limit")
+        XCTAssertEqual(fiveHour.window, "5h")
+        XCTAssertEqual(fiveHour.remainingPercent, 40)
+        XCTAssertEqual(fiveHour.resetAt, "2026-11-06T22:00:00Z")
+    }
+
+    func testWeekUnitLimitIsLabelledAsAWeek() async {
+        let result = await read(#"{"limits":[{"window":{"duration":1,"timeUnit":"TIME_UNIT_WEEK"},"detail":{"limit":"200","remaining":"50"}},{"window":{"duration":2,"timeUnit":"TIME_UNIT_WEEK"},"detail":{"limit":"10","remaining":"10"}}]}"#)
+        XCTAssertEqual(result.windows.count, 2)
+        XCTAssertEqual(result.windows[0].label, "1w limit")
+        XCTAssertEqual(result.windows[0].window, "weekly")
+        XCTAssertEqual(result.windows[0].remainingPercent, 25)
+        XCTAssertEqual(result.windows[1].label, "2w limit")
+        XCTAssertEqual(result.windows[1].window, "2w")
+    }
+
+    func testCountsAcceptPlainDecimalStringsOnly() {
+        XCTAssertEqual(KimiQuotaReader.int("300"), 300)
+        XCTAssertEqual(KimiQuotaReader.int(" 7 "), 7)
+        XCTAssertEqual(KimiQuotaReader.int(NSNumber(value: 3)), 3)
+        for bad in ["", "abc", "-1", "+1", "1e3", "0x10", "1.2.3", "7.5", "NaN", "inf", String(repeating: "9", count: 40)] {
+            XCTAssertNil(KimiQuotaReader.int(bad), bad)
+        }
+        XCTAssertNil(KimiQuotaReader.int(true))
+    }
+
     func testMissingCredentialIsSilent() async {
         let result = await read("{}", token: nil)
         XCTAssertTrue(result.windows.isEmpty)
@@ -151,6 +194,15 @@ final class KimiQuotaReaderTests: XCTestCase {
         XCTAssertEqual(KimiQuotaReader.credentialExpiry("2026-09-02T07:04:53Z"), Date(timeIntervalSince1970: 1_788_332_693))
         XCTAssertNil(KimiQuotaReader.credentialExpiry("not a date"))
         XCTAssertNil(KimiQuotaReader.credentialExpiry(nil))
+    }
+
+    /// Seen live on 2026-11-06: a signed-in Kimi account with no Kimi Code plan
+    /// answers `/usages` with 200 and `{}`.  That is "no plan", not an unreadable
+    /// quota, so it stays silent like a missing sign-in.
+    func testEmptyPayloadMeansNoPlanAndIsSilent() async {
+        let result = await read("{}")
+        XCTAssertTrue(result.windows.isEmpty)
+        XCTAssertTrue(result.issues.isEmpty)
     }
 
     func testUnparseableSuccessIsAnIssueNotAWindow() async {
