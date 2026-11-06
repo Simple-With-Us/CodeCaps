@@ -2747,14 +2747,28 @@ public final class CompanionQuotaModel: ObservableObject {
     /// Every other series - including any other MiniMax model - keeps its
     /// own identity.
     static func normalizedAllowanceSeries(providerKey: String, series: String) -> String {
-        guard providerKey.lowercased().contains("minimax") else { return series }
-        switch series {
-        case "general", "minimax:general", "minimax:general:weekly",
-             "minimax:coding-plan", "coding-plan":
-            return "minimax:plan"
-        default:
-            return series
+        if providerKey.lowercased().contains("minimax") {
+            switch series {
+            case "general", "minimax:general", "minimax:general:weekly",
+                 "minimax:coding-plan", "coding-plan":
+                return "minimax:plan"
+            default:
+                return series
+            }
         }
+        // xAI's single subscription credit pool under two producer
+        // vocabularies:  the codecaps local reader's id is
+        // local-mac:grok:subscription (series "grok:subscription") while the
+        // collector's parser emits bucketId "xai:subscription"
+        // (scripts/lib/subscription-quota-parsers.mjs), and the app's own
+        // UnifiedSubscriptionPool already unifies the two.  The qa4 wire
+        // capture (2026-11-06) shows both copies at the same reset second
+        // and reading.  Bounded to the subscription pool;  every other xAI
+        // series keeps its own identity.
+        if providerKey == "xai", series == "grok:subscription" {
+            return "xai:subscription"
+        }
+        return series
     }
 
     static func capRuleFlags(
