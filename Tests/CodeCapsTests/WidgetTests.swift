@@ -572,17 +572,22 @@ final class WidgetTests: XCTestCase {
         XCTAssertTrue(presentation.contains("static func shortCadence"))
         XCTAssertTrue(presentation.contains("static func resetCaption"))
         XCTAssertTrue(presentation.contains("func dualWindows()"))
-        // QA pixel review 2026-11-06: a cadence-only dedupe key collapsed
-        // Copilot's three monthly buckets into one "1m" row and hid the
-        // exhausted Premium behind a 100% Chat row; the canonical windowKey
-        // is not the identity either - Chat and Completions both read
-        // "monthly", and MiniMax's video weekly shares "7d" with the plan's
-        // weekly, so a windowKey dedupe let the fresher video copy eat the
-        // plan window.  The widget dedupe must key on the server's series
-        // identity from the wire id.
+        // QA 2026-11-06, verified against the real wire capture (committed
+        // verbatim at Tests/Fixtures/qa3-wire-regression-fixture.json):  the
+        // codecaps 5h and the collector weekly share series "general", the
+        // collector's 5h headline is series "minimax:coding-plan", and
+        // Copilot's Chat and Completions share the canonical key "monthly".
+        // The dedupe identity must be the triple of video class, aliased
+        // series, and canonical cadence:  video partitions first so a
+        // supplementary video window can never fold into a plan window;  the
+        // MiniMax alias set is bounded to the producer's verified
+        // general/coding-plan equivalence;  the canonical cadence keeps one
+        // model's 5-hour, daily and weekly windows separate.
         XCTAssertTrue(presentation.contains("static func allowanceSeries(forWireId id: String) -> String"))
         XCTAssertTrue(presentation.contains(#"parts[0] == "producer""#))
-        XCTAssertTrue(presentation.contains("Self.allowanceSeries(forWireId: w.id)"))
+        XCTAssertTrue(presentation.contains("static func normalizedAllowanceSeries(providerKey: String, series: String) -> String"))
+        XCTAssertTrue(presentation.contains(#""minimax:coding-plan", "coding-plan""#))
+        XCTAssertTrue(presentation.contains(#"item.isSupplementaryVideoQuota ? "video|" : "plan|""#))
     }
 
     func testOverviewViewsPassQuotasPerProviderToPlanGrid() throws {

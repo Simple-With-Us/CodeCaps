@@ -561,6 +561,10 @@ public enum WidgetPresentation {
         let planShowCostAndRenewal: Bool?
         let planHasMismatch: Bool?
         let planUserUpdatedAt: Double?
+        /// The server's canonical cadence token (`5h`, `7d`, `monthly`,
+        /// `other:...`), one component of the allowance identity - never the
+        /// identity alone (QA 2026-11-06).
+        let windowKey: String?
 
         private enum CodingKeys: String, CodingKey {
             case id, provider, providerKey, label, remainingPercent, isExhausted
@@ -568,6 +572,7 @@ public enum WidgetPresentation {
             case producerInstanceId, remainingUnknown, absoluteRemaining, plan, planName, planMetadata
             case planDetectedName, planUserName, planUserCostUsd, planUserRenewalDateText
             case planUserSubtitle, planShowCostAndRenewal, planHasMismatch, planUserUpdatedAt
+            case windowKey
         }
 
         init(from decoder: Decoder) throws {
@@ -581,6 +586,7 @@ public enum WidgetPresentation {
             modelType = try container.decodeIfPresent(String.self, forKey: .modelType)
             modelId = try container.decodeIfPresent(String.self, forKey: .modelId)
             window = try container.decodeIfPresent(String.self, forKey: .window)
+            windowKey = try container.decodeIfPresent(String.self, forKey: .windowKey)
             resetAt = try container.decodeIfPresent(String.self, forKey: .resetAt)
             occurredAt = try container.decodeIfPresent(String.self, forKey: .occurredAt)
             source = try container.decodeIfPresent(String.self, forKey: .source)
@@ -661,6 +667,24 @@ public enum WidgetPresentation {
 
     private struct WireProviderTerms: Decodable {
         let defaultWindowLabel: String?
+    }
+
+    /// MiniMax plan-level aliasing, bounded to the producer's own verified
+    /// semantics:  the collector's parser defines the "coding-plan" headline
+    /// as the general model's interval reading
+    /// (scripts/lib/subscription-quota-parsers.mjs), so "general" and
+    /// "coding-plan" name ONE allowance observed under two identities.
+    /// Every other series - including any other MiniMax model - keeps its
+    /// own identity.
+    static func normalizedAllowanceSeries(providerKey: String, series: String) -> String {
+        guard providerKey.lowercased().contains("minimax") else { return series }
+        switch series {
+        case "general", "minimax:general", "minimax:general:weekly",
+             "minimax:coding-plan", "coding-plan":
+            return "minimax:plan"
+        default:
+            return series
+        }
     }
 
     /// The server's allowance identity for a wire window.  Usage Monitor
@@ -933,18 +957,20 @@ public enum WidgetPresentation {
             // the copy is often days old, so taking the first one in payload
             // order let a stale copy win and the widget show figures the app
             // had already replaced (owner, Oct-22-2026).
-            // The allowance identity is the server's series, carried in the
-            // wire id:  Usage Monitor deliberately keeps one window per
-            // producer for the same allowance, and the series
-            // (modelId ?? bucketId ?? provider:label in projectQuotaWindows)
-            // is what the copies share.  The canonical windowKey is NOT the
-            // identity:  Copilot's Chat and Completions buckets are both
-            // "monthly", and MiniMax's supplementary video weekly shares
-            // "7d" with the plan's weekly, so a windowKey dedupe let the
-            // fresher video copy eat the plan window and the pair then
-            // showed the video bar (QA 2026-11-06).  Same-series copies fold
-            // to the freshest;  distinct series keep distinct rows.
-            let cadenceKey = Self.allowanceSeries(forWireId: w.id)
+            // The allowance identity is the triple of video class, aliased
+            // series, and canonical cadence:  the video class partitions
+            // first so a supplementary video window can never fold into a
+            // plan window;  the aliased series joins cross-producer copies
+            // of one allowance (codecaps "general" beside the collector's
+            // "minimax:coding-plan" headline - the producer parser defines
+            // them as one reading) while keeping Copilot's distinct buckets
+            // apart;  the canonical cadence keeps one model's 5-hour,
+            // daily and weekly windows separate (QA real-payload fixture
+            // 2026-11-06, Tests/Fixtures/qa3-wire-regression-fixture.json).
+            let wireCadence = (w.windowKey ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let cadenceKey = (item.isSupplementaryVideoQuota ? "video|" : "plan|")
+                + Self.normalizedAllowanceSeries(providerKey: providerKey, series: Self.allowanceSeries(forWireId: w.id))
+                + "|" + (wireCadence.isEmpty ? cadence.lowercased() : wireCadence.lowercased())
             if let current = windowByCadence[cadenceKey] {
                 if item.isFresher(than: current, now: now) {
                     windowByCadence[cadenceKey] = item
