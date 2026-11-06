@@ -141,6 +141,43 @@ import AppIntents
   precondition(xaiIds.first == "[\"producer\",\"4f938669-72f9-4386-8808-6408a031ab4d\",\"grok:subscription\"]", "the fresher phone copy should win the merged xAI row: \(xaiIds)")
   precondition(xaip?.windows.first?.remainingPercent == 79, "the merged xAI row keeps the 79% reading")
   print("PASS: xai wire fixture - one subscription pool, one 7d row, fresher copy wins")
+  // The qa6 wire captures (committed verbatim under qa6-harness/):  the
+  // video cap-state exclusion exercised end-to-end through the real
+  // parseSnapshot path on actual wire payloads - the discriminating cases
+  // QA ran red on the pre-fix head and green after.
+  let q6Now = ISO8601DateFormatter().date(from: "2026-11-06T10:30:00Z")!
+  let q6Dir = ProcessInfo.processInfo.environment["QA6_FIXTURE_DIR"] ?? "qa6-harness"
+  func q6load(_ name:String) -> [WidgetPlatformItem] {
+   guard let d = try? Data(contentsOf: URL(fileURLWithPath: q6Dir + "/" + name)) else {
+    fatalError("qa6 fixture missing at \(q6Dir)/\(name)")
+   }
+   return WidgetPresentation.parseSnapshot(data: d, now: q6Now)
+  }
+  // A: spent video (0%) beside live plan windows (78% 5h, 5% 7d) - the video
+  // pool must not cap the plan, the headline reads the plan (5), the pair
+  // opens on the plan 5h, and the gauge pick stays on the plan.
+  let q6a = q6load("qa6-a-spent-video-live-plan.json").first { $0.providerKey == "minimax" }!
+  precondition(q6a.windows.count == 4, "qa6 A: expected 4 rows, got \(q6a.windows.map { $0.id })")
+  precondition(q6a.windows.filter { $0.isSupplementaryVideoQuota }.count == 2, "qa6 A: both video rows flagged")
+  precondition(q6a.atCapWindow(now: q6Now) == nil, "qa6 A: spent video must not cap a live plan via the wire path")
+  precondition(q6a.remainingPercent == 5, "qa6 A: headline derives from plan windows (5), not the spent video (0): \(String(describing: q6a.remainingPercent))")
+  precondition(q6a.isExhausted == false, "qa6 A: platform must not read exhausted")
+  precondition(q6a.dualWindows()?.window1.id == phone5h, "qa6 A: pair opens on plan 5h")
+  precondition(q6a.controllingWindow(.mostUrgent)?.id == phone5h, "qa6 A: gauge pick stays on the plan 5h, never the spent video")
+  // B: spent plan 5h (0%) beside live video (100%) - the plan caps itself.
+  let q6b = q6load("qa6-b-spent-plan-live-video.json").first { $0.providerKey == "minimax" }!
+  precondition(q6b.windows.count == 4, "qa6 B: expected 4 rows, got \(q6b.windows.map { $0.id })")
+  precondition(q6b.atCapWindow(now: q6Now)?.id == phone5h, "qa6 B: the spent plan 5h caps the platform: \(String(describing: q6b.atCapWindow(now: q6Now)?.id))")
+  precondition(q6b.isExhausted == true, "qa6 B: platform reads exhausted")
+  // C: video-only platform, its one video spent - the all-window fallback
+  // keeps the video cap and the gauge picks it.
+  let q6c = q6load("qa6-c-video-only-spent.json").first { $0.providerKey == "minimax" }!
+  precondition(q6c.windows.count == 1, "qa6 C: expected 1 row, got \(q6c.windows.map { $0.id })")
+  precondition(q6c.windows.first?.isSupplementaryVideoQuota == true, "qa6 C: the row is flagged video")
+  precondition(q6c.atCapWindow(now: q6Now)?.id == phoneVideo, "qa6 C: video-only fallback binds the video window: \(String(describing: q6c.atCapWindow(now: q6Now)?.id))")
+  precondition(q6c.isExhausted == true, "qa6 C: platform reads exhausted")
+  precondition(q6c.controllingWindow(.mostUrgent)?.id == phoneVideo, "qa6 C: video-only gauge pick is the video window")
+  print("PASS: qa6 wire fixtures - spent video never caps/picks over a live plan, spent plan caps itself, video-only falls back")
   let edgePlatforms = platforms
   platforms += WidgetPresentation.placeholders
   platforms.append(WidgetPlatformItem(id:"overflow",providerKey:"codex",title:"Overflow plan",subtitle:"",remainingPercent:50,resetAt:nil,windows:[]))
