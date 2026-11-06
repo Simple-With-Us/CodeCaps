@@ -13,6 +13,24 @@ extension QuotaWindow {
     /// Nil for a primary window, and for OpenAI's scoped pools, whose labels
     /// already say what they are.
     public var subModelName: String? {
+        QuotaWindowPresentation.subModelName(
+            isSubModelLimit: isSubModelLimit,
+            canonicalProviderKey: canonicalProviderKey,
+            label: label,
+            modelType: modelType,
+            modelId: modelId
+        )
+    }
+}
+
+/// Ordering and collapsing rules for the quota rows a surface draws.
+public enum QuotaWindowPresentation {
+    /// The model a sub-model quota belongs to, in the provider's own words,
+    /// answered with the reading's own fields, so a surface whose rows are
+    /// not `QuotaWindow`s - the phone's companion card - asks the same
+    /// question the same way and the two surfaces cannot drift.
+    public static func subModelName(isSubModelLimit: Bool, canonicalProviderKey: String, label: String,
+                                    modelType: String?, modelId: String?) -> String? {
         guard isSubModelLimit, canonicalProviderKey != "openai" else { return nil }
         if let separator = label.range(of: " · ") {
             let name = label[..<separator.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
@@ -22,7 +40,7 @@ extension QuotaWindow {
             let raw = (candidate ?? "")
                 .replacingOccurrences(of: "_", with: " ")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            if !raw.isEmpty { return Self.initialCapped(raw) }
+            if !raw.isEmpty { return initialCapped(raw) }
         }
         return nil
     }
@@ -34,10 +52,7 @@ extension QuotaWindow {
             .map { String($0.prefix(1)).uppercased() + String($0.dropFirst()) }
             .joined(separator: " ")
     }
-}
 
-/// Ordering and collapsing rules for the quota rows a surface draws.
-public enum QuotaWindowPresentation {
     /// The platform's own windows first, then its per-model windows.
     ///
     /// A per-model quota is a real limit but not the one the plan is sold on,

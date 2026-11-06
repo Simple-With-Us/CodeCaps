@@ -112,6 +112,12 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
     /// payload carried none.  The Mac asks whether a token is present, not
     /// what it means, so a window's formatted `cadence` cannot stand in for it.
     public let rawWindowToken: String?
+    /// The model a sub-model quota belongs to ("Fable"), in the provider's own
+    /// words, resolved at build time through the shared
+    /// `QuotaWindowPresentation.subModelName`, so the phone names the window
+    /// exactly the way the Mac does.  Nil for a primary window, and in
+    /// snapshots recorded before the phone carried the name.
+    public let subModelName: String?
 
     public init(
         id: String,
@@ -133,10 +139,12 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
         reportedAt: Date? = nil,
         normalizedWindowKey: String = "",
         producerInstanceId: String? = nil,
-        rawWindowToken: String? = nil
+        rawWindowToken: String? = nil,
+        subModelName: String? = nil
     ) {
         self.id = id
         self.rawWindowToken = rawWindowToken
+        self.subModelName = subModelName
         self.label = label
         self.cadence = cadence
         self.remainingPercent = remainingPercent
@@ -194,7 +202,8 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
             reportedAt: reportedAt,
             normalizedWindowKey: normalizedWindowKey,
             producerInstanceId: producerInstanceId,
-            rawWindowToken: rawWindowToken
+            rawWindowToken: rawWindowToken,
+            subModelName: subModelName
         )
     }
 
@@ -203,7 +212,7 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
         case isDuplicateSource, isExhausted, isMasked
         case isSupplementaryVideoQuota, isScopedPoolAllowance, isSubModelLimit
         case absoluteRemaining, absoluteLimit, quotaUnit
-        case reportedAt, observedAt, normalizedWindowKey, producerInstanceId, rawWindowToken
+        case reportedAt, observedAt, normalizedWindowKey, producerInstanceId, rawWindowToken, subModelName
     }
 
     public init(from decoder: Decoder) throws {
@@ -213,6 +222,7 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
         cadence = try container.decode(String.self, forKey: .cadence)
         producerInstanceId = try container.decodeIfPresent(String.self, forKey: .producerInstanceId)
         rawWindowToken = try container.decodeIfPresent(String.self, forKey: .rawWindowToken)
+        subModelName = try container.decodeIfPresent(String.self, forKey: .subModelName)
         remainingPercent = try container.decodeIfPresent(Double.self, forKey: .remainingPercent)
         resetAt = try container.decodeIfPresent(Date.self, forKey: .resetAt)
         source = try container.decodeIfPresent(String.self, forKey: .source)
@@ -255,6 +265,7 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
         try container.encodeIfPresent(reportedAt, forKey: .reportedAt)
         try container.encodeIfPresent(producerInstanceId, forKey: .producerInstanceId)
         try container.encodeIfPresent(rawWindowToken, forKey: .rawWindowToken)
+        try container.encodeIfPresent(subModelName, forKey: .subModelName)
         try container.encode(normalizedWindowKey, forKey: .normalizedWindowKey)
     }
 
@@ -339,7 +350,14 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
         QuotaFreshnessRule.isFresh(observedAt: reportedAt, resetAt: resetAt, now: now)
     }
 
-    public var caption: String { meterCaption }
+    /// The caption a meter or window row leads with:  the cadence, plus the
+    /// model's own name when the cadence alone would leave two of the
+    /// platform's bars reading the same - Claude's own weekly and the Fable
+    /// weekly both said "7d" while reading 84% and 100% (owner, 2026-11-06).
+    public var caption: String {
+        guard let subModelName, !subModelName.isEmpty else { return meterCaption }
+        return "\(meterCaption) \(subModelName)"
+    }
 
     /// Companion meters use hyphenated cadence only; no secondary qualifier line.
     public var barQualifier: String { "" }
@@ -408,6 +426,11 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
     /// widget when the provider has no windows yet.
     public let defaultWindowLabel: String?
     public let planMetadata: PlanMetadata?
+    /// When the newest dead copy was observed, if the payload carried any.
+    /// A card whose windows are all copies of periods that have already ended
+    /// says it is waiting for a fresh reading, with this time, instead of
+    /// drawing nothing or reviving a figure whose window is over.
+    public let deadCopyObservedAt: Date?
 
     public var providerDetailRows: [CompanionProviderDetailRow] {
         var rows: [CompanionProviderDetailRow] = []
@@ -679,7 +702,8 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
         duplicateWindows: [CompanionWindowItem] = [],
         iconHint: String? = nil,
         defaultWindowLabel: String? = nil,
-        planMetadata: PlanMetadata? = nil
+        planMetadata: PlanMetadata? = nil,
+        deadCopyObservedAt: Date? = nil
     ) {
         self.id = id
         self.providerKey = providerKey
@@ -694,6 +718,7 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
         self.iconHint = iconHint
         self.defaultWindowLabel = defaultWindowLabel
         self.planMetadata = planMetadata
+        self.deadCopyObservedAt = deadCopyObservedAt
     }
 
     public var displayPercent: String {
@@ -1986,6 +2011,10 @@ public final class CompanionQuotaModel: ObservableObject {
         var primaryIndexByCadenceKey: [String: Int] = [:]
         var primaryWireByCadenceKey: [String: WireRawWindow] = [:]
         let now = Date()
+        /// The newest copy the freshness rule retires still says when the
+        /// provider was last heard from, so a card whose every window is a
+        /// dead copy can say so, with that time, instead of drawing nothing.
+        var newestDeadCopyObservedAt: Date? = nil
 
         // A copy of a period that ended before the last refresh carries no
         // live reading, so it never becomes a row here either.  The rule is
@@ -2012,9 +2041,16 @@ public final class CompanionQuotaModel: ObservableObject {
                                                         ownInstanceId: payloadProducerInstanceId) {
                 return true
             }
-            return !QuotaFreshnessRule.isDeadCopy(observedAt: CompanionDateFormatter.date(from: w.occurredAt),
-                                                  resetAt: CompanionDateFormatter.date(from: w.resetAt),
-                                                  now: now)
+            let observedAt = CompanionDateFormatter.date(from: w.occurredAt)
+            if QuotaFreshnessRule.isDeadCopy(observedAt: observedAt,
+                                             resetAt: CompanionDateFormatter.date(from: w.resetAt),
+                                             now: now) {
+                if let observedAt, observedAt > newestDeadCopyObservedAt ?? .distantPast {
+                    newestDeadCopyObservedAt = observedAt
+                }
+                return false
+            }
+            return true
         }
 
         /// Whether a window's reading is recent enough to believe, by the
@@ -2110,7 +2146,17 @@ public final class CompanionQuotaModel: ObservableObject {
                 reportedAt: parsedReportedAt,
                 normalizedWindowKey: cadenceKey,
                 producerInstanceId: w.producerInstanceId,
-                rawWindowToken: w.window
+                rawWindowToken: w.window,
+                // The same question the Mac asks, with the reader's own
+                // label, model type and model id:  that is where the "fable"
+                // and "argon" signals live, not in the display label.
+                subModelName: QuotaWindowPresentation.subModelName(
+                    isSubModelLimit: capFlags.isSubModelLimit,
+                    canonicalProviderKey: providerKey,
+                    label: w.label,
+                    modelType: w.modelType,
+                    modelId: w.modelId
+                )
             )
 
             if let index = primaryIndexByCadenceKey[cadenceKey],
@@ -2212,7 +2258,8 @@ public final class CompanionQuotaModel: ObservableObject {
             windows: primaryWindows,
             duplicateWindows: duplicateWindows,
             iconHint: iconHint,
-            planMetadata: providerPlanMetadata
+            planMetadata: providerPlanMetadata,
+            deadCopyObservedAt: newestDeadCopyObservedAt
         )
     }
 

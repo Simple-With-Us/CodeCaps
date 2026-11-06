@@ -715,13 +715,59 @@ final class CompanionModelTests: XCTestCase {
             "Companion meters must use hyphenated cadence captions"
         )
         XCTAssertTrue(
-            source.contains("public var caption: String { meterCaption }"),
-            "card meters must not use popover 5h/7d/1m tags"
+            source.contains("guard let subModelName, !subModelName.isEmpty else { return meterCaption }"),
+            "card meters lead with the cadence caption and add only the model's own name"
         )
         let content = try readCompanionContentViewSource()
         XCTAssertFalse(
             content.contains("window.barQualifier"),
             "companion meters must not render weekly/additional qualifier captions"
+        )
+    }
+
+    func testSubModelCardMetersAreNamedByTheirModel() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains("public let subModelName: String?"),
+            "the window item must carry the resolved model name to the card"
+        )
+        XCTAssertTrue(
+            source.contains("QuotaWindowPresentation.subModelName("),
+            "the card builder must name a sub-model window through the same shared rule the Mac asks"
+        )
+        XCTAssertTrue(
+            source.contains("label: w.label"),
+            "the shared rule needs the reader's own label, where the model signal lives"
+        )
+        XCTAssertTrue(
+            source.contains("modelType: w.modelType"),
+            "the shared rule needs the reader's model type"
+        )
+        XCTAssertTrue(
+            source.contains("modelId: w.modelId"),
+            "the shared rule needs the reader's model id, so Claude's Fable weekly is not another \"7d\""
+        )
+        let content = try readCompanionContentViewSource()
+        XCTAssertTrue(
+            content.contains("Text(win.caption)"),
+            "window rows must lead with the model-aware caption, not the bare cadence"
+        )
+    }
+
+    func testCardWhoseWindowsAreAllDeadCopiesSaysItIsWaiting() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains("public let deadCopyObservedAt: Date?"),
+            "the item must remember when the provider was last heard from"
+        )
+        let content = try readCompanionContentViewSource()
+        XCTAssertTrue(
+            content.contains(#"Text("Waiting for a fresh reading")"#),
+            "a card whose windows all ended must say so instead of drawing nothing"
+        )
+        XCTAssertTrue(
+            content.contains("UpdatedStamp.label(lastReading)"),
+            "the stale line says when the provider was last heard from, never the expired figure"
         )
     }
 

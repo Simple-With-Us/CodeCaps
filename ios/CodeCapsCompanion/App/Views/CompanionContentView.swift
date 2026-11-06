@@ -412,6 +412,24 @@ public struct CompanionContentView: View {
                     .accessibilityElement(children: .combine)
                     .accessibilityLabel("At cap. \(atCapSummary)")
                 }
+            } else if cardWindows.isEmpty, let lastReading = item.deadCopyObservedAt {
+                // Every window this provider reported is a copy of a period
+                // that has already ended, so there is no honest bar to draw:
+                // say the reading is stale, and when the provider was last
+                // heard from, instead of leaving the card blank or reviving a
+                // figure whose window is over.
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Waiting for a fresh reading")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                    Text("Last reading \(UpdatedStamp.label(lastReading))")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 4)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Waiting for a fresh reading, last reading \(UpdatedStamp.label(lastReading))")
             } else {
                 // Quota Bars side by side in a clean 2-column grid
                 HStack(spacing: 12) {
@@ -508,7 +526,7 @@ public struct CompanionContentView: View {
     private func windowRow(_ win: CompanionWindowItem) -> some View {
         HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(win.meterCaption)
+                Text(win.caption)
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.primary)
                 let cd = win.meterCountdown()
