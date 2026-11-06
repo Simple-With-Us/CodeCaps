@@ -366,7 +366,17 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
         guard primaryWindows.count >= 2 else { return nil }
         let visible = primaryWindows.filter { !$0.isMasked && ($0.remainingPercent != nil || $0.absoluteRemaining != nil || $0.resetAt != nil) }
         guard visible.count >= 2 else { return nil }
-        return (visible[0], visible[1])
+        // A supplementary video quota is not the plan's own window - the
+        // reader itself calls it "supplementary and discrete" - so it never
+        // takes a bar from the subscription's own windows when two of those
+        // are available.  MiniMax's video daily otherwise displaces the
+        // weekly coding window (owner 2026-11-06: "Widget says 1d instead of
+        // 7d").
+        let planWindows = visible.filter {
+            !QuotaCapRule.isSupplementaryVideoQuota(providerKey: providerKey, label: $0.label)
+        }
+        let pool = planWindows.count >= 2 ? planWindows : visible
+        return (pool[0], pool[1])
     }
 }
 

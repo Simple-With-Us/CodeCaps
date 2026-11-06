@@ -613,6 +613,17 @@ final class WidgetTests: XCTestCase {
         XCTAssertNil(dualWindows(singleWindow))
     }
 
+    func testDualWindowsSelectionSkipsSupplementaryVideoQuota() {
+        let windows = [
+            window("minimax:5h", percent: 81, hoursToReset: 2),
+            FixtureWindow(id: "minimax:video", percent: 100, hoursToReset: 20, masked: false, label: "Video"),
+            window("minimax:7d", percent: 5, hoursToReset: 66)
+        ]
+        let dual = dualWindows(windows, providerKey: "minimax")
+        XCTAssertEqual(dual?.0.id, "minimax:5h")
+        XCTAssertEqual(dual?.1.id, "minimax:7d", "the video daily must not displace the weekly coding window")
+    }
+
     // MARK: - Helpers mirroring WidgetPresentation logic for test isolation
 
     private func formatPercent(_ percent: Double?, isMasked: Bool) -> String {
@@ -665,6 +676,7 @@ final class WidgetTests: XCTestCase {
         let percent: Double?
         let hoursToReset: Double
         let masked: Bool
+        let label: String = ""
     }
 
     private enum FixtureWindowPick {
@@ -705,11 +717,17 @@ final class WidgetTests: XCTestCase {
         }
     }
 
-    private func dualWindows(_ windows: [FixtureWindow]) -> (FixtureWindow, FixtureWindow)? {
+    private func dualWindows(_ windows: [FixtureWindow], providerKey: String = "") -> (FixtureWindow, FixtureWindow)? {
         guard windows.count >= 2 else { return nil }
         let visible = windows.filter { !$0.masked }
         let pool = visible.count >= 2 ? visible : windows
         guard pool.count >= 2 else { return nil }
-        return (pool[0], pool[1])
+        // Mirrors WidgetPresentation: a MiniMax supplementary video quota
+        // never takes a bar from the plan's own windows when two remain.
+        let planWindows = pool.filter {
+            !(providerKey == "minimax" && ($0.label.lowercased().contains("video") || $0.label.lowercased().contains("hailuo")))
+        }
+        let pair = planWindows.count >= 2 ? planWindows : pool
+        return (pair[0], pair[1])
     }
 }

@@ -20,6 +20,7 @@ import AppIntents
    wire("claude:7d:missing", "anthropic", "7d", nil),
    wire("claude:fable", "anthropic", "7d", 0, model:"Fable"),
    wire("plan", "minimax", nil, nil, "Plan"), wire("minimax:5h", "minimax", "5h", 92),
+   wire("minimax:video", "minimax", "1d", 100, "Video", model:"hailuo"),
    wire("minimax:7d", "minimax", "7d", 74),
    wire("raw:gemini:5h", "google-antigravity", "5h", 7, "Gemini 5-hour"),
    wire("antigravity:gemini:5h", "google-antigravity", "5h", 63, "Gemini Models · 5-hour"),
@@ -34,7 +35,12 @@ import AppIntents
   precondition(claude.dualWindows()?.window2.id == "claude:7d")
   precondition(claude.atCapWindow()?.id == "claude:7d")
   let minimax = parsed.first { $0.providerKey == "minimax" }!
-  precondition(minimax.windows.count == 2 && !minimax.hasModelDetails && minimax.remainingPercent == 74)
+  precondition(minimax.windows.count == 3 && !minimax.hasModelDetails && minimax.remainingPercent == 74)
+  // The supplementary video daily never takes a bar from the plan's own
+  // windows:  the pair stays the 5-hour and weekly coding windows (owner
+  // 2026-11-06: "Widget says 1d instead of 7d").
+  precondition(minimax.dualWindows()?.window1.id == "minimax:5h")
+  precondition(minimax.dualWindows()?.window2.id == "minimax:7d")
   let gemini = parsed.first { $0.id == "antigravity-gemini" }!
   precondition(gemini.primaryWindows.map(\.remainingPercent) == [63, 1])
   precondition(gemini.remainingPercent == 1 && gemini.detailWindows.map(\.label) == ["Argon limit"])
