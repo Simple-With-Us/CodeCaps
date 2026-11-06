@@ -587,6 +587,10 @@ final class WidgetTests: XCTestCase {
         XCTAssertTrue(presentation.contains(#"parts[0] == "producer""#))
         XCTAssertTrue(presentation.contains("static func normalizedAllowanceSeries(providerKey: String, series: String) -> String"))
         XCTAssertTrue(presentation.contains(#""minimax:coding-plan", "coding-plan""#))
+        // The bounded xAI subscription-pool alias (qa4 wire capture:
+        // "grok:subscription" from the codecaps reader and "xai:subscription"
+        // from the collector are one allowance).
+        XCTAssertTrue(presentation.contains(#"providerKey == "xai", series == "grok:subscription""#))
         XCTAssertTrue(presentation.contains(#"item.isSupplementaryVideoQuota ? "video|" : "plan|""#))
     }
 

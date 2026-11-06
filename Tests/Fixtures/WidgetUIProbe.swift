@@ -93,6 +93,27 @@ import AppIntents
   precondition(fxc?.windows.count == 3, "copilot buckets collapsed: \(fxc?.windows.count ?? -1)")
   precondition(fxc?.windows.contains { $0.remainingPercent == 0 } == true, "the exhausted Premium row must stay visible")
   print("PASS: real wire fixture - MiniMax 4 rows, pair 5h+weekly plan, video separate, Copilot 3")
+  // The qa4 wire capture (2026-11-06 09:24, committed verbatim at
+  // Tests/Fixtures/qa4-xai-wire-counterexample.json):  xAI's single
+  // subscription credit pool seen by two producers - the phone's codecaps
+  // reader (series "grok:subscription" from id local-mac:grok:subscription)
+  // and the collector (bucketId "xai:subscription").  Same canonical
+  // providerKey, canonical cadence 7d, same reset second, same 79% reading;
+  // the app's UnifiedSubscriptionPool already unifies the vocabularies.
+  // Two identical 7d 79% bars on the qa4-01/10/11 home was the duplicate;
+  // the merged row keeps the fresher phone copy.
+  let xaiNow = ISO8601DateFormatter().date(from: "2026-11-06T09:25:00Z")!
+  let xaiPath = ProcessInfo.processInfo.environment["XAI_WIRE_FIXTURE"] ?? "Tests/Fixtures/qa4-xai-wire-counterexample.json"
+  guard let xaiData = try? Data(contentsOf: URL(fileURLWithPath: xaiPath)) else {
+   fatalError("xai wire fixture missing at \(xaiPath)")
+  }
+  let xaifx = WidgetPresentation.parseSnapshot(data: xaiData, now: xaiNow)
+  let xaip = xaifx.first { $0.providerKey == "xai" }
+  let xaiIds = xaip?.windows.map { $0.id } ?? []
+  precondition(xaip?.windows.count == 1, "the two producer copies of the one xAI subscription pool must merge: \(xaiIds)")
+  precondition(xaiIds.first == "[\"producer\",\"4f938669-72f9-4386-8808-6408a031ab4d\",\"grok:subscription\"]", "the fresher phone copy should win the merged xAI row: \(xaiIds)")
+  precondition(xaip?.windows.first?.remainingPercent == 79, "the merged xAI row keeps the 79% reading")
+  print("PASS: xai wire fixture - one subscription pool, one 7d row, fresher copy wins")
   let edgePlatforms = platforms
   platforms += WidgetPresentation.placeholders
   platforms.append(WidgetPlatformItem(id:"overflow",providerKey:"codex",title:"Overflow plan",subtitle:"",remainingPercent:50,resetAt:nil,windows:[]))
