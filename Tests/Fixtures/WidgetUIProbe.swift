@@ -89,6 +89,10 @@ import AppIntents
   precondition(fxm?.windows.filter { !$0.isSupplementaryVideoQuota }.count == 2, "exactly the two plan rows unflagged")
   precondition(fxm?.dualWindows()?.window1.id == phone5h, "the pair must open on the plan 5h")
   precondition(fxm?.dualWindows()?.window2.id == macWeekly, "the pair must hold the plan weekly, never a video row")
+  // The plan's cap state must ignore the supplementary video rows:  with
+  // the plan's own windows holding headroom, no video reading may report
+  // the plan capped (Sentry review, PR #369).
+  precondition(fxm?.atCapWindow(now: fxNow) == nil, "video rows must never cap the plan")
   let fxc = fx.first { $0.providerKey.contains("copilot") || $0.id.contains("copilot") }
   precondition(fxc?.windows.count == 3, "copilot buckets collapsed: \(fxc?.windows.count ?? -1)")
   precondition(fxc?.windows.contains { $0.remainingPercent == 0 } == true, "the exhausted Premium row must stay visible")

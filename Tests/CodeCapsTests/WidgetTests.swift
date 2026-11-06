@@ -737,7 +737,11 @@ final class WidgetTests: XCTestCase {
         // The carried flag decides, not the display label - the label
         // rewrite drops the video tokens (Kody review, PR #367).
         let planWindows = pool.filter { !$0.isSupplementaryVideoQuota }
-        let pair = planWindows.count >= 2 ? planWindows : pool
-        return (pair[0], pair[1])
+        // Mirrors production exactly:  no fallback to the pool - a plan
+        // with fewer than two of its own windows has no pair, so a video
+        // row can never slip in beside one plan bar (Sentry review, PR
+        // #369).
+        guard planWindows.count >= 2 else { return nil }
+        return (planWindows[0], planWindows[1])
     }
 }

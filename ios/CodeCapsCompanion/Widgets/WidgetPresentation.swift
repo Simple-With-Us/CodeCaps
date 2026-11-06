@@ -299,6 +299,10 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
         windows
             .filter { $0.isFresh(now: now) || (WidgetPresentation.isAtCap(percent: $0.remainingPercent, isExhausted: $0.isExhausted) && $0.resetAt != nil && $0.resetAt! > now) }
             .filter { !$0.isMasked && $0.remainingPercent != nil }
+            // A supplementary video quota is not the plan:  an exhausted
+            // video pool never reports the subscription capped (Sentry
+            // review, PR #369).
+            .filter { !$0.isSupplementaryVideoQuota }
             .filter { WidgetPresentation.isAtCap(percent: $0.remainingPercent, isExhausted: $0.isExhausted) }
             .min { ($0.resetAt ?? .distantFuture) < ($1.resetAt ?? .distantFuture) }
     }
@@ -1011,9 +1015,15 @@ public enum WidgetPresentation {
         // The last known reading stands in when nothing is fresh, so a row with
         // no live reading still shows what it last knew, beside the time it
         // was taken.
-        let freshWindows = childWindows.filter { $0.isFresh(now: now) }
+        // A supplementary video quota sits beside the subscription, not
+        // inside it:  it never caps the plan or drags its headline, the
+        // same exclusion the phone's atCapWindow and dualWindows already
+        // apply (Sentry review, PR #369).
+        let planStateWindows = childWindows.filter { !$0.isSupplementaryVideoQuota }
+        let stateWindows = planStateWindows.isEmpty ? childWindows : planStateWindows
+        let freshWindows = stateWindows.filter { $0.isFresh(now: now) }
         let freshPercent = freshWindows.compactMap(\.remainingPercent).min()
-        let lastKnownPercent = childWindows.compactMap(\.remainingPercent).min()
+        let lastKnownPercent = stateWindows.compactMap(\.remainingPercent).min()
         // Only a fresh window may cap the plan.
         let atCap = freshWindows.first {
             WidgetPresentation.isAtCap(percent: $0.remainingPercent, isExhausted: $0.isExhausted)
