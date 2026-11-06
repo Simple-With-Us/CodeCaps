@@ -61,43 +61,72 @@ import AppIntents
   // actually publishes, so construction-time behavior is pinned, not just the
   // post-construction selection above.
   let iso = ISO8601DateFormatter()
-  func wireWindow(_ id: String, _ label: String, _ window: String, _ pct: Double, _ resetIn: Double, _ windowKey: String, _ age: Double = 0) -> String {
-   "{\"id\":\"\(id)\",\"provider\":\"p\",\"label\":\"\(label)\",\"window\":\"\(window)\",\"remainingPercent\":\(pct),\"resetAt\":\"\(iso.string(from: now.addingTimeInterval(resetIn)))\",\"occurredAt\":\"\(iso.string(from: now.addingTimeInterval(-age)))\",\"windowKey\":\"\(windowKey)\"}"
+  // The wire shape the server actually publishes:  attributed windows carry
+  // the allowance series inside the id as ["producer", <instance>, <series>],
+  // and providerKey rides beside provider.
+  func wireId(_ pid: String, _ series: String) -> String {
+   "[\"producer\",\"\(pid)\",\"\(series)\"]"
+  }
+  func wireWindow(_ id: String, _ providerKey: String, _ label: String, _ window: String, _ pct: Double, _ resetIn: Double, _ age: Double = 0) -> String {
+   "{\"id\":\"\(id)\",\"provider\":\"\(providerKey)\",\"providerKey\":\"\(providerKey)\",\"label\":\"\(label)\",\"window\":\"\(window)\",\"remainingPercent\":\(pct),\"resetAt\":\"\(iso.string(from: now.addingTimeInterval(resetIn)))\",\"occurredAt\":\"\(iso.string(from: now.addingTimeInterval(-age)))\"}"
   }
   // MiniMax, shaped like the actual payload QA reviewed:  the codecaps and
   // collector producers word the SAME allowance differently ("5-hour window"
   // beside "Coding plan (all models)", "7-day window" beside "weekly
-  // window"), and the server's canonical windowKey is what says they are one
+  // window"), and the shared series in the wire id is what says they are one
   // allowance.  The copies must merge onto one row (the fresher collector
-  // reading wins), the video identity must be captured before the display
-  // rewrite, and the pair must stay the plan's own 5-hour and weekly windows.
+  // reading wins).
+  let mm5hLocal = wireId("codecaps-phone", "minimax:general")
+  let mm5hCollector = wireId("mac-studio", "minimax:general")
+  let mmWeeklyLocal = wireId("codecaps-phone", "minimax:general:weekly")
+  let mmWeeklyCollector = wireId("mac-studio", "minimax:general:weekly")
   let mmJSON = "{\"windows\":["
-   + wireWindow("minimax:5h", "5-hour window", "5h", 81, 7000, "5h", 900) + ","
-   + wireWindow("minimax:coding-plan", "Coding plan (all models)", "interval", 77, 7000, "5h") + ","
-   + wireWindow("minimax:weekly", "7-day window", "7d", 5, 300000, "7d", 900) + ","
-   + wireWindow("minimax:weekly-general", "weekly window", "weekly", 4, 300000, "7d") + ","
-   + wireWindow("minimax:hailuo", "Hailuo", "1d", 100, 70000, "1d")
+   + wireWindow(mm5hLocal, "minimax", "5-hour window", "5h", 81, 7000, 900) + ","
+   + wireWindow(mm5hCollector, "minimax", "Coding plan (all models)", "interval", 77, 7000) + ","
+   + wireWindow(mmWeeklyLocal, "minimax", "7-day window", "7d", 5, 300000, 900) + ","
+   + wireWindow(mmWeeklyCollector, "minimax", "weekly window", "weekly", 4, 300000)
    + "]}"
   let mmPlatforms = WidgetPresentation.parseSnapshot(data: mmJSON.data(using: .utf8)!, now: now)
-  let mm = mmPlatforms.first { $0.id.contains("minimax") || $0.providerKey.contains("minimax") }
-  precondition(mm?.windows.count == 3, "minimax copies did not merge: \(mm?.windows.count ?? -1)")
-  precondition(mm?.windows.contains { $0.id == "minimax:coding-plan" } == true, "the fresher copy should win the 5h row")
-  precondition(mm?.windows.contains { $0.id == "minimax:weekly-general" } == true, "the fresher copy should win the 7d row")
-  precondition(mm?.windows.first { $0.id == "minimax:hailuo" }?.isSupplementaryVideoQuota == true)
-  precondition(mm?.dualWindows()?.window1.id == "minimax:coding-plan")
-  precondition(mm?.dualWindows()?.window2.id == "minimax:weekly-general")
-  // Copilot: three monthly buckets are three allowances with three canonical
-  // keys.  A cadence-only dedupe collapses them into one "1m" row and hides
-  // an exhausted Premium behind a 100% Chat row (QA pixel review 2026-11-06).
+  let mm = mmPlatforms.first { $0.providerKey.contains("minimax") || $0.id.contains("minimax") }
+  precondition(mm?.windows.count == 2, "minimax copies did not merge: \(mm?.windows.count ?? -1)")
+  precondition(mm?.windows.contains { $0.id == mm5hCollector } == true, "the fresher copy should win the 5h row")
+  precondition(mm?.windows.contains { $0.id == mmWeeklyCollector } == true, "the fresher copy should win the 7d row")
+  precondition(mm?.dualWindows()?.window1.id == mm5hCollector)
+  precondition(mm?.dualWindows()?.window2.id == mmWeeklyCollector)
+  // The collision QA hit on the real payload:  a fresher supplementary video
+  // weekly (100%, just read) beside the plan's older weekly (5%, age 3600),
+  // both canonical "7d".  Distinct series keep the plan window alive, the
+  // video row keeps its flag, and the pair must not fall back to the video
+  // row even with the plan weekly present.
+  let col5h = wireId("codecaps-phone", "minimax:general")
+  let colPlan = wireId("codecaps-phone", "minimax:general:weekly")
+  let colVideo = wireId("codecaps-phone", "minimax:hailuo:weekly")
+  let colJSON = "{\"windows\":["
+   + wireWindow(col5h, "minimax", "5-hour window", "5h", 81, 7000) + ","
+   + wireWindow(colPlan, "minimax", "7-day window", "7d", 5, 300000, 3600) + ","
+   + wireWindow(colVideo, "minimax", "Hailuo (weekly window)", "weekly", 100, 300000)
+   + "]}"
+  let colPlatforms = WidgetPresentation.parseSnapshot(data: colJSON.data(using: .utf8)!, now: now)
+  let col = colPlatforms.first { $0.providerKey.contains("minimax") || $0.id.contains("minimax") }
+  precondition(col?.windows.count == 3, "collision case should keep 5h, plan weekly and video rows: \(col?.windows.count ?? -1)")
+  precondition(col?.windows.first { $0.id == colVideo }?.isSupplementaryVideoQuota == true, "video identity lost")
+  precondition(col?.dualWindows()?.window1.id == col5h, "pair lost the 5h plan window")
+  precondition(col?.dualWindows()?.window2.id == colPlan, "pair must keep the plan weekly, not the video weekly")
+  // Copilot, shaped like the actual payload:  Chat and Completions share the
+  // canonical "monthly" windowKey but are distinct buckets (distinct series);
+  // Premium carries its own bucket.  Distinct series are distinct
+  // allowances, so all three keep rows - a canonical-key or cadence dedupe
+  // folds them together and hides an exhausted Premium behind a 100% Chat
+  // row (QA pixel review 2026-11-06).
   let cpJSON = "{\"windows\":["
-   + wireWindow("local-mac:github-copilot:premium_interactions", "Premium requests", "monthly", 0, 900000, "other:premium_interactions") + ","
-   + wireWindow("local-mac:github-copilot:chat", "Chat requests", "monthly", 100, 900000, "other:chat") + ","
-   + wireWindow("local-mac:github-copilot:completions", "Completions", "monthly", 100, 900000, "other:completions")
+   + wireWindow(wireId("mac-studio", "copilot:premium_interactions"), "github-copilot", "Premium requests", "monthly", 0, 900000) + ","
+   + wireWindow(wireId("mac-studio", "copilot:chat"), "github-copilot", "Chat requests", "monthly", 100, 900000) + ","
+   + wireWindow(wireId("mac-studio", "copilot:completions"), "github-copilot", "Completions", "monthly", 100, 900000)
    + "]}"
   let cpPlatforms = WidgetPresentation.parseSnapshot(data: cpJSON.data(using: .utf8)!, now: now)
-  let cp = cpPlatforms.first { $0.providerKey == "github-copilot" || $0.id.contains("copilot") }
+  let cp = cpPlatforms.first { $0.providerKey.contains("copilot") || $0.id.contains("copilot") }
   precondition(cp?.windows.count == 3, "copilot buckets collapsed: \(cp?.windows.count ?? -1)")
-  print("PASS: wire-level cross-producer merge, MiniMax video identity, Copilot allowance keys")
+  print("PASS: wire-level series merge, MiniMax video collision, Copilot distinct buckets")
   let edgePlatforms = platforms
   platforms += WidgetPresentation.placeholders
   platforms.append(WidgetPlatformItem(id:"overflow",providerKey:"codex",title:"Overflow plan",subtitle:"",remainingPercent:50,resetAt:nil,windows:[]))
