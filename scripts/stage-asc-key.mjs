@@ -174,12 +174,18 @@ const READER_EXIT_UNRESOLVED = 5;
  *  credential and sends the operator to fix the read permissions. */
 export const UNRESOLVED_REFERENCE = Symbol('unresolved Infisical reference');
 
+/** What the guard returns when no explicit service token is configured:  the
+ *  reader was never asked, so this is kept apart from both an empty value
+ *  (missing credential) and an unresolved reference (vault refused the
+ *  value).  The failure must name the absent token, not read permissions. */
+export const SERVICE_TOKEN_MISSING = Symbol('missing Infisical service token');
+
 /** The service-token-only fallback reads Fleet-OPS through `fleet-secrets`.
  * Its child receives a minimal environment, so host machine-identity
  * credentials cannot be selected implicitly.  The value stays in memory;
  * exit 5 remains distinct so an unresolved reference is reported accurately. */
 export function fleetSecretsGet(name, folder, env = process.env) {
-  if (!hasInfisicalServiceToken(env)) return '';
+  if (!hasInfisicalServiceToken(env)) return SERVICE_TOKEN_MISSING;
   const localBin = join(homedir(), '.local', 'bin', 'fleet-secrets');
   const bin = env.FLEET_SECRETS || process.env.FLEET_SECRETS || (existsSync(localBin) ? localBin : 'fleet-secrets');
   try {
@@ -219,6 +225,12 @@ function checkCredential(log, name, value, malformed = false) {
   // The reader reached the vault and refused the value as a reference, so
   // this is not a missing credential and must not read as one.
   if (value === UNRESOLVED_REFERENCE) unresolved();
+  // The reader was never asked because no explicit service token is
+  // configured; name the absent token instead of the secret's read
+  // permissions, so the operator fixes the actual cause.
+  if (value === SERVICE_TOKEN_MISSING) {
+    fail(log, `Cannot read ${name}: the explicit Infisical read service token (INFISICAL_TOKEN) is not set in the job environment.  This is not a missing credential or a permissions fault; configure the scoped service token for this job.`);
+  }
   if (typeof value !== 'string' || value.trim() === '') {
     fail(log, `Missing ${name} in Fleet-OPS prod /asc; verify an explicit Infisical service token has read access.  Machine identity is disabled for CodeCaps automation.`);
   }
@@ -284,7 +296,7 @@ export async function run({
       const written = fromFile.get(name);
       if (typeof written === 'string' && written.trim() !== '') return { value: written, malformedEntry: malformed.has(name) };
       const fetched = await getSecret(name, SECRET_FOLDER, env);
-      const value = typeof fetched === 'string' || fetched === UNRESOLVED_REFERENCE ? fetched : '';
+      const value = typeof fetched === 'string' || fetched === UNRESOLVED_REFERENCE || fetched === SERVICE_TOKEN_MISSING ? fetched : '';
       return { value, malformedEntry: malformed.has(name) };
     };
 

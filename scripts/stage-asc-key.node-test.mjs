@@ -539,7 +539,7 @@ test('a reader that reports an unresolved reference is not read as a missing cre
   }
 });
 
-test('the real Infisical fallback fails closed without an explicit service token', async () => {
+test('the real Infisical fallback names the absent service token', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'asc-stage-no-token-'));
   const saved = process.env.FLEET_SECRETS;
   try {
@@ -547,7 +547,15 @@ test('the real Infisical fallback fails closed without an explicit service token
     const env = baseEnv(dir, { INFISICAL_TOKEN: '' });
     await assert.rejects(
       run({ env, log: () => {} }),
-      /explicit Infisical service token has read access/,
+      /read service token \(INFISICAL_TOKEN\) is not set/,
+    );
+    await assert.rejects(
+      run({ env, log: () => {} }),
+      (err) => {
+        assert.doesNotMatch(err.message, /Missing ASC_KEY_ID/, 'an absent token must not read as a missing credential');
+        assert.doesNotMatch(err.message, /has read access/, 'an absent token must not point at read permissions');
+        return true;
+      },
     );
     assert.equal(existsSync(env.GITHUB_ENV), false, 'a refused lookup must not create an environment file');
   } finally {
