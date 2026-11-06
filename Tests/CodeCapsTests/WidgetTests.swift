@@ -661,7 +661,9 @@ final class WidgetTests: XCTestCase {
         let percent: Double?
         let hoursToReset: Double
         let masked: Bool
-        let label: String = ""
+        // A `var`, not a `let`:  a `let` with a default is excluded from the
+        // memberwise initializer, and the MiniMax video fixture passes one.
+        var label: String = ""
     }
 
     private enum FixtureWindowPick {
