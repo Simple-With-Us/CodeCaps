@@ -2173,7 +2173,7 @@ public final class CompanionQuotaModel: ObservableObject {
             // model's 5-hour, daily and weekly windows separate (QA
             // real-payload fixture 2026-11-06).
             let isVideoWire = QuotaCapRule.isSupplementaryVideoQuota(
-                providerKey: canonicalManifestKey(provider: w.provider, providerKey: w.providerKey, via: w.via),
+                providerKey: Self.canonicalManifestKey(provider: w.provider, providerKey: w.providerKey, via: w.via),
                 modelId: w.modelId, modelType: w.modelType, label: w.label)
             let wireCadence = (w.windowKey ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             let allowanceKey = (isVideoWire ? "video|" : "plan|")
