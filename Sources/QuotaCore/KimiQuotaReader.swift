@@ -212,6 +212,7 @@ private extension KimiQuotaReader {
             }
             if unit.contains("HOUR") { return "\(duration)h limit" }
             if unit.contains("DAY") { return "\(duration)d limit" }
+            if unit.contains("WEEK") { return "\(duration)w limit" }
             return "\(duration)s limit"
         }
         return "Limit \(index + 1)"
@@ -223,6 +224,7 @@ private extension KimiQuotaReader {
         if unit.contains("DAY") { return duration >= 28 ? "monthly" : (duration >= 7 ? "weekly" : "daily") }
         if unit.contains("HOUR") { return "\(duration)h" }
         if unit.contains("MINUTE") { return duration >= 60 && duration % 60 == 0 ? "\(duration / 60)h" : "\(duration)m" }
+        if unit.contains("WEEK") { return duration == 1 ? "weekly" : "\(duration)w" }
         return nil
     }
 
@@ -372,7 +374,18 @@ private extension KimiQuotaReader {
         return text
     }
 
+    /// A non-negative finite count.  Kimi's live `/usages` payload quotes its
+    /// int64 counts (`"limit": "100"`), as protobuf JSON does, and the Kimi
+    /// CLI's own parser reads them as strings too, so a plain decimal string
+    /// counts.  Hex, exponent and signed forms do not.
     static func number(_ value: Any?) -> Double? {
+        if let text = value as? String {
+            let trimmed = text.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty, trimmed.utf8.count <= 32,
+                  trimmed.allSatisfy({ $0.isASCII && ($0.isNumber || $0 == ".") }),
+                  let parsed = Double(trimmed), parsed.isFinite else { return nil }
+            return parsed
+        }
         guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
               number.doubleValue.isFinite, number.doubleValue >= 0 else { return nil }
         return number.doubleValue
