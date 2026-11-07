@@ -690,6 +690,27 @@ public enum WidgetPresentation {
     /// "coding-plan" name ONE allowance observed under two identities.
     /// Every other series - including any other MiniMax model - keeps its
     /// own identity.
+    /// The cadence leg of the allowance identity, in the wire `windowKey`
+    /// namespace:  a copy whose producer predates `windowKey` must still merge
+    /// with its keyed copies, so the raw window token is canonicalised through
+    /// the shared vocabulary and mapped back to the wire token - "weekly" and
+    /// "7d" both land on "7d".  A token the vocabulary does not know passes
+    /// through lowercased, so two distinct unknown buckets never collapse onto
+    /// one key.  Same fix as the companion model (kody, PR #370).
+    static func canonicalWireCadence(wireCadence: String, windowToken: String?, label: String, resetAt: Date?) -> String {
+        if !wireCadence.isEmpty {
+            return wireCadence.lowercased()
+        }
+        switch QuotaWindowVocabulary.standardCadence(windowToken: windowToken, label: label, resetAt: resetAt) {
+        case QuotaWindowVocabulary.fiveHour: return "5h"
+        case QuotaWindowVocabulary.oneDay: return "1d"
+        case QuotaWindowVocabulary.sevenDay: return "7d"
+        case QuotaWindowVocabulary.oneMonth: return "monthly"
+        default:
+            return (windowToken ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        }
+    }
+
     static func normalizedAllowanceSeries(providerKey: String, series: String) -> String {
         if providerKey.lowercased().contains("minimax") {
             // Case-insensitive on purpose: a producer that ships `General`
@@ -1001,7 +1022,7 @@ public enum WidgetPresentation {
             let wireCadence = (w.windowKey ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             let cadenceKey = (item.isSupplementaryVideoQuota ? "video|" : "plan|")
                 + Self.normalizedAllowanceSeries(providerKey: providerKey, series: Self.allowanceSeries(forWireId: w.id))
-                + "|" + (wireCadence.isEmpty ? cadence.lowercased() : wireCadence.lowercased())
+                + "|" + Self.canonicalWireCadence(wireCadence: wireCadence, windowToken: w.window, label: w.label, resetAt: parsedReset)
             if let current = windowByCadence[cadenceKey] {
                 if item.isFresher(than: current, now: now) {
                     windowByCadence[cadenceKey] = item
