@@ -473,7 +473,7 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
         let rows = Self.targetRows(for: model)
         let initialSize = PipMetrics.fitSize(rowCount: rows.count,
             hasDualMeterRow: rows.contains { Self.meterCount(for: $0, now: model.now,
-                issue: model.rowIssue(for:$0.providerKey], disabledSources: model.disabledSources) > 1 },
+                issue: model.rowIssue(for: $0.providerKey), disabledSources: model.disabledSources) > 1 },
             allowsTitle: model.pipShowProviderNames)
         let p = NSPanel(
             contentRect: NSRect(origin: NSPoint(x: 120, y: 120), size: initialSize),
@@ -522,7 +522,7 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
         fittedRowSignature = signature
 
         let hasDualMeterRow = rows.contains { Self.meterCount(for: $0, now: model.now,
-            issue: model.rowIssue(for:$0.providerKey], disabledSources: model.disabledSources) > 1 }
+            issue: model.rowIssue(for: $0.providerKey), disabledSources: model.disabledSources) > 1 }
         let fit = PipMetrics.fitSize(rowCount: rows.count, hasDualMeterRow: hasDualMeterRow,
                                      allowsTitle: model.pipShowProviderNames)
         let clamped = NSSize(
@@ -565,16 +565,16 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
         // failed.  A pinned failed row still shows, because the user asked for
         // it and it reports its status instead of a cached quota.
         func remainingPercent(_ row: DisplaySection) -> Double {
-            rankingPercent(for: row, now: model.now, issue: model.rowIssue(for:row.providerKey],
+            rankingPercent(for: row, now: model.now, issue: model.rowIssue(for: row.providerKey),
                            disabledSources: model.disabledSources, peerRows: all)
         }
         func isMeasurable(_ row: DisplaySection) -> Bool {
-            readingStatus(for: row, now: model.now, issue: model.rowIssue(for:row.providerKey],
+            readingStatus(for: row, now: model.now, issue: model.rowIssue(for: row.providerKey),
                           disabledSources: model.disabledSources, peerRows: all) == nil
         }
         let measurable = all.filter { isMeasurable($0) }
-        let failed = all.filter { model.rowIssue(for:$0.providerKey] != nil }
-        let quiet = all.filter { !isMeasurable($0) && model.rowIssue(for:$0.providerKey] == nil }
+        let failed = all.filter { model.rowIssue(for: $0.providerKey) != nil }
+        let quiet = all.filter { !isMeasurable($0) && model.rowIssue(for: $0.providerKey) == nil }
         var chosen = Array(measurable.sorted { remainingPercent($0) < remainingPercent($1) }.prefix(2))
         if chosen.count < 2 {
             chosen += Array(quiet.sorted { remainingPercent($0) < remainingPercent($1) }
@@ -806,7 +806,7 @@ struct PipWidgetView: View {
     /// widens them all rather than each row being a different size.
     private func anyRowSpiking(peerRows: [DisplaySection]) -> Bool {
         targetRows.contains { row in
-            PipWidgetController.readingStatus(for: row, now: model.now, issue: model.rowIssue(for:row.providerKey],
+            PipWidgetController.readingStatus(for: row, now: model.now, issue: model.rowIssue(for: row.providerKey),
                 disabledSources: model.disabledSources, peerRows: peerRows) == nil && model.hasActiveRunawayAnomaly(for: row)
         }
     }
@@ -821,7 +821,7 @@ struct PipWidgetView: View {
 
     private var maximumMeterCount: Int {
         max(1, targetRows.map { row in
-            PipWidgetController.meterCount(for: row, now: model.now, issue: model.rowIssue(for:row.providerKey],
+            PipWidgetController.meterCount(for: row, now: model.now, issue: model.rowIssue(for: row.providerKey),
                                             disabledSources: model.disabledSources)
         }.max() ?? 1)
     }
@@ -1071,7 +1071,7 @@ struct PipWidgetView: View {
     /// detail.
     private func pipRow(_ row: DisplaySection, detail: PipMetrics.Detail, expandedCadence: Bool,
                          peerRows: [DisplaySection], available: CGFloat) -> some View {
-        let issue = model.rowIssue(for:row.providerKey]
+        let issue = model.rowIssue(for: row.providerKey)
         let status = PipWidgetController.readingStatus(for: row, now: model.now, issue: issue,
                                                        disabledSources: model.disabledSources,
                                                        peerRows: peerRows)
@@ -1202,7 +1202,7 @@ struct PipWidgetView: View {
     private func detailPanel(_ row: DisplaySection, detail: PipMetrics.Detail,
                               peerRows: [DisplaySection], height: CGFloat,
                               width: CGFloat) -> some View {
-        let issue = model.rowIssue(for:row.providerKey]
+        let issue = model.rowIssue(for: row.providerKey)
         // The platform's own 5-hour and 7-day windows first, then its
         // per-model windows such as Fable (owner, 2026-10-30).
         let windows = QuotaWindowPresentation.primaryFirst(
