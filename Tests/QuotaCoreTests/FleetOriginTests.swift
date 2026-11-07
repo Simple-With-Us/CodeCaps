@@ -243,11 +243,54 @@ final class FleetOriginTests: XCTestCase {
     /// This Mac's own push of a period that ended is a copy like any other
     /// when this Mac has no local reading to grey that period out.  There is
     /// nothing left to show for it, so it must not stand in for a reading.
-    func testOwnPushOfAnEndedPeriodIsDroppedWhenThisMacHasNoLocalReading() {
+    /// An ended copy whose cadence still has a live sibling is redundant and
+    /// goes:  the live reading is the row's number.
+    func testAnEndedCopyWithALiveSiblingOfItsCadenceIsDropped() {
+        let live = xaiWindow(id: "grok:subscription", percent: 89, resetIn: 6 * 86_400, observedAgo: 60)
         let ended = xaiWindow(id: "xai:subscription", percent: 0, resetIn: -86_400, observedAgo: 6 * 86_400)
-        let split = FleetOrigin.split([ended], host: "this-mac", localWindows: [], now: Date())
-        XCTAssertTrue(split.ownPush.isEmpty,
-                      "a copy of a period that ended is not a reading, so it never reaches a row")
+        let split = FleetOrigin.split([live, ended], host: "this-mac", localWindows: [], now: Date())
+        XCTAssertEqual(split.ownPush.map(\.id), [live.id],
+                      "a copy of a period that ended is not a reading while a live one stands")
+    }
+
+    /// A dead copy whose cadence has nothing live left is the last known
+    /// state of that meter, so it stays and the row keeps the cadence:  the
+    /// Muse Code collector restates its periods only when new usage arrives,
+    /// and dropping the finished 5h window took the whole 5h row off the
+    /// provider while the weekly one survived (CC-211, owner 2026-11-07).
+    func testAnEndedCopyWithNothingLiveLeftOfItsCadenceIsKept() {
+        let now = Date()
+        let ended = xaiWindow(id: "local-mac:xai:subscription", percent: 0,
+                              resetIn: -86_400, observedAgo: 6 * 86_400)
+        let split = FleetOrigin.split([ended], host: "this-mac", localWindows: [], now: now)
+        XCTAssertEqual(split.ownPush.count, 1,
+                       "with no live window of the cadence, the ended copy is what the row has")
+    }
+
+    func testTheMuseFiveHourRowSurvivesBesideTheLiveWeeklyWindow() {
+        let now = Date()
+        let iso = ISO8601DateFormatter()
+        func museWindow(id: String, windowToken: String, label: String, percent: Double,
+                        resetIn: TimeInterval, observedAgo: TimeInterval) -> QuotaWindow {
+            QuotaWindow(
+                id: id,
+                provider: "Muse Code",
+                providerKey: "muse-code",
+                label: label,
+                remainingPercent: percent,
+                resetAt: iso.string(from: now.addingTimeInterval(resetIn)),
+                window: windowToken,
+                occurredAt: iso.string(from: now.addingTimeInterval(-observedAgo)),
+                source: "codecaps"
+            )
+        }
+        let fiveHour = museWindow(id: "local-mac:muse-code:5h", windowToken: "5h", label: "5h window",
+                                  percent: 12, resetIn: -3 * 3_600, observedAgo: 4 * 3_600)
+        let weekly = museWindow(id: "local-mac:muse-code:weekly", windowToken: "7d", label: "7d window",
+                                percent: 35, resetIn: 6 * 86_400, observedAgo: 60)
+        let split = FleetOrigin.split([fiveHour, weekly], host: "this-mac", localWindows: [], now: now)
+        XCTAssertEqual(split.ownPush.map(\.id), [fiveHour.id, weekly.id],
+                       "the ended 5h window stays beside the live weekly one")
     }
 
     /// The exemption stays for a provider this Mac reads locally:  the local
