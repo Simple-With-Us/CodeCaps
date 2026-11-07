@@ -539,7 +539,11 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
 
     /// Main-card windows: fresh Mac CodeCaps readings win; otherwise the newest feed with an Updated label.
     public func cardWindowRows(scope: CompanionSourceScope, now: Date = Date()) -> [CardWindow] {
-        windows.map { primary in
+        // A scoped pool allowance (a code-review or per-model bucket) is not
+        // a plan meter:  the cap rule skips it and the headline excludes it,
+        // so drawing it as a bar put an empty meter beside a headline that
+        // said otherwise (kody, PR #376).
+        windows.filter { !$0.isScopedPoolAllowance }.map { primary in
             let key = Self.allowanceKey(for: primary)
             // This iPhone: only this device's primary windows. All Sources: fold
             // in mirror feeds so Mac/fleet readings can win when fresher.
@@ -2786,7 +2790,7 @@ public final class CompanionQuotaModel: ObservableObject {
                 if parseSnapshot(data: data) {
                     // A fallback render is the snapshot's age, not a fresh pull, so
                        // the stamp always says what the file says (CC-214).
-                       let attrs = try? FileManager.default.attributesOfItem(atPath: sharedFile.path),
+                       if let attrs = try? FileManager.default.attributesOfItem(atPath: sharedFile.path),
                        let modDate = attrs[.modificationDate] as? Date {
                         self.lastUpdated = modDate
                     }
@@ -2803,7 +2807,7 @@ public final class CompanionQuotaModel: ObservableObject {
                 if parseSnapshot(data: data) {
                     // A fallback render is the snapshot's age, not a fresh pull, so
                        // the stamp always says what the file says (CC-214).
-                       let attrs = try? FileManager.default.attributesOfItem(atPath: localFile.path),
+                       if let attrs = try? FileManager.default.attributesOfItem(atPath: localFile.path),
                        let modDate = attrs[.modificationDate] as? Date {
                         self.lastUpdated = modDate
                     }
@@ -2820,7 +2824,7 @@ public final class CompanionQuotaModel: ObservableObject {
                 if parseSnapshot(data: data) {
                     // A fallback render is the snapshot's age, not a fresh pull, so
                        // the stamp always says what the file says (CC-214).
-                       let attrs = try? FileManager.default.attributesOfItem(atPath: cacheFile.path),
+                       if let attrs = try? FileManager.default.attributesOfItem(atPath: cacheFile.path),
                        let modDate = attrs[.modificationDate] as? Date {
                         self.lastUpdated = modDate
                     }
@@ -2839,7 +2843,7 @@ public final class CompanionQuotaModel: ObservableObject {
                 if parseSnapshot(data: data) {
                     // A fallback render is the snapshot's age, not a fresh pull, so
                        // the stamp always says what the file says (CC-214).
-                       let attrs = try? FileManager.default.attributesOfItem(atPath: hostPath),
+                       if let attrs = try? FileManager.default.attributesOfItem(atPath: hostPath),
                        let modDate = attrs[.modificationDate] as? Date {
                         self.lastUpdated = modDate
                     }
@@ -2856,7 +2860,7 @@ public final class CompanionQuotaModel: ObservableObject {
             if parseSnapshot(data: data) {
                 // A fallback render is the snapshot's age, not a fresh pull, so
                    // the stamp always says what the file says (CC-214).
-                   let attrs = try? FileManager.default.attributesOfItem(atPath: fallbackPath),
+                   if let attrs = try? FileManager.default.attributesOfItem(atPath: fallbackPath),
                    let modDate = attrs[.modificationDate] as? Date {
                     self.lastUpdated = modDate
                 }
