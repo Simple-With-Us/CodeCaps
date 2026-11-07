@@ -96,6 +96,19 @@ final class CompanionModelTests: XCTestCase {
 
     // MARK: - App Group & Hygiene
 
+    /// Two manifest groups aliasing to one key must not become two cards
+    /// with one id, and the fallback stamp must read the snapshot's file
+    /// age (CC-214).
+    func testCompanionDeduplicatesAliasedManifestKeys() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(source.contains("seenManifestKeys.insert($0).inserted"),
+                      "aliased manifest keys are deduplicated, first occurrence wins")
+        XCTAssertTrue(source.contains("isScopedAllowance: window.isScopedPoolAllowance"),
+                      "scoped pool allowances stay out of the card headline")
+        XCTAssertFalse(source.contains("if self.lastUpdated == nil,"),
+                       "the fallback stamp reads the snapshot file's age, not only the first time")
+    }
+
     /// The companion maps Kimi and Z.ai to the supplied marks, and neither
     /// lands in the monochrome list: the catalog carries colour vectors with
     /// dark appearances, so both render in colour and stay legible (CC-212).
@@ -464,8 +477,8 @@ final class CompanionModelTests: XCTestCase {
             "the card headline must hand every window's mask to the shared headline rule"
         )
         XCTAssertTrue(
-            try readHeadlineSource().contains(".filter { !$0.isMasked }"),
-            "the shared headline rule must leave masked windows out"
+            try readHeadlineSource().contains(".filter { !$0.isMasked && !$0.isScopedAllowance }"),
+            "the shared headline rule must leave masked windows and scoped pool allowances out"
         )
         XCTAssertFalse(
             model.contains("cardWindows(scope: scope, now: now).compactMap(\\.remainingPercent).min()"),
