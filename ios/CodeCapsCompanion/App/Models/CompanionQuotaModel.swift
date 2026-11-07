@@ -618,6 +618,7 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
                         resetAt: window.resetAt
                     ),
                 isMasked: window.isMasked,
+                isScopedAllowance: window.isScopedPoolAllowance,
                 remainingPercent: window.remainingPercent
             )
         }
@@ -1378,6 +1379,14 @@ public final class CompanionQuotaModel: ObservableObject {
                 guard requestedRevision == syncConfigurationRevision,
                       requestedEndpoint == syncEndpoint,
                       requestedToken == syncToken else { return }
+                // A pull the system cancelled is not an endpoint failure:
+                // SwiftUI re-identifies the polling task on a scene-phase
+                // change and cancels the in-flight URLSession call, which
+                // used to land here as the banner's "cancelled" line.  The
+                // next poll runs against the same configuration, so keep the
+                // existing readings and stay quiet (CC-214).
+                if error is CancellationError { return }
+                if let urlError = error as? URLError, urlError.code == .cancelled { return }
                 failure = "Could not reach the sync endpoint." + sentenceGap
                     + error.localizedDescription
             }
@@ -1863,12 +1872,17 @@ public final class CompanionQuotaModel: ObservableObject {
         // windows payload but were not in the manifest.  An empty manifest
         // keeps the legacy "first-seen-wins" order (the offline-fallback path).
         let manifest = envelope.providerGroups ?? []
+        // Two manifest groups can alias to one canonical key (zcode and glm,
+        // kimi and moonshot):  building a card per entry made two items with
+        // one id, which SwiftUI's ForEach cannot place, and the header
+        // counted both.  Keep the first occurrence of each key (CC-214).
+        var seenManifestKeys = Set<String>()
         let manifestKeys: [String] = manifest.isEmpty
             ? platformKeyOrder
             : manifest.compactMap { group in
                 let key = Self.canonicalManifestKey(provider: group.provider, via: group.via)
                 return key.isEmpty ? nil : key
-            }
+            }.filter { seenManifestKeys.insert($0).inserted }
 
         for platKey in manifestKeys {
             guard let group = platformGroups[platKey] else { continue }
@@ -2768,7 +2782,8 @@ public final class CompanionQuotaModel: ObservableObject {
             let sharedFile = container.appendingPathComponent("quota-windows.json")
             if let data = try? Data(contentsOf: sharedFile) {
                 if parseSnapshot(data: data) {
-                    if self.lastUpdated == nil,
+                    // A fallback render is the snapshot's age, not a fresh pull, so
+                       // the stamp always says what the file says (CC-214).
                        let attrs = try? FileManager.default.attributesOfItem(atPath: sharedFile.path),
                        let modDate = attrs[.modificationDate] as? Date {
                         self.lastUpdated = modDate
@@ -2784,7 +2799,8 @@ public final class CompanionQuotaModel: ObservableObject {
             if FileManager.default.fileExists(atPath: localFile.path),
                let data = try? Data(contentsOf: localFile) {
                 if parseSnapshot(data: data) {
-                    if self.lastUpdated == nil,
+                    // A fallback render is the snapshot's age, not a fresh pull, so
+                       // the stamp always says what the file says (CC-214).
                        let attrs = try? FileManager.default.attributesOfItem(atPath: localFile.path),
                        let modDate = attrs[.modificationDate] as? Date {
                         self.lastUpdated = modDate
@@ -2800,7 +2816,8 @@ public final class CompanionQuotaModel: ObservableObject {
             if FileManager.default.fileExists(atPath: cacheFile.path),
                let data = try? Data(contentsOf: cacheFile) {
                 if parseSnapshot(data: data) {
-                    if self.lastUpdated == nil,
+                    // A fallback render is the snapshot's age, not a fresh pull, so
+                       // the stamp always says what the file says (CC-214).
                        let attrs = try? FileManager.default.attributesOfItem(atPath: cacheFile.path),
                        let modDate = attrs[.modificationDate] as? Date {
                         self.lastUpdated = modDate
@@ -2818,7 +2835,8 @@ public final class CompanionQuotaModel: ObservableObject {
             if FileManager.default.fileExists(atPath: hostPath),
                let data = try? Data(contentsOf: URL(fileURLWithPath: hostPath)) {
                 if parseSnapshot(data: data) {
-                    if self.lastUpdated == nil,
+                    // A fallback render is the snapshot's age, not a fresh pull, so
+                       // the stamp always says what the file says (CC-214).
                        let attrs = try? FileManager.default.attributesOfItem(atPath: hostPath),
                        let modDate = attrs[.modificationDate] as? Date {
                         self.lastUpdated = modDate
@@ -2834,7 +2852,8 @@ public final class CompanionQuotaModel: ObservableObject {
         if FileManager.default.fileExists(atPath: fallbackPath),
            let data = try? Data(contentsOf: URL(fileURLWithPath: fallbackPath)) {
             if parseSnapshot(data: data) {
-                if self.lastUpdated == nil,
+                // A fallback render is the snapshot's age, not a fresh pull, so
+                   // the stamp always says what the file says (CC-214).
                    let attrs = try? FileManager.default.attributesOfItem(atPath: fallbackPath),
                    let modDate = attrs[.modificationDate] as? Date {
                     self.lastUpdated = modDate

@@ -96,6 +96,19 @@ final class CompanionModelTests: XCTestCase {
 
     // MARK: - App Group & Hygiene
 
+    /// Two manifest groups aliasing to one key must not become two cards
+    /// with one id, and the fallback stamp must read the snapshot's file
+    /// age (CC-214).
+    func testCompanionDeduplicatesAliasedManifestKeys() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(source.contains("seenManifestKeys.insert($0).inserted"),
+                      "aliased manifest keys are deduplicated, first occurrence wins")
+        XCTAssertTrue(source.contains("isScopedAllowance: window.isScopedPoolAllowance"),
+                      "scoped pool allowances stay out of the card headline")
+        XCTAssertFalse(source.contains("if self.lastUpdated == nil,"),
+                       "the fallback stamp reads the snapshot file's age, not only the first time")
+    }
+
     func testCompanionResolvesCanonicalPlatformDisplayTitles() throws {
         let source = try readCompanionModelSource()
         XCTAssertTrue(
