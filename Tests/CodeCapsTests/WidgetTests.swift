@@ -590,7 +590,7 @@ final class WidgetTests: XCTestCase {
         // The bounded xAI subscription-pool alias (qa4 wire capture:
         // "grok:subscription" from the codecaps reader and "xai:subscription"
         // from the collector are one allowance).
-        XCTAssertTrue(presentation.contains(#"providerKey == "xai", series == "grok:subscription""#))
+        XCTAssertTrue(presentation.contains(#"providerKey == "xai", series.lowercased() == "grok:subscription""#))
         XCTAssertTrue(presentation.contains(#"item.isSupplementaryVideoQuota ? "video|" : "plan|""#))
     }
 
