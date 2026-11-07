@@ -458,8 +458,8 @@ final class CompanionModelTests: XCTestCase {
             "the card headline must hand every window's mask to the shared headline rule"
         )
         XCTAssertTrue(
-            try readHeadlineSource().contains(".filter { !$0.isMasked }"),
-            "the shared headline rule must leave masked windows out"
+            try readHeadlineSource().contains(".filter { !$0.isMasked && !$0.isScopedAllowance }"),
+            "the shared headline rule must leave masked windows and scoped pool allowances out"
         )
         XCTAssertFalse(
             model.contains("cardWindows(scope: scope, now: now).compactMap(\\.remainingPercent).min()"),
