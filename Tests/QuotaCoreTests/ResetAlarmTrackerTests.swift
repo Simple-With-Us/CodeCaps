@@ -1206,4 +1206,57 @@ extension ResetAlarmTrackerTests {
         XCTAssertTrue(repeatEvents.isEmpty,
                       "the same restore reading alerted again on a repeat poll")
     }
+
+    // MARK: Rolling windows (CC-215)
+
+    /// MiniMax's five-hour window rolls: old usage ages out, the percentage
+    /// climbs gradually, and the period end slides ahead with the clock.  A
+    /// poll that crosses the spent-to-nearly-full boundary fired a "vendor
+    /// reset" with no vendor action at all (owner, 2026-11-07).  A rolling
+    /// climb fires nothing.
+    func testARollingWindowsGradualClimbDoesNotFireAVendorReset() {
+        var tracker = ResetAlarmTracker()
+        var now = t0
+        // Seed the rolling window: near-spent, end one period ahead.
+        let startReset = now.addingTimeInterval(4 * hour)
+        tracker.process([reading("5h", period: 5 * hour, resetAt: startReset,
+                                 remaining: 12, observedAt: now, provider: "minimax")],
+                        now: now)
+        // Three polls, two hours apart: usage ages out, the end slides with
+        // the clock, and the percentage crosses the 80-to-95 boundary.
+        for step in 1...3 {
+            now = now.addingTimeInterval(2 * hour)
+            let end = now.addingTimeInterval(4 * hour)
+            let remaining = [46.0, 78.0, 96.0][step - 1]
+            let events = tracker.process(
+                [reading("5h", period: 5 * hour, resetAt: end,
+                         remaining: remaining, observedAt: now, provider: "minimax")],
+                now: now)
+            XCTAssertTrue(events.isEmpty,
+                          "poll \(step): a rolling climb is aging, not a vendor reset \(events)")
+        }
+    }
+
+    /// The same climb against a period end that held still is exactly the
+    /// courtesy restore the owner asked to hear about, and it must keep
+    /// firing.
+    func testAHeldEndRiseStillFiresTheCourtesyRestore() {
+        var tracker = ResetAlarmTracker()
+        var now = t0
+        let end = now.addingTimeInterval(4 * hour)
+        tracker.process([reading("5h", period: 5 * hour, resetAt: end,
+                                 remaining: 12, observedAt: now, provider: "minimax")],
+                        now: now)
+        now = now.addingTimeInterval(2 * hour)
+        tracker.process([reading("5h", period: 5 * hour, resetAt: end,
+                                 remaining: 78, observedAt: now, provider: "minimax")],
+                        now: now)
+        now = now.addingTimeInterval(2 * hour)
+        let events = tracker.process(
+            [reading("5h", period: 5 * hour, resetAt: end,
+                     remaining: 96, observedAt: now, provider: "minimax")],
+            now: now)
+        XCTAssertTrue(events.contains { $0.isVendorReset },
+                      "the held-end courtesy restore is what the alert is for")
+    }
 }

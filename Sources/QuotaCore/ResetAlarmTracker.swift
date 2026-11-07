@@ -563,7 +563,18 @@ public struct ResetAlarmTracker: Sendable {
             // the case that is otherwise invisible: quota restored *before* the
             // window was due to end, which no amount of near-cap reasoning can
             // distinguish from "nothing happened".
-            if !isReset, !hasPassed, let reading, let last = window.lastRemaining,
+            // A rolling window (MiniMax's five-hour and video meters) ages
+            // usage out, so its percentage climbs from spent towards full
+            // with the period end sliding ahead the whole way — no vendor
+            // did anything (CC-215, owner 2026-11-07: the false MiniMax
+            // vendor-reset alert).  A real restore holds the end where it
+            // was, so a rise only counts when this reading proves the end
+            // held; an end that jumped forward is the resetAt-jump branch
+            // above, and an unknown end says nothing and stays quiet.
+            let reportedEndHeld = observation.resetAt.map {
+                abs($0.timeIntervalSince(previousReset)) <= ResetAlarmPolicy.resetDriftTolerance
+            } ?? false
+            if !isReset, !hasPassed, reportedEndHeld, let reading, let last = window.lastRemaining,
                reading >= ResetAlarmPolicy.courtesyRestoreFloor,
                last <= ResetAlarmPolicy.courtesyRestoreCeiling {
                 isReset = true
@@ -578,8 +589,13 @@ public struct ResetAlarmTracker: Sendable {
             //  - the quota jumps to full from anything less.
             //  - the quota was nearly spent and is now nearly untouched.
             if !isReset, !hasPassed, let reading, let last = window.lastRemaining {
-                let jumpedToFull = reading >= 99.5 && last < 99.5
-                let surgedMidWindow = last < 80.0 && reading >= 95.0
+                // Same evidence bar as `quotaHandedBack`: a rise against an
+                // end that slid with the clock is the window rolling, not a
+                // restore (CC-215).  An unknown end cannot prove a restore.
+                let jumpedToFull = periodEndHeld && !slidWithTheClock
+                    && reading >= 99.5 && last < 99.5
+                let surgedMidWindow = periodEndHeld && !slidWithTheClock
+                    && last < 80.0 && reading >= 95.0
                 // "Held still" and "slid with the clock" are two separate
                 // questions, and asking them as two separate questions keeps
                 // the verdict independent of how often this Mac happens to
