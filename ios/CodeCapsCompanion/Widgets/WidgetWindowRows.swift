@@ -148,6 +148,12 @@ struct PlanAtCapRow: View {
                 Text(Self.label)
                     .font(.system(size: percentFont, weight: .bold, design: .rounded))
                     .foregroundColor(WidgetPresentation.statusColor(percent: 0, isMasked: false))
+                    // No wrap:  without a line limit the label wrapped one
+                    // letter per line when a long title squeezed the row
+                    // (QA focus-small pixel 2026-11-06).  The title, which
+                    // already truncates, yields instead.
+                    .lineLimit(1)
+                    .fixedSize()
             }
 
             WindowCaptionRow(
