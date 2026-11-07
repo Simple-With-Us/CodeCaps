@@ -3,6 +3,8 @@ import XCTest
 
 /// Legacy responses and explicit machine provenance must both remain readable.
 final class FleetOriginTests: XCTestCase {
+    private let day: TimeInterval = 86_400
+
     func testIdentityPrefersSourceAndFallsBackInOrder() {
         XCTAssertEqual(FleetOrigin.identity(of: window(source: "antigravity-usage", sourceApp: "antigravity-cli")),
                        "antigravity-usage")
@@ -281,6 +283,38 @@ final class FleetOriginTests: XCTestCase {
         XCTAssertTrue(split.ownPush.isEmpty)
         XCTAssertTrue(split.groups.flatMap(\.windows).isEmpty,
                       "a remote machine's ended copy is not a reading and never reaches a row")
+    }
+
+    /// The legacy Muse collector wrote this Mac's own machine name into the
+    /// producer field (before install UUIDs), so the producer field alone
+    /// must not decide ownership:  a name falls through to the machine-name
+    /// match, and this window is this Mac's own push — which is what keeps
+    /// the dead 5h copy on the row (CC-217).
+    func testALegacyCollectorMachineNameInTheProducerFieldIsOwnPush() {
+        let now = Date()
+        let iso = ISO8601DateFormatter()
+        var muse = QuotaWindow(
+            id: "local-mac:muse-code:5h",
+            provider: "Muse Code",
+            providerKey: "muse-code",
+            label: "5h window",
+            remainingPercent: 57,
+            resetAt: iso.string(from: now.addingTimeInterval(-3 * day)),
+            window: "5h",
+            occurredAt: iso.string(from: now.addingTimeInterval(-4 * day)),
+            source: "codecaps"
+        )
+        muse.producerInstanceId = "Mac.Jays.Services"
+        // A differently spelled host keeps the first comparison from settling
+        // it, so the machine-name match is what answers — on this Mac the
+        // real host name is the same string.
+        XCTAssertTrue(FleetOrigin.isOwnPush(muse, host: "mac.jays.services."),
+                      "the legacy collector's machine name is this Mac's own producer")
+        // A UUID-shaped producer id is a different installation's identity,
+        // and the machine-name match must not override it.
+        muse.producerInstanceId = "11111111-1111-1111-1111-111111111111"
+        XCTAssertFalse(FleetOrigin.isOwnPush(muse, host: "22222222-2222-2222-2222-222222222222"),
+                       "another install's UUID is authoritative")
     }
 
     func testTheMuseFiveHourRowSurvivesBesideTheLiveWeeklyWindow() {

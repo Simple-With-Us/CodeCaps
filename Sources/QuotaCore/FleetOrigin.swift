@@ -42,8 +42,18 @@ public enum FleetOrigin {
         host: String = QuotaPublisher.producerInstanceId,
         localWindows: [QuotaWindow] = []
     ) -> Bool {
+        var legacyProducerName: String?
         if let instance = window.producerInstanceId?.trimmingCharacters(in: .whitespacesAndNewlines), !instance.isEmpty {
-            return instance.lowercased() == host.lowercased()
+            if instance.lowercased() == host.lowercased() { return true }
+            // A UUID-shaped instance id is authoritative:  it is another
+            // installation's identity, and the machine-name match below must
+            // not override it.  A name-shaped one is a legacy collector's
+            // machine name (the Muse Code collector wrote
+            // `Mac.Jays.Services` — this Mac's own name — into the
+            // producer field), so it falls through and the machine-name
+            // match decides whether the window is this Mac's own (CC-217).
+            if UUID(uuidString: instance) != nil { return false }
+            legacyProducerName = instance
         }
         if window.id.hasPrefix(QuotaWindowVocabulary.localDeviceWindowPrefix) {
             return true
@@ -78,6 +88,17 @@ public enum FleetOrigin {
         let normLocal = normalizeMachineString(QuotaPublisher.machineName)
         let normHost = normalizeMachineString(ProcessInfo.processInfo.hostName)
         let normHostParam = normalizeMachineString(host)
+        // The legacy producer name itself, before it is folded into the
+        // identity:  the identity check below already compares the same
+        // string, and this keeps the legacy name decisive even when another
+        // field would win the identity fallback.
+        if let legacyProducerName {
+            let normLegacy = normalizeMachineString(legacyProducerName)
+            if normLegacy == normHostParam || normLegacy == normLocal || normLegacy == normHost
+                || normLegacy == "localmac" || normLegacy == "mac" {
+                return true
+            }
+        }
         if normId == normHostParam || normId == normLocal || normId == normHost || normId == "localmac" {
             return true
         }
