@@ -13,26 +13,13 @@ extension QuotaWindow {
     /// Nil for a primary window, and for OpenAI's scoped pools, whose labels
     /// already say what they are.
     public var subModelName: String? {
-        guard isSubModelLimit, canonicalProviderKey != "openai" else { return nil }
-        if let separator = label.range(of: " · ") {
-            let name = label[..<separator.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
-            if !name.isEmpty { return name }
-        }
-        for candidate in [modelType, modelId] {
-            let raw = (candidate ?? "")
-                .replacingOccurrences(of: "_", with: " ")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if !raw.isEmpty { return Self.initialCapped(raw) }
-        }
-        return nil
-    }
-
-    /// Each word's first letter upper-cased and the rest left as the reader
-    /// wrote it, so "fable" reads "Fable" while "GPT-4o" keeps its casing.
-    private static func initialCapped(_ text: String) -> String {
-        text.split(separator: " ", omittingEmptySubsequences: true)
-            .map { String($0.prefix(1)).uppercased() + String($0.dropFirst()) }
-            .joined(separator: " ")
+        SubModelNaming.name(
+            isSubModelLimit: isSubModelLimit,
+            canonicalProviderKey: canonicalProviderKey,
+            label: label,
+            modelType: modelType,
+            modelId: modelId
+        )
     }
 }
 
