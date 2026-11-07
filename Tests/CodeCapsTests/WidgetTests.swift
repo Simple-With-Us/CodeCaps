@@ -592,6 +592,11 @@ final class WidgetTests: XCTestCase {
         // from the collector are one allowance).
         XCTAssertTrue(presentation.contains(#"providerKey == "xai", series.lowercased() == "grok:subscription""#))
         XCTAssertTrue(presentation.contains(#"item.isSupplementaryVideoQuota ? "video|" : "plan|""#))
+        // The cadence leg must be canonicalised into the wire namespace, not
+        // keyed on the display cadence, or a pre-windowKey copy ("weekly")
+        // splits from its keyed copy ("7d") - same kody finding as PR #370.
+        XCTAssertTrue(presentation.contains("static func canonicalWireCadence("))
+        XCTAssertTrue(presentation.contains(#"case QuotaWindowVocabulary.sevenDay: return "7d""#))
     }
 
     func testOverviewViewsPassQuotasPerProviderToPlanGrid() throws {
