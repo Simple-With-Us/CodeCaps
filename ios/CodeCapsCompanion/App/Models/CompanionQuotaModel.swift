@@ -2178,7 +2178,7 @@ public final class CompanionQuotaModel: ObservableObject {
             let wireCadence = (w.windowKey ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             let allowanceKey = (isVideoWire ? "video|" : "plan|")
                 + Self.normalizedAllowanceSeries(providerKey: providerKey, series: Self.allowanceSeries(forWireId: w.id))
-                + "|" + (wireCadence.isEmpty ? cadence.lowercased() : wireCadence.lowercased())
+                + "|" + Self.canonicalWireCadence(wireCadence: wireCadence, windowToken: w.window, label: w.label, resetAt: parsedReset)
             let cadenceKey = effectiveQualifier.isEmpty
                 ? allowanceKey
                 : "\(effectiveQualifier):\(allowanceKey)"
@@ -2724,6 +2724,27 @@ public final class CompanionQuotaModel: ObservableObject {
     /// The provider key is canonicalised the way the Mac canonicalises a
     /// window's own provider, so the phone asks `QuotaCapRule` the same
     /// question the Mac asks and the two surfaces skip the same windows.
+    /// The cadence leg of the allowance identity, in the wire `windowKey`
+    /// namespace.  A copy whose producer predates `windowKey` must still merge
+    /// with its keyed copies (kody, PR #370), so the raw window token is
+    /// canonicalised through the shared vocabulary and mapped back to the wire
+    /// token:  "weekly" and "7d" both land on "7d".  A token the vocabulary
+    /// does not know passes through lowercased, so two distinct unknown
+    /// buckets never collapse onto one key.
+    static func canonicalWireCadence(wireCadence: String, windowToken: String?, label: String, resetAt: Date?) -> String {
+        if !wireCadence.isEmpty {
+            return wireCadence.lowercased()
+        }
+        switch QuotaWindowVocabulary.standardCadence(windowToken: windowToken, label: label, resetAt: resetAt) {
+        case QuotaWindowVocabulary.fiveHour: return "5h"
+        case QuotaWindowVocabulary.oneDay: return "1d"
+        case QuotaWindowVocabulary.sevenDay: return "7d"
+        case QuotaWindowVocabulary.oneMonth: return "monthly"
+        default:
+            return (windowToken ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        }
+    }
+
     /// The server's allowance identity for a wire window.  Usage Monitor
     /// deliberately keeps one window per producer for the same allowance;
     /// the series (`modelId ?? bucketId ?? provider:label` in
