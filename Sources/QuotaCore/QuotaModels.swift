@@ -487,6 +487,77 @@ public enum QuotaLocalScope {
         return localWindows.filter { $0.hasReading || !replacementKeys.contains(windowKey($0)) }
     }
 
+    /// The fleet's windows that may join this Mac's local list, and the
+    /// own-push windows they supersede.
+    ///
+    /// A provider this Mac does not read locally takes its reading from the
+    /// fleet, and the fleet's copy is the newer one whenever it was reported
+    /// after this Mac's own push.  That is the Antigravity case:  the Mac's
+    /// local reader needs a running Antigravity language server, and when
+    /// there was none the row read "unavailable" while the fleet carried a
+    /// fresh reading from this same Mac's collector, Argon included.
+    ///
+    /// The older own-push copy of the same period is dropped with the fleet's
+    /// window, so one period can never be drawn twice:  the fleet's Gemini
+    /// weekly and this Mac's older "Gemini 4 Argon · 7-day" are the same
+    /// allowance read twice.
+    ///
+    /// A provider whose own push is the newer reading keeps it:  the fleet's
+    /// copy is redundant then, and the rule does not change.
+    public static func fleetFallback(
+        fleet: [QuotaWindow],
+        adopted: [QuotaWindow],
+        localProviders: Set<String>,
+        expectedKeys: [String] = expectedQuotaProviderKeys
+    ) -> (fallback: [QuotaWindow], superseded: [QuotaWindow]) {
+        var fallback: [QuotaWindow] = []
+        var superseded: [QuotaWindow] = []
+        let fleetByProvider = Dictionary(grouping: fleet, by: \.canonicalProviderKey)
+        let adoptedByProvider = Dictionary(grouping: adopted, by: \.canonicalProviderKey)
+
+        for (key, windows) in fleetByProvider {
+            // A provider this Mac reads itself keeps its own reading, and a
+            // key nothing expects must not sprout a row.
+            guard expectedKeys.contains(key), !localProviders.contains(key) else { continue }
+            let own = adoptedByProvider[key] ?? []
+            let fleetNewest = windows.compactMap(\.occurredDate).max()
+            // Only a reading claims the provider.  This Mac's own plan
+            // details carry no reading, so they never stand in for one and
+            // never hold the fleet's live reading out of the row.
+            let ownReadings = own.filter(\.hasReading)
+            let ownNewest = ownReadings.compactMap(\.occurredDate).max()
+            guard let fleetNewest else {
+                // The fleet's windows carry no timestamp, so they cannot be
+                // shown to be newer than this Mac's own push.  A provider
+                // this Mac never published is still served by them.
+                if ownNewest == nil { fallback.append(contentsOf: windows) }
+                continue
+            }
+            if let ownNewest, ownNewest >= fleetNewest { continue }
+
+            fallback.append(contentsOf: windows)
+            for ownWindow in own {
+                guard ownWindow.hasReading, let ownDate = ownWindow.occurredDate else { continue }
+                let replaced = windows.contains { candidate in
+                    guard let candidateDate = candidate.occurredDate, candidateDate > ownDate else { return false }
+                    return periodKey(candidate) == periodKey(ownWindow)
+                }
+                if replaced { superseded.append(ownWindow) }
+            }
+        }
+        return (fallback, superseded)
+    }
+
+    /// The period a window measures, for comparing two readings of the same
+    /// allowance.  The shared resolver, so "7d" and "weekly" are the same
+    /// period.
+    private static func periodKey(_ window: QuotaWindow) -> String {
+        guard let seconds = ResetAlarmCadence.periodSeconds(token: window.window, label: window.label) else {
+            return "unknown"
+        }
+        return String(Int(seconds.rounded()))
+    }
+
     private static func windowKey(_ window: QuotaWindow) -> [String] {
         let prefix = QuotaWindowVocabulary.localDeviceWindowPrefix
         let id = window.id.hasPrefix(prefix) ? String(window.id.dropFirst(prefix.count)) : window.id

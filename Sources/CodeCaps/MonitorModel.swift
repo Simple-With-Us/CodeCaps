@@ -830,12 +830,28 @@ final class MonitorModel: ObservableObject {
             now: now)
     }
 
+    /// The issues a row may show.
+    ///
+    /// A reader's own failure hides a row only while the provider has no
+    /// FRESH reading to show instead.  Antigravity's local reader needs a
+    /// running Antigravity language server, and when there was none the
+    /// reader failed and the row read "unavailable" while the fleet carried
+    /// a fresh reading for this same Mac, Argon included.  A stale reading is
+    /// not a substitute:  it keeps its own row's issue, so a provider that
+    /// stopped reporting still says so.
+    var rowIssues: [String: String] {
+        let fresh = Set(response.windows
+            .filter { QuotaWindowSnapshot(window: $0, now: now).isFresh }
+            .map(\.canonicalProviderKey))
+        return issues.filter { !fresh.contains($0.key) }
+    }
+
     var freshWindows: [QuotaWindowSnapshot] {
         let masked = maskedWindowIds
         let visible = sections.flatMap(\.windows).filter {
             $0.isFresh && $0.remainingPercent != nil && !$0.window.isSupplementaryVideoQuota
                 && !masked.contains($0.window.id)
-                && issues[$0.window.canonicalProviderKey] == nil
+                && rowIssues[$0.window.canonicalProviderKey] == nil
                 && !disabledSources.contains($0.window.source ?? "")
         }
         // Order by provider rank, then by source rank within the provider, so
@@ -2458,18 +2474,24 @@ final class MonitorModel: ObservableObject {
             // named the Antigravity key, so the fleet's live reading for
             // Antigravity was held out of the row and the row read
             // "unavailable" while the fleet carried a fresh reading for it.
-            let adoptedReadingKeys = Set(adopted.filter { $0.hasReading }.map(\.canonicalProviderKey))
             // A provider this Mac can never read locally still deserves its
             // server reading in the local list instead of "no report": the
             // Muse Assist collector runs on the VM, so its windows are never
             // this Mac's own push.  Limited to expected providers so unknown
             // fleet-only keys don't sprout local rows.
-            let fleetFallback = split.groups.flatMap(\.windows).filter {
-                let key = $0.canonicalProviderKey
-                return !localProviders.contains(key) && !adoptedReadingKeys.contains(key)
-                    && expectedQuotaProviderKeys.contains(key)
-            }
-            let merged = QuotaLocalScope.localWindowsForMerge(self.localWindows, adopted: adopted) + adopted + fleetFallback
+            //
+            // The fleet's copy wins whenever it was reported after this Mac's
+            // own push for the same provider, and this Mac's older copy of
+            // that period is dropped with it:  the Antigravity local reader
+            // needs a running language server, and without one the row read
+            // "unavailable" while the fleet carried a fresh reading from this
+            // same Mac, Argon included.
+            let (fleetFallback, supersededPush) = QuotaLocalScope.fleetFallback(
+                fleet: split.groups.flatMap(\.windows),
+                adopted: adopted,
+                localProviders: localProviders)
+            let adoptedKept = adopted.filter { !supersededPush.contains($0) }
+            let merged = QuotaLocalScope.localWindowsForMerge(self.localWindows, adopted: adoptedKept) + adoptedKept + fleetFallback
             let unifiedMerged = UnifiedSubscriptionPool.share(windows: merged, now: self.now)
             var origins: [String: QuotaOrigin] = [:]
             for key in Set(unifiedMerged.map(\.canonicalProviderKey)) { origins[key] = .local }
@@ -2635,16 +2657,16 @@ final class MonitorModel: ObservableObject {
         // merged response, so a plan-details window that held the fleet's
         // live reading out of the row here would empty it a minute after the
         // refresh filled it.
-        let adoptedReadingKeys = Set(adopted.filter { $0.hasReading }.map(\.canonicalProviderKey))
         // Same fleet fallback as the refresh path: providers this Mac can
         // never read locally (e.g. Muse Assist, collected on the VM) show
-        // their server reading instead of "no report".
-        let fleetFallback = split.groups.flatMap(\.windows).filter {
-            let key = $0.canonicalProviderKey
-            return !localProviders.contains(key) && !adoptedReadingKeys.contains(key)
-                && expectedQuotaProviderKeys.contains(key)
-        }
-        let merged = QuotaLocalScope.localWindowsForMerge(localWindows, adopted: adopted) + adopted + fleetFallback
+        // their server reading instead of "no report", and a fleet reading
+        // newer than this Mac's own push replaces the older copy of it.
+        let (fleetFallback, supersededPush) = QuotaLocalScope.fleetFallback(
+            fleet: split.groups.flatMap(\.windows),
+            adopted: adopted,
+            localProviders: localProviders)
+        let adoptedKept = adopted.filter { !supersededPush.contains($0) }
+        let merged = QuotaLocalScope.localWindowsForMerge(localWindows, adopted: adoptedKept) + adoptedKept + fleetFallback
         let unifiedMerged = UnifiedSubscriptionPool.share(windows: merged, now: now)
         originByProvider = Dictionary(uniqueKeysWithValues: Set(unifiedMerged.map(\.canonicalProviderKey)).map { ($0, .local) })
         response = QuotaResponse(generatedAt: ISO8601DateFormatter().string(from: now), windows: unifiedMerged)

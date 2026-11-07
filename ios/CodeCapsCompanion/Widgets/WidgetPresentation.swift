@@ -349,14 +349,40 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
 
     /// The pair of windows that represent this plan when a row displays two quota bars side by side.
     ///
-    /// When a plan reports two or more windows (such as a 5-hour and a 7-day cap),
-    /// this returns the pair (shortest period first).  Returns nil if the plan does not have two distinct windows
-    /// or if one of the windows carries no reading or reset date.
+    /// The pair is chosen by the shared rule (`QuotaWindowPairing.meterPair`),
+    /// the one the Mac's Glance panel and the companion app use, so the three
+    /// surfaces cannot disagree about which two meters a plan has.
+    ///
+    /// It used to be "the first two windows that carry a reading", which put
+    /// MiniMax's video allowance beside the real five-hour meter:  the video
+    /// allowance is a one-day window, so the row showed "5h" and "1d" while
+    /// the weekly reading the owner routes on was nowhere.
     public func dualWindows() -> (window1: WidgetWindowItem, window2: WidgetWindowItem)? {
         guard windows.count >= 2 else { return nil }
-        let visible = windows.filter { !$0.isMasked && ($0.remainingPercent != nil || $0.absoluteRemaining != nil || $0.resetAt != nil) }
+        let visible = windows.filter {
+            !$0.isMasked && ($0.remainingPercent != nil || $0.absoluteRemaining != nil || $0.resetAt != nil)
+        }
         guard visible.count >= 2 else { return nil }
-        return (visible[0], visible[1])
+        let candidates = visible.map { window in
+            let period = ResetAlarmCadence.periodSeconds(token: window.cadence, label: window.label)
+            return QuotaWindowPairing.MeterCandidate(
+                id: window.id,
+                remainingPercent: window.remainingPercent,
+                resetAt: window.resetAt,
+                isShort: (period ?? 86_400) < 86_400,
+                isExcluded: QuotaCapRule.isSupplementaryVideoQuota(
+                    providerKey: providerKey, label: window.label)
+                    || QuotaCapRule.isScopedPoolAllowance(
+                        providerKey: providerKey, id: window.id, label: window.label)
+                    || QuotaCapRule.isSubModelLimit(
+                        providerKey: providerKey, id: window.id, label: window.label)
+            )
+        }
+        let pair = QuotaWindowPairing.meterPair(candidates)
+        guard let first = pair.short, let second = pair.long else { return nil }
+        guard let window1 = visible.first(where: { $0.id == first.id }),
+              let window2 = visible.first(where: { $0.id == second.id }) else { return nil }
+        return (window1, window2)
     }
 }
 
@@ -1153,7 +1179,7 @@ public enum WidgetPresentation {
         let id = raw.id.lowercased()
 
         if pKey.contains("anthropic") || prov.contains("anthropic") || prov.contains("claude") {
-            return ("anthropic", "Claude Code", "anthropic")
+            return ("anthropic", WidgetPlatformDisplay.title(canonicalKey: "anthropic"), "anthropic")
         }
         if pKey.contains("openai") || prov.contains("openai") || prov.contains("codex") {
             return ("openai", "Codex", "openai")
@@ -1242,7 +1268,7 @@ public enum WidgetPresentation {
             WidgetPlatformItem(
                 id: "anthropic",
                 providerKey: "anthropic",
-                title: "Claude Code",
+                title: WidgetPlatformDisplay.title(canonicalKey: "anthropic"),
                 subtitle: "5h · 7d",
                 remainingPercent: 82.0,
                 resetAt: now.addingTimeInterval(3600 * 3 + 720),
