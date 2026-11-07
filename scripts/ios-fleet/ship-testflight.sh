@@ -557,8 +557,9 @@ sentry_project_for_app() {
 # The Sentry API token, resolved once.  SENTRY_AUTH_TOKEN_FULLSCOPE is the
 # legacy name from Fleet-OPS prod /, which scoped read tokens do not export.
 # SENTRY_AUTH_TOKEN from the CodeCaps project is the token CI sets.  A DSN in
-# the token slot is refused.  The token stays a shell variable and is handed
-# to sentry-cli one invocation at a time.
+# the token slot is refused -- but the reader is asked first, so a DSN in the
+# CodeCaps slot never hides the full-scope token.  The token stays a shell
+# variable and is handed to sentry-cli one invocation at a time.
 SENTRY_API_TOKEN=""
 SENTRY_TOKEN_REASON=""
 SENTRY_UPLOAD_FAILED=0
@@ -582,15 +583,25 @@ sentry_failure_marker() {
 load_sentry_auth() {
   SENTRY_API_TOKEN=""
   SENTRY_TOKEN_REASON=""
-  local token="" raw=""
+  local token="" raw="" dsn_token=""
   if [[ -n "${SENTRY_AUTH_TOKEN_FULLSCOPE:-}" ]]; then
     token="$SENTRY_AUTH_TOKEN_FULLSCOPE"
   elif [[ -n "${SENTRY_AUTH_TOKEN:-}" ]]; then
     # Scoped CodeCaps reads do not export SENTRY_AUTH_TOKEN_FULLSCOPE.
     # SENTRY_AUTH_TOKEN is the CodeCaps project token, or the repository
     # secret of the same name when the vault value was empty.
-    token="$SENTRY_AUTH_TOKEN"
-  elif command -v fleet-secrets &>/dev/null; then
+    case "$SENTRY_AUTH_TOKEN" in
+      *://*|*@*)
+        # A DSN is not an API token, but fleet-secrets may still hold the
+        # full-scope one, so the DSN waits until the reader has been asked.
+        dsn_token="$SENTRY_AUTH_TOKEN"
+        ;;
+      *)
+        token="$SENTRY_AUTH_TOKEN"
+        ;;
+    esac
+  fi
+  if [[ -z "$token" ]] && command -v fleet-secrets &>/dev/null; then
     # The reader's exit status is captured on its own:  in a pipeline the
     # status would be the one of the last stage, so a failed read would look
     # like a successful read of an empty secret.
@@ -600,6 +611,9 @@ load_sentry_auth() {
     fi
     token="$(printf '%s' "$raw" | tr -d '\r')"
   fi
+  # Nothing better turned up, so the DSN in the CodeCaps slot is the answer,
+  # and the case below refuses it by name.
+  [[ -n "$token" ]] || token="$dsn_token"
   case "$token" in
     "")
       SENTRY_TOKEN_REASON="SENTRY_AUTH_TOKEN is unset"

@@ -10,7 +10,7 @@
 // Run: node --test scripts/ios-ship-workflow.test.mjs
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -422,6 +422,62 @@ test("the iOS lane loads the Sentry API token, not the DSN", () => {
   );
   assert.match(shipScript, /\*:\/\/\*\|\*@\*/);
   assert.match(shipScript, /looks like a DSN, not an API token/);
+});
+
+// The CodeCaps token slot can hold a DSN -- the fleet's shared value, and
+// the defect this lane had.  A DSN is not an API token, but fleet-secrets may
+// still hold the full-scope one, so the reader is asked before the DSN is
+// refused.  The function is run here against a stub reader on PATH.
+function runSentryAuth(env, stub = null) {
+  const dir = mkdtempSync(join(tmpdir(), "sentry-auth-"));
+  try {
+    const fn = shipScript.match(/load_sentry_auth\(\) \{[\s\S]*?\n\}/);
+    assert.ok(fn, "ship-testflight.sh defines load_sentry_auth");
+    writeFileSync(join(dir, "fn.sh"), fn[0]);
+    if (stub) writeFileSync(join(dir, "fleet-secrets"), stub, { mode: 0o755 });
+    const out = execFileSync(
+      "bash",
+      ["-c", 'source "$DIR/fn.sh"; load_sentry_auth; rc=$?; printf "rc=%s\\n" "$rc"; printf "reason=%s\\n" "$SENTRY_TOKEN_REASON"; printf "token=%s\\n" "$SENTRY_API_TOKEN"'],
+      {
+        encoding: "utf8",
+        // The stub directory is the only place a reader can come from, so the
+        // test never reaches a real vault.
+        env: { PATH: `${dir}:/usr/bin:/bin`, DIR: dir, ...env },
+      },
+    );
+    const field = (name) => (out.match(new RegExp(`^${name}=(.*)$`, "m")) || [])[1] ?? "";
+    return { rc: field("rc"), reason: field("reason"), token: field("token") };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const FLEET_SECRETS_STUB = [
+  "#!/usr/bin/env bash",
+  '[[ "${1:-}" == "get" ]] || exit 2',
+  'printf "%s" "synthetic-fullscope-token"',
+  "",
+].join("\n");
+
+test("a DSN in the CodeCaps token slot falls through to fleet-secrets", () => {
+  const r = runSentryAuth({ SENTRY_AUTH_TOKEN: "https://key@o1.ingest.us.sentry.io/2" }, FLEET_SECRETS_STUB);
+  assert.equal(r.rc, "0");
+  assert.equal(r.token, "synthetic-fullscope-token");
+  assert.equal(r.reason, "");
+});
+
+test("a DSN in the CodeCaps token slot is refused when there is no reader", () => {
+  const r = runSentryAuth({ SENTRY_AUTH_TOKEN: "https://key@o1.ingest.us.sentry.io/2" });
+  assert.equal(r.rc, "1");
+  assert.equal(r.reason, "the token looks like a DSN, not an API token");
+  assert.equal(r.token, "");
+});
+
+test("a CodeCaps token that is not a DSN still wins over fleet-secrets", () => {
+  const r = runSentryAuth({ SENTRY_AUTH_TOKEN: "synthetic-codecaps-token" }, FLEET_SECRETS_STUB);
+  assert.equal(r.rc, "0");
+  assert.equal(r.token, "synthetic-codecaps-token");
+  assert.equal(r.reason, "");
 });
 
 test("the iOS lane uploads to the DSN project as well as the app's own", () => {

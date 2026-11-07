@@ -223,6 +223,11 @@ jobs:
       # GH_FALLBACK_SENTRY_DSN_CODECAPS is not an Infisical name (that key
       # lived in Fleet-OPS prod /, which this token does not read).  The next
       # step applies the repository secret as the explicit fallback.
+      #
+      # The load is optional-only:  no name is required, so a scope or
+      # project-id mismatch warns and the repository secrets answer instead
+      # of failing the ship.  INFISICAL_PROJECT_ID is the CodeCaps project
+      # id, the one INFISICAL_CODECAPS_READ_TOKEN is scoped to.
       - name: Load Sentry ship secrets (Infisical, then repository secrets)
         uses: ./.github/actions/infisical-secrets
         with:

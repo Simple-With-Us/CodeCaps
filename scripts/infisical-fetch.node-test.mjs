@@ -349,10 +349,40 @@ test('wrong project, environment, folder, multi-folder, and write tokens fail be
     { ...exactMetadata, permissions: [] },
   ]) {
     const calls = [], lines = [];
-    await assert.rejects(run({ env: { ...tokenEnv, GH_FALLBACK_FOO: 'synthetic-fallback' }, fetchImpl: tokenFetch(metadata, { FOO: 'synthetic-vault' }, calls), log: l => lines.push(l) }), /exactly the requested/);
+    // A required name makes the load fail closed, so an unverifiable scope
+    // stops the job instead of quietly answering from the fallback.
+    await assert.rejects(run({ env: { ...tokenEnv, INFISICAL_REQUIRED: 'FOO', GH_FALLBACK_FOO: 'synthetic-fallback' }, fetchImpl: tokenFetch(metadata, { FOO: 'synthetic-vault' }, calls), log: l => lines.push(l) }), /exactly the requested/);
     assert.equal(calls.length, 1);
     assert.deepEqual(lines, []);
   }
+});
+
+test('an optional-only load with an unverifiable scope warns and falls back without reading secrets', async () => {
+  const { dir, path } = tempGithubEnv();
+  try {
+    const calls = [], lines = [];
+    await run({ env: { ...tokenEnv, GITHUB_ENV: path, GH_FALLBACK_FOO: 'synthetic-fallback' }, fetchImpl: tokenFetch({ ...exactMetadata, projectId: 'other' }, { FOO: 'synthetic-vault' }, calls), log: l => lines.push(l) });
+    assert.ok(lines.includes('::warning::Infisical service token scope could not be verified; the token is not used and GitHub secret fallbacks apply.'));
+    const written = readFileSync(path, 'utf8');
+    assert.match(written, /^FOO<<INFISICAL_[0-9a-f]+\n/m);
+    assert.ok(!written.includes('synthetic-vault'));
+    // The unverified token never reaches the secrets endpoint.
+    assert.equal(calls.length, 1);
+    assert.ok(!calls.some(c => c.url.includes('/api/v3/secrets/raw')));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('an optional-only load with no project id warns and falls back', async () => {
+  const { dir, path } = tempGithubEnv();
+  try {
+    const calls = [], lines = [];
+    await run({ env: { ...tokenEnv, INFISICAL_PROJECT_ID: '', GITHUB_ENV: path, GH_FALLBACK_FOO: 'synthetic-fallback' }, fetchImpl: async (url) => { calls.push(String(url)); throw new Error('must not be called without a project id'); }, log: l => lines.push(l) });
+    assert.ok(lines.includes('::warning::Infisical service token scope could not be verified; the token is not used and GitHub secret fallbacks apply.'));
+    const written = readFileSync(path, 'utf8');
+    assert.match(written, /^FOO<<INFISICAL_[0-9a-f]+\n/m);
+    assert.ok(written.includes('synthetic-fallback'));
+    assert.deepEqual(calls, []);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('legacy machine credentials alone never initiate a login', async () => {
@@ -371,7 +401,10 @@ test('ASC token stages the multiline key without raw key environment or logs', a
     assert.ok(!written.includes('SYNTHETIC-BODY'));
     assert.ok(!lines.join('\n').includes('SYNTHETIC-BODY'));
     assert.match(written, /APPLE_API_KEY_ID<</);
-    assert.match(written, /APPLE_API_KEY_P8_BASE64<</);
+    // The key never becomes an environment value:  no base64 of it, and no
+    // APPLE_API_KEY_P8_BASE64 either.
+    assert.doesNotMatch(written, /APPLE_API_KEY_P8_BASE64/);
+    assert.ok(!written.includes(Buffer.from(key).toString('base64')));
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -408,7 +441,9 @@ test('cursor cloud boot keeps its own login and does not import fetch exports', 
 
 test('metadata transport errors cannot echo credentials', async () => {
   const sentinel = 'synthetic-secret-must-not-leak';
-  await assert.rejects(run({ env: tokenEnv, fetchImpl: async () => { throw new Error(sentinel); }, log: () => {} }), e => !e.message.includes(sentinel) && /metadata unavailable/.test(e.message));
+  // A required name makes the load fail closed, so the transport error is
+  // reported as a failure instead of a warning.
+  await assert.rejects(run({ env: { ...tokenEnv, INFISICAL_REQUIRED: 'FOO' }, fetchImpl: async () => { throw new Error(sentinel); }, log: () => {} }), e => !e.message.includes(sentinel) && /metadata unavailable/.test(e.message));
 });
 
 test('both release workflows use only the three declared service token scopes', () => {

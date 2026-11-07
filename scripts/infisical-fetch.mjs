@@ -114,11 +114,20 @@ export function isUnresolvedReference(value) {
   return UNRESOLVED_REFERENCE.test(String(value ?? "").trim());
 }
 
-/** Missing tokens permit explicit GH fallbacks; invalid scope always fails closed. */
-export async function resolveVaultValues({ siteUrl, projectId, token, environment, secretPath, fetchImpl, log = () => {} }) {
+/** Missing tokens permit explicit GH fallbacks.  An invalid scope fails closed
+ * unless the caller says every name is best-effort. */
+export async function resolveVaultValues({ siteUrl, projectId, token, environment, secretPath, fetchImpl, failClosed = true, log = () => {} }) {
   if (!token) return new Map();
   // Scope errors fail closed rather than disguising a broad token as a fallback.
-  await validateServiceToken({ siteUrl, token, projectId, environment, secretPath, fetchImpl });
+  try {
+    await validateServiceToken({ siteUrl, token, projectId, environment, secretPath, fetchImpl });
+  } catch (err) {
+    if (failClosed) throw err;
+    // The token is not used for the read either:  an unverified token never
+    // reaches the secrets endpoint, so the GH_FALLBACK_* values answer.
+    log(`::warning::Infisical service token scope could not be verified; the token is not used and GitHub secret fallbacks apply.`);
+    return new Map();
+  }
   try {
     return await listSecretsRaw({ siteUrl, token, projectId, environment, secretPath, fetchImpl });
   } catch {
@@ -145,9 +154,8 @@ export function exportAscCredentials(values, { env, log }) {
     writeGithubEnvValue(env.GITHUB_ENV, name, value);
     writeGithubEnvValue(env.GITHUB_ENV, `APPLE_API_${name.slice(4)}`, value);
   }
-  const encoded = Buffer.from(key).toString("base64");
-  maskValue(encoded, log);
-  writeGithubEnvValue(env.GITHUB_ENV, "APPLE_API_KEY_P8_BASE64", encoded);
+  // The key itself never crosses into the environment:  only the staged
+  // file's path and the two identifiers do.
 }
 
 export async function run({ env = process.env, fetchImpl = fetch, log = (line) => console.log(line) } = {}) {
@@ -159,8 +167,12 @@ export async function run({ env = process.env, fetchImpl = fetch, log = (line) =
   const secretPath = env.INFISICAL_SECRET_PATH || "/";
   const token = env.INFISICAL_SERVICE_TOKEN || "";
   const githubEnvPath = env.GITHUB_ENV || "";
+  // A required name, the ASC export and the cloud export all need the vault,
+  // so an unverifiable scope fails the job there.  A best-effort load only
+  // warns and lets the GH_FALLBACK_* values answer.
+  const failClosed = required.size > 0 || env.INFISICAL_ASC_MODE === "true" || Boolean(env.INFISICAL_SHELL_FILE);
 
-  const vaultValues = await resolveVaultValues({ siteUrl, projectId, token, environment, secretPath, fetchImpl, log });
+  const vaultValues = await resolveVaultValues({ siteUrl, projectId, token, environment, secretPath, fetchImpl, failClosed, log });
 
   if (env.INFISICAL_SHELL_FILE) {
     if (!token || !projectId) throw new Error("Cloud export requires a scoped service token");
