@@ -286,6 +286,12 @@ private static let resourceNames: [String: String] = [
     "grok-cli": "grok",
     "grok-bot": "grok-bot",
     "minimax": "minimax",
+    "kimi": "kimi",
+    // Z.ai is the brand; zcode remains the quota provider's stable key.
+    "zcode": "zai",
+    "z.ai": "zai",
+    "z-ai": "zai",
+    "zai": "zai",
     "muse": "muse",
     // Muse Assist ships byte-identical artwork to Muse; one base serves both.
     "muse-assist": "muse",
