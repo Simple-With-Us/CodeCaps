@@ -1200,5 +1200,10 @@ extension ResetAlarmTrackerTests {
         let events = tracker.process([reading("7d", period: 7 * day, resetAt: end, remaining: 100, observedAt: wake)], now: wake)
 
         XCTAssertEqual(events.count, 1, "a post-usage restore after a long sleep alerted zero or multiple times")
+
+        let repeatEvents = tracker.process([reading("7d", period: 7 * day, resetAt: end, remaining: 100, observedAt: wake)], now: wake)
+
+        XCTAssertTrue(repeatEvents.isEmpty,
+                      "the same restore reading alerted again on a repeat poll")
     }
 }
