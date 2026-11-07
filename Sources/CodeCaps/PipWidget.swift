@@ -604,7 +604,7 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
                 && !$0.window.remainingUnknown
                 && !disabledSources.contains($0.window.source ?? "") }
             .map { QuotaWindowSnapshot(window: $0.window, now: now) }
-            // A live period with a bounded percentage is drawn however old
+            // A live period with a bounded percentage is drawable however old
             // its observation is:  the Muse collectors restate their windows
             // only when new usage arrives, so an unchanged quota reads
             // .stale while the menu bar dropdown draws it as the current
@@ -613,7 +613,12 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
             // .awaitingRefresh and stays out; the row then names it.
             .filter { !$0.isAwaitingRefresh && $0.remainingPercent != nil
                 && (!$0.window.skip || $0.remainingPercent == 0) }
-        if !own.isEmpty { return own }
+        // Fresh own readings outrank everything.  A pool participant with
+        // only a stale reading yields to a peer's fresh one first; every
+        // other row — and a participant no peer can fill — draws its
+        // stale-but-live reading, the same number the dropdown draws.
+        let fresh = own.filter { $0.isFresh }
+        if !fresh.isEmpty { return fresh }
 
         if UnifiedSubscriptionPool.participantKeys.contains(row.providerKey) {
             let candidates = peerRows
@@ -627,7 +632,7 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
                 return [QuotaWindowSnapshot(window: adapted, now: now)]
             }
         }
-        return []
+        return own
     }
 
     /// The extra balance a row may still spend, if the provider publishes one.
