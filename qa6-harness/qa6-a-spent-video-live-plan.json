@@ -1,0 +1,68 @@
+{
+ "windows": [
+  {
+   "id": "[\"producer\",\"4f938669-72f9-4386-8808-6408a031ab4d\",\"general\"]",
+   "provider": "minimax",
+   "providerKey": "minimax",
+   "label": "5-hour window",
+   "window": "5h",
+   "windowKey": "5h",
+   "modelId": "general",
+   "modelType": "general",
+   "remainingPercent": 78,
+   "remainingUnknown": false,
+   "isExhausted": false,
+   "occurredAt": "2026-11-06T10:25:00.000Z",
+   "reportedAt": "2026-11-06T10:25:00.000Z",
+   "resetAt": "2026-11-06T15:00:00.000Z"
+  },
+  {
+   "id": "[\"producer\",\"Mac.Jays.Services\",\"general\"]",
+   "provider": "minimax",
+   "providerKey": "minimax",
+   "label": "general (weekly window)",
+   "window": "weekly",
+   "windowKey": "7d",
+   "modelId": "general",
+   "modelType": "general",
+   "remainingPercent": 5,
+   "remainingUnknown": false,
+   "isExhausted": false,
+   "occurredAt": "2026-11-06T10:25:00.000Z",
+   "reportedAt": "2026-11-06T10:25:00.000Z",
+   "resetAt": "2026-11-09T00:00:00.000Z"
+  },
+  {
+   "id": "[\"producer\",\"4f938669-72f9-4386-8808-6408a031ab4d\",\"video\"]",
+   "provider": "minimax",
+   "providerKey": "minimax",
+   "label": "Video",
+   "window": "1d",
+   "windowKey": "1d",
+   "modelId": "video",
+   "modelType": "video",
+   "remainingPercent": 0,
+   "remainingUnknown": false,
+   "isExhausted": true,
+   "occurredAt": "2026-11-06T10:25:00.000Z",
+   "reportedAt": "2026-11-06T10:25:00.000Z",
+   "resetAt": "2026-11-07T00:00:00.000Z"
+  },
+  {
+   "id": "[\"producer\",\"Mac.Jays.Services\",\"video\"]",
+   "provider": "minimax",
+   "providerKey": "minimax",
+   "label": "video (weekly window)",
+   "window": "weekly",
+   "windowKey": "7d",
+   "modelId": "video",
+   "modelType": "video",
+   "remainingPercent": 100,
+   "remainingUnknown": false,
+   "isExhausted": false,
+   "occurredAt": "2026-11-06T10:25:00.000Z",
+   "reportedAt": "2026-11-06T10:25:00.000Z",
+   "resetAt": "2026-11-09T00:00:00.000Z"
+  }
+ ]
+}

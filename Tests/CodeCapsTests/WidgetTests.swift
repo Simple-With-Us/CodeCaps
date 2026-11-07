@@ -578,6 +578,31 @@ final class WidgetTests: XCTestCase {
         XCTAssertTrue(presentation.contains("static func shortCadence"))
         XCTAssertTrue(presentation.contains("static func resetCaption"))
         XCTAssertTrue(presentation.contains("func dualWindows()"))
+        // QA 2026-11-06, verified against the real wire capture (committed
+        // verbatim at Tests/Fixtures/qa3-wire-regression-fixture.json):  the
+        // codecaps 5h and the collector weekly share series "general", the
+        // collector's 5h headline is series "minimax:coding-plan", and
+        // Copilot's Chat and Completions share the canonical key "monthly".
+        // The dedupe identity must be the triple of video class, aliased
+        // series, and canonical cadence:  video partitions first so a
+        // supplementary video window can never fold into a plan window;  the
+        // MiniMax alias set is bounded to the producer's verified
+        // general/coding-plan equivalence;  the canonical cadence keeps one
+        // model's 5-hour, daily and weekly windows separate.
+        XCTAssertTrue(presentation.contains("static func allowanceSeries(forWireId id: String) -> String"))
+        XCTAssertTrue(presentation.contains(#"parts[0] == "producer""#))
+        XCTAssertTrue(presentation.contains("static func normalizedAllowanceSeries(providerKey: String, series: String) -> String"))
+        XCTAssertTrue(presentation.contains(#""minimax:coding-plan", "coding-plan""#))
+        // The bounded xAI subscription-pool alias (qa4 wire capture:
+        // "grok:subscription" from the codecaps reader and "xai:subscription"
+        // from the collector are one allowance).
+        XCTAssertTrue(presentation.contains(#"providerKey == "xai", series.lowercased() == "grok:subscription""#))
+        XCTAssertTrue(presentation.contains(#"item.isSupplementaryVideoQuota ? "video|" : "plan|""#))
+        // The cadence leg must be canonicalised into the wire namespace, not
+        // keyed on the display cadence, or a pre-windowKey copy ("weekly")
+        // splits from its keyed copy ("7d") - same kody finding as PR #370.
+        XCTAssertTrue(presentation.contains("static func canonicalWireCadence("))
+        XCTAssertTrue(presentation.contains(#"case QuotaWindowVocabulary.sevenDay: return "7d""#))
     }
 
     func testOverviewViewsPassQuotasPerProviderToPlanGrid() throws {
@@ -602,6 +627,17 @@ final class WidgetTests: XCTestCase {
 
         let singleWindow = [window("5h", percent: 80, hoursToReset: 2)]
         XCTAssertNil(dualWindows(singleWindow))
+    }
+
+    func testDualWindowsSelectionSkipsSupplementaryVideoQuota() {
+        let windows = [
+            window("minimax:5h", percent: 81, hoursToReset: 2),
+            FixtureWindow(id: "minimax:video", percent: 100, hoursToReset: 20, masked: false, label: "1d window", isSupplementaryVideoQuota: true),
+            window("minimax:7d", percent: 5, hoursToReset: 66)
+        ]
+        let dual = dualWindows(windows, providerKey: "minimax")
+        XCTAssertEqual(dual?.0.id, "minimax:5h")
+        XCTAssertEqual(dual?.1.id, "minimax:7d", "the video daily must not displace the weekly coding window")
     }
 
     // MARK: - Helpers mirroring WidgetPresentation logic for test isolation
@@ -656,6 +692,12 @@ final class WidgetTests: XCTestCase {
         let percent: Double?
         let hoursToReset: Double
         let masked: Bool
+        // A `var`, not a `let`:  a `let` with a default is excluded from the
+        // memberwise initializer, and the MiniMax video fixture passes one.
+        var label: String = ""
+        // Mirrors WidgetWindowItem.isSupplementaryVideoQuota:  the identity
+        // is carried, not re-derived from the display label.
+        var isSupplementaryVideoQuota: Bool = false
     }
 
     private enum FixtureWindowPick {
@@ -696,11 +738,21 @@ final class WidgetTests: XCTestCase {
         }
     }
 
-    private func dualWindows(_ windows: [FixtureWindow]) -> (FixtureWindow, FixtureWindow)? {
+    private func dualWindows(_ windows: [FixtureWindow], providerKey: String = "") -> (FixtureWindow, FixtureWindow)? {
         guard windows.count >= 2 else { return nil }
         let visible = windows.filter { !$0.masked }
         let pool = visible.count >= 2 ? visible : windows
         guard pool.count >= 2 else { return nil }
-        return (pool[0], pool[1])
+        // Mirrors WidgetPresentation: a MiniMax supplementary video quota
+        // never takes a bar from the plan's own windows when two remain.
+        // The carried flag decides, not the display label - the label
+        // rewrite drops the video tokens (Kody review, PR #367).
+        let planWindows = pool.filter { !$0.isSupplementaryVideoQuota }
+        // Mirrors production exactly:  no fallback to the pool - a plan
+        // with fewer than two of its own windows has no pair, so a video
+        // row can never slip in beside one plan bar (Sentry review, PR
+        // #369).
+        guard planWindows.count >= 2 else { return nil }
+        return (planWindows[0], planWindows[1])
     }
 }

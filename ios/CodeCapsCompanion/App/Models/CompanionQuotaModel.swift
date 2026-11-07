@@ -2322,9 +2322,15 @@ public final class CompanionQuotaModel: ObservableObject {
                 && $0.isExhausted
         }
 
-        // Nearest future reset time
-        let futureResets = primaryWindows.compactMap(\.resetAt).filter { $0 > now }
-        let nearestReset = futureResets.min() ?? primaryWindows.compactMap(\.resetAt).min()
+        // Nearest future reset time, over the same window kinds the headline
+        // and the cap rule read: a supplementary video window's reset used to
+        // drive the plan's caption while its reading was ignored (kody, PR
+        // #369).
+        let captionWindows = primaryWindows.filter {
+            !$0.isSupplementaryVideoQuota && !$0.isScopedPoolAllowance && !$0.isSubModelLimit
+        }
+        let futureResets = captionWindows.compactMap(\.resetAt).filter { $0 > now }
+        let nearestReset = futureResets.min() ?? captionWindows.compactMap(\.resetAt).min()
 
         let automaticPlan = rawWindows.compactMap(\.planName).first(where: { !$0.isEmpty })
             ?? rawWindows.compactMap(\.plan).first(where: { !$0.isEmpty })
