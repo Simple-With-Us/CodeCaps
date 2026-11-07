@@ -835,7 +835,7 @@ final class MonitorModel: ObservableObject {
         let visible = sections.flatMap(\.windows).filter {
             $0.isFresh && $0.remainingPercent != nil && !$0.window.isSupplementaryVideoQuota
                 && !masked.contains($0.window.id)
-                && issues[$0.window.canonicalProviderKey] == nil
+                && rowIssue(for: $0.window.canonicalProviderKey) == nil
                 && !disabledSources.contains($0.window.source ?? "")
         }
         // Order by provider rank, then by source rank within the provider, so
@@ -2477,7 +2477,7 @@ final class MonitorModel: ObservableObject {
             let unifiedMerged = UnifiedSubscriptionPool.share(
                 windows: merged, now: self.now,
                 targetKeys: UnifiedSubscriptionPool.participantKeys)
-            clearIssuesServedByThePool(unifiedMerged)
+            updatePoolServedKeys(from: unifiedMerged)
             var origins: [String: QuotaOrigin] = [:]
             for key in Set(unifiedMerged.map(\.canonicalProviderKey)) { origins[key] = .local }
             self.originByProvider = origins
@@ -2609,18 +2609,34 @@ final class MonitorModel: ObservableObject {
         return resolved
     }
 
-    /// Clears a pool participant's issue once the shared pool serves it a
-    /// reading.  The failed local read leaves an issue ("sign in", or the
-    /// generic failure) and no window; the pool then stands the freshest
-    /// participant's reading in for the absent row.  That row is no longer
-    /// unavailable, and every surface prefers an issue over any percentage,
-    /// so the issue has to go or the row stays "unavailable" beside a live
-    /// number.  A participant still carrying no reading keeps its issue.
-    private func clearIssuesServedByThePool(_ windows: [QuotaWindow]) {
-        let served = Set(windows.filter { $0.hasReading }.map(\.canonicalProviderKey))
-        for key in UnifiedSubscriptionPool.participantKeys where served.contains(key) {
-            issues[key] = nil
+    /// The pool participants whose rows currently carry a fresh, bounded
+    /// reading — the row the pool served, whether it filled a placeholder in
+    /// place or injected one for an absent participant.  `issues` keeps the
+    /// raw local read's map, because the Settings reader diagnostics and the
+    /// BotFleet handoff both read it and must keep seeing the real failure;
+    /// the quota rows ask `rowIssue(for:)`, which drops a participant's
+    /// issue while the shared reading stands (CC-210).
+    @Published private(set) var poolServedKeys: Set<String> = []
+
+    /// Re-derives `poolServedKeys` from the merged windows.  The test is the
+    /// pool's own donor test — a pool window with a bounded percentage that
+    /// is fresh — so an absolute-only balance or a lapsed reading never
+    /// counts as served.
+    func updatePoolServedKeys(from windows: [QuotaWindow]) {
+        var served: Set<String> = []
+        for window in windows where UnifiedSubscriptionPool.participantKeys.contains(window.canonicalProviderKey) {
+            guard window.boundedRemainingPercent != nil,
+                  QuotaWindowSnapshot(window: window, now: now).isFresh else { continue }
+            served.insert(window.canonicalProviderKey)
         }
+        poolServedKeys = served
+    }
+
+    /// The issue a quota row shows:  the raw local read's issue, unless the
+    /// shared pool stands in a fresh reading for that participant.
+    func rowIssue(for providerKey: String) -> String? {
+        guard poolServedKeys.contains(providerKey) else { return issues[providerKey] }
+        return nil
     }
 
     /// File checks publish only changed local readings.  Fleet pull and push
@@ -2671,7 +2687,7 @@ final class MonitorModel: ObservableObject {
         let unifiedMerged = UnifiedSubscriptionPool.share(
             windows: merged, now: now,
             targetKeys: UnifiedSubscriptionPool.participantKeys)
-        clearIssuesServedByThePool(unifiedMerged)
+        updatePoolServedKeys(from: unifiedMerged)
         originByProvider = Dictionary(uniqueKeysWithValues: Set(unifiedMerged.map(\.canonicalProviderKey)).map { ($0, .local) })
         response = QuotaResponse(generatedAt: ISO8601DateFormatter().string(from: now), windows: unifiedMerged)
         if let writeForTesting = handoffWriteForTesting {

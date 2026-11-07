@@ -1,0 +1,4 @@
+fix(quota): keep the raw issue map and gate pool suppression per row
+
+Review round one on #373 raised three real findings: clearing the shared issue map hid real local-reader failures from the Settings diagnostics, the BotFleet handoff captured the cleared map, and an absolute-only spend meter counted as served.
+The issue map now stays raw; the rows ask a separate served set, tested with the pool's own donor test (fresh, bounded, pool window), through one rowIssue accessor.
