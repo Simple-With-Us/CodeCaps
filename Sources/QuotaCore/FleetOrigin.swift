@@ -115,6 +115,19 @@ public enum FleetOrigin {
         return false
     }
 
+    /// Whether the window's producer field carries a legacy machine-name
+    /// identity rather than an install UUID (CC-217):  a UUID is another
+    /// installation's authoritative identity, while a name is the legacy
+    /// collector's machine name and may be this Mac's own.
+    static func isLegacyNameProducer(_ window: QuotaWindow, host: String) -> Bool {
+        guard let instance = window.producerInstanceId?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !instance.isEmpty,
+            instance.lowercased() != host.lowercased(),
+            UUID(uuidString: instance) == nil else { return false }
+        return true
+    }
+
     /// "antigravity-usage" reads as "Antigravity Usage" in a group header.
     public static func title(for identity: String) -> String {
         // A host is a host.  `chatgpt.com` title-cased to `ChATGPT.com`, which
@@ -188,12 +201,28 @@ public enum FleetOrigin {
                                                      resetAt: $0.resetDate,
                                                      now: now) }
             .map(cadenceKey))
+        // The meters the current collector itself reports:  a legacy-name
+        // copy of one of those is a superseded duplicate of a period the
+        // install-id copy already covers, not a meter only the old collector
+        // ever saw (the widget-snapshot single-xAI pin).
+        let authoritativeOwnCadences = Set(windows
+            .filter { $0.producerInstanceId?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased() == host.lowercased() }
+            .map(cadenceKey))
         for window in windows {
             let dead = QuotaFreshnessRule.isDeadCopy(observedAt: window.occurredDate,
                                                      resetAt: window.resetDate,
                                                      now: now)
             let cadenceIsLive = liveCadences.contains(cadenceKey(of: window))
-            if isOwnPush(window, host: host, localWindows: localWindows) {
+            let legacyDuplicate = isOwnPush(window, host: host, localWindows: localWindows)
+                && isLegacyNameProducer(window, host: host)
+                && authoritativeOwnCadences.contains(cadenceKey(of: window))
+            if legacyDuplicate {
+                if !dead {
+                    grouped[fleetGroupKey(for: window), default: []].append(window)
+                }
+            } else if isOwnPush(window, host: host, localWindows: localWindows) {
                 if localReaders.contains(window.canonicalProviderKey)
                     || !dead
                     || !cadenceIsLive {
