@@ -692,7 +692,10 @@ public enum WidgetPresentation {
     /// own identity.
     static func normalizedAllowanceSeries(providerKey: String, series: String) -> String {
         if providerKey.lowercased().contains("minimax") {
-            switch series {
+            // Case-insensitive on purpose: a producer that ships `General`
+            // or `Grok:Subscription` must hit the same alias as its lowercase
+            // twin, or one allowance splits into two rows (kody, PR #369).
+            switch series.lowercased() {
             case "general", "minimax:general", "minimax:general:weekly",
                  "minimax:coding-plan", "coding-plan":
                 return "minimax:plan"
@@ -709,7 +712,7 @@ public enum WidgetPresentation {
         // capture (2026-11-06) shows both copies at the same reset second
         // and reading.  Bounded to the subscription pool;  every other xAI
         // series keeps its own identity.
-        if providerKey == "xai", series == "grok:subscription" {
+        if providerKey == "xai", series.lowercased() == "grok:subscription" {
             return "xai:subscription"
         }
         return series
