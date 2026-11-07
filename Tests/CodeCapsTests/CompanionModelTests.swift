@@ -421,6 +421,14 @@ final class CompanionModelTests: XCTestCase {
             source.contains(#"providerKey == "xai", series == "grok:subscription""#),
             "the bounded xAI subscription-pool alias must exist (qa4 wire capture)"
         )
+        XCTAssertTrue(
+            source.contains("static func canonicalWireCadence("),
+            "a copy without a windowKey must be canonicalised into the wire namespace, not keyed on the display cadence (kody, PR #370)"
+        )
+        XCTAssertTrue(
+            source.contains(#"case QuotaWindowVocabulary.sevenDay: return "7d""#),
+            "the collector's \"weekly\" token must land on the wire's \"7d\" so the two copies of one allowance merge"
+        )
     }
 
     /// The phone must ask the shared rule which window binds the cap.
