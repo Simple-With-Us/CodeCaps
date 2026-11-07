@@ -604,7 +604,14 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
                 && !$0.window.remainingUnknown
                 && !disabledSources.contains($0.window.source ?? "") }
             .map { QuotaWindowSnapshot(window: $0.window, now: now) }
-            .filter { $0.isFresh && $0.remainingPercent != nil
+            // A live period with a bounded percentage is drawn however old
+            // its observation is:  the Muse collectors restate their windows
+            // only when new usage arrives, so an unchanged quota reads
+            // .stale while the menu bar dropdown draws it as the current
+            // reading — and the HUD contradicted the dropdown on the same
+            // row (CC-216, owner 2026-11-07).  A period that has ended is
+            // .awaitingRefresh and stays out; the row then names it.
+            .filter { !$0.isAwaitingRefresh && $0.remainingPercent != nil
                 && (!$0.window.skip || $0.remainingPercent == 0) }
         if !own.isEmpty { return own }
 
