@@ -2470,7 +2470,14 @@ final class MonitorModel: ObservableObject {
                     && expectedQuotaProviderKeys.contains(key)
             }
             let merged = QuotaLocalScope.localWindowsForMerge(self.localWindows, adopted: adopted) + adopted + fleetFallback
-            let unifiedMerged = UnifiedSubscriptionPool.share(windows: merged, now: self.now)
+            // Every participant gets the pool's reading, including one whose
+            // local read failed outright and left no window behind: Cursor and
+            // Grok Bot share xAI's quota, so a fresh xAI reading stands in for
+            // them instead of the row sitting at "unavailable" (CC-210).
+            let unifiedMerged = UnifiedSubscriptionPool.share(
+                windows: merged, now: self.now,
+                targetKeys: UnifiedSubscriptionPool.participantKeys)
+            clearIssuesServedByThePool(unifiedMerged)
             var origins: [String: QuotaOrigin] = [:]
             for key in Set(unifiedMerged.map(\.canonicalProviderKey)) { origins[key] = .local }
             self.originByProvider = origins
@@ -2602,6 +2609,20 @@ final class MonitorModel: ObservableObject {
         return resolved
     }
 
+    /// Clears a pool participant's issue once the shared pool serves it a
+    /// reading.  The failed local read leaves an issue ("sign in", or the
+    /// generic failure) and no window; the pool then stands the freshest
+    /// participant's reading in for the absent row.  That row is no longer
+    /// unavailable, and every surface prefers an issue over any percentage,
+    /// so the issue has to go or the row stays "unavailable" beside a live
+    /// number.  A participant still carrying no reading keeps its issue.
+    private func clearIssuesServedByThePool(_ windows: [QuotaWindow]) {
+        let served = Set(windows.filter { $0.hasReading }.map(\.canonicalProviderKey))
+        for key in UnifiedSubscriptionPool.participantKeys where served.contains(key) {
+            issues[key] = nil
+        }
+    }
+
     /// File checks publish only changed local readings.  Fleet pull and push
     /// stay on the provider/manual path, so a one-minute file poll is passive.
     private func rebuildLocalState(recordSamples: Bool) {
@@ -2645,7 +2666,12 @@ final class MonitorModel: ObservableObject {
                 && expectedQuotaProviderKeys.contains(key)
         }
         let merged = QuotaLocalScope.localWindowsForMerge(localWindows, adopted: adopted) + adopted + fleetFallback
-        let unifiedMerged = UnifiedSubscriptionPool.share(windows: merged, now: now)
+        // Same pool rule as the refresh path: an absent participant still
+        // receives the shared reading (CC-210).
+        let unifiedMerged = UnifiedSubscriptionPool.share(
+            windows: merged, now: now,
+            targetKeys: UnifiedSubscriptionPool.participantKeys)
+        clearIssuesServedByThePool(unifiedMerged)
         originByProvider = Dictionary(uniqueKeysWithValues: Set(unifiedMerged.map(\.canonicalProviderKey)).map { ($0, .local) })
         response = QuotaResponse(generatedAt: ISO8601DateFormatter().string(from: now), windows: unifiedMerged)
         if let writeForTesting = handoffWriteForTesting {
