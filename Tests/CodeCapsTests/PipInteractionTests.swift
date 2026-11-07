@@ -235,10 +235,10 @@ final class PipInteractionTests: XCTestCase {
         XCTAssertFalse(PipWidgetController.meterSnapshots(for: row,
             now: model.now.addingTimeInterval(3_600)).isEmpty)
         // A period that has ended without a refresh is named, not drawn.
-        XCTAssertEqual(PipWidgetController.readingStatus(for: row, now: model.now.addingTimeInterval(5 * day)),
+        XCTAssertEqual(PipWidgetController.readingStatus(for: row, now: model.now.addingTimeInterval(5 * 86_400)),
                        "awaiting refresh")
         XCTAssertTrue(PipWidgetController.meterSnapshots(for: row,
-            now: model.now.addingTimeInterval(5 * day)).isEmpty)
+            now: model.now.addingTimeInterval(5 * 86_400)).isEmpty)
         XCTAssertEqual(PipWidgetController.readingStatus(for: row, now: model.now,
             disabledSources: ["anthropic"]), "source disabled")
         XCTAssertTrue(PipWidgetController.meterSnapshots(for: row, now: model.now,
