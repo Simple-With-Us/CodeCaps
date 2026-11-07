@@ -267,6 +267,22 @@ final class FleetOriginTests: XCTestCase {
                        "with no live window of the cadence, the ended copy is what the row has")
     }
 
+    /// Retention is this Mac's own grey-out only: a copy from another
+    /// machine feeds the fleet fallback for a provider this Mac does not
+    /// read, so an ended 0% copy from a remote machine still drops even with
+    /// nothing live left of its cadence (PR review: the CC-191 failure).
+    func testARemoteMachinesDeadCopyDropsEvenWithNothingLiveLeftOfItsCadence() {
+        let now = Date()
+        let remoteDead = xaiWindow(id: "remote:xai:subscription", percent: 0,
+                                   resetIn: -86_400, observedAgo: 6 * 86_400)
+        var remote = remoteDead
+        remote.producerInstanceId = "other-mac"
+        let split = FleetOrigin.split([remote], host: "this-mac", localWindows: [], now: now)
+        XCTAssertTrue(split.ownPush.isEmpty)
+        XCTAssertTrue(split.groups.flatMap(\.windows).isEmpty,
+                      "a remote machine's ended copy is not a reading and never reaches a row")
+    }
+
     func testTheMuseFiveHourRowSurvivesBesideTheLiveWeeklyWindow() {
         let now = Date()
         let iso = ISO8601DateFormatter()

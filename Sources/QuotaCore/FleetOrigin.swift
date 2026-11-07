@@ -147,9 +147,20 @@ public enum FleetOrigin {
         // (CC-211, owner 2026-11-07).  The xAI row keeps the fix from
         // 2026-10-23:  its live weekly reading puts its cadence in this set,
         // so the ended copies still drop.
+        // The key names one meter: provider, cadence, and the model and
+        // account that split a provider's meters apart.  The cadence
+        // classification gets the window's reset and period start, the way
+        // every other caller classifies:  an opaque token is dated by its
+        // reset, so two opaque periods of one meter stay distinct instead of
+        // collapsing into one key (PR review, kody).
         func cadenceKey(of window: QuotaWindow) -> String {
-            window.canonicalProviderKey + ":"
-                + QuotaWindowVocabulary.standardCadence(windowToken: window.window, label: window.label)
+            window.canonicalProviderKey
+                + ":" + QuotaWindowVocabulary.standardCadence(windowToken: window.window,
+                                                              label: window.label,
+                                                              resetAt: window.resetDate,
+                                                              periodStart: window.periodStartDate)
+                + ":" + (window.modelId ?? "")
+                + ":" + (window.accountKey ?? "")
         }
         let liveCadences = Set(windows
             .filter { !QuotaFreshnessRule.isDeadCopy(observedAt: $0.occurredDate,
@@ -167,7 +178,12 @@ public enum FleetOrigin {
                     || !cadenceIsLive {
                     own.append(window)
                 }
-            } else if !dead || !cadenceIsLive {
+            } else if !dead {
+                // A copy from another machine has no local window to grey it
+                // out, and the row it would feed is the fleet fallback for a
+                // provider this Mac does not read:  an ended 0% copy becoming
+                // that row is the CC-191 failure, so remote dead copies still
+                // drop without exception (PR review, kody and sentry).
                 grouped[fleetGroupKey(for: window), default: []].append(window)
             }
         }
