@@ -562,6 +562,12 @@ final class WidgetTests: XCTestCase {
         XCTAssertTrue(rows.contains("struct WindowCaptionRow"))
         XCTAssertTrue(rows.contains("struct PlanBarRow"))
         XCTAssertTrue(rows.contains("struct PlanDualBarRow"))
+        // The Mac meter grammar: token, bar, percent and countdown on one
+        // line, with the percent and the reset trailing on the right of the
+        // bar (CC-213, owner 2026-11-07).  The small widget keeps the
+        // stacked layout, so the escape hatch must stay named too.
+        XCTAssertTrue(rows.contains("struct WidgetMeterRow"))
+        XCTAssertTrue(rows.contains("usesMeterLayout"))
         XCTAssertTrue(rows.contains("struct PlanGrid"))
         XCTAssertTrue(rows.contains("quotasPerProvider"))
         // The mark replaces the app name in the corner; the asset itself belongs
