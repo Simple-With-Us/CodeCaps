@@ -1222,8 +1222,20 @@ extension ResetAlarmTrackerTests {
         tracker.process([reading("5h", period: 5 * hour, resetAt: startReset,
                                  remaining: 12, observedAt: now, provider: "minimax")],
                         now: now)
-        // Three polls, two hours apart: usage ages out, the end slides with
-        // the clock, and the percentage crosses the 80-to-95 boundary.
+        // Two ordinary rolling polls: the end slides ahead with the clock by
+        // less than the drift tolerance, which is how a rolling meter earns
+        // its rolling classification.
+        for step in 1...2 {
+            now = now.addingTimeInterval(5 * 60)
+            let end = now.addingTimeInterval(4 * hour)
+            tracker.process(
+                [reading("5h", period: 5 * hour, resetAt: end,
+                         remaining: 12.0 + Double(step), observedAt: now, provider: "minimax")],
+                now: now)
+        }
+        // Then the burst: a large forward slide and a climb across the
+        // 80-to-95 boundary as the burst's usage ages out.  Nothing happened
+        // a vendor did, so nothing may fire.
         for step in 1...3 {
             now = now.addingTimeInterval(2 * hour)
             let end = now.addingTimeInterval(4 * hour)
@@ -1243,7 +1255,7 @@ extension ResetAlarmTrackerTests {
     func testAHeldEndRiseStillFiresTheCourtesyRestore() {
         var tracker = ResetAlarmTracker()
         var now = t0
-        let end = now.addingTimeInterval(4 * hour)
+        let end = now.addingTimeInterval(8 * hour)
         tracker.process([reading("5h", period: 5 * hour, resetAt: end,
                                  remaining: 12, observedAt: now, provider: "minimax")],
                         now: now)

@@ -149,6 +149,13 @@ public struct ResetAlarmTrackerState: Codable, Equatable, Sendable {
         public var periodSeconds: TimeInterval?
         /// Whose quota the window last described, for windows that change hands.
         public var identity: String?
+        /// How many readings advanced this window's period end forward within
+        /// its tolerance.  A fixed-boundary window never does that, so any
+        /// count marks a rolling meter (MiniMax's five-hour and video windows)
+        /// — and for a rolling meter a mid-period rise is usage aging out,
+        /// not a restore (CC-215).  Optional so snapshots recorded before this
+        /// field keep decoding.
+        public var forwardFollows: Int?
 
         public init(
             periodResetAt: Date?,
@@ -157,7 +164,8 @@ public struct ResetAlarmTrackerState: Codable, Equatable, Sendable {
             lastObservedAt: Date?,
             lastSeenAt: Date,
             periodSeconds: TimeInterval?,
-            identity: String? = nil
+            identity: String? = nil,
+            forwardFollows: Int? = nil
         ) {
             self.periodResetAt = periodResetAt
             self.minimumRemaining = minimumRemaining
@@ -166,6 +174,7 @@ public struct ResetAlarmTrackerState: Codable, Equatable, Sendable {
             self.lastSeenAt = lastSeenAt
             self.periodSeconds = periodSeconds
             self.identity = identity
+            self.forwardFollows = forwardFollows
         }
     }
 
@@ -281,6 +290,11 @@ public enum ResetAlarmPolicy {
     /// `surgeMidWindow` rule already uses this shape, but only while the
     /// window's own end is still in the future, which is not the owner's case.
     public static let courtesyRestoreCeiling: Double = 80
+
+    /// Forward end-follows after which a window counts as rolling.  One is
+    /// enough:  a fixed-boundary window never moves its end early, so a
+    /// single observed roll decides the meter's kind (CC-215).
+    public static let rollingForwardFollows = 1
     public static let courtesyRestoreFloor: Double = 95
     /// Windows and fires not seen for this long are forgotten.
     public static let retention: TimeInterval = 45 * 86_400
@@ -493,7 +507,17 @@ public struct ResetAlarmTracker: Sendable {
                 if let reading, let last = window.lastRemaining {
                     climbed = reading >= last + ResetAlarmPolicy.earlyResetRiseMargin
                 }
-                if jump > required || (jump > ResetAlarmPolicy.resetDriftTolerance && climbed) {
+                // A window whose end has already been observed rolling
+                // forward is a rolling meter (CC-215):  inside its period a
+                // forward move is the roll, however much the percentage
+                // climbed — usage aging out looks exactly like a refill.
+                // Follow the end and stay quiet;  a genuine boundary rollover
+                // still fires through `hasPassed`.
+                let rollingMeter = (window.forwardFollows ?? 0)
+                    >= ResetAlarmPolicy.rollingForwardFollows
+                let forwardJump = jump > required
+                    || (jump > ResetAlarmPolicy.resetDriftTolerance && climbed)
+                if forwardJump, hasPassed || !rollingMeter {
                     isReset = true
                     // When the window had *not* reached its own scheduled end,
                     // any reset is an early / mid-cycle vendor restore rather than
@@ -504,7 +528,11 @@ public struct ResetAlarmTracker: Sendable {
                     nextResetAt = reported
                 } else if jump > -ResetAlarmPolicy.resetDriftTolerance || reported > readAt {
                     // Jitter, or a correction to a reset still ahead: follow it
-                    // so slow drift never adds up to a false reset.
+                    // so slow drift never adds up to a false reset.  A forward
+                    // move, however small, is evidence about the meter's kind.
+                    if reported > previousReset {
+                        window.forwardFollows = min((window.forwardFollows ?? 0) + 1, 99)
+                    }
                     nextResetAt = reported
                 }
             }
