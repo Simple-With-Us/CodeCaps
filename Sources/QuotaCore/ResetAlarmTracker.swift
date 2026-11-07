@@ -589,13 +589,6 @@ public struct ResetAlarmTracker: Sendable {
             //  - the quota jumps to full from anything less.
             //  - the quota was nearly spent and is now nearly untouched.
             if !isReset, !hasPassed, let reading, let last = window.lastRemaining {
-                // Same evidence bar as `quotaHandedBack`: a rise against an
-                // end that slid with the clock is the window rolling, not a
-                // restore (CC-215).  An unknown end cannot prove a restore.
-                let jumpedToFull = periodEndHeld && !slidWithTheClock
-                    && reading >= 99.5 && last < 99.5
-                let surgedMidWindow = periodEndHeld && !slidWithTheClock
-                    && last < 80.0 && reading >= 95.0
                 // "Held still" and "slid with the clock" are two separate
                 // questions, and asking them as two separate questions keeps
                 // the verdict independent of how often this Mac happens to
@@ -646,6 +639,13 @@ public struct ResetAlarmTracker: Sendable {
                     // still read as held still.
                     slidWithTheClock = (endMoved ?? 0) > 0
                 }
+                // All three carries share one evidence bar: a rise against
+                // an end that slid with the clock is the window rolling, not
+                // a restore (CC-215).  An unknown end cannot prove a restore.
+                let jumpedToFull = periodEndHeld && !slidWithTheClock
+                    && reading >= 99.5 && last < 99.5
+                let surgedMidWindow = periodEndHeld && !slidWithTheClock
+                    && last < 80.0 && reading >= 95.0
                 let quotaHandedBack = periodEndHeld && !slidWithTheClock
                     && reading >= last + ResetAlarmPolicy.vendorRestoreRise
                 if jumpedToFull || surgedMidWindow || quotaHandedBack {
