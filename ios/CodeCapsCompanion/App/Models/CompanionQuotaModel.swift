@@ -783,6 +783,8 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
         if key.contains("grok-bot") { return "provider-grok-bot" }
         if key.contains("grok") || key.contains("xai") { return "provider-grok" }
         if key.contains("minimax") { return "provider-minimax" }
+        if key.contains("kimi") { return "provider-kimi" }
+        if ["zcode", "z.ai", "z-ai", "zai"].contains(where: { key.contains($0) }) { return "provider-zai" }
         if key.contains("copilot") || lowId.contains("copilot") { return "provider-copilot" }
         if key.contains("muse-assist") || key.contains("muse_assist") { return "provider-muse-assist" }
         if key.contains("muse-code") || key.contains("muse_code") { return "provider-muse-code" }
