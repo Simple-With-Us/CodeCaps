@@ -227,10 +227,18 @@ final class PipInteractionTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let row = try XCTUnwrap(model.displaySections.first { $0.id == "anthropic" })
         XCTAssertFalse(PipWidgetController.meterSnapshots(for: row, now: model.now).isEmpty)
-        XCTAssertEqual(PipWidgetController.readingStatus(for: row, now: model.now.addingTimeInterval(3_600)),
-                       "stale reading")
-        XCTAssertTrue(PipWidgetController.meterSnapshots(for: row,
+        // An aged observation of a live period still draws, exactly as the
+        // menu bar dropdown draws it: the Muse collectors restate their
+        // windows only when new usage arrives, so an unchanged quota reads
+        // stale while its reading is the current one (CC-216).
+        XCTAssertEqual(PipWidgetController.readingStatus(for: row, now: model.now.addingTimeInterval(3_600)), nil)
+        XCTAssertFalse(PipWidgetController.meterSnapshots(for: row,
             now: model.now.addingTimeInterval(3_600)).isEmpty)
+        // A period that has ended without a refresh is named, not drawn.
+        XCTAssertEqual(PipWidgetController.readingStatus(for: row, now: model.now.addingTimeInterval(5 * day)),
+                       "awaiting refresh")
+        XCTAssertTrue(PipWidgetController.meterSnapshots(for: row,
+            now: model.now.addingTimeInterval(5 * day)).isEmpty)
         XCTAssertEqual(PipWidgetController.readingStatus(for: row, now: model.now,
             disabledSources: ["anthropic"]), "source disabled")
         XCTAssertTrue(PipWidgetController.meterSnapshots(for: row, now: model.now,
