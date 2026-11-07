@@ -71,7 +71,11 @@ public enum FleetOrigin {
                 return true
             }
         }
-        if !window.occurredAt.isEmpty, !localWindows.isEmpty {
+        // A window that names its producer explicitly is only ever claimed by
+        // the machine-name match above and below:  matching it to a local
+        // reading by timestamp would let another installation's reading pose
+        // as this Mac's own just because both saw the same period (CC-217).
+        if !window.occurredAt.isEmpty, !localWindows.isEmpty, legacyProducerName == nil {
             let occurred = window.occurredAt
             let matchesLocal = localWindows.contains { local in
                 local.canonicalProviderKey == window.canonicalProviderKey
@@ -119,13 +123,37 @@ public enum FleetOrigin {
     /// identity rather than an install UUID (CC-217):  a UUID is another
     /// installation's authoritative identity, while a name is the legacy
     /// collector's machine name and may be this Mac's own.
-    static func isLegacyNameProducer(_ window: QuotaWindow, host: String) -> Bool {
+    public static func isLegacyNameProducer(_ window: QuotaWindow, host: String) -> Bool {
         guard let instance = window.producerInstanceId?
             .trimmingCharacters(in: .whitespacesAndNewlines),
             !instance.isEmpty,
             instance.lowercased() != host.lowercased(),
             UUID(uuidString: instance) == nil else { return false }
         return true
+    }
+
+    /// The key that names one meter, shared by the split's retention rules
+    /// and the widget publisher's duplicate rule, so both ask the same
+    /// question about the same meter (CC-217).
+    public static func cadenceIdentityKey(of window: QuotaWindow) -> String {
+        window.canonicalProviderKey
+            + ":" + QuotaWindowVocabulary.standardCadence(windowToken: window.window,
+                                                          label: window.label,
+                                                          resetAt: window.resetDate,
+                                                          periodStart: window.periodStartDate)
+            + ":" + (window.modelId ?? "")
+            + ":" + (window.accountKey ?? "")
+    }
+
+    /// The cadence keys the current collector itself reports:  a legacy-name
+    /// copy of one of those meters is a superseded duplicate, never a
+    /// reading that may publish or be retained (CC-217).
+    public static func authoritativeOwnCadenceKeys(in windows: [QuotaWindow], host: String) -> Set<String> {
+        Set(windows
+            .filter { $0.producerInstanceId?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased() == host.lowercased() }
+            .map { cadenceIdentityKey(of: $0) })
     }
 
     /// "antigravity-usage" reads as "Antigravity Usage" in a group header.
@@ -188,13 +216,7 @@ public enum FleetOrigin {
         // reset, so two opaque periods of one meter stay distinct instead of
         // collapsing into one key (PR review, kody).
         func cadenceKey(of window: QuotaWindow) -> String {
-            window.canonicalProviderKey
-                + ":" + QuotaWindowVocabulary.standardCadence(windowToken: window.window,
-                                                              label: window.label,
-                                                              resetAt: window.resetDate,
-                                                              periodStart: window.periodStartDate)
-                + ":" + (window.modelId ?? "")
-                + ":" + (window.accountKey ?? "")
+            cadenceIdentityKey(of: window)
         }
         let liveCadences = Set(windows
             .filter { !QuotaFreshnessRule.isDeadCopy(observedAt: $0.occurredDate,
