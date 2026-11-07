@@ -137,17 +137,37 @@ public enum FleetOrigin {
         // other (owner, 2026-10-23:  the xAI row read two ended windows
         // instead of the live reading).
         let localReaders = QuotaLocalScope.providers(withReadings: localWindows)
+        // The dead-copy drop is narrowed per cadence:  a dead copy whose
+        // provider still has a live window of the same cadence is redundant
+        // and goes, but a dead copy whose cadence has nothing live left is
+        // the last known state of that meter.  Dropping the second kind took
+        // the whole cadence row off the provider:  the Muse Code collector
+        // restates its periods only when new usage arrives, so the finished
+        // 5h window vanished from the row while the weekly one survived
+        // (CC-211, owner 2026-11-07).  The xAI row keeps the fix from
+        // 2026-10-23:  its live weekly reading puts its cadence in this set,
+        // so the ended copies still drop.
+        func cadenceKey(of window: QuotaWindow) -> String {
+            window.canonicalProviderKey + ":"
+                + QuotaWindowVocabulary.standardCadence(windowToken: window.window, label: window.label)
+        }
+        let liveCadences = Set(windows
+            .filter { !QuotaFreshnessRule.isDeadCopy(observedAt: $0.occurredDate,
+                                                     resetAt: $0.resetDate,
+                                                     now: now) }
+            .map(cadenceKey))
         for window in windows {
+            let dead = QuotaFreshnessRule.isDeadCopy(observedAt: window.occurredDate,
+                                                     resetAt: window.resetDate,
+                                                     now: now)
+            let cadenceIsLive = liveCadences.contains(cadenceKey(of: window))
             if isOwnPush(window, host: host, localWindows: localWindows) {
                 if localReaders.contains(window.canonicalProviderKey)
-                    || !QuotaFreshnessRule.isDeadCopy(observedAt: window.occurredDate,
-                                                      resetAt: window.resetDate,
-                                                      now: now) {
+                    || !dead
+                    || !cadenceIsLive {
                     own.append(window)
                 }
-            } else if !QuotaFreshnessRule.isDeadCopy(observedAt: window.occurredDate,
-                                                     resetAt: window.resetDate,
-                                                     now: now) {
+            } else if !dead || !cadenceIsLive {
                 grouped[fleetGroupKey(for: window), default: []].append(window)
             }
         }
