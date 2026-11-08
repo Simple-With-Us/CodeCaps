@@ -2,18 +2,9 @@ import Foundation
 import Security
 import QuotaCore
 
-/// The owner-provisioned Infisical universal-auth identity that lets this Mac
-/// act as an Infisical client (see INFISICAL.md).
-///
-/// A shipped Mac app cannot safely embed a client secret — anyone can extract
-/// it from the binary — so there is no fallback identity and no default.
-/// The owner pastes his own machine identity's client ID and secret once,
-/// under Settings → Infisical Sync, and they live in his Keychain from then
-/// on, exactly like the read and push tokens `TokenStore` already keeps.
-/// `InfisicalSettings` itself only ever holds them in memory.
-///
-/// Every Keychain call goes through `calls`, so tests inject a fake and never
-/// touch the real Keychain.  Values are never logged anywhere on this path.
+/// The app's own versioned Infisical binding record, scoped per build.
+/// Machine identities and full service tokens never use preferences or logs.
+/// Injected calls keep tests away from the real Keychain.
 enum InfisicalIdentityStore {
     struct Identity: Codable, Equatable, Sendable {
         var clientId: String
@@ -31,6 +22,7 @@ enum InfisicalIdentityStore {
     private struct Record: Codable {
         var version = 1
         var identity: Identity?
+        var setup: InfisicalSetup?
     }
 
     /// Test seam: the live implementation shells out to the Security
@@ -78,38 +70,39 @@ enum InfisicalIdentityStore {
 
     private static let setupAccount = "setup-v1"
 
-    /// The provisioned identity, or nil when the owner has not set one up.
-    /// A half-written identity (one half missing) reads as absent.
-    static func load(
-        bundleIdentifier: String? = Bundle.main.bundleIdentifier
-    ) -> Identity? {
-        let service = serviceName(bundleIdentifier: bundleIdentifier)
+    /// V1 identities become read-only bindings in memory; no startup write migrates credentials.
+    static func loadSetup(bundleIdentifier: String? = Bundle.main.bundleIdentifier) -> InfisicalSetup? {
         let raw: String?
-        do { raw = try calls.read(service, setupAccount) }
-        catch { return nil } // Read failure must never activate another destination.
-        if let raw {
-            // A malformed/unsupported record fails closed.
-            guard let data = raw.data(using: .utf8),
-                  let record = try? JSONDecoder().decode(Record.self, from: data),
-                  record.version == 1,
-                  let identity = record.identity,
-                  !identity.clientId.isEmpty, !identity.clientSecret.isEmpty,
-                  !identity.projectId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-            return identity
-        }
-        // Two-field records have no explicit destination and are not loaded.
-        return nil
+        do { raw = try calls.read(serviceName(bundleIdentifier: bundleIdentifier), setupAccount) }
+        catch { return nil }
+        guard let raw, raw.utf8.count <= 1_048_576, let data = raw.data(using: .utf8),
+              let record = try? JSONDecoder().decode(Record.self, from: data) else { return nil }
+        let setup: InfisicalSetup
+        if record.version == 1, let identity = record.identity {
+            let read = identity.configuration.readBinding
+            setup = InfisicalSetup(bindings: [read], readBindingID: read.id)
+        } else if record.version == 2, let saved = record.setup { setup = saved }
+        else { return nil }
+        guard (try? setup.validate()) != nil else { return nil }
+        return setup
     }
 
-    static func save(
-        _ identity: Identity,
-        bundleIdentifier: String? = Bundle.main.bundleIdentifier
-    ) throws {
-        let service = serviceName(bundleIdentifier: bundleIdentifier)
-        guard !identity.projectId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw StoreError.invalidRecord
-        }
-        try write(Record(identity: identity), service: service)
+    static func saveSetup(_ setup: InfisicalSetup,
+                          bundleIdentifier: String? = Bundle.main.bundleIdentifier) throws {
+        try setup.validate()
+        try write(Record(version: 2, identity: nil, setup: setup), service: serviceName(bundleIdentifier: bundleIdentifier))
+    }
+
+    /// Compatibility for callers inspecting the selected machine-auth read identity.
+    static func load(bundleIdentifier: String? = Bundle.main.bundleIdentifier) -> Identity? {
+        guard let binding = loadSetup(bundleIdentifier: bundleIdentifier)?.configuration?.readBinding,
+              binding.authentication == .machineIdentity else { return nil }
+        return Identity(clientId: binding.clientId, clientSecret: binding.clientSecret, projectId: binding.projectId)
+    }
+
+    static func save(_ identity: Identity, bundleIdentifier: String? = Bundle.main.bundleIdentifier) throws {
+        let read = identity.configuration.readBinding
+        try saveSetup(InfisicalSetup(bindings: [read], readBindingID: read.id), bundleIdentifier: bundleIdentifier)
     }
 
     static func delete(

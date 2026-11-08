@@ -33,11 +33,15 @@ public struct CursorQuotaReader: Sendable {
             guard let cookie = try cursorCookie(for: token, now: now()) else {
                 return LocalQuotaResult(issues: ["cursor": "Cursor local session is not usable; sign in again in Cursor."])
             }
-            let observedAt = now()
             async let summaryPayload = Self.fetchUsageSummary(cookie: cookie, fetch: fetch)
             async let periodPayload = Self.fetchCurrentPeriodUsageSafely(token: token, cookie: cookie, fetch: fetch)
             let summaryResult = try await summaryPayload
             let periodResult = await periodPayload
+            // Stamp the quota when both API reads have completed.  Capturing
+            // the clock before the network requests made a slow Cursor read
+            // look older than a faster xAI alias, allowing the shared pool to
+            // keep that alias's prior percentage on the Cursor row.
+            let observedAt = now()
 
             if summaryResult.statusCode == 401 || summaryResult.statusCode == 403 {
                 return LocalQuotaResult(issues: ["cursor": "Cursor session was rejected; sign in again in Cursor."])

@@ -29,6 +29,8 @@ public struct ResetAlarmObservation: Equatable, Sendable {
     public var periodSeconds: TimeInterval?
     /// When the current period ends.
     public var resetAt: Date?
+    /// When the current period began, when the provider reports it explicitly.
+    public var periodStartAt: Date?
     /// Percentage remaining, or `nil` when the reading is unknown or must not
     /// be believed (an Antigravity five-hour window under a spent weekly cap).
     public var remainingPercent: Double?
@@ -50,6 +52,7 @@ public struct ResetAlarmObservation: Equatable, Sendable {
         windowLabel: String,
         periodSeconds: TimeInterval?,
         resetAt: Date?,
+        periodStartAt: Date? = nil,
         remainingPercent: Double?,
         observedAt: Date?,
         identity: String? = nil
@@ -61,6 +64,7 @@ public struct ResetAlarmObservation: Equatable, Sendable {
         self.windowLabel = windowLabel
         self.periodSeconds = periodSeconds
         self.resetAt = resetAt
+        self.periodStartAt = periodStartAt
         self.remainingPercent = remainingPercent
         self.observedAt = observedAt
         self.identity = identity
@@ -138,6 +142,8 @@ public struct ResetAlarmTrackerState: Codable, Equatable, Sendable {
     public struct Window: Codable, Equatable, Sendable {
         /// When the current period ends, as last reported.
         public var periodResetAt: Date?
+        /// When the current period began, when the provider reports it explicitly.
+        public var periodStartAt: Date?
         /// The lowest percentage remaining observed in the current period.
         public var minimumRemaining: Double?
         /// The latest known percentage remaining.
@@ -152,6 +158,7 @@ public struct ResetAlarmTrackerState: Codable, Equatable, Sendable {
 
         public init(
             periodResetAt: Date?,
+            periodStartAt: Date? = nil,
             minimumRemaining: Double?,
             lastRemaining: Double?,
             lastObservedAt: Date?,
@@ -160,6 +167,7 @@ public struct ResetAlarmTrackerState: Codable, Equatable, Sendable {
             identity: String? = nil
         ) {
             self.periodResetAt = periodResetAt
+            self.periodStartAt = periodStartAt
             self.minimumRemaining = minimumRemaining
             self.lastRemaining = lastRemaining
             self.lastObservedAt = lastObservedAt
@@ -441,6 +449,7 @@ public struct ResetAlarmTracker: Sendable {
 
         func firstReading() -> ResetAlarmTrackerState.Window {
             .init(periodResetAt: observation.resetAt,
+                  periodStartAt: observation.periodStartAt,
                   minimumRemaining: reading,
                   lastRemaining: reading,
                   lastObservedAt: observedAt,
@@ -463,13 +472,22 @@ public struct ResetAlarmTracker: Sendable {
         }
         if window.identity == nil { window.identity = observation.identity }
         window.lastSeenAt = now
-        if let period = observation.periodSeconds { window.periodSeconds = period }
 
         // A reading older than one already processed cannot say anything new.
         if let observed = observedAt, let last = window.lastObservedAt, observed < last {
             state.windows[key] = window
             return nil
         }
+
+        // A producer may reuse a window ID while switching its cadence.  Its reset time and remaining percentage no longer share the old baseline.  Keep the new reading as a baseline instead of comparing across periods.
+        if let observedPeriod = observation.periodSeconds,
+           let previousPeriod = window.periodSeconds,
+           abs(observedPeriod - previousPeriod) > ResetAlarmPolicy.resetDriftTolerance {
+            state.windows[key] = firstReading()
+            return nil
+        }
+
+        if let period = observation.periodSeconds { window.periodSeconds = period }
 
         let readAt = observedAt ?? now
         var isReset = false
@@ -483,6 +501,33 @@ public struct ResetAlarmTracker: Sendable {
             let hasPassed = readAt >= previousReset.addingTimeInterval(-60)
             if let reported = observation.resetAt {
                 let jump = reported.timeIntervalSince(previousReset)
+                // A deadline correction needs a substantial quota rise or an elapsed full cadence.
+                let advancedFullCadence = window.periodSeconds.map { period in
+                    // Calendar months range from 28 to 31 days; fixed cadences use drift tolerance.
+                    let tolerance = ResetAlarmPolicy.resetDriftTolerance
+                    if (28 * 86_400...31 * 86_400).contains(period) {
+                        return jump >= 28 * 86_400 - tolerance && jump <= 31 * 86_400 + tolerance
+                    }
+                    return abs(jump - period) <= tolerance
+                } ?? false
+                // Some providers publish both sides of the period.  When they
+                // do, an end-time correction by one cadence is not enough to
+                // prove a reset: their explicit start must advance too.  This
+                // prevents MiniMax's corrected weekly deadline from repeatedly
+                // announcing a new week while its weekly period is unchanged.
+                let explicitStartConfirmsPeriod = {
+                    guard let current = observation.periodStartAt,
+                          let previous = window.periodStartAt,
+                          let period = window.periodSeconds else { return true }
+                    let advance = current.timeIntervalSince(previous)
+                    let tolerance = ResetAlarmPolicy.resetDriftTolerance
+                    // Same band as advancedFullCadence: a calendar-month window accepts a
+                    // 28-to-31-day start advance; fixed cadences use drift tolerance.
+                    if (28 * 86_400...31 * 86_400).contains(period) {
+                        return advance >= 28 * 86_400 - tolerance && advance <= 31 * 86_400 + tolerance
+                    }
+                    return abs(advance - period) <= tolerance
+                }()
                 let required = hasPassed
                     ? ResetAlarmPolicy.resetDriftTolerance
                     : max(ResetAlarmPolicy.resetDriftTolerance,
@@ -504,8 +549,31 @@ public struct ResetAlarmTracker: Sendable {
                 // 3:48 pm, 5:03 pm and later false MiniMax and Antigravity
                 // 5h alerts).  Across a passed end the climb keeps settling
                 // small early moves as before.
-                let forwardJump = jump > required
-                    || (jump > ResetAlarmPolicy.resetDriftTolerance && climbed && hasPassed)
+                // The deadline branch needs the quota to climb with it:  a
+                // rolling window slides its end while usage ages out (CC-215),
+                // and a stale or partially corrected deadline - the MiniMax
+                // weekly deadline advancing only five days nine hours - adopts
+                // silently.  After the end has passed, a deadline that
+                // advanced a compatible full cadence, confirmed by an explicit
+                // start when one is reported, proves a scheduled rollover on
+                // its own;  a genuine refill with the end still ahead is
+                // caught by the held-end courtesy and vendor-restore rules
+                // below.
+                // A courtesy reset that also rolls the window forward reissues
+                // a fresh full period:  the new end sits one whole period from
+                // now (a rolling climb leaves less than that) and the quota
+                // came back by a restore-sized rise (owner 2026-10-08:  quota
+                // restored before the window was due must alert).
+                let freshPeriod = window.periodSeconds.map { period in
+                    abs(reported.timeIntervalSince(readAt) - period)
+                        <= ResetAlarmPolicy.resetDriftTolerance
+                } ?? false
+                let strongQuotaRestore = reading.flatMap { current in
+                    window.lastRemaining.map { current >= $0 + ResetAlarmPolicy.vendorRestoreRise }
+                } ?? false
+                let forwardJump = (jump > required && climbed)
+                    || (hasPassed && advancedFullCadence && explicitStartConfirmsPeriod)
+                    || (!hasPassed && freshPeriod && strongQuotaRestore)
                 if forwardJump {
                     isReset = true
                     // When the window had *not* reached its own scheduled end,
@@ -549,8 +617,10 @@ public struct ResetAlarmTracker: Sendable {
             }
             // The old period is over and the percentage went back up, even
             // though the reader has not published the next reset time yet.
-            if !isReset, hasPassed, let reading, let last = window.lastRemaining,
-               reading > last + ResetAlarmPolicy.riseEpsilon {
+            if !isReset, hasPassed,
+               observation.resetAt.map({ $0 <= previousReset + ResetAlarmPolicy.resetDriftTolerance }) ?? true,
+               let reading, let last = window.lastRemaining,
+               reading >= last + ResetAlarmPolicy.earlyResetRiseMargin {
                 isReset = true
                 nextResetAt = observation.resetAt.flatMap { $0 > readAt ? $0 : nil }
             }
@@ -659,8 +729,12 @@ public struct ResetAlarmTracker: Sendable {
                 // All three carries share one evidence bar: a rise against
                 // an end that slid with the clock is the window rolling, not
                 // a restore (CC-215).  An unknown end cannot prove a restore.
+                // A reading at or above 99.5% counts as full only when the
+                // prior reading was below it by a real margin:  a sub-point
+                // rounding wobble near full (99.4 to 99.6) is not a vendor
+                // handing the quota back.
                 let jumpedToFull = periodEndHeld && !slidWithTheClock
-                    && reading >= 99.5 && last < 99.5
+                    && reading >= 99.5 && last <= 99.5 - ResetAlarmPolicy.riseEpsilon
                 let surgedMidWindow = periodEndHeld && !slidWithTheClock
                     && last < 80.0 && reading >= 95.0
                 let quotaHandedBack = periodEndHeld && !slidWithTheClock
@@ -677,7 +751,8 @@ public struct ResetAlarmTracker: Sendable {
                 nextResetAt = reported
             }
             if let reading, let last = window.lastRemaining {
-                let jumpedToFull = reading >= 99.5 && last < 99.5
+                let jumpedToFull = reading >= 99.5
+                    && last <= 99.5 - ResetAlarmPolicy.riseEpsilon
                 let surgedMidWindow = last < 80.0 && reading >= 95.0
                 if jumpedToFull || surgedMidWindow {
                     isReset = true
@@ -748,6 +823,9 @@ public struct ResetAlarmTracker: Sendable {
                 window.minimumRemaining = min(window.minimumRemaining ?? reading, reading)
                 window.lastRemaining = reading
             }
+        }
+        if let periodStartAt = observation.periodStartAt {
+            window.periodStartAt = periodStartAt
         }
         // Assigned unconditionally, so it always means "the stamp carried by the
         // previous reading" and is nil when that reading was unstamped.  Only

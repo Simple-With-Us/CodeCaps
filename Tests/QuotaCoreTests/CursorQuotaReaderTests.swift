@@ -5,6 +5,27 @@ import XCTest
 final class CursorQuotaReaderTests: XCTestCase {
     private let observedAt = Date(timeIntervalSince1970: 1_789_000_000)
 
+    func testObservationTimestampIsCapturedAfterQuotaRequestsComplete() async throws {
+        let responseAt = observedAt.addingTimeInterval(45)
+        let clock = MutableDateClock(observedAt)
+        let token = Self.jwt(subject: "auth0|cursor-user-response-time", expiration: responseAt.addingTimeInterval(3600))
+        let reader = CursorQuotaReader(
+            now: { clock.read() },
+            accessToken: { token },
+            fetch: { request in
+                clock.set(responseAt)
+                guard request.url?.path.contains("usage-summary") == true else {
+                    return Self.response("{}", status: 404)
+                }
+                return Self.response(#"{"billingCycleEnd":"2026-10-01T00:00:00Z","membershipType":"pro","individualUsage":{"plan":{"used":2500,"limit":10000,"remaining":7500}}}"#)
+            }
+        )
+
+        let result = await reader.read()
+        let window = try XCTUnwrap(result.windows.first)
+        XCTAssertEqual(window.occurredDate, responseAt)
+    }
+
     func testReadsIncludedPlanAndTranslatesCursorAppTokenToSessionCookie() async {
         let token = Self.jwt(subject: "auth0|cursor-user-1", expiration: observedAt.addingTimeInterval(3600))
         let reader = CursorQuotaReader(
@@ -273,5 +294,24 @@ final class CursorQuotaReaderTests: XCTestCase {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter.string(from: Date(timeIntervalSince1970: Double(ms) / 1_000))
+    }
+}
+
+private final class MutableDateClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var instant: Date
+
+    init(_ instant: Date) { self.instant = instant }
+
+    func read() -> Date {
+        lock.lock()
+        defer { lock.unlock() }
+        return instant
+    }
+
+    func set(_ instant: Date) {
+        lock.lock()
+        defer { lock.unlock() }
+        self.instant = instant
     }
 }

@@ -242,6 +242,7 @@ public final class ResetAlarmManager: ObservableObject {
     private var updatingLegacySound = false
     private(set) var detectedResetHistory: [ResetAlertRecord] = []
     var onUsageDelivery: ((UsageAlertKind, String, String, UsageAlertOption) -> Void)?
+    var additionalDelivery: ((UsageAlertKind, String, String, String) -> Void)?
     private var popupWindows: [NSWindow] = []
     private let defaults: UserDefaults
 
@@ -581,6 +582,7 @@ public final class ResetAlarmManager: ObservableObject {
                            identifier: String, navigation: AlertNavigation? = nil) {
         let option = preferences[kind]
         guard option.enabled else { return }
+        additionalDelivery?(kind, title, body, identifier)
         if let onUsageDelivery {
             onUsageDelivery(kind, title, body, option)
             return
@@ -822,6 +824,7 @@ func resetAlarmObservations(for row: DisplaySection, scope: String) -> [ResetAla
                 windowLabel: glanceMeterCaption(snapshot),
                 periodSeconds: quotaWindowPeriodSeconds(snapshot),
                 resetAt: snapshot.resetAt,
+                periodStartAt: snapshot.window.periodStartDate,
                 remainingPercent: row.isMasked(snapshot) ? nil : snapshot.remainingPercent,
                 observedAt: snapshot.observedAt,
                 identity: snapshot.window.accountKey)

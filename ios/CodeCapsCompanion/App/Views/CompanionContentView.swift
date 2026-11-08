@@ -298,9 +298,7 @@ public struct CompanionContentView: View {
         let short = item.cardShortWindow(scope: scope)
         let long = item.cardLongWindow(scope: scope)
         let cardWindows = item.cardWindows(scope: scope)
-        let extraWindows = cardWindows.filter {
-            $0.id != short?.window.id && $0.id != long?.window.id
-        }
+        let extraWindows = item.cardDetailWindows(scope: scope)
         let atCapWindow = item.atCapWindow(scope: scope)
         let isAtCap = atCapWindow != nil
         // Two pools of one provider share a title (Antigravity's Gemini and
@@ -486,26 +484,10 @@ public struct CompanionContentView: View {
                 }
             }
 
-            // Multiple time periods / windows and provider details when expanded
-            if isExpanded {
-                let hasExtraWindows = !extraWindows.isEmpty
-                let hasDetails = !item.providerDetailRows.isEmpty
-                if hasExtraWindows || hasDetails {
-                    Divider()
-                        .padding(.vertical, 2)
-
-                    if hasExtraWindows {
-                        VStack(alignment: .leading, spacing: 10) {
-                            ForEach(extraWindows) { win in
-                                windowRow(win)
-                            }
-                        }
-                    }
-
-                    if hasDetails {
-                        CompanionProviderDetailsView(rows: item.providerDetailRows)
-                            .padding(.top, hasExtraWindows ? 6 : 0)
-                    }
+            if isExpanded && !extraWindows.isEmpty {
+                Divider().padding(.vertical, 2)
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(extraWindows) { win in windowRow(win) }
                 }
             }
         }

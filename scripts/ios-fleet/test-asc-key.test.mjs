@@ -148,6 +148,25 @@ test("the child's environment is an allowlist, not a copy of the parent's", () =
   }
 });
 
+test("only an explicit service token reaches Infisical automation children", () => {
+  const env = {
+    PATH: "/usr/bin",
+    HOME: "/tmp/home",
+    INFISICAL_TOKEN: "st.synthetic-id.synthetic-secret",
+    INFISICAL_CLIENT_ID: "machine-client-id",
+    INFISICAL_CLIENT_SECRET: "machine-client-secret",
+    INFISICAL_MACHINE_IDENTITY_ID: "machine-identity-id"
+  };
+  const child = clientEnvironment(env);
+  assert.equal(child.INFISICAL_TOKEN, env.INFISICAL_TOKEN);
+  assert.equal(child.INFISICAL_CLIENT_ID, undefined);
+  assert.equal(child.INFISICAL_CLIENT_SECRET, undefined);
+  assert.equal(child.INFISICAL_MACHINE_IDENTITY_ID, undefined);
+
+  const invalid = clientEnvironment({ ...env, INFISICAL_TOKEN: "not-a-service-token" });
+  assert.equal(invalid.INFISICAL_TOKEN, undefined);
+});
+
 test("the credential comes from the environment, and a path is not a source", async () => {
   const { credentialEnvironment } = await import(pathToFileURL(apnsScript).href);
   //  The environment is an approved source.
