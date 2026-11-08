@@ -994,6 +994,10 @@ public enum WidgetPresentation {
             return !QuotaFreshnessRule.isDeadCopy(observedAt: reading.reportedAt, resetAt: reading.resetAt, now: now)
         }
 
+        var windowByCadence: [String: WidgetWindowItem] = [:]
+        var cadenceOrder: [String] = []
+        var childWindows: [WidgetWindowItem] = []
+
         for w in liveWindows {
             // The wire's plan-metadata rows are captions, not allowances:  a
             // bare "Plan" or "Plan Details" row carries no reading, and if it

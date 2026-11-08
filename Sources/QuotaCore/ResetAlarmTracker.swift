@@ -640,10 +640,42 @@ public struct ResetAlarmTracker: Sendable {
                             && current >= $0 + ResetAlarmPolicy.vendorRestoreRise
                     }
                 } ?? false
-                let forwardJump = (jump > required && climbed)
+                // A rolling window's end slides in step with the clock:
+                // across any gap it advances by roughly the elapsed time, no
+                // more - the rolling readers (MiniMax's five-hour and video
+                // meters) recompute "resets in N seconds" every poll.  A real
+                // reset moves the end by its own amount, independent of when
+                // this Mac happened to read: a courtesy reset that reissues
+                // the period lands the end one full period from the reset
+                // moment, far more than the poll gap.  An end that advanced
+                // by no more than the gap since the previous reading is the
+                // rolling-window signature, so the early and mid-window reset
+                // legs below must not claim it.  A reading without a
+                // trustworthy gap cannot prove a slide, so the legs decide as
+                // before.  The whole-cadence rollover leg is exempt: a
+                // roll-immediately provider's end advances by whole periods
+                // while the Mac sleeps, which is roughly the gap by
+                // definition, and that leg is the accepted slept-through
+                // behavior.
+                // Both stamps must be real: a fallback `readAt` is Mac
+                // processing time, not a provider-to-provider interval - the
+                // same bar the mid-window rules below apply.
+                let pollGap: TimeInterval?
+                if observedAt != nil, let lastObserved = window.lastObservedAt {
+                    pollGap = max(0, readAt.timeIntervalSince(lastObserved))
+                } else {
+                    pollGap = nil
+                }
+                // In step means in step: the end advanced by roughly the
+                // elapsed gap - not far less (a real reset late in a long
+                // sleep) and not far more (a reissue seen at the next poll).
+                let slidWithTheClock = pollGap.map {
+                    $0 > 0 && jump > 0 && abs(jump - $0) <= ResetAlarmPolicy.resetDriftTolerance
+                } ?? false
+                let forwardJump = (jump > required && climbed && (hasPassed || !slidWithTheClock))
                     || (hasPassed && advancedFullCadence && explicitStartConfirmsPeriod)
-                    || (!hasPassed && freshPeriod && strongQuotaRestore)
-                    || (!hasPassed && rolledRestore)
+                    || (!hasPassed && !slidWithTheClock && freshPeriod && strongQuotaRestore)
+                    || (!hasPassed && !slidWithTheClock && rolledRestore)
                 if forwardJump {
                     isReset = true
                     // When the window had *not* reached its own scheduled end,

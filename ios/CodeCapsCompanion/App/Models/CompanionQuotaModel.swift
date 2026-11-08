@@ -508,7 +508,7 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
     }
 
     public func cardDetailWindows(scope: CompanionSourceScope, now: Date = Date()) -> [CompanionWindowItem] {
-        cardWindows(scope: scope, now: now).filter { $0.isSubModelLimit }
+        windows.filter { $0.isSubModelLimit }
     }
 
     /// Both feeds must report within this window for a source-disagreement banner.
@@ -606,7 +606,7 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
         // and a wire plan caption ("Plan" with no reading) is not an
         // allowance at all:  neither takes a short/long slot or the headline
         // (native probe, PR #367).
-        windows.filter { !$0.isScopedPoolAllowance && !$0.isSubModelLimit
+        let resolved = windows.filter { !$0.isScopedPoolAllowance && !$0.isSubModelLimit
                 && !(($0.label == "Plan" || $0.cadence == "Plan") && $0.remainingPercent == nil) }
             .map { primary in
             let key = Self.allowanceKey(for: primary)
@@ -632,13 +632,6 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
 
     public func cardWindows(scope: CompanionSourceScope, now: Date = Date()) -> [CompanionWindowItem] {
         cardWindowRows(scope: scope, now: now).map(\.window)
-    }
-
-    /// The per-model detail rows beside the plan (Anthropic's Fable limit,
-    /// Antigravity's Argon limit): the card's own sub-model identity marks
-    /// them, exactly as the widget's carried flag does.
-    public func cardDetailWindows(scope: CompanionSourceScope, now: Date = Date()) -> [CardWindow] {
-        windows.filter { $0.isSubModelLimit }.map { CardWindow(window: $0, updatedLabel: nil) }
     }
 
     public func cardShortWindow(scope: CompanionSourceScope, now: Date = Date()) -> CardWindow? {
