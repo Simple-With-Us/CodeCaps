@@ -657,9 +657,20 @@ public struct ResetAlarmTracker: Sendable {
                 // while the Mac sleeps, which is roughly the gap by
                 // definition, and that leg is the accepted slept-through
                 // behavior.
-                let pollGap = window.lastObservedAt.map { max(0, readAt.timeIntervalSince($0)) }
+                // Both stamps must be real: a fallback `readAt` is Mac
+                // processing time, not a provider-to-provider interval - the
+                // same bar the mid-window rules below apply.
+                let pollGap: TimeInterval?
+                if observedAt != nil, let lastObserved = window.lastObservedAt {
+                    pollGap = max(0, readAt.timeIntervalSince(lastObserved))
+                } else {
+                    pollGap = nil
+                }
+                // In step means in step: the end advanced by roughly the
+                // elapsed gap - not far less (a real reset late in a long
+                // sleep) and not far more (a reissue seen at the next poll).
                 let slidWithTheClock = pollGap.map {
-                    $0 > 0 && jump > 0 && jump <= $0 + ResetAlarmPolicy.resetDriftTolerance
+                    $0 > 0 && jump > 0 && abs(jump - $0) <= ResetAlarmPolicy.resetDriftTolerance
                 } ?? false
                 let forwardJump = (jump > required && climbed && (hasPassed || !slidWithTheClock))
                     || (hasPassed && advancedFullCadence && explicitStartConfirmsPeriod)
