@@ -237,13 +237,14 @@ public enum FleetOrigin {
                                                      resetAt: window.resetDate,
                                                      now: now)
             let cadenceIsLive = liveCadences.contains(cadenceKey(of: window))
+            // A legacy-name copy of a meter the current collector reports is
+            // a superseded duplicate of this Mac's own reading, so it is
+            // neither retained nor shown as somebody else's fleet row
+            // (kody, PR #380).
             let legacyDuplicate = isOwnPush(window, host: host, localWindows: localWindows)
                 && isLegacyNameProducer(window, host: host)
                 && authoritativeOwnCadences.contains(cadenceKey(of: window))
             if legacyDuplicate {
-                if !dead {
-                    grouped[fleetGroupKey(for: window), default: []].append(window)
-                }
             } else if isOwnPush(window, host: host, localWindows: localWindows) {
                 if localReaders.contains(window.canonicalProviderKey)
                     || !dead
