@@ -37,7 +37,10 @@ enum BoundedHTTPFetch {
         protocolClasses: [AnyClass]? = nil
     ) async throws -> (Data, HTTPURLResponse) {
         var request = request
-        request.timeoutInterval = timeout
+        // A caller that set a tighter timeout on the request keeps it; the
+        // budget here is only a ceiling, never a raise. (URLRequest's default
+        // is 60 s, so an unset request simply takes `timeout`.)
+        request.timeoutInterval = min(request.timeoutInterval, timeout)
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpCookieStorage = nil
         configuration.urlCache = nil
