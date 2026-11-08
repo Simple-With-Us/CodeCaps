@@ -35,6 +35,36 @@ final class TwilioCredentialStoreTests: XCTestCase {
         XCTAssertFalse(TokenStore.ownServices.contains(development))
     }
 
+    /// The Twilio API key secret resolves env-first, then Infisical, and the
+    /// Keychain record only last: an ordinary service credential must not
+    /// make the Keychain its source of truth (Kody review, PR #367).
+    func testSecretResolutionOrderIsEnvironmentThenInfisicalThenKeychain() {
+        let stored = TwilioSMSCredentials(
+            configuration: TwilioSMSConfiguration(accountSID: "AC123", apiKeySID: "SK123",
+                                                  messagingServiceSID: "MG123", recipient: "+15551234567"),
+            apiKeySecret: "keychain-secret")
+        let envCredentials = SMSCredentialAccess.resolvedCredentials(
+            stored: stored,
+            environment: ["TWILIO_API_KEY_SECRET": "env-secret"],
+            infisicalSecret: "infisical-secret")
+        XCTAssertEqual(envCredentials?.apiKeySecret, "env-secret", "the environment wins")
+        let infisicalCredentials = SMSCredentialAccess.resolvedCredentials(
+            stored: stored, environment: [:], infisicalSecret: "infisical-secret")
+        XCTAssertEqual(infisicalCredentials?.apiKeySecret, "infisical-secret", "Infisical outranks the Keychain")
+        let keychainCredentials = SMSCredentialAccess.resolvedCredentials(
+            stored: stored, environment: [:], infisicalSecret: nil)
+        XCTAssertEqual(keychainCredentials?.apiKeySecret, "keychain-secret",
+                       "with no operator secret the Keychain record still answers")
+        // A stored record supplies the configuration an operator secret is used with.
+        XCTAssertEqual(envCredentials?.configuration, stored.configuration)
+        XCTAssertNil(SMSCredentialAccess.resolvedCredentials(stored: nil, environment: [:], infisicalSecret: nil),
+                     "no secret anywhere means no credentials")
+        // An empty or blank secret is not a secret.
+        XCTAssertEqual(SMSCredentialAccess.resolvedCredentials(
+            stored: stored, environment: ["TWILIO_API_KEY_SECRET": "   "],
+            infisicalSecret: nil)?.apiKeySecret, "keychain-secret")
+    }
+
     func testInvalidSetupNeverTouchesKeychain() async {
         let fixture = TwilioKeychainFixture()
         let store = TwilioCredentialStore(calls: fixture.calls, bundleIdentifier: "com.example.CodeCaps.test")

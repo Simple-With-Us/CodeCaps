@@ -68,7 +68,13 @@ public struct LocalQuotaReaderRegistry: Sendable {
         var issues: [String: String] = [:]
         var consentNeeded: Set<String> = []
         for (_, result) in results {
-            windows.append(contentsOf: result.windows)
+            // Two registrations can surface the same QuotaWindow (grok-bot and
+            // gbu both declare providerKey "grok-bot"); a duplicate row would
+            // reach every downstream surface twice, so only new windows are
+            // appended (Kody review, PR #367).
+            for window in result.windows where !windows.contains(window) {
+                windows.append(window)
+            }
             issues.merge(result.issues) { _, next in next }
             consentNeeded.formUnion(result.consentNeeded)
         }

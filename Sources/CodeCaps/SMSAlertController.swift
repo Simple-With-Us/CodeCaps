@@ -10,10 +10,48 @@ struct SMSCredentialAccess {
     var clear: () async throws -> Void
     var reauthorize: () async -> TwilioSMSCredentials?
 
-    static let live = Self(load: { await TwilioCredentialStore.shared.load() },
+    static let live = Self(load: { await SMSCredentialAccess.resolvedLiveCredentials() },
                            save: { try await TwilioCredentialStore.shared.save($0) },
                            clear: { try await TwilioCredentialStore.shared.clear() },
-                           reauthorize: { await TwilioCredentialStore.shared.readAllowingInteraction() })
+                           reauthorize: {
+                               if let resolved = await SMSCredentialAccess.resolvedLiveCredentials() {
+                                   return resolved
+                               }
+                               return await TwilioCredentialStore.shared.readAllowingInteraction()
+                           })
+
+    /// An operator-provided Twilio API key secret outranks the Keychain setup
+    /// record:  the process environment first, then the app's Infisical
+    /// project, and the Keychain record only last.  An ordinary service
+    /// credential must not make the Keychain its source of truth (Kody
+    /// review, PR #367).  The Keychain record still supplies the rest of the
+    /// configuration the secret is used with, and `save`/`clear` keep
+    /// handling explicitly entered values.
+    nonisolated static func resolvedCredentials(stored: TwilioSMSCredentials?,
+                                                environment: [String: String],
+                                                infisicalSecret: String?) -> TwilioSMSCredentials? {
+        func splicing(_ secret: String) -> TwilioSMSCredentials {
+            let configuration = stored?.configuration ?? TwilioSMSConfiguration(
+                accountSID: environment["TWILIO_ACCOUNT_SID"] ?? "",
+                apiKeySID: environment["TWILIO_API_KEY_SID"] ?? "",
+                messagingServiceSID: environment["TWILIO_MESSAGING_SERVICE_SID"] ?? "",
+                recipient: environment["TWILIO_RECIPIENT"] ?? "")
+            return TwilioSMSCredentials(configuration: configuration, apiKeySecret: secret)
+        }
+        let envSecret = environment["TWILIO_API_KEY_SECRET"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !envSecret.isEmpty { return splicing(envSecret) }
+        if let secret = infisicalSecret?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !secret.isEmpty { return splicing(secret) }
+        return stored
+    }
+
+    private static func resolvedLiveCredentials() async -> TwilioSMSCredentials? {
+        let stored = await TwilioCredentialStore.shared.load()
+        return resolvedCredentials(stored: stored,
+                                   environment: ProcessInfo.processInfo.environment,
+                                   infisicalSecret: InfisicalSettings.shared.value(for: "TWILIO_API_KEY_SECRET"))
+    }
 }
 
 @MainActor

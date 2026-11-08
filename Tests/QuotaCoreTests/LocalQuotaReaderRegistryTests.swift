@@ -107,4 +107,27 @@ final class LocalQuotaReaderRegistryTests: XCTestCase {
         XCTAssertTrue(result.windows.isEmpty)
     }
 
+    /// Two registrations can surface the same QuotaWindow (grok-bot and gbu
+    /// both declare providerKey "grok-bot"); the merged snapshot must carry
+    /// the row once, not once per reader (Kody review, PR #367).
+    func testIdenticalWindowsFromTwoReadersArePublishedOnce() async {
+        func makeWindow(percent: Double) -> QuotaWindow {
+            QuotaWindow(id: "grok:weekly", provider: "grok", providerKey: "grok-bot",
+                        label: "weekly", remainingPercent: percent,
+                        occurredAt: "2026-11-06T12:00:00Z")
+        }
+        let window = makeWindow(percent: 42)
+        let registry = LocalQuotaReaderRegistry(registrations: [
+            LocalQuotaReaderRegistration(id: "grok-bot", label: "Grok Bot") {
+                RegistryFakeReader(result: LocalQuotaResult(windows: [window, makeWindow(percent: 7)]))
+            },
+            LocalQuotaReaderRegistration(id: "gbu", label: "Grok Build Usage") {
+                RegistryFakeReader(result: LocalQuotaResult(windows: [window]))
+            },
+        ])
+        let result = await registry.read(preferences: .init())
+        XCTAssertEqual(result.windows.count, 2, "an identical window from a second reader must be dropped")
+        XCTAssertEqual(result.windows.filter { $0.remainingPercent == 42 }.count, 1)
+    }
+
 }
