@@ -1085,25 +1085,13 @@ private func firstTimestamp(_ root: [String: Any], _ keys: [String]) -> String? 
 private extension LocalQuotaReader {
     static func makeFetcher() -> @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse) {
         return { request in
-            let delegate = RedirectRefusingURLSessionDelegate()
-            let configuration = URLSessionConfiguration.ephemeral
-            configuration.httpCookieStorage = nil
-            configuration.urlCache = nil
-            configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-            configuration.timeoutIntervalForRequest = requestTimeout
-            configuration.timeoutIntervalForResource = requestTimeout
-            let session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
-            defer { session.invalidateAndCancel() }
-            let (bytes, response) = try await session.bytes(for: request)
-            guard let http = response as? HTTPURLResponse else { throw LocalReaderError.unavailable }
-            if let length = http.value(forHTTPHeaderField: "Content-Length"), let count = Int(length), count > maxResponseBytes { throw LocalReaderError.unavailable }
-            var data = Data()
-            data.reserveCapacity(min(maxResponseBytes, 16_384))
-            for try await byte in bytes {
-                guard data.count < maxResponseBytes else { throw LocalReaderError.unavailable }
-                data.append(byte)
+            do {
+                return try await BoundedHTTPFetch.data(for: request, timeout: requestTimeout, maxBytes: maxResponseBytes)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                throw LocalReaderError.unavailable
             }
-            return (data, http)
         }
     }
 
@@ -1140,10 +1128,6 @@ private extension LocalQuotaReader {
                 timeout: processTimeout, maxBytes: maxProcessOutputBytes)
         }
     }
-}
-
-private final class RedirectRefusingURLSessionDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
-    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) { completionHandler(nil) }
 }
 
 /// Limits how often CodeCaps asks Claude Code to renew its own login, and

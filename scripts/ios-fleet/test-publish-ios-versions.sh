@@ -117,7 +117,8 @@ grep -q "HTTP 403" "${TMP}/fail.err"
 grep -q "Resource not accessible" "${TMP}/fail.err"
 
 # No credential: the cause is printed, including why the ship token cannot work.
-if PATH="/usr/bin:/bin" HOME="${TMP}" bash "${TMP}/fleet/publish-ios-versions.sh" \
+if env -u IOS_VERSIONS_PUBLISH_TOKEN -u GH_TOKEN -u GITHUB_TOKEN \
+    PATH="/usr/bin:/bin" HOME="${TMP}" bash "${TMP}/fleet/publish-ios-versions.sh" \
     --bundle-id com.simplewithus.codecaps.ios --version 1.0.264 >"${TMP}/notoken.out" 2>"${TMP}/notoken.err"; then
   echo "FAIL: no-credential publish must exit non-zero so the ship log warns" >&2; exit 1
 fi
