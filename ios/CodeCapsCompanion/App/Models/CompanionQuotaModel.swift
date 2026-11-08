@@ -508,7 +508,10 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
     }
 
     public func cardDetailWindows(scope: CompanionSourceScope, now: Date = Date()) -> [CompanionWindowItem] {
-        let resolved =     /// Both feeds must report within this window for a source-disagreement banner.
+        windows.filter { $0.isSubModelLimit }
+    }
+
+    /// Both feeds must report within this window for a source-disagreement banner.
     public static let sourceDiscrepancyFreshnessWindow: TimeInterval = FleetSourceDisagreement.alertFreshnessWindow
 
     public struct CardWindow: Equatable, Sendable {
@@ -603,7 +606,7 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
         // and a wire plan caption ("Plan" with no reading) is not an
         // allowance at all:  neither takes a short/long slot or the headline
         // (native probe, PR #367).
-        let resolved =         windows.filter { !$0.isScopedPoolAllowance && !$0.isSubModelLimit
+        let resolved = windows.filter { !$0.isScopedPoolAllowance && !$0.isSubModelLimit
                 && !(($0.label == "Plan" || $0.cadence == "Plan") && $0.remainingPercent == nil) }
             .map { primary in
             let key = Self.allowanceKey(for: primary)
