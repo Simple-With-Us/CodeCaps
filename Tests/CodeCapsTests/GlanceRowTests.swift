@@ -463,6 +463,37 @@ final class GlanceMeterTests: XCTestCase {
         XCTAssertNil(glanceUsableMuseExtra([weekly, spent]))
     }
 
+    /// A scoped pool allowance beside the subscription (Codex's Code Review
+    /// pool) is not the limit the plan is sold on, so it never takes a meter
+    /// from the plan's own windows — the same exclusion the companion and
+    /// the widgets apply.
+    func testAScopedPoolAllowanceNeverOccupiesAMeter() {
+        let row = DisplaySection(
+            id: "openai",
+            providerKey: "openai",
+            title: "Codex",
+            platformTitle: "Codex",
+            section: QuotaPlatformSection(
+                providerKey: "openai",
+                providerLabel: "Codex",
+                via: nil,
+                expected: true,
+                windows: [
+                    makeWindow(id: "session", label: "5h window", token: "5h", remaining: 92, resetIn: 3 * 3600, provider: "openai"),
+                    makeWindow(id: "weekly", label: "7d window", token: "168h", remaining: 11, resetIn: 4 * 86_400, provider: "openai"),
+                    makeWindow(id: "local-mac:openai:code-review", label: "Code Review", token: "168h", remaining: 40, resetIn: 4 * 86_400, provider: "openai"),
+                ]),
+            poolKey: nil,
+            remainingPercent: 11,
+            resetAt: now.addingTimeInterval(4 * 86_400),
+            maskedWindowIds: [])
+        let pair = glanceMeterPair(for: row, now: now)
+        XCTAssertEqual(pair.short?.window.id, "session")
+        XCTAssertEqual(pair.long?.window.id, "weekly")
+        XCTAssertNotEqual(pair.short?.window.id, "local-mac:openai:code-review")
+        XCTAssertNotEqual(pair.long?.window.id, "local-mac:openai:code-review")
+    }
+
     func testMuseAssistSanitizedLabelsStillPairWeeklyAndExtraMeters() {
         let pair = glanceMeterPair(for: museAssistRow(), now: now)
         XCTAssertEqual(pair.short?.window.id, "weekly")

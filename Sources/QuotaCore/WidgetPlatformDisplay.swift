@@ -6,7 +6,11 @@ import Foundation
 /// Keys stay lowercase for wiring; titles are always owner-facing labels.
 public enum WidgetPlatformDisplay {
     private static let titlesByCanonicalKey: [String: String] = [
-        "anthropic": "Claude Code",
+        // The Mac calls this provider Claude (QuotaProviders.expected), and the
+        // phone called it Claude Code, so the two apps of one product showed
+        // the same plan under two different names.  One name, taken from the
+        // Mac, so the surfaces agree.
+        "anthropic": "Claude",
         "openai": "Codex",
         "google-antigravity": "Antigravity",
         "cursor": "Cursor",

@@ -1283,31 +1283,38 @@ func glanceMeterPair(for row: DisplaySection, now: Date) -> GlanceMeterPair {
     let primary = candidates.filter { !$0.window.isSubModelLimit }
     let eligible = primary.isEmpty ? candidates : primary
 
-    let shortest = eligible.filter { glanceCadence($0, now: now) == .short }
-    let longest = eligible.filter { glanceCadence($0, now: now) == .long }
-
-    // A provider that publishes only one cadence — Grok Bot's weekly meter, or
-    // a plan-only subscription — still fills the first slot.  The second slot
-    // then falls back to the next window closest to its cap, so a provider
-    // with two unnamed windows still gets two meters.
-    let short = nearestToCap(shortest) ?? nearestToCap(eligible) ?? anchor
-    // Both fallbacks exclude the window the first slot already took, and any
-    // copy of it.  A single-window provider that classifies as long — which
-    // every weekly meter does — would otherwise resolve `longest` to the same
-    // snapshot and render one meter twice, hiding the second cadence entirely;
-    // and a second source's copy of the same meter (Grok Bot's weekly, read
-    // by both Cursor's DashboardService and `gbu`) would render it twice more.
-    func distinct(_ snapshot: QuotaWindowSnapshot) -> Bool {
-        snapshot.window.id != short.window.id && !glanceIsCopy(snapshot, of: short)
+    // The general path is the shared rule, so the Mac, the companion and the
+    // widgets pick their two meters the same way.  The Mac keeps one
+    // refinement on top of it:  a second source's report of the meter the
+    // first slot already shows is not a second meter, so it never fills the
+    // second slot.
+    let meterCandidates = eligible.map { snapshot in
+        QuotaWindowPairing.MeterCandidate(
+            id: snapshot.window.id,
+            remainingPercent: snapshot.remainingPercent,
+            resetAt: snapshot.resetAt,
+            isShort: glanceCadence(snapshot, now: now) == .short,
+            // The same exclusion predicates the companion and the widgets
+            // apply, so the phone can never show a meter this Mac hides and
+            // one rule decides every surface's two meters.
+            isExcluded: QuotaCapRule.isSupplementaryVideoQuota(
+                providerKey: row.providerKey, label: snapshot.window.label)
+                || QuotaCapRule.isScopedPoolAllowance(
+                    providerKey: row.providerKey, id: snapshot.window.id, label: snapshot.window.label)
+                || QuotaCapRule.isSubModelLimit(
+                    providerKey: row.providerKey, id: snapshot.window.id, label: snapshot.window.label))
     }
-    // A placeholder window with neither a reading nor a reset date provides no information
-    // and should not displace an empty slot with a dummy solid bar.
-    func hasInformation(_ snapshot: QuotaWindowSnapshot) -> Bool {
-        snapshot.remainingPercent != nil || snapshot.resetAt != nil
+    let pair = QuotaWindowPairing.meterPair(meterCandidates) { candidate, other in
+        guard let snapshot = eligible.first(where: { $0.window.id == candidate.id }),
+              let held = eligible.first(where: { $0.window.id == other.id }) else { return false }
+        return glanceIsCopy(snapshot, of: held)
     }
-    let longCandidates = longest.filter(distinct).filter(hasInformation)
-    let fallbackCandidates = eligible.filter(distinct).filter(hasInformation)
-    let long = nearestToCap(longCandidates) ?? nearestToCap(fallbackCandidates)
+    func snapshot(_ candidate: QuotaWindowPairing.MeterCandidate?) -> QuotaWindowSnapshot? {
+        guard let candidate else { return nil }
+        return eligible.first { $0.window.id == candidate.id }
+    }
+    let short = snapshot(pair.short) ?? anchor
+    let long = snapshot(pair.long)
     return GlanceMeterPair(short: short, long: long)
 }
 
@@ -1408,15 +1415,6 @@ func glanceDrawableWindows(_ windows: [QuotaWindowSnapshot]) -> [QuotaWindowSnap
         if readingKeys.contains(key) || (namesNoCadence && !readingKeys.isEmpty) { return false }
         return emptyKeys.insert(key).inserted
     }
-}
-
-/// The window closest to its cap, preferring one that reports a percentage.
-/// Same rule as `QuotaPlatformSection.drivingWindow`, so the second meter and
-/// the row's headline always agree on which window is closest to trouble.
-private func nearestToCap(_ pool: [QuotaWindowSnapshot]) -> QuotaWindowSnapshot? {
-    pool.filter { $0.remainingPercent != nil }
-        .min { ($0.remainingPercent ?? 100) < ($1.remainingPercent ?? 100) }
-        ?? pool.first
 }
 
 /// A window's cadence, from its own token where the reader set one, and from
@@ -2364,7 +2362,9 @@ struct GlanceRow: View {
         if let subModel = windows.first(where: { $0.window.isSubModelLimit }) {
             if subModel.window.canonicalProviderKey == "openai" { return line.label }
             if subModel.window.canonicalProviderKey == "google-antigravity" {
-                return "Gemini 4 Argon"
+                // "Argon", the way the Claude row names "Fable":  the model,
+                // not the pool it belongs to.
+                return "Argon"
             }
             if let model = subModel.window.modelId, !model.isEmpty {
                 return model.capitalized
