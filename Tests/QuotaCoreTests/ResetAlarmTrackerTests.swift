@@ -832,6 +832,23 @@ final class ResetAlarmTrackerTests: XCTestCase {
                       "a refill back to full is a vendor reset, not a plan change")
     }
 
+    /// A genuine reset late in a long sleep is not a slide: the end moved
+    /// three hours while four hours passed - decisively less than the gap -
+    /// and the quota came back to full.  Missing it would leave the owner
+    /// working against a cap that no longer exists.
+    func testAnEarlyResetLateInALongSleepStillAlerts() {
+        var tracker = ResetAlarmTracker()
+        let end = t0 + 5 * self.hour
+        _ = tracker.process([reading("5h", period: 5 * hour, resetAt: end, remaining: 15, observedAt: t0)], now: t0)
+
+        let wake = t0 + 4 * self.hour
+        let reissued = t0 + 8 * self.hour
+        let events = tracker.process([reading("5h", period: 5 * hour, resetAt: reissued, remaining: 100, observedAt: wake)], now: wake)
+
+        XCTAssertEqual(events.count, 1,
+                       "a decisive end move smaller than the sleep gap was silenced as a rolling slide")
+    }
+
     func testAShortJumpWithoutAClimbIsStillJustADrift() {
         var tracker = ResetAlarmTracker()
         _ = tracker.process(claude(at: t0, fiveResetAt: t0 + 4 * hour, five: 90,
