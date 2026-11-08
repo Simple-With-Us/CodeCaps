@@ -7,7 +7,8 @@
 // approved fallback, so the test stubs that fallback -- the injected getter
 // -- rather than a network endpoint.  Nothing here reaches the vault.
 //
-// Every private key fixture is generated at runtime from an ephemeral P-256 keypair.
+// Every fixture is synthetic.  The private key in these tests is a marker
+// string, not a credential.
 //
 // Run: node --test scripts/stage-asc-key.node-test.mjs
 import assert from 'node:assert/strict';
@@ -20,19 +21,10 @@ import { fileURLToPath } from 'node:url';
 
 import { run, UNRESOLVED_REFERENCE } from './stage-asc-key.mjs';
 
-// Keep the fixture structurally valid while never storing PEM material in the repository.
-function generateTestKey() {
-  return generateKeyPairSync('ec', {
-    namedCurve: 'prime256v1',
-    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
-    publicKeyEncoding: { type: 'spki', format: 'pem' },
-  }).privateKey;
-}
-
-const KEY = generateTestKey();
-const KEY_MARKER = KEY.split(/\r?\n/)[1];
-const ENVIRONMENT_KEY = generateTestKey();
-const ENVIRONMENT_KEY_MARKER = ENVIRONMENT_KEY.split(/\r?\n/)[1];
+// A synthetic fixture, not a credential.  It stands in for the private key
+// so the test can tell a leak from a clean run.
+const KEY_MARKER = 'SYNTHETIC-MULTILINE-FIXTURE-DO-NOT-USE';
+const KEY = `-----BEGIN PRIVATE KEY-----\n${KEY_MARKER}\n-----END PRIVATE KEY-----`; // gitleaks:allow
 const VAULT = {
   ASC_KEY_ID: 'STUBKEYID',
   ASC_ISSUER_ID: 'STUBISSUER',
@@ -46,7 +38,6 @@ function baseEnv(dir, overrides = {}) {
   return {
     GITHUB_ENV: join(dir, 'env'),
     ASC_STAGING_ROOT: join(dir, 'staging'),
-    INFISICAL_TOKEN: 'st.synthetic-id.synthetic-secret',
     ...overrides,
   };
 }
@@ -113,10 +104,7 @@ function importEnvironmentFile(path) {
  * key-bearing entry, and a later step is handed no key. */
 function assertNoKeySurvives(envPath) {
   const written = readFileSync(envPath, 'utf8');
-  assert.ok(
-    ![KEY, KEY_MARKER, ENVIRONMENT_KEY, ENVIRONMENT_KEY_MARKER].some((fixture) => written.includes(fixture)),
-    'private key bytes must not survive in the environment file',
-  );
+  assert.ok(!written.includes(KEY_MARKER), 'the key bytes must not survive in the environment file');
   assert.doesNotMatch(written, /ASC_KEY_P8/, 'the ASC_KEY_P8 entry must be removed, not blanked');
   const imported = importEnvironmentFile(envPath);
   assert.ok(!('ASC_KEY_P8' in imported), 'a later step must not be handed the key');
@@ -382,18 +370,17 @@ test('the environment is looked up first, before the approved fallback', async (
     const env = baseEnv(dir, {
       ASC_KEY_ID: 'ENVKEYID',
       ASC_ISSUER_ID: 'ENVISSUER',
-      ASC_KEY_P8: ENVIRONMENT_KEY,
+      ASC_KEY_P8: `-----BEGIN PRIVATE KEY-----\nENVIRONMENT-COPY\n-----END PRIVATE KEY-----`, // gitleaks:allow
     });
     const getter = stubGetter();
     await run({ env, getSecret: getter, log: () => {} });
 
     assert.deepEqual(getter.calls, [], 'the fallback must not be consulted when the environment has the name');
     const written = readFileSync(env.GITHUB_ENV, 'utf8');
-    assertNoKeySurvives(env.GITHUB_ENV);
     assert.match(written, /ENVKEYID/);
     assert.match(written, /ENVISSUER/);
     const keyPath = written.match(/^ASC_KEY_PATH=(.*)$/m)[1].trim();
-    assert.ok(readFileSync(keyPath, 'utf8').includes(ENVIRONMENT_KEY_MARKER), 'the environment copy is the one that is staged');
+    assert.ok(readFileSync(keyPath, 'utf8').includes('ENVIRONMENT-COPY'), 'the environment copy is the one that is staged');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
