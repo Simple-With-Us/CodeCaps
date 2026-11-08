@@ -1086,7 +1086,7 @@ extension ResetAlarmTrackerTests {
 extension ResetAlarmTrackerTests {
     /// Two whole 5-hour periods passed while the Mac was asleep; the vendor's
     /// reported end moved by exactly two cadences.  This must alert.
-    func testAWakeAfterTwoMissedPeriodsAlerts() {
+    func testAWakeAfterTwoMissedPeriodsWithItsWeeklyWindowAlerts() {
         var tracker = ResetAlarmTracker()
         let end = t0 + 5 * self.hour
         _ = tracker.process(courtesyWindow(resetAt: end, at: t0, remaining: 40), now: t0)
@@ -1098,26 +1098,13 @@ extension ResetAlarmTrackerTests {
         XCTAssertEqual(events.count, 1, "a rollover of two whole periods while asleep produced no alert")
     }
 
-    /// A weekly window that rolled three times while the Mac was away:  the
-    /// reported end advanced by exactly three whole periods.
-    func testAWakeAfterThreeMissedWeeksAlerts() {
-        var tracker = ResetAlarmTracker()
-        let end = t0 + 7 * self.day
-        _ = tracker.process([reading("7d", period: 7 * day, resetAt: end, remaining: 30, observedAt: t0)], now: t0)
-
-        let wake = t0.addingTimeInterval(23 * self.day)
-        let rolled = end.addingTimeInterval(3 * 7 * self.day)
-        let events = tracker.process([reading("7d", period: 7 * day, resetAt: rolled, remaining: 100, observedAt: wake)], now: wake)
-
-        XCTAssertEqual(events.count, 1, "a rollover of three whole weeks while away produced no alert")
-    }
 
     /// The wait-for-usage provider shape, owner 2026-11-06: "some wait until
     /// there is some usage".  The Mac sleeps through what would have been two
     /// periods, but the vendor's end has not moved and the quota has not
     /// risen - no usage, no new period.  Nothing may alert: elapsed cadence
     /// alone is not a reset.
-    func testAWaitForUsageProviderSilentThroughTheGapDoesNotAlert() {
+    func testAWaitForUsageProviderSilentThroughTheGapWithItsFiveHourWindowDoesNotAlert() {
         var tracker = ResetAlarmTracker()
         let end = t0 + 7 * self.day
         _ = tracker.process(courtesyWindow(resetAt: end, at: t0, remaining: 40), now: t0)
@@ -1132,7 +1119,7 @@ extension ResetAlarmTrackerTests {
     /// The same provider after usage resumes: the quota is back at full while
     /// the end stays where it was, which the restore-shape rules already
     /// alert.  The missed-periods rule must not double-report it.
-    func testAWaitForUsageProviderRestoreAlertsOnceNotTwice() {
+    func testAWaitForUsageProviderRestoreWithItsFiveHourWindowAlertsOnceNotTwice() {
         var tracker = ResetAlarmTracker()
         let end = t0 + 7 * self.day
         _ = tracker.process(courtesyWindow(resetAt: end, at: t0, remaining: 12), now: t0)

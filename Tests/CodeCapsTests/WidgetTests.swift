@@ -251,8 +251,12 @@ final class WidgetTests: XCTestCase {
         // and a stale window that is at cap with a reset still ahead may name
         // the cap;  every other cap pick comes from the fresh windows.
         XCTAssertTrue(
-            atCapMethod.contains("let planWindows = windows.filter { !$0.isSupplementaryVideoQuota }"),
-            "the widget's cap window never comes from a supplementary video pool"
+            atCapMethod.contains("let planWindows = windows.filter { !$0.isSupplementaryVideoQuota && !$0.isModelDetail }"),
+            "the widget's cap window never comes from a supplementary video pool or a per-model detail"
+        )
+        XCTAssertTrue(
+            atCapMethod.contains("let capPool = planWindows.isEmpty ? windows : planWindows"),
+            "a platform reporting only video windows keeps them, otherwise they leave the cap pool"
         )
         XCTAssertTrue(
             atCapMethod.contains("$0.isFresh(now: now)"),

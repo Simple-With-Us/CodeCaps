@@ -404,6 +404,16 @@ public struct ResetAlarmTracker: Sendable {
                 reason = .nearCap(minimumRemaining: minimum)
             } else if transition.isMidWindow {
                 reason = .nearCap(minimumRemaining: transition.previous.minimumRemaining ?? (transition.previous.lastRemaining ?? 80.0))
+            } else if sleptThroughMultiplePeriods(transition, now: now) {
+                // The owner accepted 2026-11-06: a Mac asleep through several
+                // quota resets must still hear that a reset happened.  The
+                // smaller window's rollover already fires when it is polled on
+                // its own;  a larger window in the same batch must not swallow
+                // it.  Only two or more WHOLE missed cadences qualify - an
+                // ordinary one-period reset of a smaller window stays quiet
+                // unless it came near its cap, and a gradual rolling slide
+                // never matches a whole multiple.
+                reason = .newPeriod
             } else {
                 continue
             }
@@ -432,6 +442,34 @@ public struct ResetAlarmTracker: Sendable {
             if (lhs.reason == .newPeriod) != (rhs.reason == .newPeriod) { return lhs.reason == .newPeriod }
             return (lhs.periodSeconds ?? 0) > (rhs.periodSeconds ?? 0)
         }
+    }
+
+
+    /// Whether a fired transition spans two or more whole cadences: the Mac
+    /// slept through several resets and the vendor's end moved by a whole
+    /// multiple of the period (within drift tolerance; calendar months accept
+    /// a 28-to-31-day span per period).  Mirrors the whole-multiple rule in
+    /// the deadline-correction path.
+    private func sleptThroughMultiplePeriods(_ transition: Transition, now: Date) -> Bool {
+        guard let period = transition.observation.periodSeconds ?? transition.previous.periodSeconds,
+              period > 0,
+              let previousReset = transition.previous.periodResetAt,
+              let reported = transition.observation.resetAt else { return false }
+        // Nothing to tell without real quota readings on both sides: a window
+        // never seen with a percentage stays quiet (pinned), and a masked
+        // current reading must not alarm even with a readable past (pinned).
+        guard transition.previous.minimumRemaining != nil,
+              transition.observation.remainingPercent != nil else { return false }
+        let readAt = transition.observation.observedAt ?? now
+        guard readAt >= previousReset.addingTimeInterval(-60) else { return false }
+        let jump = reported.timeIntervalSince(previousReset)
+        let periods = (jump / period).rounded()
+        guard periods >= 2 else { return false }
+        let tolerance = ResetAlarmPolicy.resetDriftTolerance
+        if (28 * 86_400...31 * 86_400).contains(period) {
+            return jump >= periods * 28 * 86_400 - tolerance && jump <= periods * 31 * 86_400 + tolerance
+        }
+        return abs(jump - periods * period) <= tolerance
     }
 
     /// Folds one reading into its window's state, returning the previous state
@@ -533,7 +571,9 @@ public struct ResetAlarmTracker: Sendable {
                     // window accepts a 28-to-31-day start advance per period;
                     // fixed cadences use drift tolerance.
                     let periods = (advance / period).rounded()
-                    guard periods >= 1 else { return true }
+                    // An unmoved explicit start cannot confirm a rollover: the
+                    // provider must publish the new period on both sides.
+                    guard periods >= 1 else { return false }
                     if (28 * 86_400...31 * 86_400).contains(period) {
                         return advance >= periods * 28 * 86_400 - tolerance && advance <= periods * 31 * 86_400 + tolerance
                     }
