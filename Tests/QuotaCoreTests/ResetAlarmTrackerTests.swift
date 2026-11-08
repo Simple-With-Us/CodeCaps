@@ -793,25 +793,43 @@ final class ResetAlarmTrackerTests: XCTestCase {
     }
 
     func testAShortJumpWithAClimbIsSilentLikeARollingWindow() {
-        // The week is at 30% with 5 days left; the provider reports a new
-        // reset time 7 days away, a move of 2 days, well under half a
-        // 7-day period.  Before the CC-215 safeguard a climb back to 100
-        // settled it as an early reset, but that same short forward jump plus
-        // a climb is how a rolling window ages across a long sleep, so the
-        // owner ruling of 2026-11-07 (#378) treats it as rolling.  The tracker
-        // adopts the reported end, so this covers only the silent observation;
+        // The week is at 30% with 5 days left; the Mac wakes a little over
+        // two days later and the reported end has slid forward by exactly the
+        // elapsed time, well under half a 7-day period.  That in-step slide
+        // plus a climb back to 100 is a rolling window aging usage out
+        // across the sleep, not a reset.  The tracker adopts the reported
+        // end, so this covers only the silent observation;
         // testAnEarlyResetByTheProviderStillCounts covers the jumps that do
-        // still count.
+        // still count, and testACourtesyResetReissuingTheWeekOverAShortGapStillAlerts
+        // covers the same numbers across a short gap, where the end move is
+        // a real reissue.
+        var tracker = ResetAlarmTracker()
+        _ = tracker.process(claude(at: t0, fiveResetAt: t0 + 4 * hour, five: 90,
+                                   weekResetAt: t0 + 5 * day, week: 30), now: t0)
+        let later = t0 + 2 * day + hour
+        let events = tracker.process(claude(at: later, fiveResetAt: t0 + 4 * hour, five: 90,
+                                            weekResetAt: t0 + 7 * day + hour, week: 100), now: later)
+        XCTAssertTrue(events.isEmpty,
+                      "an end sliding in step with the elapsed time plus a climb is the rolling-window shape")
+        XCTAssertEqual(tracker.state.windows["local|anthropic|7d"]?.minimumRemaining, 30,
+                       "a rolling-window update keeps the current period's low-water mark")
+    }
+
+    /// The same numbers across a SHORT gap are not a rolling slide: the end
+    /// moved 49 hours while one hour of clock time passed, which no rolling
+    /// window can do.  That is the courtesy-reset shape - the week came back
+    /// to full with a fresh period reissued from now - and it must alert.
+    func testACourtesyResetReissuingTheWeekOverAShortGapStillAlerts() {
         var tracker = ResetAlarmTracker()
         _ = tracker.process(claude(at: t0, fiveResetAt: t0 + 4 * hour, five: 90,
                                    weekResetAt: t0 + 5 * day, week: 30), now: t0)
         let later = t0 + hour
         let events = tracker.process(claude(at: later, fiveResetAt: t0 + 4 * hour, five: 90,
                                             weekResetAt: later + 7 * day, week: 100), now: later)
-        XCTAssertTrue(events.isEmpty,
-                      "a short forward jump plus a climb before the end is the rolling-window shape")
-        XCTAssertEqual(tracker.state.windows["local|anthropic|7d"]?.minimumRemaining, 30,
-                       "a rolling-window update keeps the current period's low-water mark")
+        XCTAssertEqual(events.count, 1,
+                       "a quota restore with a decisively moved end across a short gap produced no alert")
+        XCTAssertTrue(events.first?.isVendorReset ?? false,
+                      "a refill back to full is a vendor reset, not a plan change")
     }
 
     func testAShortJumpWithoutAClimbIsStillJustADrift() {
