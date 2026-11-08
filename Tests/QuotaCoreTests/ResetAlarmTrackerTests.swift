@@ -936,7 +936,7 @@ extension ResetAlarmTrackerTests {
 
         XCTAssertEqual(events.count, 1,
                        "a vendor restore after the published end produced no alert at all")
-        XCTAssertTrue(events[0].isVendorReset,
+        XCTAssertTrue(events.first?.isVendorReset ?? false,
                       "it should be reported as a vendor reset, not an ordinary period end")
     }
 
@@ -958,7 +958,7 @@ extension ResetAlarmTrackerTests {
 
         XCTAssertEqual(events.count, 1,
                        "a partial restore after the published end produced no alert")
-        XCTAssertTrue(events[0].isVendorReset)
+        XCTAssertTrue(events.first?.isVendorReset ?? false)
     }
 
     /// The rule must not become a false-positive machine: a window that merely
@@ -1042,7 +1042,7 @@ extension ResetAlarmTrackerTests {
         let events = tracker.process(courtesyWindow(resetAt: end, at: later, remaining: 100), now: later)
 
         XCTAssertEqual(events.count, 1, "a courtesy reset produced no alert, so the cap silently came back")
-        XCTAssertTrue(events[0].isVendorReset, "it should be flagged as a restore rather than a new period")
+        XCTAssertTrue(events.first?.isVendorReset ?? false, "it should be flagged as a restore rather than a new period")
     }
 
     /// A courtesy reset that also rolls the window forward.  Here the period
@@ -1058,7 +1058,7 @@ extension ResetAlarmTrackerTests {
         let events = tracker.process(courtesyWindow(resetAt: rolled, at: later, remaining: 100), now: later)
 
         XCTAssertEqual(events.count, 1, "a reset that moved the window end was missed entirely")
-        XCTAssertTrue(events[0].isVendorReset)
+        XCTAssertTrue(events.first?.isVendorReset ?? false)
     }
 
     /// Usage was never low, so near-cap could not have fired either: 60% to
