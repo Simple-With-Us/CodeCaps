@@ -155,10 +155,27 @@ final class QuotaWindowCaptionTests: XCTestCase {
     func test_a_caption_without_a_qualifier_is_asked_for_by_name() {
         let caption = QuotaWindowCaption.withoutQualifier(
             token: "7d",
-            resetCaption: "Resets in 3h"
+            resetCaption: "Resets in 3h",
+            compactResetCaption: "3h"
         )
         XCTAssertEqual(caption.qualifier, "")
         XCTAssertEqual(caption.token, "7d")
         XCTAssertEqual(caption.resetCaption, "Resets in 3h")
+    }
+
+    /// The no-qualifier form carries the compact fallback the row needs.
+    ///
+    /// A caption row falls back to the bare countdown when the full reset
+    /// line cannot fit,  so a caption without a compact partner would give
+    /// that fallback nothing to print.  The argument is required,  and the
+    /// value travels with the caption.
+    func test_a_caption_without_a_qualifier_carries_its_compact_fallback() {
+        let caption = QuotaWindowCaption.withoutQualifier(
+            token: "5h",
+            resetCaption: "Resets in 24m",
+            compactResetCaption: "24m"
+        )
+        XCTAssertEqual(caption.compactResetCaption, "24m")
+        XCTAssertTrue(caption.compactResetCaption.isEmpty == false)
     }
 }
