@@ -2476,7 +2476,6 @@ final class MonitorModel: ObservableObject {
                 localProviders: localProviders)
             let adoptedKept = adopted.filter { !supersededPush.contains($0) }
             let merged = QuotaLocalScope.localWindowsForMerge(self.localWindows, adopted: adoptedKept) + adoptedKept + fleetFallback
-            let unifiedMerged = UnifiedSubscriptionPool.share(windows: merged, now: self.now)
             // Every participant gets the pool's reading, including one whose
             // local read failed outright and left no window behind: Cursor and
             // Grok Bot share xAI's quota, so a fresh xAI reading stands in for
@@ -2695,7 +2694,6 @@ final class MonitorModel: ObservableObject {
             localProviders: localProviders)
         let adoptedKept = adopted.filter { !supersededPush.contains($0) }
         let merged = QuotaLocalScope.localWindowsForMerge(localWindows, adopted: adoptedKept) + adoptedKept + fleetFallback
-        let unifiedMerged = UnifiedSubscriptionPool.share(windows: merged, now: now)
         // Same pool rule as the refresh path: an absent participant still
         // receives the shared reading (CC-210).
         let unifiedMerged = UnifiedSubscriptionPool.share(
