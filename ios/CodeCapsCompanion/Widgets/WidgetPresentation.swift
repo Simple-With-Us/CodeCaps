@@ -108,8 +108,6 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
         return (observedAt ?? .distantPast) > (other.observedAt ?? .distantPast)
     }
 
-    public var isModelDetail: Bool { label == "Fable limit" || label == "Argon limit" }
-
     public var displayPercent: String {
         if !isMasked, remainingPercent == nil, let count = absoluteRemaining, count.isFinite, count >= 0 {
             return "\(count.formatted(.number.precision(.fractionLength(0...2)))) left"
@@ -316,9 +314,6 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
         return max(0.0, min(1.0, pct / 100.0))
     }
 
-    public var primaryWindows: [WidgetWindowItem] { windows.filter { !$0.isModelDetail } }
-    public var detailWindows: [WidgetWindowItem] { windows.filter(\.isModelDetail) }
-    public var hasModelDetails: Bool { !detailWindows.isEmpty }
 
     public var elapsedFraction: Double? {
         primaryWindows.compactMap { $0.elapsedFraction() }.first
