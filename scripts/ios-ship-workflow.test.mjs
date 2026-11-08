@@ -10,7 +10,7 @@
 // Run: node --test scripts/ios-ship-workflow.test.mjs
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -205,73 +205,32 @@ test("ASC credentials come from Fleet-OPS /asc, never the stale repository secre
   // bare Infisical CLI is not used: it prints the value to stdout.
   assert.doesNotMatch(code, /8dae6d03/);
   assert.doesNotMatch(code, /ASC_INFISICAL_PROJECT_ID/);
-  assert.match(code, /INFISICAL_PROJECT_ID: \$\{\{ secrets\.INFISICAL_FLEET_OPS_PROJECT_ID \}\}/);
   assert.match(code, /uses: \.\/\.github\/actions\/infisical-secrets/);
-  // The Sentry step names the org secret that exists.  The repository has no
-  // secret called INFISICAL_PROJECT_ID, so the vault leg resolved nothing and
-  // the step fell through to the repository copies without saying so.
-  assert.doesNotMatch(code, /project-id: \$\{\{ secrets\.INFISICAL_PROJECT_ID \}\}/);
+  // ASC stays on Fleet-OPS.  Sentry uses the CodeCaps project.
   assert.match(code, /project-id: \$\{\{ secrets\.INFISICAL_FLEET_OPS_PROJECT_ID \}\}/);
-  assert.match(code, /secrets\.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID/);
+  assert.match(code, /project-id: \$\{\{ secrets\.INFISICAL_PROJECT_ID \}\}/);
+  assert.match(code, /service-token: \$\{\{ secrets\.INFISICAL_ASC_READ_TOKEN \}\}/);
+  assert.match(code, /service-token: \$\{\{ secrets\.INFISICAL_CODECAPS_READ_TOKEN \}\}/);
+  assert.match(code, /secret-path: \/asc/);
+  assert.match(code, /asc-mode: "true"/);
+  assert.match(code, /names: ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8/);
+  assert.match(code, /required: ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8/);
+  assert.doesNotMatch(code, /client-id:/);
+  assert.doesNotMatch(code, /INFISICAL_UNIVERSAL_AUTH_CLIENT/);
+  assert.doesNotMatch(code, /INFISICAL_CLIENT_(ID|SECRET)/);
+  assert.doesNotMatch(code, /install-release-secrets-tooling/);
+  assert.doesNotMatch(code, /universal-auth/);
   assert.doesNotMatch(code, /infisical secrets get/);
   assert.doesNotMatch(code, /infisical\/get-cli/);
-  // No new code may talk to the vault directly.
+  // No workflow step talks to the vault directly.  asc-mode in the fetch
+  // script stages the key and does not write the raw PEM to GITHUB_ENV.
   assert.doesNotMatch(code, /listSecretsRaw|loginUniversalAuth/);
-
-  // The multiline key never enters the step environment.  The tooling and
-  // the staging script run in ONE step: the tooling brings the fleet's
-  // reader onto the runner, the staging script resolves the three values
-  // environment-first, streams the key over stdin into a mode-600 file and
-  // removes the ASC_KEY_P8 entry, so only the file's path and the two
-  // identifiers cross into the later steps.
-  // The step names the tooling, and the tooling names the consumer that
-  // resolves the values.
-  assert.match(code, /scripts\/install-release-secrets-tooling\.sh/);
-  // No workflow step reads the vault directly: the reader is the fleet's
-  // own, and the staging script is the only thing that resolves a value.
   assert.doesNotMatch(code, /node scripts\/infisical-fetch\.mjs/);
-  // The step is a single call to the tooling, and the tooling runs the
-  // consumer in the same process tree, so the minted token reaches it
-  // through its environment and never through a file.
-  assert.match(code, /bash scripts\/install-release-secrets-tooling\.sh/);
-  const tooling = readFileSync(join(ROOT, "scripts/install-release-secrets-tooling.sh"), "utf8");
-  assert.match(tooling, /node "\$repo_root\/scripts\/stage-asc-key\.mjs"/);
-  assert.doesNotMatch(tooling, /release-secrets-env\.sh/);
-  // The minted token must never reach the log.  The guard names every output
-  // helper the script has, because a regression that printed through `say` or
-  // `fail` would leak the token while a guard that only matched `printf`
-  // still passed.
-  assert.doesNotMatch(tooling, /\b(say|echo|printf|fail)\b[^\n]*\$(token|\{token\})/);
-  assert.doesNotMatch(code, /release-secrets-env\.sh/);
-  assert.match(tooling, /export INFISICAL_TOKEN="\$token"/);
-  assert.match(tooling, /export INFISICAL_FLEET_OPS_PROJECT_ID="\$project_id"/);
-  // The consumer runs even when the tooling install fails, and the step
-  // reports the status of the command that actually failed.
-  assert.match(tooling, /install_rc=0[\s\S]*install_tooling \|\| install_rc=\$\?/);
-  assert.match(tooling, /stage_rc=0[\s\S]*stage-asc-key\.mjs"? \|\| stage_rc=\$\?/);
-  assert.match(tooling, /if \[ "\$install_rc" -ne 0 \]; then exit "\$install_rc"; fi/);
-  assert.match(tooling, /exit "\$stage_rc"/);
-  // The tooling is part of the ship, so a change to it runs the ship the
-  // same way a change to any other ship script does.
-  assert.match(code, /'scripts\/install-release-secrets-tooling\.sh'/);
-  // The staging script resolves each value from process.env first and only
-  // then through the approved reader, so a credential in the step's own
-  // environment always wins over the vault.
-  const stage = readFileSync(join(ROOT, "scripts/stage-asc-key.mjs"), "utf8");
-  assert.match(stage, /process\.env[\s\S]*fleet-secrets/s);
-  assert.ok(
-    stage.indexOf("fromProcess.get(name)") < stage.indexOf("getSecret(name"),
-    "the environment must be looked up before the approved reader",
-  );
-  // The vault is named where it is read: the step says which vault it
-  // reads, and the staging script owns the folder inside it.
+  const fetch = readFileSync(join(ROOT, "scripts/infisical-fetch.mjs"), "utf8");
+  assert.match(fetch, /export function exportAscCredentials/);
+  assert.match(fetch, /ios-stage-asc-key\.sh/);
+  assert.doesNotMatch(fetch, /writeGithubEnvValue\(env\.GITHUB_ENV, "ASC_KEY_P8"/);
   assert.match(code, /Load and stage the ASC credentials \(Fleet-OPS prod \/asc\)/);
-  assert.match(stage, /SECRET_FOLDER = '\/asc'/);
-  // No step may ask the composite action for an ASC_* name: the action
-  // writes every requested value into $GITHUB_ENV, which would put the
-  // private key back into the environment of every later step.
-  assert.doesNotMatch(code, /names: ASC_/);
-  assert.match(readFileSync(join(ROOT, "scripts/stage-asc-key.mjs"), "utf8"), /ios-stage-asc-key\.sh/);
   // The key leaves the environment file with the entry itself removed, not
   // with a blank assignment that leaves the earlier bytes in the file for the
   // runner to import into a later step.
@@ -450,12 +409,75 @@ test("scheduled gate and key handoff shell tests pass", () => {
 const shipScript = read("scripts/ios-fleet/ship-testflight.sh");
 
 test("the iOS lane loads the Sentry API token, not the DSN", () => {
-  assert.match(code, /SENTRY_AUTH_TOKEN_FULLSCOPE/);
+  assert.match(code, /names: SENTRY_DSN SENTRY_AUTH_TOKEN/);
+  assert.doesNotMatch(code, /SENTRY_AUTH_TOKEN_FULLSCOPE/);
   assert.match(shipScript, /SENTRY_AUTH_TOKEN_FULLSCOPE/);
-  // The full-scope token is the one sentry-cli accepts, and it is the one the
-  // workflow hands over.  The DSN must never reach the token slot.
+  assert.match(shipScript, /SENTRY_AUTH_TOKEN from the CodeCaps project/);
+  // FULLSCOPE is optional.  When it is unset the CodeCaps token is used, and
+  // a DSN in the token slot is still refused.
+  const loader = shipScript.match(/load_sentry_auth\(\) \{[\s\S]*?\n\}/)[0];
+  assert.ok(
+    loader.indexOf("SENTRY_AUTH_TOKEN_FULLSCOPE") < loader.indexOf('elif [[ -n "${SENTRY_AUTH_TOKEN:-}" ]]'),
+    "the CodeCaps token is the fallback when FULLSCOPE is unset",
+  );
   assert.match(shipScript, /\*:\/\/\*\|\*@\*/);
   assert.match(shipScript, /looks like a DSN, not an API token/);
+});
+
+// The CodeCaps token slot can hold a DSN -- the fleet's shared value, and
+// the defect this lane had.  A DSN is not an API token, but fleet-secrets may
+// still hold the full-scope one, so the reader is asked before the DSN is
+// refused.  The function is run here against a stub reader on PATH.
+function runSentryAuth(env, stub = null) {
+  const dir = mkdtempSync(join(tmpdir(), "sentry-auth-"));
+  try {
+    const fn = shipScript.match(/load_sentry_auth\(\) \{[\s\S]*?\n\}/);
+    assert.ok(fn, "ship-testflight.sh defines load_sentry_auth");
+    writeFileSync(join(dir, "fn.sh"), fn[0]);
+    if (stub) writeFileSync(join(dir, "fleet-secrets"), stub, { mode: 0o755 });
+    const out = execFileSync(
+      "bash",
+      ["-c", 'source "$DIR/fn.sh"; load_sentry_auth; rc=$?; printf "rc=%s\\n" "$rc"; printf "reason=%s\\n" "$SENTRY_TOKEN_REASON"; printf "token=%s\\n" "$SENTRY_API_TOKEN"'],
+      {
+        encoding: "utf8",
+        // The stub directory is the only place a reader can come from, so the
+        // test never reaches a real vault.
+        env: { PATH: `${dir}:/usr/bin:/bin`, DIR: dir, ...env },
+      },
+    );
+    const field = (name) => (out.match(new RegExp(`^${name}=(.*)$`, "m")) || [])[1] ?? "";
+    return { rc: field("rc"), reason: field("reason"), token: field("token") };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const FLEET_SECRETS_STUB = [
+  "#!/usr/bin/env bash",
+  '[[ "${1:-}" == "get" ]] || exit 2',
+  'printf "%s" "synthetic-fullscope-token"',
+  "",
+].join("\n");
+
+test("a DSN in the CodeCaps token slot falls through to fleet-secrets", () => {
+  const r = runSentryAuth({ SENTRY_AUTH_TOKEN: "https://key@o1.ingest.us.sentry.io/2" }, FLEET_SECRETS_STUB);
+  assert.equal(r.rc, "0");
+  assert.equal(r.token, "synthetic-fullscope-token");
+  assert.equal(r.reason, "");
+});
+
+test("a DSN in the CodeCaps token slot is refused when there is no reader", () => {
+  const r = runSentryAuth({ SENTRY_AUTH_TOKEN: "https://key@o1.ingest.us.sentry.io/2" });
+  assert.equal(r.rc, "1");
+  assert.equal(r.reason, "the token looks like a DSN, not an API token");
+  assert.equal(r.token, "");
+});
+
+test("a CodeCaps token that is not a DSN still wins over fleet-secrets", () => {
+  const r = runSentryAuth({ SENTRY_AUTH_TOKEN: "synthetic-codecaps-token" }, FLEET_SECRETS_STUB);
+  assert.equal(r.rc, "0");
+  assert.equal(r.token, "synthetic-codecaps-token");
+  assert.equal(r.reason, "");
 });
 
 test("the iOS lane uploads to the DSN project as well as the app's own", () => {
@@ -548,11 +570,17 @@ test("a slug DSN tail is used as it stands, with no API call", () => {
 });
 
 test("CodeCaps iOS ships with its own Sentry DSN, and a missing one is loud", () => {
-  // SENTRY_DSN_CODECAPS (Sentry project codecaps) is fetched with the other
-  // Sentry names, from Infisical first and the same-named repository secret
-  // second, and it replaces the shared fleet SENTRY_DSN before the archive.
-  assert.match(code, /names: [^\n]*\bSENTRY_DSN_CODECAPS\b/);
+  // The CodeCaps project SENTRY_DSN is the codecaps DSN.  SENTRY_DSN_CODECAPS
+  // is not an Infisical name anymore.  The repository secret stays the
+  // explicit fallback, including GH_FALLBACK_SENTRY_DSN_CODECAPS on the fetch
+  // step and the value the next step reads.
+  assert.match(code, /names: SENTRY_DSN SENTRY_AUTH_TOKEN/);
+  assert.doesNotMatch(code, /names: [^\n]*\bSENTRY_DSN_CODECAPS\b/);
+  assert.doesNotMatch(code, /SENTRY_AUTH_TOKEN_FULLSCOPE/);
+  assert.match(code, /GH_FALLBACK_SENTRY_DSN: \$\{\{ secrets\.SENTRY_DSN \}\}/);
+  assert.match(code, /GH_FALLBACK_SENTRY_AUTH_TOKEN: \$\{\{ secrets\.SENTRY_AUTH_TOKEN \}\}/);
   assert.match(code, /GH_FALLBACK_SENTRY_DSN_CODECAPS: \$\{\{ secrets\.SENTRY_DSN_CODECAPS \}\}/);
+  assert.match(code, /service-token: \$\{\{ secrets\.INFISICAL_CODECAPS_READ_TOKEN \}\}/);
   const steps = code.split(/- name:/);
   const pick = steps.findIndex((s) => /Use the CodeCaps Sentry DSN/.test(s));
   const load = steps.findIndex((s) => /Load Sentry ship secrets/.test(s));
@@ -567,6 +595,8 @@ test("CodeCaps iOS ships with its own Sentry DSN, and a missing one is loud", ()
   // lives in RUNNER_TEMP, never in the checkout:  the ship script refuses a
   // dirty worktree, so an untracked file there would stop the ship.
   assert.match(step, /::error title=Sentry DSN::/);
+  assert.match(step, /CodeCaps Infisical project prod \//);
+  assert.doesNotMatch(step, /Fleet-OPS prod \//);
   assert.match(step, /"\$RUNNER_TEMP\/ios-ship-sentry-dsn-missing"/);
   assert.doesNotMatch(step, /GITHUB_WORKSPACE/);
   assert.doesNotMatch(step, /exit 1/);

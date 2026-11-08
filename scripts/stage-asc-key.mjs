@@ -22,12 +22,11 @@
  * no later step can read the key from the environment.  Only the two
  * identifiers are published, and they are masked before they are written.
  *
- * This script is the only thing in the release that reads a credential.  The
- * workflow installs the reader (scripts/install-release-secrets-tooling.sh
- * brings the Infisical CLI and the fleet's `fleet-secrets` onto the runner
- * and mints the access token they use) and this script calls the reader.
- * No workflow step asks the vault for a value, and no step's environment
- * carries the private key.
+ * CI does not call this script.  The release workflows stage the key
+ * through scripts/infisical-fetch.mjs in asc-mode, using the scoped
+ * INFISICAL_ASC_READ_TOKEN.  This script remains the environment-first
+ * fallback for a caller that already has fleet-secrets.  It does not mint
+ * a token.  No step's environment carries the private key.
  *
  * Run: node scripts/stage-asc-key.mjs
  */

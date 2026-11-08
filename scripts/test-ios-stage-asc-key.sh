@@ -45,8 +45,8 @@ if grep -Eq 'for name in .*ASC_KEY_P8' "$workflow"; then
   echo 'workflow still propagates the multiline key through an environment mask' >&2
   exit 1
 fi
-if ! grep -Fq 'scripts/ios-stage-asc-key.sh' "$workflow"; then
-  echo 'workflow does not use the protected key-file handoff' >&2
+if ! grep -Fq 'asc-mode:' "$workflow"; then
+  echo 'workflow does not stage the ASC key through asc-mode' >&2
   exit 1
 fi
 
@@ -72,8 +72,12 @@ if grep -Eq 'for name in .*ASC_KEY_P8' "$workflow"; then
   echo 'workflow still propagates the multiline key through an environment mask' >&2
   exit 1
 fi
-if ! grep -Fq 'scripts/stage-asc-key.mjs' "$workflow"; then
-  echo 'workflow does not use the protected key-file handoff' >&2
+if ! grep -Fq 'asc-mode: "true"' "$workflow"; then
+  echo 'workflow does not stage the ASC key through asc-mode' >&2
+  exit 1
+fi
+if grep -Eq 'client-id:|INFISICAL_UNIVERSAL_AUTH_CLIENT|INFISICAL_CLIENT_(ID|SECRET)' "$workflow"; then
+  echo 'workflow still uses universal-auth client credentials' >&2
   exit 1
 fi
 if grep -Eq 'infisical secrets get|infisical/get-cli' "$workflow"; then
@@ -90,8 +94,8 @@ if grep -Eq 'listSecretsRaw|loginUniversalAuth' "$workflow"; then
   echo 'workflow reads the vault directly instead of through the approved action' >&2
   exit 1
 fi
-# The staging script is what hands the key to the protected handoff.
-if ! grep -Fq 'ios-stage-asc-key.sh' "$repo_root/scripts/stage-asc-key.mjs"; then
+# asc-mode hands the key to the protected staging script.
+if ! grep -Fq 'ios-stage-asc-key.sh' "$repo_root/scripts/infisical-fetch.mjs"; then
   echo 'the fetch script does not hand the key to the staging script' >&2
   exit 1
 fi
