@@ -541,13 +541,15 @@ public enum QuotaLocalScope {
                     if ownNewest == nil { fallback.append(contentsOf: periodWindows) }
                     continue
                 }
-                guard let ownNewest, ownNewest >= fleetNewest else {
-                    fallback.append(contentsOf: periodWindows)
+                if let ownNewest, ownNewest >= fleetNewest {
+                    // This Mac's own reading of the period is the newer one:
+                    // it keeps the row, and the fleet's copy is redundant.
                     continue
                 }
-                // This Mac's own reading of the period is the newer one:  it
-                // keeps the row, and the fleet's copy of the same period is
-                // redundant.
+                // The fleet's reading of the period is the newer one:  it
+                // joins the row and this Mac's older copy of the same period
+                // is dropped with it, so one period is never drawn twice.
+                fallback.append(contentsOf: periodWindows)
                 for ownWindow in ownByPeriod[period] ?? [] {
                     guard let ownDate = ownWindow.occurredDate, ownDate < fleetNewest else { continue }
                     superseded.append(ownWindow)
