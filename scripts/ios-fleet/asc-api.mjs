@@ -251,8 +251,10 @@ function resolveCredential() {
   const envIssuer = String(process.env.ASC_ISSUER_ID || "").trim();
   const envKeyPem = String(process.env.ASC_KEY_P8 || "").trim();
 
-  // 1) The APPLE_API_* trio the ship workflow exports from Infisical.  The
-  //    key itself is in the environment, so it wins over every other source.
+  // 1) The APPLE_API_* trio, for operators who set it themselves.  CI no
+  //    longer exports APPLE_API_KEY_P8_BASE64 (the key stays in the staged
+  //    mode-600 file), so the ship steps resolve through source 2.  When the
+  //    key is in the environment it wins over every other source.
   const keyId = String(process.env.APPLE_API_KEY_ID || "").trim();
   const issuerId = String(process.env.APPLE_API_ISSUER_ID || "").trim();
   if (keyId && issuerId && process.env.APPLE_API_KEY_P8_BASE64) {
