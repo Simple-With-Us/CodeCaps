@@ -301,7 +301,14 @@ public struct CompanionContentView: View {
         let extraWindows = item.cardDetailWindows(scope: scope)
         let atCapWindow = item.atCapWindow(scope: scope)
         let isAtCap = atCapWindow != nil
-        let usableMuseExtra = item.providerKey == "muse-assist" && isAtCap ? cardWindows.first(where: {
+        // Two pools of one provider share a title (Antigravity's Gemini and
+        // Third-Party pools), so a collapsed card whose title is not unique
+        // also shows the pool subtitle - the same gate as Settings >
+        // Platform Order (owner, 2026-11-06).
+        let duplicatedTitles = Set(model.items.map(\.title).filter { title in
+            model.items.count(where: { $0.title == title }) > 1
+        })
+        let usableMuseExtra = item.providerKey == "muse-assist" ? cardWindows.first(where: {
             QuotaWindowVocabulary.isMuseAssistExtra(providerKey: item.providerKey, windowToken: $0.rawWindowToken, label: $0.label, resetAt: $0.resetAt)
             && (($0.remainingPercent ?? 0) > 0 || ($0.absoluteRemaining ?? 0) > 0)
         }) : nil
@@ -319,7 +326,13 @@ public struct CompanionContentView: View {
                             .italic(shouldDimTitle)
                             .foregroundStyle(shouldDimTitle ? Color.primary.opacity(0.45) : .primary)
                     }
-
+                    if duplicatedTitles.contains(item.title),
+                       let subtitle = item.subtitle, !subtitle.isEmpty {
+                        Text(subtitle)
+                            .font(.system(size: 11))
+                            .foregroundStyle(shouldDimTitle ? Color.secondary.opacity(0.45) : .secondary)
+                            .lineLimit(1)
+                    }
                 }
                 Spacer()
                 HStack(spacing: 10) {
@@ -378,6 +391,12 @@ public struct CompanionContentView: View {
                             Text(atCapSummary)
                                 .font(.system(size: 10))
                                 .foregroundStyle(.secondary)
+                            if let ageCue = item.atCapReadingAgeCue(scope: scope) {
+                                Text(ageCue)
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -404,12 +423,36 @@ public struct CompanionContentView: View {
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                         }
+                        if let ageCue = item.atCapReadingAgeCue(scope: scope) {
+                            Text(ageCue)
+                                .font(.system(size: 10))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, 4)
                     .accessibilityElement(children: .combine)
                     .accessibilityLabel("At cap. \(atCapSummary)")
                 }
+            } else if cardWindows.isEmpty, let lastReading = item.deadCopyObservedAt {
+                // Every window this provider reported is a copy of a period
+                // that has already ended, so there is no honest bar to draw:
+                // say the reading is stale, and when the provider was last
+                // heard from, instead of leaving the card blank or reviving a
+                // figure whose window is over.
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Waiting for a fresh reading")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                    Text("Last reading \(UpdatedStamp.label(lastReading))")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 4)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Waiting for a fresh reading, last reading \(UpdatedStamp.label(lastReading))")
             } else {
                 // Quota Bars side by side in a clean 2-column grid
                 HStack(spacing: 12) {
@@ -490,7 +533,7 @@ public struct CompanionContentView: View {
     private func windowRow(_ win: CompanionWindowItem) -> some View {
         HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(win.meterCaption)
+                Text(win.caption)
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.primary)
                 let cd = win.meterCountdown()
@@ -590,12 +633,27 @@ public struct CompanionContentView: View {
 
     @ViewBuilder
     private var settingsDisplaySections: some View {
+        // Two pools of one provider share a title (Antigravity's Gemini and
+        // Third-Party pools), so a row whose title is not unique also shows
+        // the subtitle its home card carries (owner, 2026-11-06).
+        let duplicatedTitles = Set(model.items.map(\.title).filter { title in
+            model.items.count(where: { $0.title == title }) > 1
+        })
         Section {
             ForEach(model.items) { item in
                 HStack(spacing: 10) {
                     CompanionProviderLogo(item: item, size: 24)
-                    Text(item.title)
-                        .font(.system(size: 14, weight: .medium))
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(item.title)
+                            .font(.system(size: 14, weight: .medium))
+                        if duplicatedTitles.contains(item.title),
+                           let subtitle = item.subtitle, !subtitle.isEmpty {
+                            Text(subtitle)
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
                     Spacer()
                 }
             }
@@ -1005,6 +1063,14 @@ public struct CompanionMeterView: View {
                 height: 7
             )
             .frame(maxWidth: .infinity)
+
+            if let cue = window.staleReadingCue() {
+                Text(cue)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(CompanionTheme.warning)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -1129,7 +1195,7 @@ public struct CompanionProviderLogo: View {
     /// Antigravity's supplied arch and Gemini's star keep their color here.
     private var isMonochrome: Bool {
         guard let name = resolvedLogoName else { return false }
-        return ["provider-openai", "provider-cursor", "provider-grok", "provider-grok-bot", "provider-copilot", "provider-zai"]
+        return ["provider-openai", "provider-cursor", "provider-grok", "provider-grok-bot", "provider-copilot"]
             .contains(name)
     }
 

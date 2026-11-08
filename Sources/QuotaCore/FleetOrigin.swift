@@ -137,17 +137,53 @@ public enum FleetOrigin {
         // other (owner, 2026-10-23:  the xAI row read two ended windows
         // instead of the live reading).
         let localReaders = QuotaLocalScope.providers(withReadings: localWindows)
+        // The dead-copy drop is narrowed per cadence:  a dead copy whose
+        // provider still has a live window of the same cadence is redundant
+        // and goes, but a dead copy whose cadence has nothing live left is
+        // the last known state of that meter.  Dropping the second kind took
+        // the whole cadence row off the provider:  the Muse Code collector
+        // restates its periods only when new usage arrives, so the finished
+        // 5h window vanished from the row while the weekly one survived
+        // (CC-211, owner 2026-11-07).  The xAI row keeps the fix from
+        // 2026-10-23:  its live weekly reading puts its cadence in this set,
+        // so the ended copies still drop.
+        // The key names one meter: provider, cadence, and the model and
+        // account that split a provider's meters apart.  The cadence
+        // classification gets the window's reset and period start, the way
+        // every other caller classifies:  an opaque token is dated by its
+        // reset, so two opaque periods of one meter stay distinct instead of
+        // collapsing into one key (PR review, kody).
+        func cadenceKey(of window: QuotaWindow) -> String {
+            window.canonicalProviderKey
+                + ":" + QuotaWindowVocabulary.standardCadence(windowToken: window.window,
+                                                              label: window.label,
+                                                              resetAt: window.resetDate,
+                                                              periodStart: window.periodStartDate)
+                + ":" + (window.modelId ?? "")
+                + ":" + (window.accountKey ?? "")
+        }
+        let liveCadences = Set(windows
+            .filter { !QuotaFreshnessRule.isDeadCopy(observedAt: $0.occurredDate,
+                                                     resetAt: $0.resetDate,
+                                                     now: now) }
+            .map(cadenceKey))
         for window in windows {
+            let dead = QuotaFreshnessRule.isDeadCopy(observedAt: window.occurredDate,
+                                                     resetAt: window.resetDate,
+                                                     now: now)
+            let cadenceIsLive = liveCadences.contains(cadenceKey(of: window))
             if isOwnPush(window, host: host, localWindows: localWindows) {
                 if localReaders.contains(window.canonicalProviderKey)
-                    || !QuotaFreshnessRule.isDeadCopy(observedAt: window.occurredDate,
-                                                      resetAt: window.resetDate,
-                                                      now: now) {
+                    || !dead
+                    || !cadenceIsLive {
                     own.append(window)
                 }
-            } else if !QuotaFreshnessRule.isDeadCopy(observedAt: window.occurredDate,
-                                                     resetAt: window.resetDate,
-                                                     now: now) {
+            } else if !dead {
+                // A copy from another machine has no local window to grey it
+                // out, and the row it would feed is the fleet fallback for a
+                // provider this Mac does not read:  an ended 0% copy becoming
+                // that row is the CC-191 failure, so remote dead copies still
+                // drop without exception (PR review, kody and sentry).
                 grouped[fleetGroupKey(for: window), default: []].append(window)
             }
         }

@@ -421,7 +421,10 @@ final class MonitorModel: ObservableObject {
         didSet { defaults.set(viewLayout.rawValue, forKey: "quotaViewLayout") }
     }
     @Published var platformOrder: [String] {
-        didSet { defaults.set(platformOrder, forKey: "platformOrder") }
+        didSet {
+            defaults.set(platformOrder, forKey: "platformOrder")
+            sectionsCache = nil
+        }
     }
     @Published var platformCustomInfo: [String: PlatformCustomInfo] {
         didSet {
@@ -461,7 +464,9 @@ final class MonitorModel: ObservableObject {
     @Published var customMarkDarkPaths: [String: String] {
         didSet { defaults.set(customMarkDarkPaths, forKey: "customMarkDarkPaths") }
     }
-    @Published private(set) var response = QuotaResponse(generatedAt: "")
+    @Published private(set) var response = QuotaResponse(generatedAt: "") {
+        didSet { sectionsCache = nil }
+    }
     @Published private(set) var isRefreshing = false
     @Published private(set) var lastChecked: Date?
     @Published private(set) var issues: [String: String] = [:]
@@ -478,7 +483,9 @@ final class MonitorModel: ObservableObject {
     /// order, after the one before it.
     private var snapshotWriteChain: Task<Void, Never>?
     private(set) var snapshotWritesClosedForTermination = false
-    @Published private(set) var now = Date()
+    @Published private(set) var now = Date() {
+        didSet { sectionsCache = nil }
+    }
 
     // Local & Remote Reading
     @Published private(set) var localEnabled: Bool
@@ -862,7 +869,28 @@ final class MonitorModel: ObservableObject {
             }
     }
 
+    /// `sections` and `displaySections` are read dozens of times per Glance,
+    /// Console and status-bar update (every row, the runaway footer once per
+    /// anomaly, every menu-bar option).  Rebuilding them on each read ran the
+    /// whole platform pipeline (dedupe, manifest, Antigravity pool matching)
+    /// on the main thread every time, which is the shared cost behind the
+    /// "App hanging for at least 2000 ms" reports on build 312.  They depend
+    /// only on `response`, `now` and `platformOrder`, so they are built once
+    /// and dropped whenever one of those changes.
+    private struct SectionsCache {
+        let sections: [QuotaPlatformSection]
+        var displaySections: [DisplaySection]?
+    }
+    private var sectionsCache: SectionsCache?
+
     var sections: [QuotaPlatformSection] {
+        if let cached = sectionsCache { return cached.sections }
+        let built = buildSections()
+        sectionsCache = SectionsCache(sections: built, displaySections: nil)
+        return built
+    }
+
+    private func buildSections() -> [QuotaPlatformSection] {
         let base = response.platformSections(now: now)
         if platformOrder.isEmpty { return base }
         var orderMap: [String: Int] = [:]
@@ -879,7 +907,10 @@ final class MonitorModel: ObservableObject {
     /// One row per platform, except Antigravity, which is one row per pool.
     /// Every surface that lists platforms reads this rather than `sections`.
     var displaySections: [DisplaySection] {
-        sections.flatMap { DisplaySection.rows(for: $0, now: now) }
+        if let rows = sectionsCache?.displaySections { return rows }
+        let rows = sections.flatMap { DisplaySection.rows(for: $0, now: now) }
+        sectionsCache?.displaySections = rows
+        return rows
     }
 
     func historySamples() -> [AnomalyDetector.Sample] {
@@ -920,7 +951,7 @@ final class MonitorModel: ObservableObject {
         let visible = sections.flatMap(\.windows).filter {
             $0.isFresh && $0.remainingPercent != nil && !$0.window.isSupplementaryVideoQuota
                 && !masked.contains($0.window.id)
-                && issues[$0.window.canonicalProviderKey] == nil
+                && rowIssue(for: $0.window.canonicalProviderKey) == nil
                 && !disabledSources.contains($0.window.source ?? "")
         }
         // Order by provider rank, then by source rank within the provider, so
@@ -1278,6 +1309,12 @@ final class MonitorModel: ObservableObject {
         )
         self.now = now
         self.issues = issues
+    }
+
+    /// Advances the clock alone, without replacing `response`, so a test can
+    /// check that `now` invalidates the sections cache on its own.
+    func injectNowForTests(_ now: Date) {
+        self.now = now
     }
 
     func injectLocalHistorySourceForTests(_ windows: [QuotaWindow]) {
@@ -2590,7 +2627,14 @@ final class MonitorModel: ObservableObject {
                     && expectedQuotaProviderKeys.contains(key)
             }
             let merged = QuotaLocalScope.localWindowsForMerge(self.localWindows, adopted: adopted) + adopted + fleetFallback
-            let unifiedMerged = UnifiedSubscriptionPool.share(windows: merged, now: self.now)
+            // Every participant gets the pool's reading, including one whose
+            // local read failed outright and left no window behind: Cursor and
+            // Grok Bot share xAI's quota, so a fresh xAI reading stands in for
+            // them instead of the row sitting at "unavailable" (CC-210).
+            let unifiedMerged = UnifiedSubscriptionPool.share(
+                windows: merged, now: self.now,
+                targetKeys: UnifiedSubscriptionPool.participantKeys)
+            updatePoolServedKeys(from: unifiedMerged)
             var origins: [String: QuotaOrigin] = [:]
             for key in Set(unifiedMerged.map(\.canonicalProviderKey)) { origins[key] = .local }
             self.originByProvider = origins
@@ -2723,6 +2767,36 @@ final class MonitorModel: ObservableObject {
         return resolved
     }
 
+    /// The pool participants whose rows currently carry a fresh, bounded
+    /// reading — the row the pool served, whether it filled a placeholder in
+    /// place or injected one for an absent participant.  `issues` keeps the
+    /// raw local read's map, because the Settings reader diagnostics and the
+    /// BotFleet handoff both read it and must keep seeing the real failure;
+    /// the quota rows ask `rowIssue(for:)`, which drops a participant's
+    /// issue while the shared reading stands (CC-210).
+    @Published private(set) var poolServedKeys: Set<String> = []
+
+    /// Re-derives `poolServedKeys` from the merged windows.  The test is the
+    /// pool's own donor test — a pool window with a bounded percentage that
+    /// is fresh — so an absolute-only balance or a lapsed reading never
+    /// counts as served.
+    func updatePoolServedKeys(from windows: [QuotaWindow]) {
+        var served: Set<String> = []
+        for window in windows where UnifiedSubscriptionPool.participantKeys.contains(window.canonicalProviderKey) {
+            guard window.boundedRemainingPercent != nil,
+                  QuotaWindowSnapshot(window: window, now: now).isFresh else { continue }
+            served.insert(window.canonicalProviderKey)
+        }
+        poolServedKeys = served
+    }
+
+    /// The issue a quota row shows:  the raw local read's issue, unless the
+    /// shared pool stands in a fresh reading for that participant.
+    func rowIssue(for providerKey: String) -> String? {
+        guard poolServedKeys.contains(providerKey) else { return issues[providerKey] }
+        return nil
+    }
+
     /// File checks publish only changed local readings.  Fleet pull and push
     /// stay on the provider/manual path, so a one-minute file poll is passive.
     private func rebuildLocalState(recordSamples: Bool) {
@@ -2766,7 +2840,12 @@ final class MonitorModel: ObservableObject {
                 && expectedQuotaProviderKeys.contains(key)
         }
         let merged = QuotaLocalScope.localWindowsForMerge(localWindows, adopted: adopted) + adopted + fleetFallback
-        let unifiedMerged = UnifiedSubscriptionPool.share(windows: merged, now: now)
+        // Same pool rule as the refresh path: an absent participant still
+        // receives the shared reading (CC-210).
+        let unifiedMerged = UnifiedSubscriptionPool.share(
+            windows: merged, now: now,
+            targetKeys: UnifiedSubscriptionPool.participantKeys)
+        updatePoolServedKeys(from: unifiedMerged)
         originByProvider = Dictionary(uniqueKeysWithValues: Set(unifiedMerged.map(\.canonicalProviderKey)).map { ($0, .local) })
         response = QuotaResponse(generatedAt: ISO8601DateFormatter().string(from: now), windows: unifiedMerged)
         if let writeForTesting = handoffWriteForTesting {

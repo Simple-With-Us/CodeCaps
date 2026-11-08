@@ -295,9 +295,12 @@ public struct ZCodeQuotaReader: Sendable {
 
     /// Step 3: mint the request-time project token.  `Bearer` for both
     /// families, stable across the bracket.  An envelope 404 means the key
-    /// vanished; `enable: false` means the account disabled the token.  The
-    /// minted token is short-lived sign-in material (the payload carries its
-    /// own expiry), the same call ZCode's monitor makes every refresh.
+    /// vanished.  The minted token is short-lived sign-in material (the
+    /// payload carries its own expiry), the same call ZCode's monitor makes
+    /// every refresh.  Live shape (z.ai, verified 2026-11-04): the mint
+    /// payload names its flag `enabled` — `enable` never appears — and
+    /// `enabled: false` still mints a token the quota endpoint accepts, so
+    /// the flag is consulted only when no token came back.
     private func mintProjectToken(_ account: Account, login: String, organizationId: String, projectId: String, keyId: String) async throws -> String {
         let base = "\(account.origin)/api/biz/v1/organization/\(Self.pathEscape(organizationId))/projects/\(Self.pathEscape(projectId))/api_keys"
         let url = URL(string: "\(base)/\(Self.pathEscape(keyId))/access_tokens")!
@@ -311,10 +314,13 @@ public struct ZCodeQuotaReader: Sendable {
             throw Flow.account("ZCode's coding-plan key no longer exists; sign in again in ZCode.")
         }
         guard let data = Self.envelopeData(root) as? [String: Any] else { throw Flow.unavailable(.accessTokens, .envelope) }
-        guard let enable = data["enable"] as? NSNumber else { throw Flow.unavailable(.accessTokens, .malformed) }
-        guard enable.boolValue else { throw Flow.account("ZCode reports the coding-plan token disabled.") }
-        guard let token = data["accessToken"] as? String, Self.validToken(token) else { throw Flow.unavailable(.accessTokens, .malformed) }
-        return token
+        if let token = data["accessToken"] as? String, Self.validToken(token) {
+            return token
+        }
+        if Self.booleanFlag(data, keys: ["enabled", "enable"]) == false {
+            throw Flow.account("ZCode reports the coding-plan token disabled.")
+        }
+        throw Flow.unavailable(.accessTokens, .malformed)
     }
 
     /// Step 4: the quota read, always `Bearer <project token>` — the one
@@ -421,6 +427,24 @@ private extension ZCodeQuotaReader {
         value.addingPercentEncoding(withAllowedCharacters: CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")) ?? value
     }
 
+    /// The first named key that carries a boolean-shaped value, tolerating
+    /// the JSON bool, numeric 0/1, and "true"/"false" string forms seen
+    /// across the management endpoints; nil when no key carries one.
+    static func booleanFlag(_ data: [String: Any], keys: [String]) -> Bool? {
+        for key in keys {
+            guard let value = data[key] else { continue }
+            if let bool = value as? Bool { return bool }
+            if let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() {
+                return number.intValue != 0
+            }
+            if let text = value as? String {
+                if text == "true" { return true }
+                if text == "false" { return false }
+            }
+        }
+        return nil
+    }
+
     /// The installed ZCode app's own version, for the mint body's
     /// `clientVersion`; omitted when the app cannot be read.
     static func installedZCodeVersion() -> String? {
@@ -471,11 +495,12 @@ private extension ZCodeQuotaReader {
             let descriptor = descriptor(type: type, unit: unit)
             let percentage = number(limit["percentage"])
             let remaining = number(limit["remaining"])
-            // currentValue is the CONSUMED amount and number is the window
-            // length; the cap only exists when the payload names a remaining
-            // figure, as remaining + used.
+            // `usage` is the server's own window cap (live-verified 2026-11-04:
+            // 2000 per five hours, 10000 weekly) and currentValue is the
+            // CONSUMED amount; the cap falls back to remaining + used only
+            // when the payload names no usage figure.
             let used = number(limit["currentValue"])
-            let cap: Double? = remaining.flatMap { r in used.map { r + $0 } }
+            let cap: Double? = number(limit["usage"]) ?? remaining.flatMap { r in used.map { r + $0 } }
             let percent: Double?
             if let percentage {
                 percent = min(100, max(0, 100 - percentage))

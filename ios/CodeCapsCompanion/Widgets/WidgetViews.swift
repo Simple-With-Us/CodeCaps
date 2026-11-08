@@ -311,7 +311,8 @@ struct OverviewSmallView: View {
                             titleFont: 11.5,
                             captionFont: 8.5,
                             percentFont: 11.5,
-                            barHeight: 3.5
+                            barHeight: 3.5,
+                            usesMeterLayout: false
                         )
                     }
                 }

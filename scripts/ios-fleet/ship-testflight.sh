@@ -116,13 +116,11 @@
 #   staged copy this script writes for them.
 #   or Xcode-signed-in session for destination=upload export
 #   SENTRY_AUTH_TOKEN_FULLSCOPE
-#                        (the Sentry API token for the dSYM + Size Analysis
-#                        upload; env or `fleet-secrets get`).  This is the only
-#                        credential sentry-cli accepts.  SENTRY_AUTH_TOKEN on
-#                        some repos holds the DSN instead, and a DSN is not an
-#                        API token, so sentry-cli refuses it in about seventy
-#                        milliseconds and the upload never happens.
-#   SENTRY_AUTH_TOKEN  (legacy token slot; used only when it is not a DSN)
+#                        (optional legacy name).  Scoped CI tokens do not
+#                        export it.  When it is unset, SENTRY_AUTH_TOKEN from
+#                        the CodeCaps project (or the repository secret of the
+#                        same name) is the API token.
+#   SENTRY_AUTH_TOKEN  (CodeCaps project token; rejected when it is a DSN)
 #   SENTRY_DSN         (injected into xcodebuild so Cocoa plist $(SENTRY_DSN) is set)
 #
 # Sentry after a successful archive (2026-09-01):
@@ -567,11 +565,12 @@ sentry_project_for_app() {
   esac
 }
 
-# The Sentry API token, resolved once.  SENTRY_AUTH_TOKEN_FULLSCOPE is the only
-# credential sentry-cli accepts.  SENTRY_AUTH_TOKEN holds the DSN on some repos,
-# and a DSN is not an API token, so sentry-cli refuses it in about seventy
-# milliseconds and the upload never happens.  The token stays a shell variable
-# and is handed to sentry-cli one invocation at a time.
+# The Sentry API token, resolved once.  SENTRY_AUTH_TOKEN_FULLSCOPE is the
+# legacy name from Fleet-OPS prod /, which scoped read tokens do not export.
+# SENTRY_AUTH_TOKEN from the CodeCaps project is the token CI sets.  A DSN in
+# the token slot is refused -- but the reader is asked first, so a DSN in the
+# CodeCaps slot never hides the full-scope token.  The token stays a shell
+# variable and is handed to sentry-cli one invocation at a time.
 SENTRY_API_TOKEN=""
 SENTRY_TOKEN_REASON=""
 SENTRY_UPLOAD_FAILED=0
@@ -595,10 +594,25 @@ sentry_failure_marker() {
 load_sentry_auth() {
   SENTRY_API_TOKEN=""
   SENTRY_TOKEN_REASON=""
-  local token="" raw=""
+  local token="" raw="" dsn_token=""
   if [[ -n "${SENTRY_AUTH_TOKEN_FULLSCOPE:-}" ]]; then
     token="$SENTRY_AUTH_TOKEN_FULLSCOPE"
-  elif has_infisical_service_token && { [[ -x "${FLEET_SECRETS_BIN:-}" ]] || command -v fleet-secrets &>/dev/null; }; then
+  elif [[ -n "${SENTRY_AUTH_TOKEN:-}" ]]; then
+    # Scoped CodeCaps reads do not export SENTRY_AUTH_TOKEN_FULLSCOPE.
+    # SENTRY_AUTH_TOKEN is the CodeCaps project token, or the repository
+    # secret of the same name when the vault value was empty.
+    case "$SENTRY_AUTH_TOKEN" in
+      *://*|*@*)
+        # A DSN is not an API token, but fleet-secrets may still hold the
+        # full-scope one, so the DSN waits until the reader has been asked.
+        dsn_token="$SENTRY_AUTH_TOKEN"
+        ;;
+      *)
+        token="$SENTRY_AUTH_TOKEN"
+        ;;
+    esac
+  fi
+  if [[ -z "$token" ]] && command -v fleet-secrets &>/dev/null; then
     # The reader's exit status is captured on its own:  in a pipeline the
     # status would be the one of the last stage, so a failed read would look
     # like a successful read of an empty secret.
@@ -612,14 +626,12 @@ load_sentry_auth() {
     # Fall through: an explicit SENTRY_AUTH_TOKEN in the environment is still an
     # approved source, and returning here would discard it.
   fi
-  if [[ -z "$token" && -n "${SENTRY_AUTH_TOKEN:-}" ]]; then
-    # The legacy slot is a fallback only, and only when it holds a real token.
-    token="$SENTRY_AUTH_TOKEN"
-    SENTRY_TOKEN_REASON=""
-  fi
+  # Nothing better turned up, so the DSN in the CodeCaps slot is the answer,
+  # and the case below refuses it by name.
+  [[ -n "$token" ]] || token="$dsn_token"
   case "$token" in
     "")
-      SENTRY_TOKEN_REASON="SENTRY_AUTH_TOKEN_FULLSCOPE is unset"
+      SENTRY_TOKEN_REASON="SENTRY_AUTH_TOKEN is unset"
       return 1
       ;;
     *://*|*@*)

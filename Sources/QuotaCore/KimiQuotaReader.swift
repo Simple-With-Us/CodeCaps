@@ -7,7 +7,7 @@ import Foundation
 /// logs, or refreshes it.  Token contents never leave this type.
 public struct KimiQuotaReader: Sendable {
     private let now: @Sendable () -> Date
-    private let accessToken: @Sendable () -> String?
+    private let credential: @Sendable () -> (token: String?, expiresAt: Date?)
     private let fetch: @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)
 
     private static let maxResponseBytes = 262_144
@@ -27,18 +27,33 @@ public struct KimiQuotaReader: Sendable {
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
         now: @escaping @Sendable () -> Date = { Date() },
         accessToken: (@Sendable () -> String?)? = nil,
+        credentialExpiresAt: (@Sendable () -> Date?)? = nil,
         fetch: (@Sendable (URLRequest) async throws -> (Data, HTTPURLResponse))? = nil
     ) {
         self.now = now
         let home = homeDirectory.standardizedFileURL
-        self.accessToken = accessToken ?? { Self.readLocalAccessToken(home: home) }
+        if let accessToken {
+            if let credentialExpiresAt {
+                self.credential = { (accessToken(), credentialExpiresAt()) }
+            } else {
+                self.credential = { (accessToken(), nil) }
+            }
+        } else {
+            // One store read per refresh: the token and its expiry must come
+            // from the same snapshot, or a credential the CLI rewrites
+            // mid-refresh pairs a rejected token with the wrong expiry.
+            self.credential = {
+                guard let local = Self.readLocalCredential(home: home) else { return (nil, nil) }
+                return (local.token, local.expiresAt)
+            }
+        }
         self.fetch = fetch ?? Self.makeFetcher()
     }
 
     public func read() async -> LocalQuotaResult {
         do {
-            try Task.checkCancellation()
-            guard let token = accessToken(), !token.isEmpty else {
+            let snapshot = credential()
+            guard let token = snapshot.token, !token.isEmpty else {
                 // No local sign-in at all: the product is simply absent, the
                 // same way a missing `gh` binary is not a Copilot error.
                 return LocalQuotaResult()
@@ -67,6 +82,11 @@ public struct KimiQuotaReader: Sendable {
                 guard (200..<300).contains(result.statusCode), let root = result.root else {
                     continue
                 }
+                // A signed-in account with no Kimi Code plan answers 200 with
+                // an empty object (seen live, 2026-11-06).  There is nothing
+                // to monitor, so the product is absent, the same way a missing
+                // sign-in is, rather than a quota CodeCaps failed to read.
+                if root.isEmpty { return LocalQuotaResult() }
                 let windows = Self.parse(root, observedAt: now())
                 if windows.isEmpty {
                     return LocalQuotaResult(issues: ["kimi": "Kimi returned no readable quota."])
@@ -77,6 +97,15 @@ public struct KimiQuotaReader: Sendable {
                 return LocalQuotaResult(windows: windows, issues: issues)
             }
             if lastStatus == 401 || lastStatus == 403 {
+                // A token the credential file itself marks expired is a
+                // routine refresh wait, not a dead sign-in: the CLI refreshes
+                // it on its next use and this reader then reads the fresh
+                // file.  Only a rejection with no local expiry evidence is
+                // worded as a sign-in problem.  The expiry is the one taken
+                // alongside the token, never a second store read.
+                if let expiry = snapshot.expiresAt, now() >= expiry {
+                    return LocalQuotaResult(issues: ["kimi": "Kimi's stored access token has expired; open Kimi Code to refresh it."])
+                }
                 return LocalQuotaResult(issues: ["kimi": "Kimi session was rejected; sign in again in Kimi Code."])
             }
             return LocalQuotaResult(issues: ["kimi": sawTransportError
@@ -190,6 +219,7 @@ private extension KimiQuotaReader {
             }
             if unit.contains("HOUR") { return "\(duration)h limit" }
             if unit.contains("DAY") { return "\(duration)d limit" }
+            if unit.contains("WEEK") { return "\(duration)w limit" }
             return "\(duration)s limit"
         }
         return "Limit \(index + 1)"
@@ -201,6 +231,7 @@ private extension KimiQuotaReader {
         if unit.contains("DAY") { return duration >= 28 ? "monthly" : (duration >= 7 ? "weekly" : "daily") }
         if unit.contains("HOUR") { return "\(duration)h" }
         if unit.contains("MINUTE") { return duration >= 60 && duration % 60 == 0 ? "\(duration / 60)h" : "\(duration)m" }
+        if unit.contains("WEEK") { return duration == 1 ? "weekly" : "\(duration)w" }
         return nil
     }
 
@@ -215,11 +246,19 @@ private extension KimiQuotaReader {
         return nil
     }
 
-    /// Only the CLI's designated Kimi Code credential is eligible, followed by
-    /// an explicitly identified Kimi Code provider with an approved coding URL.
+    /// Newest credential JSON under the two documented roots, then the
+    /// `api_key` lines of `config.toml` / `config.json` as a last resort.
     internal static func readLocalAccessToken(
         home: URL, environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> String? {
+        readLocalCredential(home: home, environment: environment)?.token
+    }
+
+    /// The token plus the expiry the credential records alongside it, so a
+    /// server rejection can be told apart from a locally known expiry.
+    internal static func readLocalCredential(
+        home: URL, environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> (token: String, expiresAt: Date?)? {
         let roots = [
             environment["KIMI_CODE_HOME"].map { URL(fileURLWithPath: $0) }
                 ?? home.appendingPathComponent(".kimi-code"),
@@ -240,15 +279,15 @@ private extension KimiQuotaReader {
             return (l ?? .distantPast) > (r ?? .distantPast)
         }
         for candidate in candidates {
-            if let token = credentialToken(at: candidate) { return token }
+            if let credential = credentialToken(at: candidate) { return credential }
         }
         for root in roots {
-            if let token = configToken(root: root) { return token }
+            if let token = configToken(root: root) { return (token, nil) }
         }
         return nil
     }
 
-    static func credentialToken(at url: URL) -> String? {
+    static func credentialToken(at url: URL) -> (token: String, expiresAt: Date?)? {
         guard let data = try? Data(contentsOf: url, options: .mappedIfSafe), data.count <= Self.maxCredentialBytes,
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
         // Extract the raw string, NOT via the label-capped string() helper:
@@ -259,7 +298,21 @@ private extension KimiQuotaReader {
         // A token whose recorded expiry has passed is only going to earn a
         // 401; the CLI refreshes it on next use, so report the stored one
         // anyway and let the server answer.
-        return token
+        return (token, credentialExpiry(root["expires_at"] ?? root["expiresAt"]))
+    }
+
+    /// The credential's own expiry: epoch seconds (the live file's form),
+    /// epoch milliseconds, or an ISO-8601 stamp.
+    internal static func credentialExpiry(_ value: Any?) -> Date? {
+        if let number = number(value) {
+            if number >= 1_000_000_000_000 { return Date(timeIntervalSince1970: number / 1000) }
+            return Date(timeIntervalSince1970: number)
+        }
+        guard let text = value as? String, !text.isEmpty, text.utf8.count <= 64 else { return nil }
+        let iso = ISO8601DateFormatter()
+        if let date = iso.date(from: text) { return date }
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return iso.date(from: text)
     }
 
     internal static func configToken(root: URL) -> String? {
@@ -391,15 +444,21 @@ private extension KimiQuotaReader {
         return text
     }
 
+    /// A non-negative finite count.  Kimi's live `/usages` payload quotes its
+    /// int64 counts (`"limit": "100"`), as protobuf JSON does, and the Kimi
+    /// CLI's own parser reads them as strings too, so a plain decimal string
+    /// counts.  Hex, exponent and signed forms do not.
     static func number(_ value: Any?) -> Double? {
-        let parsed: Double?
         if let text = value as? String {
-            parsed = Double(text.trimmingCharacters(in: .whitespacesAndNewlines))
-        } else if let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() {
-            parsed = number.doubleValue
-        } else { parsed = nil }
-        guard let parsed, parsed.isFinite, parsed >= 0 else { return nil }
-        return parsed
+            let trimmed = text.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty, trimmed.utf8.count <= 32,
+                  trimmed.allSatisfy({ $0.isASCII && ($0.isNumber || $0 == ".") }),
+                  let parsed = Double(trimmed), parsed.isFinite else { return nil }
+            return parsed
+        }
+        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+              number.doubleValue.isFinite, number.doubleValue >= 0 else { return nil }
+        return number.doubleValue
     }
 
     internal static func int(_ value: Any?) -> Int? {

@@ -415,7 +415,7 @@ struct SettingsSourcesFleetPage: View {
             HStack(spacing: 8) {
                 Image(systemName: "laptopcomputer")
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(Theme.accent)
+                    .foregroundStyle(Color.secondary)
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Machine Identity: \(QuotaPublisher.machineName)")
                         .font(.system(size: 12, weight: .semibold))
@@ -428,8 +428,8 @@ struct SettingsSourcesFleetPage: View {
                     .font(.system(size: 10, weight: .medium))
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
-                    .background(Theme.accent.opacity(0.12), in: Capsule())
-                    .foregroundStyle(Theme.accent)
+                    .background(Color.secondary.opacity(0.14), in: Capsule())
+                    .foregroundStyle(Color.secondary)
             }
             .padding(.vertical, 2)
 
@@ -512,7 +512,7 @@ struct SettingsSourcesFleetPage: View {
                 } else {
                     Image(systemName: healthy ? "checkmark.circle" : "exclamationmark.triangle")
                         .font(.system(size: 12))
-                        .foregroundStyle(healthy ? Theme.accent : Theme.warning)
+                        .foregroundStyle(healthy ? Theme.success : Theme.warning)
                         .accessibilityHidden(true)
                 }
             }
@@ -571,7 +571,7 @@ struct SettingsSourcesFleetPage: View {
             if let claudeConsentMessage {
                 Text(claudeConsentMessage)
                     .font(.system(size: 11))
-                    .foregroundStyle(claudeConsentSucceeded ? Theme.accent : Theme.warning)
+                    .foregroundStyle(claudeConsentSucceeded ? Theme.success : Theme.warning)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -771,7 +771,7 @@ private struct ReauthorizeCaption: View {
             if let pushMessage {
                 Text(pushMessage)
                     .font(.system(size: 11))
-                    .foregroundStyle(pushSucceeded ? Theme.accent : Theme.danger)
+                    .foregroundStyle(pushSucceeded ? Theme.success : Theme.danger)
                     .fixedSize(horizontal: false, vertical: true)
             }
         } header: {
@@ -891,7 +891,7 @@ private struct ReauthorizeCaption: View {
             if let pullMessage {
                 Text(pullMessage)
                     .font(.system(size: 11))
-                    .foregroundStyle(pullSucceeded ? Theme.accent : Theme.danger)
+                    .foregroundStyle(pullSucceeded ? Theme.success : Theme.danger)
                     .fixedSize(horizontal: false, vertical: true)
             }
         } header: {
@@ -1863,6 +1863,9 @@ struct SettingsInfisicalPage: View {
             footer: {
                 Text("Use the complete service token, including its st. prefix." + sentenceGap
                      + "Credentials stay in this build’s Keychain; Infisical enforces their actual permissions.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .disabled(working)
             Section {
@@ -1889,6 +1892,9 @@ struct SettingsInfisicalPage: View {
             footer: {
                 Text(settings.canWrite ? "Changes are saved to Infisical before the local cache updates."
                      : "Choose a matching write binding to save changes to Infisical.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .onAppear { reloadSetup() }
