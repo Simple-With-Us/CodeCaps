@@ -3037,7 +3037,17 @@ final class MonitorModel: ObservableObject {
         // The rule lives here rather than at the call sites, so a caller that
         // forgets it cannot publish the stale copy again.
         let localProviders = Set(self.localWindows.map(\.canonicalProviderKey))
+        let host = QuotaPublisher.producerInstanceId
+        let authoritative = FleetOrigin.authoritativeOwnCadenceKeys(in: candidates, host: host)
         let publishable = candidates.filter { candidate in
+            // A legacy collector's copy of a meter the current collector also
+            // reports is a superseded duplicate:  the install-id copy is the
+            // row's reading, and the legacy copy must not publish beside it
+            // (CC-217).
+            if FleetOrigin.isLegacyNameProducer(candidate, host: host),
+               authoritative.contains(FleetOrigin.cadenceIdentityKey(of: candidate)) {
+                return false
+            }
             // A copy of another machine's reading whose period ended before the
             // last refresh is not a reading, so the widget's cache does not
             // carry it.  The rule is the shared one, so the widget, the phone
