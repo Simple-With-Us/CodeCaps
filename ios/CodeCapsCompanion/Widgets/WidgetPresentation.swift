@@ -136,7 +136,8 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
         QuotaWindowCaption(
             token: cadenceToken,
             qualifier: barQualifier,
-            resetCaption: resetCaption()
+            resetCaption: resetCaption(),
+            compactResetCaption: countdown()
         )
     }
 
