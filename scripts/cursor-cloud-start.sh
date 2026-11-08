@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Cursor cloud agent start for CodeCaps.
 #
-# Runs on every agent boot.  When the dashboard has injected the scoped
-# CodeCaps prod-root read service token, it reads the configured project and
-# exports the secret map for this repo to a 0600 file at
-# $HOME/.cursor-cloud-env/codecaps.env, plus a tiny
+# Runs on every agent boot.  When the dashboard has injected
+# INFISICAL_CLIENT_ID and INFISICAL_CLIENT_SECRET, logs into Infisical
+# universal auth and exports the dev-env secret map for this repo to a
+# 0600 file at $HOME/.cursor-cloud-env/codecaps.env, plus a tiny
 # codecaps.source.sh that future shells can `source` without printing.
 #
 # If the dashboard secrets are missing, prints the missing NAMES (never
@@ -40,11 +40,10 @@ if [[ "${INFISICAL_ENV:-prod}" != "prod" ]]; then
   exit 0
 fi
 
-# 2.  Require the dashboard-injected project and service token by NAME only.
+# 2.  Require the dashboard-injected credentials by NAME only.
 MISSING=()
-[[ -z "${INFISICAL_PROJECT_ID:-}" ]] && MISSING+=("INFISICAL_PROJECT_ID")
-[[ -z "${INFISICAL_CODECAPS_PROD_ROOT_READ_SERVICE_TOKEN:-}" ]] \
-  && MISSING+=("INFISICAL_CODECAPS_PROD_ROOT_READ_SERVICE_TOKEN")
+[[ -z "${INFISICAL_CLIENT_ID:-}" ]]     && MISSING+=("INFISICAL_CLIENT_ID")
+[[ -z "${INFISICAL_CLIENT_SECRET:-}" ]] && MISSING+=("INFISICAL_CLIENT_SECRET")
 if (( ${#MISSING[@]} > 0 )); then
   echo "CodeCaps: skipping Infisical export.  Add the following names to the Cursor dashboard secrets: ${MISSING[*]}"
   exit 0
@@ -64,17 +63,26 @@ if INFISICAL_SITE_URL="${INFISICAL_DOMAIN:-https://app.infisical.com}" \
    INFISICAL_PROJECT_ID="${INFISICAL_PROJECT_ID:-}" \
    INFISICAL_ENVIRONMENT="${INFISICAL_ENV:-prod}" \
    INFISICAL_SECRET_PATH="${INFISICAL_SECRET_PATH:-/}" \
-   INFISICAL_SERVICE_TOKEN="${INFISICAL_CODECAPS_PROD_ROOT_READ_SERVICE_TOKEN}" \
    node -e '
      const site = String(process.env.INFISICAL_SITE_URL || "").replace(/\/+$/, "");
      const projectId = process.env.INFISICAL_PROJECT_ID || "";
      const env = process.env.INFISICAL_ENVIRONMENT || "prod";
      const path = process.env.INFISICAL_SECRET_PATH || "/";
-     const token = process.env.INFISICAL_SERVICE_TOKEN || "";
+     const cid = process.env.INFISICAL_CLIENT_ID || "";
+     const cs  = process.env.INFISICAL_CLIENT_SECRET || "";
      const log = (m) => process.stderr.write(m + "\n");
-     if (!site || !projectId || !token.startsWith("st.")) { log("CodeCaps: Infisical service-token config invalid; skipping."); process.exit(0); }
+     if (!site || !projectId || !cid || !cs) { log("CodeCaps: Infisical config incomplete; skipping."); process.exit(0); }
      (async () => {
        try {
+         const lr = await fetch(site + "/api/v1/auth/universal-auth/login", {
+           method: "POST", headers: { "content-type": "application/json" },
+           body: JSON.stringify({ clientId: cid, clientSecret: cs }),
+           signal: AbortSignal.timeout(30000),
+         });
+         if (!lr.ok) { log("CodeCaps: Infisical login failed (HTTP " + lr.status + ")."); process.exit(0); }
+         const lb = await lr.json();
+         const token = lb && lb.accessToken;
+         if (!token) { log("CodeCaps: Infisical login returned no accessToken."); process.exit(0); }
          const qs = new URLSearchParams({
            workspaceId: projectId, environment: env, secretPath: path,
            viewSecretValue: "true", expandSecretReferences: "false", include_imports: "false",
