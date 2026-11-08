@@ -67,10 +67,10 @@ final class ResetAlarmPlanChangeTests: XCTestCase {
         let events = tracker.process(weekly(at: later, resetAt: weekEnd, remaining: 75), now: later)
 
         XCTAssertEqual(events.count, 1, "the change still has to be reported")
-        XCTAssertFalse(events[0].isVendorReset, "a rise to 75% is not a vendor reset")
-        XCTAssertTrue(events[0].isPlanChange, "a rise that lands below the full level is a likely plan change")
-        XCTAssertEqual(events[0].reason, .planChange)
-        XCTAssertEqual(events[0].remainingPercent, 75)
+        XCTAssertFalse(events.first?.isVendorReset ?? true, "a rise to 75% is not a vendor reset")
+        XCTAssertTrue(events.first?.isPlanChange ?? false, "a rise that lands below the full level is a likely plan change")
+        XCTAssertEqual(events.first?.reason, .planChange)
+        XCTAssertEqual(events.first?.remainingPercent, 75)
     }
 
     /// The owner's other case, and the one that must not regress: Codex reset
@@ -84,8 +84,8 @@ final class ResetAlarmPlanChangeTests: XCTestCase {
         let events = tracker.process(weekly(at: later, resetAt: weekEnd, remaining: 100), now: later)
 
         XCTAssertEqual(events.count, 1)
-        XCTAssertTrue(events[0].isVendorReset, "a restore to full is a vendor reset")
-        XCTAssertFalse(events[0].isPlanChange)
+        XCTAssertTrue(events.first?.isVendorReset ?? false, "a restore to full is a vendor reset")
+        XCTAssertFalse(events.first?.isPlanChange ?? true)
     }
 
     func testMidWindowRestoreFromLowNinetiesToFullStillCountsAsAVendorReset() {
@@ -97,7 +97,7 @@ final class ResetAlarmPlanChangeTests: XCTestCase {
         let events = tracker.process(weekly(at: later, resetAt: weekEnd, remaining: 100), now: later)
 
         XCTAssertEqual(events.count, 1)
-        XCTAssertTrue(events[0].isVendorReset, "a full refill remains a vendor reset even after some intervening use")
+        XCTAssertTrue(events.first?.isVendorReset ?? false, "a full refill remains a vendor reset even after some intervening use")
     }
 
     func testNearFullRoundingWobbleIsNotReportedAsVendorReset() {
@@ -137,8 +137,8 @@ final class ResetAlarmPlanChangeTests: XCTestCase {
         let events = tracker.process(weekly(at: later, resetAt: weekEnd, remaining: 95), now: later)
 
         XCTAssertEqual(events.count, 1)
-        XCTAssertTrue(events[0].isVendorReset, "95% is at the floor and is a vendor reset")
-        XCTAssertFalse(events[0].isPlanChange)
+        XCTAssertTrue(events.first?.isVendorReset ?? false, "95% is at the floor and is a vendor reset")
+        XCTAssertFalse(events.first?.isPlanChange ?? true)
     }
 
     func testARiseThatStopsJustBelowTheFloorIsAPlanChange() {
@@ -149,8 +149,8 @@ final class ResetAlarmPlanChangeTests: XCTestCase {
         let events = tracker.process(weekly(at: later, resetAt: weekEnd, remaining: 94.9), now: later)
 
         XCTAssertEqual(events.count, 1)
-        XCTAssertTrue(events[0].isPlanChange)
-        XCTAssertFalse(events[0].isVendorReset)
+        XCTAssertTrue(events.first?.isPlanChange ?? false)
+        XCTAssertFalse(events.first?.isVendorReset ?? true)
     }
 
     // MARK: A window whose number must not be believed
