@@ -1077,7 +1077,7 @@ extension ResetAlarmTrackerTests {
 extension ResetAlarmTrackerTests {
     /// Two whole 5-hour periods passed while the Mac was asleep; the vendor's
     /// reported end moved by exactly two cadences.  This must alert.
-    func testAStampedWakeAfterTwoMissedPeriodsAlerts() {
+    func testAWakeAfterTwoMissedPeriodsWithItsWeeklyWindowAlerts() {
         var tracker = ResetAlarmTracker()
         let end = t0 + 5 * self.hour
         _ = tracker.process(courtesyWindow(resetAt: end, at: t0, remaining: 40), now: t0)
@@ -1095,7 +1095,7 @@ extension ResetAlarmTrackerTests {
     /// periods, but the vendor's end has not moved and the quota has not
     /// risen - no usage, no new period.  Nothing may alert: elapsed cadence
     /// alone is not a reset.
-    func testAStampedWaitForUsageProviderSilentThroughTheGapDoesNotAlert() {
+    func testAWaitForUsageProviderSilentThroughTheGapWithItsFiveHourWindowDoesNotAlert() {
         var tracker = ResetAlarmTracker()
         let end = t0 + 7 * self.day
         _ = tracker.process(courtesyWindow(resetAt: end, at: t0, remaining: 40), now: t0)
@@ -1110,7 +1110,7 @@ extension ResetAlarmTrackerTests {
     /// The same provider after usage resumes: the quota is back at full while
     /// the end stays where it was, which the restore-shape rules already
     /// alert.  The missed-periods rule must not double-report it.
-    func testAStampedWaitForUsageProviderRestoreAlertsOnceNotTwice() {
+    func testAWaitForUsageProviderRestoreWithItsFiveHourWindowAlertsOnceNotTwice() {
         var tracker = ResetAlarmTracker()
         let end = t0 + 7 * self.day
         _ = tracker.process(courtesyWindow(resetAt: end, at: t0, remaining: 12), now: t0)
