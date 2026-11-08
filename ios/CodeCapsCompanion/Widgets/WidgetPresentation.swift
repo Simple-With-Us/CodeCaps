@@ -133,10 +133,17 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
     /// the qualifier out:  a caption built from the window and a caption built
     /// without it are different values,  and only the first one names the sibling.
     public var caption: QuotaWindowCaption {
-        QuotaWindowCaption(
+        // One timestamp for both forms,  and the compact form derived from the
+        // same filtered answer as the full line:  resetCaption blanks a past
+        // reset,  so its compact partner must blank with it rather than print
+        // a bare "due"  - and both must agree across a minute boundary.
+        let now = Date()
+        let reset = resetCaption(now: now)
+        return QuotaWindowCaption(
             token: cadenceToken,
             qualifier: barQualifier,
-            resetCaption: resetCaption()
+            resetCaption: reset,
+            compactResetCaption: reset.isEmpty ? "" : countdown(now: now)
         )
     }
 

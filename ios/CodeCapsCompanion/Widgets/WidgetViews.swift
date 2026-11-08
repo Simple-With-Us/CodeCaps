@@ -492,6 +492,15 @@ struct ProviderFocusView: View {
         return platform?.resetCaption() ?? ""
     }
 
+    /// The bare countdown for the narrow fallback of a caption row.  Captions
+    /// are built here without a qualifier,  so this is also where the compact
+    /// form is named:  a reset line without its compact partner would leave
+    /// the row's ViewThatFits with nothing to fall back to.
+    private var captionCountdown: String {
+        if let window = shownWindow { return window.countdown() }
+        return platform?.countdown() ?? ""
+    }
+
     var body: some View {
         if let platform {
             switch family {
@@ -560,7 +569,7 @@ struct ProviderFocusView: View {
                     .minimumScaleFactor(0.85)
             } else {
                 WindowCaptionRow(
-                    caption: .withoutQualifier(token: captionToken, resetCaption: captionReset),
+                    caption: .withoutQualifier(token: captionToken, resetCaption: captionReset, compactResetCaption: captionCountdown),
                     font: 9
                 )
             }
@@ -656,7 +665,7 @@ struct ProviderFocusView: View {
                         )
                     } else if windowsToShow.isEmpty {
                         WindowCaptionRow(
-                            caption: .withoutQualifier(token: captionToken, resetCaption: captionReset),
+                            caption: .withoutQualifier(token: captionToken, resetCaption: captionReset, compactResetCaption: captionCountdown),
                             font: 9.5
                         )
                     } else {
@@ -821,7 +830,8 @@ struct AccessoryView: View {
                                         cadence: platform.subtitle,
                                         label: platform.title
                                     ),
-                                    resetCaption: platform.resetCaption()
+                                    resetCaption: platform.resetCaption(),
+                                    compactResetCaption: platform.countdown()
                                 ),
                             font: 9
                         )
