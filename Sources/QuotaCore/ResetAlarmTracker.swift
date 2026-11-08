@@ -149,13 +149,6 @@ public struct ResetAlarmTrackerState: Codable, Equatable, Sendable {
         public var periodSeconds: TimeInterval?
         /// Whose quota the window last described, for windows that change hands.
         public var identity: String?
-        /// How many readings advanced this window's period end forward within
-        /// its tolerance.  A fixed-boundary window never does that, so any
-        /// count marks a rolling meter (MiniMax's five-hour and video windows)
-        /// — and for a rolling meter a mid-period rise is usage aging out,
-        /// not a restore (CC-215).  Optional so snapshots recorded before this
-        /// field keep decoding.
-        public var forwardFollows: Int?
 
         public init(
             periodResetAt: Date?,
@@ -164,8 +157,7 @@ public struct ResetAlarmTrackerState: Codable, Equatable, Sendable {
             lastObservedAt: Date?,
             lastSeenAt: Date,
             periodSeconds: TimeInterval?,
-            identity: String? = nil,
-            forwardFollows: Int? = nil
+            identity: String? = nil
         ) {
             self.periodResetAt = periodResetAt
             self.minimumRemaining = minimumRemaining
@@ -174,7 +166,6 @@ public struct ResetAlarmTrackerState: Codable, Equatable, Sendable {
             self.lastSeenAt = lastSeenAt
             self.periodSeconds = periodSeconds
             self.identity = identity
-            self.forwardFollows = forwardFollows
         }
     }
 
@@ -291,10 +282,6 @@ public enum ResetAlarmPolicy {
     /// window's own end is still in the future, which is not the owner's case.
     public static let courtesyRestoreCeiling: Double = 80
 
-    /// Forward end-follows after which a window counts as rolling.  One is
-    /// enough:  a fixed-boundary window never moves its end early, so a
-    /// single observed roll decides the meter's kind (CC-215).
-    public static let rollingForwardFollows = 1
     public static let courtesyRestoreFloor: Double = 95
     /// Windows and fires not seen for this long are forgotten.
     public static let retention: TimeInterval = 45 * 86_400
@@ -507,14 +494,6 @@ public struct ResetAlarmTracker: Sendable {
                 if let reading, let last = window.lastRemaining {
                     climbed = reading >= last + ResetAlarmPolicy.earlyResetRiseMargin
                 }
-                // A window whose end has already been observed rolling
-                // forward is a rolling meter (CC-215):  inside its period a
-                // forward move is the roll, however much the percentage
-                // climbed — usage aging out looks exactly like a refill.
-                // Follow the end and stay quiet;  a genuine boundary rollover
-                // still fires through `hasPassed`.
-                let rollingMeter = (window.forwardFollows ?? 0)
-                    >= ResetAlarmPolicy.rollingForwardFollows
                 // A mid-window reset must move the end decisively — past the
                 // period-share bound.  A smaller forward move plus a climb is
                 // how a rolling window ages across a long gap (the Mac
@@ -527,7 +506,7 @@ public struct ResetAlarmTracker: Sendable {
                 // small early moves as before.
                 let forwardJump = jump > required
                     || (jump > ResetAlarmPolicy.resetDriftTolerance && climbed && hasPassed)
-                if forwardJump, hasPassed || !rollingMeter {
+                if forwardJump {
                     isReset = true
                     // When the window had *not* reached its own scheduled end,
                     // any reset is an early / mid-cycle vendor restore rather than
@@ -538,11 +517,7 @@ public struct ResetAlarmTracker: Sendable {
                     nextResetAt = reported
                 } else if jump > -ResetAlarmPolicy.resetDriftTolerance || reported > readAt {
                     // Jitter, or a correction to a reset still ahead: follow it
-                    // so slow drift never adds up to a false reset.  A forward
-                    // move, however small, is evidence about the meter's kind.
-                    if reported > previousReset {
-                        window.forwardFollows = min((window.forwardFollows ?? 0) + 1, 99)
-                    }
+                    // so slow drift never adds up to a false reset.
                     nextResetAt = reported
                 }
             }
@@ -609,8 +584,12 @@ public struct ResetAlarmTracker: Sendable {
             // was, so a rise only counts when this reading proves the end
             // held; an end that jumped forward is the resetAt-jump branch
             // above, and an unknown end says nothing and stays quiet.
+            // A real restore holds the end where it was:  not within a
+            // tolerance a rolling slide fits inside, but still — a five
+            // minute poll slides a rolling end about five minutes, so the
+            // held bar is one minute (sentry + kody, PR #378).
             let reportedEndHeld = observation.resetAt.map {
-                abs($0.timeIntervalSince(previousReset)) <= ResetAlarmPolicy.resetDriftTolerance
+                abs($0.timeIntervalSince(previousReset)) <= 60
             } ?? false
             if !isReset, !hasPassed, reportedEndHeld, let reading, let last = window.lastRemaining,
                reading >= ResetAlarmPolicy.courtesyRestoreFloor,
