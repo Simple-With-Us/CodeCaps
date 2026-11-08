@@ -830,22 +830,6 @@ final class MonitorModel: ObservableObject {
             now: now)
     }
 
-    /// The issues a row may show.
-    ///
-    /// A reader's own failure hides a row only while the provider has no
-    /// FRESH reading to show instead.  Antigravity's local reader needs a
-    /// running Antigravity language server, and when there was none the
-    /// reader failed and the row read "unavailable" while the fleet carried
-    /// a fresh reading for this same Mac, Argon included.  A stale reading is
-    /// not a substitute:  it keeps its own row's issue, so a provider that
-    /// stopped reporting still says so.
-    var rowIssues: [String: String] {
-        let fresh = Set(response.windows
-            .filter { QuotaWindowSnapshot(window: $0, now: now).isFresh }
-            .map(\.canonicalProviderKey))
-        return issues.filter { !fresh.contains($0.key) }
-    }
-
     var freshWindows: [QuotaWindowSnapshot] {
         let masked = maskedWindowIds
         let visible = sections.flatMap(\.windows).filter {
@@ -2648,8 +2632,14 @@ final class MonitorModel: ObservableObject {
     func updatePoolServedKeys(from windows: [QuotaWindow]) {
         var served: Set<String> = []
         for window in windows where UnifiedSubscriptionPool.participantKeys.contains(window.canonicalProviderKey) {
+            // The standing-in window has to be one the rows would actually
+            // draw:  a masked or disabled-source reading fills no meter, so
+            // it must not suppress the row's issue either, or the row would
+            // show neither data nor its error.
             guard window.boundedRemainingPercent != nil,
-                  QuotaWindowSnapshot(window: window, now: now).isFresh else { continue }
+                  QuotaWindowSnapshot(window: window, now: now).isFresh,
+                  !maskedWindowIds.contains(window.id),
+                  !disabledSources.contains(window.source ?? "") else { continue }
             served.insert(window.canonicalProviderKey)
         }
         poolServedKeys = served

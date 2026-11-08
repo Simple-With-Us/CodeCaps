@@ -56,6 +56,39 @@ final class FleetFallbackTests: XCTestCase {
         XCTAssertTrue(result.superseded.isEmpty)
     }
 
+    /// The comparison is per period, not per provider:  this Mac's fresh
+    /// five-hour reading must not hold back a newer weekly fleet reading, and
+    /// its stale weekly copy is superseded by that fleet weekly while the
+    /// five-hour one stays.
+    func testPeriodsAreComparedIndependently() {
+        let ownShort = window("own-5h", label: "Third-Party Models · 5-hour", token: "5h",
+                              occurredAt: "2026-11-06T13:48:06Z")
+        let ownWeekly = window("own-weekly", label: "Third-Party Models · 7-day", token: "7d",
+                               occurredAt: "2026-11-03T13:48:06Z")
+        let fleetShort = window("fleet-5h", label: "Third-Party 5-hour", token: "5h",
+                                occurredAt: "2026-11-05T13:48:06Z")
+        let fleetWeekly = window("fleet-weekly", label: "Third-Party weekly", token: "weekly",
+                                 occurredAt: "2026-11-04T17:39:07Z")
+        let result = QuotaLocalScope.fleetFallback(
+            fleet: [fleetShort, fleetWeekly], adopted: [ownShort, ownWeekly], localProviders: [])
+        XCTAssertEqual(Set(result.fallback.map(\.id)), ["fleet-weekly"])
+        XCTAssertEqual(result.superseded.map(\.id), ["own-weekly"])
+    }
+
+    /// Two windows whose periods do not resolve are not the same meter just
+    /// because neither resolves:  the fleet window of another period is
+    /// served and this Mac's own window of its period is not superseded.
+    func testUnresolvablePeriodsDoNotCollide() {
+        let own = window("own", label: "Odd period A", token: "19x",
+                         occurredAt: "2026-11-03T13:48:06Z")
+        let fleet = window("fleet", label: "Odd period B", token: "23x",
+                           occurredAt: "2026-11-04T17:39:07Z")
+        let result = QuotaLocalScope.fleetFallback(
+            fleet: [fleet], adopted: [own], localProviders: [])
+        XCTAssertEqual(result.fallback.map(\.id), ["fleet"])
+        XCTAssertTrue(result.superseded.isEmpty)
+    }
+
     /// This Mac's own push is the newer reading:  the fleet's copy is
     /// redundant and the rule does not change.
     func testTheNewerOwnPushKeepsTheRow() {

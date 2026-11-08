@@ -520,29 +520,38 @@ public enum QuotaLocalScope {
             // key nothing expects must not sprout a row.
             guard expectedKeys.contains(key), !localProviders.contains(key) else { continue }
             let own = adoptedByProvider[key] ?? []
-            let fleetNewest = windows.compactMap(\.occurredDate).max()
             // Only a reading claims the provider.  This Mac's own plan
             // details carry no reading, so they never stand in for one and
             // never hold the fleet's live reading out of the row.
             let ownReadings = own.filter(\.hasReading)
-            let ownNewest = ownReadings.compactMap(\.occurredDate).max()
-            guard let fleetNewest else {
-                // The fleet's windows carry no timestamp, so they cannot be
-                // shown to be newer than this Mac's own push.  A provider
-                // this Mac never published is still served by them.
-                if ownNewest == nil { fallback.append(contentsOf: windows) }
-                continue
-            }
-            if let ownNewest, ownNewest >= fleetNewest { continue }
-
-            fallback.append(contentsOf: windows)
-            for ownWindow in own {
-                guard ownWindow.hasReading, let ownDate = ownWindow.occurredDate else { continue }
-                let replaced = windows.contains { candidate in
-                    guard let candidateDate = candidate.occurredDate, candidateDate > ownDate else { return false }
-                    return periodKey(candidate) == periodKey(ownWindow)
+            // The comparison is per period, not per provider:  a fresh
+            // five-hour own reading must not hold back a newer weekly fleet
+            // reading, and a stale weekly own copy must not admit a weekly
+            // fleet window that is older than it.  The five-hour and weekly
+            // meters are read and judged on their own (per periodKey).
+            let ownByPeriod = Dictionary(grouping: ownReadings, by: Self.periodKey)
+            for (period, periodWindows) in Dictionary(grouping: windows, by: Self.periodKey) {
+                let fleetNewest = periodWindows.compactMap(\.occurredDate).max()
+                let ownNewest = ownByPeriod[period]?.compactMap(\.occurredDate).max()
+                guard let fleetNewest else {
+                    // The fleet's windows carry no timestamp, so they cannot
+                    // be shown to be newer than this Mac's own push.  A
+                    // period this Mac never published is still served by
+                    // them.
+                    if ownNewest == nil { fallback.append(contentsOf: periodWindows) }
+                    continue
                 }
-                if replaced { superseded.append(ownWindow) }
+                guard let ownNewest, ownNewest >= fleetNewest else {
+                    fallback.append(contentsOf: periodWindows)
+                    continue
+                }
+                // This Mac's own reading of the period is the newer one:  it
+                // keeps the row, and the fleet's copy of the same period is
+                // redundant.
+                for ownWindow in ownByPeriod[period] ?? [] {
+                    guard let ownDate = ownWindow.occurredDate, ownDate < fleetNewest else { continue }
+                    superseded.append(ownWindow)
+                }
             }
         }
         return (fallback, superseded)
@@ -553,7 +562,11 @@ public enum QuotaLocalScope {
     /// period.
     private static func periodKey(_ window: QuotaWindow) -> String {
         guard let seconds = ResetAlarmCadence.periodSeconds(token: window.window, label: window.label) else {
-            return "unknown"
+            // Two windows of unresolvable periods are not the same meter just
+            // because neither resolves:  carry a per-window identity, or
+            // unrelated periods would supersede each other and distinct
+            // periods would drop as duplicates.
+            return "unknown:\(window.window ?? "-")#\(window.label)"
         }
         return String(Int(seconds.rounded()))
     }

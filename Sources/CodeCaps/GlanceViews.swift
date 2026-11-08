@@ -1294,7 +1294,15 @@ func glanceMeterPair(for row: DisplaySection, now: Date) -> GlanceMeterPair {
             remainingPercent: snapshot.remainingPercent,
             resetAt: snapshot.resetAt,
             isShort: glanceCadence(snapshot, now: now) == .short,
-            isExcluded: false)
+            // The same exclusion predicates the companion and the widgets
+            // apply, so the phone can never show a meter this Mac hides and
+            // one rule decides every surface's two meters.
+            isExcluded: QuotaCapRule.isSupplementaryVideoQuota(
+                providerKey: row.providerKey, label: snapshot.window.label)
+                || QuotaCapRule.isScopedPoolAllowance(
+                    providerKey: row.providerKey, id: snapshot.window.id, label: snapshot.window.label)
+                || QuotaCapRule.isSubModelLimit(
+                    providerKey: row.providerKey, id: snapshot.window.id, label: snapshot.window.label))
     }
     let pair = QuotaWindowPairing.meterPair(meterCandidates) { candidate, other in
         guard let snapshot = eligible.first(where: { $0.window.id == candidate.id }),

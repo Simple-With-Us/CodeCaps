@@ -67,6 +67,20 @@ final class QuotaWindowPairingTests: XCTestCase {
         XCTAssertNil(pair.long)
     }
 
+    /// The short slot carries the long slot's guard:  a short pool with only
+    /// an empty window must not win the first slot with a dummy bar while an
+    /// informative candidate sits unused.
+    func testAnEmptyShortWindowDoesNotDisplaceAnInformativeCandidate() {
+        let pair = QuotaWindowPairing.meterPair([
+            candidate("plan", percent: nil, isShort: true),
+            candidate("7d", percent: 53, isShort: false),
+        ])
+        XCTAssertEqual(pair.short?.id, "7d",
+            "the short slot must fall back to the informative candidate")
+        XCTAssertNil(pair.long,
+            "there is no second informative meter, so the second slot stays empty")
+    }
+
     /// A window that reports no percentage never displaces one that does.
     func testAWindowWithoutAReadingNeverDisplacesOneWithAReading() {
         let pair = QuotaWindowPairing.meterPair([

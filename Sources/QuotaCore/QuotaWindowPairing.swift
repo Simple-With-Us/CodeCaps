@@ -94,7 +94,15 @@ public enum QuotaWindowPairing {
 
         let shortPool = eligible.filter(\.isShort)
         let longPool = eligible.filter { !$0.isShort }
-        let short = nearestToCap(shortPool) ?? nearestToCap(eligible) ?? anchor
+        // The short slot carries the long slot's guard:  an empty window says
+        // nothing, so an informative candidate anywhere beats a blank short
+        // bar, and a window with no reading and no reset never fills the
+        // first slot while a real one exists.
+        let short = nearestToCap(shortPool.filter(hasInformation))
+            ?? nearestToCap(eligible.filter(hasInformation))
+            ?? nearestToCap(shortPool)
+            ?? nearestToCap(eligible)
+            ?? anchor
         func distinct(_ candidate: MeterCandidate) -> Bool {
             guard candidate.id != short.id else { return false }
             guard let isSameMeter else { return true }
