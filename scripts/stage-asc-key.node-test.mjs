@@ -494,6 +494,10 @@ test('a reader that reports an unresolved reference is not read as a missing cre
     // nothing, and the exit code is what has to survive.
     process.env.FLEET_SECRETS = writeStubReader(dir, 5, 'fleet-secrets: unresolved-reference:  ASC_KEY_ID');
     const env = baseEnv(dir);
+    // The service-token guard reads the run's own environment:  without a
+    // token the reader is never asked and the error names the token, not the
+    // reference (PR #367 review).
+    env.INFISICAL_TOKEN = 'st.test.service';
     writeEnvEntry(env.GITHUB_ENV, 'ASC_KEY_P8', KEY);
     const realLines = [];
     await assert.rejects(
