@@ -735,16 +735,16 @@ final class ResetAlarmTrackerTests: XCTestCase {
         XCTAssertEqual(events.map(\.windowId), ["7d"])
     }
 
-    func testAShortJumpWithAClimbIsSilentUntilTheEndPasses() {
-        // The week is at 30% with 5 days left; the provider resets it and the
-        // new reset time is 7 days away, a move of 2 days, well under half a
+    func testAShortJumpWithAClimbIsSilentLikeARollingWindow() {
+        // The week is at 30% with 5 days left; the provider reports a new
+        // reset time 7 days away, a move of 2 days, well under half a
         // 7-day period.  Before the CC-215 safeguard a climb back to 100
         // settled it as an early reset, but that same short forward jump plus
         // a climb is how a rolling window ages across a long sleep, so the
-        // owner ruling of 2026-11-07 (#378) keeps it silent until the old end
-        // has actually passed (see testResetIsDetectedWhenTheOldResetPassedAndRemainingRoseWithoutANewResetTime
-        // and testAnEarlyResetByTheProviderStillCounts for the jumps that do
-        // still count).
+        // owner ruling of 2026-11-07 (#378) treats it as rolling.  The tracker
+        // adopts the reported end, so this covers only the silent observation;
+        // testAnEarlyResetByTheProviderStillCounts covers the jumps that do
+        // still count.
         var tracker = ResetAlarmTracker()
         _ = tracker.process(claude(at: t0, fiveResetAt: t0 + 4 * hour, five: 90,
                                    weekResetAt: t0 + 5 * day, week: 30), now: t0)
@@ -753,6 +753,8 @@ final class ResetAlarmTrackerTests: XCTestCase {
                                             weekResetAt: later + 7 * day, week: 100), now: later)
         XCTAssertTrue(events.isEmpty,
                       "a short forward jump plus a climb before the end is the rolling-window shape")
+        XCTAssertEqual(tracker.state.windows["local|anthropic|7d"]?.minimumRemaining, 30,
+                       "a rolling-window update keeps the current period's low-water mark")
     }
 
     func testAShortJumpWithoutAClimbIsStillJustADrift() {
