@@ -75,10 +75,13 @@ final class QuotaCardProjectionTests: XCTestCase {
         XCTAssertEqual(QuotaCardProjection.selectedPoolIndices(in: rows, poolKey: "gemini", now: now), [1])
     }
 
-    func testHealthyMuseWeeklyLeadsUntilItsAllowanceIsSpent() {
+    /// Main's reviewed headline rule (PR #376): a Muse Assist extra meter
+    /// with headroom headlines the card; the plan's spent window does not
+    /// out-shout it.
+    func testMuseAssistExtraHeadlinesWhileItHasRoom() {
         let weekly = CardHeadline.Reading(isMuseAssistExtra: false, isMasked: false, remainingPercent: 47)
         let extra = CardHeadline.Reading(isMuseAssistExtra: true, isMasked: false, remainingPercent: 81)
-        XCTAssertEqual(CardHeadline.percent([weekly, extra]), 47)
+        XCTAssertEqual(CardHeadline.percent([weekly, extra]), 81)
         XCTAssertEqual(CardHeadline.percent([.init(isMuseAssistExtra: false, isMasked: false, remainingPercent: 0), extra]), 81)
     }
 

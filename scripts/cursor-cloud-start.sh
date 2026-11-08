@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
 # Cursor cloud agent start for CodeCaps.
 #
-# Runs on every agent boot.  When the dashboard has injected the scoped
-# CodeCaps prod-root read service token, it reads the configured project and
-# exports the secret map for this repo to a 0600 file at
-# $HOME/.cursor-cloud-env/codecaps.env, plus a tiny
+# Runs on every agent boot.  When the dashboard has injected
+# INFISICAL_CLIENT_ID and INFISICAL_CLIENT_SECRET, logs into Infisical
+# universal auth and exports the dev-env secret map for this repo to a
+# 0600 file at $HOME/.cursor-cloud-env/codecaps.env, plus a tiny
 # codecaps.source.sh that future shells can `source` without printing.
 #
 # If the dashboard secrets are missing, prints the missing NAMES (never
 # values) and exits 0 so the agent boots cleanly.  Never prints a secret
 # value at any point.
 #
-# Uses the same direct service-token + raw-secrets API as
-# scripts/infisical-fetch.mjs, but the dotenv output here is the form a Linux
-# non-Apple script actually needs.
+# This boot path keeps its own universal-auth login.  CI uses scoped
+# service tokens in scripts/infisical-fetch.mjs, and this script does not
+# import it.  The dotenv output here is the form a Linux non-Apple script
+# actually needs.
 set -euo pipefail
 
 REPO_NAME="codecaps"
@@ -39,19 +40,19 @@ if [[ "${INFISICAL_ENV:-prod}" != "prod" ]]; then
   exit 0
 fi
 
-# 2.  Require the dashboard-injected project and service token by NAME only.
+# 2.  Require the dashboard-injected credentials by NAME only.
 MISSING=()
-[[ -z "${INFISICAL_PROJECT_ID:-}" ]] && MISSING+=("INFISICAL_PROJECT_ID")
-[[ -z "${INFISICAL_CODECAPS_PROD_ROOT_READ_SERVICE_TOKEN:-}" ]] \
-  && MISSING+=("INFISICAL_CODECAPS_PROD_ROOT_READ_SERVICE_TOKEN")
+[[ -z "${INFISICAL_CLIENT_ID:-}" ]]     && MISSING+=("INFISICAL_CLIENT_ID")
+[[ -z "${INFISICAL_CLIENT_SECRET:-}" ]] && MISSING+=("INFISICAL_CLIENT_SECRET")
 if (( ${#MISSING[@]} > 0 )); then
   echo "CodeCaps: skipping Infisical export.  Add the following names to the Cursor dashboard secrets: ${MISSING[*]}"
   exit 0
 fi
 
-# 3.  Fetch prod secrets with the scoped service token, then emit a dotenv
-#     file on stdout.  The script does not echo credentials or log response
-#     bodies.  Stderr only carries status.
+# 3.  Fetch the prod-env secrets with this script's own universal-auth
+#     login and raw-secrets read, then emit a dotenv file on stdout.  The
+#     script does not echo values and does not log the response body.
+#     Stderr only carries status.  It does not call scripts/infisical-fetch.mjs.
 mkdir -p "${ENV_DIR}"
 chmod 0700 "${ENV_DIR}"
 
@@ -62,17 +63,26 @@ if INFISICAL_SITE_URL="${INFISICAL_DOMAIN:-https://app.infisical.com}" \
    INFISICAL_PROJECT_ID="${INFISICAL_PROJECT_ID:-}" \
    INFISICAL_ENVIRONMENT="${INFISICAL_ENV:-prod}" \
    INFISICAL_SECRET_PATH="${INFISICAL_SECRET_PATH:-/}" \
-   INFISICAL_SERVICE_TOKEN="${INFISICAL_CODECAPS_PROD_ROOT_READ_SERVICE_TOKEN}" \
    node -e '
      const site = String(process.env.INFISICAL_SITE_URL || "").replace(/\/+$/, "");
      const projectId = process.env.INFISICAL_PROJECT_ID || "";
      const env = process.env.INFISICAL_ENVIRONMENT || "prod";
      const path = process.env.INFISICAL_SECRET_PATH || "/";
-     const token = process.env.INFISICAL_SERVICE_TOKEN || "";
+     const cid = process.env.INFISICAL_CLIENT_ID || "";
+     const cs  = process.env.INFISICAL_CLIENT_SECRET || "";
      const log = (m) => process.stderr.write(m + "\n");
-     if (!site || !projectId || !token.startsWith("st.")) { log("CodeCaps: Infisical service-token config invalid; skipping."); process.exit(0); }
+     if (!site || !projectId || !cid || !cs) { log("CodeCaps: Infisical config incomplete; skipping."); process.exit(0); }
      (async () => {
        try {
+         const lr = await fetch(site + "/api/v1/auth/universal-auth/login", {
+           method: "POST", headers: { "content-type": "application/json" },
+           body: JSON.stringify({ clientId: cid, clientSecret: cs }),
+           signal: AbortSignal.timeout(30000),
+         });
+         if (!lr.ok) { log("CodeCaps: Infisical login failed (HTTP " + lr.status + ")."); process.exit(0); }
+         const lb = await lr.json();
+         const token = lb && lb.accessToken;
+         if (!token) { log("CodeCaps: Infisical login returned no accessToken."); process.exit(0); }
          const qs = new URLSearchParams({
            workspaceId: projectId, environment: env, secretPath: path,
            viewSecretValue: "true", expandSecretReferences: "false", include_imports: "false",

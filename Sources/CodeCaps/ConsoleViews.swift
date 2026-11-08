@@ -690,7 +690,7 @@ struct ConsoleSidebar: View {
                     .foregroundStyle(Theme.accent)
                     .accessibilityLabel("Reset alarm on")
             }
-            if model.issues[row.providerKey] != nil {
+            if model.rowIssue(for: row.providerKey) != nil {
                 Image(systemName: "exclamationmark.circle")
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.warning)
@@ -898,7 +898,7 @@ struct AllPlatformsPage: View {
     private func card(_ row: DisplaySection, origin: QuotaOrigin) -> some View {
         PlatformCard(row: row,
                      now: model.now,
-                     issue: origin == .fleet ? nil : model.issues[row.providerKey],
+                     issue: origin == .fleet ? nil : model.rowIssue(for: row.providerKey),
                      compact: compact,
                      wide: false,
                      origin: origin,
@@ -946,7 +946,7 @@ struct PlatformDetailPage: View {
                 UsageHistoryView(model: model, state: state, row: row)
                 PlatformCard(row: row,
                              now: model.now,
-                             issue: model.issues[row.providerKey],
+                             issue: model.rowIssue(for: row.providerKey),
                              compact: false,
                              wide: true,
                              origin: model.originByProvider[row.providerKey] ?? .local,

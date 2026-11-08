@@ -14,7 +14,9 @@ final class ZCodeQuotaReaderTests: XCTestCase {
 
     private let customerJSON = #"{"code":200,"data":{"organizations":[{"organizationId":"o1","organizationName":"默认机构","projects":[{"projectId":"p1","projectName":"默认项目","projectType":1}]}]}}"#
     private let keysJSON = #"{"code":200,"data":[{"name":"zcode-api-key","apiKey":"key-id-1"}]}"#
-    private let mintJSON = #"{"code":200,"data":{"enable":true,"accessToken":"proj-tok","expiresAt":9999999999,"expiresIn":3600}}"#
+    // Live mint shape (z.ai, verified 2026-11-04): the flag is `enabled`,
+    // alongside accessToken, tokenType, expiresAt and expiresIn.
+    private let mintJSON = #"{"code":200,"data":{"accessToken":"proj-tok","enabled":true,"tokenType":"Bearer","expiresAt":9999999999,"expiresIn":3600}}"#
 
     private struct Stub {
         var quotaJSON: String
@@ -171,8 +173,30 @@ final class ZCodeQuotaReaderTests: XCTestCase {
     }
 
     func testDisabledTokenIsAnIssue() async {
-        let result = await read(Stub(quotaJSON: "{}", mintJSON: #"{"code":200,"data":{"enable":false}}"#))
+        // Live shape: `enabled` false and no token minted is the disabled
+        // account state.
+        let result = await read(Stub(quotaJSON: "{}", mintJSON: #"{"code":200,"data":{"enabled":false}}"#))
         XCTAssertEqual(result.issues["zcode"], "ZCode reports the coding-plan token disabled.")
+        let legacy = await read(Stub(quotaJSON: "{}", mintJSON: #"{"code":200,"data":{"enable":false}}"#))
+        XCTAssertEqual(legacy.issues["zcode"], "ZCode reports the coding-plan token disabled.", "the fixture-era `enable` spelling stays accepted")
+    }
+
+    func testEnabledFalseWithMintedTokenStillReadsQuota() async {
+        // Live-verified 2026-11-04: z.ai answers the mint with
+        // `enabled: false` and a token the quota endpoint accepts.  The flag
+        // must not veto a minted token.
+        let result = await read(Stub(
+            quotaJSON: #"{"code":200,"data":{"level":"lite","limits":[{"type":"CREDIT_LIMIT","unit":3,"number":5,"percentage":56,"currentValue":1120,"remaining":879,"usage":2000}]}}"#,
+            mintJSON: #"{"code":200,"data":{"accessToken":"proj-tok","enabled":false,"expiresIn":18000}}"#
+        ))
+        XCTAssertTrue(result.issues.isEmpty)
+        XCTAssertEqual(result.windows.count, 1)
+        XCTAssertEqual(result.windows[0].remainingPercent, 44)
+    }
+
+    func testMintWithoutTokenOrFlagIsMalformed() async {
+        let result = await read(Stub(quotaJSON: "{}", mintJSON: #"{"code":200,"data":{"unexpected":true}}"#))
+        XCTAssertEqual(result.issues["zcode"], "ZCode quota service is unavailable (accessTokens step: malformed response).")
     }
 
     func testMintKeyGoneIsAnIssue() async {
@@ -291,6 +315,33 @@ final class ZCodeQuotaReaderTests: XCTestCase {
         XCTAssertEqual(weekly.window, "weekly")
         XCTAssertEqual(weekly.remainingPercent, 10)
         XCTAssertEqual(weekly.status, .nearCap)
+    }
+
+    func testUsageFieldIsTheTrueWindowCap() async {
+        // Live payload (2026-11-04): usage is the cap, currentValue the
+        // consumed amount, remaining what is left.  The derived
+        // remaining + consumed cap loses a unit to server rounding.
+        let result = await read(Stub(quotaJSON: #"{"code":200,"data":{"level":"lite","limits":[{"type":"CREDIT_LIMIT","unit":3,"number":5,"percentage":56,"currentValue":1120,"remaining":879,"usage":2000,"nextResetTime":1793876117995},{"type":"CREDIT_LIMIT","unit":6,"number":1,"percentage":31,"currentValue":3128,"remaining":6871,"usage":10000,"nextResetTime":1794358975997}]}}"#))
+        XCTAssertTrue(result.issues.isEmpty)
+        XCTAssertEqual(result.windows.count, 2)
+        let fiveHour = result.windows[0]
+        XCTAssertEqual(fiveHour.label, "5-hour limit")
+        XCTAssertEqual(fiveHour.absoluteLimit, 2000)
+        XCTAssertEqual(fiveHour.absoluteRemaining, 879)
+        XCTAssertEqual(fiveHour.remainingPercent, 44)
+        XCTAssertEqual(fiveHour.quotaUnit, "credits")
+        XCTAssertEqual(fiveHour.planName, "GLM Coding Lite")
+        let weekly = result.windows[1]
+        XCTAssertEqual(weekly.label, "Weekly limit")
+        XCTAssertEqual(weekly.absoluteLimit, 10000)
+        XCTAssertEqual(weekly.absoluteRemaining, 6871)
+        XCTAssertEqual(weekly.remainingPercent, 69)
+    }
+
+    func testCapFallsBackToRemainingPlusUsedWithoutUsage() async {
+        let result = await read(Stub(quotaJSON: #"{"code":200,"data":{"level":"pro","limits":[{"type":"CREDIT_LIMIT","unit":3,"percentage":40,"currentValue":1000,"remaining":600}]}}"#))
+        XCTAssertEqual(result.windows[0].absoluteLimit, 1600)
+        XCTAssertEqual(result.windows[0].remainingPercent, 60)
     }
 
     func testTimeLimitIsTheMonthlyToolQuota() async {

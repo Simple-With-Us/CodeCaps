@@ -289,6 +289,7 @@ public enum ResetAlarmPolicy {
     /// `surgeMidWindow` rule already uses this shape, but only while the
     /// window's own end is still in the future, which is not the owner's case.
     public static let courtesyRestoreCeiling: Double = 80
+
     public static let courtesyRestoreFloor: Double = 95
     /// Windows and fires not seen for this long are forgotten.
     public static let retention: TimeInterval = 45 * 86_400
@@ -538,27 +539,59 @@ public struct ResetAlarmTracker: Sendable {
                     // window accepts a 28-to-31-day start advance per period;
                     // fixed cadences use drift tolerance.
                     let periods = (advance / period).rounded()
-                    guard periods >= 1 else { return true }
+                    // An unchanged or fractional start advance confirms
+                    // nothing:  only a whole period forward proves the
+                    // provider actually began a new period.
+                    guard periods >= 1 else { return false }
                     if (28 * 86_400...31 * 86_400).contains(period) {
                         return advance >= periods * 28 * 86_400 - tolerance && advance <= periods * 31 * 86_400 + tolerance
                     }
                     return abs(advance - periods * period) <= tolerance
                 }()
-                let preExpiryJumpThreshold = window.periodSeconds.map { period in
-                    max(ResetAlarmPolicy.resetDriftTolerance,
-                        period * ResetAlarmPolicy.earlyResetShareOfPeriod)
-                } ?? ResetAlarmPolicy.earlyResetUnknownPeriod
-                let requiredJump = hasPassed
+let required = hasPassed
                     ? ResetAlarmPolicy.resetDriftTolerance
-                    : preExpiryJumpThreshold
-                let strongQuotaRestore = reading.flatMap { current in
-                    window.lastRemaining.map { current >= $0 + ResetAlarmPolicy.vendorRestoreRise }
-                } ?? false
-                let substantialRiseWithShortPreExpiryJump = !hasPassed
-                    && jump > ResetAlarmPolicy.resetDriftTolerance && strongQuotaRestore
-                if (hasPassed && advancedFullCadence && explicitStartConfirmsPeriod)
-                    || (jump > requiredJump && climbed)
-                    || substantialRiseWithShortPreExpiryJump {
+                    : max(ResetAlarmPolicy.resetDriftTolerance,
+                          window.periodSeconds.map { $0 * ResetAlarmPolicy.earlyResetShareOfPeriod }
+                              ?? ResetAlarmPolicy.earlyResetUnknownPeriod)
+                // A mid-window reset must move the end decisively — past the
+                // period-share bound — and carry a quota climb.  A smaller
+                // forward move plus a climb is how a rolling window ages
+                // across a long gap (the Mac asleep, MiniMax's five-hour
+                // meter):  the end slides once by the whole gap and the
+                // percentage comes back with it.  A climb alone is never
+                // proof (CC-215, owner 2026-11-07: gradual rolling climbs are
+                // aging, not vendor resets), and a forward move alone is a
+                // stale-deadline correction, not a new period.
+                let climbConfirmed = jump > required && climbed
+                // A Mac asleep through several whole periods wakes to an end
+                // moved by a multiple of the cadence with no quota climb; the
+                // cadence move, confirmed by an advancing explicit start, is
+                // the rollover (lineage: whole-multiple periods missed).
+                let wholePeriodRollover = hasPassed && advancedFullCadence
+                    && explicitStartConfirmsPeriod
+                // A courtesy reset can move the end only a little while
+                // handing back nearly everything.  The near-full jump is the
+                // tell; a gradual rolling climb never reaches it in one poll.
+                let courtesyFullRollover = !hasPassed
+                    && jump > ResetAlarmPolicy.resetDriftTolerance
+                    && (reading.map { $0 >= 99.5 } ?? false)
+                    && (window.lastRemaining.map { $0 < 99.5 } ?? true)
+                // A short forward move that hands back a large share of the
+                // quota and lands near full is an early reset even under the
+                // period-share bound:  quota cannot legitimately rise that far
+                // inside one period.  A rolling window's gradual aging rises
+                // by a comparable amount but lands far from full, so the
+                // landing level, not the rise alone, separates the two.
+                let substantialRestore = !hasPassed
+                    && jump > ResetAlarmPolicy.resetDriftTolerance
+                    && (reading.flatMap { current in
+                            window.lastRemaining.map {
+                                current >= $0 + ResetAlarmPolicy.vendorRestoreRise
+                            }
+                        } ?? false)
+                    && (reading.map { $0 >= 90 } ?? false)
+                if climbConfirmed || wholePeriodRollover || courtesyFullRollover
+                    || substantialRestore {
                     isReset = true
                     // When the window had *not* reached its own scheduled end,
                     // any reset is an early / mid-cycle vendor restore rather than
@@ -630,7 +663,22 @@ public struct ResetAlarmTracker: Sendable {
             // the case that is otherwise invisible: quota restored *before* the
             // window was due to end, which no amount of near-cap reasoning can
             // distinguish from "nothing happened".
-            if !isReset, !hasPassed, let reading, let last = window.lastRemaining,
+            // A rolling window (MiniMax's five-hour and video meters) ages
+            // usage out, so its percentage climbs from spent towards full
+            // with the period end sliding ahead the whole way — no vendor
+            // did anything (CC-215, owner 2026-11-07: the false MiniMax
+            // vendor-reset alert).  A real restore holds the end where it
+            // was, so a rise only counts when this reading proves the end
+            // held; an end that jumped forward is the resetAt-jump branch
+            // above, and an unknown end says nothing and stays quiet.
+            // A real restore holds the end where it was:  not within a
+            // tolerance a rolling slide fits inside, but still — a five
+            // minute poll slides a rolling end about five minutes, so the
+            // held bar is one minute (sentry + kody, PR #378).
+            let reportedEndHeld = observation.resetAt.map {
+                abs($0.timeIntervalSince(previousReset)) <= 60
+            } ?? false
+            if !isReset, !hasPassed, reportedEndHeld, let reading, let last = window.lastRemaining,
                reading >= ResetAlarmPolicy.courtesyRestoreFloor,
                last <= ResetAlarmPolicy.courtesyRestoreCeiling {
                 isReset = true
@@ -645,9 +693,6 @@ public struct ResetAlarmTracker: Sendable {
             //  - the quota jumps to full from anything less.
             //  - the quota was nearly spent and is now nearly untouched.
             if !isReset, !hasPassed, let reading, let last = window.lastRemaining {
-                let jumpedToFull = reading >= 99.5
-                    && last <= 99.5 - ResetAlarmPolicy.riseEpsilon
-                let surgedMidWindow = last < 80.0 && reading >= 95.0
                 // "Held still" and "slid with the clock" are two separate
                 // questions, and asking them as two separate questions keeps
                 // the verdict independent of how often this Mac happens to
@@ -698,6 +743,13 @@ public struct ResetAlarmTracker: Sendable {
                     // still read as held still.
                     slidWithTheClock = (endMoved ?? 0) > 0
                 }
+                // All three carries share one evidence bar: a rise against
+                // an end that slid with the clock is the window rolling, not
+                // a restore (CC-215).  An unknown end cannot prove a restore.
+                let jumpedToFull = periodEndHeld && !slidWithTheClock
+                    && reading >= 99.5 && last <= 99.5 - ResetAlarmPolicy.riseEpsilon
+                let surgedMidWindow = periodEndHeld && !slidWithTheClock
+                    && last < 80.0 && reading >= 95.0
                 let quotaHandedBack = periodEndHeld && !slidWithTheClock
                     && reading >= last + ResetAlarmPolicy.vendorRestoreRise
                 if jumpedToFull || surgedMidWindow || quotaHandedBack {

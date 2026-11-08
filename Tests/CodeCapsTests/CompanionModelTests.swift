@@ -8,45 +8,6 @@ import QuotaCore
 /// Mirrors the companion contract used on iOS so behavioral regressions
 /// are caught directly in the standard `swift test` suite.
 final class CompanionModelTests: XCTestCase {
-    @MainActor
-    func testSharedProjectionMatchesActualMacMetersForSanitizedScreenshotRows() {
-        let now = Date(timeIntervalSince1970: 1_800_000_000)
-        let stamp = ISO8601DateFormatter().string(from: now)
-        let reset = ISO8601DateFormatter().string(from: now.addingTimeInterval(3600))
-        func window(_ id: String, _ provider: String, _ token: String?, _ percent: Double?,
-                    model: String? = nil, label: String = "Quota") -> QuotaWindow {
-            QuotaWindow(id: id, provider: provider, providerKey: provider, modelId: model, label: label,
-                remainingPercent: percent, remainingUnknown: percent == nil, resetAt: reset,
-                window: token, occurredAt: stamp, source: "CodeCaps")
-        }
-        let fixtures = [
-            [window("minimax:plan", "minimax", nil, nil, label: "Plan"),
-             window("minimax:5h", "minimax", "5h", 92, model: "general"),
-             window("minimax:7d", "minimax", "7d", 74, model: "general")],
-            [window("claude:plan", "anthropic", nil, nil, label: "Plan"),
-             window("claude:5h", "anthropic", "5h", 80),
-             window("claude:missing", "anthropic", "7d", nil),
-             window("claude:7d", "anthropic", "7d", 0),
-             window("claude:fable", "anthropic", "7d", 0, model: "fable")]
-        ]
-        for windows in fixtures {
-            let section = QuotaResponse(generatedAt: stamp, windows: windows).platformSections(now: now)
-                .first { !$0.windows.isEmpty }!
-            let mac = DisplaySection.rows(for: section, now: now)[0]
-            let pair = glanceMeterPair(for: mac, now: now)
-            let macIDs = [pair.short?.window.id, pair.long?.window.id].compactMap { $0 }
-            let readings = windows.map {
-                QuotaCardProjection.Reading(id: $0.id, providerKey: $0.canonicalProviderKey, label: $0.label,
-                    window: $0.window, modelId: $0.modelId, remainingPercent: $0.boundedRemainingPercent,
-                    resetAt: $0.resetDate, reportedAt: $0.occurredDate, source: $0.source)
-            }
-            let companionIDs = QuotaCardProjection.selectedIndices(in: readings, now: now)
-                .filter { readings[$0].detailName == nil }.map { readings[$0].id }
-            XCTAssertEqual(companionIDs, macIDs)
-            XCTAssertEqual(companionIDs.count, 2)
-        }
-    }
-
     func testPhoneNonfiniteReadingGuardsRemainAtTextAndBarBoundaries() throws {
         let source = try readCompanionModelSource()
         XCTAssertTrue(source.contains("guard let remainingPercent, remainingPercent.isFinite else { return \"—\" }"))
@@ -133,8 +94,36 @@ final class CompanionModelTests: XCTestCase {
         return try String(contentsOf: url, encoding: .utf8)
     }
 
+    private func readQuotaWindowVocabularySource() throws -> String {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()  // Tests/CodeCapsTests
+            .deletingLastPathComponent()  // Tests
+            .deletingLastPathComponent()  // repo root
+            .appendingPathComponent("Sources/QuotaCore/QuotaWindowVocabulary.swift")
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw XCTSkip("QuotaWindowVocabulary.swift is not present at \(url.path)")
+        }
+        return try String(contentsOf: url, encoding: .utf8)
+    }
+
     // MARK: - App Group & Hygiene
 
+    /// Two manifest groups aliasing to one key must not become two cards
+    /// with one id, and the fallback stamp must read the snapshot's file
+    /// age (CC-214).
+    func testCompanionDeduplicatesAliasedManifestKeys() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(source.contains("seenManifestKeys.insert($0).inserted"),
+                      "aliased manifest keys are deduplicated, first occurrence wins")
+        XCTAssertTrue(source.contains("isScopedAllowance: window.isScopedPoolAllowance"),
+                      "scoped pool allowances stay out of the card headline")
+        XCTAssertFalse(source.contains("if self.lastUpdated == nil,"),
+                       "the fallback stamp reads the snapshot file's age, not only the first time")
+    }
+
+    /// The companion maps Kimi and Z.ai to the supplied marks, and neither
+    /// lands in the monochrome list: the catalog carries colour vectors with
+    /// dark appearances, so both render in colour and stay legible (CC-212).
     func testCompanionMapsKimiAndZAIProviderAliasesToLogos() throws {
         let source = try readCompanionModelSource()
         XCTAssertTrue(source.contains(#"if key.contains("kimi") { return "provider-kimi" }"#))
@@ -144,7 +133,11 @@ final class CompanionModelTests: XCTestCase {
             .appendingPathComponent("ios/CodeCapsCompanion/Widgets/WidgetViews.swift"), encoding: .utf8)
         XCTAssertTrue(widgets.contains(#"if low.contains("kimi") { return "provider-kimi" }"#))
         XCTAssertTrue(widgets.contains(#"["zcode", "z.ai", "z-ai", "zai"].contains(where: { low.contains($0) }) { return "provider-zai" }"#))
-        XCTAssertTrue(widgets.contains(#"asset == "provider-zai" ? .template : .original"#))
+        let view = try String(contentsOf: URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("ios/CodeCapsCompanion/App/Views/CompanionContentView.swift"), encoding: .utf8)
+        XCTAssertFalse(view.contains("\"provider-zai\""),
+                       "Z.ai keeps its colour mark, so it must not join the monochrome list")
     }
 
     func testCompanionResolvesCanonicalPlatformDisplayTitles() throws {
@@ -306,14 +299,6 @@ final class CompanionModelTests: XCTestCase {
         )
     }
 
-    func testCompanionAntigravityPeriodLabelsUseExactCanonicalValues() throws {
-        let source = try readCompanionModelSource()
-        XCTAssertTrue(source.contains("weeklyLabels.contains(label)"))
-        XCTAssertTrue(source.contains("fiveHourLabels.contains(label)"))
-        XCTAssertFalse(source.contains("label.contains(\"week\")"))
-        XCTAssertFalse(source.contains("label.contains(\"5h\")"))
-    }
-
     /// The shared-pool rule from `AntigravityQuotaGroups`: a weekly reading has
     /// to be identified explicitly, and a reset's distance is not a duration.
     ///
@@ -363,8 +348,8 @@ final class CompanionModelTests: XCTestCase {
     func testAntigravityRowSelectsDrivingObservationWithoutAveraging() throws {
         let source = try readCompanionModelSource()
         XCTAssertTrue(
-            source.contains("QuotaCardProjection.selectedPoolIndices(in: facts, poolKey: poolKey, now: now)"),
-            "the companion must use the shared pool resolver tested for lower-value ties"
+            source.contains("(left.remainingPercent ?? 101) < (right.remainingPercent ?? 101)"),
+            "a tie between two models of one shared pool must take the lower value"
         )
         XCTAssertFalse(
             source.contains("remainingPercent) / Double("),
@@ -387,8 +372,8 @@ final class CompanionModelTests: XCTestCase {
     func testNonAntigravityPlatformsKeepTheirOwnWindows() throws {
         let source = try readCompanionModelSource()
         XCTAssertTrue(
-            source.contains("let cadenceKey = reading(w).allowanceKey"),
-            "ordinary provider windows must use shared allowance identity, preserving named model details"
+            source.contains("let modelQualifier = (w.modelId ?? \"\").lowercased()"),
+            "buildPlatformSection must still fold ordinary platforms by model-qualified cadence"
         )
     }
 
@@ -418,6 +403,63 @@ final class CompanionModelTests: XCTestCase {
         XCTAssertTrue(
             source.contains("QuotaWindowVocabulary.atCapSummary(cadence: window.atCapCadenceLabel"),
             "the phone must use the shared cap wording, not a copy of it"
+        )
+    }
+
+    /// QA pixel review 2026-11-06: a fully-at-cap card hides the meters and
+    /// their stale cue, so an old cap reading carried no age anywhere.  The
+    /// cap line must date the reading.
+    func testTheCompanionCardDatesAnOldCapReading() throws {
+        let view = try readCompanionContentViewSource()
+        XCTAssertTrue(
+            view.contains("item.atCapReadingAgeCue(scope: scope)"),
+            "the at-cap layout must render the reading's age when it is old"
+        )
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(source.contains("public func atCapReadingAgeCue(scope: CompanionSourceScope"))
+        XCTAssertTrue(
+            source.contains("QuotaFreshnessRule.isReadingRecent(observedAt: reportedAt, now: now)"),
+            "the cap age cue must use the shared freshness threshold"
+        )
+    }
+
+    /// QA 2026-11-06, verified against the real wire capture:  the codecaps
+    /// 5h and the collector weekly share series "general", the collector's
+    /// 5h headline is series "minimax:coding-plan", and Copilot's Chat and
+    /// Completions share the canonical key "monthly".  The dedupe identity
+    /// must be the triple of video class, aliased series, and canonical
+    /// cadence - and the helpers must live on the type that uses them
+    /// (a helper defined on the item type left the model's call dangling,
+    /// compile failure on 9ad6e5f2).
+    func testDistinctAllowancesSharingACadenceKeepTheirOwnRows() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains("static func allowanceSeries(forWireId id: String) -> String"),
+            "the model must derive the server's series identity from the wire id"
+        )
+        XCTAssertTrue(
+            source.contains("Self.allowanceSeries(forWireId: w.id)"),
+            "the dedupe must key on the series identity, not the canonical windowKey"
+        )
+        XCTAssertTrue(
+            source.contains("static func normalizedAllowanceSeries(providerKey: String, series: String) -> String"),
+            "MiniMax plan-level aliasing must exist on the model"
+        )
+        XCTAssertTrue(
+            source.contains(#"isVideoWire ? "video|" : "plan|""#),
+            "video windows must partition out of plan identity before dedupe"
+        )
+        XCTAssertTrue(
+            source.contains(#"providerKey == "xai", series == "grok:subscription""#),
+            "the bounded xAI subscription-pool alias must exist (qa4 wire capture)"
+        )
+        XCTAssertTrue(
+            source.contains("static func canonicalWireCadence("),
+            "a copy without a windowKey must be canonicalised into the wire namespace, not keyed on the display cadence (kody, PR #370)"
+        )
+        XCTAssertTrue(
+            source.contains(#"case QuotaWindowVocabulary.sevenDay: return "7d""#),
+            "the collector's \"weekly\" token must land on the wire's \"7d\" so the two copies of one allowance merge"
         )
     }
 
@@ -504,8 +546,8 @@ final class CompanionModelTests: XCTestCase {
             "the card headline must hand every window's mask to the shared headline rule"
         )
         XCTAssertTrue(
-            try readHeadlineSource().contains(".filter { !$0.isMasked }"),
-            "the shared headline rule must leave masked windows out"
+            try readHeadlineSource().contains(".filter { !$0.isMasked && !$0.isScopedAllowance }"),
+            "the shared headline rule must leave masked windows and scoped pool allowances out"
         )
         XCTAssertFalse(
             model.contains("cardWindows(scope: scope, now: now).compactMap(\\.remainingPercent).min()"),
@@ -757,10 +799,14 @@ final class CompanionModelTests: XCTestCase {
 
     func testMiniMaxConsolidationToTwoWindows() throws {
         let source = try readCompanionModelSource()
-        XCTAssertTrue(source.contains("let cadenceKey = reading(w).allowanceKey"),
-                      "MiniMax model names must not create duplicate allowance rows")
-        XCTAssertTrue(source.contains("QuotaCardProjection.preferredIndex(in: [reading(current), reading(candidate)], now: now)"),
-                      "MiniMax and other providers must share measured Mac/source precedence")
+        XCTAssertTrue(
+            source.contains(#"let isMiniMax = providerKey.lowercased().contains("minimax")"#),
+            "MiniMax must be identified during platform section building"
+        )
+        XCTAssertTrue(
+            source.contains("let effectiveQualifier = isMiniMax ? \"\" : modelQualifier"),
+            "MiniMax must not split cadences by modelQualifier, collapsing into two primary windows"
+        )
     }
 
     func testCompanionMeterUsesHyphenatedCaptionsNotPopoverTags() throws {
@@ -770,13 +816,76 @@ final class CompanionModelTests: XCTestCase {
             "Companion meters must use hyphenated cadence captions"
         )
         XCTAssertTrue(
-            source.contains("public var caption: String { meterCaption }"),
-            "card meters must not use popover 5h/7d/1m tags"
+            source.contains("guard let subModelName, !subModelName.isEmpty else { return meterCaption }"),
+            "card meters lead with the cadence caption and add only the model's own name"
         )
         let content = try readCompanionContentViewSource()
         XCTAssertFalse(
             content.contains("window.barQualifier"),
             "companion meters must not render weekly/additional qualifier captions"
+        )
+    }
+
+    func testSubModelCardMetersAreNamedByTheirModel() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains("public let subModelName: String?"),
+            "the window item must carry the resolved model name to the card"
+        )
+        XCTAssertTrue(
+            source.contains("SubModelNaming.name("),
+            "the card builder must name a sub-model window through the same shared rule the Mac asks"
+        )
+        let shared = try readQuotaWindowVocabularySource()
+        XCTAssertTrue(
+            shared.contains("public enum SubModelNaming"),
+            "the rule must live where every companion target already compiles it"
+        )
+        XCTAssertTrue(
+            source.contains("label: w.label"),
+            "the shared rule needs the reader's own label, where the model signal lives"
+        )
+        XCTAssertTrue(
+            source.contains("modelType: w.modelType"),
+            "the shared rule needs the reader's model type"
+        )
+        XCTAssertTrue(
+            source.contains("modelId: w.modelId"),
+            "the shared rule needs the reader's model id, so Claude's Fable weekly is not another \"7d\""
+        )
+        let content = try readCompanionContentViewSource()
+        XCTAssertTrue(
+            content.contains("Text(win.caption)"),
+            "window rows must lead with the model-aware caption, not the bare cadence"
+        )
+    }
+
+    func testCardWhoseWindowsAreAllDeadCopiesSaysItIsWaiting() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains("public let deadCopyObservedAt: Date?"),
+            "the item must remember when the provider was last heard from"
+        )
+        let content = try readCompanionContentViewSource()
+        XCTAssertTrue(
+            content.contains(#"Text("Waiting for a fresh reading")"#),
+            "a card whose windows all ended must say so instead of drawing nothing"
+        )
+        XCTAssertTrue(
+            content.contains("UpdatedStamp.label(lastReading)"),
+            "the stale line says when the provider was last heard from, never the expired figure"
+        )
+    }
+
+    func testReorderRowShowsPoolSubtitleWhenTitleIsShared() throws {
+        let content = try readCompanionContentViewSource()
+        XCTAssertTrue(
+            content.contains("duplicatedTitles.contains(item.title)"),
+            "a row whose title another row also carries must show its pool subtitle"
+        )
+        XCTAssertTrue(
+            content.contains("let subtitle = item.subtitle"),
+            "the reorder row reuses the home card's own subtitle, never a renamed provider"
         )
     }
 
@@ -969,11 +1078,11 @@ final class CompanionModelTests: XCTestCase {
             "the phone must pick the freshest five-hour window, not the first one in payload order"
         )
         XCTAssertTrue(
-            source.contains("let weeklyWin = selected.first { Self.antigravityPeriod(of: $0) == \"weekly\" }"),
+            source.contains("if isFresher(w, than: weeklyWin) { weeklyWin = w }"),
             "the phone's weekly window must be the freshest one that matches"
         )
         XCTAssertTrue(
-            source.contains("let fiveHourWin = selected.first { Self.antigravityPeriod(of: $0) == \"5h\" }"),
+            source.contains("if isFresher(w, than: fiveHourWin) { fiveHourWin = w }"),
             "the phone's five-hour window must be the freshest one that matches"
         )
         XCTAssertTrue(

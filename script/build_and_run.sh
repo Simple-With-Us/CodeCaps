@@ -2,7 +2,7 @@
 set -euo pipefail
 
 MODE="${1:-run}"
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PACKAGE_DIR="$ROOT_DIR"
 DIST_DIR="$PACKAGE_DIR/dist"
 APP_NAME="CodeCaps"
@@ -28,6 +28,7 @@ ICON_MAKER="$ROOT_DIR/script/make_icon.swift"
 ICON_FILE="AppIcon.icns"
 INSTALL_DIR="$HOME/Applications"
 INSTALLED_APP="$INSTALL_DIR/$APP_NAME.app"
+VERSION_FILE="$ROOT_DIR/VERSION"
 ZIP_FILE="$DIST_DIR/$APP_NAME.zip"
 DMG_FILE="$DIST_DIR/$APP_NAME.dmg"
 NOTARY_PROFILE="${CODECAPS_NOTARY_PROFILE:-${AGENTBAR_NOTARY_PROFILE:-agentbar-notary}}"
@@ -71,6 +72,11 @@ usage() {
   cat >&2 <<'USAGE'
 usage: script/build_and_run.sh [mode]
 
+  Release numbers fail closed: both CFBundleVersion and the commit count in
+  CFBundleShortVersionString come from `git rev-list --count HEAD`, and a
+  shallow or non-Git checkout stops the build with an error instead of
+  shipping a guessed version.  Fetch full history (fetch-depth: 0) first.
+
   run            (default) build, install to ~/Applications, relaunch it, then
                  delete the dist staging bundle and Trash every other copy
   --install      the same without relaunching
@@ -111,10 +117,10 @@ usage: script/build_and_run.sh [mode]
   --package also signs with the hardened runtime and a secure timestamp and
   prints the notarytool command; --release is the mode that actually notarizes.
 
-  Versions: release builds use the fixed marketing version from the iOS app
-  registry, preserving a higher released App Store version when ASC reports one.  CFBundleVersion comes from the shared iOS/Mac planner as a 12-digit Chicago
-  merge timestamp, raised above every existing app and Sparkle build.  A release
-  fails closed when ASC or the paired Sparkle build inventory cannot be read.  Local non-release builds use the commit's Chicago timestamp and registry version.
+  Versions: CFBundleShortVersionString is unified as <prefix>.<commit_count>
+  per fleet standard (prefix from VERSION file, default 1.0; commit count from
+  `git rev-list --count HEAD`).  CFBundleVersion is `git rev-list --count HEAD`,
+  giving macOS and iOS the identical monotonic build number.
 
   Auto-update: Sparkle.framework is embedded in Contents/Frameworks and signed
   inside-out.  A build with the release identifier carries the update feed and
@@ -440,39 +446,61 @@ sign_app_bundle() {
   fi
 }
 
-VERSION_PLAN_READY=0
-BUILD_MARKETING_VERSION=""
-BUILD_BUNDLE_VERSION=""
-
-prepare_build_versions() {
-  [[ "$VERSION_PLAN_READY" -eq 1 ]] && return 0
-  local mode="offline" plan_output
-  [[ "$MODE" != "--release" ]] || mode="release"
-  if ! command -v node >/dev/null 2>&1; then
-    echo "error: Node.js is required to plan CodeCaps build versions." >&2
-    return 1
-  fi
-  if ! plan_output="$(node "$ROOT_DIR/scripts/mac-release-version.mjs" "$mode" "$ROOT_DIR")"; then
-    echo "error: CodeCaps build version plan is unavailable; no bundle was built." >&2
-    return 1
-  fi
-  IFS=$'\t' read -r BUILD_MARKETING_VERSION BUILD_BUNDLE_VERSION <<< "$plan_output"
-  if [[ ! "$BUILD_MARKETING_VERSION" =~ ^[0-9]+(\.[0-9]+){0,2}$ \
-        || ! "$BUILD_BUNDLE_VERSION" =~ ^[1-9][0-9]{11}$ ]]; then
-    echo "error: CodeCaps build version planner returned invalid metadata." >&2
-    return 1
-  fi
-  VERSION_PLAN_READY=1
-}
-
+# The marketing version is unified as <prefix>.<commit_count> per fleet standard,
+# where prefix is drawn from the VERSION file (defaulting to 1.0) and commit count
+# is monotonic across all git commits.  Both numbers fail closed: a shallow or
+# unreadable history is an error, never a guessed build number.
 short_version() {
-  prepare_build_versions || exit 1
-  printf '%s\n' "$BUILD_MARKETING_VERSION"
+  local version=""
+  [[ ! -f "$VERSION_FILE" ]] || version="$(/usr/bin/sed -e 's/[[:space:]]//g' -e '/^$/d' "$VERSION_FILE" | /usr/bin/head -n 1)"
+  local prefix="${version:-1.0}"
+  prefix="$(printf '%s' "$prefix" | /usr/bin/awk -F. '{ if (NF >= 2) print $1"."$2; else print $1".0" }')"
+  local count="${1:-}"
+  if [[ -z "$count" ]]; then
+    count="$(bundle_version)" || return 1
+  fi
+  printf '%s.%s\n' "$prefix" "$count"
 }
 
 bundle_version() {
-  prepare_build_versions || exit 1
-  printf '%s\n' "$BUILD_BUNDLE_VERSION"
+  local shallow count
+  shallow="$(/usr/bin/git -C "$ROOT_DIR" rev-parse --is-shallow-repository 2>/dev/null)" || {
+    echo "error: cannot inspect git history at $ROOT_DIR; refusing to guess a release number." >&2
+    return 1
+  }
+  if [[ "$shallow" != "false" ]]; then
+    echo "error: shallow git history at $ROOT_DIR; fetch full history before building." >&2
+    return 1
+  fi
+  count="$(/usr/bin/git -C "$ROOT_DIR" rev-list --count HEAD 2>/dev/null)" || {
+    echo "error: cannot count git commits at $ROOT_DIR; refusing to guess a release number." >&2
+    return 1
+  }
+  if [[ ! "$count" =~ ^[1-9][0-9]*$ ]]; then
+    echo "error: git commit count is not a positive integer; refusing to build." >&2
+    return 1
+  fi
+  printf '%s\n' "$count"
+}
+
+# A command substitution that fails inside a here-document is masked by
+# `set -e`, so the plist could ship with blank version keys.  Resolve both
+# numbers once, with an explicit error, and expand the captured values later.
+RELEASE_SHORT_VERSION=""
+RELEASE_BUILD_VERSION=""
+
+resolve_release_numbers() {
+  local short build
+  # Resolve the commit count once so the marketing version and the build
+  # number can never disagree when HEAD moves between calls.
+  build="$(bundle_version)" || { echo "error: cannot resolve the $APP_NAME build number; refusing to build." >&2; return 1; }
+  short="$(short_version "$build")" || { echo "error: cannot resolve the $APP_NAME release number; refusing to build." >&2; return 1; }
+  if [[ -z "$short" || -z "$build" ]]; then
+    echo "error: the $APP_NAME release numbers are empty; refusing to build." >&2
+    return 1
+  fi
+  RELEASE_SHORT_VERSION="$short"
+  RELEASE_BUILD_VERSION="$build"
 }
 
 bundle_identifier() {
@@ -541,7 +569,7 @@ assert_resource_bundle_reachable() {
 }
 
 build_and_stage() {
-  prepare_build_versions || exit 1
+  resolve_release_numbers || exit 1
   local arch_flags=()
   if [[ "$UNIVERSAL" == "1" ]]; then
     local arch
@@ -604,9 +632,9 @@ build_and_stage() {
   <key>CFBundleIconFile</key>
   <string>$ICON_FILE</string>
   <key>CFBundleShortVersionString</key>
-  <string>$(short_version)</string>
+  <string>$RELEASE_SHORT_VERSION</string>
   <key>CFBundleVersion</key>
-  <string>$(bundle_version)</string>
+  <string>$RELEASE_BUILD_VERSION</string>
   <key>CFBundleIdentifier</key>
   <string>$BUNDLE_ID</string>
   <key>CFBundleName</key>
@@ -819,7 +847,7 @@ release_dist() {
   echo "Release artifacts in $DIST_DIR"
   echo "  $APP_NAME.zip  $zip_sha"
   echo "  $APP_NAME.dmg  $dmg_sha"
-  echo "  version $(short_version) (build $(bundle_version))"
+  echo "  version $RELEASE_SHORT_VERSION (build $RELEASE_BUILD_VERSION)"
 }
 
 case "$MODE" in

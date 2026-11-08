@@ -15,25 +15,21 @@ name: iOS TestFlight ship (GitHub-hosted macOS)
 # never the owned Mac, which runs a beta that App Store review rejects as
 # INVALID_BINARY).
 #
-# Credentials:
-#   * App Store Connect key (ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8) comes from
-#     Fleet-OPS Infisical prod /asc, the fleet's single copy (owner ruling
-#     2026-10-17: usable by any app), exactly as Congress.Trade and
-#     Usage-Monitor read it.  The same-named repository secrets are a stale
-#     copy that App Store Connect answers with HTTP 401 (CC-163), so they are
-#     deliberately not read here and there is no fallback to them.
-#   * The multiline key never enters the step environment.
-#     The tooling and scripts/stage-asc-key.mjs run in one step, so the key
-#     goes from the fleet's reader straight into a mode-600 file, and only
-#     that file's path and the two identifiers cross a step boundary.
+# Credentials (names only; no value is ever printed):
+#   * INFISICAL_ASC_READ_TOKEN reads Fleet-OPS prod /asc (ASC_KEY_ID,
+#     ASC_ISSUER_ID, ASC_KEY_P8).  The same-named repository secrets are a
+#     stale copy that App Store Connect answers with HTTP 401 (CC-163), so
+#     they are not read and there is no fallback to them.  asc-mode stages
+#     the private key to a mode-600 file.  Only ASC_KEY_PATH and the two
+#     identifiers cross a step boundary.
 #   * IOS_DIST_P12_BASE64 / IOS_DIST_P12_PASSWORD (Apple Distribution identity)
 #     stay repository secrets.
-#   * SENTRY_DSN and SENTRY_AUTH_TOKEN are best-effort: an inert Sentry beats a
-#     red TestFlight ship.  Infisical prod first, same-named GitHub secrets as
-#     fallback.  SENTRY_DSN_CODECAPS (the DSN of Sentry project `codecaps`)
-#     replaces the shared fleet SENTRY_DSN for this app; a missing one falls
-#     back to the shared key and turns the run red.
-#   Values are never printed.
+#   * INFISICAL_CODECAPS_READ_TOKEN reads the CodeCaps Infisical project
+#     (prod /) for SENTRY_DSN and SENTRY_AUTH_TOKEN.  The project's SENTRY_DSN
+#     is the codecaps DSN.  Same-named repository secrets are the fetch
+#     fallbacks.  SENTRY_DSN_CODECAPS stays an explicit fallback for the app
+#     DSN; a missing codecaps DSN falls back to the shared fleet DSN and turns
+#     the run red.  An inert Sentry still beats a missed TestFlight ship.
 #
 # scripts/ios-appstore-gm-prepare.sh imports the Distribution identity (the job
 # environment carries ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_PATH to the ship step).  IOS_MANUAL_SIGN=1 signs Release with the
@@ -84,7 +80,6 @@ on:
       - '.github/workflows/ios-ship.yml'
       - '.github/actions/infisical-secrets/**'
       - 'scripts/infisical-fetch.mjs'
-      - 'scripts/install-release-secrets-tooling.sh'
       - 'scripts/stage-asc-key*'
       - 'scripts/ios-fleet/**'
       - '!scripts/ios-fleet/test-*.sh'
@@ -224,47 +219,59 @@ jobs:
             brew install xcodegen
           fi
 
+      # CodeCaps project prod /.  SENTRY_DSN there is the codecaps DSN.
+      # GH_FALLBACK_SENTRY_DSN_CODECAPS is not an Infisical name (that key
+      # lived in Fleet-OPS prod /, which this token does not read).  The next
+      # step applies the repository secret as the explicit fallback.
+      #
+      # The load is optional-only:  no name is required, so a scope or
+      # project-id mismatch warns and the repository secrets answer instead
+      # of failing the ship.  INFISICAL_PROJECT_ID is the CodeCaps project
+      # id, the one INFISICAL_CODECAPS_READ_TOKEN is scoped to.
       - name: Load Sentry ship secrets (Infisical, then repository secrets)
         uses: ./.github/actions/infisical-secrets
         with:
-          names: SENTRY_DSN SENTRY_DSN_CODECAPS SENTRY_AUTH_TOKEN SENTRY_AUTH_TOKEN_FULLSCOPE
-          project-id: ${{ secrets.INFISICAL_FLEET_OPS_PROJECT_ID }}
-          secret-path: /
-          service-token: ${{ secrets.INFISICAL_CODECAPS_CI_READ_SERVICE_TOKEN }}
+          names: SENTRY_DSN SENTRY_AUTH_TOKEN
+          project-id: ${{ secrets.INFISICAL_PROJECT_ID }}
+          service-token: ${{ secrets.INFISICAL_CODECAPS_READ_TOKEN }}
         env:
           GH_FALLBACK_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
-          GH_FALLBACK_SENTRY_DSN_CODECAPS: ${{ secrets.SENTRY_DSN_CODECAPS }}
           GH_FALLBACK_SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-          GH_FALLBACK_SENTRY_AUTH_TOKEN_FULLSCOPE: ${{ secrets.SENTRY_AUTH_TOKEN_FULLSCOPE }}
+          GH_FALLBACK_SENTRY_DSN_CODECAPS: ${{ secrets.SENTRY_DSN_CODECAPS }}
 
-      # CodeCaps iOS reports into its own Sentry project, `codecaps`
-      # (4512207409840129), not into the project the shared fleet SENTRY_DSN
-      # names (`botfleet` since 2026-10-22).  SENTRY_DSN_CODECAPS is that
-      # project's DSN; this step makes it the SENTRY_DSN the archive and the
-      # ship script see, so the events, the dSYMs and the Size Analysis build
-      # all land in `codecaps`.
+      # CodeCaps iOS reports into Sentry project `codecaps`
+      # (4512207409840129).  The CodeCaps project SENTRY_DSN is that DSN.
+      # When the vault value is empty the fetch fills SENTRY_DSN from
+      # GH_FALLBACK_SENTRY_DSN, the shared fleet DSN (`botfleet`).  The
+      # repository secret SENTRY_DSN_CODECAPS is the explicit codecaps
+      # fallback and wins over that shared value.
       #
-      # A missing SENTRY_DSN_CODECAPS falls back to the shared SENTRY_DSN,
-      # LOUDLY:  an ::error:: annotation plus a note in RUNNER_TEMP that the
-      # Sentry status step reads, so the last step turns the run red.  The
-      # note is never written into the checkout:  the ship script refuses a
-      # dirty worktree, and an untracked file there would stop the ship.  It never blocks the
-      # TestFlight upload (an inert or misrouted Sentry beats a missed ship),
-      # and it never stays green while crashes go to the wrong project.
-      # The value is masked by the fetch above and is never printed here.
+      # A missing codecaps DSN falls back to the shared SENTRY_DSN, LOUDLY:
+      # an ::error:: annotation plus a note in RUNNER_TEMP that the Sentry
+      # status step reads, so the last step turns the run red.  The note is
+      # never written into the checkout: the ship script refuses a dirty
+      # worktree.  It never blocks the TestFlight upload, and it never stays
+      # green while crashes go to the wrong project.  The value is never
+      # printed here.
       - name: Use the CodeCaps Sentry DSN
+        env:
+          SENTRY_DSN_CODECAPS: ${{ secrets.SENTRY_DSN_CODECAPS }}
+          SHARED_FLEET_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
         run: |
           set +o xtrace
           set -euo pipefail
-          if [ -n "${SENTRY_DSN_CODECAPS:-}" ]; then
+          vault_dsn="${SENTRY_DSN:-}"
+          if [ -n "$vault_dsn" ] && [ "$vault_dsn" != "${SHARED_FLEET_SENTRY_DSN:-}" ]; then
+            echo "SENTRY_DSN comes from the CodeCaps Infisical project (Sentry project codecaps)."
+          elif [ -n "${SENTRY_DSN_CODECAPS:-}" ]; then
             {
               echo "SENTRY_DSN<<SENTRY_DSN_CODECAPS_EOF"
               printf '%s\n' "$SENTRY_DSN_CODECAPS"
               echo "SENTRY_DSN_CODECAPS_EOF"
             } >>"$GITHUB_ENV"
-            echo "SENTRY_DSN now comes from SENTRY_DSN_CODECAPS (Sentry project codecaps)."
+            echo "SENTRY_DSN now comes from the repository secret SENTRY_DSN_CODECAPS (Sentry project codecaps)."
           else
-            msg="SENTRY_DSN_CODECAPS is missing from Infisical Fleet-OPS prod / and from the repository secrets, so this build falls back to the shared fleet SENTRY_DSN and its crashes do not land in the codecaps project.  Set SENTRY_DSN_CODECAPS to the DSN of Sentry project codecaps."
+            msg="SENTRY_DSN is missing from the CodeCaps Infisical project prod / and SENTRY_DSN_CODECAPS is missing from the repository secrets, so this build falls back to the shared fleet SENTRY_DSN and its crashes do not land in the codecaps project.  Set SENTRY_DSN_CODECAPS to the DSN of Sentry project codecaps."
             echo "::error title=Sentry DSN::${msg}"
             printf '%s\n' "$msg" >>"$RUNNER_TEMP/ios-ship-sentry-dsn-missing"
           fi
@@ -272,30 +279,19 @@ jobs:
       # Do not use `secrets.*` in `if:` -- GitHub's dispatch parser rejects it
       # (`Unrecognized named-value: secrets`) and the whole workflow dies at 0s.
 
-      # ASC key from Fleet-OPS prod /asc.  ASC_KEY_ID and ASC_ISSUER_ID are
-      # single-line and go to GITHUB_ENV; the multiline private key is staged
-      # to a mode-600 file and only ASC_KEY_PATH is exported.
-      #
-      # The tooling and the staging script run in ONE step on purpose.  The
-      # tooling installs the fleet's reader and passes it the scoped service
-      # token directly through its environment.  The staging script runs in the
-      # same process tree, so the token never touches a file.  The
-      # staging script is what resolves the three ASC values, and it writes
-      # the private key to a mode-600 file: the key is never an environment
-      # variable of a step, and only that file's path and the two identifiers
-      # cross a step boundary.
-      #
-      # The staging script runs even when the install fails, because it is
-      # what removes any key-bearing entry from the job's environment file,
-      # and the step reports the status of the command that actually failed.
+      # ASC key from Fleet-OPS prod /asc via INFISICAL_ASC_READ_TOKEN.
+      # asc-mode stages the PEM with scripts/ios-stage-asc-key.sh and exports
+      # ASC_KEY_PATH, ASC_KEY_ID and ASC_ISSUER_ID.  The raw PEM is not written
+      # to GITHUB_ENV.
       - name: Load and stage the ASC credentials (Fleet-OPS prod /asc)
-        env:
-          INFISICAL_PROJECT_ID: ${{ secrets.INFISICAL_FLEET_OPS_PROJECT_ID }}
-          INFISICAL_SERVICE_TOKEN: ${{ secrets.INFISICAL_CODECAPS_CI_READ_SERVICE_TOKEN }}
-        run: |
-          set +o xtrace
-          set -euo pipefail
-          bash scripts/install-release-secrets-tooling.sh
+        uses: ./.github/actions/infisical-secrets
+        with:
+          names: ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8
+          required: ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8
+          project-id: ${{ secrets.INFISICAL_FLEET_OPS_PROJECT_ID }}
+          secret-path: /asc
+          service-token: ${{ secrets.INFISICAL_ASC_READ_TOKEN }}
+          asc-mode: "true"
 
       - name: Check the ASC credentials arrived
         run: |
@@ -303,12 +299,12 @@ jobs:
           set -euo pipefail
           for name in ASC_KEY_ID ASC_ISSUER_ID; do
             if [ -z "${!name:-}" ]; then
-              echo "::error::Missing $name in Fleet-OPS prod /asc; verify the scoped /asc read service token has access to Fleet-OPS prod /asc." >&2
+              echo "::error::Missing $name in Fleet-OPS prod /asc; verify the CI identity has read access to Fleet-OPS prod /asc." >&2
               exit 1
             fi
           done
           if [ -z "${ASC_KEY_PATH:-}" ] || [ ! -s "${ASC_KEY_PATH:-}" ]; then
-            echo '::error::Missing ASC key material in Fleet-OPS prod /asc; verify the scoped /asc read service token has access to Fleet-OPS prod /asc.' >&2
+            echo '::error::Missing ASC key material in Fleet-OPS prod /asc; verify the CI identity has read access to Fleet-OPS prod /asc.' >&2
             exit 1
           fi
       - name: Import signing identity

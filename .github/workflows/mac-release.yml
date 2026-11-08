@@ -6,23 +6,25 @@ name: Mac Release (Sparkle)
 # keys, hosting, rollback, and how to copy it to another fleet Mac app.
 #
 # Secrets (names only; no value is ever printed):
-#   MAC_CERT_P12_BASE64, MAC_CERT_PASSWORD  The Developer ID Application
-#       certificate for team CC8UTF7ATG.  Read from Fleet-OPS Infisical prod /
-#       using INFISICAL_FLEET_OPS_PROJECT_ID and the read-only
-#       INFISICAL_CODECAPS_CI_READ_SERVICE_TOKEN. Same-named repository secrets
-#       remain a fallback.
-#   ASC_KEY_ID, ASC_ISSUER_ID and the App Store Connect private key come from
-#       Fleet-OPS Infisical prod /asc using that same read-only CI token.
-#       Never fall back to the stale repository ASC_* secrets.  The private key never enters
-#       the job environment: the tooling install and
-#       scripts/stage-asc-key.mjs run in one step, so the key goes from the
-#       fleet's reader straight into a mode-600 file, and only that file's
-#       path and the two identifiers cross a step boundary.
+#   INFISICAL_MAC_CERTS_READ_TOKEN  Read-only service token for Fleet-OPS
+#       prod /mac-certs.  Loads MAC_CERT_P12_BASE64 and MAC_CERT_PASSWORD
+#       (Developer ID Application certificate for team CC8UTF7ATG), with
+#       same-named repository secrets as the fallback.
+#   INFISICAL_ASC_READ_TOKEN  Read-only service token for Fleet-OPS prod /asc.
+#       Loads ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_P8, matching ios-ship.yml.
+#       The stale repository ASC_* secrets are never read.  asc-mode stages
+#       the private key to a mode-600 file and exports only ASC_KEY_PATH plus
+#       the two identifiers.
+#   INFISICAL_CODECAPS_READ_TOKEN  Read-only service token for the CodeCaps
+#       Infisical project (prod /).  Loads SENTRY_DSN and SENTRY_AUTH_TOKEN.
+#       The project's SENTRY_DSN is the codecaps Sentry DSN.  Repository
+#       secrets of those two names are the fetch fallbacks.
+#       SENTRY_DSN_CODECAPS stays an explicit fallback for the app DSN.
 #   SPARKLE_ED_PRIVATE_KEY  The EdDSA key that signs each update archive
-#       (Sparkle's generate_keys -x output).
-# Pull requests build without credentials and never publish. A main release
-# fails early if the fleet ASC tooling or notarization preflight fails. Missing
-# certificate/Sparkle material is reported by the publication gate.
+#       (Sparkle's generate_keys -x output).  Repository secret.
+# Pull requests build without credentials and never publish.  A main release
+# fails early if the ASC token or the notarization preflight fails.  Missing
+# certificate or Sparkle material is reported by the publication gate.
 
 on:
   push:
@@ -37,7 +39,8 @@ on:
       - 'script/build_and_run.sh'
       - 'script/make_appcast.sh'
       - 'scripts/check-notary-access.sh'
-      - 'scripts/install-release-secrets-tooling.sh'
+      - '.github/actions/infisical-secrets/**'
+      - 'scripts/infisical-fetch.mjs'
       - 'scripts/mac-release-workflow.test.mjs'
       - 'scripts/ios-stage-asc-key.sh'
       - 'script/make_icon.swift'
@@ -51,7 +54,6 @@ on:
       - 'script/build_and_run.sh'
       - 'script/make_appcast.sh'
       - 'scripts/check-notary-access.sh'
-      - 'scripts/install-release-secrets-tooling.sh'
       - 'scripts/mac-release-workflow.test.mjs'
       - 'scripts/ios-stage-asc-key.sh'
       - '.github/workflows/mac-release.yml'
@@ -133,70 +135,28 @@ jobs:
         if: github.event_name != 'pull_request'
         uses: ./.github/actions/infisical-secrets
         with:
-          names: MAC_CERT_P12_BASE64 MAC_CERT_PASSWORD SENTRY_DSN SENTRY_DSN_CODECAPS SENTRY_AUTH_TOKEN SENTRY_AUTH_TOKEN_FULLSCOPE
+          names: MAC_CERT_P12_BASE64 MAC_CERT_PASSWORD
           project-id: ${{ secrets.INFISICAL_FLEET_OPS_PROJECT_ID }}
-          secret-path: /
-          service-token: ${{ secrets.INFISICAL_CODECAPS_CI_READ_SERVICE_TOKEN }}
+          secret-path: /mac-certs
+          service-token: ${{ secrets.INFISICAL_MAC_CERTS_READ_TOKEN }}
         env:
           GH_FALLBACK_MAC_CERT_P12_BASE64: ${{ secrets.MAC_CERT_P12_BASE64 }}
           GH_FALLBACK_MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
-          GH_FALLBACK_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
-          GH_FALLBACK_SENTRY_DSN_CODECAPS: ${{ secrets.SENTRY_DSN_CODECAPS }}
-          GH_FALLBACK_SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-          GH_FALLBACK_SENTRY_AUTH_TOKEN_FULLSCOPE: ${{ secrets.SENTRY_AUTH_TOKEN_FULLSCOPE }}
 
-      # The macOS app reports into its own Sentry project, `codecaps`, the
-      # same as the iOS ship (ios-ship.yml "Use the CodeCaps Sentry DSN").
-      # The shared fleet SENTRY_DSN names `botfleet`, so without this step the
-      # Mac app's events (com.jays.agent-bar.mac) land in the BotFleet
-      # project.  SENTRY_DSN_CODECAPS becomes the SENTRY_DSN that
-      # build_and_run.sh stamps into Info.plist and that the dSYM upload
-      # reads.  A missing one falls back to the shared DSN with an ::error::
-      # annotation and a RUNNER_TEMP note; the release still
-      # publishes, and the last step turns the run red.  The value is masked by the
-      # fetch above and is never printed here.
-      - name: Use the CodeCaps Sentry DSN
-        if: github.event_name != 'pull_request'
-        run: |
-          set +o xtrace
-          set -euo pipefail
-          if [ -n "${SENTRY_DSN_CODECAPS:-}" ]; then
-            {
-              echo "SENTRY_DSN<<SENTRY_DSN_CODECAPS_EOF"
-              printf '%s\n' "$SENTRY_DSN_CODECAPS"
-              echo "SENTRY_DSN_CODECAPS_EOF"
-            } >>"$GITHUB_ENV"
-            echo "SENTRY_DSN now comes from SENTRY_DSN_CODECAPS (Sentry project codecaps)."
-          else
-            msg="SENTRY_DSN_CODECAPS is missing from Infisical Fleet-OPS prod / and from the repository secrets, so this Mac build falls back to the shared fleet SENTRY_DSN and its events land in the botfleet project, not codecaps."
-            echo "::error title=Sentry DSN::${msg}"
-            # Read by the "Sentry DSN status" step, which turns the run red
-            # after the release is published.  RUNNER_TEMP, not the checkout,
-            # so the release build never sees a dirty worktree.
-            printf '%s\n' "$msg" >>"$RUNNER_TEMP/mac-release-sentry-dsn-missing"
-          fi
-
-      # The tooling and the staging script run in ONE step on purpose.  The
-      # tooling installs the fleet's reader and passes it the scoped service
-      # token directly through its environment.  The staging script runs in the
-      # same process tree, so the token never touches a file.  The
-      # staging script is what resolves the three ASC values, and it writes
-      # the private key to a mode-600 file: the key is never an environment
-      # variable of a step, and only that file's path and the two identifiers
-      # cross a step boundary.
-      #
-      # The staging script runs even when the install fails, because it is
-      # what removes any key-bearing entry from the job's environment file,
-      # and the step reports the status of the command that actually failed.
+      # asc-mode stages the key with scripts/ios-stage-asc-key.sh and exports
+      # ASC_KEY_PATH, ASC_KEY_ID and ASC_ISSUER_ID.  The raw PEM is not written
+      # to GITHUB_ENV.  There is no GH_FALLBACK for ASC: the repository copies
+      # are stale.
       - name: Load and stage the ASC credentials (Fleet-OPS prod /asc)
         if: github.event_name != 'pull_request'
-        env:
-          INFISICAL_PROJECT_ID: ${{ secrets.INFISICAL_FLEET_OPS_PROJECT_ID }}
-          INFISICAL_SERVICE_TOKEN: ${{ secrets.INFISICAL_CODECAPS_CI_READ_SERVICE_TOKEN }}
-        run: |
-          set +o xtrace
-          set -euo pipefail
-          bash scripts/install-release-secrets-tooling.sh
+        uses: ./.github/actions/infisical-secrets
+        with:
+          names: ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8
+          required: ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8
+          project-id: ${{ secrets.INFISICAL_FLEET_OPS_PROJECT_ID }}
+          secret-path: /asc
+          service-token: ${{ secrets.INFISICAL_ASC_READ_TOKEN }}
+          asc-mode: "true"
 
       - name: Check the ASC credentials arrived
         if: github.event_name != 'pull_request'
@@ -205,14 +165,60 @@ jobs:
           set -euo pipefail
           for name in ASC_KEY_ID ASC_ISSUER_ID; do
             if [ -z "${!name:-}" ]; then
-              echo "::error::Missing $name in Fleet-OPS prod /asc; verify the scoped /asc read service token has access to Fleet-OPS prod /asc." >&2
+              echo "::error::Missing $name in Fleet-OPS prod /asc; verify the CI identity has read access to Fleet-OPS prod /asc." >&2
               exit 1
             fi
           done
           if [ -z "${ASC_KEY_PATH:-}" ] || [ ! -s "${ASC_KEY_PATH:-}" ]; then
-            echo '::error::Missing ASC key material in Fleet-OPS prod /asc; verify the scoped /asc read service token has access to Fleet-OPS prod /asc.' >&2
+            echo '::error::Missing ASC key material in Fleet-OPS prod /asc; verify the CI identity has read access to Fleet-OPS prod /asc.' >&2
             exit 1
           fi
+      - name: Load Sentry secrets (CodeCaps project, then repository secrets)
+        if: github.event_name != 'pull_request'
+        uses: ./.github/actions/infisical-secrets
+        with:
+          names: SENTRY_DSN SENTRY_AUTH_TOKEN
+          project-id: ${{ secrets.INFISICAL_PROJECT_ID }}
+          service-token: ${{ secrets.INFISICAL_CODECAPS_READ_TOKEN }}
+        env:
+          GH_FALLBACK_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          GH_FALLBACK_SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          GH_FALLBACK_SENTRY_DSN_CODECAPS: ${{ secrets.SENTRY_DSN_CODECAPS }}
+
+      # The macOS app reports into Sentry project `codecaps`.  The CodeCaps
+      # project SENTRY_DSN is that DSN.  When the vault value is empty the
+      # fetch fills SENTRY_DSN from GH_FALLBACK_SENTRY_DSN, the shared fleet
+      # DSN (botfleet).  The repository secret SENTRY_DSN_CODECAPS is the
+      # explicit codecaps fallback and wins over that shared value.  A miss
+      # writes a RUNNER_TEMP note; the release still publishes, and the last
+      # step turns the run red.  The value is never printed here.
+      - name: Use the CodeCaps Sentry DSN
+        if: github.event_name != 'pull_request'
+        env:
+          SENTRY_DSN_CODECAPS: ${{ secrets.SENTRY_DSN_CODECAPS }}
+          SHARED_FLEET_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+        run: |
+          set +o xtrace
+          set -euo pipefail
+          vault_dsn="${SENTRY_DSN:-}"
+          if [ -n "$vault_dsn" ] && [ "$vault_dsn" != "${SHARED_FLEET_SENTRY_DSN:-}" ]; then
+            echo "SENTRY_DSN comes from the CodeCaps Infisical project (Sentry project codecaps)."
+          elif [ -n "${SENTRY_DSN_CODECAPS:-}" ]; then
+            {
+              echo "SENTRY_DSN<<SENTRY_DSN_CODECAPS_EOF"
+              printf '%s\n' "$SENTRY_DSN_CODECAPS"
+              echo "SENTRY_DSN_CODECAPS_EOF"
+            } >>"$GITHUB_ENV"
+            echo "SENTRY_DSN now comes from the repository secret SENTRY_DSN_CODECAPS (Sentry project codecaps)."
+          else
+            msg="SENTRY_DSN is missing from the CodeCaps Infisical project prod / and SENTRY_DSN_CODECAPS is missing from the repository secrets, so this Mac build falls back to the shared fleet SENTRY_DSN and its events land in the botfleet project, not codecaps."
+            echo "::error title=Sentry DSN::${msg}"
+            # Read by the "Sentry DSN status" step, which turns the run red
+            # after the release is published.  RUNNER_TEMP, not the checkout,
+            # so the release build never sees a dirty worktree.
+            printf '%s\n' "$msg" >>"$RUNNER_TEMP/mac-release-sentry-dsn-missing"
+          fi
+
       - name: Decide whether this run can publish
         id: gate
         run: |
@@ -306,13 +312,16 @@ jobs:
       # stack, and two things kept it from ever being uploaded.  Both failed
       # quietly, so every app frame in Sentry came back unsymbolicated:
       #
-      #   * the token.  `SENTRY_AUTH_TOKEN` holds the DSN, and a DSN is not an
-      #     API token, so `sentry-cli` was refused and the step swallowed the
-      #     error as a warning.  The API token is `SENTRY_AUTH_TOKEN_FULLSCOPE`.
-      #   * the project.  `SENTRY_DSN` is one shared fleet key, so the app
-      #     reports into whichever project that key names -- the `botfleet`
-      #     project since 2026-10-22 -- while this step uploaded to `codecaps`.
-      #     A dSYM in a project the events do not land in never matches them.
+      #   * the token.  A DSN in the token slot is not an API token, so
+      #     `sentry-cli` was refused and the step swallowed the error as a
+      #     warning.  SENTRY_AUTH_TOKEN_FULLSCOPE lived in Fleet-OPS prod /,
+      #     which no scoped token reads.  SENTRY_AUTH_TOKEN from the CodeCaps
+      #     project (repository secret of the same name as the fetch fallback)
+      #     is the API token.
+      #   * the project.  A shared fleet SENTRY_DSN names `botfleet`, so events
+      #     would land there while this step uploaded to `codecaps`.  The
+      #     CodeCaps project SENTRY_DSN is the codecaps DSN.  The upload still
+      #     covers the DSN project when that value is some other project.
       #
       # The upload goes to both projects.  Any miss -- no token, no
       # sentry-cli, no app dSYM, a refused upload -- exits nonzero with an
@@ -349,15 +358,18 @@ jobs:
             echo "::error::sentry-cli is missing; no dSYM was uploaded"
             exit 1
           fi
-          # The token stays a shell variable and is handed only to sentry-cli.
-          TOKEN="${SENTRY_AUTH_TOKEN_FULLSCOPE:-}"
+          # SENTRY_AUTH_TOKEN_FULLSCOPE lived in Fleet-OPS prod /, which no
+          # scoped token reads.  SENTRY_AUTH_TOKEN from the CodeCaps project,
+          # or the repository secret of the same name, is the API token.  It
+          # stays a shell variable and is handed only to sentry-cli.
+          TOKEN="${SENTRY_AUTH_TOKEN:-}"
           if [ -z "$TOKEN" ]; then
-            echo "::error::SENTRY_AUTH_TOKEN_FULLSCOPE is missing; no dSYM was uploaded"
+            echo "::error::SENTRY_AUTH_TOKEN is missing; no dSYM was uploaded"
             exit 1
           fi
           case "$TOKEN" in
             *://*|*@*)
-              echo "::error::SENTRY_AUTH_TOKEN_FULLSCOPE looks like a DSN, not an API token; no dSYM was uploaded"
+              echo "::error::SENTRY_AUTH_TOKEN looks like a DSN, not an API token; no dSYM was uploaded"
               exit 1
               ;;
           esac
@@ -506,17 +518,28 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      # The tooling and the staging script run in ONE step, so the private
-      # key never becomes an environment variable of a step.  See the release
-      # job's step of the same name for the full reason.
-      - name: Load and stage the ASC credentials (Fleet-OPS prod /asc)
+      # Same three scoped loads as the release job, without the pull-request
+      # guard.  This dispatch is manual and publishes nothing.
+      - name: Load the Developer ID certificate (Infisical, then repository secrets)
+        uses: ./.github/actions/infisical-secrets
+        with:
+          names: MAC_CERT_P12_BASE64 MAC_CERT_PASSWORD
+          project-id: ${{ secrets.INFISICAL_FLEET_OPS_PROJECT_ID }}
+          secret-path: /mac-certs
+          service-token: ${{ secrets.INFISICAL_MAC_CERTS_READ_TOKEN }}
         env:
-          INFISICAL_PROJECT_ID: ${{ secrets.INFISICAL_FLEET_OPS_PROJECT_ID }}
-          INFISICAL_SERVICE_TOKEN: ${{ secrets.INFISICAL_CODECAPS_CI_READ_SERVICE_TOKEN }}
-        run: |
-          set +o xtrace
-          set -euo pipefail
-          bash scripts/install-release-secrets-tooling.sh
+          GH_FALLBACK_MAC_CERT_P12_BASE64: ${{ secrets.MAC_CERT_P12_BASE64 }}
+          GH_FALLBACK_MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+
+      - name: Load and stage the ASC credentials (Fleet-OPS prod /asc)
+        uses: ./.github/actions/infisical-secrets
+        with:
+          names: ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8
+          required: ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8
+          project-id: ${{ secrets.INFISICAL_FLEET_OPS_PROJECT_ID }}
+          secret-path: /asc
+          service-token: ${{ secrets.INFISICAL_ASC_READ_TOKEN }}
+          asc-mode: "true"
 
       - name: Check the ASC credentials arrived
         run: |
@@ -524,14 +547,26 @@ jobs:
           set -euo pipefail
           for name in ASC_KEY_ID ASC_ISSUER_ID; do
             if [ -z "${!name:-}" ]; then
-              echo "::error::Missing $name in Fleet-OPS prod /asc; verify the scoped /asc read service token has access to Fleet-OPS prod /asc." >&2
+              echo "::error::Missing $name in Fleet-OPS prod /asc; verify the CI identity has read access to Fleet-OPS prod /asc." >&2
               exit 1
             fi
           done
           if [ -z "${ASC_KEY_PATH:-}" ] || [ ! -s "${ASC_KEY_PATH:-}" ]; then
-            echo '::error::Missing ASC key material in Fleet-OPS prod /asc; verify the scoped /asc read service token has access to Fleet-OPS prod /asc.' >&2
+            echo '::error::Missing ASC key material in Fleet-OPS prod /asc; verify the CI identity has read access to Fleet-OPS prod /asc.' >&2
             exit 1
           fi
+
+      - name: Load Sentry secrets (CodeCaps project, then repository secrets)
+        uses: ./.github/actions/infisical-secrets
+        with:
+          names: SENTRY_DSN SENTRY_AUTH_TOKEN
+          project-id: ${{ secrets.INFISICAL_PROJECT_ID }}
+          service-token: ${{ secrets.INFISICAL_CODECAPS_READ_TOKEN }}
+        env:
+          GH_FALLBACK_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          GH_FALLBACK_SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          GH_FALLBACK_SENTRY_DSN_CODECAPS: ${{ secrets.SENTRY_DSN_CODECAPS }}
+
       - name: Verify notarization access before building
         run: bash scripts/check-notary-access.sh
 

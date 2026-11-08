@@ -1,15 +1,25 @@
 {
-  "images" : [
+  "images": [
     {
-      "filename" : "provider-kimi.svg",
-      "idiom" : "universal"
+      "filename": "provider-kimi.svg",
+      "idiom": "universal"
+    },
+    {
+      "appearances": [
+        {
+          "appearance": "luminosity",
+          "value": "dark"
+        }
+      ],
+      "filename": "provider-kimi-dark.svg",
+      "idiom": "universal"
     }
   ],
-  "info" : {
-    "author" : "xcode",
-    "version" : 1
+  "info": {
+    "author": "xcode",
+    "version": 1
   },
-  "properties" : {
-    "preserves-vector-representation" : true
+  "properties": {
+    "preserves-vector-representation": true
   }
 }

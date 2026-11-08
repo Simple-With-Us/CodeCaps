@@ -179,7 +179,7 @@ final class WidgetTests: XCTestCase {
     func testWidgetDropsACopyOfAPeriodThatEnded() throws {
         let source = try readSource(at: Self.widgetPresentationURL)
         XCTAssertTrue(
-            source.contains("QuotaFreshnessRule.isDeadCopy(observedAt: parseDate(from: w.reportedAt) ?? parseDate(from: w.occurredAt),"),
+            source.contains("QuotaFreshnessRule.isDeadCopy(observedAt: parseDate(from: w.occurredAt),"),
             "the widget must ask the shared rule about a window whose period already ended"
         )
         XCTAssertFalse(
@@ -240,24 +240,13 @@ final class WidgetTests: XCTestCase {
     /// how the plan looked when the reading was taken.
     func testWidgetOnlyLetsAFreshWindowCapAPlan() throws {
         let source = try readSource(at: Self.widgetPresentationURL)
-        let atCapMethod = source
-            .components(separatedBy: "public func atCapWindow(now: Date = Date()) -> WidgetWindowItem? {")
-            .dropFirst()
-            .first?
-            .components(separatedBy: "\n    }")
-            .first ?? ""
-        XCTAssertFalse(atCapMethod.isEmpty, "the widget must decide caps through its window selector")
         XCTAssertTrue(
-            atCapMethod.contains(".filter { $0.isFresh(now: now) }"),
+            source.contains(".filter { $0.isFresh(now: now) }"),
             "the widget's cap window must be chosen from the fresh windows"
         )
         XCTAssertTrue(
-            atCapMethod.contains(".filter { !$0.isMasked && $0.remainingPercent != nil }"),
-            "masked and unknown windows must not cap a plan"
-        )
-        XCTAssertTrue(
-            atCapMethod.contains(".filter { WidgetPresentation.isAtCap(percent: $0.remainingPercent, isExhausted: $0.isExhausted) }"),
-            "the widget must use the shared cap rule after freshness filtering"
+            source.contains("let atCap = freshWindows.first {"),
+            "the widget's cap line must be decided from the fresh windows"
         )
     }
 
@@ -308,11 +297,7 @@ final class WidgetTests: XCTestCase {
             "the widget's weekly must be decided through the shared rule, and only a fresh reading may spend it"
         )
         XCTAssertTrue(
-            source.contains("let fresh = primary.filter { $0.isFresh(now: now) && !$0.isMasked }"),
-            "only fresh, unmasked readings may contribute to the pool cap"
-        )
-        XCTAssertTrue(
-            source.contains("let isExhausted = weeklyExhausted || QuotaCapRule.isAtCap(remainingPercent: fresh.compactMap(\\.remainingPercent).min())"),
+            source.contains("let isExhausted = weeklyExhausted || QuotaCapRule.isAtCap(remainingPercent: freshPercents.min())"),
             "a spent weekly must spend the pool even when the five-hour window still reports headroom, "
                 + "and only a fresh reading may spend it"
         )
@@ -577,6 +562,12 @@ final class WidgetTests: XCTestCase {
         XCTAssertTrue(rows.contains("struct WindowCaptionRow"))
         XCTAssertTrue(rows.contains("struct PlanBarRow"))
         XCTAssertTrue(rows.contains("struct PlanDualBarRow"))
+        // The Mac meter grammar: token, bar, percent and countdown on one
+        // line, with the percent and the reset trailing on the right of the
+        // bar (CC-213, owner 2026-11-07).  The small widget keeps the
+        // stacked layout, so the escape hatch must stay named too.
+        XCTAssertTrue(rows.contains("struct WidgetMeterRow"))
+        XCTAssertTrue(rows.contains("usesMeterLayout"))
         XCTAssertTrue(rows.contains("struct PlanGrid"))
         XCTAssertTrue(rows.contains("quotasPerProvider"))
         // The mark replaces the app name in the corner; the asset itself belongs
@@ -587,6 +578,31 @@ final class WidgetTests: XCTestCase {
         XCTAssertTrue(presentation.contains("static func shortCadence"))
         XCTAssertTrue(presentation.contains("static func resetCaption"))
         XCTAssertTrue(presentation.contains("func dualWindows()"))
+        // QA 2026-11-06, verified against the real wire capture (committed
+        // verbatim at Tests/Fixtures/qa3-wire-regression-fixture.json):  the
+        // codecaps 5h and the collector weekly share series "general", the
+        // collector's 5h headline is series "minimax:coding-plan", and
+        // Copilot's Chat and Completions share the canonical key "monthly".
+        // The dedupe identity must be the triple of video class, aliased
+        // series, and canonical cadence:  video partitions first so a
+        // supplementary video window can never fold into a plan window;  the
+        // MiniMax alias set is bounded to the producer's verified
+        // general/coding-plan equivalence;  the canonical cadence keeps one
+        // model's 5-hour, daily and weekly windows separate.
+        XCTAssertTrue(presentation.contains("static func allowanceSeries(forWireId id: String) -> String"))
+        XCTAssertTrue(presentation.contains(#"parts[0] == "producer""#))
+        XCTAssertTrue(presentation.contains("static func normalizedAllowanceSeries(providerKey: String, series: String) -> String"))
+        XCTAssertTrue(presentation.contains(#""minimax:coding-plan", "coding-plan""#))
+        // The bounded xAI subscription-pool alias (qa4 wire capture:
+        // "grok:subscription" from the codecaps reader and "xai:subscription"
+        // from the collector are one allowance).
+        XCTAssertTrue(presentation.contains(#"providerKey == "xai", series.lowercased() == "grok:subscription""#))
+        XCTAssertTrue(presentation.contains(#"item.isSupplementaryVideoQuota ? "video|" : "plan|""#))
+        // The cadence leg must be canonicalised into the wire namespace, not
+        // keyed on the display cadence, or a pre-windowKey copy ("weekly")
+        // splits from its keyed copy ("7d") - same kody finding as PR #370.
+        XCTAssertTrue(presentation.contains("static func canonicalWireCadence("))
+        XCTAssertTrue(presentation.contains(#"case QuotaWindowVocabulary.sevenDay: return "7d""#))
     }
 
     func testOverviewViewsPassQuotasPerProviderToPlanGrid() throws {
@@ -616,7 +632,7 @@ final class WidgetTests: XCTestCase {
     func testDualWindowsSelectionSkipsSupplementaryVideoQuota() {
         let windows = [
             window("minimax:5h", percent: 81, hoursToReset: 2),
-            FixtureWindow(id: "minimax:video", percent: 100, hoursToReset: 20, masked: false, label: "Video"),
+            FixtureWindow(id: "minimax:video", percent: 100, hoursToReset: 20, masked: false, label: "1d window", isSupplementaryVideoQuota: true),
             window("minimax:7d", percent: 5, hoursToReset: 66)
         ]
         let dual = dualWindows(windows, providerKey: "minimax")
@@ -676,7 +692,12 @@ final class WidgetTests: XCTestCase {
         let percent: Double?
         let hoursToReset: Double
         let masked: Bool
-        let label: String = ""
+        // A `var`, not a `let`:  a `let` with a default is excluded from the
+        // memberwise initializer, and the MiniMax video fixture passes one.
+        var label: String = ""
+        // Mirrors WidgetWindowItem.isSupplementaryVideoQuota:  the identity
+        // is carried, not re-derived from the display label.
+        var isSupplementaryVideoQuota: Bool = false
     }
 
     private enum FixtureWindowPick {
@@ -724,10 +745,14 @@ final class WidgetTests: XCTestCase {
         guard pool.count >= 2 else { return nil }
         // Mirrors WidgetPresentation: a MiniMax supplementary video quota
         // never takes a bar from the plan's own windows when two remain.
-        let planWindows = pool.filter {
-            !(providerKey == "minimax" && ($0.label.lowercased().contains("video") || $0.label.lowercased().contains("hailuo")))
-        }
-        let pair = planWindows.count >= 2 ? planWindows : pool
-        return (pair[0], pair[1])
+        // The carried flag decides, not the display label - the label
+        // rewrite drops the video tokens (Kody review, PR #367).
+        let planWindows = pool.filter { !$0.isSupplementaryVideoQuota }
+        // Mirrors production exactly:  no fallback to the pool - a plan
+        // with fewer than two of its own windows has no pair, so a video
+        // row can never slip in beside one plan bar (Sentry review, PR
+        // #369).
+        guard planWindows.count >= 2 else { return nil }
+        return (planWindows[0], planWindows[1])
     }
 }

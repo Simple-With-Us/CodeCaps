@@ -31,29 +31,37 @@ final class ProviderMarkTripletTests: XCTestCase {
         PlatformLogoImage.invalidateCaches()
     }
 
-    func testCompanionCatalogCarriesKimiAndZAIAssets() throws {
+    /// The companion's asset catalog must carry every provider the model can
+    /// name, Copilot included: a missing imageset draws the dashed fallback.
+    /// The companion catalog carries both supplied marks with a dark
+    /// appearance, byte-exact against the SwiftPM sources, so the phone and
+    /// the Mac draw the same artwork and both stay legible in dark mode
+    /// (CC-212, owner 2026-11-07).
+    func testCompanionCatalogCarriesKimiAndZAIWithDarkAppearances() throws {
         let catalog = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("ios/CodeCapsCompanion/Assets.xcassets")
         let sourceRoot = catalog.deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("Sources/CodeCaps/Resources/ProviderMarks")
-        for (asset, file, source) in [("provider-kimi", "provider-kimi.svg", "kimi-color.svg"),
-                                      ("provider-zai", "provider-zai.svg", "zai.svg")] {
+        for (asset, light, lightSource, dark) in [("provider-kimi", "provider-kimi.svg", "kimi-color.svg", "provider-kimi-dark.svg"),
+                                                  ("provider-zai", "provider-zai.svg", "zai-color.svg", "provider-zai-dark.svg")] {
             let imageset = catalog.appendingPathComponent("\(asset).imageset")
-            let image = imageset.appendingPathComponent(file)
-            XCTAssertTrue(FileManager.default.fileExists(atPath: image.path),
+            let lightFile = imageset.appendingPathComponent(light)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: lightFile.path),
                           "\(asset).imageset is missing its vector logo")
-            XCTAssertTrue(FileManager.default.fileExists(atPath: imageset.appendingPathComponent("Contents.json").path),
-                          "\(asset).imageset is missing Contents.json")
-            let copiedVector = try Data(contentsOf: image)
-            let suppliedVector = try Data(contentsOf: sourceRoot.appendingPathComponent(source))
+            let copiedVector = try Data(contentsOf: lightFile)
+            let suppliedVector = try Data(contentsOf: sourceRoot.appendingPathComponent(lightSource))
             XCTAssertEqual(copiedVector, suppliedVector,
                            "\(asset) must use the byte-exact supplied vector")
+            let darkFile = imageset.appendingPathComponent(dark)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: darkFile.path),
+                          "\(asset).imageset is missing its dark-appearance vector")
+            let contents = try String(contentsOf: imageset.appendingPathComponent("Contents.json"), encoding: .utf8)
+            XCTAssertTrue(contents.contains(dark),
+                          "\(asset).imageset must declare \(dark) as its dark appearance")
         }
     }
 
-    /// The companion's asset catalog must carry every provider the model can
-    /// name, Copilot included: a missing imageset draws the dashed fallback.
     func testCompanionCatalogCarriesCopilotMark() {
         let catalog = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
