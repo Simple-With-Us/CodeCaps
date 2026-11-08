@@ -72,6 +72,23 @@ final class BoundedHTTPFetchTests: XCTestCase {
         XCTAssertEqual(StubURLProtocol.requestedURLs(), [start.absoluteString])
     }
 
+    func testCallerTimeoutIsCappedNotRaised() async throws {
+        let url = URL(string: "https://fetch.test/tight")!
+        StubURLProtocol.register(url, statusCode: 200, body: Data("ok".utf8))
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 2
+        _ = try await BoundedHTTPFetch.data(for: request, timeout: 15, maxBytes: 1024, protocolClasses: [StubURLProtocol.self])
+        XCTAssertEqual(StubURLProtocol.requestedTimeoutIntervals(), [2], "A tighter per-request timeout must survive the fetch budget")
+    }
+
+    func testUnsetRequestTakesTheFetchBudget() async throws {
+        let url = URL(string: "https://fetch.test/budget")!
+        StubURLProtocol.register(url, statusCode: 200, body: Data("ok".utf8))
+        let request = URLRequest(url: url)
+        _ = try await BoundedHTTPFetch.data(for: request, timeout: 15, maxBytes: 1024, protocolClasses: [StubURLProtocol.self])
+        XCTAssertEqual(StubURLProtocol.requestedTimeoutIntervals(), [15], "An unset request (system default 60 s) takes the fetch budget")
+    }
+
     func testCancellationSurfacesAsCancellationError() async {
         let url = URL(string: "https://fetch.test/hangs")!
         StubURLProtocol.registerHanging(url)
@@ -101,6 +118,7 @@ private final class StubURLProtocol: URLProtocol {
     private static let lock = NSLock()
     private static var stubs: [String: Stub] = [:]
     private static var requests: [String] = []
+    private static var timeouts: [TimeInterval] = []
 
     static func register(_ url: URL, statusCode: Int, body: Data) {
         lock.lock(); stubs[url.absoluteString] = .body(statusCode: statusCode, body: body); lock.unlock()
@@ -118,8 +136,12 @@ private final class StubURLProtocol: URLProtocol {
         lock.lock(); defer { lock.unlock() }; return requests
     }
 
+    static func requestedTimeoutIntervals() -> [TimeInterval] {
+        lock.lock(); defer { lock.unlock() }; return timeouts
+    }
+
     static func reset() {
-        lock.lock(); stubs = [:]; requests = []; lock.unlock()
+        lock.lock(); stubs = [:]; requests = []; timeouts = []; lock.unlock()
     }
 
     override class func canInit(with request: URLRequest) -> Bool { true }
@@ -132,6 +154,7 @@ private final class StubURLProtocol: URLProtocol {
         }
         Self.lock.lock()
         Self.requests.append(url.absoluteString)
+        Self.timeouts.append(request.timeoutInterval)
         let stub = Self.stubs[url.absoluteString]
         Self.lock.unlock()
         guard let stub else {
