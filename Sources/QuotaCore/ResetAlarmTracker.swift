@@ -515,8 +515,18 @@ public struct ResetAlarmTracker: Sendable {
                 // still fires through `hasPassed`.
                 let rollingMeter = (window.forwardFollows ?? 0)
                     >= ResetAlarmPolicy.rollingForwardFollows
+                // A mid-window reset must move the end decisively — past the
+                // period-share bound.  A smaller forward move plus a climb is
+                // how a rolling window ages across a long gap (the Mac
+                // asleep, MiniMax's five-hour meter):  the end slides once by
+                // the whole gap and the percentage comes back with it, and
+                // before any rolling evidence has had time to accumulate
+                // that read as a vendor reset (CC-215, owner 2026-11-07:
+                // 3:48 pm, 5:03 pm and later false MiniMax and Antigravity
+                // 5h alerts).  Across a passed end the climb keeps settling
+                // small early moves as before.
                 let forwardJump = jump > required
-                    || (jump > ResetAlarmPolicy.resetDriftTolerance && climbed)
+                    || (jump > ResetAlarmPolicy.resetDriftTolerance && climbed && hasPassed)
                 if forwardJump, hasPassed || !rollingMeter {
                     isReset = true
                     // When the window had *not* reached its own scheduled end,
