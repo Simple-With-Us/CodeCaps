@@ -77,7 +77,7 @@ public enum CompanionDateFormatter {
 }
 
 /// An individual quota window or time period within a platform.
-public struct CompanionWindowItem: Identifiable, Codable, Equatable {
+public struct CompanionWindowItem: Identifiable, Codable, Equatable, Sendable {
     public let id: String
     public let label: String
     public let cadence: String
@@ -503,7 +503,12 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
     /// A platform card is expandable if it reports more than two allowance
     /// windows or holds provider plan details.
     public var isExpandable: Bool {
-        windows.count > 2 || !providerDetailRows.isEmpty
+        windows.contains { $0.isSubModelLimit && ($0.label == "Fable limit" || $0.label == "Argon limit")
+            && ($0.remainingPercent?.isFinite == true || $0.absoluteRemaining?.isFinite == true) }
+    }
+
+    public func cardDetailWindows(scope: CompanionSourceScope, now: Date = Date()) -> [CompanionWindowItem] {
+        cardWindows(scope: scope, now: now).filter { $0.isSubModelLimit }
     }
 
     /// Both feeds must report within this window for a source-disagreement banner.
@@ -597,7 +602,13 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
         // a plan meter:  the cap rule skips it and the headline excludes it,
         // so drawing it as a bar put an empty meter beside a headline that
         // said otherwise (kody, PR #376).
-        windows.filter { !$0.isScopedPoolAllowance }.map { primary in
+        // A per-model detail (Fable) is a card detail row, not a card meter,
+        // and a wire plan caption ("Plan" with no reading) is not an
+        // allowance at all:  neither takes a short/long slot or the headline
+        // (native probe, PR #367).
+        windows.filter { !$0.isScopedPoolAllowance && !$0.isSubModelLimit
+                && !(($0.label == "Plan" || $0.cadence == "Plan") && $0.remainingPercent == nil) }
+            .map { primary in
             let key = Self.allowanceKey(for: primary)
             // This iPhone: only this device's primary windows. All Sources: fold
             // in mirror feeds so Mac/fleet readings can win when fresher.
@@ -610,14 +621,28 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
             let pool = mirrors.isEmpty ? [primary] : [primary] + mirrors
             return Self.resolveCardWindow(pool: pool, now: now)
         }
+        return resolved.filter {
+            let window = $0.window
+            let measured = window.remainingPercent?.isFinite == true
+                || (window.absoluteRemaining?.isFinite == true && (window.absoluteRemaining ?? -1) >= 0)
+            return measured && !window.isSupplementaryVideoQuota && !window.isScopedPoolAllowance
+                && (!window.isSubModelLimit || window.label == "Fable limit" || window.label == "Argon limit")
+        }
     }
 
     public func cardWindows(scope: CompanionSourceScope, now: Date = Date()) -> [CompanionWindowItem] {
         cardWindowRows(scope: scope, now: now).map(\.window)
     }
 
+    /// The per-model detail rows beside the plan (Anthropic's Fable limit,
+    /// Antigravity's Argon limit): the card's own sub-model identity marks
+    /// them, exactly as the widget's carried flag does.
+    public func cardDetailWindows(scope: CompanionSourceScope, now: Date = Date()) -> [CardWindow] {
+        windows.filter { $0.isSubModelLimit }.map { CardWindow(window: $0, updatedLabel: nil) }
+    }
+
     public func cardShortWindow(scope: CompanionSourceScope, now: Date = Date()) -> CardWindow? {
-        let resolved = cardWindowRows(scope: scope, now: now)
+        let resolved = cardWindowRows(scope: scope, now: now).filter { !$0.window.isSubModelLimit }
         if providerKey == "muse-assist" {
             if let weekly = resolved.first(where: {
                 QuotaWindowVocabulary.isMuseAssistWeekly(
@@ -634,7 +659,7 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
     }
 
     public func cardLongWindow(scope: CompanionSourceScope, now: Date = Date()) -> CardWindow? {
-        let resolved = cardWindowRows(scope: scope, now: now)
+        let resolved = cardWindowRows(scope: scope, now: now).filter { !$0.window.isSubModelLimit }
         if providerKey == "muse-assist" {
             if let extra = resolved.first(where: {
                 QuotaWindowVocabulary.isMuseAssistExtra(
@@ -688,7 +713,9 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
     /// spent reports whatever it last saw, and the card put that on its
     /// headline while the label beside it said "n/a".
     public func cardRemainingPercent(scope: CompanionSourceScope, now: Date = Date()) -> Double? {
-        let readings = cardWindows(scope: scope, now: now).map { window in
+        let primary = cardWindows(scope: scope, now: now).filter { !$0.isSubModelLimit }
+        let fresh = primary.filter { $0.isFresh(now: now) }
+        let readings = (fresh.isEmpty ? primary : fresh).map { window in
             CardHeadline.Reading(
                 isMuseAssistExtra: providerKey == "muse-assist"
                     && QuotaWindowVocabulary.isMuseAssistExtra(
@@ -733,7 +760,11 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
     }
 
     private static func resolveCardWindow(pool: [CompanionWindowItem], now: Date) -> CardWindow {
-        let observations = pool.map {
+        let measured = pool.filter { $0.remainingPercent?.isFinite == true || $0.absoluteRemaining?.isFinite == true }
+        let available = measured.isEmpty ? pool : measured
+        let fresh = available.filter { $0.isFresh(now: now) }
+        let candidates = fresh.isEmpty ? available : fresh
+        let observations = candidates.map {
             FleetQuotaObservation(
                 remainingPercent: $0.remainingPercent,
                 reportedAt: $0.reportedAt,
@@ -741,9 +772,9 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
             )
         }
         if let pick = FleetMacReading.pickCardDisplay(from: observations, now: now) {
-            return CardWindow(window: pool[pick.chosenIndex], updatedLabel: pick.updatedLabel)
+            return CardWindow(window: candidates[pick.chosenIndex], updatedLabel: pick.updatedLabel)
         }
-        return CardWindow(window: pool[0], updatedLabel: nil)
+        return CardWindow(window: candidates[0], updatedLabel: nil)
     }
 
     public var sourceCount: Int {
@@ -2023,11 +2054,11 @@ public final class CompanionQuotaModel: ObservableObject {
         if !antigravityWindows.isEmpty {
             let geminiWindows = antigravityWindows.filter {
                 let s = ($0.id + " " + $0.label + " " + ($0.modelType ?? "") + " " + ($0.modelId ?? "")).lowercased()
-                return s.contains("gemini")
+                return s.contains("gemini") || s.contains("argon")
             }
             let thirdPartyWindows = antigravityWindows.filter {
                 let s = ($0.id + " " + $0.label + " " + ($0.modelType ?? "") + " " + ($0.modelId ?? "")).lowercased()
-                return !s.contains("gemini")
+                return !s.contains("gemini") && !s.contains("argon")
             }
 
             if let geminiItem = consolidateAntigravityPool(
@@ -2106,6 +2137,15 @@ public final class CompanionQuotaModel: ObservableObject {
             }
         }
 
+        func reading(_ wire: WireRawWindow) -> QuotaCardProjection.Reading {
+            QuotaCardProjection.Reading(id: wire.id, providerKey: providerKey, label: wire.label,
+                window: wire.window, modelId: wire.modelId, modelType: wire.modelType,
+                remainingPercent: wire.remainingUnknown == true ? nil : wire.remainingPercent,
+                absoluteRemaining: wire.absoluteRemaining,
+                resetAt: CompanionDateFormatter.date(from: wire.resetAt), reportedAt: Self.reportedAt(from: wire),
+                source: wire.source, via: wire.via)
+        }
+
         var primaryWindows: [CompanionWindowItem] = []
         var duplicateWindows: [CompanionWindowItem] = []
         var primaryIndexByCadenceKey: [String: Int] = [:]
@@ -2123,6 +2163,7 @@ public final class CompanionQuotaModel: ObservableObject {
         // observation time.  It only judges copies:  this Mac's own reading
         // keeps its row, so an expired one greys out instead of vanishing.
         let liveWindows = rawWindows.filter { w in
+            guard reading(w).isQuota else { return false }
             let lowId = w.id.lowercased()
             let lowLabel = w.label.lowercased()
             if lowId.hasSuffix(":plan-metadata") || lowLabel == "plan details" {
@@ -2169,25 +2210,15 @@ public final class CompanionQuotaModel: ObservableObject {
         /// already replaced (owner, Oct-22-2026).  The widget asks the same
         /// question the same way, so the two cannot drift.
         func isFresher(_ candidate: WireRawWindow, than current: WireRawWindow) -> Bool {
-            let candidateFresh = isFresh(candidate)
-            let currentFresh = isFresh(current)
-            if candidateFresh != currentFresh { return candidateFresh }
-            return (CompanionDateFormatter.date(from: candidate.occurredAt) ?? .distantPast)
-                > (CompanionDateFormatter.date(from: current.occurredAt) ?? .distantPast)
+            QuotaCardProjection.preferredIndex(in: [reading(current), reading(candidate)], now: now) == 1
         }
 
         for w in liveWindows {
             let parsedReset = CompanionDateFormatter.date(from: w.resetAt)
             let parsedReportedAt = Self.reportedAt(from: w)
             let cadence = Self.formatCadence(w.label, window: w.window, resetAt: parsedReset)
-            let displayLabel = QuotaWindowVocabulary.isExtraAllowanceLabel(w.label)
-                ? w.label
-                : QuotaWindowVocabulary.windowLabel(
-                windowToken: w.window,
-                existingLabel: w.label,
-                resetAt: parsedReset
-            )
-            let pct = w.remainingPercent
+            let displayLabel = reading(w).displayLabel
+            let pct = reading(w).remainingPercent
             // A reading decides, as it does on every surface:  the export never
             // clears `isExhausted`, so a stale word must not outvote a reading
             // that says there is room left.  The provider's word is the
@@ -2301,6 +2332,7 @@ public final class CompanionQuotaModel: ObservableObject {
 
         // Standardize cadence order: shorter periods (e.g. 5-hour) precede longer periods (e.g. weekly).
         primaryWindows.sort { left, right in
+            if left.isSubModelLimit != right.isSubModelLimit { return !left.isSubModelLimit }
             if providerKey == "muse-assist" {
                 let leftWeekly = QuotaWindowVocabulary.isMuseAssistWeekly(
                     providerKey: providerKey, windowToken: left.rawWindowToken, label: left.label, resetAt: left.resetAt)
@@ -2323,8 +2355,9 @@ public final class CompanionQuotaModel: ObservableObject {
         }
 
         // Controlling percentage is the minimum among primary non-masked windows
-        let validPercents = primaryWindows.compactMap(\.remainingPercent)
-        let controllingPct = validPercents.min()
+        let primaryReadings = primaryWindows.filter { !$0.isSubModelLimit && !$0.isScopedPoolAllowance }
+        let freshReadings = primaryReadings.filter { $0.isFresh(now: now) }
+        let controllingPct = (freshReadings.isEmpty ? primaryReadings : freshReadings).compactMap(\.remainingPercent).min()
         //  Each window above already decided through the shared rule, so the
         //  pool is exhausted when any of them is.  Evaluating the provider's
         //  word against `controllingPct` instead would compare a reading that
@@ -2447,17 +2480,16 @@ public final class CompanionQuotaModel: ObservableObject {
                 > (CompanionDateFormatter.date(from: current.occurredAt) ?? .distantPast)
         }
 
-        var weeklyWin: WireRawWindow?
-        var fiveHourWin: WireRawWindow?
-        for w in windows {
-            let s = (w.id + " " + w.label).lowercased()
-            if s.contains("weekly") || s.contains("1w") || s.contains("7d") {
-                if isFresher(w, than: weeklyWin) { weeklyWin = w }
-            }
-            if s.contains("5h") || s.contains("5-hour") || s.contains("interval") {
-                if isFresher(w, than: fiveHourWin) { fiveHourWin = w }
-            }
+        let facts = windows.map {
+            QuotaCardProjection.Reading(id: $0.id, providerKey: "google-antigravity", label: $0.label,
+                window: $0.window, modelId: $0.modelId, modelType: $0.modelType,
+                remainingPercent: $0.remainingPercent, absoluteRemaining: $0.absoluteRemaining,
+                resetAt: CompanionDateFormatter.date(from: $0.resetAt), reportedAt: Self.reportedAt(from: $0),
+                source: $0.source, via: $0.via)
         }
+        let selected = QuotaCardProjection.selectedPoolIndices(in: facts, poolKey: poolKey, now: now).map { windows[$0] }
+        let weeklyWin = selected.first { Self.antigravityPeriod(of: $0) == "weekly" }
+        let fiveHourWin = selected.first { Self.antigravityPeriod(of: $0) == "5h" }
 
         let weeklyPct = weeklyWin?.remainingPercent
         // Only a fresh window may spend the pool.  A pool copy that is days old
@@ -2475,7 +2507,6 @@ public final class CompanionQuotaModel: ObservableObject {
             && QuotaCapRule.isExhausted(remainingPercent: weeklyPct,
                                         providerSaysExhausted: weeklyWin?.isExhausted ?? false)
 
-        let controllingPct: Double?
         let isExhausted: Bool
         let subtitle: String
 
@@ -2487,16 +2518,11 @@ public final class CompanionQuotaModel: ObservableObject {
             fiveHourWin.flatMap { isFresh($0) ? $0.remainingPercent : nil },
             weeklyWin.flatMap { isFresh($0) ? $0.remainingPercent : nil }
         ].compactMap { $0 }
-        let validPercents = [fiveHourWin?.remainingPercent, weeklyWin?.remainingPercent].compactMap { $0 }
 
         if weeklyExhausted && weeklyWin != nil {
-            controllingPct = weeklyPct ?? 0
             isExhausted = true
             subtitle = "\(QuotaWindowVocabulary.sevenDay) limit exhausted"
         } else {
-            controllingPct = freshPercents.min()
-                ?? validPercents.min()
-                ?? windows.compactMap(\.remainingPercent).min()
             isExhausted = QuotaCapRule.isAtCap(remainingPercent: freshPercents.min())
             subtitle = defaultSubtitle
         }
@@ -2512,9 +2538,16 @@ public final class CompanionQuotaModel: ObservableObject {
         // value, and never average or add.
         let childWindows = Self.periodRows(
             poolKey: poolKey,
-            windows: windows,
+            windows: selected,
             weeklyExhausted: weeklyExhausted
         )
+        let detailReports = windows.filter {
+            [$0.id, $0.label, $0.modelId ?? "", $0.modelType ?? ""].joined(separator: " ")
+                .localizedCaseInsensitiveContains("argon")
+        }
+        let details = buildPlatformSection(id: itemId, providerKey: "google-antigravity", title: title,
+            rawWindows: detailReports).windows
+        let projectedWindows = childWindows + details
 
         let nearestReset = childWindows.compactMap(\.resetAt).filter { $0 > now }.min()
             ?? childWindows.compactMap(\.resetAt).min()
@@ -2524,11 +2557,11 @@ public final class CompanionQuotaModel: ObservableObject {
             providerKey: "google-antigravity",
             title: title,
             subtitle: subtitle,
-            remainingPercent: controllingPct,
+            remainingPercent: childWindows.filter { !$0.isMasked }.compactMap(\.remainingPercent).min(),
             resetAt: nearestReset,
             isExhausted: isExhausted,
             isAlarmEnabled: alarmProviderIds.contains(itemId),
-            windows: childWindows,
+            windows: projectedWindows,
             duplicateWindows: [],
             iconHint: poolKey == "third-party" ? "antigravity" : "gemini"
         )
@@ -2552,13 +2585,15 @@ public final class CompanionQuotaModel: ObservableObject {
     /// pool because of it.
     private static func antigravityPeriod(of w: WireRawWindow) -> String? {
         let token = (w.window ?? "").lowercased().replacingOccurrences(of: " ", with: "")
-        let label = w.label.lowercased()
+        let label = w.label.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let weeklyLabels: Set<String> = ["weekly", "week", "7-day", "7 day", "7-day window", "7 day window"]
+        let fiveHourLabels: Set<String> = ["5h", "5hr", "5-hour", "5 hours", "5-hour window", "5 hour window", "five_hour"]
         if ["weekly", "week", "1w", "7d", "168h", "10080m"].contains(token)
-            || label.contains("weekly") || label.contains("week") {
+            || weeklyLabels.contains(label) {
             return "weekly"
         }
         if ["5h", "5hr", "5-hour", "5hours", "300m"].contains(token)
-            || label.contains("5h") || label.contains("5-hour") || label.contains("five_hour") {
+            || fiveHourLabels.contains(label) {
             return "5h"
         }
         return nil
@@ -2586,13 +2621,7 @@ public final class CompanionQuotaModel: ObservableObject {
             // take the latest observation, breaking a tie between two models of
             // the same pool with the lower value.  Never averaged, never added.
             let canonicalID = "antigravity:\(poolKey):\(period)"
-            let driving = candidates.first { $0.id == canonicalID }
-                ?? candidates.min { left, right in
-                    let l = CompanionDateFormatter.date(from: left.resetAt) ?? .distantPast
-                    let r = CompanionDateFormatter.date(from: right.resetAt) ?? .distantPast
-                    if l != r { return l > r }
-                    return (left.remainingPercent ?? 101) < (right.remainingPercent ?? 101)
-                }
+            let driving = candidates.first { $0.id == canonicalID } ?? candidates.first
             guard let driving else { return nil }
 
             // A weekly the provider reports as gone without a figure still has to
@@ -2720,7 +2749,7 @@ public final class CompanionQuotaModel: ObservableObject {
         if pKey.contains("muse-assist") || prov.contains("muse-assist") || prov.contains("muse assist") || id.contains("assist") {
             return ("muse-assist", "Muse Assist", "muse-assist")
         }
-        if pKey.contains("muse-code") || prov.contains("muse-code") || prov.contains("muse code") || id.contains("code") {
+        if pKey.contains("muse-code") || prov.contains("muse-code") || prov.contains("muse code") || id.hasPrefix("local-mac:muse-code:") {
             return ("muse-code", "Muse Code", "muse-code")
         }
         if pKey.contains("muse") || prov.contains("muse") {
@@ -2735,7 +2764,7 @@ public final class CompanionQuotaModel: ObservableObject {
         if pKey.contains("grok") || prov.contains("grok") || pKey.contains("xai") || prov.contains("xai") {
             return ("xai", "Grok", "xai")
         }
-        let fallbackKey = (raw.providerKey ?? raw.provider).trimmingCharacters(in: .whitespacesAndNewlines)
+        let fallbackKey = canonicalManifestKey(provider: raw.provider, providerKey: raw.providerKey, via: raw.via)
         let key = fallbackKey.isEmpty ? "other" : fallbackKey
         let title = WidgetPlatformDisplay.title(canonicalKey: key, wireProvider: raw.provider)
         return (key, title, fallbackKey.isEmpty ? key : fallbackKey)

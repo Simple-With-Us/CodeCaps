@@ -245,41 +245,16 @@ private extension GrokBotQuotaReader {
 
     static func makeFetcher() -> @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse) {
         { request in
-            let delegate = GrokBotNoRedirectDelegate()
-            let configuration = URLSessionConfiguration.ephemeral
-            configuration.httpCookieStorage = nil
-            configuration.urlCache = nil
-            configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-            configuration.timeoutIntervalForRequest = timeout
-            configuration.timeoutIntervalForResource = timeout
-            let session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
-            defer { session.invalidateAndCancel() }
-            let (bytes, response) = try await session.bytes(for: request)
-            guard let http = response as? HTTPURLResponse else { throw GrokBotQuotaError.unavailable }
-            if let length = http.value(forHTTPHeaderField: "Content-Length"), let count = Int(length), count > maxResponseBytes {
+            do {
+                return try await BoundedHTTPFetch.data(for: request, timeout: timeout, maxBytes: maxResponseBytes)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
                 throw GrokBotQuotaError.unavailable
             }
-            var data = Data()
-            data.reserveCapacity(16_384)
-            for try await byte in bytes {
-                guard data.count < maxResponseBytes else { throw GrokBotQuotaError.unavailable }
-                data.append(byte)
-            }
-            return (data, http)
         }
     }
 }
 
 private let grokBotSQLiteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
-private final class GrokBotNoRedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
-    func urlSession(
-        _ session: URLSession,
-        task: URLSessionTask,
-        willPerformHTTPRedirection response: HTTPURLResponse,
-        newRequest request: URLRequest,
-        completionHandler: @escaping (URLRequest?) -> Void
-    ) {
-        completionHandler(nil)
-    }
-}

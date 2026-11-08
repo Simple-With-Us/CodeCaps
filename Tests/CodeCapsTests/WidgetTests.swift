@@ -179,7 +179,7 @@ final class WidgetTests: XCTestCase {
     func testWidgetDropsACopyOfAPeriodThatEnded() throws {
         let source = try readSource(at: Self.widgetPresentationURL)
         XCTAssertTrue(
-            source.contains("QuotaFreshnessRule.isDeadCopy(observedAt: parseDate(from: w.occurredAt),"),
+            source.contains("QuotaFreshnessRule.isDeadCopy(observedAt: parseDate(from: w.reportedAt) ?? parseDate(from: w.occurredAt),"),
             "the widget must ask the shared rule about a window whose period already ended"
         )
         XCTAssertFalse(
@@ -240,13 +240,31 @@ final class WidgetTests: XCTestCase {
     /// how the plan looked when the reading was taken.
     func testWidgetOnlyLetsAFreshWindowCapAPlan() throws {
         let source = try readSource(at: Self.widgetPresentationURL)
+        let atCapMethod = source
+            .components(separatedBy: "public func atCapWindow(now: Date = Date()) -> WidgetWindowItem? {")
+            .dropFirst()
+            .first?
+            .components(separatedBy: "\n    }")
+            .first ?? ""
+        XCTAssertFalse(atCapMethod.isEmpty, "the widget must decide caps through its window selector")
+        // A platform that reports only supplementary video windows keeps them,
+        // and a stale window that is at cap with a reset still ahead may name
+        // the cap;  every other cap pick comes from the fresh windows.
         XCTAssertTrue(
-            source.contains(".filter { $0.isFresh(now: now) }"),
+            atCapMethod.contains("let planWindows = windows.filter { !$0.isSupplementaryVideoQuota }"),
+            "the widget's cap window never comes from a supplementary video pool"
+        )
+        XCTAssertTrue(
+            atCapMethod.contains("$0.isFresh(now: now)"),
             "the widget's cap window must be chosen from the fresh windows"
         )
         XCTAssertTrue(
-            source.contains("let atCap = freshWindows.first {"),
-            "the widget's cap line must be decided from the fresh windows"
+            atCapMethod.contains(".filter { !$0.isMasked && $0.remainingPercent != nil }"),
+            "masked and unknown windows must not cap a plan"
+        )
+        XCTAssertTrue(
+            atCapMethod.contains(".filter { WidgetPresentation.isAtCap(percent: $0.remainingPercent, isExhausted: $0.isExhausted) }"),
+            "the widget must use the shared cap rule after freshness filtering"
         )
     }
 
@@ -297,7 +315,11 @@ final class WidgetTests: XCTestCase {
             "the widget's weekly must be decided through the shared rule, and only a fresh reading may spend it"
         )
         XCTAssertTrue(
-            source.contains("let isExhausted = weeklyExhausted || QuotaCapRule.isAtCap(remainingPercent: freshPercents.min())"),
+            source.contains("let fresh = primary.filter { $0.isFresh(now: now) && !$0.isMasked }"),
+            "only fresh, unmasked readings may contribute to the pool cap"
+        )
+        XCTAssertTrue(
+            source.contains("let isExhausted = weeklyExhausted || QuotaCapRule.isAtCap(remainingPercent: fresh.compactMap(\\.remainingPercent).min())"),
             "a spent weekly must spend the pool even when the five-hour window still reports headroom, "
                 + "and only a fresh reading may spend it"
         )

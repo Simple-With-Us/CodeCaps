@@ -88,6 +88,43 @@ final class ResetAlarmPlanChangeTests: XCTestCase {
         XCTAssertFalse(events.first?.isPlanChange ?? true)
     }
 
+    func testMidWindowRestoreFromLowNinetiesToFullStillCountsAsAVendorReset() {
+        var tracker = ResetAlarmTracker()
+        let weekEnd = t0 + 7 * day
+        _ = tracker.process(weekly(at: t0, resetAt: weekEnd, remaining: 92), now: t0)
+
+        let later = t0 + 2 * hour
+        let events = tracker.process(weekly(at: later, resetAt: weekEnd, remaining: 100), now: later)
+
+        XCTAssertEqual(events.count, 1)
+        XCTAssertTrue(events.first?.isVendorReset ?? false, "a full refill remains a vendor reset even after some intervening use")
+    }
+
+    func testNearFullRoundingWobbleIsNotReportedAsVendorReset() {
+        var tracker = ResetAlarmTracker()
+        let weekEnd = t0 + 7 * day
+        _ = tracker.process(weekly(at: t0, resetAt: weekEnd, remaining: 99.4), now: t0)
+
+        let later = t0 + 2 * hour
+        let events = tracker.process(weekly(at: later, resetAt: weekEnd, remaining: 99.6), now: later)
+
+        XCTAssertTrue(events.isEmpty, "a sub-point rounding wobble near full is not evidence of a vendor reset")
+    }
+
+    func testPreExpirySmallDeadlineNudgeAndTenPointRiseIsNotAReset() {
+        var tracker = ResetAlarmTracker()
+        let oldEnd = t0 + 5 * day
+        _ = tracker.process(weekly(at: t0, resetAt: oldEnd, remaining: 72), now: t0)
+
+        let later = t0 + hour
+        let nudgedEnd = oldEnd + 16 * 60
+        let events = tracker.process(weekly(at: later, resetAt: nudgedEnd, remaining: 84), now: later)
+
+        XCTAssertTrue(events.isEmpty, "a 16-minute nudge is not a weekly reset even when quota rises by ten points")
+        XCTAssertEqual(tracker.state.windows[ResetAlarmTracker.windowKey(scope: "local", providerId: "musecode", windowId: "7d")]?.periodResetAt,
+                       nudgedEnd)
+    }
+
     /// The line itself.  The floor is 95 rather than 99 because the first
     /// reading after a reset can already carry a little usage.
     func testTheLevelTheQuotaLandsAtDecidesWhichNameItGets() {
@@ -194,17 +231,138 @@ final class ResetAlarmPlanChangeTests: XCTestCase {
     func testAMidCycleEventThatFellIsNeitherARefillNorAPlanChange() {
         var tracker = ResetAlarmTracker()
         let weekEnd = t0 + 7 * self.day
-        _ = tracker.process(weekly(at: t0, resetAt: weekEnd, remaining: 90), now: t0)
+        _ = tracker.process(weekly(at: t0, resetAt: weekEnd, remaining: 74), now: t0)
 
-        // The reported end jumps forward by more than half the period, which is
-        // how the tracker sees a period that ended early, and the quota falls.
+        // The saved MiniMax alerts held at 74%, then fell to 73% while the reported end moved forward.
         let later = t0 + 2 * self.hour
-        let events = tracker.process(weekly(at: later, resetAt: t0 + 11 * self.day, remaining: 40), now: later)
+        let events = tracker.process(weekly(at: later, resetAt: t0 + 11 * self.day, remaining: 73), now: later)
 
-        XCTAssertEqual(events.count, 1, "the early period end still has to be reported")
-        XCTAssertFalse(events.first?.isVendorReset ?? true, "a quota that fell is not a refill")
-        XCTAssertFalse(events.first?.isPlanChange ?? true, "a quota that fell is not a plan change")
-        XCTAssertNotEqual(events.first?.reason, .planChange, "no event may claim the quota rose")
+        XCTAssertTrue(events.isEmpty, "a future-end correction with falling quota is not a reset")
+
+        // Adopt the corrected end, then still report its actual scheduled rollover.
+        let scheduled = t0 + 11 * self.day + 60
+        let rollover = tracker.process(weekly(at: scheduled, resetAt: scheduled + 7 * self.day,
+                                              remaining: 100), now: scheduled)
+        XCTAssertEqual(rollover.map(\.windowId), ["7d"])
+        XCTAssertEqual(rollover.first?.reason, .newPeriod)
+        XCTAssertEqual(rollover.first?.endedPeriodResetAt, t0 + 11 * self.day)
+        XCTAssertFalse(rollover.first?.isVendorReset ?? true)
+        XCTAssertFalse(rollover.first?.isPlanChange ?? true)
+    }
+
+    /// The live MiniMax history recorded a stale 9:00 AM deadline, then a correction to Nov 8 at 6:00 PM with the weekly balance unchanged at 73%.
+    func testPassedMiniMaxDeadlineCorrectionWithUnchangedQuotaDoesNotAlertAndValidRolloverDoes() {
+        var tracker = ResetAlarmTracker()
+        func minimax(at observedAt: Date, resetAt: Date, remaining: Double) -> ResetAlarmObservation {
+            ResetAlarmObservation(scope: "local", providerId: "minimax", providerTitle: "MiniMax",
+                windowId: "local-mac:minimax:general:weekly", windowLabel: "7d", periodSeconds: 7 * day,
+                resetAt: resetAt, remainingPercent: remaining, observedAt: observedAt)
+        }
+
+        let firstRead = t0
+        let staleDeadline = firstRead + 25 * 60
+        _ = tracker.process([minimax(at: firstRead, resetAt: staleDeadline, remaining: 73)], now: firstRead)
+
+        let correctedRead = firstRead + 32 * 60
+        let correctedDeadline = staleDeadline + 5 * day + 9 * hour
+        let correction = tracker.process(
+            [minimax(at: correctedRead, resetAt: correctedDeadline, remaining: 73)], now: correctedRead)
+
+        XCTAssertTrue(correction.isEmpty, "a passed stale deadline corrected forward without quota restoration is not a new week")
+        let key = ResetAlarmTracker.windowKey(scope: "local", providerId: "minimax", windowId: "local-mac:minimax:general:weekly")
+        XCTAssertEqual(tracker.state.windows[key]?.periodResetAt, correctedDeadline)
+        XCTAssertEqual(tracker.state.windows[key]?.lastRemaining, 73)
+
+        let scheduled = correctedDeadline + 60
+        let rollover = tracker.process(
+            [minimax(at: scheduled, resetAt: scheduled + 7 * day, remaining: 100)], now: scheduled)
+        XCTAssertEqual(rollover.map(\.windowId), ["local-mac:minimax:general:weekly"])
+        XCTAssertEqual(rollover.first?.reason, .newPeriod)
+        XCTAssertEqual(rollover.first?.endedPeriodResetAt, correctedDeadline)
+    }
+
+    func testMiniMaxWeeklyDeadlineCorrectionNeedsAnAdvancedExplicitPeriodStart() {
+        var tracker = ResetAlarmTracker()
+        let week = 7 * day
+        let periodStart = t0 - 6 * day
+        let staleEnd = t0 + hour
+        let correctedEnd = staleEnd + week
+        func minimax(at observedAt: Date, start: Date, end: Date, remaining: Double) -> ResetAlarmObservation {
+            ResetAlarmObservation(scope: "local", providerId: "minimax", providerTitle: "MiniMax",
+                windowId: "general:weekly", windowLabel: "7d", periodSeconds: week,
+                resetAt: end, periodStartAt: start, remainingPercent: remaining, observedAt: observedAt)
+        }
+
+        _ = tracker.process([minimax(at: t0, start: periodStart, end: staleEnd, remaining: 26)], now: t0)
+        let correctionAt = staleEnd + 60
+        let correction = tracker.process(
+            [minimax(at: correctionAt, start: periodStart, end: correctedEnd, remaining: 26)], now: correctionAt)
+        XCTAssertTrue(correction.isEmpty)
+
+        let repeated = correctionAt + hour
+        XCTAssertTrue(tracker.process(
+            [minimax(at: repeated, start: periodStart, end: correctedEnd, remaining: 26)], now: repeated).isEmpty)
+
+        let rolloverAt = correctedEnd + 60
+        let rollover = tracker.process(
+            [minimax(at: rolloverAt, start: periodStart + week, end: correctedEnd + week, remaining: 24)], now: rolloverAt)
+        XCTAssertEqual(rollover.map(\.windowId), ["general:weekly"])
+        XCTAssertEqual(rollover.first?.reason, .newPeriod)
+    }
+
+    func testPassedStaleWeeklyDeadlineAdoptsFlatAndSmallFluctuationsSilently() {
+        for balance in [72.0, 73.0, 74.0] {
+            var tracker = ResetAlarmTracker()
+            let oldEnd = t0 + 25 * 60
+            let nextEnd = oldEnd + 5 * day + 9 * hour
+            _ = tracker.process(weekly(at: t0, resetAt: oldEnd, remaining: 72, provider: "minimax"), now: t0)
+            let later = t0 + 32 * 60
+            XCTAssertTrue(tracker.process(weekly(at: later, resetAt: nextEnd, remaining: balance, provider: "minimax"), now: later).isEmpty)
+            let key = ResetAlarmTracker.windowKey(scope: "local", providerId: "minimax", windowId: "7d")
+            XCTAssertEqual(tracker.state.windows[key]?.periodResetAt, nextEnd)
+            XCTAssertEqual(tracker.state.windows[key]?.lastRemaining, balance)
+            XCTAssertTrue(tracker.process(weekly(at: later + 60, resetAt: nextEnd, remaining: balance, provider: "minimax"), now: later + 60).isEmpty)
+        }
+    }
+
+    func testFleetWeeklyFutureDeadlineCorrectionsNeverTreatSmallDriftAsMidwindowRestore() {
+        for balance in [72.0, 73.0, 74.0] {
+            var tracker = ResetAlarmTracker()
+            let oldEnd = t0 + day
+            func fleet(at time: Date, end: Date, value: Double) -> ResetAlarmObservation {
+                ResetAlarmObservation(scope: "Mac.Jays.Services", providerId: "minimax", providerTitle: "MiniMax",
+                    windowId: "7d", windowLabel: "7d", periodSeconds: 7 * day,
+                    resetAt: end, remainingPercent: value, observedAt: time)
+            }
+            _ = tracker.process([fleet(at: t0, end: oldEnd, value: 72)], now: t0)
+            let later = t0 + hour
+            XCTAssertTrue(tracker.process([fleet(at: later, end: oldEnd + 5 * day, value: balance)], now: later).isEmpty)
+            let key = ResetAlarmTracker.windowKey(scope: "Mac.Jays.Services", providerId: "minimax", windowId: "7d")
+            XCTAssertEqual(tracker.state.windows[key]?.periodResetAt, oldEnd + 5 * day)
+            XCTAssertEqual(tracker.state.windows[key]?.lastRemaining, balance)
+        }
+    }
+
+    func testFlatFullQuotaStillReportsElapsedWeeklyAndCalendarMonthRollovers() {
+        for (period, advance) in [(7 * day, 7 * day), (30 * day, 28 * day), (30 * day, 31 * day)] {
+            var tracker = ResetAlarmTracker()
+            let end = t0 + hour
+            _ = tracker.process([reading("cadence", period: period, resetAt: end, remaining: 100, observedAt: t0)], now: t0)
+            let later = end + 60
+            let events = tracker.process([reading("cadence", period: period, resetAt: end + advance, remaining: 100, observedAt: later)], now: later)
+            XCTAssertEqual(events.count, 1)
+            XCTAssertEqual(events.first?.reason, .newPeriod)
+        }
+    }
+
+    func testFiveHourFlatQuotaRolloverRetainsNearCapNotificationPolicy() {
+        var tracker = ResetAlarmTracker()
+        let end = t0 + hour
+        _ = tracker.process([reading("5h", period: 5 * hour, resetAt: end, remaining: 10, observedAt: t0)], now: t0)
+        let later = end + 60
+        let events = tracker.process([reading("5h", period: 5 * hour, resetAt: end + 5 * hour, remaining: 10, observedAt: later)], now: later)
+        XCTAssertEqual(events.count, 1)
+        XCTAssertEqual(events.first?.reason, .newPeriod)
     }
 
     // MARK: The words
