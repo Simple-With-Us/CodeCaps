@@ -44,10 +44,11 @@ import AppIntents
   precondition(minimax.dualWindows()?.window1.id == "minimax:5h")
   precondition(minimax.dualWindows()?.window2.id == "minimax:7d")
   let gemini = parsed.first { $0.id == "antigravity-gemini" }!
-  // The widget's pool rule keeps the freshest copy of each period, unlike
-  // the phone's canonical-row preference: both copies here carry no
-  // observation stamp, so the payload's first row wins the five-hour slot.
-  precondition(gemini.primaryWindows.map(\.remainingPercent) == [7, 1])
+  // The exported pool rows are authoritative beside raw model observations
+  // (WidgetPlatformDisplay.selectedPoolIndices): the canonical
+  // antigravity:gemini:5h copy (63) wins the five-hour slot and the raw 7%
+  // copy never reaches a bar.
+  precondition(gemini.primaryWindows.map(\.remainingPercent) == [63, 1])
   precondition(gemini.remainingPercent == 1 && gemini.detailWindows.map(\.label) == ["Argon limit"])
   precondition(gemini.atCapWindow() == nil)
   let copilot = parsed.first { $0.providerKey == "github-copilot" }!
@@ -69,7 +70,7 @@ import AppIntents
        remainingPercent:0, resetAt:nil, isExhausted:false, isAlarmEnabled:false, windows:[plan,week,fable])
   precondition(phone.cardShortWindow(scope:.allSources)?.window.id == "weekly")
   precondition(phone.cardLongWindow(scope:.allSources) == nil && phone.cardRemainingPercent(scope:.allSources) == 57)
-  precondition(phone.isExpandable && phone.cardDetailWindows(scope:.allSources).map(\.window.label) == ["Fable limit"])
+  precondition(phone.isExpandable && phone.cardDetailWindows(scope:.allSources).map(\.label) == ["Fable limit"])
   let weeklyHealthy = WidgetWindowItem(id:"weekly", label:"Weekly", cadence:"7d", remainingPercent:47, resetAt:nil)
   let positiveExtra = WidgetWindowItem(id:"extra", label:"Additional tokens", cadence:"Other limit", remainingPercent:81,
        resetAt:nil, isExtraAllowance:true)
@@ -93,7 +94,10 @@ import AppIntents
   precondition(counted.controllingWindow(.mostHeadroom)?.id == zero.id)
   precondition(counted.usableMuseExtra?.absoluteRemaining == 42)
   precondition(counted.windows.last?.absoluteRemaining == 42)
-  precondition(counted.dualWindows() != nil)
+  // A count-only extra (no percent, no reset) displays its "N left" caption
+  // but never fills a meter-pair slot:  the shared rule seats only windows
+  // with a percentage or a reset (QuotaWindowPairing.meterPair, PR #360).
+  precondition(counted.dualWindows() == nil)
   precondition(!ShowWidgetPlanDetailIntent.openAppWhenRun)
   let defaults=UserDefaults(suiteName:WidgetSnapshotStore.appGroupId)!
   let scope="native-regression-"+UUID().uuidString
@@ -262,6 +266,28 @@ import AppIntents
   precondition(platforms[1].usableMuseExtra?.absoluteRemaining == 42)
   precondition(platforms[1].atCapWindow()?.remainingPercent == 0)
   let entry=CodeCapsWidgetEntry(date:Date(),platforms:platforms,lastUpdated:Date())
+  // Render the antigravity pool through the real wire parse, so the gallery
+  // shows the pool row and its single Argon detail exactly as the widget
+  // draws them:  one "Argon limit" row beside the pool meters, and the pool
+  // headline read from the pool's own windows, never the spent detail.
+  let antiStamp = ISO8601DateFormatter().string(from: Date())
+  let antiReset = ISO8601DateFormatter().string(from: Date().addingTimeInterval(3600))
+  func antiWire(_ id: String, _ token: String?, _ percent: Double?, _ label: String, model: String? = nil) -> [String: Any] {
+   var value: [String: Any] = ["id":id, "provider":"google-antigravity", "providerKey":"google-antigravity",
+       "label":label, "occurredAt":antiStamp, "reportedAt":antiStamp, "resetAt":antiReset]
+   value["window"] = token; value["remainingPercent"] = percent
+   value["modelId"] = model
+   return value
+  }
+  let antiPayload = [
+   antiWire("raw:gemini:5h", "5h", 7, "Gemini 5-hour"),
+   antiWire("antigravity:gemini:5h", "5h", 63, "Gemini Models 5-hour"),
+   antiWire("antigravity:gemini:weekly", "7d", 1, "Gemini Models Weekly"),
+   antiWire("gemini:argon", "5h", 0, "Gemini Argon", model:"Argon")
+  ]
+  let antiParsed = WidgetPresentation.parseSnapshot(data: try JSONSerialization.data(withJSONObject:["windows":antiPayload]))
+  let geminiPlatform = antiParsed.first { $0.id == "antigravity-gemini" }!
+  let antiEntry = CodeCapsWidgetEntry(date:Date(), platforms:[geminiPlatform], lastUpdated:Date())
   for (name,scheme) in [("light",ColorScheme.light),("dark",ColorScheme.dark)] {
    let view=HStack(alignment:.top,spacing:20) {
     VStack {
@@ -277,6 +303,20 @@ import AppIntents
    guard let img=renderer.cgImage else {fatalError("render unavailable")}
    let rep=NSBitmapImageRep(cgImage:img)
    try rep.representation(using:.png,properties:[:])!.write(to:URL(fileURLWithPath:"\(ProcessInfo.processInfo.environment["CODECAPS_WIDGET_RENDER_DIR"] ?? NSTemporaryDirectory())/widget-gallery-"+name+".png"))
+   let antiView=HStack(alignment:.top,spacing:20) {
+    VStack {
+     Text("Large overview (antigravity pool)").font(.caption)
+     OverviewLargeView(entry:antiEntry).frame(width:338,height:354)
+    }
+    VStack {
+     Text("In-widget plan details (antigravity pool)").font(.caption)
+     WidgetPlanDetailView(platform:geminiPlatform,entry:antiEntry).padding(14).frame(width:338,height:354)
+    }
+   }.padding(16).background(scheme == .dark ? Color.black : Color.white).environment(\.colorScheme,scheme)
+   let antiRenderer=ImageRenderer(content:antiView);antiRenderer.scale=2
+   guard let antiImg=antiRenderer.cgImage else {fatalError("render unavailable")}
+   let antiRep=NSBitmapImageRep(cgImage:antiImg)
+   try antiRep.representation(using:.png,properties:[:])!.write(to:URL(fileURLWithPath:"\(ProcessInfo.processInfo.environment["CODECAPS_WIDGET_RENDER_DIR"] ?? NSTemporaryDirectory())/widget-gallery-antigravity-"+name+".png"))
   }
  }
 }
