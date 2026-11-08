@@ -41,7 +41,11 @@ public struct QuotaWindowCaption: Equatable, Sendable {
     ///
     /// It is a separate name on purpose:  a caller that has a window uses the
     /// window's own caption,  and a caller that has no window says so here.
-    public static func withoutQualifier(token: String, resetCaption: String, compactResetCaption: String = "") -> QuotaWindowCaption {
+    /// `compactResetCaption` has no default on purpose:  a caption row falls
+    /// back to it when the full reset line cannot fit,  and a caller that left
+    /// it out would print a caption whose only narrow form is the truncation
+    /// the fallback exists to avoid.  Pass the countdown with the reset line.
+    public static func withoutQualifier(token: String, resetCaption: String, compactResetCaption: String) -> QuotaWindowCaption {
         QuotaWindowCaption(token: token, qualifier: "", resetCaption: resetCaption, compactResetCaption: compactResetCaption)
     }
 
