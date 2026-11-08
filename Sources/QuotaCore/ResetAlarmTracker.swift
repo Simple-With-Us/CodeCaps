@@ -504,8 +504,27 @@ public struct ResetAlarmTracker: Sendable {
                 // 3:48 pm, 5:03 pm and later false MiniMax and Antigravity
                 // 5h alerts).  Across a passed end the climb keeps settling
                 // small early moves as before.
+                // A mid-window restore may also roll the window forward:  the
+                // vendor reissues the period instead of holding it where it
+                // was.  The evidence is the same shape the held-end rules
+                // below trust, sized up — a restore-sized rise that lands
+                // substantially restored.  A rolling slide cannot meet it:
+                // its climb is gradual, so a single poll's rise past the
+                // ceiling never carries a 30-point rise with it (CC-215's
+                // false alerts moved a few points to a few tens of points
+                // across the boundary, never thirty).  Owner 2026-11-07
+                // (CC-218):  a reset that moved the window end was missed
+                // entirely by the held-end rules.
+                let rolledRestore = reading.flatMap { current in
+                    window.lastRemaining.map {
+                        current >= ResetAlarmPolicy.courtesyRestoreCeiling
+                            && $0 <= ResetAlarmPolicy.courtesyRestoreCeiling
+                            && current >= $0 + ResetAlarmPolicy.vendorRestoreRise
+                    }
+                } ?? false
                 let forwardJump = jump > required
                     || (jump > ResetAlarmPolicy.resetDriftTolerance && climbed && hasPassed)
+                    || (!hasPassed && rolledRestore)
                 if forwardJump {
                     isReset = true
                     // When the window had *not* reached its own scheduled end,
