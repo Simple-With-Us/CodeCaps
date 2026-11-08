@@ -621,10 +621,10 @@ load_sentry_auth() {
       return 1
     fi
     token="$(printf '%s' "$raw" | tr -d '\r')"
-  elif [[ -x "${FLEET_SECRETS_BIN:-}" ]] || command -v fleet-secrets &>/dev/null; then
+  elif [[ -z "$token" ]] && { [[ -x "${FLEET_SECRETS_BIN:-}" ]] || command -v fleet-secrets &>/dev/null; }; then
+    # The reason is only for the case that ends without a token:  a CodeCaps
+    # token in the slot wins and leaves the reason empty (PR #357 review).
     SENTRY_TOKEN_REASON="an explicit Infisical service token is required; machine identity is disabled for CodeCaps automation"
-    # Fall through: an explicit SENTRY_AUTH_TOKEN in the environment is still an
-    # approved source, and returning here would discard it.
   fi
   # Nothing better turned up, so the DSN in the CodeCaps slot is the answer,
   # and the case below refuses it by name.

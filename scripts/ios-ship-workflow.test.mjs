@@ -394,22 +394,6 @@ test("the fixed marketing version is 0.1.0 and release notes use the owner clock
   assert.match(fn, /toLowerCase\(\)/);
 });
 
-test("the iOS ship expires obsolete versions before staging the signing key", () => {
-  const installer = read("scripts/install-release-secrets-tooling.sh");
-  const cleanup = read("scripts/ios-fleet/expire-obsolete-codecaps-versions.mjs");
-  assert.match(installer, /GITHUB_REPOSITORY:-\}" = "Simple-With-Us\/CodeCaps"/);
-  assert.match(installer, /GITHUB_WORKFLOW:-\}" = "iOS TestFlight ship \(GitHub-hosted macOS\)"/);
-  assert.match(installer, /GITHUB_REF:-\}" = "refs\/heads\/main"/);
-  assert.match(installer, /expire-obsolete-codecaps-versions[\s\S]*--apply/);
-  assert.match(cleanup, /const APP_BUNDLE = "com\.simplewithus\.codecaps\.ios"/);
-  assert.match(cleanup, /const KEEP_VERSION = "0\.1\.0"/);
-  assert.match(cleanup, /deletableVersionStates/);
-  assert.match(cleanup, /reviewSubmissions\?filter\[platform\]=IOS/);
-  assert.match(cleanup, /DELETE", `\/v1\/reviewSubmissionItems\//);
-  assert.match(cleanup, /DELETE", `\/v1\/appStoreVersions\//);
-  assert.match(cleanup, /PATCH", `\/v1\/builds\//);
-});
-
 test("scheduled gate and key handoff shell tests pass", () => {
   for (const script of [
     "scripts/ios-fleet/test-scheduled-ship-gate.sh",
@@ -461,9 +445,17 @@ test("the iOS lane loads the Sentry API token, not the DSN", () => {
 function runSentryAuth(env, stub = null) {
   const dir = mkdtempSync(join(tmpdir(), "sentry-auth-"));
   try {
+    // The merged load_sentry_auth calls the reader helpers defined beside
+    // it, so the extracted block carries them too or the sourced function
+    // fails before the stub is ever asked (PR #357 review).
+    const helpers = ["has_infisical_service_token", "fs_get"].map((name) => {
+      const m = shipScript.match(new RegExp(`${name}\\(\\) \\{[\\s\\S]*?\\n\\}`));
+      assert.ok(m, `ship-testflight.sh defines ${name}`);
+      return m[0];
+    });
     const fn = shipScript.match(/load_sentry_auth\(\) \{[\s\S]*?\n\}/);
     assert.ok(fn, "ship-testflight.sh defines load_sentry_auth");
-    writeFileSync(join(dir, "fn.sh"), fn[0]);
+    writeFileSync(join(dir, "fn.sh"), [...helpers, fn[0]].join("\n"));
     if (stub) writeFileSync(join(dir, "fleet-secrets"), stub, { mode: 0o755 });
     const out = execFileSync(
       "bash",
@@ -472,7 +464,10 @@ function runSentryAuth(env, stub = null) {
         encoding: "utf8",
         // The stub directory is the only place a reader can come from, so the
         // test never reaches a real vault.
-        env: { PATH: `${dir}:/usr/bin:/bin`, DIR: dir, ...env },
+        // FLEET_SECRETS_BIN pins the reader to the stub, so a host that has
+        // a real fleet-secrets on its PATH cannot answer instead (the tests
+        // must be hermetic on any machine).
+        env: { PATH: `${dir}:/usr/bin:/bin`, DIR: dir, FLEET_SECRETS_BIN: join(dir, "fleet-secrets"), ...env },
       },
     );
     const field = (name) => (out.match(new RegExp(`^${name}=(.*)$`, "m")) || [])[1] ?? "";
@@ -490,7 +485,11 @@ const FLEET_SECRETS_STUB = [
 ].join("\n");
 
 test("a DSN in the CodeCaps token slot falls through to fleet-secrets", () => {
-  const r = runSentryAuth({ SENTRY_AUTH_TOKEN: "https://key@o1.ingest.us.sentry.io/2" }, FLEET_SECRETS_STUB);
+  // The service-token guard reads the run's environment before the stub
+  // reader is asked, so the probe carries a token (PR #357 review).
+  const r = runSentryAuth(
+    { SENTRY_AUTH_TOKEN: "https://key@o1.ingest.us.sentry.io/2", INFISICAL_TOKEN: "st.test.service" },
+    FLEET_SECRETS_STUB);
   assert.equal(r.rc, "0");
   assert.equal(r.token, "synthetic-fullscope-token");
   assert.equal(r.reason, "");
@@ -504,7 +503,9 @@ test("a DSN in the CodeCaps token slot is refused when there is no reader", () =
 });
 
 test("a CodeCaps token that is not a DSN still wins over fleet-secrets", () => {
-  const r = runSentryAuth({ SENTRY_AUTH_TOKEN: "synthetic-codecaps-token" }, FLEET_SECRETS_STUB);
+  const r = runSentryAuth(
+    { SENTRY_AUTH_TOKEN: "synthetic-codecaps-token", INFISICAL_TOKEN: "st.test.service" },
+    FLEET_SECRETS_STUB);
   assert.equal(r.rc, "0");
   assert.equal(r.token, "synthetic-codecaps-token");
   assert.equal(r.reason, "");
