@@ -533,7 +533,9 @@ public struct ResetAlarmTracker: Sendable {
                     // window accepts a 28-to-31-day start advance per period;
                     // fixed cadences use drift tolerance.
                     let periods = (advance / period).rounded()
-                    guard periods >= 1 else { return true }
+                    // An unmoved explicit start cannot confirm a rollover: the
+                    // provider must publish the new period on both sides.
+                    guard periods >= 1 else { return false }
                     if (28 * 86_400...31 * 86_400).contains(period) {
                         return advance >= periods * 28 * 86_400 - tolerance && advance <= periods * 31 * 86_400 + tolerance
                     }
