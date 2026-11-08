@@ -642,8 +642,7 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
                 return weekly
             }
         }
-        let window = resolved.map(\.window).first(where: { $0.isShortCadence }) ?? resolved.first?.window
-        return resolved.first(where: { $0.window.id == window?.id })
+        return cardMeterPair(resolved).short
     }
 
     public func cardLongWindow(scope: CompanionSourceScope, now: Date = Date()) -> CardWindow? {
@@ -660,12 +659,38 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
                 return extra
             }
         }
-        let short = cardShortWindow(scope: scope, now: now)?.window
-        let nonShort = resolved.filter { !$0.window.isShortCadence }
-        if let match = nonShort.first(where: { $0.window.id != short?.id }) {
-            return match
+        return cardMeterPair(resolved).long
+    }
+
+    /// The card's two meters, chosen by the shared rule.
+    ///
+    /// The phone used to pick the second meter by "the first window that is
+    /// not short", which is not a rule:  MiniMax's video allowance is a
+    /// one-day window beside the real weekly one, so it won the long slot and
+    /// the weekly reading the owner actually routes on was pushed into the
+    /// expanded list.  The shared rule (QuotaWindowPairing.meterPair) is
+    /// the one the Mac's Glance panel uses:  the window nearest to its cap on
+    /// each side, with the supplementary, scoped and sub-model allowances
+    /// left out because none of them is the limit the plan is sold on.
+    private func cardMeterPair(_ resolved: [CardWindow]) -> (short: CardWindow?, long: CardWindow?) {
+        let candidates = resolved.map { row in
+            QuotaWindowPairing.MeterCandidate(
+                id: row.window.id,
+                remainingPercent: row.window.remainingPercent,
+                resetAt: row.window.resetAt,
+                isShort: row.window.isShortCadence,
+                isExcluded: row.window.isSupplementaryVideoQuota
+                    || row.window.isScopedPoolAllowance
+                    || row.window.isSubModelLimit
+                    || row.window.isMasked
+            )
         }
-        return resolved.first(where: { $0.window.id != short?.id })
+        let pair = QuotaWindowPairing.meterPair(candidates)
+        func card(_ candidate: QuotaWindowPairing.MeterCandidate?) -> CardWindow? {
+            guard let candidate else { return nil }
+            return resolved.first(where: { $0.window.id == candidate.id })
+        }
+        return (card(pair.short), card(pair.long))
     }
 
     /// The card's headline percentage: the lowest honest reading on the card.
@@ -2695,7 +2720,7 @@ public final class CompanionQuotaModel: ObservableObject {
         let id = raw.id.lowercased()
 
         if pKey.contains("anthropic") || prov.contains("anthropic") || prov.contains("claude") {
-            return ("anthropic", "Claude Code", "anthropic")
+            return ("anthropic", WidgetPlatformDisplay.title(canonicalKey: "anthropic"), "anthropic")
         }
         if pKey.contains("openai") || prov.contains("openai") || prov.contains("codex") {
             return ("openai", "Codex", "openai")
