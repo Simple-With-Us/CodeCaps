@@ -91,4 +91,30 @@ final class QuotaCardProjectionTests: XCTestCase {
                     row("raw", "google-antigravity", "7d", 51)]
         XCTAssertEqual(QuotaCardProjection.selectedPoolIndices(in: rows, poolKey: "gemini", now: now), [1])
     }
+
+    /// The bare-cadence fallback in `allowanceKey` carries the provider, so
+    /// two providers' identical cadences never collapse into one grouping
+    /// bucket (Kody review, PR #367).
+    func testBareCadenceAllowanceKeyIsProviderPrefixed() {
+        let grok = row("grok-weekly", "grok-bot", "7d", 50)
+        let cursor = row("cursor-weekly", "cursor", "7d", 90)
+        XCTAssertNotEqual(grok.allowanceKey, cursor.allowanceKey,
+                          "two providers' weekly windows must not share an allowance key")
+        XCTAssertTrue(grok.allowanceKey.hasPrefix("grok-bot:"))
+        // Within one provider the primary rows still group together.
+        XCTAssertEqual(grok.allowanceKey,
+                       row("grok-weekly-copy", "grok-bot", "7d", 51).allowanceKey)
+    }
+
+    /// Model classification is by exact token: a model id that merely
+    /// contains the word is not the Fable limit (Kody review, PR #367).
+    func testFableDetectionIsExactTokenNotSubstring() {
+        XCTAssertNotNil(row("claude:fable", "anthropic", "7d", 0, model: "Fable").detailName)
+        XCTAssertNil(row("claude:fable-era", "anthropic", "7d", 0, model: "Fable-era").detailName,
+                      "fable-era is its own model, not the Fable limit")
+        XCTAssertNil(row("claude:fabled", "anthropic", "7d", 0, model: "Fabled").detailName)
+        XCTAssertNil(row("antigravity:argonaut", "google-antigravity", "5h", 0, model: "Argonaut").detailName,
+                      "Argonaut is not the Argon limit")
+        XCTAssertNotNil(row("gemini:argon", "google-antigravity", "5h", 0, model: "Argon").detailName)
+    }
 }

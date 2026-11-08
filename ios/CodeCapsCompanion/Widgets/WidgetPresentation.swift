@@ -27,6 +27,12 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
     /// the video tokens - a "Hailuo" daily arrives here as "1d window"
     /// (Kody review, PR #367).
     public let isSupplementaryVideoQuota: Bool
+    /// True when the window is a per-model detail beside the plan (Anthropic's
+    /// Fable, Antigravity's Argon) rather than one of the plan's own meters.
+    /// The identity is captured at construction from the wire fields, for the
+    /// same reason the video identity is:  the display label rewrite happens
+    /// here, after the question has to be answered.
+    public let isModelDetail: Bool
     /// Short distinguishing label for a bar when two bars share one cadence
     /// token (e.g. two "7d" bars).  "Free weekly limit" reads "weekly",
     /// "Additional tokens" reads "additional".  Empty when the row needs no
@@ -56,6 +62,7 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
         barQualifier: String = "",
         isExtraAllowance: Bool = false,
         isSupplementaryVideoQuota: Bool = false,
+        isModelDetail: Bool = false,
         absoluteRemaining: Double? = nil
     ) {
         self.id = id
@@ -70,6 +77,7 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
         self.barQualifier = barQualifier
         self.isExtraAllowance = isExtraAllowance
         self.isSupplementaryVideoQuota = isSupplementaryVideoQuota
+        self.isModelDetail = isModelDetail
     }
 
     /// Whether the reading is old enough that the widget says when it was
@@ -164,6 +172,7 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
             barQualifier: qualifier,
             isExtraAllowance: isExtraAllowance,
             isSupplementaryVideoQuota: isSupplementaryVideoQuota,
+            isModelDetail: isModelDetail,
             absoluteRemaining: absoluteRemaining
         )
     }
@@ -207,6 +216,22 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
     /// Server-supplied fallback window label (Phase 2 backend manifest).
     public let defaultWindowLabel: String?
     public let planMetadata: PlanMetadata?
+
+    /// The plan's own meters.  Per-model details (Fable, Argon) and
+    /// supplementary video allowances sit beside the plan, not inside it, so
+    /// a detail view or a focus bar picks from these.
+    public var primaryWindows: [WidgetWindowItem] {
+        windows.filter { !$0.isModelDetail && !$0.isSupplementaryVideoQuota }
+    }
+
+    /// The per-model detail windows beside the plan, in payload order.
+    public var detailWindows: [WidgetWindowItem] {
+        windows.filter { $0.isModelDetail }
+    }
+
+    /// Whether a detail scope exists for this platform at all:  a plan with
+    /// no per-model rows has nothing to expand into.
+    public var hasModelDetails: Bool { !detailWindows.isEmpty }
 
     public init(
         id: String,
@@ -313,7 +338,9 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
         // pool never reports the subscription capped (Sentry review, PR
         // #369).  A platform that reports ONLY video windows keeps them -
         // they are all it has.
-        let planWindows = windows.filter { !$0.isSupplementaryVideoQuota }
+        // A per-model detail (Argon, Fable) is beside the plan for the same
+        // reason:  its own spent limit does not cap the subscription.
+        let planWindows = windows.filter { !$0.isSupplementaryVideoQuota && !$0.isModelDetail }
         let capPool = planWindows.isEmpty ? windows : planWindows
         return capPool
             .filter { $0.isFresh(now: now) || (WidgetPresentation.isAtCap(percent: $0.remainingPercent, isExhausted: $0.isExhausted) && $0.resetAt != nil && $0.resetAt! > now) }
@@ -451,6 +478,8 @@ public enum WidgetPresentation {
 
     public static func displayPercent(percent: Double?, isMasked: Bool) -> String {
         if isMasked { return "n/a" }
+        // A non-finite figure is no figure:  a NaN must not trap the
+        // integer conversion (native probe, PR #367).
         guard let percent, percent.isFinite else { return "—" }
         return "\(Int(min(100, max(0, percent)).rounded()))%"
     }
@@ -971,6 +1000,14 @@ public enum WidgetPresentation {
         }
 
         for w in liveWindows {
+            // The wire's plan-metadata rows are captions, not allowances:  a
+            // bare "Plan" or "Plan Details" row carries no reading, and if it
+            // were carried it would take a bar slot beside the plan's own
+            // meters (native probe, PR #367).
+            let trimmedLabel = w.label.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard !w.id.lowercased().hasSuffix(":plan-metadata"),
+                  trimmedLabel != "plan details",
+                  !(trimmedLabel == "plan" && w.remainingPercent == nil) else { continue }
             let parsedReset = parseDate(from: w.resetAt)
             let observed = parseDate(from: w.occurredAt)
             let cadence = formatCadence(w.label, window: w.window, resetAt: parsedReset)
@@ -980,7 +1017,7 @@ public enum WidgetPresentation {
             // the word is the fallback for a window that reports no figure.
             let exhausted = QuotaCapRule.isExhausted(remainingPercent: pct,
                                                       providerSaysExhausted: w.isExhausted ?? false)
-            let displayLabel = QuotaWindowVocabulary.windowLabel(
+            var displayLabel = QuotaWindowVocabulary.windowLabel(
                 windowToken: w.window,
                 existingLabel: w.label.isEmpty ? cadence : w.label,
                 resetAt: parsedReset
@@ -1007,6 +1044,16 @@ public enum WidgetPresentation {
                 modelType: w.modelType,
                 label: w.label
             )
+            // The per-model detail identity is answered the same way, at
+            // construction, from the same wire fields; the detail row then
+            // carries its canonical "<Model> limit" display label.
+            let detailName = QuotaCardProjection.Reading(
+                id: w.id, providerKey: providerKey, label: w.label, window: w.window,
+                modelId: w.modelId, modelType: w.modelType).detailName
+            let isModelDetail = detailName != nil
+            if isModelDetail {
+                displayLabel = detailName! + " limit"
+            }
 
             let item = WidgetWindowItem(
                 id: w.id,
@@ -1019,6 +1066,7 @@ public enum WidgetPresentation {
                 observedAt: observed,
                 isExtraAllowance: isExtraAllowance,
                 isSupplementaryVideoQuota: isSupplementaryVideo,
+                isModelDetail: isModelDetail,
                 absoluteRemaining: w.absoluteRemaining
             )
 
@@ -1209,6 +1257,27 @@ public enum WidgetPresentation {
                 isExhausted: fiveHourSpent,
                 isMasked: weeklyExhausted,
                 observedAt: parseDate(from: f.reportedAt) ?? parseDate(from: f.occurredAt)
+            ))
+        }
+
+        // Sub-model limits (Argon) are details beside the pool, not pool
+        // meters:  the pool rows stay the plan's own five-hour and weekly
+        // windows (native probe: gemini detailWindows == ["Argon limit"]).
+        for w in windows where !childWindows.contains(where: { $0.id == w.id }) {
+            let reading = QuotaCardProjection.Reading(
+                id: w.id, providerKey: "google-antigravity", label: w.label, window: w.window,
+                modelId: w.modelId, modelType: w.modelType)
+            guard let detail = reading.detailName else { continue }
+            childWindows.append(WidgetWindowItem(
+                id: w.id,
+                label: detail + " limit",
+                cadence: shortCadence(cadence: w.window ?? "", label: w.label),
+                remainingPercent: w.remainingPercent,
+                resetAt: parseDate(from: w.resetAt),
+                isExhausted: QuotaCapRule.isExhausted(remainingPercent: w.remainingPercent,
+                                                      providerSaysExhausted: w.isExhausted ?? false),
+                observedAt: parseDate(from: w.occurredAt),
+                isModelDetail: true
             ))
         }
 

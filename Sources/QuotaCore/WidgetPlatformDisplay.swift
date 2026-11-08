@@ -203,10 +203,23 @@ public enum QuotaCardProjection {
         }
 
         /// Only these model limits have a separate detail in the companion.
+        /// The identity fields are tokenized on non-alphanumeric characters
+        /// and matched exactly, so a model id like "Fabled" or "fable-era"
+        /// cannot be classified as the Fable limit by a substring accident
+        /// (Kody review, PR #367).
         public var detailName: String? {
-            let identity = [id, label, modelId ?? "", modelType ?? ""].joined(separator: " ").lowercased()
-            if providerKey == "anthropic", identity.contains("fable") { return "Fable" }
-            if providerKey == "google-antigravity", identity.contains("argon") { return "Argon" }
+            let tokens = Set(
+                [id, label, modelId ?? "", modelType ?? ""]
+                    .joined(separator: " ")
+                    .lowercased()
+                    // A hyphen or underscore stays inside a token:  a
+                    // model id like "fable-era" is one model, not the Fable
+                    // limit; structural separators (":", "/", whitespace)
+                    // are what split the fields.
+                    .split(whereSeparator: { $0.isWhitespace || ":·/|,;".contains($0) })
+                    .map(String.init))
+            if providerKey == "anthropic", tokens.contains("fable") { return "Fable" }
+            if providerKey == "google-antigravity", tokens.contains("argon") { return "Argon" }
             return nil
         }
 
@@ -229,8 +242,11 @@ public enum QuotaCardProjection {
             if QuotaWindowVocabulary.isExtraAllowance(providerKey: providerKey, label: label, windowToken: window) {
                 return "extra:" + cadence
             }
-            // Primary model names describe observations of the same plan allowance.
-            return cadence
+            // Primary model names describe observations of the same plan
+            // allowance.  The provider prefixes the bare-cadence fallback so
+            // distinct providers cannot collapse into one grouping bucket
+            // (Kody review, PR #367).
+            return providerKey.lowercased() + ":" + cadence
         }
 
         public var displayLabel: String {

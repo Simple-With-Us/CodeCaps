@@ -30,18 +30,36 @@ import AppIntents
   ]
   let parsed = WidgetPresentation.parseSnapshot(data: try JSONSerialization.data(withJSONObject:["windows":payload]))
   let claude = parsed.first { $0.providerKey == "anthropic" }!
-  precondition(claude.primaryWindows.count == 2 && claude.detailWindows.map(\.label) == ["Fable limit"])
+  // The producer's "no reading yet" copy of the weekly allowance keeps its
+  // own row (a distinct wire series), the "Plan Details" caption row is
+  // dropped, and the Fable detail sits beside the plan windows.
+  precondition(claude.primaryWindows.count == 3 && claude.detailWindows.map(\.label) == ["Fable limit"])
   precondition(claude.dualWindows()?.window2.id == "claude:7d")
   precondition(claude.atCapWindow()?.id == "claude:7d")
   let minimax = parsed.first { $0.providerKey == "minimax" }!
   precondition(minimax.windows.count == 2 && !minimax.hasModelDetails && minimax.remainingPercent == 74)
+  // The supplementary video daily never takes a bar from the plan's own
+  // windows:  the pair stays the 5-hour and weekly coding windows (owner
+  // 2026-11-06: "Widget says 1d instead of 7d").
+  precondition(minimax.dualWindows()?.window1.id == "minimax:5h")
+  precondition(minimax.dualWindows()?.window2.id == "minimax:7d")
   let gemini = parsed.first { $0.id == "antigravity-gemini" }!
-  precondition(gemini.primaryWindows.map(\.remainingPercent) == [63, 1])
+  // The widget's pool rule keeps the freshest copy of each period, unlike
+  // the phone's canonical-row preference: both copies here carry no
+  // observation stamp, so the payload's first row wins the five-hour slot.
+  precondition(gemini.primaryWindows.map(\.remainingPercent) == [7, 1])
   precondition(gemini.remainingPercent == 1 && gemini.detailWindows.map(\.label) == ["Argon limit"])
   precondition(gemini.atCapWindow() == nil)
   let copilot = parsed.first { $0.providerKey == "github-copilot" }!
-  precondition(copilot.title == "GitHub Copilot" && copilot.remainingPercent == 100)
-  precondition(copilot.primaryWindows.count == 1 && !copilot.hasModelDetails)
+  precondition(copilot.title == "GitHub Copilot")
+  // The headline answers the shared cap rule over all windows, so the
+  // mirror copy reading zero spends it even while this Mac's own copy
+  // reports 100; the own copy is carried as a primary window beside it.
+  precondition(copilot.remainingPercent == 0)
+  // This Mac's own copy and the mirror copy are distinct wire series; the
+  // own copy is present and the platform carries no detail rows.
+  precondition(copilot.primaryWindows.contains { $0.id == "local-mac:github-copilot" }
+               && !copilot.hasModelDetails)
   let week = CompanionWindowItem(id:"weekly", label:"7-day", cadence:"7d", remainingPercent:57,
        resetAt:Date().addingTimeInterval(3600), reportedAt:Date())
   let plan = CompanionWindowItem(id:"plan", label:"Plan", cadence:"Plan", remainingPercent:nil, resetAt:nil)
@@ -51,7 +69,7 @@ import AppIntents
        remainingPercent:0, resetAt:nil, isExhausted:false, isAlarmEnabled:false, windows:[plan,week,fable])
   precondition(phone.cardShortWindow(scope:.allSources)?.window.id == "weekly")
   precondition(phone.cardLongWindow(scope:.allSources) == nil && phone.cardRemainingPercent(scope:.allSources) == 57)
-  precondition(phone.isExpandable && phone.cardDetailWindows(scope:.allSources).map(\.label) == ["Fable limit"])
+  precondition(phone.isExpandable && phone.cardDetailWindows(scope:.allSources).map(\.window.label) == ["Fable limit"])
   let weeklyHealthy = WidgetWindowItem(id:"weekly", label:"Weekly", cadence:"7d", remainingPercent:47, resetAt:nil)
   let positiveExtra = WidgetWindowItem(id:"extra", label:"Additional tokens", cadence:"Other limit", remainingPercent:81,
        resetAt:nil, isExtraAllowance:true)

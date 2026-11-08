@@ -941,16 +941,24 @@ public enum QuotaCapRule {
                 || id.hasPrefix("openai:additional:") || id.hasPrefix("openai:code-review:")
                 || id.hasPrefix("additional:") || id.hasPrefix("code-review:")
         }
+        // Exact tokens, not substrings: "Argonaut" or "fable-era" is not a
+        // per-model limit (Kody review, PR #367).
+        func tokens(_ raw: String) -> Set<String> {
+            // A hyphen or underscore stays inside a token:  a model id like
+            // "fable-era" is one model, not the Fable limit; structural
+            // separators (":", "/", whitespace) are what split the fields.
+            Set(raw.lowercased()
+                .split(whereSeparator: { $0.isWhitespace || ":·/|,;".contains($0) })
+                .map(String.init))
+        }
         if providerKey == "google-antigravity" {
-            if let modelId = modelId?.lowercased(), modelId.contains("argon") { return true }
-            if let modelType = modelType?.lowercased(), modelType.contains("argon") { return true }
-            if label.localizedCaseInsensitiveContains("argon") { return true }
-            return false
+            if let modelId, !tokens(modelId).isDisjoint(with: ["argon"]) { return true }
+            if let modelType, !tokens(modelType).isDisjoint(with: ["argon"]) { return true }
+            return !tokens(label).isDisjoint(with: ["argon"])
         }
         if providerKey == "anthropic" {
             if let model = modelId?.lowercased(), !model.isEmpty { return true }
-            let lower = label.lowercased()
-            return lower.contains("fable") || lower.contains("sonnet") || lower.contains("opus") || lower.contains("haiku")
+            return !tokens(label).isDisjoint(with: ["fable", "sonnet", "opus", "haiku"])
         }
         return false
     }

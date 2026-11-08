@@ -502,13 +502,21 @@ public struct ResetAlarmTracker: Sendable {
             if let reported = observation.resetAt {
                 let jump = reported.timeIntervalSince(previousReset)
                 // A deadline correction needs a substantial quota rise or an elapsed full cadence.
+                // A roll-immediately provider restarts each period when the last
+                // one ends, so a Mac asleep through several periods wakes to an
+                // end that moved by a whole multiple of the cadence.  Accept any
+                // whole number of periods, not exactly one.  A wait-for-usage
+                // provider's end does not move on a schedule, so it never matches
+                // this shape; cadence alone is never proof.
                 let advancedFullCadence = window.periodSeconds.map { period in
-                    // Calendar months range from 28 to 31 days; fixed cadences use drift tolerance.
                     let tolerance = ResetAlarmPolicy.resetDriftTolerance
+                    let periods = (jump / period).rounded()
+                    guard periods >= 1 else { return false }
+                    // Calendar months range from 28 to 31 days; fixed cadences use drift tolerance.
                     if (28 * 86_400...31 * 86_400).contains(period) {
-                        return jump >= 28 * 86_400 - tolerance && jump <= 31 * 86_400 + tolerance
+                        return jump >= periods * 28 * 86_400 - tolerance && jump <= periods * 31 * 86_400 + tolerance
                     }
-                    return abs(jump - period) <= tolerance
+                    return abs(jump - periods * period) <= tolerance
                 } ?? false
                 // Some providers publish both sides of the period.  When they
                 // do, an end-time correction by one cadence is not enough to
@@ -521,12 +529,15 @@ public struct ResetAlarmTracker: Sendable {
                           let period = window.periodSeconds else { return true }
                     let advance = current.timeIntervalSince(previous)
                     let tolerance = ResetAlarmPolicy.resetDriftTolerance
-                    // Same band as advancedFullCadence: a calendar-month window accepts a
-                    // 28-to-31-day start advance; fixed cadences use drift tolerance.
+                    // Same whole-multiple rule as advancedFullCadence: a calendar-month
+                    // window accepts a 28-to-31-day start advance per period;
+                    // fixed cadences use drift tolerance.
+                    let periods = (advance / period).rounded()
+                    guard periods >= 1 else { return true }
                     if (28 * 86_400...31 * 86_400).contains(period) {
-                        return advance >= 28 * 86_400 - tolerance && advance <= 31 * 86_400 + tolerance
+                        return advance >= periods * 28 * 86_400 - tolerance && advance <= periods * 31 * 86_400 + tolerance
                     }
-                    return abs(advance - period) <= tolerance
+                    return abs(advance - periods * period) <= tolerance
                 }()
                 let required = hasPassed
                     ? ResetAlarmPolicy.resetDriftTolerance

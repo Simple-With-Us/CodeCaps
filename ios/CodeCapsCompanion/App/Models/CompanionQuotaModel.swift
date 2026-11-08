@@ -602,7 +602,13 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
         // a plan meter:  the cap rule skips it and the headline excludes it,
         // so drawing it as a bar put an empty meter beside a headline that
         // said otherwise (kody, PR #376).
-        windows.filter { !$0.isScopedPoolAllowance }.map { primary in
+        // A per-model detail (Fable) is a card detail row, not a card meter,
+        // and a wire plan caption ("Plan" with no reading) is not an
+        // allowance at all:  neither takes a short/long slot or the headline
+        // (native probe, PR #367).
+        windows.filter { !$0.isScopedPoolAllowance && !$0.isSubModelLimit
+                && !(($0.label == "Plan" || $0.cadence == "Plan") && $0.remainingPercent == nil) }
+            .map { primary in
             let key = Self.allowanceKey(for: primary)
             // This iPhone: only this device's primary windows. All Sources: fold
             // in mirror feeds so Mac/fleet readings can win when fresher.
@@ -626,6 +632,13 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
 
     public func cardWindows(scope: CompanionSourceScope, now: Date = Date()) -> [CompanionWindowItem] {
         cardWindowRows(scope: scope, now: now).map(\.window)
+    }
+
+    /// The per-model detail rows beside the plan (Anthropic's Fable limit,
+    /// Antigravity's Argon limit): the card's own sub-model identity marks
+    /// them, exactly as the widget's carried flag does.
+    public func cardDetailWindows(scope: CompanionSourceScope, now: Date = Date()) -> [CardWindow] {
+        windows.filter { $0.isSubModelLimit }.map { CardWindow(window: $0, updatedLabel: nil) }
     }
 
     public func cardShortWindow(scope: CompanionSourceScope, now: Date = Date()) -> CardWindow? {
