@@ -613,14 +613,18 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
             // .awaitingRefresh and stays out; the row then names it.
             .filter { !$0.isAwaitingRefresh && $0.remainingPercent != nil
                 && (!$0.window.skip || $0.remainingPercent == 0) }
-        // Fresh own readings outrank everything.  A pool participant with
-        // only a stale reading yields to a peer's fresh one first; every
-        // other row — and a participant no peer can fill — draws its
-        // stale-but-live reading, the same number the dropdown draws.
-        let fresh = own.filter { $0.isFresh }
-        if !fresh.isEmpty { return fresh }
+        // Fresh own readings outrank everything for a pool participant:  a
+        // stale own reading yields to a peer's fresh one first.  Every other
+        // row keeps its whole live-period set — fresh and stale-but-live
+        // together — the same meters the dropdown draws, so a fresh 5h
+        // cannot make the stale 7d vanish (CC-216 review).
+        let isPoolParticipant = UnifiedSubscriptionPool.participantKeys.contains(row.providerKey)
+        if isPoolParticipant {
+            let fresh = own.filter { $0.isFresh }
+            if !fresh.isEmpty { return fresh }
+        }
 
-        if UnifiedSubscriptionPool.participantKeys.contains(row.providerKey) {
+        if isPoolParticipant {
             let candidates = peerRows
                 .filter { $0.id != row.id && UnifiedSubscriptionPool.participantKeys.contains($0.providerKey) }
                 .flatMap { peer in
