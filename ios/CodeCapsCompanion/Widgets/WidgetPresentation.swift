@@ -1253,7 +1253,7 @@ public enum WidgetPresentation {
         // Sub-model limits (Argon) are details beside the pool, not pool
         // meters:  the pool rows stay the plan's own five-hour and weekly
         // windows (native probe: gemini detailWindows == ["Argon limit"]).
-        for w in windows {
+        for w in windows where !childWindows.contains(where: { $0.id == w.id }) {
             let reading = QuotaCardProjection.Reading(
                 id: w.id, providerKey: "google-antigravity", label: w.label, window: w.window,
                 modelId: w.modelId, modelType: w.modelType)
