@@ -42,6 +42,8 @@ on:
       - '.github/actions/infisical-secrets/**'
       - 'scripts/infisical-fetch.mjs'
       - 'scripts/mac-release-workflow.test.mjs'
+      - 'scripts/plan-mac-release-build.mjs'
+      - 'scripts/plan-mac-release-build.test.mjs'
       - 'scripts/ios-stage-asc-key.sh'
       - 'script/make_icon.swift'
       - '.github/workflows/mac-release.yml'
@@ -55,6 +57,8 @@ on:
       - 'script/make_appcast.sh'
       - 'scripts/check-notary-access.sh'
       - 'scripts/mac-release-workflow.test.mjs'
+      - 'scripts/plan-mac-release-build.mjs'
+      - 'scripts/plan-mac-release-build.test.mjs'
       - 'scripts/ios-stage-asc-key.sh'
       - '.github/workflows/mac-release.yml'
       - '.github/actions/infisical-secrets/**'
@@ -101,7 +105,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Test Sparkle release contract without credentials
-        run: node --test scripts/mac-release-workflow.test.mjs scripts/stage-asc-key.node-test.mjs scripts/infisical-fetch.node-test.mjs scripts/infisical-fetch-expand.node-test.mjs
+        run: node --test scripts/mac-release-workflow.test.mjs scripts/plan-mac-release-build.test.mjs scripts/stage-asc-key.node-test.mjs scripts/infisical-fetch.node-test.mjs scripts/infisical-fetch-expand.node-test.mjs
 
       - name: Wait for Swift CI compile checks on this commit
         env:
@@ -127,8 +131,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          # CFBundleVersion is `git rev-list --count HEAD`, which needs the
-          # whole history.  A shallow clone would make every build number 1.
+          # The build number is the committer date of HEAD, so the history has
+          # to be there:  a shallow clone would leave the merge stamp of some
+          # older commit, or none at all.
           fetch-depth: 0
 
       - name: Load the Developer ID certificate (Infisical, then repository secrets)
@@ -255,6 +260,39 @@ jobs:
       - name: Verify notarization access before building
         if: steps.gate.outputs.publish == 'true' || steps.gate.outputs.verify_only == 'true'
         run: bash scripts/check-notary-access.sh
+
+      # The release's ONE build number, planned once (owner 2026-11-04).
+      # The macOS app used to ship "1.0.312 (312)" -- the retired
+      # 1.0.<commit_count> scheme -- while the iOS companion shipped
+      # "0.1.0 (202611030314)".  The two apps of one product now carry the same
+      # marketing version and the same merge-timestamp build, so a build
+      # number never has to be read twice to know which one it is.
+      #
+      # The number is planned here, before the bundle is built, and handed to
+      # the build script through the environment.  It is the fleet's shared
+      # rule:  max(S, M + 1), where S is the committer date of HEAD in
+      # America/Chicago as YYYYMMDDHHMM and M is the highest build the app has
+      # already published (read from its live Sparkle appcast).  The iOS ship
+      # computes the same S from the same commit, so one merge gives both apps
+      # one number whenever the merge stamp is the highest either side has
+      # used.
+      - name: Plan the release build (once per release)
+        if: steps.gate.outputs.publish == 'true'
+        run: |
+          set -euo pipefail
+          build="$(node scripts/plan-mac-release-build.mjs)"
+          if ! printf '%s' "$build" | grep -qE '^[1-9][0-9]{11}$'; then
+            echo "::error::plan-mac-release-build did not print a 12-digit merge-timestamp build."
+            exit 1
+          fi
+          version="$(node scripts/plan-mac-release-build.mjs --marketing-version)"
+          if ! printf '%s' "$version" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::plan-mac-release-build did not print a X.Y.Z marketing version."
+            exit 1
+          fi
+          echo "CODECAPS_BUILD_NUMBER=$build" >> "$GITHUB_ENV"
+          echo "CODECAPS_MARKETING_VERSION=$version" >> "$GITHUB_ENV"
+          echo "Planned release: ${version} (${build})"
 
       - name: Install XcodeGen
         if: steps.gate.outputs.publish == 'true' || steps.gate.outputs.verify_only != 'true'
