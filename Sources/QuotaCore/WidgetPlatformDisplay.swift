@@ -125,17 +125,23 @@ public enum CardHeadline {
     public struct Reading: Equatable {
         public var isMuseAssistExtra: Bool
         public var isMasked: Bool
+        /// A scoped pool allowance (a code-review or per-model bucket) is a
+        /// real meter, but it is not the plan's headline:  the cap rule skips
+        /// it, and counting it made the headline say 0% under a card the cap
+        /// rule did not call spent (CC-214).
+        public var isScopedAllowance: Bool
         public var remainingPercent: Double?
 
-        public init(isMuseAssistExtra: Bool, isMasked: Bool, remainingPercent: Double?) {
+        public init(isMuseAssistExtra: Bool, isMasked: Bool, isScopedAllowance: Bool = false, remainingPercent: Double?) {
             self.isMuseAssistExtra = isMuseAssistExtra
             self.isMasked = isMasked
+            self.isScopedAllowance = isScopedAllowance
             self.remainingPercent = remainingPercent
         }
     }
 
     public static func percent(_ readings: [Reading]) -> Double? {
-        let honest = readings.filter { !$0.isMasked }
+        let honest = readings.filter { !$0.isMasked && !$0.isScopedAllowance }
         if let extra = honest.first(where: { $0.isMuseAssistExtra }),
            let percent = extra.remainingPercent, percent.isFinite, percent > 0 {
             return percent

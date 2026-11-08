@@ -132,7 +132,7 @@ struct GlancePopover: View {
                     if index > 0 {
                         rowDivider
                     }
-                    glanceRow(row, issue: model.rowIssues[row.providerKey], origin: .local)
+                    glanceRow(row, issue: model.rowIssue(for: row.providerKey), origin: .local)
                 }
             }
             if !model.visiblePlanChanges.isEmpty {
