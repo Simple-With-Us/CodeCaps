@@ -72,10 +72,10 @@ usage() {
   cat >&2 <<'USAGE'
 usage: script/build_and_run.sh [mode]
 
-  Release numbers fail closed: both CFBundleVersion and the commit count in
-  CFBundleShortVersionString come from `git rev-list --count HEAD`, and a
-  shallow or non-Git checkout stops the build with an error instead of
-  shipping a guessed version.  Fetch full history (fetch-depth: 0) first.
+  Release numbers fail closed: CFBundleShortVersionString is the fixed
+  marketing version and CFBundleVersion the shared merge-timestamp build,
+  and a malformed or unusable number stops the build with an error instead
+  of shipping a guessed one.
 
   run            (default) build, install to ~/Applications, relaunch it, then
                  delete the dist staging bundle and Trash every other copy
