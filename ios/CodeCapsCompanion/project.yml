@@ -33,7 +33,7 @@ settings:
 packages:
   Sentry:
     url: https://github.com/getsentry/sentry-cocoa.git
-    from: "9.31.0"
+    from: "9.32.0"
 
 targets:
   CodeCapsCompanion:
@@ -62,6 +62,8 @@ targets:
       - path: ../../Sources/QuotaCore/ResetAlarmCadence.swift
         group: Shared
       - path: ../../Sources/QuotaCore/QuotaWindowVocabulary.swift
+        group: Shared
+      - path: ../../Sources/QuotaCore/QuotaWindowPairing.swift
         group: Shared
       - path: ../../Sources/QuotaCore/FleetSourceDisagreement.swift
         group: Shared
@@ -112,6 +114,8 @@ targets:
       - path: ../../Sources/QuotaCore/ResetAlarmCadence.swift
         group: Shared
       - path: ../../Sources/QuotaCore/QuotaWindowVocabulary.swift
+        group: Shared
+      - path: ../../Sources/QuotaCore/QuotaWindowPairing.swift
         group: Shared
       - path: ../../Sources/QuotaCore/QuotaWindowCaption.swift
         group: Shared
@@ -177,6 +181,8 @@ targets:
         group: Shared
       - path: ../../Sources/QuotaCore/CompanionReadTokenStore.swift
         group: Shared
+      - path: ../../Sources/QuotaCore/QuotaWindowPairing.swift
+        group: Shared
     dependencies:
       - target: CodeCapsWidgetsMac
         embed: true
@@ -228,6 +234,8 @@ targets:
       - path: ../../Sources/QuotaCore/WidgetSnapshotFetcher.swift
         group: Shared
       - path: ../../Sources/QuotaCore/CompanionReadTokenStore.swift
+        group: Shared
+      - path: ../../Sources/QuotaCore/QuotaWindowPairing.swift
         group: Shared
     entitlements:
       path: Generated/CodeCapsWidgetsMac.entitlements

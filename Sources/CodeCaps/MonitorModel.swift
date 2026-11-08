@@ -2458,18 +2458,24 @@ final class MonitorModel: ObservableObject {
             // named the Antigravity key, so the fleet's live reading for
             // Antigravity was held out of the row and the row read
             // "unavailable" while the fleet carried a fresh reading for it.
-            let adoptedReadingKeys = Set(adopted.filter { $0.hasReading }.map(\.canonicalProviderKey))
             // A provider this Mac can never read locally still deserves its
             // server reading in the local list instead of "no report": the
             // Muse Assist collector runs on the VM, so its windows are never
             // this Mac's own push.  Limited to expected providers so unknown
             // fleet-only keys don't sprout local rows.
-            let fleetFallback = split.groups.flatMap(\.windows).filter {
-                let key = $0.canonicalProviderKey
-                return !localProviders.contains(key) && !adoptedReadingKeys.contains(key)
-                    && expectedQuotaProviderKeys.contains(key)
-            }
-            let merged = QuotaLocalScope.localWindowsForMerge(self.localWindows, adopted: adopted) + adopted + fleetFallback
+            //
+            // The fleet's copy wins whenever it was reported after this Mac's
+            // own push for the same provider, and this Mac's older copy of
+            // that period is dropped with it:  the Antigravity local reader
+            // needs a running language server, and without one the row read
+            // "unavailable" while the fleet carried a fresh reading from this
+            // same Mac, Argon included.
+            let (fleetFallback, supersededPush) = QuotaLocalScope.fleetFallback(
+                fleet: split.groups.flatMap(\.windows),
+                adopted: adopted,
+                localProviders: localProviders)
+            let adoptedKept = adopted.filter { !supersededPush.contains($0) }
+            let merged = QuotaLocalScope.localWindowsForMerge(self.localWindows, adopted: adoptedKept) + adoptedKept + fleetFallback
             // Every participant gets the pool's reading, including one whose
             // local read failed outright and left no window behind: Cursor and
             // Grok Bot share xAI's quota, so a fresh xAI reading stands in for
@@ -2625,8 +2631,14 @@ final class MonitorModel: ObservableObject {
     func updatePoolServedKeys(from windows: [QuotaWindow]) {
         var served: Set<String> = []
         for window in windows where UnifiedSubscriptionPool.participantKeys.contains(window.canonicalProviderKey) {
+            // The standing-in window has to be one the rows would actually
+            // draw:  a masked or disabled-source reading fills no meter, so
+            // it must not suppress the row's issue either, or the row would
+            // show neither data nor its error.
             guard window.boundedRemainingPercent != nil,
-                  QuotaWindowSnapshot(window: window, now: now).isFresh else { continue }
+                  QuotaWindowSnapshot(window: window, now: now).isFresh,
+                  !maskedWindowIds.contains(window.id),
+                  !disabledSources.contains(window.source ?? "") else { continue }
             served.insert(window.canonicalProviderKey)
         }
         poolServedKeys = served
@@ -2672,16 +2684,16 @@ final class MonitorModel: ObservableObject {
         // merged response, so a plan-details window that held the fleet's
         // live reading out of the row here would empty it a minute after the
         // refresh filled it.
-        let adoptedReadingKeys = Set(adopted.filter { $0.hasReading }.map(\.canonicalProviderKey))
         // Same fleet fallback as the refresh path: providers this Mac can
         // never read locally (e.g. Muse Assist, collected on the VM) show
-        // their server reading instead of "no report".
-        let fleetFallback = split.groups.flatMap(\.windows).filter {
-            let key = $0.canonicalProviderKey
-            return !localProviders.contains(key) && !adoptedReadingKeys.contains(key)
-                && expectedQuotaProviderKeys.contains(key)
-        }
-        let merged = QuotaLocalScope.localWindowsForMerge(localWindows, adopted: adopted) + adopted + fleetFallback
+        // their server reading instead of "no report", and a fleet reading
+        // newer than this Mac's own push replaces the older copy of it.
+        let (fleetFallback, supersededPush) = QuotaLocalScope.fleetFallback(
+            fleet: split.groups.flatMap(\.windows),
+            adopted: adopted,
+            localProviders: localProviders)
+        let adoptedKept = adopted.filter { !supersededPush.contains($0) }
+        let merged = QuotaLocalScope.localWindowsForMerge(localWindows, adopted: adoptedKept) + adoptedKept + fleetFallback
         // Same pool rule as the refresh path: an absent participant still
         // receives the shared reading (CC-210).
         let unifiedMerged = UnifiedSubscriptionPool.share(
@@ -2866,7 +2878,17 @@ final class MonitorModel: ObservableObject {
         // The rule lives here rather than at the call sites, so a caller that
         // forgets it cannot publish the stale copy again.
         let localProviders = Set(self.localWindows.map(\.canonicalProviderKey))
+        let host = QuotaPublisher.producerInstanceId
+        let authoritative = FleetOrigin.authoritativeOwnCadenceKeys(in: candidates, host: host)
         let publishable = candidates.filter { candidate in
+            // A legacy collector's copy of a meter the current collector also
+            // reports is a superseded duplicate:  the install-id copy is the
+            // row's reading, and the legacy copy must not publish beside it
+            // (CC-217).
+            if FleetOrigin.isLegacyNameProducer(candidate, host: host),
+               authoritative.contains(FleetOrigin.cadenceIdentityKey(of: candidate)) {
+                return false
+            }
             // A copy of another machine's reading whose period ended before the
             // last refresh is not a reading, so the widget's cache does not
             // carry it.  The rule is the shared one, so the widget, the phone

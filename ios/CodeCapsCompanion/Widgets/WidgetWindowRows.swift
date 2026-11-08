@@ -93,12 +93,21 @@ struct WindowCaptionRow: View {
             }
             Spacer(minLength: 0)
             if !caption.resetCaption.isEmpty {
-                Text(caption.resetCaption)
-                    .font(.system(size: font, weight: .medium, design: .monospaced))
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
-                    .truncationMode(.tail)
+                // A narrow row keeps the countdown and drops the words:
+                // "Resets in 24d 15h" truncating to "Resets in..." loses the
+                // only part the owner can act on, so the bare countdown is the
+                // fallback form.
+                ViewThatFits(in: .horizontal) {
+                    Text(caption.resetCaption)
+                    if !caption.compactResetCaption.isEmpty {
+                        Text(caption.compactResetCaption)
+                    }
+                }
+                .font(.system(size: font, weight: .medium, design: .monospaced))
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .truncationMode(.tail)
             }
         }
     }
