@@ -502,18 +502,12 @@ public struct ResetAlarmTracker: Sendable {
             if let reported = observation.resetAt {
                 let jump = reported.timeIntervalSince(previousReset)
                 // A deadline correction needs a substantial quota rise or an elapsed full cadence.
-                let climbed = reading.flatMap { current in
-                    window.lastRemaining.map { current >= $0 + ResetAlarmPolicy.earlyResetRiseMargin }
-                } ?? false
                 // A roll-immediately provider restarts each period when the last
                 // one ends, so a Mac asleep through several periods wakes to an
                 // end that moved by a whole multiple of the cadence.  Accept any
-                // whole number of periods, not exactly one (owner, 2026-11-06:
-                // "some providers have their 7d period restart right at end of
-                // last one").  A wait-for-usage provider's end does not move on
-                // a schedule at all, so it never matches this shape; its resets
-                // arrive through the quota-rise rules instead.  Cadence alone is
-                // never proof here: the vendor's reported times must have moved.
+                // whole number of periods, not exactly one.  A wait-for-usage
+                // provider's end does not move on a schedule, so it never matches
+                // this shape; cadence alone is never proof.
                 let advancedFullCadence = window.periodSeconds.map { period in
                     let tolerance = ResetAlarmPolicy.resetDriftTolerance
                     let periods = (jump / period).rounded()
@@ -539,59 +533,59 @@ public struct ResetAlarmTracker: Sendable {
                     // window accepts a 28-to-31-day start advance per period;
                     // fixed cadences use drift tolerance.
                     let periods = (advance / period).rounded()
-                    // An unchanged or fractional start advance confirms
-                    // nothing:  only a whole period forward proves the
-                    // provider actually began a new period.
-                    guard periods >= 1 else { return false }
+                    guard periods >= 1 else { return true }
                     if (28 * 86_400...31 * 86_400).contains(period) {
                         return advance >= periods * 28 * 86_400 - tolerance && advance <= periods * 31 * 86_400 + tolerance
                     }
                     return abs(advance - periods * period) <= tolerance
                 }()
-let required = hasPassed
+                let required = hasPassed
                     ? ResetAlarmPolicy.resetDriftTolerance
                     : max(ResetAlarmPolicy.resetDriftTolerance,
                           window.periodSeconds.map { $0 * ResetAlarmPolicy.earlyResetShareOfPeriod }
                               ?? ResetAlarmPolicy.earlyResetUnknownPeriod)
+                // A provider that resets early may move the reset time by less
+                // than `required`; the percentage jumping back up settles it.
+                var climbed = false
+                if let reading, let last = window.lastRemaining {
+                    climbed = reading >= last + ResetAlarmPolicy.earlyResetRiseMargin
+                }
                 // A mid-window reset must move the end decisively — past the
-                // period-share bound — and carry a quota climb.  A smaller
-                // forward move plus a climb is how a rolling window ages
-                // across a long gap (the Mac asleep, MiniMax's five-hour
-                // meter):  the end slides once by the whole gap and the
-                // percentage comes back with it.  A climb alone is never
-                // proof (CC-215, owner 2026-11-07: gradual rolling climbs are
-                // aging, not vendor resets), and a forward move alone is a
-                // stale-deadline correction, not a new period.
-                let climbConfirmed = jump > required && climbed
-                // A Mac asleep through several whole periods wakes to an end
-                // moved by a multiple of the cadence with no quota climb; the
-                // cadence move, confirmed by an advancing explicit start, is
-                // the rollover (lineage: whole-multiple periods missed).
-                let wholePeriodRollover = hasPassed && advancedFullCadence
-                    && explicitStartConfirmsPeriod
-                // A courtesy reset can move the end only a little while
-                // handing back nearly everything.  The near-full jump is the
-                // tell; a gradual rolling climb never reaches it in one poll.
-                let courtesyFullRollover = !hasPassed
-                    && jump > ResetAlarmPolicy.resetDriftTolerance
-                    && (reading.map { $0 >= 99.5 } ?? false)
-                    && (window.lastRemaining.map { $0 < 99.5 } ?? true)
-                // A short forward move that hands back a large share of the
-                // quota and lands near full is an early reset even under the
-                // period-share bound:  quota cannot legitimately rise that far
-                // inside one period.  A rolling window's gradual aging rises
-                // by a comparable amount but lands far from full, so the
-                // landing level, not the rise alone, separates the two.
-                let substantialRestore = !hasPassed
-                    && jump > ResetAlarmPolicy.resetDriftTolerance
-                    && (reading.flatMap { current in
-                            window.lastRemaining.map {
-                                current >= $0 + ResetAlarmPolicy.vendorRestoreRise
-                            }
-                        } ?? false)
-                    && (reading.map { $0 >= 90 } ?? false)
-                if climbConfirmed || wholePeriodRollover || courtesyFullRollover
-                    || substantialRestore {
+                // period-share bound.  A smaller forward move plus a climb is
+                // how a rolling window ages across a long gap (the Mac
+                // asleep, MiniMax's five-hour meter):  the end slides once by
+                // the whole gap and the percentage comes back with it, and
+                // before any rolling evidence has had time to accumulate
+                // that read as a vendor reset (CC-215, owner 2026-11-07:
+                // 3:48 pm, 5:03 pm and later false MiniMax and Antigravity
+                // 5h alerts).  Across a passed end the climb keeps settling
+                // small early moves as before.
+                // The deadline branch needs the quota to climb with it:  a
+                // rolling window slides its end while usage ages out (CC-215),
+                // and a stale or partially corrected deadline - the MiniMax
+                // weekly deadline advancing only five days nine hours - adopts
+                // silently.  After the end has passed, a deadline that
+                // advanced a compatible full cadence, confirmed by an explicit
+                // start when one is reported, proves a scheduled rollover on
+                // its own;  a genuine refill with the end still ahead is
+                // caught by the held-end courtesy and vendor-restore rules
+                // below.
+                // A courtesy reset that also rolls the window forward reissues
+                // a fresh full period:  the new end sits one whole period from
+                // now (a rolling climb leaves less than that) and the quota
+                // came back by a restore-sized rise (owner 2026-10-08:  quota
+                // restored before the window was due must alert).
+                let freshPeriod = window.periodSeconds.map { period in
+                    abs(reported.timeIntervalSince(readAt) - period)
+                        <= ResetAlarmPolicy.resetDriftTolerance
+                } ?? false
+                let strongQuotaRestore = reading.flatMap { current in
+                    window.lastRemaining.map { current >= $0 + ResetAlarmPolicy.vendorRestoreRise }
+                } ?? false
+                let forwardJump = (jump > required && climbed)
+                    || (hasPassed && advancedFullCadence && explicitStartConfirmsPeriod)
+                    || (!hasPassed && freshPeriod && strongQuotaRestore)
+                if forwardJump {
                     isReset = true
                     // When the window had *not* reached its own scheduled end,
                     // any reset is an early / mid-cycle vendor restore rather than
@@ -746,6 +740,10 @@ let required = hasPassed
                 // All three carries share one evidence bar: a rise against
                 // an end that slid with the clock is the window rolling, not
                 // a restore (CC-215).  An unknown end cannot prove a restore.
+                // A reading at or above 99.5% counts as full only when the
+                // prior reading was below it by a real margin:  a sub-point
+                // rounding wobble near full (99.4 to 99.6) is not a vendor
+                // handing the quota back.
                 let jumpedToFull = periodEndHeld && !slidWithTheClock
                     && reading >= 99.5 && last <= 99.5 - ResetAlarmPolicy.riseEpsilon
                 let surgedMidWindow = periodEndHeld && !slidWithTheClock
