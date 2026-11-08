@@ -170,12 +170,12 @@ jobs:
           set -euo pipefail
           for name in ASC_KEY_ID ASC_ISSUER_ID; do
             if [ -z "${!name:-}" ]; then
-              echo "::error::Missing $name in Fleet-OPS prod /asc; verify the scoped /asc read service token has access to Fleet-OPS prod /asc." >&2
+              echo "::error::Missing $name in Fleet-OPS prod /asc; verify the CI identity has read access to Fleet-OPS prod /asc." >&2
               exit 1
             fi
           done
           if [ -z "${ASC_KEY_PATH:-}" ] || [ ! -s "${ASC_KEY_PATH:-}" ]; then
-            echo '::error::Missing ASC key material in Fleet-OPS prod /asc; verify the scoped /asc read service token has access to Fleet-OPS prod /asc.' >&2
+            echo '::error::Missing ASC key material in Fleet-OPS prod /asc; verify the CI identity has read access to Fleet-OPS prod /asc.' >&2
             exit 1
           fi
       - name: Load Sentry secrets (CodeCaps project, then repository secrets)
@@ -585,12 +585,12 @@ jobs:
           set -euo pipefail
           for name in ASC_KEY_ID ASC_ISSUER_ID; do
             if [ -z "${!name:-}" ]; then
-              echo "::error::Missing $name in Fleet-OPS prod /asc; verify the scoped /asc read service token has access to Fleet-OPS prod /asc." >&2
+              echo "::error::Missing $name in Fleet-OPS prod /asc; verify the CI identity has read access to Fleet-OPS prod /asc." >&2
               exit 1
             fi
           done
           if [ -z "${ASC_KEY_PATH:-}" ] || [ ! -s "${ASC_KEY_PATH:-}" ]; then
-            echo '::error::Missing ASC key material in Fleet-OPS prod /asc; verify the scoped /asc read service token has access to Fleet-OPS prod /asc.' >&2
+            echo '::error::Missing ASC key material in Fleet-OPS prod /asc; verify the CI identity has read access to Fleet-OPS prod /asc.' >&2
             exit 1
           fi
 

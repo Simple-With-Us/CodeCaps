@@ -1,12 +1,11 @@
 // Credential-free contract and mocked notarization preflight tests.
 import assert from 'node:assert/strict';
-import {readFileSync, mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync, readdirSync, symlinkSync} from 'node:fs';
+import {readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {spawnSync} from 'node:child_process';
 import test from 'node:test';
-import {chicagoMergeStamp, latestFixedMarketingVersion, offlineBuildMetadata, parseAppcastFloor, planSharedBuild, releaseBuildPlannerArgs} from './mac-release-version.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const read = p => readFileSync(join(root, p), 'utf8');
 const workflow = read('.github/workflows/mac-release.yml');
@@ -42,7 +41,7 @@ test('Sparkle reads the ASC credentials through the fleet reader, never reposito
   for (const name of ['ASC_KEY_ID', 'ASC_ISSUER_ID', 'ASC_KEY_P8']) {
     assert.doesNotMatch(code, new RegExp(`secrets\\.${name}`));
   }
-  // One handoff, two workflows.  The release path and the iOS ship path must
+  // One handoff, two workflows.  The release path and the iOS ship path must
   // carry the same text, so a fix to one is a fix to the other.
   for (const name of LOADERS) {
     assert.equal(stripGuard(step(workflow, name)), step(iosShip, name), `mac-release and ios-ship disagree on "${name}"`);
@@ -257,109 +256,4 @@ test('the Sentry upload keeps the full-scope token away from the installer and r
   assert.equal(handoffs.length, 1);
   assert.match(sentry, /SENTRY_AUTH_TOKEN="\$TOKEN" SENTRY_PROJECT="\$project" \\\n\s+sentry-cli debug-files upload /);
   assert.match(sentry, /\*:\/\/\*\|\*@\*\)\n[^\n]*looks like a DSN[^\n]*\n\s+exit 1/);
-});
-
-
-test('Mac release versions use Chicago merge timestamps and the shared rebuild floor', () => {
-  const mergeDate = new Date('2026-10-29T14:30:00Z');
-  const stamp = chicagoMergeStamp(mergeDate);
-  assert.equal(stamp, '202610290930');
-  assert.match(stamp, /^[1-9][0-9]{11}$/);
-  assert.equal(chicagoMergeStamp(new Date(mergeDate)), stamp, 'the same commit date plans deterministically');
-  assert.equal(planSharedBuild({mergeStamp: stamp}), stamp);
-  assert.equal(planSharedBuild({mergeStamp: stamp}), stamp, 'a repeat plan with unchanged inventory reuses the same shared build');
-  assert.equal(planSharedBuild({mergeStamp: stamp, iosBuilds: [stamp]}), '202610290931');
-  assert.equal(planSharedBuild({mergeStamp: stamp, macBuilds: [stamp]}), '202610290931');
-  assert.equal(chicagoMergeStamp(new Date('2026-11-03T12:00:00Z')), '202611030600',
-    'the conversion observes Chicago standard time after daylight saving ends');
-});
-
-test('Mac marketing version keeps the registry default unless ASC proves a higher approved version', () => {
-  assert.equal(latestFixedMarketingVersion('0.1.0'), '0.1.0');
-  assert.equal(latestFixedMarketingVersion('0.1.0', ''), '0.1.0');
-  assert.equal(latestFixedMarketingVersion('0.1.0', '0.0.9'), '0.1.0');
-  assert.equal(latestFixedMarketingVersion('0.1.0', '0.1.0'), '0.1.0');
-  assert.equal(latestFixedMarketingVersion('0.1.0', '1.0'), '1.0',
-    'ASC can return an approved two-component marketing version, which must be preserved');
-  const approved = latestFixedMarketingVersion('0.1.0', '1.0.302');
-  assert.equal(approved, '1.0.302');
-  assert.equal(latestFixedMarketingVersion('0.1.0', '1.0.302'), approved,
-    're-reading the same approved version does not bump or rewrite the train');
-  assert.deepEqual(offlineBuildMetadata({mergeDate: new Date('2026-10-29T14:30:00Z')}), {
-    marketingVersion: '0.1.0', buildVersion: '202610290930',
-  });
-  assert.throws(() => latestFixedMarketingVersion('0.1', '1.0.0'), /invalid marketing version/);
-  assert.throws(() => latestFixedMarketingVersion('0.1', '1.0'), /invalid marketing version/);
-  assert.throws(() => latestFixedMarketingVersion('0.1.0', 'not-a-version'), /invalid marketing version/);
-  assert.throws(() => latestFixedMarketingVersion('0.1.0', '1.0.302.1'), /invalid marketing version/);
-  assert.equal(parseAppcastFloor('<sparkle:version>210</sparkle:version><sparkle:version>202610290930</sparkle:version>'),
-    '202610290930');
-  assert.throws(() => parseAppcastFloor('<sparkle:version>1234567890123</sparkle:version>'), /no valid build floor/);
-});
-
-test('Mac shared build planning includes the registered paired app before its feed floor', () => {
-  assert.deepEqual(releaseBuildPlannerArgs({bundleId: 'com.example.ios', pairedBundleId: 'com.example.mac'}, '73', '202611030600'),
-    ['com.example.ios', 'com.example.mac', '73', '--merge-stamp', '202611030600']);
-  assert.deepEqual(releaseBuildPlannerArgs({bundleId: 'com.example.ios', macBundleId: 'com.example.mac'}, '73', '202611030600'),
-    ['com.example.ios', 'com.example.mac', '73', '--merge-stamp', '202611030600']);
-  assert.deepEqual(releaseBuildPlannerArgs({bundleId: 'com.example.ios'}, '73', '202611030600'),
-    ['com.example.ios', '73', '--merge-stamp', '202611030600']);
-});
-
-test('the build root resolves task-lane symlinks before invoking the version planner', () => {
-  const temporary = mkdtempSync(join(tmpdir(), 'codecaps-build-root-'));
-  const alias = join(temporary, 'lane');
-  try {
-    symlinkSync(root, alias, 'dir');
-    const script = 'ROOT_DIR="$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd -P)"\nnode "$ROOT_DIR/scripts/mac-release-version.mjs" offline "$ROOT_DIR"\n';
-    const result = spawnSync('bash', ['-c', script], {
-      encoding: 'utf8', env: {...process.env, SCRIPT_PATH: join(alias, 'script', 'build_and_run.sh')},
-    });
-    assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /^0\.1\.0\t[1-9][0-9]{11}\n$/);
-  } finally {
-    rmSync(temporary, {recursive: true, force: true});
-  }
-});
-
-test('the build script accepts approved short marketing versions and caches the one planner result', () => {
-  const builder = read('script/build_and_run.sh');
-  const start = builder.indexOf('VERSION_PLAN_READY=0\n');
-  const end = builder.indexOf('\nshort_version() {', start);
-  assert.ok(start >= 0 && end > start, 'extract only the version helper, never source the build script');
-  const versionHelper = builder.slice(start, end);
-  for (const marketingVersion of ['1.0', '1.0.302']) {
-    const temp = mkdtempSync(join(tmpdir(), 'codecaps-version-shell-'));
-    try {
-      const bin = join(temp, 'bin');
-      mkdirSync(bin);
-      const nodeStub = join(bin, 'node');
-      writeFileSync(nodeStub, '#!/bin/sh\nprintf called >> "$PLAN_CALLS"\nprintf "%s\\n" "$PLAN_OUTPUT"\n');
-      chmodSync(nodeStub, 0o700);
-      const calls = join(temp, 'calls');
-      const script = `${versionHelper}\nMODE=--dev\nROOT_DIR=/fixture\nprepare_build_versions\nprepare_build_versions\nprintf '%s\\t%s\\n' "$BUILD_MARKETING_VERSION" "$BUILD_BUNDLE_VERSION"\n`;
-      const result = spawnSync('bash', ['-c', script], {
-        encoding: 'utf8', env: {...process.env, PATH: `${bin}:${process.env.PATH}`, PLAN_CALLS: calls,
-          PLAN_OUTPUT: `${marketingVersion}\t202611030600`},
-      });
-      assert.equal(result.status, 0, result.stderr);
-      assert.equal(result.stdout.trim(), `${marketingVersion}\t202611030600`);
-      assert.equal(readFileSync(calls, 'utf8'), 'called', 'the planner runs once and the cached plan serves subsequent calls');
-    } finally {
-      rmSync(temp, {recursive: true, force: true});
-    }
-  }
-});
-
-test('the Mac release builder fails closed on missing shared planning and no longer uses commit counts', () => {
-  const builder = read('script/build_and_run.sh');
-  const planner = read('scripts/mac-release-version.mjs');
-  assert.match(builder, /mac-release-version\.mjs/);
-  assert.match(builder, /no bundle was built/);
-  assert.match(builder, /prepare_build_versions \|\| exit 1\n  local arch_flags=\(\)/,
-    'build_and_stage must validate and cache the shared plan before starting Swift build actions');
-  assert.doesNotMatch(builder, /git -C "\$ROOT_DIR" rev-list --count HEAD/);
-  assert.match(planner, /plan-release-build/);
-  assert.match(planner, /released-store-version/);
-  assert.match(planner, /pairedBuildFeed/);
 });

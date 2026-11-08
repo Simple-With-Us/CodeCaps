@@ -2,7 +2,7 @@
 set -euo pipefail
 
 MODE="${1:-run}"
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PACKAGE_DIR="$ROOT_DIR"
 DIST_DIR="$PACKAGE_DIR/dist"
 APP_NAME="CodeCaps"
@@ -28,6 +28,7 @@ ICON_MAKER="$ROOT_DIR/script/make_icon.swift"
 ICON_FILE="AppIcon.icns"
 INSTALL_DIR="$HOME/Applications"
 INSTALLED_APP="$INSTALL_DIR/$APP_NAME.app"
+VERSION_FILE="$ROOT_DIR/VERSION"
 ZIP_FILE="$DIST_DIR/$APP_NAME.zip"
 DMG_FILE="$DIST_DIR/$APP_NAME.dmg"
 NOTARY_PROFILE="${CODECAPS_NOTARY_PROFILE:-${AGENTBAR_NOTARY_PROFILE:-agentbar-notary}}"
