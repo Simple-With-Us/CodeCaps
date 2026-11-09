@@ -591,6 +591,7 @@ final class WidgetTests: XCTestCase {
         let smallView = views.components(separatedBy: "struct OverviewSmallView").last?
             .components(separatedBy: "// MARK: - Overview Medium View").first ?? ""
         XCTAssertTrue(smallView.contains("showsCountdown: false"), "Small rows must not show the days-and-hours countdown")
+        XCTAssertTrue(smallView.contains("showsCadenceToken: false"), "Small rows must not show the 5h/7d duration tokens either")
         XCTAssertTrue(smallView.contains("ShowWidgetPlanDetailIntent"), "Small rows must tap through to the plan detail")
         XCTAssertTrue(smallView.contains("selectedDetail"), "Small view must render the tapped plan detail")
         XCTAssertTrue(smallView.contains("planDetailWindows"), "Small detail shows the plan's 5h/7d windows")
