@@ -423,11 +423,14 @@ test("scheduled gate and key handoff shell tests pass", () => {
 const shipScript = read("scripts/ios-fleet/ship-testflight.sh");
 
 test("the iOS lane loads the Sentry API token, not the DSN", () => {
-  assert.match(code, /names: SENTRY_DSN SENTRY_AUTH_TOKEN/);
-  assert.doesNotMatch(code, /SENTRY_AUTH_TOKEN_FULLSCOPE/);
+  // Workflow loads FULLSCOPE for sentry-cli (CC-200) alongside SENTRY_AUTH_TOKEN.
+  assert.match(code, /names: SENTRY_DSN SENTRY_AUTH_TOKEN SENTRY_AUTH_TOKEN_FULLSCOPE/);
+  // SENTRY_DSN must not be required: empty vault+fallback must not block TestFlight.
+  assert.doesNotMatch(code, /required: SENTRY_DSN\b/);
+  assert.match(code, /GH_FALLBACK_SENTRY_AUTH_TOKEN_FULLSCOPE: \$\{\{ secrets\.SENTRY_AUTH_TOKEN_FULLSCOPE \}\}/);
   assert.match(shipScript, /SENTRY_AUTH_TOKEN_FULLSCOPE/);
   assert.match(shipScript, /SENTRY_AUTH_TOKEN from the CodeCaps project/);
-  // FULLSCOPE is optional.  When it is unset the CodeCaps token is used, and
+  // FULLSCOPE is preferred; when unset the CodeCaps token is used, and
   // a DSN in the token slot is still refused.
   const loader = shipScript.match(/load_sentry_auth\(\) \{[\s\S]*?\n\}/)[0];
   assert.ok(
@@ -600,18 +603,25 @@ test("a slug DSN tail is used as it stands, with no API call", () => {
   assert.deepEqual(r.urls, []);
 });
 
+test("Sentry load is best-effort and prefers CODECAPS GH fallback", () => {
+  // Fail-fast load contract: Infisical names + FULLSCOPE, no required DSN
+  // (never block TestFlight), GH_FALLBACK prefers SENTRY_DSN_CODECAPS.
+  const steps = code.split(/- name:/);
+  const load = steps.find((s) => /Load Sentry ship secrets/.test(s));
+  assert.ok(load, "load step exists");
+  assert.match(load, /names: SENTRY_DSN SENTRY_AUTH_TOKEN SENTRY_AUTH_TOKEN_FULLSCOPE/);
+  assert.doesNotMatch(load, /required:\s*SENTRY_DSN\b/);
+  assert.match(load, /GH_FALLBACK_SENTRY_DSN: \$\{\{ secrets\.SENTRY_DSN_CODECAPS \|\| secrets\.SENTRY_DSN \}\}/);
+  assert.match(load, /GH_FALLBACK_SENTRY_AUTH_TOKEN: \$\{\{ secrets\.SENTRY_AUTH_TOKEN \}\}/);
+  assert.match(load, /GH_FALLBACK_SENTRY_AUTH_TOKEN_FULLSCOPE: \$\{\{ secrets\.SENTRY_AUTH_TOKEN_FULLSCOPE \}\}/);
+  assert.match(load, /service-token: \$\{\{ secrets\.INFISICAL_CODECAPS_READ_TOKEN \}\}/);
+});
+
 test("CodeCaps iOS ships with its own Sentry DSN, and a missing one is loud", () => {
-  // The CodeCaps project SENTRY_DSN is the codecaps DSN.  SENTRY_DSN_CODECAPS
-  // is not an Infisical name anymore.  The repository secret stays the
-  // explicit fallback, including GH_FALLBACK_SENTRY_DSN_CODECAPS on the fetch
-  // step and the value the next step reads.
-  assert.match(code, /names: SENTRY_DSN SENTRY_AUTH_TOKEN/);
-  assert.doesNotMatch(code, /names: [^\n]*\bSENTRY_DSN_CODECAPS\b/);
-  assert.doesNotMatch(code, /SENTRY_AUTH_TOKEN_FULLSCOPE/);
-  assert.match(code, /GH_FALLBACK_SENTRY_DSN: \$\{\{ secrets\.SENTRY_DSN \}\}/);
-  assert.match(code, /GH_FALLBACK_SENTRY_AUTH_TOKEN: \$\{\{ secrets\.SENTRY_AUTH_TOKEN \}\}/);
-  assert.match(code, /GH_FALLBACK_SENTRY_DSN_CODECAPS: \$\{\{ secrets\.SENTRY_DSN_CODECAPS \}\}/);
-  assert.match(code, /service-token: \$\{\{ secrets\.INFISICAL_CODECAPS_READ_TOKEN \}\}/);
+  // Pick-step contract: when vault/fallback is missing or not codecaps,
+  // write the RUNNER_TEMP note and let the status step turn the run red
+  // without exiting the pick step (TestFlight stays unblocked).
+  assert.match(code, /CODECAPS_SENTRY_PROJECT_ID: "4512207409840129"/);
   const steps = code.split(/- name:/);
   const pick = steps.findIndex((s) => /Use the CodeCaps Sentry DSN/.test(s));
   const load = steps.findIndex((s) => /Load Sentry ship secrets/.test(s));
@@ -621,12 +631,14 @@ test("CodeCaps iOS ships with its own Sentry DSN, and a missing one is loud", ()
   assert.match(step, /SENTRY_DSN<</);
   assert.match(step, /"\$SENTRY_DSN_CODECAPS"/);
   assert.match(step, />>"\$GITHUB_ENV"/);
-  // Missing: the shared key stays, but the run goes red through a note the
-  // Sentry status step reads, and the ship itself is not blocked.  The note
-  // lives in RUNNER_TEMP, never in the checkout:  the ship script refuses a
-  // dirty worktree, so an untracked file there would stop the ship.
+  assert.match(step, /dsn_project_id/);
+  assert.match(step, /CODECAPS_SENTRY_PROJECT_ID/);
+  // Normalize trailing slash and query/fragment before comparing project id.
+  assert.match(step, /sed -E/);
+  assert.ok(step.includes("s/[?#].*$//"), "strips query/fragment");
+  assert.ok(step.includes("s#/+$##"), "strips trailing slashes");
   assert.match(step, /::error title=Sentry DSN::/);
-  assert.match(step, /CodeCaps Infisical project prod \//);
+  assert.match(step, /Infisical CodeCaps prod \//);
   assert.doesNotMatch(step, /Fleet-OPS prod \//);
   assert.match(step, /"\$RUNNER_TEMP\/ios-ship-sentry-dsn-missing"/);
   assert.doesNotMatch(step, /GITHUB_WORKSPACE/);
@@ -634,8 +646,30 @@ test("CodeCaps iOS ships with its own Sentry DSN, and a missing one is loud", ()
   const status = steps.find((s) => /Sentry artifact upload status/.test(s));
   assert.match(status, /\$RUNNER_TEMP\/ios-ship-sentry-dsn-missing/);
   assert.match(status, /dsn_missing" = "1" \]; then\s+exit 1/);
-  // The DSN value is never echoed.
   assert.doesNotMatch(step, /echo[^\n]*\$\{?SENTRY_DSN_CODECAPS\}?"?\s*$/m);
+});
+
+test("dsn_project_id accepts trailing slash and query suffix", () => {
+  // Hermetic unit of the pick-step helper: extract via the workflow source.
+  const m = code.match(/dsn_project_id\(\) \{[\s\S]*?\n          \}/);
+  assert.ok(m, "workflow defines dsn_project_id");
+  const dir = mkdtempSync(join(tmpdir(), "dsn-pid-"));
+  try {
+    writeFileSync(join(dir, "fn.sh"), m[0] + '\n');
+    const run = (dsn) =>
+      execFileSync("bash", ["-c", 'source "$DIR/fn.sh"; dsn_project_id "$DSN"'], {
+        encoding: "utf8",
+        env: { ...process.env, DIR: dir, DSN: dsn },
+      }).trim();
+    const id = "4512207409840129";
+    const base = `https://placeholder@o1.ingest.us.sentry.io/${id}`;
+    assert.equal(run(base), id);
+    assert.equal(run(base + "/"), id);
+    assert.equal(run(base + "?x=1"), id);
+    assert.equal(run(base + "/#frag"), id);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("a failed Sentry upload is an error annotation and a red run", () => {
