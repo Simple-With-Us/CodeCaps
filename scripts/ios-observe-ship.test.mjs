@@ -78,6 +78,15 @@ test("upload success logs yield uploaded=true", () => {
   assert.match(r.recorded, /ship_observed=uploaded/);
 });
 
+test("[ios-ship] log prefix from ship-testflight.sh still matches", () => {
+  const r = runFakeShip(
+    "[ios-ship] upload path succeeded via xcodebuild export (destination=upload)\n",
+    0,
+  );
+  assert.equal(r.status, 0);
+  assert.match(r.recorded, /uploaded=true/);
+});
+
 test("spawn failure writes uploaded=false and exits nonzero", () => {
   const dir = mkdtempSync(join(tmpdir(), "observe-ship-"));
   const outFile = join(dir, "github-output");

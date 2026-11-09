@@ -371,6 +371,11 @@ test("post-sync ensure-tf-ready recheck runs after standing-tester sync", () => 
   assert.doesNotMatch(block, /steps\.ship\.outcome == 'success'/);
   const ship = steps.find((s) => /id: ship\b/.test(s));
   assert.match(ship, /ios-observe-ship\.mjs/);
+  const observe = read("scripts/ios-observe-ship.mjs");
+  assert.match(observe, /LOG_PREFIX.*ios-ship/, "upload/skip patterns must allow the ship log prefix");
+  const syncBlock = steps[sync];
+  assert.match(syncBlock, /if: success\(\)/);
+  assert.doesNotMatch(syncBlock, /steps\.ship\.outputs\.uploaded/);
 });
 
 test("the ship job clears a stale archive lock restored from the ship-state cache", () => {

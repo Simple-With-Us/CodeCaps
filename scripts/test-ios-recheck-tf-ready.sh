@@ -57,7 +57,7 @@ set -e
 [[ "$run_rc" -eq 0 ]] && ok "exits 0 after recheck (non-fatal to job)" || bad "exits 0 after recheck"
 grep -q 'tf_ready_rc=' "$GITHUB_OUTPUT" && ok "GITHUB_OUTPUT has tf_ready_rc" || bad "GITHUB_OUTPUT has tf_ready_rc"
 grep -q 'tf_ready_summary=' "$GITHUB_OUTPUT" && ok "GITHUB_OUTPUT has tf_ready_summary" || bad "GITHUB_OUTPUT has tf_ready_summary"
-grep -vq 'tf_ready_summary=rc=' "$GITHUB_OUTPUT" && ok "summary label omits duplicate rc= prefix" || bad "summary label must not repeat rc= code"
+! grep -q 'tf_ready_summary=rc=' "$GITHUB_OUTPUT" && ok "summary label omits duplicate rc= prefix" || bad "summary label must not repeat rc= code"
 
 set +e
 bash "$SCRIPT" no-such-app 199901011200 2>/dev/null
