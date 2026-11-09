@@ -838,6 +838,21 @@ final class GlanceMeterTests: XCTestCase {
                        ["local-mac:grok-bot:gbu-weekly", "local-mac:grok-bot:weekly", "x"])
     }
 
+    func testAbsoluteOnlyReadingCountsForGlanceDedupAndIsKept() {
+        let credits = makeWindow(id: "credits", label: "Grok Bot credits", token: "weekly", remaining: nil,
+                                 provider: "grok-bot")
+        var creditsWindow = credits.window
+        creditsWindow.absoluteRemaining = 6_099
+        creditsWindow.absoluteLimit = 40_000
+        creditsWindow.quotaUnit = "credits"
+        let creditsSnapshot = QuotaWindowSnapshot(window: creditsWindow, now: now)
+        let placeholder = makeWindow(id: "p", label: "Grok Bot weekly", token: "weekly", remaining: nil,
+                                     provider: "grok-bot")
+        let drawable = glanceDrawableWindows([creditsSnapshot, placeholder])
+        XCTAssertEqual(drawable.map(\.window.id), ["credits"],
+                       "an absolute-only reading stands for the meter and drops the empty twin")
+    }
+
     // MARK: Captions
 
     func testWeeklyTokensCaptionAsSevenDays() {

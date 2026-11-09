@@ -238,7 +238,7 @@ public actor QuotaPublisher {
         let machine = machineName ?? Self.machineName
         let events: [[String: Any]] = windows.compactMap { window in
             let remaining = window.boundedRemainingPercent
-            guard remaining != nil || window.planMetadata != nil else { return nil }
+            guard window.hasReading || window.planMetadata != nil else { return nil }
             let seriesKey = window.resetAt ?? "\(occurredAtIso.prefix(13)):00"
             let bucketId = UsageMonitorPushMetadata.bucketId(for: window)
             let readingTime = window.occurredAt.isEmpty ? occurredAtIso : window.occurredAt

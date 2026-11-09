@@ -949,7 +949,7 @@ final class MonitorModel: ObservableObject {
     var freshWindows: [QuotaWindowSnapshot] {
         let masked = maskedWindowIds
         let visible = sections.flatMap(\.windows).filter {
-            $0.isFresh && $0.remainingPercent != nil && !$0.window.isSupplementaryVideoQuota
+            $0.isFresh && $0.window.hasReading && !$0.window.isSupplementaryVideoQuota
                 && !masked.contains($0.window.id)
                 && rowIssue(for: $0.window.canonicalProviderKey) == nil
                 && !disabledSources.contains($0.window.source ?? "")
@@ -987,7 +987,7 @@ final class MonitorModel: ObservableObject {
     var menuBarPlatformPairOptions: [(id: String, label: String)] {
         displaySections.compactMap { row in
             let windows = row.section.windows.filter {
-                $0.isFresh && $0.remainingPercent != nil && !$0.window.isSupplementaryVideoQuota && !row.isMasked($0)
+                $0.isFresh && $0.window.hasReading && !$0.window.isSupplementaryVideoQuota && !row.isMasked($0)
             }
             guard windows.count >= 2 else { return nil }
             return (id: "platform_pair:\(row.id)", label: "Pin to \(row.title) (Both Quotas)")
@@ -1006,7 +1006,7 @@ final class MonitorModel: ObservableObject {
         var result: [(id: String, label: String)] = []
         for row in displaySections {
             let windows = row.section.windows.filter {
-                $0.isFresh && $0.remainingPercent != nil && !$0.window.isSupplementaryVideoQuota && !row.isMasked($0)
+                $0.isFresh && $0.window.hasReading && !$0.window.isSupplementaryVideoQuota && !row.isMasked($0)
             }
             for snapshot in windows {
                 let label = "\(row.title) · \(AntigravityDisplay.windowLabel(snapshot.window.label))"
@@ -1070,7 +1070,7 @@ final class MonitorModel: ObservableObject {
                     return [short, weekly]
                 }
                 let valid = row.section.windows.filter {
-                    $0.isFresh && $0.remainingPercent != nil && !$0.window.isSupplementaryVideoQuota && !$0.window.isSubModelLimit && !row.isMasked($0)
+                    $0.isFresh && $0.window.hasReading && !$0.window.isSupplementaryVideoQuota && !$0.window.isSubModelLimit && !row.isMasked($0)
                 }
                 if valid.count >= 2 {
                     return [valid[0], valid[1]]
@@ -1121,7 +1121,7 @@ final class MonitorModel: ObservableObject {
                isShortMenuBarWindow(short), isWeeklyMenuBarWindow(weekly) {
                 selected = weekly.remainingPercent == 0 ? [weekly] : [short, weekly]
             } else {
-                let remaining = windows.filter { $0.remainingPercent != nil }
+                let remaining = windows.filter { $0.window.hasReading }
                 guard let urgent = remaining.min(by: { ($0.remainingPercent ?? 100) < ($1.remainingPercent ?? 100) }) else {
                     return nil
                 }
@@ -3165,7 +3165,7 @@ final class MonitorModel: ObservableObject {
         let masked = maskedWindowIds
         let currentKeys = Set(localWindows.compactMap { window -> String? in
             let snapshot = QuotaWindowSnapshot(window: window, now: now)
-            guard snapshot.isFresh, snapshot.remainingPercent != nil,
+            guard snapshot.isFresh, window.hasReading,
                   !window.isSupplementaryVideoQuota, !masked.contains(window.id),
                   issues[window.canonicalProviderKey] == nil,
                   !disabledSources.contains(window.source ?? "") else { return nil }
