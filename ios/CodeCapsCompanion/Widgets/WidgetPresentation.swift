@@ -990,7 +990,22 @@ public enum WidgetPresentation {
             let reading = quotaReading(w, providerKey: providerKey)
             let lowId = w.id.lowercased()
             let lowLabel = w.label.lowercased()
-            if lowId.hasSuffix(":plan-metadata") || lowLabel == "plan details" {
+            // The shared intake gate stays:  a scoped pool (a code-review or
+            // per-model bucket) or a per-model limit that names no detail is
+            // not the plan's own quota - it never earns a row, a meter, the
+            // headline or the cap, exactly as on the phone (PR #376 parity).
+            // The one case the gate misclassifies is the supplementary video
+            // allowance:  that is a real row beside the plan, not a
+            // non-quota, so it survives intake flagged, and the plan-state,
+            // cap, pair and headline exclusions keep it off the plan's own
+            // bars (the qa6 wire contract, PR #369).
+            let isSupplementaryVideo = QuotaCapRule.isSupplementaryVideoQuota(
+                providerKey: providerKey, modelId: w.modelId, modelType: w.modelType, label: w.label)
+            guard reading.isQuota || isSupplementaryVideo else { return false }
+            // Producer-scoped window ids are serialized JSON, so they end in
+            // `"]`, not in the bare token:  match the metadata marker
+            // anywhere in the id (Kody review, PR #387).
+            if lowId.contains("plan-metadata") || lowLabel == "plan details" {
                 return false
             }
             // A copy that says it does not know the reading, carries no
@@ -1003,10 +1018,6 @@ public enum WidgetPresentation {
                 && !QuotaWindowVocabulary.isExtraAllowanceLabel(w.label) {
                 return false
             }
-            // A supplementary video allowance is a real row beside the plan,
-            // not a non-quota:  it survives intake flagged, and the
-            // plan-state, cap, pair and headline exclusions keep it off the
-            // plan's own bars (the qa6 wire contract, PR #369).
             if QuotaWindowVocabulary.isOwnDeviceWindow(id: w.id, source: w.source, machine: w.machine,
                 producerInstanceId: w.producerInstanceId, ownInstanceId: ownInstanceId) { return true }
             return !QuotaFreshnessRule.isDeadCopy(observedAt: reading.reportedAt, resetAt: reading.resetAt, now: now)
