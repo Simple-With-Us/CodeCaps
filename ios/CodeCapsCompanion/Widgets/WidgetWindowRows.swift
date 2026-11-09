@@ -256,9 +256,9 @@ struct PlanBarRow: View {
     var percentFont: CGFloat = 12
     var barHeight: CGFloat = 3.5
     /// The Mac meter grammar (token, bar, percent, countdown on one line).
-    /// The system-small widget is the exception: its width cannot hold a
-    /// bar, a percent and a countdown beside a title, so it keeps the
-    /// stacked layout.
+    /// The small widget opted into the meter grammar too (owner 2026-11-08):
+    /// rendered at the smallest system-small width (141pt) with long labels,
+    /// three-digit percents and long countdowns, nothing truncates.
     var usesMeterLayout: Bool = true
 
     /// The bar's own source, so the caption names the window it came from
