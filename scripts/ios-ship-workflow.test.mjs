@@ -423,11 +423,13 @@ test("scheduled gate and key handoff shell tests pass", () => {
 const shipScript = read("scripts/ios-fleet/ship-testflight.sh");
 
 test("the iOS lane loads the Sentry API token, not the DSN", () => {
-  assert.match(code, /names: SENTRY_DSN SENTRY_AUTH_TOKEN/);
-  assert.doesNotMatch(code, /SENTRY_AUTH_TOKEN_FULLSCOPE/);
+  // Workflow loads FULLSCOPE for sentry-cli (CC-200) alongside SENTRY_AUTH_TOKEN.
+  assert.match(code, /names: SENTRY_DSN SENTRY_AUTH_TOKEN SENTRY_AUTH_TOKEN_FULLSCOPE/);
+  assert.match(code, /required: SENTRY_DSN/);
+  assert.match(code, /GH_FALLBACK_SENTRY_AUTH_TOKEN_FULLSCOPE: \$\{\{ secrets\.SENTRY_AUTH_TOKEN_FULLSCOPE \}\}/);
   assert.match(shipScript, /SENTRY_AUTH_TOKEN_FULLSCOPE/);
   assert.match(shipScript, /SENTRY_AUTH_TOKEN from the CodeCaps project/);
-  // FULLSCOPE is optional.  When it is unset the CodeCaps token is used, and
+  // FULLSCOPE is preferred; when unset the CodeCaps token is used, and
   // a DSN in the token slot is still refused.
   const loader = shipScript.match(/load_sentry_auth\(\) \{[\s\S]*?\n\}/)[0];
   assert.ok(
@@ -601,17 +603,19 @@ test("a slug DSN tail is used as it stands, with no API call", () => {
 });
 
 test("CodeCaps iOS ships with its own Sentry DSN, and a missing one is loud", () => {
-  // The CodeCaps project SENTRY_DSN is the codecaps DSN.  SENTRY_DSN_CODECAPS
-  // is not an Infisical name anymore.  The repository secret stays the
-  // explicit fallback, including GH_FALLBACK_SENTRY_DSN_CODECAPS on the fetch
-  // step and the value the next step reads.
-  assert.match(code, /names: SENTRY_DSN SENTRY_AUTH_TOKEN/);
+  // CodeCaps Infisical SENTRY_DSN is the codecaps DSN (project id
+  // 4512207409840129).  SENTRY_DSN is required so a bad scoped read fails
+  // loudly.  Repository SENTRY_DSN_CODECAPS is preferred over shared
+  // secrets.SENTRY_DSN as the GH fallback.  Acceptance is by numeric
+  // project id, not by inequality vs the shared fleet secret.
+  assert.match(code, /names: SENTRY_DSN SENTRY_AUTH_TOKEN SENTRY_AUTH_TOKEN_FULLSCOPE/);
+  assert.match(code, /required: SENTRY_DSN/);
   assert.doesNotMatch(code, /names: [^\n]*\bSENTRY_DSN_CODECAPS\b/);
-  assert.doesNotMatch(code, /SENTRY_AUTH_TOKEN_FULLSCOPE/);
-  assert.match(code, /GH_FALLBACK_SENTRY_DSN: \$\{\{ secrets\.SENTRY_DSN \}\}/);
+  assert.match(code, /GH_FALLBACK_SENTRY_DSN: \$\{\{ secrets\.SENTRY_DSN_CODECAPS \|\| secrets\.SENTRY_DSN \}\}/);
   assert.match(code, /GH_FALLBACK_SENTRY_AUTH_TOKEN: \$\{\{ secrets\.SENTRY_AUTH_TOKEN \}\}/);
-  assert.match(code, /GH_FALLBACK_SENTRY_DSN_CODECAPS: \$\{\{ secrets\.SENTRY_DSN_CODECAPS \}\}/);
+  assert.match(code, /GH_FALLBACK_SENTRY_AUTH_TOKEN_FULLSCOPE: \$\{\{ secrets\.SENTRY_AUTH_TOKEN_FULLSCOPE \}\}/);
   assert.match(code, /service-token: \$\{\{ secrets\.INFISICAL_CODECAPS_READ_TOKEN \}\}/);
+  assert.match(code, /CODECAPS_SENTRY_PROJECT_ID: "4512207409840129"/);
   const steps = code.split(/- name:/);
   const pick = steps.findIndex((s) => /Use the CodeCaps Sentry DSN/.test(s));
   const load = steps.findIndex((s) => /Load Sentry ship secrets/.test(s));
@@ -626,7 +630,9 @@ test("CodeCaps iOS ships with its own Sentry DSN, and a missing one is loud", ()
   // lives in RUNNER_TEMP, never in the checkout:  the ship script refuses a
   // dirty worktree, so an untracked file there would stop the ship.
   assert.match(step, /::error title=Sentry DSN::/);
-  assert.match(step, /CodeCaps Infisical project prod \//);
+  assert.match(step, /Infisical CodeCaps prod \//);
+  assert.match(step, /dsn_project_id/);
+  assert.match(step, /CODECAPS_SENTRY_PROJECT_ID/);
   assert.doesNotMatch(step, /Fleet-OPS prod \//);
   assert.match(step, /"\$RUNNER_TEMP\/ios-ship-sentry-dsn-missing"/);
   assert.doesNotMatch(step, /GITHUB_WORKSPACE/);
