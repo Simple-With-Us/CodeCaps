@@ -1149,7 +1149,10 @@ public enum WidgetPresentation {
         // inside it:  it never caps the plan or drags its headline, the
         // same exclusion the phone's atCapWindow and dualWindows already
         // apply (Sentry review, PR #369).
-        let planStateWindows = childWindows.filter { !$0.isSupplementaryVideoQuota }
+        // Sub-model details sit beside the plan here too:  a spent Fable or
+        // Argon limit must not cap the generic headline any more than it may
+        // win the single-bar pick or drag the antigravity pool headline.
+        let planStateWindows = childWindows.filter { !$0.isSupplementaryVideoQuota && !$0.isModelDetail }
         let stateWindows = planStateWindows.isEmpty ? childWindows : planStateWindows
         let freshWindows = stateWindows.filter { $0.isFresh(now: now) }
         let freshPercent = freshWindows.compactMap(\.remainingPercent).min()
