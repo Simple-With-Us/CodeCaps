@@ -25,11 +25,14 @@ name: iOS TestFlight ship (GitHub-hosted macOS)
 #   * IOS_DIST_P12_BASE64 / IOS_DIST_P12_PASSWORD (Apple Distribution identity)
 #     stay repository secrets.
 #   * INFISICAL_CODECAPS_READ_TOKEN reads the CodeCaps Infisical project
-#     (prod /) for SENTRY_DSN and SENTRY_AUTH_TOKEN.  The project's SENTRY_DSN
-#     is the codecaps DSN.  Same-named repository secrets are the fetch
-#     fallbacks.  SENTRY_DSN_CODECAPS stays an explicit fallback for the app
-#     DSN; a missing codecaps DSN falls back to the shared fleet DSN and turns
-#     the run red.  An inert Sentry still beats a missed TestFlight ship.
+#     (prod /) for SENTRY_DSN, SENTRY_AUTH_TOKEN and
+#     SENTRY_AUTH_TOKEN_FULLSCOPE.  The project's SENTRY_DSN is the codecaps
+#     DSN (project id 4512207409840129).  SENTRY_DSN is required so a bad
+#     service token fails the load step instead of silently using a wrong
+#     fallback.  Repository SENTRY_DSN_CODECAPS is the explicit codecaps
+#     fallback (preferred over secrets.SENTRY_DSN).  An inert Sentry still
+#     beats a missed TestFlight ship for the upload itself; the status step
+#     turns the run red when the DSN is not codecaps.
 #
 # scripts/ios-appstore-gm-prepare.sh imports the Distribution identity (the job
 # environment carries ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_PATH to the ship step).  IOS_MANUAL_SIGN=1 signs Release with the
@@ -221,61 +224,63 @@ jobs:
             brew install xcodegen
           fi
 
-      # CodeCaps project prod /.  SENTRY_DSN there is the codecaps DSN.
-      # GH_FALLBACK_SENTRY_DSN_CODECAPS is not an Infisical name (that key
-      # lived in Fleet-OPS prod /, which this token does not read).  The next
-      # step applies the repository secret as the explicit fallback.
-      #
-      # The load is optional-only:  no name is required, so a scope or
-      # project-id mismatch warns and the repository secrets answer instead
-      # of failing the ship.  INFISICAL_PROJECT_ID is the CodeCaps project
-      # id, the one INFISICAL_CODECAPS_READ_TOKEN is scoped to.
+      # CodeCaps project prod /.  SENTRY_DSN there is the codecaps DSN
+      # (numeric project 4512207409840129).  Also load
+      # SENTRY_AUTH_TOKEN_FULLSCOPE — sentry-cli refuses a DSN-shaped
+      # SENTRY_AUTH_TOKEN (CC-200).  INFISICAL_PROJECT_ID +
+      # INFISICAL_CODECAPS_READ_TOKEN must be the CodeCaps project id and a
+      # read-only service token scoped to prod:/.  A bad/expired token used
+      # to warn and silently fall back to secrets.SENTRY_DSN; that hid the
+      # real failure mode.  SENTRY_DSN is required so a scope/token mismatch
+      # fails this step loudly instead of shipping with a misrouted DSN.
+      # Repository secrets remain the fallbacks (including SENTRY_DSN_CODECAPS).
       - name: Load Sentry ship secrets (Infisical, then repository secrets)
         uses: ./.github/actions/infisical-secrets
         with:
-          names: SENTRY_DSN SENTRY_AUTH_TOKEN
+          names: SENTRY_DSN SENTRY_AUTH_TOKEN SENTRY_AUTH_TOKEN_FULLSCOPE
+          required: SENTRY_DSN
           project-id: ${{ secrets.INFISICAL_PROJECT_ID }}
           service-token: ${{ secrets.INFISICAL_CODECAPS_READ_TOKEN }}
         env:
-          GH_FALLBACK_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          GH_FALLBACK_SENTRY_DSN: ${{ secrets.SENTRY_DSN_CODECAPS || secrets.SENTRY_DSN }}
           GH_FALLBACK_SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-          GH_FALLBACK_SENTRY_DSN_CODECAPS: ${{ secrets.SENTRY_DSN_CODECAPS }}
+          GH_FALLBACK_SENTRY_AUTH_TOKEN_FULLSCOPE: ${{ secrets.SENTRY_AUTH_TOKEN_FULLSCOPE }}
 
-      # CodeCaps iOS reports into Sentry project `codecaps`
-      # (4512207409840129).  The CodeCaps project SENTRY_DSN is that DSN.
-      # When the vault value is empty the fetch fills SENTRY_DSN from
-      # GH_FALLBACK_SENTRY_DSN, the shared fleet DSN (`botfleet`).  The
-      # repository secret SENTRY_DSN_CODECAPS is the explicit codecaps
-      # fallback and wins over that shared value.
-      #
-      # A missing codecaps DSN falls back to the shared SENTRY_DSN, LOUDLY:
-      # an ::error:: annotation plus a note in RUNNER_TEMP that the Sentry
-      # status step reads, so the last step turns the run red.  The note is
-      # never written into the checkout: the ship script refuses a dirty
-      # worktree.  It never blocks the TestFlight upload, and it never stays
-      # green while crashes go to the wrong project.  The value is never
-      # printed here.
+      # Accept a DSN only when it names the codecaps project id.  Comparing
+      # vault_dsn != secrets.SENTRY_DSN was a false negative whenever the
+      # repository secret was already the codecaps DSN (run 42550310144).
+      # Prefer SENTRY_DSN_CODECAPS over any non-codecaps vault/fallback value.
+      # A miss still does not block TestFlight; it writes the status-step note.
       - name: Use the CodeCaps Sentry DSN
         env:
           SENTRY_DSN_CODECAPS: ${{ secrets.SENTRY_DSN_CODECAPS }}
-          SHARED_FLEET_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          CODECAPS_SENTRY_PROJECT_ID: "4512207409840129"
         run: |
           set +o xtrace
           set -euo pipefail
+          dsn_project_id() {
+            # DSN path tail is the numeric project id; never print the DSN.
+            printf '%s' "${1:-}" | awk -F/ '{print $NF}' | tr -d '\r\n'
+          }
           vault_dsn="${SENTRY_DSN:-}"
-          if [ -n "$vault_dsn" ] && [ "$vault_dsn" != "${SHARED_FLEET_SENTRY_DSN:-}" ]; then
-            echo "SENTRY_DSN comes from the CodeCaps Infisical project (Sentry project codecaps)."
-          elif [ -n "${SENTRY_DSN_CODECAPS:-}" ]; then
+          vault_proj="$(dsn_project_id "$vault_dsn")"
+          caps_proj="$(dsn_project_id "${SENTRY_DSN_CODECAPS:-}")"
+          if [ -n "$vault_dsn" ] && [ "$vault_proj" = "${CODECAPS_SENTRY_PROJECT_ID}" ]; then
+            echo "SENTRY_DSN names Sentry project codecaps (${CODECAPS_SENTRY_PROJECT_ID})."
+          elif [ -n "${SENTRY_DSN_CODECAPS:-}" ] && [ "$caps_proj" = "${CODECAPS_SENTRY_PROJECT_ID}" ]; then
             {
               echo "SENTRY_DSN<<SENTRY_DSN_CODECAPS_EOF"
               printf '%s\n' "$SENTRY_DSN_CODECAPS"
               echo "SENTRY_DSN_CODECAPS_EOF"
             } >>"$GITHUB_ENV"
-            echo "SENTRY_DSN now comes from the repository secret SENTRY_DSN_CODECAPS (Sentry project codecaps)."
+            echo "SENTRY_DSN now comes from SENTRY_DSN_CODECAPS (Sentry project codecaps)."
           else
-            msg="SENTRY_DSN is missing from the CodeCaps Infisical project prod / and SENTRY_DSN_CODECAPS is missing from the repository secrets, so this build falls back to the shared fleet SENTRY_DSN and its crashes do not land in the codecaps project.  Set SENTRY_DSN_CODECAPS to the DSN of Sentry project codecaps."
+            msg="No codecaps Sentry DSN: Infisical CodeCaps prod / SENTRY_DSN and repository SENTRY_DSN_CODECAPS are missing or do not name project ${CODECAPS_SENTRY_PROJECT_ID} (got vault_project_id=${vault_proj:-empty}). Crashes from this build will not land in codecaps."
             echo "::error title=Sentry DSN::${msg}"
             printf '%s\n' "$msg" >>"$RUNNER_TEMP/ios-ship-sentry-dsn-missing"
+          fi
+          if [ -z "${SENTRY_AUTH_TOKEN_FULLSCOPE:-}" ]; then
+            echo "::warning title=Sentry auth::SENTRY_AUTH_TOKEN_FULLSCOPE is empty; dSYM / Size Analysis upload needs an org API token (not a DSN-shaped SENTRY_AUTH_TOKEN). See CC-200."
           fi
 
       # Do not use `secrets.*` in `if:` -- GitHub's dispatch parser rejects it
@@ -434,7 +439,7 @@ jobs:
           dsn_missing=0
           if [ -f "$dsn_note" ]; then
             dsn_missing=1
-            echo "::error title=Sentry DSN::this build used the shared fleet SENTRY_DSN, not SENTRY_DSN_CODECAPS, so its crashes do not land in the codecaps project."
+            echo "::error title=Sentry DSN::this build did not get a codecaps Sentry DSN (project 4512207409840129), so its crashes do not land in the codecaps project."
             while IFS= read -r line; do
               echo "  ${line}"
             done <"$dsn_note"
