@@ -354,6 +354,20 @@ test("ship state cache is keyed apart from the Mac ship", () => {
   for (const k of keys) assert.equal(k, "ios-fleet-state-codecaps-ios-", `bare prefix ${k} also matches the Mac ship cache`);
 });
 
+test("post-sync ensure-tf-ready recheck runs after standing-tester sync", () => {
+  const steps = code.split(/- name:/);
+  const sync = steps.findIndex((s) => /Sync standing TestFlight testers/.test(s));
+  const recheck = steps.findIndex((s) => /Recheck TestFlight readiness after standing-tester sync/.test(s));
+  assert.ok(sync > 0, "ios-ship.yml must sync standing TestFlight testers");
+  assert.ok(recheck > sync, "the post-sync recheck step must follow standing-tester sync");
+  const block = steps[recheck];
+  assert.match(block, /continue-on-error:\s*true/);
+  assert.match(block, /ios-recheck-tf-ready\.sh/);
+  assert.match(block, /steps\.plan-build\.outputs\.build/);
+  assert.match(block, /IOS_TF_READY_TIMEOUT_SEC/);
+  assert.match(block, /steps\.ship\.outcome == 'success'/);
+});
+
 test("the ship job clears a stale archive lock restored from the ship-state cache", () => {
   // scripts/ios-fleet/ship-testflight.sh takes an mkdir lock at
   // ~/.cache/ios-fleet/archive.lockdir.  Hosted runners are single-use, so a

@@ -58,3 +58,4 @@ jobs:
           python3 scripts/ios-fleet/test_screenshot_ink.py
           bash scripts/ios-fleet/test-capture-script.sh
           bash scripts/ios-fleet/test-publish-ios-versions.sh
+          bash scripts/test-ios-recheck-tf-ready.sh

@@ -403,6 +403,20 @@ jobs:
             echo "::warning title=TestFlight standing testers::tester sync exited ${rc}; see the standing-testers lines above.  The TestFlight upload itself succeeded."
           fi
 
+      # ensure-tf-ready inside the ship step runs before standing-tester sync,
+      # so rc=5 there can be a false alarm when sync creates the internal
+      # group (OPS-1052).  Re-run read-only readiness after sync for the run
+      # summary; failures must not fail a run that already uploaded.
+      - name: Recheck TestFlight readiness after standing-tester sync
+        if: success() && steps.ship.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 8
+        env:
+          IOS_TF_READY_TIMEOUT_SEC: "240"
+        run: |
+          source scripts/ios-load-asc-key.sh
+          bash scripts/ios-recheck-tf-ready.sh --build "${{ steps.plan-build.outputs.build }}"
+
       # Never persist the archive lock: a cancelled ship can leave it held,
       # and saving it would hand the next run a stale lock to wait on.
       - name: Remove archive lock before saving ship-state cache
