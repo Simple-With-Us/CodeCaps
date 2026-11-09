@@ -90,6 +90,31 @@ final class PipUnifiedPoolTests: XCTestCase {
         XCTAssertTrue(PipWidgetController.currentWindows(for: target, now: now, peerRows: [billing, account]).isEmpty)
     }
 
+    func testFreshAbsoluteOnlyOnPoolRowDoesNotBlockPeerPercentAdoption() {
+        var ownWindow = QuotaWindow(
+            id: "xai:credits",
+            provider: "xAI",
+            providerKey: "xai",
+            label: "Credits",
+            absoluteRemaining: 9_000,
+            absoluteLimit: 40_000,
+            quotaUnit: "credits",
+            remainingUnknown: true,
+            occurredAt: iso.string(from: now.addingTimeInterval(-30)),
+            source: "local"
+        )
+        let ownSection = QuotaPlatformSection(providerKey: "xai", providerLabel: "xAI", expected: true,
+                                              windows: [QuotaWindowSnapshot(window: ownWindow, now: now)])
+        let xaiRow = DisplaySection(id: "xai", providerKey: "xai", title: "xAI", platformTitle: "xAI",
+                                    section: ownSection, poolKey: nil, remainingPercent: nil,
+                                    resetAt: nil, maskedWindowIds: [])
+        let cursorPeer = makeDisplaySection(providerKey: "cursor", windowId: "local-mac:cursor:plan",
+                                            rem: 33.0, observedAgo: 20)
+        let windows = PipWidgetController.currentWindows(for: xaiRow, now: now, peerRows: [cursorPeer])
+        XCTAssertEqual(windows.first?.remainingPercent, 33.0,
+                       "a fresh absolute-only own reading must not block a peer percentage adoption")
+    }
+
     func testPeerFallbackUsesFreshestEligibleReadingAcrossRows() {
         let older = makeDisplaySection(providerKey: "cursor", windowId: "local-mac:cursor:plan", rem: 70, observedAgo: 120)
         let newer = makeDisplaySection(providerKey: "grok", windowId: "local-mac:grok:subscription", rem: 40, observedAgo: 10)

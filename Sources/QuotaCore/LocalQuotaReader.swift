@@ -409,7 +409,7 @@ public struct LocalQuotaReader: Sendable {
         // names the refusal and does not send the owner to sign in again.
         let issue = fallbackRefused
             ? "Grok returned no readable quota percentage; grok.com refused the credits fallback for GROK_TOKEN (\(Self.maskedTokenPreview(token)))."
-            : (windows.first?.remainingPercent == nil ? "Grok returned no readable quota percentage." : nil)
+            : (windows.contains(where: \.hasReading) ? nil : "Grok returned no readable quota percentage.")
         return ProviderRead(provider: provider, windows: windows, issue: issue)
     }
 

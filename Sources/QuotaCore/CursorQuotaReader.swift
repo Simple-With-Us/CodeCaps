@@ -77,7 +77,7 @@ public struct CursorQuotaReader: Sendable {
             guard !windows.isEmpty else {
                 return LocalQuotaResult(windows: [cursorUnknownWindow(observedAt: observedAt)], issues: ["cursor": "Cursor returned no readable included quota."])
             }
-            let issues = windows.allSatisfy { $0.remainingPercent == nil }
+            let issues = windows.allSatisfy { !$0.hasReading }
                 ? ["cursor": "Cursor returned no readable included quota."]
                 : [:]
             return LocalQuotaResult(windows: windows, issues: issues)
