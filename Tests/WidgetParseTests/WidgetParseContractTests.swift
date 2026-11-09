@@ -153,4 +153,29 @@ final class WidgetParseContractTests: XCTestCase {
                                          windows: [zero, countedExtra])
         XCTAssertNil(counted.dualWindows(), "a count-only extra fills no meter-pair slot (QuotaWindowPairing, #360)")
     }
+
+    /// A spent scoped pool (Codex's Code Review bucket) is not the plan's
+    /// quota:  it earns no row, cannot cap the plan and cannot drag the
+    /// headline - the phone's intake and the shared gate agree (PR #376,
+    /// Kody review on this PR).  And a producer-scoped plan-metadata id is
+    /// serialized JSON, so the metadata marker must match inside the id, not
+    /// only at its tail.
+    func testScopedPoolsAndJsonMetadataIdsStayOutOfIntake() throws {
+        let stamp = ISO8601DateFormatter().string(from: Date())
+        let reset = ISO8601DateFormatter().string(from: Date().addingTimeInterval(3600))
+        // The id shape the fleet actually ships (qa3 wire fixture).
+        let metadataJsonId = "[\"producer\",\"4f938669-72f9-4386-8808-6408a031ab4d\",\"minimax:plan-metadata\"]"
+        let payload = [
+            wire("openai:subscription", "openai", "5h", 62, "5-hour window", stamp: stamp, reset: reset),
+            wire("openai:code-review", "openai", "7d", 0, "Code Review", stamp: stamp, reset: reset),
+            wire(metadataJsonId, "minimax", nil, nil, "MiniMax quota", stamp: stamp, reset: reset),
+        ]
+        let parsed = WidgetPresentation.parseSnapshot(data: try JSONSerialization.data(withJSONObject: ["windows": payload]))
+        let codex = try XCTUnwrap(parsed.first { $0.providerKey == "openai" })
+        XCTAssertEqual(codex.windows.map(\.id), ["openai:subscription"])
+        XCTAssertEqual(codex.remainingPercent, 62)
+        XCTAssertNil(codex.atCapWindow())
+        let minimax = parsed.first { $0.providerKey == "minimax" }
+        XCTAssertTrue(minimax?.windows.isEmpty ?? true, "a JSON-shaped metadata id is a caption, not a window")
+    }
 }
