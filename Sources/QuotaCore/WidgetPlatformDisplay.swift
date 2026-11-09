@@ -162,6 +162,42 @@ public enum UpdatedStamp {
 }
 
 
+/// The one rule that decides whether a reading is old enough that a surface
+/// must date it, and the words every surface uses when it does.
+///
+/// The Mac's popover, the Mac's PiP, the phone and the widgets each answered
+/// this question for themselves, and the Mac's answer for Muse Code was "no
+/// marker at all", so one reading could read as current on one surface and as
+/// stale on another (owner 2026-11-09).
+///
+/// Plain Foundation and no other QuotaCore type, so the companion and the
+/// widget compile it beside the rules they already share.
+public enum QuotaStalenessRule {
+    /// Whether the reading is old enough that a surface must date it.
+    ///
+    /// A reading with no timestamp is unverified rather than stale, and a
+    /// period that has already ended is the dead-copy path's business rather
+    /// than a stale reading.
+    public static func isStale(observedAt: Date?, resetAt: Date?, now: Date) -> Bool {
+        guard let observedAt else { return false }
+        if let resetAt, resetAt <= now { return false }
+        return !QuotaFreshnessRule.isReadingRecent(observedAt: observedAt, now: now)
+    }
+
+    /// The cue a surface shows for a reading that is no longer current:
+    /// `stale · updated 3:15 PM`, and `at cap · updated 3:15 PM` for a spent
+    /// allowance, whose cap itself stays believed for the rest of its cycle.
+    ///
+    /// Nil for a fresh reading, for a reading the feed never dated, and for a
+    /// period that has already ended.
+    public static func cue(observedAt: Date?, resetAt: Date?, now: Date = Date(), isAtCap: Bool = false) -> String? {
+        guard let observedAt,
+              isStale(observedAt: observedAt, resetAt: resetAt, now: now) else { return nil }
+        let word = isAtCap ? "at cap" : "stale"
+        return "\(word) \u{00B7} updated \(UpdatedStamp.label(observedAt, now: now))"
+    }
+}
+
 /// Allowance identity and source selection shared by the companion and widgets.
 public enum QuotaCardProjection {
     public struct Reading: Equatable, Sendable {

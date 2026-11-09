@@ -963,6 +963,44 @@ public enum QuotaCapRule {
         return false
     }
 
+    /// Whether this window is a money meter rather than a quota meter.
+    ///
+    /// Cursor's plan spend window reports dollars against its billing cycle.
+    /// The shared pool already keeps it out of the included allowance, and it
+    /// must not stand in for a quota meter either:  a dollar balance is not a
+    /// percentage of anything, so it never fills a meter slot and never draws
+    /// a meter line of its own (owner 2026-11-09:  the Cursor row showed an
+    /// empty `1-month | 1m | —` line beside its one weekly meter).
+    ///
+    /// A billing cycle names money, and a currency unit names money.  A window
+    /// that counts requests, videos or credits is a quota, so it stays.
+    public static func isMoneyMeter(cadenceToken: String?, quotaUnit: String?, label: String? = nil) -> Bool {
+        let token = (cadenceToken ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if ["billing-cycle", "billing_cycle", "billing cycle", "billingcycle"].contains(token) {
+            return true
+        }
+        let unit = (quotaUnit ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if ["$", "usd", "us$"].contains(unit) { return true }
+        // The labels this codebase already mints for a money window.
+        let label = (label ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return ["api credits", "billing cycle spend"].contains(label)
+    }
+
+    /// The windows that may stand as this row's quota meters.
+    ///
+    /// A money meter is not a quota meter, so it never takes a slot beside a
+    /// real quota meter:  the Cursor row keeps exactly one weekly meter and
+    /// draws no `1-month | 1m | —` line beside it (owner 2026-11-09).
+    ///
+    /// But a plan whose only reading is a dollar balance must still show that
+    /// reading.  The Mac drew it, so a phone or a widget that rendered
+    /// nothing was a cross-surface disagreement, and a blank card is worse
+    /// than a dollar meter (Sentry review, PR #439).
+    public static func meterWindows<T>(_ windows: [T], isMoneyMeter: (T) -> Bool) -> [T] {
+        let quota = windows.filter { !isMoneyMeter($0) }
+        return quota.isEmpty ? windows : quota
+    }
+
     /// Whether this window is a scoped allowance that sits beside the
     /// subscription rather than inside it, which is Codex's Code Review and
     /// additional rate-limit pools.

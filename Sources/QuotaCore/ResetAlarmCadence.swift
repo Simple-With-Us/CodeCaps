@@ -88,10 +88,15 @@ public enum ResetAlarmCadence {
             break
         }
         if monthlyHint { return .calendarMonths(1) }
+        // The window's own words come before the provider-specific rule:  a
+        // Cursor window that states its cadence is read by that cadence.
+        // Cursor has only the seven-day pool quota now (owner ruling
+        // 2026-11-09), so the month rule may not override it.
+        if let prose = prosePeriod(token: token, label: label) { return prose }
         // Cursor's included plan resets with Cursor's monthly billing cycle and
         // carries no cadence of its own.
         if providerKey == "cursor", named.contains("plan") { return .calendarMonths(1) }
-        return prosePeriod(token: token, label: label)
+        return nil
     }
 
     /// The period in seconds.  A calendar month reads as the thirty days the

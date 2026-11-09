@@ -685,6 +685,12 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
         }
         let snapshots = relevant.map { QuotaWindowSnapshot(window: $0.window, now: now) }
         if snapshots.contains(where: \.isAwaitingRefresh) { return "awaiting refresh" }
+        if let stale = snapshots.first(where: \.isStale),
+           let cue = QuotaStalenessRule.cue(observedAt: stale.observedAt,
+                                            resetAt: stale.resetAt,
+                                            now: now) {
+            return cue
+        }
         if snapshots.contains(where: \.isStale) { return "stale reading" }
         return "unavailable"
     }
@@ -1343,7 +1349,25 @@ struct PipWidgetView: View {
                     .fixedSize()
             }
         }
-        .help(isExtra ? "Extra token usage" : (snapshot.resetAt.map { "Resets \(glanceResetCountdown($0, now: model.now))" } ?? ""))
+        .help(isExtra ? "Extra token usage" : pipMeterHelp(snapshot, now: model.now))
+    }
+
+    /// The tooltip one meter carries:  when the allowance comes back, and how
+    /// old the reading is when it is no longer current.
+    ///
+    /// The staleness words are the shared ones, so the panel, the phone and
+    /// the widgets say the same thing about one reading.
+    private func pipMeterHelp(_ snapshot: QuotaWindowSnapshot, now: Date) -> String {
+        var parts: [String] = []
+        if let reset = snapshot.resetAt {
+            parts.append("Resets \(glanceResetCountdown(reset, now: now))")
+        }
+        if let cue = QuotaStalenessRule.cue(observedAt: snapshot.observedAt,
+                                            resetAt: snapshot.resetAt,
+                                            now: now) {
+            parts.append(cue)
+        }
+        return parts.joined(separator: " · ")
     }
 
     /// How far apart the expanded rows sit.

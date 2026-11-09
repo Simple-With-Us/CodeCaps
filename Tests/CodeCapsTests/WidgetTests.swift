@@ -583,6 +583,30 @@ final class WidgetTests: XCTestCase {
         XCTAssertTrue(presentation.contains("title: \"3rd-Party\""))
     }
 
+    /// Owner 2026-11-09: the small widget keeps days-and-hours off its rows;
+    /// tapping a row reveals the plan's 5h/7d windows with the time remaining
+    /// beside each bar.  Every other surface keeps the countdown on the row.
+    func testSmallWidgetHidesCountdownUntilTap() throws {
+        let views = try readSource(at: Self.repoRoot.appendingPathComponent("ios/CodeCapsCompanion/Widgets/WidgetViews.swift"))
+        let smallView = views.components(separatedBy: "struct OverviewSmallView").last?
+            .components(separatedBy: "// MARK: - Overview Medium View").first ?? ""
+        XCTAssertTrue(smallView.contains("showsCountdown: false"), "Small rows must not show the days-and-hours countdown")
+        XCTAssertTrue(smallView.contains("showsCadenceToken: false"), "Small rows must not show the 5h/7d duration tokens either")
+        XCTAssertTrue(smallView.contains("ShowWidgetPlanDetailIntent"), "Small rows must tap through to the plan detail")
+        XCTAssertTrue(smallView.contains("selectedSmallDetail"), "Small view must render the tapped plan detail")
+        XCTAssertTrue(smallView.contains("smallDetailScope"), "Small taps must not leak into larger widgets' shared detail scope")
+        XCTAssertTrue(smallView.contains("detailLevel != .compact"), "The compact detail level turns small tap-through off too")
+        XCTAssertTrue(smallView.contains("planDetailWindows"), "Small detail shows the plan's 5h/7d windows")
+        let provider = try readSource(at: Self.repoRoot.appendingPathComponent("ios/CodeCapsCompanion/Widgets/WidgetDataProvider.swift"))
+        XCTAssertTrue(provider.contains("smallDetailScope"))
+        XCTAssertTrue(provider.contains("$0.id == id && $0.hasModelDetails"), "Larger widgets still detail only model-detail plans")
+        XCTAssertTrue(views.contains("compactLabels && !window.cadenceToken.isEmpty"), "Compact detail falls back to the full label when a window has no token")
+        let rows = try readSource(at: Self.repoRoot.appendingPathComponent("ios/CodeCapsCompanion/Widgets/WidgetWindowRows.swift"))
+        XCTAssertTrue(rows.contains("var showsCountdown: Bool = true"), "Countdown stays on everywhere else by default")
+        let presentation = try readSource(at: Self.widgetPresentationURL)
+        XCTAssertTrue(presentation.contains("planDetailWindows"))
+    }
+
     func testWindowCaptionRowNamesTheWindow() throws {
         let rows = try readSource(at: Self.repoRoot.appendingPathComponent("ios/CodeCapsCompanion/Widgets/WidgetWindowRows.swift"))
         XCTAssertTrue(rows.contains("struct WindowCaptionRow"))
@@ -590,8 +614,8 @@ final class WidgetTests: XCTestCase {
         XCTAssertTrue(rows.contains("struct PlanDualBarRow"))
         // The Mac meter grammar: token, bar, percent and countdown on one
         // line, with the percent and the reset trailing on the right of the
-        // bar (CC-213, owner 2026-11-07).  The small widget keeps the
-        // stacked layout, so the escape hatch must stay named too.
+        // bar (CC-213, owner 2026-11-07).  The small widget uses it too
+        // (owner 2026-11-08); the escape hatch must stay named.
         XCTAssertTrue(rows.contains("struct WidgetMeterRow"))
         XCTAssertTrue(rows.contains("usesMeterLayout"))
         XCTAssertTrue(rows.contains("struct PlanGrid"))
@@ -603,7 +627,7 @@ final class WidgetTests: XCTestCase {
         let presentation = try readSource(at: Self.widgetPresentationURL)
         XCTAssertTrue(presentation.contains("static func shortCadence"))
         XCTAssertTrue(presentation.contains("static func resetCaption"))
-        XCTAssertTrue(presentation.contains("func dualWindows()"))
+        XCTAssertTrue(presentation.contains("func dualWindows(now:"))
         // QA 2026-11-06, verified against the real wire capture (committed
         // verbatim at Tests/Fixtures/qa3-wire-regression-fixture.json):  the
         // codecaps 5h and the collector weekly share series "general", the

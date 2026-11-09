@@ -289,6 +289,32 @@ struct OverviewSmallView: View {
         Array(entry.platforms.prefix(3))
     }
 
+    /// The compact detail level in the edit sheet turns the tap-through off,
+    /// the same as on the larger widgets.
+    @ViewBuilder
+    private func smallRow(_ platform: WidgetPlatformItem) -> some View {
+        let bar = PlanBarRow(
+            platform: platform,
+            pick: pick,
+            markSize: 13,
+            titleFont: 11.5,
+            captionFont: 8.5,
+            percentFont: 11.5,
+            barHeight: 3.5,
+            usesMeterLayout: true,
+            showsCountdown: false,
+            showsCadenceToken: false
+        )
+        if entry.detailLevel == .compact {
+            bar
+        } else {
+            Button(intent: ShowWidgetPlanDetailIntent(planID: platform.id, overviewKey: entry.smallDetailScope)) {
+                bar
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
     var body: some View {
         if entry.platforms.isEmpty {
             WidgetEmptyStateView(
@@ -296,7 +322,15 @@ struct OverviewSmallView: View {
                 subtitle: "Open CodeCaps to sync"
             )
             .padding(8)
+        } else if let selected = entry.selectedSmallDetail, entry.detailLevel != .compact {
+            // Tapped row: the plan's own windows (5h, 7d) with the time
+            // remaining beside each bar (owner 2026-11-09).
+            WidgetPlanDetailView(platform: selected, entry: entry, windows: selected.planDetailWindows, compactLabels: true, clearScope: entry.smallDetailScope)
+                .padding(.horizontal, 13)
+                .padding(.vertical, 10)
         } else {
+            // No duration labels or countdowns on the rows; one tap reveals
+            // the 5h/7d windows with the time remaining (owner 2026-11-09).
             VStack(alignment: .leading, spacing: 7) {
                 WidgetHeaderView(markSize: 13)
 
@@ -304,16 +338,7 @@ struct OverviewSmallView: View {
 
                 VStack(spacing: 6) {
                     ForEach(displayed) { platform in
-                        PlanBarRow(
-                            platform: platform,
-                            pick: pick,
-                            markSize: 13,
-                            titleFont: 11.5,
-                            captionFont: 8.5,
-                            percentFont: 11.5,
-                            barHeight: 3.5,
-                            usesMeterLayout: false
-                        )
+                        smallRow(platform)
                     }
                 }
 
@@ -879,19 +904,39 @@ struct AccessoryView: View {
 struct WidgetPlanDetailView: View {
     let platform: WidgetPlatformItem
     let entry: CodeCapsWidgetEntry
+    /// Defaults to the sub-model breakdown; the small widget passes the
+    /// plan's own windows so its tap-through shows the 5h/7d countdowns.
+    var windows: [WidgetWindowItem]? = nil
+    /// Small width swaps the long window names for the compact tokens (5h, 7d)
+    /// so the label never truncates (owner 2026-11-09).
+    var compactLabels: Bool = false
+    /// The small widget's selection lives under its own scope; Back clears it.
+    var clearScope: String? = nil
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Button(intent: ShowWidgetPlanDetailIntent(planID: "", overviewKey: entry.detailScope)) {
-                    Label("All Plans", systemImage: "chevron.left")
-                }.buttonStyle(.plain).font(.caption)
-                Spacer()
+        VStack(alignment: .leading, spacing: compactLabels ? 8 : 10) {
+            if compactLabels {
+                // Small width: one header row keeps three window rows inside
+                // the 141pt frame.
+                HStack(spacing: 6) {
+                    Button(intent: ShowWidgetPlanDetailIntent(planID: "", overviewKey: clearScope ?? entry.detailScope)) {
+                        Image(systemName: "chevron.left")
+                    }.buttonStyle(.plain).font(.caption)
+                    Text(platform.title).font(.headline)
+                    Spacer(minLength: 0)
+                }
+            } else {
+                HStack {
+                    Button(intent: ShowWidgetPlanDetailIntent(planID: "", overviewKey: entry.detailScope)) {
+                        Label("All Plans", systemImage: "chevron.left")
+                    }.buttonStyle(.plain).font(.caption)
+                    Spacer()
+                }
+                Text(platform.title).font(.headline)
             }
-            Text(platform.title).font(.headline)
-            ForEach(platform.detailWindows) { window in
+            ForEach(windows ?? platform.detailWindows) { window in
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 8) {
-                        Text(window.label).font(.caption.bold())
+                        Text(compactLabels && !window.cadenceToken.isEmpty ? window.cadenceToken : window.label).font(.caption.bold())
                         Text(window.displayPercent).font(.subheadline.bold()).foregroundStyle(window.statusColor)
                         Text(window.countdown().isEmpty ? "—" : window.countdown())
                             .font(.caption).foregroundStyle(.secondary)
@@ -899,7 +944,11 @@ struct WidgetPlanDetailView: View {
                     MiniProgressBar(fraction: (window.remainingPercent ?? 0) / 100,
                         color: window.statusColor, elapsedFraction: window.elapsedFraction(),
                         hasReading: !window.isMasked && window.remainingPercent?.isFinite == true, height: 5)
-                    if window.isStale() { Text("Reading is stale").font(.caption2).foregroundStyle(.secondary) }
+                    if let cue = QuotaStalenessRule.cue(observedAt: window.observedAt,
+                                                       resetAt: window.resetAt,
+                                                       isAtCap: window.isExhausted) {
+                        Text(cue).font(.caption2).foregroundStyle(.secondary)
+                    }
                 }
             }
             Spacer(minLength: 0)

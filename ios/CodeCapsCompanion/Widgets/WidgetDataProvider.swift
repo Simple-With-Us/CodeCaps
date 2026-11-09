@@ -50,6 +50,16 @@ public struct CodeCapsWidgetEntry: TimelineEntry {
         [configuration?.plan?.id ?? "all", rowLayout.rawValue,
          quotasPerProvider.rawValue, windowPick.rawValue, detailLevel.rawValue].joined(separator: "|")
     }
+    /// The small widget gets its own scope so a tap there never changes what
+    /// a larger widget with the same configuration shows, and vice versa.
+    public var smallDetailScope: String { "small|" + detailScope }
+    /// The small widget details the plan's own windows, so any plan resolves,
+    /// not only ones with sub-model breakdowns.
+    public var selectedSmallDetail: WidgetPlatformItem? {
+        guard let id = UserDefaults(suiteName: WidgetSnapshotStore.appGroupId)?.string(forKey: "widgetDetail:" + smallDetailScope) else { return nil }
+        return platforms.first { $0.id == id }
+    }
+
     public var selectedDetail: WidgetPlatformItem? {
         guard let id = UserDefaults(suiteName: WidgetSnapshotStore.appGroupId)?.string(forKey: "widgetDetail:" + detailScope) else { return nil }
         return platforms.first { $0.id == id && $0.hasModelDetails }

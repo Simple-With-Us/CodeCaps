@@ -1260,12 +1260,22 @@ func glanceUsableMuseExtra(_ windows: [QuotaWindowSnapshot]) -> QuotaWindowSnaps
 /// that you can trust it.  If that leaves nothing, the row's own driving
 /// window is used so the row never renders blank.
 func glanceMeterPair(for row: DisplaySection, now: Date) -> GlanceMeterPair {
-    let trustworthy = glanceDrawableWindows(row.section.windows.filter {
+    let drawable = row.section.windows.filter {
         !$0.window.isSupplementaryVideoQuota && !row.isMasked($0)
-    })
-    let candidates = trustworthy.isEmpty
+    }
+    // A dollar balance is not a quota meter, so it never takes a slot beside a
+    // real quota meter; a plan whose only reading is a dollar balance still
+    // shows it, so the Mac, the phone and the widget never disagree about a
+    // blank card (Sentry review, PR #439).
+    let trustworthy = glanceDrawableWindows(drawable)
+    let meters = QuotaCapRule.meterWindows(trustworthy) {
+        QuotaCapRule.isMoneyMeter(
+            cadenceToken: $0.window.window, quotaUnit: $0.window.quotaUnit,
+            label: $0.window.label)
+    }
+    let candidates = meters.isEmpty
         ? [row.driving].compactMap { $0 }
-        : trustworthy
+        : meters
     guard let anchor = candidates.first else { return GlanceMeterPair() }
 
     if row.providerKey == "muse-assist" {
@@ -1302,7 +1312,12 @@ func glanceMeterPair(for row: DisplaySection, now: Date) -> GlanceMeterPair {
                 || QuotaCapRule.isScopedPoolAllowance(
                     providerKey: row.providerKey, id: snapshot.window.id, label: snapshot.window.label)
                 || QuotaCapRule.isSubModelLimit(
-                    providerKey: row.providerKey, id: snapshot.window.id, label: snapshot.window.label))
+                    providerKey: row.providerKey, id: snapshot.window.id, label: snapshot.window.label),
+            // A reading of a period that has ended never takes a slot from a
+            // live one.
+            isLive: !QuotaFreshnessRule.isDeadCopy(
+                observedAt: snapshot.observedAt, resetAt: snapshot.resetAt, now: now)
+        )
     }
     let pair = QuotaWindowPairing.meterPair(meterCandidates) { candidate, other in
         guard let snapshot = eligible.first(where: { $0.window.id == candidate.id }),
@@ -1685,11 +1700,6 @@ struct GlanceMeter: View {
         return glanceResetCountdown(snapshot.resetAt, now: now)
     }
 
-    private var isMuseProvider: Bool {
-        let key = snapshot.window.canonicalProviderKey
-        return key == "muse-assist" || key == "muse-code"
-    }
-
     /// The tooltip for a stale meter that has no reset to count down to.
     ///
     /// The countdown slot is empty then, so its own tooltip (which carries the
@@ -1697,7 +1707,7 @@ struct GlanceMeter: View {
     /// instead, and fresh meters keep an empty tooltip.  Muse Assist and Muse Code
     /// never display "Updated..." captions (owner 2026-10-17, 2026-10-18).
     private var staleBarHelp: String {
-        guard countdown.isEmpty, !isMuseProvider else { return "" }
+        guard countdown.isEmpty else { return "" }
         return glanceResetHelp(nil, now: now, observedAt: snapshot.observedAt, isFresh: snapshot.isFresh) ?? ""
     }
 
@@ -1761,7 +1771,7 @@ struct GlanceMeter: View {
                     // variable-width value cannot be centred in a trailing
                     // frame.
                     .frame(width: Metrics.glanceMeterCountdownWidth, alignment: .center)
-                    .help(isExtraLabel ? "Extra token usage" : (glanceResetHelp(snapshot.resetAt, now: now, observedAt: isMuseProvider ? nil : snapshot.observedAt, isFresh: snapshot.isFresh) ?? ""))
+                    .help(isExtraLabel ? "Extra token usage" : (glanceResetHelp(snapshot.resetAt, now: now, observedAt: snapshot.observedAt, isFresh: snapshot.isFresh) ?? ""))
             } else {
                 Color.clear
                     .frame(width: Metrics.glanceMeterCountdownWidth, height: 1)
@@ -1782,8 +1792,13 @@ struct GlanceMeter: View {
         if !countdown.isEmpty {
             parts.append("resets in \(glanceResetFullCountdown(snapshot.resetAt, now: now))")
         }
-        if !isMuseProvider, !snapshot.isFresh, let observed = snapshot.observedAt {
-            parts.append("updated \(observed.formatted(date: .omitted, time: .shortened))")
+        // The same cue the phone and the widget show, so one reading says the
+        // same thing on every surface.
+        if let cue = QuotaStalenessRule.cue(observedAt: snapshot.observedAt,
+                                            resetAt: snapshot.resetAt,
+                                            now: now,
+                                            isAtCap: snapshot.isAtCap) {
+            parts.append(cue)
         }
         return parts.joined(separator: ", ")
     }
@@ -1924,6 +1939,8 @@ func glanceExpandedLines(for row: DisplaySection, now: Date) -> [GlanceMeterLine
     // An empty duplicate is no more an extra line than it is a second meter.
     let drawable = glanceDrawableWindows(row.section.windows.filter {
         !$0.window.isSupplementaryVideoQuota && !row.isMasked($0)
+            && !QuotaCapRule.isMoneyMeter(
+                cadenceToken: $0.window.window, quotaUnit: $0.window.quotaUnit)
     })
     for snapshot in drawable where !shown.contains(snapshot.window.id) {
         if let known = holders[key(snapshot)],
@@ -2553,6 +2570,9 @@ func glanceResetFullCountdown(_ reset: Date?, now: Date) -> String {
 func glanceResetHelp(_ reset: Date?, now: Date, observedAt: Date? = nil, isFresh: Bool = true) -> String? {
     guard let reset else {
         if let observedAt, !isFresh {
+            if let cue = QuotaStalenessRule.cue(observedAt: observedAt, resetAt: nil, now: now) {
+                return cue
+            }
             return "Updated \(observedAt.formatted(date: .omitted, time: .shortened))"
         }
         return nil
@@ -2562,6 +2582,9 @@ func glanceResetHelp(_ reset: Date?, now: Date, observedAt: Date? = nil, isFresh
         ? "Resets in \(glanceResetFullCountdown(reset, now: now)), on \(when)"
         : "Reset was due \(when)"
     if let observedAt, !isFresh {
+        if let cue = QuotaStalenessRule.cue(observedAt: observedAt, resetAt: reset, now: now) {
+            return "\(prefix) · \(cue)"
+        }
         return "\(prefix) · updated \(observedAt.formatted(date: .omitted, time: .shortened))"
     }
     return prefix
