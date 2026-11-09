@@ -257,6 +257,14 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
     /// no per-model rows has nothing to expand into.
     public var hasModelDetails: Bool { !detailWindows.isEmpty }
 
+    /// The small widget's tap-through detail: the plan's own windows (5h, 7d)
+    /// with their countdowns, one tap away from the countdown-free rows
+    /// (owner 2026-11-09).  Sub-model breakdowns stay on the bigger widgets,
+    /// which have the room.
+    public var planDetailWindows: [WidgetWindowItem] {
+        windows.filter { !$0.isSupplementaryVideoQuota && !$0.isModelDetail }
+    }
+
     public init(
         id: String,
         providerKey: String,
