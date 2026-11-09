@@ -130,6 +130,19 @@ test("the compile gate still checks the Mac package and the iOS companion", () =
   assert.match(code, /runs-on: macos-latest/);
 });
 
+test("the package job resolves packages with retries before Swift build", () => {
+  const code = withoutComments(swiftCi);
+  const resolveIndex = code.indexOf("Resolve Swift packages (retry)");
+  const buildIndex = code.indexOf("Swift build");
+  assert.ok(resolveIndex >= 0, "the package job must resolve packages with a retry step");
+  assert.ok(buildIndex > resolveIndex, "package resolve must run before Swift build");
+  const resolveBlock = code.slice(resolveIndex, buildIndex);
+  assert.match(resolveBlock, /swift package resolve/);
+  assert.match(resolveBlock, /for attempt in 1 2 3 4/);
+  assert.match(resolveBlock, /::warning::/);
+  assert.match(resolveBlock, /::error::/);
+});
+
 test("only the Mac release gate may replace a cancelled compile run", () => {
   const release = withoutComments(read(".github/workflows/mac-release.yml"));
   const ship = withoutComments(read(".github/workflows/ios-ship.yml"));
