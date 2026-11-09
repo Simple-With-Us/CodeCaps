@@ -31,7 +31,7 @@ struct SMSSettingsView: View {
             SecureField(controller.hasSavedSetup ? "API Key Secret (Blank Keeps Saved Secret)" : "API Key Secret",
                         text: $apiKeySecret)
             TextField("Messaging Service SID", text: $messagingServiceSID)
-            TextField("Recipient (E.164)", text: $recipient)
+            TextField("Recipient Phone Number", text: $recipient, prompt: Text("+15551234567"))
             HStack {
                 Button("Save Setup") {
                     Task {
