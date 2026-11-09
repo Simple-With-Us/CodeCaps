@@ -988,7 +988,36 @@ public enum WidgetPresentation {
 
         let liveWindows = rawWindows.filter { w in
             let reading = quotaReading(w, providerKey: providerKey)
-            guard reading.isQuota else { return false }
+            let lowId = w.id.lowercased()
+            let lowLabel = w.label.lowercased()
+            // The shared intake gate stays:  a scoped pool (a code-review or
+            // per-model bucket) or a per-model limit that names no detail is
+            // not the plan's own quota - it never earns a row, a meter, the
+            // headline or the cap, exactly as on the phone (PR #376 parity).
+            // The one case the gate misclassifies is the supplementary video
+            // allowance:  that is a real row beside the plan, not a
+            // non-quota, so it survives intake flagged, and the plan-state,
+            // cap, pair and headline exclusions keep it off the plan's own
+            // bars (the qa6 wire contract, PR #369).
+            let isSupplementaryVideo = QuotaCapRule.isSupplementaryVideoQuota(
+                providerKey: providerKey, modelId: w.modelId, modelType: w.modelType, label: w.label)
+            guard reading.isQuota || isSupplementaryVideo else { return false }
+            // Producer-scoped window ids are serialized JSON, so they end in
+            // `"]`, not in the bare token:  match the metadata marker
+            // anywhere in the id (Kody review, PR #387).
+            if lowId.contains("plan-metadata") || lowLabel == "plan details" {
+                return false
+            }
+            // A copy that says it does not know the reading, carries no
+            // figure and names no reset is a status note, not a window:  it
+            // never earns a row (the phone's intake keeps the same rule).
+            if (w.remainingUnknown == true || lowLabel.contains("plan details"))
+                && w.remainingPercent == nil
+                && w.absoluteRemaining == nil
+                && parseDate(from: w.resetAt) == nil
+                && !QuotaWindowVocabulary.isExtraAllowanceLabel(w.label) {
+                return false
+            }
             if QuotaWindowVocabulary.isOwnDeviceWindow(id: w.id, source: w.source, machine: w.machine,
                 producerInstanceId: w.producerInstanceId, ownInstanceId: ownInstanceId) { return true }
             return !QuotaFreshnessRule.isDeadCopy(observedAt: reading.reportedAt, resetAt: reading.resetAt, now: now)
@@ -1298,19 +1327,19 @@ public enum WidgetPresentation {
             ))
         }
 
-        let primary = childWindows
+        // The headline reads the pool's own meters only:  a spent per-model
+        // detail (a 0% Argon limit) sits beside the pool and must not drag
+        // its figure to zero - the same exclusion the phone's
+        // cardRemainingPercent applies with isSubModelLimit.
+        let primary = childWindows.filter { !$0.isModelDetail }
         let fresh = primary.filter { $0.isFresh(now: now) && !$0.isMasked }
         let fallback = primary.filter { !$0.isMasked }
         let controllingPct = (fresh.isEmpty ? fallback : fresh).compactMap(\.remainingPercent).min()
         let isExhausted = weeklyExhausted || QuotaCapRule.isAtCap(remainingPercent: fresh.compactMap(\.remainingPercent).min())
-        let detailReports = windows.filter { quotaReading($0, providerKey: "google-antigravity").detailName == "Argon" }
-        if !detailReports.isEmpty {
-            let details = buildPlatformItem(id: "argon", providerKey: "google-antigravity", title: title,
-                iconHint: iconHint, defaultWindowLabel: nil, rawWindows: detailReports, now: now,
-                ownInstanceId: ownInstanceId)
-            childWindows += details.detailWindows
-        }
-
+        // Sub-model details arrive only through the detail loop above:
+        // appending buildPlatformItem's detailWindows here added a second
+        // copy of every Argon row beside the loop's own (native probe:
+        // gemini detailWindows == ["Argon limit"], not two).
         let nearestReset = childWindows.compactMap(\.resetAt).filter { $0 > now }.min()
             ?? childWindows.compactMap(\.resetAt).min()
 

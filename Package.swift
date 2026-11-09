@@ -28,6 +28,14 @@ let package = Package(
             resources: [.process("Resources")]
         ),
         .testTarget(name: "QuotaCoreTests", dependencies: ["QuotaCore"]),
+        // The iOS widget parse path, compiled straight from the iOS sources
+        // (mirrored into the test build at build time, so there is no
+        // committed copy to drift) because the companion builds via
+        // xcodebuild, not SPM: without this target the code feeding every
+        // widget pixel had no CI.
+        .executableTarget(name: "WidgetParseMirrorTool"),
+        .plugin(name: "WidgetParseMirrorGen", capability: .buildTool(), dependencies: ["WidgetParseMirrorTool"]),
+        .testTarget(name: "WidgetParseTests", plugins: ["WidgetParseMirrorGen"]),
         .testTarget(name: "CodeCapsTests", dependencies: ["CodeCaps"]),
     ]
 )
