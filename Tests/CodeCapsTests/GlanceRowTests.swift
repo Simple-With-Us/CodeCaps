@@ -1178,6 +1178,23 @@ final class GlanceMeterTests: XCTestCase {
                       "a money meter is not a quota meter, so it draws no meter line")
     }
 
+    /// A plan whose only reading is a dollar balance still draws that meter.
+    ///
+    /// The money meter never takes a slot beside a real quota meter, so the
+    /// Cursor row keeps exactly one weekly meter.  But when the dollar
+    /// balance is all the plan has, the Mac still draws it:  the phone and the
+    /// widget read the same shared rule, and a blank row is worse than a
+    /// dollar meter (Sentry review on PR #439).
+    func testAMoneyOnlyPlanStillDrawsItsMeter() {
+        let row = cursorRow([
+            makeWindow(id: "local-mac:cursor:plan", label: "Included plan", token: "billing-cycle",
+                       remaining: nil, resetIn: 20 * 86_400, provider: "cursor", quotaUnit: "USD"),
+        ])
+        let pair = glanceMeterPair(for: row, now: now)
+        XCTAssertEqual(pair.short?.window.id, "local-mac:cursor:plan")
+        XCTAssertNil(pair.long)
+    }
+
     private func antigravityRow(_ windows: [QuotaWindowSnapshot], masked: Set<String> = []) -> DisplaySection {
         DisplaySection(
             id: "google-antigravity:gemini",

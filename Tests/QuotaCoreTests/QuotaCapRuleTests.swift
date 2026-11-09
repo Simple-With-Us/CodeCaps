@@ -515,4 +515,22 @@ final class QuotaCapRuleTests: XCTestCase {
         XCTAssertFalse(QuotaCapRule.isMoneyMeter(cadenceToken: nil, quotaUnit: nil, label: "7-day window"))
     }
 
+    /// The money meter is a fallback, not a blank card.
+    ///
+    /// A dollar balance never takes a slot beside a real quota meter, so the
+    /// Cursor row keeps exactly one weekly meter.  But a plan whose only
+    /// reading is a dollar balance must still show that reading:  the Mac
+    /// drew it, so a phone or a widget that rendered nothing was a
+    /// cross-surface disagreement (Sentry review, PR #439).
+    func testAMoneyMeterIsTheFallbackWhenItIsTheOnlyReading() {
+        let windows = ["quota", "money"]
+        let isMoney: (String) -> Bool = { $0 == "money" }
+        // A quota meter is present:  the money window is left out entirely.
+        XCTAssertEqual(QuotaCapRule.meterWindows(windows, isMoneyMeter: isMoney), ["quota"])
+        // No quota meter at all:  the money window is what there is.
+        XCTAssertEqual(QuotaCapRule.meterWindows(["money"], isMoneyMeter: isMoney), ["money"])
+        // Nothing to show is still nothing.
+        XCTAssertEqual(QuotaCapRule.meterWindows([String](), isMoneyMeter: isMoney), [])
+    }
+
 }

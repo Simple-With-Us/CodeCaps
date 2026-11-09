@@ -601,6 +601,19 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
 
     /// Main-card windows: fresh Mac CodeCaps readings win; otherwise the newest feed with an Updated label.
     public func cardWindowRows(scope: CompanionSourceScope, now: Date = Date()) -> [CardWindow] {
+        // A dollar balance is not a percentage of anything, so it never speaks
+        // for the plan and it never draws a meter of its own (owner
+        // 2026-11-09:  the Cursor card showed an empty `1-month | 1m | —` line
+        // beside its one weekly meter).
+        cardMeasuredRows(scope: scope, now: now).filter { !Self.isMoneyMeter($0.window) }
+    }
+
+    /// The card's measured windows, a dollar balance included.
+    ///
+    /// The headline and the cap verdict read the set without a dollar
+    /// balance;  the two meters read it with one, because a dollar balance is
+    /// all some plans have.
+    private func cardMeasuredRows(scope: CompanionSourceScope, now: Date = Date()) -> [CardWindow] {
         // A scoped pool allowance (a code-review or per-model bucket) is not
         // a plan meter:  the cap rule skips it and the headline excludes it,
         // so drawing it as a bar put an empty meter beside a headline that
@@ -630,12 +643,27 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
                 || (window.absoluteRemaining?.isFinite == true && (window.absoluteRemaining ?? -1) >= 0)
             return measured && !window.isSupplementaryVideoQuota && !window.isScopedPoolAllowance
                 && (!window.isSubModelLimit || window.label == "Fable limit" || window.label == "Argon limit")
-                // A dollar balance is not a percentage of anything, so it is
-                // not a quota meter (owner 2026-11-09).
-                && !QuotaCapRule.isMoneyMeter(cadenceToken: window.rawWindowToken,
-                                             quotaUnit: window.quotaUnit,
-                                             label: window.label)
         }
+    }
+
+    /// The windows the card's two meters may be drawn from.
+    ///
+    /// A dollar balance is not a quota meter, so it never takes a slot beside
+    /// a real quota meter:  the Cursor card keeps exactly one weekly meter.
+    /// But a plan whose only reading is a dollar balance still shows it, so
+    /// the phone never renders a blank card where the Mac draws a meter
+    /// (Sentry review, PR #439).
+    private func cardMeterRows(scope: CompanionSourceScope, now: Date = Date()) -> [CardWindow] {
+        QuotaCapRule.meterWindows(cardMeasuredRows(scope: scope, now: now)) {
+            Self.isMoneyMeter($0.window)
+        }
+    }
+
+    /// Whether this window is a dollar balance rather than a quota meter.
+    private static func isMoneyMeter(_ window: CompanionWindowItem) -> Bool {
+        QuotaCapRule.isMoneyMeter(cadenceToken: window.rawWindowToken,
+                                  quotaUnit: window.quotaUnit,
+                                  label: window.label)
     }
 
     public func cardWindows(scope: CompanionSourceScope, now: Date = Date()) -> [CompanionWindowItem] {
@@ -643,7 +671,7 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
     }
 
     public func cardShortWindow(scope: CompanionSourceScope, now: Date = Date()) -> CardWindow? {
-        let resolved = cardWindowRows(scope: scope, now: now).filter { !$0.window.isSubModelLimit }
+        let resolved = cardMeterRows(scope: scope, now: now).filter { !$0.window.isSubModelLimit }
         if providerKey == "muse-assist" {
             if let weekly = resolved.first(where: {
                 QuotaWindowVocabulary.isMuseAssistWeekly(
@@ -660,7 +688,7 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
     }
 
     public func cardLongWindow(scope: CompanionSourceScope, now: Date = Date()) -> CardWindow? {
-        let resolved = cardWindowRows(scope: scope, now: now).filter { !$0.window.isSubModelLimit }
+        let resolved = cardMeterRows(scope: scope, now: now).filter { !$0.window.isSubModelLimit }
         if providerKey == "muse-assist" {
             if let extra = resolved.first(where: {
                 QuotaWindowVocabulary.isMuseAssistExtra(
@@ -696,12 +724,7 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
                 isExcluded: row.window.isSupplementaryVideoQuota
                     || row.window.isScopedPoolAllowance
                     || row.window.isSubModelLimit
-                    || row.window.isMasked
-                    // A dollar balance is not a percentage of anything, so it
-                    // is not a quota meter (owner 2026-11-09).
-                    || QuotaCapRule.isMoneyMeter(cadenceToken: row.window.rawWindowToken,
-                                                quotaUnit: row.window.quotaUnit,
-                                                label: row.window.label),
+                    || row.window.isMasked,
                 // A reading of a period that has ended never takes a slot from
                 // a live one.
                 isLive: !QuotaFreshnessRule.isDeadCopy(observedAt: row.window.reportedAt,

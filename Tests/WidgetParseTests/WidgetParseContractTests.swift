@@ -81,6 +81,41 @@ final class WidgetParseContractTests: XCTestCase {
         XCTAssertEqual(cursor.primaryWindows.first?.remainingPercent, 50)
     }
 
+    /// A plan whose only reading is a dollar balance still shows it.
+    ///
+    /// The money window never takes a slot beside a real quota meter, so the
+    /// Cursor row keeps exactly one weekly meter.  But when the dollar
+    /// balance is all the plan has, the phone and the widget must show it
+    /// rather than render an empty card:  the Mac drew it (Sentry review on
+    /// this PR).
+    func testAMoneyOnlyPlanStillShowsItsReading() throws {
+        let iso = ISO8601DateFormatter()
+        let stamp = iso.string(from: Date())
+        let reset = iso.string(from: Date().addingTimeInterval(2 * 86_400))
+        let payload = [
+            wire("local-mac:cursor:billing", "cursor", "billing-cycle", nil, "Included plan",
+                 stamp: stamp, reset: reset),
+        ]
+        let parsed = WidgetPresentation.parseSnapshot(
+            data: try JSONSerialization.data(withJSONObject: ["windows": payload]))
+        let cursor = try XCTUnwrap(parsed.first { $0.id == "cursor" })
+        XCTAssertEqual(cursor.primaryWindows.count, 1,
+                       "a dollar balance is all this plan has, so the widget still shows it")
+        XCTAssertEqual(cursor.primaryWindows.first?.rawWindowToken, "billing-cycle")
+
+        // The phone card reads the same rule.
+        let money = CompanionWindowItem(id: "billing", label: "Included plan", cadence: "billing-cycle",
+                                        remainingPercent: nil,
+                                        resetAt: Date().addingTimeInterval(3600),
+                                        absoluteRemaining: 42, reportedAt: Date(),
+                                        rawWindowToken: "billing-cycle")
+        let phone = CompanionQuotaItem(id: "cursor", providerKey: "cursor", title: "Cursor", subtitle: nil,
+                                       remainingPercent: nil, resetAt: nil, isExhausted: false,
+                                       isAlarmEnabled: false, windows: [money])
+        XCTAssertEqual(phone.cardShortWindow(scope: .allSources)?.window.id, "billing",
+                       "the phone card must not render blank where the Mac draws a meter")
+    }
+
     /// A spent sub-model detail never stands in for the pool on the
     /// single-bar row pick:  the small widget's controlling window is the
     /// pool's own most-urgent meter (the 1% weekly), not the 0% Argon

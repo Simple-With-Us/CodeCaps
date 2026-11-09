@@ -234,12 +234,18 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
     /// supplementary video allowances sit beside the plan, not inside it, so
     /// a detail view or a focus bar picks from these.
     public var primaryWindows: [WidgetWindowItem] {
-        windows.filter { !$0.isModelDetail && !$0.isSupplementaryVideoQuota
-            // A dollar balance is not a percentage of anything, so it is not a
-            // quota meter (owner 2026-11-09).
-            && !QuotaCapRule.isMoneyMeter(cadenceToken: $0.rawWindowToken,
-                                          quotaUnit: $0.quotaUnit,
-                                          label: $0.label) }
+        // A dollar balance is not a percentage of anything, so it never takes
+        // a slot beside a real quota meter (owner 2026-11-09).  But a plan
+        // whose only reading is a dollar balance still shows it, so the
+        // widget never renders an empty row where the Mac draws a meter
+        // (Sentry review, PR #439).
+        QuotaCapRule.meterWindows(
+            windows.filter { !$0.isModelDetail && !$0.isSupplementaryVideoQuota }
+        ) {
+            QuotaCapRule.isMoneyMeter(cadenceToken: $0.rawWindowToken,
+                                      quotaUnit: $0.quotaUnit,
+                                      label: $0.label)
+        }
     }
 
     /// The per-model detail windows beside the plan, in payload order.
@@ -457,12 +463,7 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
                     || QuotaCapRule.isScopedPoolAllowance(
                         providerKey: providerKey, id: window.id, label: window.label)
                     || QuotaCapRule.isSubModelLimit(
-                        providerKey: providerKey, id: window.id, label: window.label)
-                    // A dollar balance is not a percentage of anything, so it
-                    // is not a quota meter (owner 2026-11-09).
-                    || QuotaCapRule.isMoneyMeter(cadenceToken: window.rawWindowToken,
-                                                quotaUnit: window.quotaUnit,
-                                                label: window.label),
+                        providerKey: providerKey, id: window.id, label: window.label),
                 // A reading of a period that has ended never takes a slot from
                 // a live one.
                 isLive: !QuotaFreshnessRule.isDeadCopy(observedAt: window.observedAt,

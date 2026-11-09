@@ -1260,15 +1260,22 @@ func glanceUsableMuseExtra(_ windows: [QuotaWindowSnapshot]) -> QuotaWindowSnaps
 /// that you can trust it.  If that leaves nothing, the row's own driving
 /// window is used so the row never renders blank.
 func glanceMeterPair(for row: DisplaySection, now: Date) -> GlanceMeterPair {
-    let trustworthy = glanceDrawableWindows(row.section.windows.filter {
+    let drawable = row.section.windows.filter {
         !$0.window.isSupplementaryVideoQuota && !row.isMasked($0)
-            && !QuotaCapRule.isMoneyMeter(
-                cadenceToken: $0.window.window, quotaUnit: $0.window.quotaUnit,
-                label: $0.window.label)
-    })
-    let candidates = trustworthy.isEmpty
+    }
+    // A dollar balance is not a quota meter, so it never takes a slot beside a
+    // real quota meter; a plan whose only reading is a dollar balance still
+    // shows it, so the Mac, the phone and the widget never disagree about a
+    // blank card (Sentry review, PR #439).
+    let trustworthy = glanceDrawableWindows(drawable)
+    let meters = QuotaCapRule.meterWindows(trustworthy) {
+        QuotaCapRule.isMoneyMeter(
+            cadenceToken: $0.window.window, quotaUnit: $0.window.quotaUnit,
+            label: $0.window.label)
+    }
+    let candidates = meters.isEmpty
         ? [row.driving].compactMap { $0 }
-        : trustworthy
+        : meters
     guard let anchor = candidates.first else { return GlanceMeterPair() }
 
     if row.providerKey == "muse-assist" {
@@ -1305,12 +1312,7 @@ func glanceMeterPair(for row: DisplaySection, now: Date) -> GlanceMeterPair {
                 || QuotaCapRule.isScopedPoolAllowance(
                     providerKey: row.providerKey, id: snapshot.window.id, label: snapshot.window.label)
                 || QuotaCapRule.isSubModelLimit(
-                    providerKey: row.providerKey, id: snapshot.window.id, label: snapshot.window.label)
-                // A dollar balance is not a percentage of anything, so it is
-                // not a quota meter (owner 2026-11-09).
-                || QuotaCapRule.isMoneyMeter(
-                    cadenceToken: snapshot.window.window, quotaUnit: snapshot.window.quotaUnit,
-                    label: snapshot.window.label),
+                    providerKey: row.providerKey, id: snapshot.window.id, label: snapshot.window.label),
             // A reading of a period that has ended never takes a slot from a
             // live one.
             isLive: !QuotaFreshnessRule.isDeadCopy(
