@@ -229,16 +229,16 @@ jobs:
       # SENTRY_AUTH_TOKEN_FULLSCOPE — sentry-cli refuses a DSN-shaped
       # SENTRY_AUTH_TOKEN (CC-200).  INFISICAL_PROJECT_ID +
       # INFISICAL_CODECAPS_READ_TOKEN must be the CodeCaps project id and a
-      # read-only service token scoped to prod:/.  A bad/expired token used
-      # to warn and silently fall back to secrets.SENTRY_DSN; that hid the
-      # real failure mode.  SENTRY_DSN is required so a scope/token mismatch
-      # fails this step loudly instead of shipping with a misrouted DSN.
-      # Repository secrets remain the fallbacks (including SENTRY_DSN_CODECAPS).
+      # read-only service token scoped to prod:/.  SENTRY_DSN is NOT required
+      # here: a totally missing vault+fallback value must not block
+      # TestFlight (docs/IOS-TESTFLIGHT.md).  Loudness for a missing or
+      # non-codecaps DSN is the pick step note + Sentry status step.  Keep
+      # GH_FALLBACK_SENTRY_DSN (prefer SENTRY_DSN_CODECAPS) so a scoped-read
+      # miss can still supply a DSN for the pick step to validate.
       - name: Load Sentry ship secrets (Infisical, then repository secrets)
         uses: ./.github/actions/infisical-secrets
         with:
           names: SENTRY_DSN SENTRY_AUTH_TOKEN SENTRY_AUTH_TOKEN_FULLSCOPE
-          required: SENTRY_DSN
           project-id: ${{ secrets.INFISICAL_PROJECT_ID }}
           service-token: ${{ secrets.INFISICAL_CODECAPS_READ_TOKEN }}
         env:
@@ -260,7 +260,9 @@ jobs:
           set -euo pipefail
           dsn_project_id() {
             # DSN path tail is the numeric project id; never print the DSN.
-            printf '%s' "${1:-}" | awk -F/ '{print $NF}' | tr -d '\r\n'
+            # Strip query/fragment and trailing slashes so a valid DSN like
+            # .../4512207409840129/ or .../4512207409840129?x=1 still matches.
+            printf '%s' "${1:-}" | sed -E 's/[?#].*$//; s#/+$##' | awk -F/ '{print $NF}' | tr -d '\r\n'
           }
           vault_dsn="${SENTRY_DSN:-}"
           vault_proj="$(dsn_project_id "$vault_dsn")"
