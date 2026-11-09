@@ -75,6 +75,25 @@ final class WidgetParseContractTests: XCTestCase {
         XCTAssertEqual(gemini.controllingWindow()?.remainingPercent, 1)
     }
 
+    /// The generic path applies the same rule:  with a healthy plan and a
+    /// spent Fable detail, the Anthropic headline and the single-bar pick
+    /// both read the plan's own windows, not the detail (Kody, PR #389).
+    func testGenericPathSpentDetailCapsNeitherHeadlineNorPick() throws {
+        let stamp = ISO8601DateFormatter().string(from: Date())
+        let reset = ISO8601DateFormatter().string(from: Date().addingTimeInterval(3600))
+        let payload = [
+            wire("claude:5h", "anthropic", "5h", 80, "Claude 5-hour", stamp: stamp, reset: reset),
+            wire("claude:7d", "anthropic", "7d", 60, "Claude Weekly", stamp: stamp, reset: reset),
+            wire("claude:fable", "anthropic", "7d", 0, "Claude Fable", model: "Fable", stamp: stamp, reset: reset),
+        ]
+        let parsed = WidgetPresentation.parseSnapshot(data: try JSONSerialization.data(withJSONObject: ["windows": payload]))
+        let claude = try XCTUnwrap(parsed.first { $0.providerKey == "anthropic" })
+        XCTAssertEqual(claude.remainingPercent, 60)
+        XCTAssertFalse(claude.isExhausted)
+        XCTAssertEqual(claude.controllingWindow()?.id, "claude:7d")
+        XCTAssertEqual(claude.controllingWindow()?.remainingPercent, 60)
+    }
+
     /// The qa3 wire capture (committed verbatim):  the MiniMax plan keeps its
     /// 5h and weekly rows, both video cadences stay as separate flagged rows,
     /// the reading-less unknown row earns no row, and Copilot keeps buckets.
