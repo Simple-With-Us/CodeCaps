@@ -289,6 +289,32 @@ struct OverviewSmallView: View {
         Array(entry.platforms.prefix(3))
     }
 
+    /// The compact detail level in the edit sheet turns the tap-through off,
+    /// the same as on the larger widgets.
+    @ViewBuilder
+    private func smallRow(_ platform: WidgetPlatformItem) -> some View {
+        let bar = PlanBarRow(
+            platform: platform,
+            pick: pick,
+            markSize: 13,
+            titleFont: 11.5,
+            captionFont: 8.5,
+            percentFont: 11.5,
+            barHeight: 3.5,
+            usesMeterLayout: true,
+            showsCountdown: false,
+            showsCadenceToken: false
+        )
+        if entry.detailLevel == .compact {
+            bar
+        } else {
+            Button(intent: ShowWidgetPlanDetailIntent(planID: platform.id, overviewKey: entry.smallDetailScope)) {
+                bar
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
     var body: some View {
         if entry.platforms.isEmpty {
             WidgetEmptyStateView(
@@ -296,10 +322,10 @@ struct OverviewSmallView: View {
                 subtitle: "Open CodeCaps to sync"
             )
             .padding(8)
-        } else if let selected = entry.selectedDetail {
+        } else if let selected = entry.selectedSmallDetail, entry.detailLevel != .compact {
             // Tapped row: the plan's own windows (5h, 7d) with the time
             // remaining beside each bar (owner 2026-11-09).
-            WidgetPlanDetailView(platform: selected, entry: entry, windows: selected.planDetailWindows, compactLabels: true)
+            WidgetPlanDetailView(platform: selected, entry: entry, windows: selected.planDetailWindows, compactLabels: true, clearScope: entry.smallDetailScope)
                 .padding(.horizontal, 13)
                 .padding(.vertical, 10)
         } else {
@@ -312,21 +338,7 @@ struct OverviewSmallView: View {
 
                 VStack(spacing: 6) {
                     ForEach(displayed) { platform in
-                        Button(intent: ShowWidgetPlanDetailIntent(planID: platform.id, overviewKey: entry.detailScope)) {
-                            PlanBarRow(
-                                platform: platform,
-                                pick: pick,
-                                markSize: 13,
-                                titleFont: 11.5,
-                                captionFont: 8.5,
-                                percentFont: 11.5,
-                                barHeight: 3.5,
-                                usesMeterLayout: true,
-                                showsCountdown: false,
-                                showsCadenceToken: false
-                            )
-                        }
-                        .buttonStyle(.plain)
+                        smallRow(platform)
                     }
                 }
 
@@ -898,13 +910,15 @@ struct WidgetPlanDetailView: View {
     /// Small width swaps the long window names for the compact tokens (5h, 7d)
     /// so the label never truncates (owner 2026-11-09).
     var compactLabels: Bool = false
+    /// The small widget's selection lives under its own scope; Back clears it.
+    var clearScope: String? = nil
     var body: some View {
         VStack(alignment: .leading, spacing: compactLabels ? 8 : 10) {
             if compactLabels {
                 // Small width: one header row keeps three window rows inside
                 // the 141pt frame.
                 HStack(spacing: 6) {
-                    Button(intent: ShowWidgetPlanDetailIntent(planID: "", overviewKey: entry.detailScope)) {
+                    Button(intent: ShowWidgetPlanDetailIntent(planID: "", overviewKey: clearScope ?? entry.detailScope)) {
                         Image(systemName: "chevron.left")
                     }.buttonStyle(.plain).font(.caption)
                     Text(platform.title).font(.headline)
