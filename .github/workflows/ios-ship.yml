@@ -85,6 +85,8 @@ on:
       - 'scripts/ios-fleet/**'
       - '!scripts/ios-fleet/test-*.sh'
       - 'scripts/ios-ship-testflight.sh'
+      - 'scripts/ios-observe-ship.mjs'
+      - 'scripts/ios-recheck-tf-ready.sh'
       - 'scripts/ios-appstore-gm-prepare.sh'
       - 'scripts/ios-install-appstore-profiles.sh'
       - 'scripts/ios-stage-asc-key.sh'
