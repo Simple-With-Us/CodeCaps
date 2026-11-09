@@ -3,6 +3,8 @@ import XCTest
 
 /// Legacy responses and explicit machine provenance must both remain readable.
 final class FleetOriginTests: XCTestCase {
+    private let day: TimeInterval = 86_400
+
     func testIdentityPrefersSourceAndFallsBackInOrder() {
         XCTAssertEqual(FleetOrigin.identity(of: window(source: "antigravity-usage", sourceApp: "antigravity-cli")),
                        "antigravity-usage")
@@ -243,11 +245,102 @@ final class FleetOriginTests: XCTestCase {
     /// This Mac's own push of a period that ended is a copy like any other
     /// when this Mac has no local reading to grey that period out.  There is
     /// nothing left to show for it, so it must not stand in for a reading.
-    func testOwnPushOfAnEndedPeriodIsDroppedWhenThisMacHasNoLocalReading() {
+    /// An ended copy whose cadence still has a live sibling is redundant and
+    /// goes:  the live reading is the row's number.
+    func testAnEndedCopyWithALiveSiblingOfItsCadenceIsDropped() {
+        let live = xaiWindow(id: "grok:subscription", percent: 89, resetIn: 6 * 86_400, observedAgo: 60)
         let ended = xaiWindow(id: "xai:subscription", percent: 0, resetIn: -86_400, observedAgo: 6 * 86_400)
-        let split = FleetOrigin.split([ended], host: "this-mac", localWindows: [], now: Date())
-        XCTAssertTrue(split.ownPush.isEmpty,
-                      "a copy of a period that ended is not a reading, so it never reaches a row")
+        let split = FleetOrigin.split([live, ended], host: "this-mac", localWindows: [], now: Date())
+        XCTAssertEqual(split.ownPush.map(\.id), [live.id],
+                      "a copy of a period that ended is not a reading while a live one stands")
+    }
+
+    /// A dead copy whose cadence has nothing live left is the last known
+    /// state of that meter, so it stays and the row keeps the cadence:  the
+    /// Muse Code collector restates its periods only when new usage arrives,
+    /// and dropping the finished 5h window took the whole 5h row off the
+    /// provider while the weekly one survived (CC-211, owner 2026-11-07).
+    func testAnEndedCopyWithNothingLiveLeftOfItsCadenceIsKept() {
+        let now = Date()
+        let ended = xaiWindow(id: "local-mac:xai:subscription", percent: 0,
+                              resetIn: -86_400, observedAgo: 6 * 86_400)
+        let split = FleetOrigin.split([ended], host: "this-mac", localWindows: [], now: now)
+        XCTAssertEqual(split.ownPush.count, 1,
+                       "with no live window of the cadence, the ended copy is what the row has")
+    }
+
+    /// Retention is this Mac's own grey-out only: a copy from another
+    /// machine feeds the fleet fallback for a provider this Mac does not
+    /// read, so an ended 0% copy from a remote machine still drops even with
+    /// nothing live left of its cadence (PR review: the CC-191 failure).
+    func testARemoteMachinesDeadCopyDropsEvenWithNothingLiveLeftOfItsCadence() {
+        let now = Date()
+        let remoteDead = xaiWindow(id: "remote:xai:subscription", percent: 0,
+                                   resetIn: -86_400, observedAgo: 6 * 86_400)
+        var remote = remoteDead
+        remote.producerInstanceId = "other-mac"
+        let split = FleetOrigin.split([remote], host: "this-mac", localWindows: [], now: now)
+        XCTAssertTrue(split.ownPush.isEmpty)
+        XCTAssertTrue(split.groups.flatMap(\.windows).isEmpty,
+                      "a remote machine's ended copy is not a reading and never reaches a row")
+    }
+
+    /// The legacy Muse collector wrote this Mac's own machine name into the
+    /// producer field (before install UUIDs), so the producer field alone
+    /// must not decide ownership:  a name falls through to the machine-name
+    /// match, and this window is this Mac's own push — which is what keeps
+    /// the dead 5h copy on the row (CC-217).
+    func testALegacyCollectorMachineNameInTheProducerFieldIsOwnPush() {
+        let now = Date()
+        let iso = ISO8601DateFormatter()
+        var muse = QuotaWindow(
+            id: "local-mac:muse-code:5h",
+            provider: "Muse Code",
+            providerKey: "muse-code",
+            label: "5h window",
+            remainingPercent: 57,
+            resetAt: iso.string(from: now.addingTimeInterval(-3 * day)),
+            window: "5h",
+            occurredAt: iso.string(from: now.addingTimeInterval(-4 * day)),
+            source: "codecaps"
+        )
+        muse.producerInstanceId = "Mac.Jays.Services"
+        // A differently spelled host keeps the first comparison from settling
+        // it, so the machine-name match is what answers — on this Mac the
+        // real host name is the same string.
+        XCTAssertTrue(FleetOrigin.isOwnPush(muse, host: "mac.jays.services."),
+                      "the legacy collector's machine name is this Mac's own producer")
+        // A UUID-shaped producer id is a different installation's identity,
+        // and the machine-name match must not override it.
+        muse.producerInstanceId = "11111111-1111-1111-1111-111111111111"
+        XCTAssertFalse(FleetOrigin.isOwnPush(muse, host: "22222222-2222-2222-2222-222222222222"),
+                       "another install's UUID is authoritative")
+    }
+
+    func testTheMuseFiveHourRowSurvivesBesideTheLiveWeeklyWindow() {
+        let now = Date()
+        let iso = ISO8601DateFormatter()
+        func museWindow(id: String, windowToken: String, label: String, percent: Double,
+                        resetIn: TimeInterval, observedAgo: TimeInterval) -> QuotaWindow {
+            QuotaWindow(
+                id: id,
+                provider: "Muse Code",
+                providerKey: "muse-code",
+                label: label,
+                remainingPercent: percent,
+                resetAt: iso.string(from: now.addingTimeInterval(resetIn)),
+                window: windowToken,
+                occurredAt: iso.string(from: now.addingTimeInterval(-observedAgo)),
+                source: "codecaps"
+            )
+        }
+        let fiveHour = museWindow(id: "local-mac:muse-code:5h", windowToken: "5h", label: "5h window",
+                                  percent: 12, resetIn: -3 * 3_600, observedAgo: 4 * 3_600)
+        let weekly = museWindow(id: "local-mac:muse-code:weekly", windowToken: "7d", label: "7d window",
+                                percent: 35, resetIn: 6 * 86_400, observedAgo: 60)
+        let split = FleetOrigin.split([fiveHour, weekly], host: "this-mac", localWindows: [], now: now)
+        XCTAssertEqual(split.ownPush.map(\.id), [fiveHour.id, weekly.id],
+                       "the ended 5h window stays beside the live weekly one")
     }
 
     /// The exemption stays for a provider this Mac reads locally:  the local

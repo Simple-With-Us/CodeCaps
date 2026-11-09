@@ -29,6 +29,8 @@ const ascPem = pem();
 const otherPem = pem();
 const fake = join(root, "fleet-secrets");
 writeFileSync(fake, `#!/usr/bin/env node
+if (!/^st\\.[^.\\s]+\\.[^.\\s]+$/.test(process.env.INFISICAL_TOKEN || "")) process.exit(9);
+if (process.env.INFISICAL_CLIENT_ID || process.env.INFISICAL_CLIENT_SECRET || process.env.INFISICAL_MACHINE_IDENTITY_ID) process.exit(10);
 const [, , verb, name, , folder] = process.argv;
 const table = {
   "/asc:ASC_KEY_ID": "ASCKEY0001",
@@ -52,7 +54,7 @@ function run(env) {
     });
     server.listen(0, "127.0.0.1", () => {
       const url = `http://127.0.0.1:${server.address().port}/v1/apps`;
-      const base = { PATH: process.env.PATH, HOME: home, FLEET_SECRETS: fake };
+      const base = { PATH: process.env.PATH, HOME: home, FLEET_SECRETS: fake, INFISICAL_TOKEN: "st.synthetic-id.synthetic-secret" };
       const child = spawn(process.execPath, [script, "GET", url], { env: { ...base, ...env }, stdio: ["ignore", "pipe", "pipe"] });
       child.stdout.resume();
       child.stderr.resume();
@@ -77,6 +79,12 @@ test("nothing in the environment:  id, issuer and key all come from /asc", async
   assert.equal(r.code, 0);
   assert.equal(r.kid, "ASCKEY0001");
   assert.equal(r.iss, "issuer-from-asc");
+});
+
+test("Infisical fallback fails closed without an explicit service token", async () => {
+  const r = await run({ INFISICAL_TOKEN: "" });
+  assert.notEqual(r.code, 0);
+  assert.equal(r.kid, null);
 });
 
 test("an env key id equal to the /asc one is served from /asc", async () => {

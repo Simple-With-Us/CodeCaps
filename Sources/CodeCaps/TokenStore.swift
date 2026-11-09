@@ -26,11 +26,15 @@ enum TokenStore {
 
     static let readService = serviceName(suffix: "read-token")
     static let syncService = serviceName(suffix: "sync-token")
+    /// The Muse plugin's bridge token: a producer-scoped Usage Monitor
+    /// ingest token for `muse-code`, kept apart from this app's own Push
+    /// Token because a scoped token authorizes exactly one producer.
+    static let museCodeIngestService = serviceName(suffix: "muse-code-ingest-token")
 
-    /// The two service names this build owns: its Read Token and its Push
-    /// Token.  A `.dev` build's names differ from the release app's, so neither
-    /// can reach the other's items.
-    static var ownServices: Set<String> { [readService, syncService] }
+    /// The service names this build owns: its Read Token, its Push Token,
+    /// and the Muse bridge token.  A `.dev` build's names differ from the
+    /// release app's, so neither can reach the other's items.
+    static var ownServices: Set<String> { [readService, syncService, museCodeIngestService] }
 
     /// Whether `service` is exactly one of CodeCaps's own two items.  The store
     /// refuses every other name before any Keychain call is made, so nothing

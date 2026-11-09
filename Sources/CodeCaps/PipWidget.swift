@@ -473,7 +473,7 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
         let rows = Self.targetRows(for: model)
         let initialSize = PipMetrics.fitSize(rowCount: rows.count,
             hasDualMeterRow: rows.contains { Self.meterCount(for: $0, now: model.now,
-                issue: model.issues[$0.providerKey], disabledSources: model.disabledSources) > 1 },
+                issue: model.rowIssue(for: $0.providerKey), disabledSources: model.disabledSources) > 1 },
             allowsTitle: model.pipShowProviderNames)
         let p = NSPanel(
             contentRect: NSRect(origin: NSPoint(x: 120, y: 120), size: initialSize),
@@ -522,7 +522,7 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
         fittedRowSignature = signature
 
         let hasDualMeterRow = rows.contains { Self.meterCount(for: $0, now: model.now,
-            issue: model.issues[$0.providerKey], disabledSources: model.disabledSources) > 1 }
+            issue: model.rowIssue(for: $0.providerKey), disabledSources: model.disabledSources) > 1 }
         let fit = PipMetrics.fitSize(rowCount: rows.count, hasDualMeterRow: hasDualMeterRow,
                                      allowsTitle: model.pipShowProviderNames)
         let clamped = NSSize(
@@ -565,16 +565,16 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
         // failed.  A pinned failed row still shows, because the user asked for
         // it and it reports its status instead of a cached quota.
         func remainingPercent(_ row: DisplaySection) -> Double {
-            rankingPercent(for: row, now: model.now, issue: model.issues[row.providerKey],
+            rankingPercent(for: row, now: model.now, issue: model.rowIssue(for: row.providerKey),
                            disabledSources: model.disabledSources, peerRows: all)
         }
         func isMeasurable(_ row: DisplaySection) -> Bool {
-            readingStatus(for: row, now: model.now, issue: model.issues[row.providerKey],
+            readingStatus(for: row, now: model.now, issue: model.rowIssue(for: row.providerKey),
                           disabledSources: model.disabledSources, peerRows: all) == nil
         }
         let measurable = all.filter { isMeasurable($0) }
-        let failed = all.filter { model.issues[$0.providerKey] != nil }
-        let quiet = all.filter { !isMeasurable($0) && model.issues[$0.providerKey] == nil }
+        let failed = all.filter { model.rowIssue(for: $0.providerKey) != nil }
+        let quiet = all.filter { !isMeasurable($0) && model.rowIssue(for: $0.providerKey) == nil }
         var chosen = Array(measurable.sorted { remainingPercent($0) < remainingPercent($1) }.prefix(2))
         if chosen.count < 2 {
             chosen += Array(quiet.sorted { remainingPercent($0) < remainingPercent($1) }
@@ -604,11 +604,27 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
                 && !$0.window.remainingUnknown
                 && !disabledSources.contains($0.window.source ?? "") }
             .map { QuotaWindowSnapshot(window: $0.window, now: now) }
-            .filter { $0.isFresh && $0.remainingPercent != nil
+            // A live period with a bounded percentage is drawable however old
+            // its observation is:  the Muse collectors restate their windows
+            // only when new usage arrives, so an unchanged quota reads
+            // .stale while the menu bar dropdown draws it as the current
+            // reading — and the HUD contradicted the dropdown on the same
+            // row (CC-216, owner 2026-11-07).  A period that has ended is
+            // .awaitingRefresh and stays out; the row then names it.
+            .filter { !$0.isAwaitingRefresh && $0.remainingPercent != nil
                 && (!$0.window.skip || $0.remainingPercent == 0) }
-        if !own.isEmpty { return own }
+        // Fresh own readings outrank everything for a pool participant:  a
+        // stale own reading yields to a peer's fresh one first.  Every other
+        // row keeps its whole live-period set — fresh and stale-but-live
+        // together — the same meters the dropdown draws, so a fresh 5h
+        // cannot make the stale 7d vanish (CC-216 review).
+        let isPoolParticipant = UnifiedSubscriptionPool.participantKeys.contains(row.providerKey)
+        if isPoolParticipant {
+            let fresh = own.filter { $0.isFresh }
+            if !fresh.isEmpty { return fresh }
+        }
 
-        if UnifiedSubscriptionPool.participantKeys.contains(row.providerKey) {
+        if isPoolParticipant {
             let candidates = peerRows
                 .filter { $0.id != row.id && UnifiedSubscriptionPool.participantKeys.contains($0.providerKey) }
                 .flatMap { peer in
@@ -620,7 +636,7 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
                 return [QuotaWindowSnapshot(window: adapted, now: now)]
             }
         }
-        return []
+        return own
     }
 
     /// The extra balance a row may still spend, if the provider publishes one.
@@ -669,6 +685,12 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
         }
         let snapshots = relevant.map { QuotaWindowSnapshot(window: $0.window, now: now) }
         if snapshots.contains(where: \.isAwaitingRefresh) { return "awaiting refresh" }
+        if let stale = snapshots.first(where: \.isStale),
+           let cue = QuotaStalenessRule.cue(observedAt: stale.observedAt,
+                                            resetAt: stale.resetAt,
+                                            now: now) {
+            return cue
+        }
         if snapshots.contains(where: \.isStale) { return "stale reading" }
         return "unavailable"
     }
@@ -806,7 +828,7 @@ struct PipWidgetView: View {
     /// widens them all rather than each row being a different size.
     private func anyRowSpiking(peerRows: [DisplaySection]) -> Bool {
         targetRows.contains { row in
-            PipWidgetController.readingStatus(for: row, now: model.now, issue: model.issues[row.providerKey],
+            PipWidgetController.readingStatus(for: row, now: model.now, issue: model.rowIssue(for: row.providerKey),
                 disabledSources: model.disabledSources, peerRows: peerRows) == nil && model.hasActiveRunawayAnomaly(for: row)
         }
     }
@@ -821,7 +843,7 @@ struct PipWidgetView: View {
 
     private var maximumMeterCount: Int {
         max(1, targetRows.map { row in
-            PipWidgetController.meterCount(for: row, now: model.now, issue: model.issues[row.providerKey],
+            PipWidgetController.meterCount(for: row, now: model.now, issue: model.rowIssue(for: row.providerKey),
                                             disabledSources: model.disabledSources)
         }.max() ?? 1)
     }
@@ -1071,7 +1093,7 @@ struct PipWidgetView: View {
     /// detail.
     private func pipRow(_ row: DisplaySection, detail: PipMetrics.Detail, expandedCadence: Bool,
                          peerRows: [DisplaySection], available: CGFloat) -> some View {
-        let issue = model.issues[row.providerKey]
+        let issue = model.rowIssue(for: row.providerKey)
         let status = PipWidgetController.readingStatus(for: row, now: model.now, issue: issue,
                                                        disabledSources: model.disabledSources,
                                                        peerRows: peerRows)
@@ -1202,7 +1224,7 @@ struct PipWidgetView: View {
     private func detailPanel(_ row: DisplaySection, detail: PipMetrics.Detail,
                               peerRows: [DisplaySection], height: CGFloat,
                               width: CGFloat) -> some View {
-        let issue = model.issues[row.providerKey]
+        let issue = model.rowIssue(for: row.providerKey)
         // The platform's own 5-hour and 7-day windows first, then its
         // per-model windows such as Fable (owner, 2026-10-30).
         let windows = QuotaWindowPresentation.primaryFirst(
@@ -1327,7 +1349,25 @@ struct PipWidgetView: View {
                     .fixedSize()
             }
         }
-        .help(isExtra ? "Extra token usage" : (snapshot.resetAt.map { "Resets \(glanceResetCountdown($0, now: model.now))" } ?? ""))
+        .help(isExtra ? "Extra token usage" : pipMeterHelp(snapshot, now: model.now))
+    }
+
+    /// The tooltip one meter carries:  when the allowance comes back, and how
+    /// old the reading is when it is no longer current.
+    ///
+    /// The staleness words are the shared ones, so the panel, the phone and
+    /// the widgets say the same thing about one reading.
+    private func pipMeterHelp(_ snapshot: QuotaWindowSnapshot, now: Date) -> String {
+        var parts: [String] = []
+        if let reset = snapshot.resetAt {
+            parts.append("Resets \(glanceResetCountdown(reset, now: now))")
+        }
+        if let cue = QuotaStalenessRule.cue(observedAt: snapshot.observedAt,
+                                            resetAt: snapshot.resetAt,
+                                            now: now) {
+            parts.append(cue)
+        }
+        return parts.joined(separator: " · ")
     }
 
     /// How far apart the expanded rows sit.

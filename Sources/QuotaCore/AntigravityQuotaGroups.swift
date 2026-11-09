@@ -233,8 +233,13 @@ public enum AntigravityQuotaGroups {
 
     private static func cadence(_ value: QuotaWindow) -> String? {
         let token = value.window?.lowercased().replacingOccurrences(of: " ", with: "")
-        if ["weekly", "week", "1w", "7d", "168h", "10080m"].contains(token ?? "") || value.label.lowercased().contains("weekly") { return "weekly" }
-        if ["5h", "5hr", "5-hour", "5hours", "300m"].contains(token ?? "") { return "5h" }
+        let label = value.label.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let weeklyLabels: Set<String> = ["weekly", "week", "7-day", "7 day", "7-day window", "7 day window"]
+        let fiveHourLabels: Set<String> = ["5h", "5hr", "5-hour", "5 hours", "5-hour window", "5 hour window", "five_hour"]
+        if ["weekly", "week", "1w", "7d", "168h", "10080m"].contains(token ?? "")
+            || weeklyLabels.contains(label) { return "weekly" }
+        if ["5h", "5hr", "5-hour", "5hours", "300m"].contains(token ?? "")
+            || fiveHourLabels.contains(label) { return "5h" }
         // The helper's model quotaInfo is the short pool.  A weekly reading
         // must be explicitly identified; a reset's distance is not a duration.
         if token == nil && value.sourceApp == "local-mac" && value.modelId != nil { return "5h" }

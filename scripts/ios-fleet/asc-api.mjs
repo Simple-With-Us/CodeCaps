@@ -38,6 +38,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { normalizePrivateKey } from "./asc-key.mjs";
+import { fleetSecretsEnvironment, hasInfisicalServiceToken } from "./infisical-service-token.mjs";
 // The version-numbering RULES live in ./version-plan.mjs (pure, no I/O, no
 // network); this client only reads the App Store Connect state they need.
 import {
@@ -220,11 +221,15 @@ function materializeP8(pem) {
 // FLEET_SECRETS_BIN, then FLEET_SECRETS (what ship-testflight.sh reads and what
 // the test suites set), override the default binary.  Values stay in memory.
 function fleetSecretsGet(name, folder) {
+  // `fleet-secrets` can use a host machine identity when no service token is
+  // present.  Release automation must never enter that fallback.
+  if (!hasInfisicalServiceToken(process.env)) return "";
   const bin = process.env.FLEET_SECRETS_BIN || process.env.FLEET_SECRETS || join(homedir(), ".local", "bin", "fleet-secrets");
   try {
     return execFileSync(bin, ["get", name, "--path", folder], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
+      env: fleetSecretsEnvironment(process.env),
       timeout: 30000
     }).replace(/\n$/, "");
   } catch {
@@ -251,8 +256,10 @@ function resolveCredential() {
   const envIssuer = String(process.env.ASC_ISSUER_ID || "").trim();
   const envKeyPem = String(process.env.ASC_KEY_P8 || "").trim();
 
-  // 1) The APPLE_API_* trio the ship workflow exports from Infisical.  The
-  //    key itself is in the environment, so it wins over every other source.
+  // 1) The APPLE_API_* trio, for operators who set it themselves.  CI no
+  //    longer exports APPLE_API_KEY_P8_BASE64 (the key stays in the staged
+  //    mode-600 file), so the ship steps resolve through source 2.  When the
+  //    key is in the environment it wins over every other source.
   const keyId = String(process.env.APPLE_API_KEY_ID || "").trim();
   const issuerId = String(process.env.APPLE_API_ISSUER_ID || "").trim();
   if (keyId && issuerId && process.env.APPLE_API_KEY_P8_BASE64) {

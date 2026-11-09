@@ -5,8 +5,8 @@ This file is binding on every agent that works in this repo.  Read it first.
 ## Inter-agent coordination
 
 Coordinate with other AI agents on Zulip (`https://simplewithus.zulipchat.com`), channel
-`#Work-In-Progress`; a topic is the thread.  Never write to any "agent-sync" channel — that
-does not exist; `#Work-In-Progress` is the live coordination channel.  Full protocol:
+`#Work-In-Progress`; a topic is the thread.  Use only the live coordination channel,
+not a retired channel or stub.  Full protocol:
 `/Users/jay/apps/FLEET-PROTOCOL.md` (canonical — read it before your first message); chat
 mechanics: https://fleetlink.online/zulip/zulip-fleet-guide.md.  Post with the `simple-chat` CLI
 (`~/.local/bin/simple-chat`) and ST-MCP, which writes your `[AG·session8]` tag for you.
@@ -40,7 +40,7 @@ Hosting and routing (apexes, hostnames, hosts, deploy paths): see [`Fleet-OPS/do
 CodeCaps is a macOS menu-bar Swift app for **centralized monitoring and
 alerting of every AI subscription plan on your Mac** — usage, quotas, and
 caps across Claude, Codex, Cursor, Antigravity, Grok, MiniMax, and the
-other AI CLIs already signed in.  No provider API key is entered; CodeCaps
+other AI CLIs already signed in.  Optional Z.ai coding-plan keys stay in Keychain; CodeCaps
 uses existing local sign-ins to query supported provider quotas and local
 helpers.  Reading a credential file is not a passive quota-file refresh.  The
 same readings can be pushed to an endpoint you run and pulled back into the

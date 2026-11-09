@@ -15,7 +15,7 @@ final class WidgetPlatformDisplayTests: XCTestCase {
     func testNoCanonicalPlatformTitleIsRawLowercaseProviderId() {
         let slugs = [
             "cursor", "anthropic", "openai", "minimax", "xai", "grok-bot",
-            "muse-assist", "muse-code", "google-antigravity", "kimi",
+            "muse-assist", "muse-code", "google-antigravity", "kimi", "zcode",
         ]
         for slug in slugs {
             let title = WidgetPlatformDisplay.title(
@@ -28,6 +28,20 @@ final class WidgetPlatformDisplayTests: XCTestCase {
                 "widget row for \(slug) must not render the raw id \"\(title)\""
             )
         }
+    }
+
+    func testAntigravityPeriodUsesCanonicalTokensAndExactLabels() {
+        func reading(window: String?, label: String) -> QuotaCardProjection.Reading {
+            .init(id: "fixture", providerKey: "google-antigravity", label: label, window: window)
+        }
+
+        XCTAssertEqual(QuotaCardProjection.antigravityPeriod(reading(window: nil, label: " Weekly ")), "weekly")
+        XCTAssertEqual(QuotaCardProjection.antigravityPeriod(reading(window: "1w", label: "usage")), "weekly")
+        XCTAssertEqual(QuotaCardProjection.antigravityPeriod(reading(window: nil, label: "5-hour window")), "5h")
+        XCTAssertEqual(QuotaCardProjection.antigravityPeriod(reading(window: "300m", label: "usage")), "5h")
+        XCTAssertNil(QuotaCardProjection.antigravityPeriod(reading(window: nil, label: "notweekly")))
+        XCTAssertNil(QuotaCardProjection.antigravityPeriod(reading(window: nil, label: "weekend")))
+        XCTAssertNil(QuotaCardProjection.antigravityPeriod(reading(window: nil, label: "not a 5-hour limit")))
     }
 
     func testMuseAssistUsableExtraSpeaksForTheCardHeadline() {
