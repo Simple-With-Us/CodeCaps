@@ -97,10 +97,46 @@ final class CC193HasReadingSitesTests: XCTestCase {
         XCTAssertEqual(windows.map(\.window.id), ["credits"])
     }
 
+    func testPipHUDCurrentWindowsKeepsStaleAbsoluteOnlyReading() {
+        let window = QuotaWindow(
+            id: "credits",
+            provider: "Grok Bot",
+            providerKey: "grok-bot",
+            label: "Grok Bot credits",
+            absoluteRemaining: 500,
+            absoluteLimit: 40_000,
+            quotaUnit: "credits",
+            remainingUnknown: true,
+            occurredAt: iso.string(from: now.addingTimeInterval(-86400 * 3)),
+            source: "local-test"
+        )
+        let row = snapshotRow(window)
+        let windows = PipWidgetController.currentWindows(for: row, now: now)
+        XCTAssertEqual(windows.map(\.window.id), ["credits"],
+                       "stale absolute balances remain HUD-current per CC-193")
+    }
+
+    func testPipHUDCurrentWindowsRejectsFreshLimitOnlyWindow() {
+        let window = QuotaWindow(
+            id: "limit-only",
+            provider: "Grok Bot",
+            providerKey: "grok-bot",
+            label: "Plan cap",
+            absoluteLimit: 40_000,
+            quotaUnit: "credits",
+            occurredAt: iso.string(from: now.addingTimeInterval(-30)),
+            source: "local-test"
+        )
+        let row = snapshotRow(window)
+        XCTAssertTrue(window.hasReading)
+        XCTAssertTrue(PipWidgetController.currentWindows(for: row, now: now).isEmpty,
+                      "limit-only placeholders must not become drawable HUD meters")
+    }
+
     func testPipWidgetCurrentWindowsFilterUsesHasReading() throws {
         let source = try readSource("Sources/CodeCaps/PipWidget.swift")
         XCTAssertTrue(source.contains("!$0.isAwaitingRefresh && $0.window.hasReading"))
-        XCTAssertTrue(source.contains("$0.remainingPercent != nil || $0.isFresh"))
+        XCTAssertTrue(source.contains("$0.remainingPercent != nil || $0.window.absoluteRemaining != nil"))
         XCTAssertTrue(source.contains("fresh.contains(where: { $0.remainingPercent != nil })"),
                       "pool participants must not let fresh absolute-only readings block peer adoption")
         XCTAssertFalse(source.contains("&& !$0.window.remainingUnknown\n                && !disabledSources.contains"),

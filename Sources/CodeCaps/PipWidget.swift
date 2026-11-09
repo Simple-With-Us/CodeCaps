@@ -613,7 +613,9 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
             .filter { !$0.isAwaitingRefresh && $0.window.hasReading
                 && !isMuseAssistExtra($0)
                 && (!$0.window.skip || $0.remainingPercent == 0)
-                && ($0.remainingPercent != nil || $0.isFresh) }
+                // Percent meters stay drawable when stale (CC-216).  Absolute
+                // balances need a remaining figure, not limit-only (CC-193).
+                && ($0.remainingPercent != nil || $0.window.absoluteRemaining != nil) }
         // Fresh own readings outrank everything for a pool participant:  a
         // stale own reading yields to a peer's fresh one first.  Every other
         // row keeps its whole live-period set — fresh and stale-but-live
