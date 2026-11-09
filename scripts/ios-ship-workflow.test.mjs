@@ -372,7 +372,8 @@ test("post-sync ensure-tf-ready recheck runs after standing-tester sync", () => 
   const ship = steps.find((s) => /id: ship\b/.test(s));
   assert.match(ship, /ios-observe-ship\.mjs/);
   const observe = read("scripts/ios-observe-ship.mjs");
-  assert.match(observe, /LOG_PREFIX.*ios-ship/, "upload/skip patterns must allow the ship log prefix");
+  assert.match(observe, /SHIP_LOG_PREFIX.*ios-ship/, "upload/skip patterns must require the ship log prefix");
+  assert.doesNotMatch(observe, /\(\?:\\\[ios-ship\\\] \)\?/, "optional bare-marker match must not be allowed");
   const syncBlock = steps[sync];
   assert.match(syncBlock, /if: success\(\)/);
   assert.doesNotMatch(syncBlock, /steps\.ship\.outputs\.uploaded/);

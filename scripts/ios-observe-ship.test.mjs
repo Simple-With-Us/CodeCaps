@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import {
   UPLOADED_LINE_RES,
+  SKIPPED_LINE_RES,
   createStreamScanner,
   feedStreamChunk,
   finishStreamScan,
@@ -16,7 +17,9 @@ import {
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const OBSERVE = join(ROOT, "scripts/ios-observe-ship.mjs");
 
-function runFakeShip(logText, exitCode = 0, logStream = "stdout") {
+const PREFIX = "[ios-ship] ";
+
+function runFakeShip(logText, exitCode = 0) {
   const dir = mkdtempSync(join(tmpdir(), "observe-ship-"));
   const outFile = join(dir, "github-output");
   const fake = join(dir, "fake-ship.sh");
@@ -55,36 +58,61 @@ test("anchored line match does not phantom-upload across stream halves", () => {
   assert.equal(uploaded, false);
 });
 
-test("upload marker must be a full line", () => {
+test("upload marker must be a full prefixed line", () => {
   const state = createStreamScanner();
-  feedStreamChunk("prefix upload path succeeded via xcodebuild export (destination=upload) suffix\n", state);
+  feedStreamChunk(
+    `prefix ${PREFIX}upload path succeeded via xcodebuild export (destination=upload) suffix\n`,
+    state,
+  );
   assert.equal(finishStreamScan(state).uploaded, false);
-  const state2 = createStreamScanner();
-  feedStreamChunk("upload path succeeded via xcodebuild export (destination=upload)\n", state2);
-  assert.equal(finishStreamScan(state2).uploaded, true);
+  const bare = createStreamScanner();
+  feedStreamChunk("upload path succeeded via xcodebuild export (destination=upload)\n", bare);
+  assert.equal(finishStreamScan(bare).uploaded, false);
+  const prefixed = createStreamScanner();
+  feedStreamChunk(
+    `${PREFIX}upload path succeeded via xcodebuild export (destination=upload)\n`,
+    prefixed,
+  );
+  assert.equal(finishStreamScan(prefixed).uploaded, true);
 });
 
-test("gate-skip logs yield uploaded=false", () => {
-  const r = runFakeShip("ship-gate: exiting 0 before any version is resolved (nothing consumed)\n", 0);
+test("bare upload markers without [ios-ship] prefix yield uploaded=false", () => {
+  const r = runFakeShip(
+    "upload path succeeded via xcodebuild export (destination=upload)\n",
+    0,
+  );
   assert.equal(r.status, 0);
   assert.match(r.recorded, /uploaded=false/);
-  assert.match(r.recorded, /ship_observed=skipped/);
 });
 
-test("upload success logs yield uploaded=true", () => {
-  const r = runFakeShip("upload path succeeded via xcodebuild export (destination=upload)\n", 0);
+test("prefixed upload markers from log() yield uploaded=true", () => {
+  const r = runFakeShip(
+    `${PREFIX}upload path succeeded via xcodebuild export (destination=upload)\n`,
+    0,
+  );
   assert.equal(r.status, 0);
   assert.match(r.recorded, /uploaded=true/);
   assert.match(r.recorded, /ship_observed=uploaded/);
 });
 
-test("[ios-ship] log prefix from ship-testflight.sh still matches", () => {
+test("gate-skip logs yield uploaded=false when prefixed", () => {
   const r = runFakeShip(
-    "[ios-ship] upload path succeeded via xcodebuild export (destination=upload)\n",
+    `${PREFIX}ship-gate: exiting 0 before any version is resolved (nothing consumed)\n`,
     0,
   );
   assert.equal(r.status, 0);
-  assert.match(r.recorded, /uploaded=true/);
+  assert.match(r.recorded, /uploaded=false/);
+  assert.match(r.recorded, /ship_observed=skipped/);
+});
+
+test("bare gate-skip marker without prefix is not treated as skip", () => {
+  const r = runFakeShip(
+    "ship-gate: exiting 0 before any version is resolved (nothing consumed)\n",
+    0,
+  );
+  assert.equal(r.status, 0);
+  assert.match(r.recorded, /uploaded=false/);
+  assert.doesNotMatch(r.recorded, /ship_observed=skipped/);
 });
 
 test("spawn failure writes uploaded=false and exits nonzero", () => {
@@ -102,9 +130,26 @@ test("spawn failure writes uploaded=false and exits nonzero", () => {
   assert.match(recorded, /ship_observed=spawn_error/);
 });
 
-test("UPLOADED_LINE_RES patterns match ship-testflight.sh log lines only", () => {
+test("UPLOADED_LINE_RES patterns match prefixed ship-testflight.sh log lines only", () => {
   assert.ok(
-    UPLOADED_LINE_RES.some((re) => re.test("upload submitted; watch TestFlight processing for com.example")),
+    UPLOADED_LINE_RES.some((re) =>
+      re.test(`${PREFIX}upload submitted; watch TestFlight processing for com.example`),
+    ),
+  );
+  assert.ok(
+    !UPLOADED_LINE_RES.some((re) =>
+      re.test("upload submitted; watch TestFlight processing for com.example"),
+    ),
   );
   assert.ok(!UPLOADED_LINE_RES.some((re) => re.test("build 281 submitted for review")));
+  assert.ok(
+    SKIPPED_LINE_RES.some((re) =>
+      re.test(`${PREFIX}ship-gate: exiting 0 before any version is resolved (nothing consumed)`),
+    ),
+  );
+  assert.ok(
+    !SKIPPED_LINE_RES.some((re) =>
+      re.test("ship-gate: exiting 0 before any version is resolved (nothing consumed)"),
+    ),
+  );
 });

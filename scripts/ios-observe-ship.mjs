@@ -10,15 +10,18 @@ import { fileURLToPath } from "node:url";
 /** Max partial line retained across chunks (not the full xcodebuild log). */
 const LINE_TAIL_MAX = 512;
 
-const LOG_PREFIX = "(?:\\[ios-ship\\] )?";
+/** Required ship-script log() prefix — bare markers in tool output must not match. */
+const SHIP_LOG_PREFIX = "\\[ios-ship\\] ";
 
 export const UPLOADED_LINE_RES = [
-  new RegExp(`^${LOG_PREFIX}upload path succeeded via xcodebuild export \\(destination=upload\\)`),
-  new RegExp(`^${LOG_PREFIX}upload submitted; watch TestFlight processing`),
+  new RegExp(
+    `^${SHIP_LOG_PREFIX}upload path succeeded via xcodebuild export \\(destination=upload\\)`,
+  ),
+  new RegExp(`^${SHIP_LOG_PREFIX}upload submitted; watch TestFlight processing`),
 ];
 export const SKIPPED_LINE_RES = [
   new RegExp(
-    `^${LOG_PREFIX}ship-gate: exiting 0 before any version is resolved \\(nothing consumed\\)`,
+    `^${SHIP_LOG_PREFIX}ship-gate: exiting 0 before any version is resolved \\(nothing consumed\\)`,
   ),
 ];
 
