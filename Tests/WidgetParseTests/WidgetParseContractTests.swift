@@ -56,6 +56,44 @@ final class WidgetParseContractTests: XCTestCase {
         XCTAssertNil(gemini.atCapWindow())
     }
 
+    /// A spent sub-model detail never stands in for the pool on the
+    /// single-bar row pick:  the small widget's controlling window is the
+    /// pool's own most-urgent meter (the 1% weekly), not the 0% Argon
+    /// detail (pixel: the small widget headlined "Gemini 5h 0%").
+    func testSpentSubModelDetailNeverWinsControllingWindow() throws {
+        let stamp = ISO8601DateFormatter().string(from: Date())
+        let reset = ISO8601DateFormatter().string(from: Date().addingTimeInterval(3600))
+        let payload = [
+            wire("raw:gemini:5h", "google-antigravity", "5h", 7, "Gemini 5-hour", stamp: stamp, reset: reset),
+            wire("antigravity:gemini:5h", "google-antigravity", "5h", 63, "Gemini Models 5-hour", stamp: stamp, reset: reset),
+            wire("antigravity:gemini:weekly", "google-antigravity", "7d", 1, "Gemini Models Weekly", stamp: stamp, reset: reset),
+            wire("gemini:argon", "google-antigravity", "5h", 0, "Gemini Argon", model: "Argon", stamp: stamp, reset: reset),
+        ]
+        let parsed = WidgetPresentation.parseSnapshot(data: try JSONSerialization.data(withJSONObject: ["windows": payload]))
+        let gemini = try XCTUnwrap(parsed.first { $0.id == "antigravity-gemini" })
+        XCTAssertEqual(gemini.controllingWindow()?.id, "antigravity:gemini:weekly")
+        XCTAssertEqual(gemini.controllingWindow()?.remainingPercent, 1)
+    }
+
+    /// The generic path applies the same rule:  with a healthy plan and a
+    /// spent Fable detail, the Anthropic headline and the single-bar pick
+    /// both read the plan's own windows, not the detail (Kody, PR #389).
+    func testGenericPathSpentDetailCapsNeitherHeadlineNorPick() throws {
+        let stamp = ISO8601DateFormatter().string(from: Date())
+        let reset = ISO8601DateFormatter().string(from: Date().addingTimeInterval(3600))
+        let payload = [
+            wire("claude:5h", "anthropic", "5h", 80, "Claude 5-hour", stamp: stamp, reset: reset),
+            wire("claude:7d", "anthropic", "7d", 60, "Claude Weekly", stamp: stamp, reset: reset),
+            wire("claude:fable", "anthropic", "7d", 0, "Claude Fable", model: "Fable", stamp: stamp, reset: reset),
+        ]
+        let parsed = WidgetPresentation.parseSnapshot(data: try JSONSerialization.data(withJSONObject: ["windows": payload]))
+        let claude = try XCTUnwrap(parsed.first { $0.providerKey == "anthropic" })
+        XCTAssertEqual(claude.remainingPercent, 60)
+        XCTAssertFalse(claude.isExhausted)
+        XCTAssertEqual(claude.controllingWindow()?.id, "claude:7d")
+        XCTAssertEqual(claude.controllingWindow()?.remainingPercent, 60)
+    }
+
     /// The qa3 wire capture (committed verbatim):  the MiniMax plan keeps its
     /// 5h and weekly rows, both video cadences stay as separate flagged rows,
     /// the reading-less unknown row earns no row, and Copilot keeps buckets.

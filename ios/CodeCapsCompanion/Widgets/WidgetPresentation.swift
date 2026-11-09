@@ -381,7 +381,10 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
         // gauge headlines the video figure beside a plan with headroom (QA
         // focus-small pixel 2026-11-06).  A platform that reports only video
         // windows keeps them.
-        let planPool = pool.filter { !$0.isSupplementaryVideoQuota }
+        // Sub-model details (a spent Argon limit) are not the plan either:
+        // they sit beside the pool as detail rows, so they can no more stand
+        // in for it here than in the headline or the meter pair (line 338).
+        let planPool = pool.filter { !$0.isSupplementaryVideoQuota && !$0.isModelDetail }
         let pickPool = planPool.isEmpty ? pool : planPool
         switch pick {
         case .mostHeadroom:
@@ -1146,7 +1149,10 @@ public enum WidgetPresentation {
         // inside it:  it never caps the plan or drags its headline, the
         // same exclusion the phone's atCapWindow and dualWindows already
         // apply (Sentry review, PR #369).
-        let planStateWindows = childWindows.filter { !$0.isSupplementaryVideoQuota }
+        // Sub-model details sit beside the plan here too:  a spent Fable or
+        // Argon limit must not cap the generic headline any more than it may
+        // win the single-bar pick or drag the antigravity pool headline.
+        let planStateWindows = childWindows.filter { !$0.isSupplementaryVideoQuota && !$0.isModelDetail }
         let stateWindows = planStateWindows.isEmpty ? childWindows : planStateWindows
         let freshWindows = stateWindows.filter { $0.isFresh(now: now) }
         let freshPercent = freshWindows.compactMap(\.remainingPercent).min()
