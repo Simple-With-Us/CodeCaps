@@ -600,6 +600,7 @@ final class WidgetTests: XCTestCase {
         let provider = try readSource(at: Self.repoRoot.appendingPathComponent("ios/CodeCapsCompanion/Widgets/WidgetDataProvider.swift"))
         XCTAssertTrue(provider.contains("smallDetailScope"))
         XCTAssertTrue(provider.contains("$0.id == id && $0.hasModelDetails"), "Larger widgets still detail only model-detail plans")
+        XCTAssertTrue(views.contains("compactLabels && !window.cadenceToken.isEmpty"), "Compact detail falls back to the full label when a window has no token")
         let rows = try readSource(at: Self.repoRoot.appendingPathComponent("ios/CodeCapsCompanion/Widgets/WidgetWindowRows.swift"))
         XCTAssertTrue(rows.contains("var showsCountdown: Bool = true"), "Countdown stays on everywhere else by default")
         let presentation = try readSource(at: Self.widgetPresentationURL)
