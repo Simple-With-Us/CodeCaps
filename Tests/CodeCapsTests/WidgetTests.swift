@@ -583,6 +583,23 @@ final class WidgetTests: XCTestCase {
         XCTAssertTrue(presentation.contains("title: \"3rd-Party\""))
     }
 
+    /// Owner 2026-11-09: the small widget keeps days-and-hours off its rows;
+    /// tapping a row reveals the plan's 5h/7d windows with the time remaining
+    /// beside each bar.  Every other surface keeps the countdown on the row.
+    func testSmallWidgetHidesCountdownUntilTap() throws {
+        let views = try readSource(at: Self.repoRoot.appendingPathComponent("ios/CodeCapsCompanion/Widgets/WidgetViews.swift"))
+        let smallView = views.components(separatedBy: "struct OverviewSmallView").last?
+            .components(separatedBy: "// MARK: - Overview Medium View").first ?? ""
+        XCTAssertTrue(smallView.contains("showsCountdown: false"), "Small rows must not show the days-and-hours countdown")
+        XCTAssertTrue(smallView.contains("ShowWidgetPlanDetailIntent"), "Small rows must tap through to the plan detail")
+        XCTAssertTrue(smallView.contains("selectedDetail"), "Small view must render the tapped plan detail")
+        XCTAssertTrue(smallView.contains("planDetailWindows"), "Small detail shows the plan's 5h/7d windows")
+        let rows = try readSource(at: Self.repoRoot.appendingPathComponent("ios/CodeCapsCompanion/Widgets/WidgetWindowRows.swift"))
+        XCTAssertTrue(rows.contains("var showsCountdown: Bool = true"), "Countdown stays on everywhere else by default")
+        let presentation = try readSource(at: Self.widgetPresentationURL)
+        XCTAssertTrue(presentation.contains("planDetailWindows"))
+    }
+
     func testWindowCaptionRowNamesTheWindow() throws {
         let rows = try readSource(at: Self.repoRoot.appendingPathComponent("ios/CodeCapsCompanion/Widgets/WidgetWindowRows.swift"))
         XCTAssertTrue(rows.contains("struct WindowCaptionRow"))
