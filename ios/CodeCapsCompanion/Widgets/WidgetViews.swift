@@ -296,7 +296,15 @@ struct OverviewSmallView: View {
                 subtitle: "Open CodeCaps to sync"
             )
             .padding(8)
+        } else if let selected = entry.selectedDetail {
+            // Tapped row: the plan's own windows (5h, 7d) with the time
+            // remaining beside each bar (owner 2026-11-09).
+            WidgetPlanDetailView(platform: selected, entry: entry, windows: selected.planDetailWindows, compactLabels: true)
+                .padding(.horizontal, 13)
+                .padding(.vertical, 10)
         } else {
+            // Days-and-hours stay off the rows; one tap reveals them (owner
+            // 2026-11-09).
             VStack(alignment: .leading, spacing: 7) {
                 WidgetHeaderView(markSize: 13)
 
@@ -304,16 +312,20 @@ struct OverviewSmallView: View {
 
                 VStack(spacing: 6) {
                     ForEach(displayed) { platform in
-                        PlanBarRow(
-                            platform: platform,
-                            pick: pick,
-                            markSize: 13,
-                            titleFont: 11.5,
-                            captionFont: 8.5,
-                            percentFont: 11.5,
-                            barHeight: 3.5,
-                            usesMeterLayout: true
-                        )
+                        Button(intent: ShowWidgetPlanDetailIntent(planID: platform.id, overviewKey: entry.detailScope)) {
+                            PlanBarRow(
+                                platform: platform,
+                                pick: pick,
+                                markSize: 13,
+                                titleFont: 11.5,
+                                captionFont: 8.5,
+                                percentFont: 11.5,
+                                barHeight: 3.5,
+                                usesMeterLayout: true,
+                                showsCountdown: false
+                            )
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
 
@@ -879,19 +891,37 @@ struct AccessoryView: View {
 struct WidgetPlanDetailView: View {
     let platform: WidgetPlatformItem
     let entry: CodeCapsWidgetEntry
+    /// Defaults to the sub-model breakdown; the small widget passes the
+    /// plan's own windows so its tap-through shows the 5h/7d countdowns.
+    var windows: [WidgetWindowItem]? = nil
+    /// Small width swaps the long window names for the compact tokens (5h, 7d)
+    /// so the label never truncates (owner 2026-11-09).
+    var compactLabels: Bool = false
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Button(intent: ShowWidgetPlanDetailIntent(planID: "", overviewKey: entry.detailScope)) {
-                    Label("All Plans", systemImage: "chevron.left")
-                }.buttonStyle(.plain).font(.caption)
-                Spacer()
+        VStack(alignment: .leading, spacing: compactLabels ? 8 : 10) {
+            if compactLabels {
+                // Small width: one header row keeps three window rows inside
+                // the 141pt frame.
+                HStack(spacing: 6) {
+                    Button(intent: ShowWidgetPlanDetailIntent(planID: "", overviewKey: entry.detailScope)) {
+                        Image(systemName: "chevron.left")
+                    }.buttonStyle(.plain).font(.caption)
+                    Text(platform.title).font(.headline)
+                    Spacer(minLength: 0)
+                }
+            } else {
+                HStack {
+                    Button(intent: ShowWidgetPlanDetailIntent(planID: "", overviewKey: entry.detailScope)) {
+                        Label("All Plans", systemImage: "chevron.left")
+                    }.buttonStyle(.plain).font(.caption)
+                    Spacer()
+                }
+                Text(platform.title).font(.headline)
             }
-            Text(platform.title).font(.headline)
-            ForEach(platform.detailWindows) { window in
+            ForEach(windows ?? platform.detailWindows) { window in
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 8) {
-                        Text(window.label).font(.caption.bold())
+                        Text(compactLabels ? window.cadenceToken : window.label).font(.caption.bold())
                         Text(window.displayPercent).font(.subheadline.bold()).foregroundStyle(window.statusColor)
                         Text(window.countdown().isEmpty ? "—" : window.countdown())
                             .font(.caption).foregroundStyle(.secondary)
