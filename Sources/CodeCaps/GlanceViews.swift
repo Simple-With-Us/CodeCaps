@@ -1262,6 +1262,9 @@ func glanceUsableMuseExtra(_ windows: [QuotaWindowSnapshot]) -> QuotaWindowSnaps
 func glanceMeterPair(for row: DisplaySection, now: Date) -> GlanceMeterPair {
     let trustworthy = glanceDrawableWindows(row.section.windows.filter {
         !$0.window.isSupplementaryVideoQuota && !row.isMasked($0)
+            && !QuotaCapRule.isMoneyMeter(
+                cadenceToken: $0.window.window, quotaUnit: $0.window.quotaUnit,
+                label: $0.window.label)
     })
     let candidates = trustworthy.isEmpty
         ? [row.driving].compactMap { $0 }
@@ -1306,7 +1309,8 @@ func glanceMeterPair(for row: DisplaySection, now: Date) -> GlanceMeterPair {
                 // A dollar balance is not a percentage of anything, so it is
                 // not a quota meter (owner 2026-11-09).
                 || QuotaCapRule.isMoneyMeter(
-                    cadenceToken: snapshot.window.window, quotaUnit: snapshot.window.quotaUnit),
+                    cadenceToken: snapshot.window.window, quotaUnit: snapshot.window.quotaUnit,
+                    label: snapshot.window.label),
             // A reading of a period that has ended never takes a slot from a
             // live one.
             isLive: !QuotaFreshnessRule.isDeadCopy(
@@ -2564,6 +2568,9 @@ func glanceResetFullCountdown(_ reset: Date?, now: Date) -> String {
 func glanceResetHelp(_ reset: Date?, now: Date, observedAt: Date? = nil, isFresh: Bool = true) -> String? {
     guard let reset else {
         if let observedAt, !isFresh {
+            if let cue = QuotaStalenessRule.cue(observedAt: observedAt, resetAt: nil, now: now) {
+                return cue
+            }
             return "Updated \(observedAt.formatted(date: .omitted, time: .shortened))"
         }
         return nil
@@ -2573,6 +2580,9 @@ func glanceResetHelp(_ reset: Date?, now: Date, observedAt: Date? = nil, isFresh
         ? "Resets in \(glanceResetFullCountdown(reset, now: now)), on \(when)"
         : "Reset was due \(when)"
     if let observedAt, !isFresh {
+        if let cue = QuotaStalenessRule.cue(observedAt: observedAt, resetAt: reset, now: now) {
+            return "\(prefix) · \(cue)"
+        }
         return "\(prefix) · updated \(observedAt.formatted(date: .omitted, time: .shortened))"
     }
     return prefix

@@ -510,6 +510,9 @@ final class QuotaCapRuleTests: XCTestCase {
         XCTAssertFalse(QuotaCapRule.isMoneyMeter(cadenceToken: "weekly", quotaUnit: nil))
         XCTAssertFalse(QuotaCapRule.isMoneyMeter(cadenceToken: "5h", quotaUnit: "requests"))
         XCTAssertFalse(QuotaCapRule.isMoneyMeter(cadenceToken: nil, quotaUnit: nil))
+        XCTAssertTrue(QuotaCapRule.isMoneyMeter(cadenceToken: nil, quotaUnit: nil, label: "API credits"))
+        XCTAssertTrue(QuotaCapRule.isMoneyMeter(cadenceToken: nil, quotaUnit: nil, label: "Billing cycle spend"))
+        XCTAssertFalse(QuotaCapRule.isMoneyMeter(cadenceToken: nil, quotaUnit: nil, label: "7-day window"))
     }
 
 }

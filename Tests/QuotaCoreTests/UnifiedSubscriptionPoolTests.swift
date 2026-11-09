@@ -536,9 +536,13 @@ final class UnifiedSubscriptionPoolTests: XCTestCase {
                        .fixed(7 * 86_400))
     }
 
-    /// The pool's own window keeps the cadence the donor stated, so a donor
-    /// that states a different cadence is not flattened into a week.
-    func testThePoolKeepsTheDonorsStatedCadence() {
+    /// The donor keeps its own window and its own cadence.
+    ///
+    /// The pool's windows are weekly by identity, and a copy of the donor
+    /// that carried a different token would be a second window in the widget's
+    /// cache rather than the same one.  The windows the pool fills in read
+    /// the week.
+    func testTheDonorKeepsItsOwnWindowAndItsOwnCadence() {
         var grok = makeWindow(providerKey: "grok", id: "local-mac:grok:subscription", rem: 50.0)
         grok = QuotaWindow(
             id: grok.id, provider: grok.provider, providerKey: grok.providerKey,
@@ -549,7 +553,11 @@ final class UnifiedSubscriptionPoolTests: XCTestCase {
         let shared = UnifiedSubscriptionPool.share(
             windows: [grok], now: now, targetKeys: UnifiedSubscriptionPool.participantKeys)
         let cursorWindow = shared.first { $0.canonicalProviderKey == "cursor" }
-        XCTAssertEqual(cursorWindow?.window, "5h")
+        XCTAssertEqual(cursorWindow?.window, "7d",
+                       "the window the pool fills in reads the week")
+        let grokWindow = shared.first { $0.canonicalProviderKey == "grok" }
+        XCTAssertEqual(grokWindow?.window, "5h",
+                       "the donor keeps its own window and its own cadence")
     }
 
 }

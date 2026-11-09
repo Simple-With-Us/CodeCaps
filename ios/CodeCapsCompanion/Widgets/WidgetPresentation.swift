@@ -54,6 +54,10 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
     /// billing cycle reads "1-month" like a monthly quota meter does, and only
     /// the token says which one it was.
     public let rawWindowToken: String?
+    /// The unit the allowance is counted in, when the payload names one
+    /// ("USD", "credits", "requests").  A currency unit means the window is a
+    /// money meter rather than a quota meter.
+    public let quotaUnit: String?
 
     public init(
         id: String,
@@ -69,7 +73,8 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
         isSupplementaryVideoQuota: Bool = false,
         isModelDetail: Bool = false,
         absoluteRemaining: Double? = nil,
-        rawWindowToken: String? = nil
+        rawWindowToken: String? = nil,
+        quotaUnit: String? = nil
     ) {
         self.id = id
         self.label = label
@@ -82,6 +87,7 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
         self.observedAt = observedAt
         self.barQualifier = barQualifier
         self.rawWindowToken = rawWindowToken
+        self.quotaUnit = quotaUnit
         self.isExtraAllowance = isExtraAllowance
         self.isSupplementaryVideoQuota = isSupplementaryVideoQuota
         self.isModelDetail = isModelDetail
@@ -179,7 +185,8 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
             isSupplementaryVideoQuota: isSupplementaryVideoQuota,
             isModelDetail: isModelDetail,
             absoluteRemaining: absoluteRemaining,
-            rawWindowToken: rawWindowToken
+            rawWindowToken: rawWindowToken,
+            quotaUnit: quotaUnit
         )
     }
 
@@ -230,7 +237,9 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
         windows.filter { !$0.isModelDetail && !$0.isSupplementaryVideoQuota
             // A dollar balance is not a percentage of anything, so it is not a
             // quota meter (owner 2026-11-09).
-            && !QuotaCapRule.isMoneyMeter(cadenceToken: $0.rawWindowToken, quotaUnit: nil) }
+            && !QuotaCapRule.isMoneyMeter(cadenceToken: $0.rawWindowToken,
+                                          quotaUnit: $0.quotaUnit,
+                                          label: $0.label) }
     }
 
     /// The per-model detail windows beside the plan, in payload order.
@@ -451,7 +460,9 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
                         providerKey: providerKey, id: window.id, label: window.label)
                     // A dollar balance is not a percentage of anything, so it
                     // is not a quota meter (owner 2026-11-09).
-                    || QuotaCapRule.isMoneyMeter(cadenceToken: window.rawWindowToken, quotaUnit: nil),
+                    || QuotaCapRule.isMoneyMeter(cadenceToken: window.rawWindowToken,
+                                                quotaUnit: window.quotaUnit,
+                                                label: window.label),
                 // A reading of a period that has ended never takes a slot from
                 // a live one.
                 isLive: !QuotaFreshnessRule.isDeadCopy(observedAt: window.observedAt,
@@ -645,6 +656,7 @@ public enum WidgetPresentation {
         let producerInstanceId: String?
         let remainingUnknown: Bool?
         let absoluteRemaining: Double?
+        let quotaUnit: String?
         let plan: String?
         let planName: String?
         let planMetadata: PlanMetadata?
@@ -664,7 +676,7 @@ public enum WidgetPresentation {
         private enum CodingKeys: String, CodingKey {
             case id, provider, providerKey, label, remainingPercent, isExhausted
             case modelType, modelId, window, resetAt, occurredAt, reportedAt, via, source, machine
-            case producerInstanceId, remainingUnknown, absoluteRemaining, plan, planName, planMetadata
+            case producerInstanceId, remainingUnknown, absoluteRemaining, quotaUnit, plan, planName, planMetadata
             case planDetectedName, planUserName, planUserCostUsd, planUserRenewalDateText
             case planUserSubtitle, planShowCostAndRenewal, planHasMismatch, planUserUpdatedAt
             case windowKey
@@ -691,6 +703,7 @@ public enum WidgetPresentation {
             producerInstanceId = try container.decodeIfPresent(String.self, forKey: .producerInstanceId)
             remainingUnknown = try container.decodeIfPresent(Bool.self, forKey: .remainingUnknown)
             absoluteRemaining = try container.decodeIfPresent(Double.self, forKey: .absoluteRemaining)
+            quotaUnit = try container.decodeIfPresent(String.self, forKey: .quotaUnit)
             plan = try container.decodeIfPresent(String.self, forKey: .plan)
             planName = try container.decodeIfPresent(String.self, forKey: .planName)
             planMetadata = try container.decodeIfPresent(PlanMetadata.self, forKey: .planMetadata)
@@ -1119,7 +1132,8 @@ public enum WidgetPresentation {
                 isSupplementaryVideoQuota: isSupplementaryVideo,
                 isModelDetail: isModelDetail,
                 absoluteRemaining: w.absoluteRemaining,
-                rawWindowToken: w.window
+                rawWindowToken: w.window,
+                quotaUnit: w.quotaUnit
             )
 
             // One window per allowance, and the freshest one.  The payload

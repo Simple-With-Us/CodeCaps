@@ -156,19 +156,13 @@ public enum UnifiedSubscriptionPool {
     /// rules read as a month, so the Cursor row read `1m` while Grok, xAI and
     /// Grok Bot read `7d` for the same pool reading (owner 2026-11-09).
     public static func poolCadenceToken(for donor: QuotaWindow) -> String {
-        let token = (donor.window ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        switch token {
-        case "5h", "5hr", "5-hour", "300m", "session", "fast":
-            return "5h"
-        case "1d", "day", "daily", "24h":
-            return "1d"
-        case "billing-cycle", "billing_cycle", "billing cycle", "billingcycle", "monthly", "month", "30d":
-            return "30d"
-        default:
-            // The pool is a weekly allowance:  "1w", "weekly", "7d" and a
-            // donor that names no cadence at all all read as the same week.
-            return "7d"
-        }
+        // The donor's own token describes that reader, not the pool:  the
+        // Grok reader names the interval it saw, and a donor that names none
+        // is still the same weekly allowance.  The pool is one week, so every
+        // participant reads the week (owner 2026-11-09:  Cursor must read
+        // `7d` like Grok, xAI and Grok Bot).
+        _ = donor
+        return "7d"
     }
 
     /// Creates an adapted pool window for the given participant key from a source window.
@@ -265,7 +259,11 @@ public enum UnifiedSubscriptionPool {
                 participantsHandled.insert(key)
                 let windowDate = window.occurredDate ?? .distantPast
                 if window.hasReading && windowDate >= bestDate {
-                    // Current window is already as fresh or fresher than best
+                    // The current window is already as fresh or fresher than the
+                    // donor, so it keeps its own values and its own token:  the
+                    // pool's windows are weekly by identity, and a copy of this
+                    // window that carried a different token would be a second
+                    // window in the widget's cache rather than the same one.
                     result.append(window)
                 } else {
                     // Update this window with the fresher reading from best

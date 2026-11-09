@@ -974,13 +974,16 @@ public enum QuotaCapRule {
     ///
     /// A billing cycle names money, and a currency unit names money.  A window
     /// that counts requests, videos or credits is a quota, so it stays.
-    public static func isMoneyMeter(cadenceToken: String?, quotaUnit: String?) -> Bool {
+    public static func isMoneyMeter(cadenceToken: String?, quotaUnit: String?, label: String? = nil) -> Bool {
         let token = (cadenceToken ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if ["billing-cycle", "billing_cycle", "billing cycle", "billingcycle"].contains(token) {
             return true
         }
         let unit = (quotaUnit ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return ["$", "usd", "us$"].contains(unit)
+        if ["$", "usd", "us$"].contains(unit) { return true }
+        // The labels this codebase already mints for a money window.
+        let label = (label ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return ["api credits", "billing cycle spend"].contains(label)
     }
 
     /// Whether this window is a scoped allowance that sits beside the

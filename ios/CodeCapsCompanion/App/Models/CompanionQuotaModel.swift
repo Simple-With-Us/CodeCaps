@@ -283,14 +283,12 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable, Sendable {
         // label only hints at a month when the window names no cadence of its
         // own (owner 2026-11-09:  the Cursor pool window read `1m` while every
         // other xAI row read `7d`).
-        let statesNoCadence = cadence.isEmpty
-            || cadence.lowercased() == "plan" || cadence.lowercased() == "quota"
+        let monthlyHint = cadence.isEmpty && label.lowercased().contains("plan")
         let token = QuotaWindowVocabulary.popoverCaption(
             windowToken: cadence.isEmpty ? nil : cadence,
             label: label,
             resetAt: resetAt,
-            monthlyHint: statesNoCadence
-                && (label.lowercased().contains("plan") || cadence.lowercased().contains("plan"))
+            monthlyHint: monthlyHint
         )
         return token == "+" ? (QuotaWindowVocabulary.isExtraAllowanceLabel(label) ? "Extra" : "Limit") : token
     }
@@ -635,7 +633,8 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
                 // A dollar balance is not a percentage of anything, so it is
                 // not a quota meter (owner 2026-11-09).
                 && !QuotaCapRule.isMoneyMeter(cadenceToken: window.rawWindowToken,
-                                             quotaUnit: window.quotaUnit)
+                                             quotaUnit: window.quotaUnit,
+                                             label: window.label)
         }
     }
 
@@ -701,7 +700,8 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
                     // A dollar balance is not a percentage of anything, so it
                     // is not a quota meter (owner 2026-11-09).
                     || QuotaCapRule.isMoneyMeter(cadenceToken: row.window.rawWindowToken,
-                                                quotaUnit: row.window.quotaUnit),
+                                                quotaUnit: row.window.quotaUnit,
+                                                label: row.window.label),
                 // A reading of a period that has ended never takes a slot from
                 // a live one.
                 isLive: !QuotaFreshnessRule.isDeadCopy(observedAt: row.window.reportedAt,

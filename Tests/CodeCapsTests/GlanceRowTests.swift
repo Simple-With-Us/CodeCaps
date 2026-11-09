@@ -97,12 +97,15 @@ final class GlanceRowTests: XCTestCase {
         let updated = observed.formatted(date: .omitted, time: .shortened)
         let when = reset.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().hour().minute())
         XCTAssertEqual(glanceResetHelp(reset, now: now, observedAt: observed, isFresh: false),
-                       "Resets in 4h, on \(when) · updated \(updated)")
+                       "Resets in 4h, on \(when) · stale \u{00B7} updated \(updated)",
+                       "the tooltip words the staleness the way every other surface does")
         XCTAssertEqual(glanceResetHelp(reset, now: now, observedAt: observed, isFresh: true),
                        "Resets in 4h, on \(when)", "a fresh reading never repeats its update time")
         // No reset to count down to: a stale reading still says when it was
         // taken, and a fresh one has nothing to say.
-        XCTAssertEqual(glanceResetHelp(nil, now: now, observedAt: observed, isFresh: false), "Updated \(updated)")
+        XCTAssertEqual(glanceResetHelp(nil, now: now, observedAt: observed, isFresh: false),
+                       "stale \u{00B7} updated \(updated)",
+                       "the tooltip words the staleness the way every other surface does")
         XCTAssertNil(glanceResetHelp(nil, now: now, observedAt: observed, isFresh: true))
         XCTAssertNil(glanceResetHelp(nil, now: now, observedAt: nil, isFresh: false))
     }
@@ -1142,7 +1145,7 @@ final class GlanceMeterTests: XCTestCase {
     ///
     /// Owner 2026-11-09:  the row showed two slots (`7d 14% due` and
     /// `1m 50% 2d 23h`) instead of one.
-    func testTheCursorRowIsOneWeeklyMeterLikeEveryOtherXaiRow() {
+    func testTheCursorRowIsOneWeeklyMeterLikeEveryOtherXaiRow() throws {
         let row = cursorRow([
             makeWindow(id: "local-mac:cursor:weekly-dead", label: "7d window", token: "7d",
                        remaining: 14, resetIn: -3_600, provider: "cursor", observedAgo: 6 * 86_400),
@@ -1153,7 +1156,8 @@ final class GlanceMeterTests: XCTestCase {
         XCTAssertEqual(pair.short?.window.id, "local-mac:cursor:subscription",
                        "the live pool reading takes the slot, not the dead copy")
         XCTAssertNil(pair.long, "one meter, so the second slot stays empty")
-        XCTAssertEqual(glanceMeterCaption(pair.short!), "7d")
+        let meter = try XCTUnwrap(pair.short)
+        XCTAssertEqual(glanceMeterCaption(meter), "7d")
     }
 
     /// The plan's billing-cycle spend meter reports money, so it never stands

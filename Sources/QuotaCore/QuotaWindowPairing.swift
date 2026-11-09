@@ -101,7 +101,7 @@ public enum QuotaWindowPairing {
         // so it may fill a row that has nothing live left, but it must never
         // displace a live reading:  the stale 14% beside the pool's live 50%
         // is what put two wrong meters on the Cursor row (owner 2026-11-09).
-        let live = eligible.filter(\.isLive)
+        let live = eligible.filter { $0.isLive && hasInformation($0) }
         let selectable = live.isEmpty ? eligible : live
 
         let shortPool = selectable.filter(\.isShort)
