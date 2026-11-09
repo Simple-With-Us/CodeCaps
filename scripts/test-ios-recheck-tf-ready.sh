@@ -22,7 +22,8 @@ grep -q 'tf-ready-outcome.sh' "$SCRIPT" && ok "sources tf-ready-outcome.sh" || b
 grep -q 'tf_ready_rc_summary_label' "$SCRIPT" && ok "uses tf_ready_rc_summary_label" || bad "uses tf_ready_rc_summary_label"
 grep -q 'GITHUB_OUTPUT' "$SCRIPT" && ok "writes GITHUB_OUTPUT" || bad "writes GITHUB_OUTPUT"
 ! grep -q 'GITHUB_STEP_SUMMARY' "$SCRIPT" && ok "does not write GITHUB_STEP_SUMMARY (workflow owns summary)" || bad "must not write GITHUB_STEP_SUMMARY"
-grep -q "mapfile -t _APP_META" "$SCRIPT" && ok "reads app metadata via python heredoc" || bad "reads app metadata via python heredoc"
+! grep -qE '\b(mapfile|readarray)\b' "$SCRIPT" && ok "no bash-4 mapfile/readarray (macOS /bin/bash 3.2)" || bad "must not use mapfile/readarray"
+grep -q 'while IFS= read -r line' "$SCRIPT" && ok "reads app metadata via python heredoc + read loop" || bad "reads app metadata via python heredoc + read loop"
 grep -q 'ensure-tf-ready' "$SCRIPT" && ok "calls ensure-tf-ready" || bad "calls ensure-tf-ready"
 
 set +e

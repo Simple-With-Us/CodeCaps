@@ -27,7 +27,18 @@ fi
 
 [[ -f "$APPS_JSON" ]] || { echo "missing ${APPS_JSON}" >&2; exit 2; }
 
-mapfile -t _APP_META < <(python3 - "$APP_KEY" "$APPS_JSON" <<'PY'
+BUNDLE_ID=""
+MARKETING=""
+APPLE_ID=""
+_APP_META_LINE=0
+while IFS= read -r line; do
+  case "$_APP_META_LINE" in
+    0) BUNDLE_ID="$line" ;;
+    1) MARKETING="$line" ;;
+    2) APPLE_ID="$line" ;;
+  esac
+  _APP_META_LINE=$((_APP_META_LINE + 1))
+done < <(python3 - "$APP_KEY" "$APPS_JSON" <<'PY'
 import json, sys
 app_key, path = sys.argv[1], sys.argv[2]
 root = json.load(open(path, encoding="utf-8"))
@@ -38,9 +49,6 @@ print(marketing)
 print(app.get("appleId", ""))
 PY
 )
-BUNDLE_ID="${_APP_META[0]:-}"
-MARKETING="${_APP_META[1]:-}"
-APPLE_ID="${_APP_META[2]:-}"
 [[ -n "$BUNDLE_ID" && -n "$MARKETING" ]] || { echo "apps.json entry for ${APP_KEY} is incomplete" >&2; exit 2; }
 
 # shellcheck source=scripts/ios-fleet/tf-ready-outcome.sh
