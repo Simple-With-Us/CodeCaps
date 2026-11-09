@@ -936,7 +936,7 @@ struct WidgetPlanDetailView: View {
             ForEach(windows ?? platform.detailWindows) { window in
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 8) {
-                        Text(compactLabels ? window.cadenceToken : window.label).font(.caption.bold())
+                        Text(compactLabels && !window.cadenceToken.isEmpty ? window.cadenceToken : window.label).font(.caption.bold())
                         Text(window.displayPercent).font(.subheadline.bold()).foregroundStyle(window.statusColor)
                         Text(window.countdown().isEmpty ? "—" : window.countdown())
                             .font(.caption).foregroundStyle(.secondary)
