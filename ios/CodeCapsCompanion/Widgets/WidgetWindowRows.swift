@@ -190,6 +190,12 @@ struct WidgetMeterRow: View {
     let barHeight: CGFloat
     var percentSlotWidth: CGFloat = 30
     var countdownSlotWidth: CGFloat = 36
+    /// The small widget hides the days-and-hours countdown until the row is
+    /// tapped (owner 2026-11-09); every other surface keeps it on the row.
+    var showsCountdown: Bool = true
+    /// The small widget also hides the duration token (5h, 7d); it names the
+    /// windows in the tapped detail instead (owner 2026-11-09).
+    var showsCadenceToken: Bool = true
 
     private var percent: Double? { window?.remainingPercent ?? fallbackPercent }
 
@@ -206,11 +212,13 @@ struct WidgetMeterRow: View {
 
     var body: some View {
         HStack(spacing: 5) {
-            Text(window?.cadenceToken ?? "")
-                .font(.system(size: captionFont, weight: .semibold))
-                .foregroundColor(.secondary)
-                .lineLimit(1)
-                .fixedSize()
+            if showsCadenceToken {
+                Text(window?.cadenceToken ?? "")
+                    .font(.system(size: captionFont, weight: .semibold))
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .fixedSize()
+            }
             if window?.isCountOnly != true {
                 MiniProgressBar(
                     fraction: fraction,
@@ -229,12 +237,14 @@ struct WidgetMeterRow: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
                 .frame(minWidth: percentSlotWidth, alignment: .trailing)
-            Text(countdown)
-                .font(.system(size: max(6, captionFont - 0.5), weight: .medium, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
-                .frame(minWidth: countdown.isEmpty ? 0 : countdownSlotWidth, alignment: .trailing)
+            if showsCountdown {
+                Text(countdown)
+                    .font(.system(size: max(6, captionFont - 0.5), weight: .medium, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                    .frame(minWidth: countdown.isEmpty ? 0 : countdownSlotWidth, alignment: .trailing)
+            }
         }
     }
 }
@@ -260,6 +270,9 @@ struct PlanBarRow: View {
     /// rendered at the smallest system-small width (141pt) with long labels,
     /// three-digit percents and long countdowns, nothing truncates.
     var usesMeterLayout: Bool = true
+    /// Forwarded to WidgetMeterRow; the small widget sets both false.
+    var showsCountdown: Bool = true
+    var showsCadenceToken: Bool = true
 
     /// The bar's own source, so the caption names the window it came from
     /// rather than the plan's aggregate.
@@ -339,7 +352,9 @@ struct PlanBarRow: View {
                     isMasked: platform.isMasked,
                     captionFont: captionFont,
                     percentFont: percentFont,
-                    barHeight: barHeight
+                    barHeight: barHeight,
+                    showsCountdown: showsCountdown,
+                    showsCadenceToken: showsCadenceToken
                 )
             }
             .accessibilityElement(children: .combine)
