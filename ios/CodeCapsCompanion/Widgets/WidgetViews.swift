@@ -134,25 +134,7 @@ struct ProviderMarkView: View {
     }
 
     private func assetName(for key: String) -> String? {
-        let low = key.lowercased()
-        let pool = (itemId ?? "").lowercased()
-        if low.contains("antigravity") && pool.contains("gemini") { return "provider-gemini" }
-        if low.contains("antigravity") && pool.contains("third-party") { return "provider-antigravity" }
-        if low.contains("claude") || low.contains("anthropic") { return "provider-claude" }
-        if low.contains("openai") || low.contains("codex") { return "provider-openai" }
-        if low.contains("cursor") { return "provider-cursor" }
-        if low.contains("minimax") { return "provider-minimax" }
-        if low.contains("kimi") { return "provider-kimi" }
-        if ["zcode", "z.ai", "z-ai", "zai"].contains(where: { low.contains($0) }) { return "provider-zai" }
-        if low.contains("copilot") { return "provider-copilot" }
-        if low.contains("muse-assist") || low.contains("muse_assist") { return "provider-muse-assist" }
-        if low.contains("muse-code") || low.contains("muse_code") { return "provider-muse-code" }
-        if low.contains("muse") { return "provider-muse-assist" }
-        if low.contains("antigravity") { return "provider-antigravity" }
-        if low.contains("gemini") { return "provider-gemini" }
-        if low.contains("grok-bot") { return "provider-grok-bot" }
-        if low.contains("grok") || low.contains("xai") { return "provider-grok" }
-        return nil
+        CompanionProviderMarkAssets.catalogAssetName(providerKey: key, itemId: itemId)
     }
 }
 
