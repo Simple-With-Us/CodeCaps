@@ -1121,7 +1121,9 @@ final class MonitorModel: ObservableObject {
                isShortMenuBarWindow(short), isWeeklyMenuBarWindow(weekly) {
                 selected = weekly.remainingPercent == 0 ? [weekly] : [short, weekly]
             } else {
-                let remaining = windows.filter { $0.window.hasReading }
+                // Smart-pair urgency compares percentages only; absolute-only
+                // balances belong in freshWindows but do not invent a 100% rank.
+                let remaining = windows.filter { $0.window.hasReading && $0.remainingPercent != nil }
                 guard let urgent = remaining.min(by: { ($0.remainingPercent ?? 100) < ($1.remainingPercent ?? 100) }) else {
                     return nil
                 }

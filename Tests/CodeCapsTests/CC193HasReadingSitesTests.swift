@@ -94,6 +94,7 @@ final class CC193HasReadingSitesTests: XCTestCase {
     func testPipWidgetCurrentWindowsFilterUsesHasReading() throws {
         let source = try readSource("Sources/CodeCaps/PipWidget.swift")
         XCTAssertTrue(source.contains("!$0.isAwaitingRefresh && $0.window.hasReading"))
+        XCTAssertTrue(source.contains("$0.remainingPercent != nil || $0.isFresh"))
         XCTAssertFalse(source.contains("&& !$0.window.remainingUnknown\n                && !disabledSources.contains"),
                        "PiP must not use remainingUnknown as the reading gate")
     }

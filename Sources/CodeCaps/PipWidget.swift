@@ -612,7 +612,8 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
             // .awaitingRefresh and stays out; the row then names it.
             .filter { !$0.isAwaitingRefresh && $0.window.hasReading
                 && !isMuseAssistExtra($0)
-                && (!$0.window.skip || $0.remainingPercent == 0) }
+                && (!$0.window.skip || $0.remainingPercent == 0)
+                && ($0.remainingPercent != nil || $0.isFresh) }
         // Fresh own readings outrank everything for a pool participant:  a
         // stale own reading yields to a peer's fresh one first.  Every other
         // row keeps its whole live-period set — fresh and stale-but-live
