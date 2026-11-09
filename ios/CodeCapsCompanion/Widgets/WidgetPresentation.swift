@@ -381,7 +381,10 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
         // gauge headlines the video figure beside a plan with headroom (QA
         // focus-small pixel 2026-11-06).  A platform that reports only video
         // windows keeps them.
-        let planPool = pool.filter { !$0.isSupplementaryVideoQuota }
+        // Sub-model details (a spent Argon limit) are not the plan either:
+        // they sit beside the pool as detail rows, so they can no more stand
+        // in for it here than in the headline or the meter pair (line 338).
+        let planPool = pool.filter { !$0.isSupplementaryVideoQuota && !$0.isModelDetail }
         let pickPool = planPool.isEmpty ? pool : planPool
         switch pick {
         case .mostHeadroom:
