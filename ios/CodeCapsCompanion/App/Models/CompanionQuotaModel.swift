@@ -1580,7 +1580,9 @@ public final class CompanionQuotaModel: ObservableObject {
         let ext: String
     }
 
-    private struct WireRawWindow: Decodable {
+    // Internal rather than private so the mirrored package tests can feed
+    // wire rows to the intake predicate (WidgetParseContractTests).
+    struct WireRawWindow: Decodable {
         let id: String
         let provider: String
         let providerKey: String?
@@ -2107,6 +2109,55 @@ public final class CompanionQuotaModel: ObservableObject {
         return CompanionDateFormatter.date(from: wire.occurredAt)
     }
 
+    /// The phone's wire-intake rule, lifted out of `buildPlatformSection`
+    /// unchanged so the mirrored package tests can exercise it directly:  a
+    /// scoped pool or detail-less model limit is not the plan's quota (the
+    /// shared gate), a plan-metadata id or caption is not a window, a
+    /// reading-less status note is not a window, a dead copy is not a
+    /// reading, and this device's own window always survives.
+    static func admitsToIntake(_ w: WireRawWindow, providerKey: String,
+                               ownInstanceId: String?, now: Date,
+                               newestDeadCopyObservedAt: inout Date?) -> Bool {
+        let reading = QuotaCardProjection.Reading(id: w.id, providerKey: providerKey, label: w.label,
+            window: w.window, modelId: w.modelId, modelType: w.modelType,
+            remainingPercent: w.remainingUnknown == true ? nil : w.remainingPercent,
+            absoluteRemaining: w.absoluteRemaining,
+            resetAt: CompanionDateFormatter.date(from: w.resetAt), reportedAt: Self.reportedAt(from: w),
+            source: w.source, via: w.via)
+        guard reading.isQuota else { return false }
+        let lowId = w.id.lowercased()
+        let lowLabel = w.label.lowercased()
+        // Producer-scoped window ids are serialized JSON, so they end in
+        // `"]`, not in the bare token:  match the metadata marker anywhere
+        // in the id, the same shape the widget's intake uses (PR #387).
+        if lowId.contains("plan-metadata") || lowLabel == "plan details" {
+            return false
+        }
+        if (w.remainingUnknown == true || lowLabel.contains("plan details"))
+            && w.remainingPercent == nil
+            && CompanionDateFormatter.date(from: w.resetAt) == nil
+            && !QuotaWindowVocabulary.isExtraAllowanceLabel(w.label) {
+            return false
+        }
+        if QuotaWindowVocabulary.isOwnDeviceWindow(id: w.id,
+                                                    source: w.source,
+                                                    machine: w.machine,
+                                                    producerInstanceId: w.producerInstanceId,
+                                                    ownInstanceId: ownInstanceId) {
+            return true
+        }
+        let observedAt = CompanionDateFormatter.date(from: w.occurredAt)
+        if QuotaFreshnessRule.isDeadCopy(observedAt: observedAt,
+                                         resetAt: CompanionDateFormatter.date(from: w.resetAt),
+                                         now: now) {
+            if let observedAt, observedAt > newestDeadCopyObservedAt ?? .distantPast {
+                newestDeadCopyObservedAt = observedAt
+            }
+            return false
+        }
+        return true
+    }
+
     private func buildPlatformSection(
         id: String,
         providerKey: String,
@@ -2156,35 +2207,9 @@ public final class CompanionQuotaModel: ObservableObject {
         // observation time.  It only judges copies:  this Mac's own reading
         // keeps its row, so an expired one greys out instead of vanishing.
         let liveWindows = rawWindows.filter { w in
-            guard reading(w).isQuota else { return false }
-            let lowId = w.id.lowercased()
-            let lowLabel = w.label.lowercased()
-            if lowId.hasSuffix(":plan-metadata") || lowLabel == "plan details" {
-                return false
-            }
-            if (w.remainingUnknown == true || lowLabel.contains("plan details"))
-                && w.remainingPercent == nil
-                && CompanionDateFormatter.date(from: w.resetAt) == nil
-                && !QuotaWindowVocabulary.isExtraAllowanceLabel(w.label) {
-                return false
-            }
-            if QuotaWindowVocabulary.isOwnDeviceWindow(id: w.id,
-                                                        source: w.source,
-                                                        machine: w.machine,
-                                                        producerInstanceId: w.producerInstanceId,
-                                                        ownInstanceId: payloadProducerInstanceId) {
-                return true
-            }
-            let observedAt = CompanionDateFormatter.date(from: w.occurredAt)
-            if QuotaFreshnessRule.isDeadCopy(observedAt: observedAt,
-                                             resetAt: CompanionDateFormatter.date(from: w.resetAt),
-                                             now: now) {
-                if let observedAt, observedAt > newestDeadCopyObservedAt ?? .distantPast {
-                    newestDeadCopyObservedAt = observedAt
-                }
-                return false
-            }
-            return true
+            Self.admitsToIntake(w, providerKey: providerKey,
+                                ownInstanceId: payloadProducerInstanceId,
+                                now: now, newestDeadCopyObservedAt: &newestDeadCopyObservedAt)
         }
 
         /// Whether a window's reading is recent enough to believe, by the
