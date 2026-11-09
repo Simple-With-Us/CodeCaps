@@ -590,8 +590,8 @@ final class WidgetTests: XCTestCase {
         XCTAssertTrue(rows.contains("struct PlanDualBarRow"))
         // The Mac meter grammar: token, bar, percent and countdown on one
         // line, with the percent and the reset trailing on the right of the
-        // bar (CC-213, owner 2026-11-07).  The small widget keeps the
-        // stacked layout, so the escape hatch must stay named too.
+        // bar (CC-213, owner 2026-11-07).  The small widget uses it too
+        // (owner 2026-11-08); the escape hatch must stay named.
         XCTAssertTrue(rows.contains("struct WidgetMeterRow"))
         XCTAssertTrue(rows.contains("usesMeterLayout"))
         XCTAssertTrue(rows.contains("struct PlanGrid"))

@@ -312,7 +312,7 @@ struct OverviewSmallView: View {
                             captionFont: 8.5,
                             percentFont: 11.5,
                             barHeight: 3.5,
-                            usesMeterLayout: false
+                            usesMeterLayout: true
                         )
                     }
                 }
