@@ -23,8 +23,9 @@ do not replace claims or prove another seat accepted a task.
 
 Before changing a UI or shared-model fileset:
 
-1. Inspect `gh pr list --state open` and each potentially overlapping PR's
-   file list (`gh pr view <number> --json files`).
+1. Inspect open PRs through the Fleet Tools relay (`gr_wf_pr_list_page`, paging
+   until a page comes back empty) and
+   each potentially overlapping PR (`gr_wf_pr_get`, which carries its file list).
 2. Inspect `git log --oneline --since=12h -- <files>` against fresh
    `origin/main`; check older merged work when reconciling a stale board item.
 3. Announce the board IDs, branch, and exact fileset on `#Work-In-Progress`.  Negotiate one writer
@@ -142,8 +143,10 @@ that goes backwards silently strands every installed copy.
 
 ## Reviewer / merge
 
-- One PR per audit batch or feature.  Auto-merge (`gh pr merge --squash --auto`)
-  is the default once CI is green and the owner has not asked to drive.
+- One PR per audit batch or feature.  Auto-merge (relay `gr_wf_automerge_enable`
+  with `method: "squash"`) is the default once CI is green and the owner has not
+  asked to drive.  If the relay refuses or is down, `gh pr merge --squash --auto` is
+  the backup for that one step only, logged in the Fleet GitOps deficiencies document.
 - Audit batches use the `audit-#N` branch naming and ship in
   `docs/audits/<date>-<topic>.md`.
 - UI changes must be covered by automated visual verification where feasible: Playwright screenshot assertions for web surfaces, `xcrun simctl io booted screenshot` for iOS simulator. The owner never takes manual screenshots and does not run local UI preview sessions. Native Mac app UI is verified through code review and CI.
