@@ -56,6 +56,25 @@ final class WidgetParseContractTests: XCTestCase {
         XCTAssertNil(gemini.atCapWindow())
     }
 
+    /// A spent sub-model detail never stands in for the pool on the
+    /// single-bar row pick:  the small widget's controlling window is the
+    /// pool's own most-urgent meter (the 1% weekly), not the 0% Argon
+    /// detail (pixel: the small widget headlined "Gemini 5h 0%").
+    func testSpentSubModelDetailNeverWinsControllingWindow() throws {
+        let stamp = ISO8601DateFormatter().string(from: Date())
+        let reset = ISO8601DateFormatter().string(from: Date().addingTimeInterval(3600))
+        let payload = [
+            wire("raw:gemini:5h", "google-antigravity", "5h", 7, "Gemini 5-hour", stamp: stamp, reset: reset),
+            wire("antigravity:gemini:5h", "google-antigravity", "5h", 63, "Gemini Models 5-hour", stamp: stamp, reset: reset),
+            wire("antigravity:gemini:weekly", "google-antigravity", "7d", 1, "Gemini Models Weekly", stamp: stamp, reset: reset),
+            wire("gemini:argon", "google-antigravity", "5h", 0, "Gemini Argon", model: "Argon", stamp: stamp, reset: reset),
+        ]
+        let parsed = WidgetPresentation.parseSnapshot(data: try JSONSerialization.data(withJSONObject: ["windows": payload]))
+        let gemini = try XCTUnwrap(parsed.first { $0.id == "antigravity-gemini" })
+        XCTAssertEqual(gemini.controllingWindow()?.id, "antigravity:gemini:weekly")
+        XCTAssertEqual(gemini.controllingWindow()?.remainingPercent, 1)
+    }
+
     /// The qa3 wire capture (committed verbatim):  the MiniMax plan keeps its
     /// 5h and weekly rows, both video cadences stay as separate flagged rows,
     /// the reading-less unknown row earns no row, and Copilot keeps buckets.
