@@ -622,7 +622,12 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
         let isPoolParticipant = UnifiedSubscriptionPool.participantKeys.contains(row.providerKey)
         if isPoolParticipant {
             let fresh = own.filter { $0.isFresh }
-            if !fresh.isEmpty { return fresh }
+            // Fresh absolute-only readings must not block adoption of a peer's
+            // percentage meter (CC-193 review).  Percent meters still short-
+            // circuit to the full fresh live-period set.
+            if fresh.contains(where: { $0.remainingPercent != nil }), !fresh.isEmpty {
+                return fresh
+            }
         }
 
         if isPoolParticipant {

@@ -1121,17 +1121,30 @@ final class MonitorModel: ObservableObject {
                isShortMenuBarWindow(short), isWeeklyMenuBarWindow(weekly) {
                 selected = weekly.remainingPercent == 0 ? [weekly] : [short, weekly]
             } else {
-                // Smart-pair urgency compares percentages only; absolute-only
-                // balances belong in freshWindows but do not invent a 100% rank.
-                let remaining = windows.filter { $0.window.hasReading && $0.remainingPercent != nil }
-                guard let urgent = remaining.min(by: { ($0.remainingPercent ?? 100) < ($1.remainingPercent ?? 100) }) else {
-                    return nil
+                let candidates = windows.filter { $0.window.hasReading }.compactMap { snapshot -> (QuotaWindowSnapshot, Double)? in
+                    guard let urgency = Self.smartPairUrgency(snapshot) else { return nil }
+                    return (snapshot, urgency)
                 }
-                selected = [urgent]
+                guard let urgent = candidates.min(by: { $0.1 < $1.1 }) else { return nil }
+                selected = [urgent.0]
+                return (selected, urgent.1)
             }
-            return (selected, selected.compactMap(\.remainingPercent).min() ?? 100)
+            return (selected, selected.compactMap { Self.smartPairUrgency($0) ?? $0.remainingPercent }.min() ?? 100)
         }
         return rows.min(by: { $0.urgency < $1.urgency })?.targets ?? []
+    }
+
+    /// Comparable urgency for smart-pair (percent scale).  Uses
+    /// `remainingPercent` when present; otherwise derives from absolute
+    /// remaining/limit so CC-193 credits windows can compete without a
+    /// fabricated 100% rank.
+    private static func smartPairUrgency(_ snapshot: QuotaWindowSnapshot) -> Double? {
+        if let percent = snapshot.remainingPercent { return percent }
+        if let remaining = snapshot.window.absoluteRemaining,
+           let limit = snapshot.window.absoluteLimit, limit > 0 {
+            return remaining / limit * 100
+        }
+        return nil
     }
 
     private func menuBarPeriodSeconds(_ snapshot: QuotaWindowSnapshot) -> TimeInterval? {

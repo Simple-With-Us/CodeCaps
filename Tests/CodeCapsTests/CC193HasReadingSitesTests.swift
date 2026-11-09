@@ -73,6 +73,12 @@ final class CC193HasReadingSitesTests: XCTestCase {
                       "freshWindows must treat absolute balances as readable")
     }
 
+    func testMonitorModelSmartPairUsesDerivedAbsoluteUrgency() throws {
+        let source = try readSource("Sources/CodeCaps/MonitorModel.swift")
+        XCTAssertTrue(source.contains("private static func smartPairUrgency"))
+        XCTAssertTrue(source.contains("absoluteRemaining / limit * 100"))
+    }
+
     func testMonitorModelFreshWindowsFilterUsesHasReading() throws {
         let source = try readSource("Sources/CodeCaps/MonitorModel.swift")
         guard let range = source.range(of: "var freshWindows:") else {
@@ -95,6 +101,8 @@ final class CC193HasReadingSitesTests: XCTestCase {
         let source = try readSource("Sources/CodeCaps/PipWidget.swift")
         XCTAssertTrue(source.contains("!$0.isAwaitingRefresh && $0.window.hasReading"))
         XCTAssertTrue(source.contains("$0.remainingPercent != nil || $0.isFresh"))
+        XCTAssertTrue(source.contains("fresh.contains(where: { $0.remainingPercent != nil })"),
+                      "pool participants must not let fresh absolute-only readings block peer adoption")
         XCTAssertFalse(source.contains("&& !$0.window.remainingUnknown\n                && !disabledSources.contains"),
                        "PiP must not use remainingUnknown as the reading gate")
     }
@@ -137,6 +145,12 @@ final class CC193HasReadingSitesTests: XCTestCase {
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: payload) as? [String: Any])
         let events = try XCTUnwrap(json["events"] as? [[String: Any]])
         XCTAssertEqual(events.count, 1, "absolute-only windows must publish")
+        let meta = try XCTUnwrap((events[0]["metadata"] as? [String: Any]))
+        XCTAssertEqual(meta["absoluteRemaining"] as? Double, 6_099)
+        XCTAssertEqual(meta["absoluteLimit"] as? Double, 40_000)
+        XCTAssertEqual(meta["remainingUnknown"] as? Bool, false)
+        XCTAssertEqual(events[0]["credits"] as? Double, 6_099)
+        XCTAssertEqual(events[0]["limit"] as? Double, 40_000)
     }
 
     func testMakeUsageMonitorV2PayloadGuardsOnHasReading() throws {
