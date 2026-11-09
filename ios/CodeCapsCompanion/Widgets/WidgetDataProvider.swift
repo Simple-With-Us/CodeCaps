@@ -52,7 +52,7 @@ public struct CodeCapsWidgetEntry: TimelineEntry {
     }
     public var selectedDetail: WidgetPlatformItem? {
         guard let id = UserDefaults(suiteName: WidgetSnapshotStore.appGroupId)?.string(forKey: "widgetDetail:" + detailScope) else { return nil }
-        return platforms.first { $0.id == id && $0.hasModelDetails }
+        return platforms.first { $0.id == id }
     }
 
     /// Primary platform to display in single-provider focus widgets.
