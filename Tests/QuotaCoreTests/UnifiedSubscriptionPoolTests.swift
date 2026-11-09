@@ -498,4 +498,66 @@ final class UnifiedSubscriptionPoolTests: XCTestCase {
         XCTAssertNil(cursor?.producerInstanceId,
                      "the row keeps the installation identity the fleet rules read")
     }
+
+    /// Every participant of the shared pool reads as the pool's weekly
+    /// allowance.
+    ///
+    /// Owner 2026-11-09:  the Cursor row read `1m` while every other xAI row
+    /// read `7d`, because the participant's canonical label ("Included plan")
+    /// was read as a month.  The pool stamps its cadence on the window, so
+    /// every surface reads the same week for every participant.
+    func testEveryParticipantWindowCarriesThePoolWeeklyCadence() {
+        let grok = makeWindow(providerKey: "grok", id: "local-mac:grok:subscription", rem: 50.0)
+        // A Cursor participant that carries no cadence of its own, the way the
+        // reader's placeholder does.
+        let cursor = QuotaWindow(
+            id: "local-mac:cursor:unknown",
+            provider: "Cursor",
+            providerKey: "cursor",
+            providerLabel: "Cursor",
+            sourceApp: "local-mac",
+            label: "Included plan",
+            remainingUnknown: true,
+            status: .unknown,
+            occurredAt: iso.string(from: now),
+            source: "Cursor")
+        let shared = UnifiedSubscriptionPool.share(
+            windows: [grok, cursor], now: now,
+            targetKeys: UnifiedSubscriptionPool.participantKeys)
+        let cursorWindow = try? XCTUnwrap(shared.first { $0.canonicalProviderKey == "cursor" })
+        XCTAssertEqual(cursorWindow?.window, "7d",
+                       "the pool stamps its weekly cadence on the participant window")
+        XCTAssertEqual(QuotaWindowVocabulary.popoverCaption(windowToken: cursorWindow?.window,
+                                                             label: cursorWindow?.label ?? ""),
+                       "7d")
+        XCTAssertEqual(ResetAlarmCadence.resolve(token: cursorWindow?.window,
+                                                 label: cursorWindow?.label ?? "",
+                                                 providerKey: "cursor"),
+                       .fixed(7 * 86_400))
+    }
+
+    /// The donor keeps its own window and its own cadence.
+    ///
+    /// The pool's windows are weekly by identity, and a copy of the donor
+    /// that carried a different token would be a second window in the widget's
+    /// cache rather than the same one.  The windows the pool fills in read
+    /// the week.
+    func testTheDonorKeepsItsOwnWindowAndItsOwnCadence() {
+        var grok = makeWindow(providerKey: "grok", id: "local-mac:grok:subscription", rem: 50.0)
+        grok = QuotaWindow(
+            id: grok.id, provider: grok.provider, providerKey: grok.providerKey,
+            providerLabel: grok.providerLabel, sourceApp: grok.sourceApp,
+            label: grok.label, remainingPercent: grok.remainingPercent,
+            resetAt: grok.resetAt, window: "5h", occurredAt: grok.occurredAt,
+            source: grok.source)
+        let shared = UnifiedSubscriptionPool.share(
+            windows: [grok], now: now, targetKeys: UnifiedSubscriptionPool.participantKeys)
+        let cursorWindow = shared.first { $0.canonicalProviderKey == "cursor" }
+        XCTAssertEqual(cursorWindow?.window, "7d",
+                       "the window the pool fills in reads the week")
+        let grokWindow = shared.first { $0.canonicalProviderKey == "grok" }
+        XCTAssertEqual(grokWindow?.window, "5h",
+                       "the donor keeps its own window and its own cadence")
+    }
+
 }

@@ -77,7 +77,7 @@ public enum CompanionDateFormatter {
 }
 
 /// An individual quota window or time period within a platform.
-public struct CompanionWindowItem: Identifiable, Codable, Equatable {
+public struct CompanionWindowItem: Identifiable, Codable, Equatable, Sendable {
     public let id: String
     public let label: String
     public let cadence: String
@@ -112,6 +112,11 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
     /// payload carried none.  The Mac asks whether a token is present, not
     /// what it means, so a window's formatted `cadence` cannot stand in for it.
     public let rawWindowToken: String?
+    /// The model a sub-model quota belongs to ("Fable"), in the provider's own
+    /// words, resolved at build time through the shared `SubModelNaming` rule,
+    /// so the phone names the window exactly the way the Mac does.  Nil for a
+    /// primary window, and in snapshots recorded before the phone carried it.
+    public let subModelName: String?
 
     public init(
         id: String,
@@ -133,10 +138,12 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
         reportedAt: Date? = nil,
         normalizedWindowKey: String = "",
         producerInstanceId: String? = nil,
-        rawWindowToken: String? = nil
+        rawWindowToken: String? = nil,
+        subModelName: String? = nil
     ) {
         self.id = id
         self.rawWindowToken = rawWindowToken
+        self.subModelName = subModelName
         self.label = label
         self.cadence = cadence
         self.remainingPercent = remainingPercent
@@ -194,7 +201,8 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
             reportedAt: reportedAt,
             normalizedWindowKey: normalizedWindowKey,
             producerInstanceId: producerInstanceId,
-            rawWindowToken: rawWindowToken
+            rawWindowToken: rawWindowToken,
+            subModelName: subModelName
         )
     }
 
@@ -203,7 +211,7 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
         case isDuplicateSource, isExhausted, isMasked
         case isSupplementaryVideoQuota, isScopedPoolAllowance, isSubModelLimit
         case absoluteRemaining, absoluteLimit, quotaUnit
-        case reportedAt, observedAt, normalizedWindowKey, producerInstanceId, rawWindowToken
+        case reportedAt, observedAt, normalizedWindowKey, producerInstanceId, rawWindowToken, subModelName
     }
 
     public init(from decoder: Decoder) throws {
@@ -213,6 +221,7 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
         cadence = try container.decode(String.self, forKey: .cadence)
         producerInstanceId = try container.decodeIfPresent(String.self, forKey: .producerInstanceId)
         rawWindowToken = try container.decodeIfPresent(String.self, forKey: .rawWindowToken)
+        subModelName = try container.decodeIfPresent(String.self, forKey: .subModelName)
         remainingPercent = try container.decodeIfPresent(Double.self, forKey: .remainingPercent)
         resetAt = try container.decodeIfPresent(Date.self, forKey: .resetAt)
         source = try container.decodeIfPresent(String.self, forKey: .source)
@@ -255,6 +264,7 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
         try container.encodeIfPresent(reportedAt, forKey: .reportedAt)
         try container.encodeIfPresent(producerInstanceId, forKey: .producerInstanceId)
         try container.encodeIfPresent(rawWindowToken, forKey: .rawWindowToken)
+        try container.encodeIfPresent(subModelName, forKey: .subModelName)
         try container.encode(normalizedWindowKey, forKey: .normalizedWindowKey)
     }
 
@@ -269,11 +279,16 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
 
     /// Compact cadence beside a meter bar (`5h`, `7d`, `1m`, `+`), matching Mac Glance.
     public var meterCaption: String {
+        // A window that states its cadence is read by that cadence.  The plan
+        // label only hints at a month when the window names no cadence of its
+        // own (owner 2026-11-09:  the Cursor pool window read `1m` while every
+        // other xAI row read `7d`).
+        let monthlyHint = cadence.isEmpty && label.lowercased().contains("plan")
         let token = QuotaWindowVocabulary.popoverCaption(
             windowToken: cadence.isEmpty ? nil : cadence,
             label: label,
             resetAt: resetAt,
-            monthlyHint: label.lowercased().contains("plan") || cadence.lowercased().contains("plan")
+            monthlyHint: monthlyHint
         )
         return token == "+" ? (QuotaWindowVocabulary.isExtraAllowanceLabel(label) ? "Extra" : "Limit") : token
     }
@@ -339,7 +354,44 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable {
         QuotaFreshnessRule.isFresh(observedAt: reportedAt, resetAt: resetAt, now: now)
     }
 
-    public var caption: String { meterCaption }
+    /// The "how old is this number" cue for a live-period window whose
+    /// reading is older than the shared freshness threshold.  The number
+    /// stays - it is the last known state, not an invented one - but it is
+    /// labeled stale with when the feed last reported it, the way the Mac's
+    /// dashboard marks a stale reading instead of passing it off as current
+    /// (Muse Code read 35% for days on a stalled pipeline while the plan was
+    /// spent, owner 2026-11-06).  Nil when the reading is fresh; when the
+    /// period has already ended, which the dead-copy path speaks for; when
+    /// the window is masked; or when the feed never dated the reading, which
+    /// is unverified rather than stale.
+    ///
+    /// An exhausted window keeps the cue too, worded as the last-known age
+    /// rather than "stale":  the cap itself stays believed (that is
+    /// `QuotaFreshnessRule.isFresh`'s at-cap branch, which exists so a spent
+    /// allowance binds the cap for the rest of its cycle).  Nothing in this
+    /// repo's readers skips polling while spent - each one runs on every
+    /// refresh and restamps `occurredAt`.  Whether an external feed producer
+    /// polls a spent allowance is not established here, so an old timestamp
+    /// does not prove the feed stopped; it does mean the number has not been
+    /// re-confirmed in that time, and the row must not read as a fresh
+    /// confirmation of the cap.  Showing the age changes no cap, quota or
+    /// alarm decision; it only dates the reading.
+    public func staleReadingCue(now: Date = Date()) -> String? {
+        guard !isMasked else { return nil }
+        return QuotaStalenessRule.cue(observedAt: reportedAt,
+                                      resetAt: resetAt,
+                                      now: now,
+                                      isAtCap: isExhausted)
+    }
+
+    /// The caption a meter or window row leads with:  the cadence, plus the
+    /// model's own name when the cadence alone would leave two of the
+    /// platform's bars reading the same - Claude's own weekly and the Fable
+    /// weekly both said "7d" while reading 84% and 100% (owner, 2026-11-06).
+    public var caption: String {
+        guard let subModelName, !subModelName.isEmpty else { return meterCaption }
+        return "\(meterCaption) \(subModelName)"
+    }
 
     /// Companion meters use hyphenated cadence only; no secondary qualifier line.
     public var barQualifier: String { "" }
@@ -408,6 +460,11 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
     /// widget when the provider has no windows yet.
     public let defaultWindowLabel: String?
     public let planMetadata: PlanMetadata?
+    /// When the newest dead copy was observed, if the payload carried any.
+    /// A card whose windows are all copies of periods that have already ended
+    /// says it is waiting for a fresh reading, with this time, instead of
+    /// drawing nothing or reviving a figure whose window is over.
+    public let deadCopyObservedAt: Date?
 
     public var providerDetailRows: [CompanionProviderDetailRow] {
         var rows: [CompanionProviderDetailRow] = []
@@ -449,7 +506,12 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
     /// A platform card is expandable if it reports more than two allowance
     /// windows or holds provider plan details.
     public var isExpandable: Bool {
-        windows.count > 2 || !providerDetailRows.isEmpty
+        windows.contains { $0.isSubModelLimit && ($0.label == "Fable limit" || $0.label == "Argon limit")
+            && ($0.remainingPercent?.isFinite == true || $0.absoluteRemaining?.isFinite == true) }
+    }
+
+    public func cardDetailWindows(scope: CompanionSourceScope, now: Date = Date()) -> [CompanionWindowItem] {
+        windows.filter { $0.isSubModelLimit }
     }
 
     /// Both feeds must report within this window for a source-disagreement banner.
@@ -539,7 +601,30 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
 
     /// Main-card windows: fresh Mac CodeCaps readings win; otherwise the newest feed with an Updated label.
     public func cardWindowRows(scope: CompanionSourceScope, now: Date = Date()) -> [CardWindow] {
-        windows.map { primary in
+        // A dollar balance is not a percentage of anything, so it never speaks
+        // for the plan and it never draws a meter of its own (owner
+        // 2026-11-09:  the Cursor card showed an empty `1-month | 1m | —` line
+        // beside its one weekly meter).
+        cardMeasuredRows(scope: scope, now: now).filter { !Self.isMoneyMeter($0.window) }
+    }
+
+    /// The card's measured windows, a dollar balance included.
+    ///
+    /// The headline and the cap verdict read the set without a dollar
+    /// balance;  the two meters read it with one, because a dollar balance is
+    /// all some plans have.
+    private func cardMeasuredRows(scope: CompanionSourceScope, now: Date = Date()) -> [CardWindow] {
+        // A scoped pool allowance (a code-review or per-model bucket) is not
+        // a plan meter:  the cap rule skips it and the headline excludes it,
+        // so drawing it as a bar put an empty meter beside a headline that
+        // said otherwise (kody, PR #376).
+        // A per-model detail (Fable) is a card detail row, not a card meter,
+        // and a wire plan caption ("Plan" with no reading) is not an
+        // allowance at all:  neither takes a short/long slot or the headline
+        // (native probe, PR #367).
+        let resolved = windows.filter { !$0.isScopedPoolAllowance && !$0.isSubModelLimit
+                && !(($0.label == "Plan" || $0.cadence == "Plan") && $0.remainingPercent == nil) }
+            .map { primary in
             let key = Self.allowanceKey(for: primary)
             // This iPhone: only this device's primary windows. All Sources: fold
             // in mirror feeds so Mac/fleet readings can win when fresher.
@@ -552,6 +637,33 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
             let pool = mirrors.isEmpty ? [primary] : [primary] + mirrors
             return Self.resolveCardWindow(pool: pool, now: now)
         }
+        return resolved.filter {
+            let window = $0.window
+            let measured = window.remainingPercent?.isFinite == true
+                || (window.absoluteRemaining?.isFinite == true && (window.absoluteRemaining ?? -1) >= 0)
+            return measured && !window.isSupplementaryVideoQuota && !window.isScopedPoolAllowance
+                && (!window.isSubModelLimit || window.label == "Fable limit" || window.label == "Argon limit")
+        }
+    }
+
+    /// The windows the card's two meters may be drawn from.
+    ///
+    /// A dollar balance is not a quota meter, so it never takes a slot beside
+    /// a real quota meter:  the Cursor card keeps exactly one weekly meter.
+    /// But a plan whose only reading is a dollar balance still shows it, so
+    /// the phone never renders a blank card where the Mac draws a meter
+    /// (Sentry review, PR #439).
+    private func cardMeterRows(scope: CompanionSourceScope, now: Date = Date()) -> [CardWindow] {
+        QuotaCapRule.meterWindows(cardMeasuredRows(scope: scope, now: now)) {
+            Self.isMoneyMeter($0.window)
+        }
+    }
+
+    /// Whether this window is a dollar balance rather than a quota meter.
+    private static func isMoneyMeter(_ window: CompanionWindowItem) -> Bool {
+        QuotaCapRule.isMoneyMeter(cadenceToken: window.rawWindowToken,
+                                  quotaUnit: window.quotaUnit,
+                                  label: window.label)
     }
 
     public func cardWindows(scope: CompanionSourceScope, now: Date = Date()) -> [CompanionWindowItem] {
@@ -559,7 +671,7 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
     }
 
     public func cardShortWindow(scope: CompanionSourceScope, now: Date = Date()) -> CardWindow? {
-        let resolved = cardWindowRows(scope: scope, now: now)
+        let resolved = cardMeterRows(scope: scope, now: now).filter { !$0.window.isSubModelLimit }
         if providerKey == "muse-assist" {
             if let weekly = resolved.first(where: {
                 QuotaWindowVocabulary.isMuseAssistWeekly(
@@ -572,12 +684,11 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
                 return weekly
             }
         }
-        let window = resolved.map(\.window).first(where: { $0.isShortCadence }) ?? resolved.first?.window
-        return resolved.first(where: { $0.window.id == window?.id })
+        return cardMeterPair(resolved, now: now).short
     }
 
     public func cardLongWindow(scope: CompanionSourceScope, now: Date = Date()) -> CardWindow? {
-        let resolved = cardWindowRows(scope: scope, now: now)
+        let resolved = cardMeterRows(scope: scope, now: now).filter { !$0.window.isSubModelLimit }
         if providerKey == "muse-assist" {
             if let extra = resolved.first(where: {
                 QuotaWindowVocabulary.isMuseAssistExtra(
@@ -590,12 +701,43 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
                 return extra
             }
         }
-        let short = cardShortWindow(scope: scope, now: now)?.window
-        let nonShort = resolved.filter { !$0.window.isShortCadence }
-        if let match = nonShort.first(where: { $0.window.id != short?.id }) {
-            return match
+        return cardMeterPair(resolved, now: now).long
+    }
+
+    /// The card's two meters, chosen by the shared rule.
+    ///
+    /// The phone used to pick the second meter by "the first window that is
+    /// not short", which is not a rule:  MiniMax's video allowance is a
+    /// one-day window beside the real weekly one, so it won the long slot and
+    /// the weekly reading the owner actually routes on was pushed into the
+    /// expanded list.  The shared rule (QuotaWindowPairing.meterPair) is
+    /// the one the Mac's Glance panel uses:  the window nearest to its cap on
+    /// each side, with the supplementary, scoped and sub-model allowances
+    /// left out because none of them is the limit the plan is sold on.
+    private func cardMeterPair(_ resolved: [CardWindow], now: Date = Date()) -> (short: CardWindow?, long: CardWindow?) {
+        let candidates = resolved.map { row in
+            QuotaWindowPairing.MeterCandidate(
+                id: row.window.id,
+                remainingPercent: row.window.remainingPercent,
+                resetAt: row.window.resetAt,
+                isShort: row.window.isShortCadence,
+                isExcluded: row.window.isSupplementaryVideoQuota
+                    || row.window.isScopedPoolAllowance
+                    || row.window.isSubModelLimit
+                    || row.window.isMasked,
+                // A reading of a period that has ended never takes a slot from
+                // a live one.
+                isLive: !QuotaFreshnessRule.isDeadCopy(observedAt: row.window.reportedAt,
+                                                       resetAt: row.window.resetAt,
+                                                       now: now)
+            )
         }
-        return resolved.first(where: { $0.window.id != short?.id })
+        let pair = QuotaWindowPairing.meterPair(candidates)
+        func card(_ candidate: QuotaWindowPairing.MeterCandidate?) -> CardWindow? {
+            guard let candidate else { return nil }
+            return resolved.first(where: { $0.window.id == candidate.id })
+        }
+        return (card(pair.short), card(pair.long))
     }
 
     /// The card's headline percentage: the lowest honest reading on the card.
@@ -605,7 +747,9 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
     /// spent reports whatever it last saw, and the card put that on its
     /// headline while the label beside it said "n/a".
     public func cardRemainingPercent(scope: CompanionSourceScope, now: Date = Date()) -> Double? {
-        let readings = cardWindows(scope: scope, now: now).map { window in
+        let primary = cardWindows(scope: scope, now: now).filter { !$0.isSubModelLimit }
+        let fresh = primary.filter { $0.isFresh(now: now) }
+        let readings = (fresh.isEmpty ? primary : fresh).map { window in
             CardHeadline.Reading(
                 isMuseAssistExtra: providerKey == "muse-assist"
                     && QuotaWindowVocabulary.isMuseAssistExtra(
@@ -618,6 +762,7 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
                         resetAt: window.resetAt
                     ),
                 isMasked: window.isMasked,
+                isScopedAllowance: window.isScopedPoolAllowance,
                 remainingPercent: window.remainingPercent
             )
         }
@@ -649,7 +794,11 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
     }
 
     private static func resolveCardWindow(pool: [CompanionWindowItem], now: Date) -> CardWindow {
-        let observations = pool.map {
+        let measured = pool.filter { $0.remainingPercent?.isFinite == true || $0.absoluteRemaining?.isFinite == true }
+        let available = measured.isEmpty ? pool : measured
+        let fresh = available.filter { $0.isFresh(now: now) }
+        let candidates = fresh.isEmpty ? available : fresh
+        let observations = candidates.map {
             FleetQuotaObservation(
                 remainingPercent: $0.remainingPercent,
                 reportedAt: $0.reportedAt,
@@ -657,9 +806,9 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
             )
         }
         if let pick = FleetMacReading.pickCardDisplay(from: observations, now: now) {
-            return CardWindow(window: pool[pick.chosenIndex], updatedLabel: pick.updatedLabel)
+            return CardWindow(window: candidates[pick.chosenIndex], updatedLabel: pick.updatedLabel)
         }
-        return CardWindow(window: pool[0], updatedLabel: nil)
+        return CardWindow(window: candidates[0], updatedLabel: nil)
     }
 
     public var sourceCount: Int {
@@ -679,7 +828,8 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
         duplicateWindows: [CompanionWindowItem] = [],
         iconHint: String? = nil,
         defaultWindowLabel: String? = nil,
-        planMetadata: PlanMetadata? = nil
+        planMetadata: PlanMetadata? = nil,
+        deadCopyObservedAt: Date? = nil
     ) {
         self.id = id
         self.providerKey = providerKey
@@ -694,6 +844,7 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
         self.iconHint = iconHint
         self.defaultWindowLabel = defaultWindowLabel
         self.planMetadata = planMetadata
+        self.deadCopyObservedAt = deadCopyObservedAt
     }
 
     public var displayPercent: String {
@@ -765,6 +916,22 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
         guard let window = atCapWindow(scope: scope, now: now),
               let reset = window.resetAt, reset > now else { return nil }
         return reset.formatted(.dateTime.weekday(.abbreviated).hour().minute())
+    }
+
+    /// Dates the cap reading when it is old.  A capped card hides the meters,
+    /// so without this line an at-cap row carries no age at all:  the cap
+    /// itself stays believed for the rest of its cycle (that is the shared
+    /// rule's at-cap branch), but an old timestamp means the reading has not
+    /// been re-confirmed, and the line must not pass as a fresh confirmation
+    /// (QA pixel review 2026-11-06: fully-at-cap card showed cap and reset
+    /// with no timestamp).  Nil when the reading is recent or the feed never
+    /// dated it, which is unverified rather than old.  This only dates the
+    /// reading; it changes no cap, quota or alarm decision.
+    public func atCapReadingAgeCue(scope: CompanionSourceScope = .allSources, now: Date = Date()) -> String? {
+        guard let window = atCapWindow(scope: scope, now: now),
+              let reportedAt = window.reportedAt else { return nil }
+        guard !QuotaFreshnessRule.isReadingRecent(observedAt: reportedAt, now: now) else { return nil }
+        return "updated \(UpdatedStamp.label(reportedAt, now: now))"
     }
 
     public var elapsedFraction: Double? {
@@ -1380,6 +1547,14 @@ public final class CompanionQuotaModel: ObservableObject {
                 guard requestedRevision == syncConfigurationRevision,
                       requestedEndpoint == syncEndpoint,
                       requestedToken == syncToken else { return }
+                // A pull the system cancelled is not an endpoint failure:
+                // SwiftUI re-identifies the polling task on a scene-phase
+                // change and cancels the in-flight URLSession call, which
+                // used to land here as the banner's "cancelled" line.  The
+                // next poll runs against the same configuration, so keep the
+                // existing readings and stay quiet (CC-214).
+                if error is CancellationError { return }
+                if let urlError = error as? URLError, urlError.code == .cancelled { return }
                 failure = "Could not reach the sync endpoint." + sentenceGap
                     + error.localizedDescription
             }
@@ -1446,7 +1621,9 @@ public final class CompanionQuotaModel: ObservableObject {
         let ext: String
     }
 
-    private struct WireRawWindow: Decodable {
+    // Internal rather than private so the mirrored package tests can feed
+    // wire rows to the intake predicate (WidgetParseContractTests).
+    struct WireRawWindow: Decodable {
         let id: String
         let provider: String
         let providerKey: String?
@@ -1480,6 +1657,12 @@ public final class CompanionQuotaModel: ObservableObject {
         let planShowCostAndRenewal: Bool?
         let planHasMismatch: Bool?
         let planUserUpdatedAt: Double?
+        /// The server's canonical cadence token, one component of the
+        /// allowance identity - never the identity alone (QA 2026-11-06).
+        let windowKey: String?
+        /// The server's canonical allowance key (`5h`, `7d`,
+        /// `other:premium_interactions`, ...), normalized across producers by
+        /// Usage Monitor.  Nil only on feeds that predate it.
 
         private enum CodingKeys: String, CodingKey {
             case id, provider, providerKey, label, remainingPercent, isExhausted
@@ -1488,6 +1671,7 @@ public final class CompanionQuotaModel: ObservableObject {
             case producerInstanceId, machine, remainingUnknown, plan, planName, planMetadata
             case planDetectedName, planUserName, planUserCostUsd, planUserRenewalDateText
             case planUserSubtitle, planShowCostAndRenewal, planHasMismatch, planUserUpdatedAt
+            case windowKey
         }
 
         init(from decoder: Decoder) throws {
@@ -1501,6 +1685,7 @@ public final class CompanionQuotaModel: ObservableObject {
             modelType = try container.decodeIfPresent(String.self, forKey: .modelType)
             modelId = try container.decodeIfPresent(String.self, forKey: .modelId)
             window = try container.decodeIfPresent(String.self, forKey: .window)
+            windowKey = try container.decodeIfPresent(String.self, forKey: .windowKey)
             source = try container.decodeIfPresent(String.self, forKey: .source)
             via = try container.decodeIfPresent(String.self, forKey: .via)
             resetAt = try container.decodeIfPresent(String.self, forKey: .resetAt)
@@ -1865,12 +2050,17 @@ public final class CompanionQuotaModel: ObservableObject {
         // windows payload but were not in the manifest.  An empty manifest
         // keeps the legacy "first-seen-wins" order (the offline-fallback path).
         let manifest = envelope.providerGroups ?? []
+        // Two manifest groups can alias to one canonical key (zcode and glm,
+        // kimi and moonshot):  building a card per entry made two items with
+        // one id, which SwiftUI's ForEach cannot place, and the header
+        // counted both.  Keep the first occurrence of each key (CC-214).
+        var seenManifestKeys = Set<String>()
         let manifestKeys: [String] = manifest.isEmpty
             ? platformKeyOrder
             : manifest.compactMap { group in
                 let key = Self.canonicalManifestKey(provider: group.provider, via: group.via)
                 return key.isEmpty ? nil : key
-            }
+            }.filter { seenManifestKeys.insert($0).inserted }
 
         for platKey in manifestKeys {
             guard let group = platformGroups[platKey] else { continue }
@@ -1900,11 +2090,11 @@ public final class CompanionQuotaModel: ObservableObject {
         if !antigravityWindows.isEmpty {
             let geminiWindows = antigravityWindows.filter {
                 let s = ($0.id + " " + $0.label + " " + ($0.modelType ?? "") + " " + ($0.modelId ?? "")).lowercased()
-                return s.contains("gemini")
+                return s.contains("gemini") || s.contains("argon")
             }
             let thirdPartyWindows = antigravityWindows.filter {
                 let s = ($0.id + " " + $0.label + " " + ($0.modelType ?? "") + " " + ($0.modelId ?? "")).lowercased()
-                return !s.contains("gemini")
+                return !s.contains("gemini") && !s.contains("argon")
             }
 
             if let geminiItem = consolidateAntigravityPool(
@@ -1960,6 +2150,55 @@ public final class CompanionQuotaModel: ObservableObject {
         return CompanionDateFormatter.date(from: wire.occurredAt)
     }
 
+    /// The phone's wire-intake rule, lifted out of `buildPlatformSection`
+    /// unchanged so the mirrored package tests can exercise it directly:  a
+    /// scoped pool or detail-less model limit is not the plan's quota (the
+    /// shared gate), a plan-metadata id or caption is not a window, a
+    /// reading-less status note is not a window, a dead copy is not a
+    /// reading, and this device's own window always survives.
+    static func admitsToIntake(_ w: WireRawWindow, providerKey: String,
+                               ownInstanceId: String?, now: Date,
+                               newestDeadCopyObservedAt: inout Date?) -> Bool {
+        let reading = QuotaCardProjection.Reading(id: w.id, providerKey: providerKey, label: w.label,
+            window: w.window, modelId: w.modelId, modelType: w.modelType,
+            remainingPercent: w.remainingUnknown == true ? nil : w.remainingPercent,
+            absoluteRemaining: w.absoluteRemaining,
+            resetAt: CompanionDateFormatter.date(from: w.resetAt), reportedAt: Self.reportedAt(from: w),
+            source: w.source, via: w.via)
+        guard reading.isQuota else { return false }
+        let lowId = w.id.lowercased()
+        let lowLabel = w.label.lowercased()
+        // Producer-scoped window ids are serialized JSON, so they end in
+        // `"]`, not in the bare token:  match the metadata marker anywhere
+        // in the id, the same shape the widget's intake uses (PR #387).
+        if lowId.contains("plan-metadata") || lowLabel == "plan details" {
+            return false
+        }
+        if (w.remainingUnknown == true || lowLabel.contains("plan details"))
+            && w.remainingPercent == nil
+            && CompanionDateFormatter.date(from: w.resetAt) == nil
+            && !QuotaWindowVocabulary.isExtraAllowanceLabel(w.label) {
+            return false
+        }
+        if QuotaWindowVocabulary.isOwnDeviceWindow(id: w.id,
+                                                    source: w.source,
+                                                    machine: w.machine,
+                                                    producerInstanceId: w.producerInstanceId,
+                                                    ownInstanceId: ownInstanceId) {
+            return true
+        }
+        let observedAt = CompanionDateFormatter.date(from: w.occurredAt)
+        if QuotaFreshnessRule.isDeadCopy(observedAt: observedAt,
+                                         resetAt: CompanionDateFormatter.date(from: w.resetAt),
+                                         now: now) {
+            if let observedAt, observedAt > newestDeadCopyObservedAt ?? .distantPast {
+                newestDeadCopyObservedAt = observedAt
+            }
+            return false
+        }
+        return true
+    }
+
     private func buildPlatformSection(
         id: String,
         providerKey: String,
@@ -1983,11 +2222,24 @@ public final class CompanionQuotaModel: ObservableObject {
             }
         }
 
+        func reading(_ wire: WireRawWindow) -> QuotaCardProjection.Reading {
+            QuotaCardProjection.Reading(id: wire.id, providerKey: providerKey, label: wire.label,
+                window: wire.window, modelId: wire.modelId, modelType: wire.modelType,
+                remainingPercent: wire.remainingUnknown == true ? nil : wire.remainingPercent,
+                absoluteRemaining: wire.absoluteRemaining,
+                resetAt: CompanionDateFormatter.date(from: wire.resetAt), reportedAt: Self.reportedAt(from: wire),
+                source: wire.source, via: wire.via)
+        }
+
         var primaryWindows: [CompanionWindowItem] = []
         var duplicateWindows: [CompanionWindowItem] = []
         var primaryIndexByCadenceKey: [String: Int] = [:]
         var primaryWireByCadenceKey: [String: WireRawWindow] = [:]
         let now = Date()
+        /// The newest copy the freshness rule retires still says when the
+        /// provider was last heard from, so a card whose every window is a
+        /// dead copy can say so, with that time, instead of drawing nothing.
+        var newestDeadCopyObservedAt: Date? = nil
 
         // A copy of a period that ended before the last refresh carries no
         // live reading, so it never becomes a row here either.  The rule is
@@ -1996,27 +2248,9 @@ public final class CompanionQuotaModel: ObservableObject {
         // observation time.  It only judges copies:  this Mac's own reading
         // keeps its row, so an expired one greys out instead of vanishing.
         let liveWindows = rawWindows.filter { w in
-            let lowId = w.id.lowercased()
-            let lowLabel = w.label.lowercased()
-            if lowId.hasSuffix(":plan-metadata") || lowLabel == "plan details" {
-                return false
-            }
-            if (w.remainingUnknown == true || lowLabel.contains("plan details"))
-                && w.remainingPercent == nil
-                && CompanionDateFormatter.date(from: w.resetAt) == nil
-                && !QuotaWindowVocabulary.isExtraAllowanceLabel(w.label) {
-                return false
-            }
-            if QuotaWindowVocabulary.isOwnDeviceWindow(id: w.id,
-                                                        source: w.source,
-                                                        machine: w.machine,
-                                                        producerInstanceId: w.producerInstanceId,
-                                                        ownInstanceId: payloadProducerInstanceId) {
-                return true
-            }
-            return !QuotaFreshnessRule.isDeadCopy(observedAt: CompanionDateFormatter.date(from: w.occurredAt),
-                                                  resetAt: CompanionDateFormatter.date(from: w.resetAt),
-                                                  now: now)
+            Self.admitsToIntake(w, providerKey: providerKey,
+                                ownInstanceId: payloadProducerInstanceId,
+                                now: now, newestDeadCopyObservedAt: &newestDeadCopyObservedAt)
         }
 
         /// Whether a window's reading is recent enough to believe, by the
@@ -2035,25 +2269,15 @@ public final class CompanionQuotaModel: ObservableObject {
         /// already replaced (owner, Oct-22-2026).  The widget asks the same
         /// question the same way, so the two cannot drift.
         func isFresher(_ candidate: WireRawWindow, than current: WireRawWindow) -> Bool {
-            let candidateFresh = isFresh(candidate)
-            let currentFresh = isFresh(current)
-            if candidateFresh != currentFresh { return candidateFresh }
-            return (CompanionDateFormatter.date(from: candidate.occurredAt) ?? .distantPast)
-                > (CompanionDateFormatter.date(from: current.occurredAt) ?? .distantPast)
+            QuotaCardProjection.preferredIndex(in: [reading(current), reading(candidate)], now: now) == 1
         }
 
         for w in liveWindows {
             let parsedReset = CompanionDateFormatter.date(from: w.resetAt)
             let parsedReportedAt = Self.reportedAt(from: w)
             let cadence = Self.formatCadence(w.label, window: w.window, resetAt: parsedReset)
-            let displayLabel = QuotaWindowVocabulary.isExtraAllowanceLabel(w.label)
-                ? w.label
-                : QuotaWindowVocabulary.windowLabel(
-                windowToken: w.window,
-                existingLabel: w.label,
-                resetAt: parsedReset
-            )
-            let pct = w.remainingPercent
+            let displayLabel = reading(w).displayLabel
+            let pct = reading(w).remainingPercent
             // A reading decides, as it does on every surface:  the export never
             // clears `isExhausted`, so a stale word must not outvote a reading
             // that says there is room left.  The provider's word is the
@@ -2064,14 +2288,35 @@ public final class CompanionQuotaModel: ObservableObject {
             let modelQualifier = (w.modelId ?? "").lowercased()
             let isMiniMax = providerKey.lowercased().contains("minimax") || id.lowercased().contains("minimax")
             let effectiveQualifier = isMiniMax ? "" : modelQualifier
-            let baseAllowanceKey = CompanionWindowItem.fallbackNormalizedWindowKey(
-                cadence: cadence,
-                label: displayLabel,
-                resetAt: parsedReset
-            )
+            // One row per allowance, keyed on the server's series identity
+            // from the wire id:  Usage Monitor deliberately keeps one window
+            // per producer for the same allowance, and the series
+            // (modelId ?? bucketId ?? provider:label in projectQuotaWindows)
+            // is what the codecaps and collector copies share.  The
+            // canonical windowKey is NOT the identity:  Copilot's Chat and
+            // Completions buckets are both "monthly", and MiniMax's
+            // supplementary video weekly shares "7d" with the plan's weekly,
+            // so a windowKey dedupe merges distinct allowances (QA
+            // 2026-11-06).
+            // The allowance identity is the triple of video class, aliased
+            // series, and canonical cadence:  video partitions first so a
+            // supplementary video window can never fold into a plan window;
+            // the aliased series joins cross-producer copies of one
+            // allowance (codecaps "general" beside the collector's
+            // "minimax:coding-plan" headline) while keeping Copilot's
+            // distinct buckets apart;  the canonical cadence keeps one
+            // model's 5-hour, daily and weekly windows separate (QA
+            // real-payload fixture 2026-11-06).
+            let isVideoWire = QuotaCapRule.isSupplementaryVideoQuota(
+                providerKey: Self.canonicalManifestKey(provider: w.provider, providerKey: w.providerKey, via: w.via),
+                modelId: w.modelId, modelType: w.modelType, label: w.label)
+            let wireCadence = (w.windowKey ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let allowanceKey = (isVideoWire ? "video|" : "plan|")
+                + Self.normalizedAllowanceSeries(providerKey: providerKey, series: Self.allowanceSeries(forWireId: w.id))
+                + "|" + Self.canonicalWireCadence(wireCadence: wireCadence, windowToken: w.window, label: w.label, resetAt: parsedReset)
             let cadenceKey = effectiveQualifier.isEmpty
-                ? baseAllowanceKey
-                : "\(effectiveQualifier):\(baseAllowanceKey)"
+                ? allowanceKey
+                : "\(effectiveQualifier):\(allowanceKey)"
 
             // The shared cap rule needs the window's own label, not the
             // display label:  the Mac reads the reader's own label, and that is
@@ -2112,7 +2357,17 @@ public final class CompanionQuotaModel: ObservableObject {
                 reportedAt: parsedReportedAt,
                 normalizedWindowKey: cadenceKey,
                 producerInstanceId: w.producerInstanceId,
-                rawWindowToken: w.window
+                rawWindowToken: w.window,
+                // The same question the Mac asks, with the reader's own
+                // label, model type and model id:  that is where the "fable"
+                // and "argon" signals live, not in the display label.
+                subModelName: SubModelNaming.name(
+                    isSubModelLimit: capFlags.isSubModelLimit,
+                    canonicalProviderKey: providerKey,
+                    label: w.label,
+                    modelType: w.modelType,
+                    modelId: w.modelId
+                )
             )
 
             if let index = primaryIndexByCadenceKey[cadenceKey],
@@ -2136,6 +2391,7 @@ public final class CompanionQuotaModel: ObservableObject {
 
         // Standardize cadence order: shorter periods (e.g. 5-hour) precede longer periods (e.g. weekly).
         primaryWindows.sort { left, right in
+            if left.isSubModelLimit != right.isSubModelLimit { return !left.isSubModelLimit }
             if providerKey == "muse-assist" {
                 let leftWeekly = QuotaWindowVocabulary.isMuseAssistWeekly(
                     providerKey: providerKey, windowToken: left.rawWindowToken, label: left.label, resetAt: left.resetAt)
@@ -2158,8 +2414,9 @@ public final class CompanionQuotaModel: ObservableObject {
         }
 
         // Controlling percentage is the minimum among primary non-masked windows
-        let validPercents = primaryWindows.compactMap(\.remainingPercent)
-        let controllingPct = validPercents.min()
+        let primaryReadings = primaryWindows.filter { !$0.isSubModelLimit && !$0.isScopedPoolAllowance }
+        let freshReadings = primaryReadings.filter { $0.isFresh(now: now) }
+        let controllingPct = (freshReadings.isEmpty ? primaryReadings : freshReadings).compactMap(\.remainingPercent).min()
         //  Each window above already decided through the shared rule, so the
         //  pool is exhausted when any of them is.  Evaluating the provider's
         //  word against `controllingPct` instead would compare a reading that
@@ -2182,9 +2439,15 @@ public final class CompanionQuotaModel: ObservableObject {
                 && $0.isExhausted
         }
 
-        // Nearest future reset time
-        let futureResets = primaryWindows.compactMap(\.resetAt).filter { $0 > now }
-        let nearestReset = futureResets.min() ?? primaryWindows.compactMap(\.resetAt).min()
+        // Nearest future reset time, over the same window kinds the headline
+        // and the cap rule read: a supplementary video window's reset used to
+        // drive the plan's caption while its reading was ignored (kody, PR
+        // #369).
+        let captionWindows = primaryWindows.filter {
+            !$0.isSupplementaryVideoQuota && !$0.isScopedPoolAllowance && !$0.isSubModelLimit
+        }
+        let futureResets = captionWindows.compactMap(\.resetAt).filter { $0 > now }
+        let nearestReset = futureResets.min() ?? captionWindows.compactMap(\.resetAt).min()
 
         let automaticPlan = rawWindows.compactMap(\.planName).first(where: { !$0.isEmpty })
             ?? rawWindows.compactMap(\.plan).first(where: { !$0.isEmpty })
@@ -2214,7 +2477,8 @@ public final class CompanionQuotaModel: ObservableObject {
             windows: primaryWindows,
             duplicateWindows: duplicateWindows,
             iconHint: iconHint,
-            planMetadata: providerPlanMetadata
+            planMetadata: providerPlanMetadata,
+            deadCopyObservedAt: newestDeadCopyObservedAt
         )
     }
 
@@ -2275,17 +2539,16 @@ public final class CompanionQuotaModel: ObservableObject {
                 > (CompanionDateFormatter.date(from: current.occurredAt) ?? .distantPast)
         }
 
-        var weeklyWin: WireRawWindow?
-        var fiveHourWin: WireRawWindow?
-        for w in windows {
-            let s = (w.id + " " + w.label).lowercased()
-            if s.contains("weekly") || s.contains("1w") || s.contains("7d") {
-                if isFresher(w, than: weeklyWin) { weeklyWin = w }
-            }
-            if s.contains("5h") || s.contains("5-hour") || s.contains("interval") {
-                if isFresher(w, than: fiveHourWin) { fiveHourWin = w }
-            }
+        let facts = windows.map {
+            QuotaCardProjection.Reading(id: $0.id, providerKey: "google-antigravity", label: $0.label,
+                window: $0.window, modelId: $0.modelId, modelType: $0.modelType,
+                remainingPercent: $0.remainingPercent, absoluteRemaining: $0.absoluteRemaining,
+                resetAt: CompanionDateFormatter.date(from: $0.resetAt), reportedAt: Self.reportedAt(from: $0),
+                source: $0.source, via: $0.via)
         }
+        let selected = QuotaCardProjection.selectedPoolIndices(in: facts, poolKey: poolKey, now: now).map { windows[$0] }
+        let weeklyWin = selected.first { Self.antigravityPeriod(of: $0) == "weekly" }
+        let fiveHourWin = selected.first { Self.antigravityPeriod(of: $0) == "5h" }
 
         let weeklyPct = weeklyWin?.remainingPercent
         // Only a fresh window may spend the pool.  A pool copy that is days old
@@ -2303,7 +2566,6 @@ public final class CompanionQuotaModel: ObservableObject {
             && QuotaCapRule.isExhausted(remainingPercent: weeklyPct,
                                         providerSaysExhausted: weeklyWin?.isExhausted ?? false)
 
-        let controllingPct: Double?
         let isExhausted: Bool
         let subtitle: String
 
@@ -2315,16 +2577,11 @@ public final class CompanionQuotaModel: ObservableObject {
             fiveHourWin.flatMap { isFresh($0) ? $0.remainingPercent : nil },
             weeklyWin.flatMap { isFresh($0) ? $0.remainingPercent : nil }
         ].compactMap { $0 }
-        let validPercents = [fiveHourWin?.remainingPercent, weeklyWin?.remainingPercent].compactMap { $0 }
 
         if weeklyExhausted && weeklyWin != nil {
-            controllingPct = weeklyPct ?? 0
             isExhausted = true
             subtitle = "\(QuotaWindowVocabulary.sevenDay) limit exhausted"
         } else {
-            controllingPct = freshPercents.min()
-                ?? validPercents.min()
-                ?? windows.compactMap(\.remainingPercent).min()
             isExhausted = QuotaCapRule.isAtCap(remainingPercent: freshPercents.min())
             subtitle = defaultSubtitle
         }
@@ -2340,9 +2597,16 @@ public final class CompanionQuotaModel: ObservableObject {
         // value, and never average or add.
         let childWindows = Self.periodRows(
             poolKey: poolKey,
-            windows: windows,
+            windows: selected,
             weeklyExhausted: weeklyExhausted
         )
+        let detailReports = windows.filter {
+            [$0.id, $0.label, $0.modelId ?? "", $0.modelType ?? ""].joined(separator: " ")
+                .localizedCaseInsensitiveContains("argon")
+        }
+        let details = buildPlatformSection(id: itemId, providerKey: "google-antigravity", title: title,
+            rawWindows: detailReports).windows
+        let projectedWindows = childWindows + details
 
         let nearestReset = childWindows.compactMap(\.resetAt).filter { $0 > now }.min()
             ?? childWindows.compactMap(\.resetAt).min()
@@ -2352,11 +2616,11 @@ public final class CompanionQuotaModel: ObservableObject {
             providerKey: "google-antigravity",
             title: title,
             subtitle: subtitle,
-            remainingPercent: controllingPct,
+            remainingPercent: childWindows.filter { !$0.isMasked }.compactMap(\.remainingPercent).min(),
             resetAt: nearestReset,
             isExhausted: isExhausted,
             isAlarmEnabled: alarmProviderIds.contains(itemId),
-            windows: childWindows,
+            windows: projectedWindows,
             duplicateWindows: [],
             iconHint: poolKey == "third-party" ? "antigravity" : "gemini"
         )
@@ -2380,13 +2644,15 @@ public final class CompanionQuotaModel: ObservableObject {
     /// pool because of it.
     private static func antigravityPeriod(of w: WireRawWindow) -> String? {
         let token = (w.window ?? "").lowercased().replacingOccurrences(of: " ", with: "")
-        let label = w.label.lowercased()
+        let label = w.label.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let weeklyLabels: Set<String> = ["weekly", "week", "7-day", "7 day", "7-day window", "7 day window"]
+        let fiveHourLabels: Set<String> = ["5h", "5hr", "5-hour", "5 hours", "5-hour window", "5 hour window", "five_hour"]
         if ["weekly", "week", "1w", "7d", "168h", "10080m"].contains(token)
-            || label.contains("weekly") || label.contains("week") {
+            || weeklyLabels.contains(label) {
             return "weekly"
         }
         if ["5h", "5hr", "5-hour", "5hours", "300m"].contains(token)
-            || label.contains("5h") || label.contains("5-hour") || label.contains("five_hour") {
+            || fiveHourLabels.contains(label) {
             return "5h"
         }
         return nil
@@ -2414,13 +2680,7 @@ public final class CompanionQuotaModel: ObservableObject {
             // take the latest observation, breaking a tie between two models of
             // the same pool with the lower value.  Never averaged, never added.
             let canonicalID = "antigravity:\(poolKey):\(period)"
-            let driving = candidates.first { $0.id == canonicalID }
-                ?? candidates.min { left, right in
-                    let l = CompanionDateFormatter.date(from: left.resetAt) ?? .distantPast
-                    let r = CompanionDateFormatter.date(from: right.resetAt) ?? .distantPast
-                    if l != r { return l > r }
-                    return (left.remainingPercent ?? 101) < (right.remainingPercent ?? 101)
-                }
+            let driving = candidates.first { $0.id == canonicalID } ?? candidates.first
             guard let driving else { return nil }
 
             // A weekly the provider reports as gone without a figure still has to
@@ -2532,7 +2792,7 @@ public final class CompanionQuotaModel: ObservableObject {
         let id = raw.id.lowercased()
 
         if pKey.contains("anthropic") || prov.contains("anthropic") || prov.contains("claude") {
-            return ("anthropic", "Claude Code", "anthropic")
+            return ("anthropic", WidgetPlatformDisplay.title(canonicalKey: "anthropic"), "anthropic")
         }
         if pKey.contains("openai") || prov.contains("openai") || prov.contains("codex") {
             return ("openai", "Codex", "openai")
@@ -2548,7 +2808,7 @@ public final class CompanionQuotaModel: ObservableObject {
         if pKey.contains("muse-assist") || prov.contains("muse-assist") || prov.contains("muse assist") || id.contains("assist") {
             return ("muse-assist", "Muse Assist", "muse-assist")
         }
-        if pKey.contains("muse-code") || prov.contains("muse-code") || prov.contains("muse code") || id.contains("code") {
+        if pKey.contains("muse-code") || prov.contains("muse-code") || prov.contains("muse code") || id.hasPrefix("local-mac:muse-code:") {
             return ("muse-code", "Muse Code", "muse-code")
         }
         if pKey.contains("muse") || prov.contains("muse") {
@@ -2563,7 +2823,7 @@ public final class CompanionQuotaModel: ObservableObject {
         if pKey.contains("grok") || prov.contains("grok") || pKey.contains("xai") || prov.contains("xai") {
             return ("xai", "Grok", "xai")
         }
-        let fallbackKey = (raw.providerKey ?? raw.provider).trimmingCharacters(in: .whitespacesAndNewlines)
+        let fallbackKey = canonicalManifestKey(provider: raw.provider, providerKey: raw.providerKey, via: raw.via)
         let key = fallbackKey.isEmpty ? "other" : fallbackKey
         let title = WidgetPlatformDisplay.title(canonicalKey: key, wireProvider: raw.provider)
         return (key, title, fallbackKey.isEmpty ? key : fallbackKey)
@@ -2603,6 +2863,74 @@ public final class CompanionQuotaModel: ObservableObject {
     /// The provider key is canonicalised the way the Mac canonicalises a
     /// window's own provider, so the phone asks `QuotaCapRule` the same
     /// question the Mac asks and the two surfaces skip the same windows.
+    /// The cadence leg of the allowance identity, in the wire `windowKey`
+    /// namespace.  A copy whose producer predates `windowKey` must still merge
+    /// with its keyed copies (kody, PR #370), so the raw window token is
+    /// canonicalised through the shared vocabulary and mapped back to the wire
+    /// token:  "weekly" and "7d" both land on "7d".  A token the vocabulary
+    /// does not know passes through lowercased, so two distinct unknown
+    /// buckets never collapse onto one key.
+    static func canonicalWireCadence(wireCadence: String, windowToken: String?, label: String, resetAt: Date?) -> String {
+        if !wireCadence.isEmpty {
+            return wireCadence.lowercased()
+        }
+        switch QuotaWindowVocabulary.standardCadence(windowToken: windowToken, label: label, resetAt: resetAt) {
+        case QuotaWindowVocabulary.fiveHour: return "5h"
+        case QuotaWindowVocabulary.oneDay: return "1d"
+        case QuotaWindowVocabulary.sevenDay: return "7d"
+        case QuotaWindowVocabulary.oneMonth: return "monthly"
+        default:
+            return (windowToken ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        }
+    }
+
+    /// The server's allowance identity for a wire window.  Usage Monitor
+    /// deliberately keeps one window per producer for the same allowance;
+    /// the series (`modelId ?? bucketId ?? provider:label` in
+    /// projectQuotaWindows) is the identity those copies share, encoded in
+    /// the wire id as `["producer", <instance>, <series>]` for attributed
+    /// windows or carried as the bare id for legacy ones.
+    static func allowanceSeries(forWireId id: String) -> String {
+        guard id.hasPrefix("["),
+              let data = id.data(using: .utf8),
+              let parts = try? JSONDecoder().decode([String].self, from: data),
+              parts.count == 3, parts[0] == "producer", !parts[2].isEmpty
+        else { return id }
+        return parts[2]
+    }
+
+    /// MiniMax plan-level aliasing, bounded to the producer's own verified
+    /// semantics:  the collector's parser defines the "coding-plan" headline
+    /// as the general model's interval reading
+    /// (scripts/lib/subscription-quota-parsers.mjs), so "general" and
+    /// "coding-plan" name ONE allowance observed under two identities.
+    /// Every other series - including any other MiniMax model - keeps its
+    /// own identity.
+    static func normalizedAllowanceSeries(providerKey: String, series: String) -> String {
+        if providerKey.lowercased().contains("minimax") {
+            switch series {
+            case "general", "minimax:general", "minimax:general:weekly",
+                 "minimax:coding-plan", "coding-plan":
+                return "minimax:plan"
+            default:
+                return series
+            }
+        }
+        // xAI's single subscription credit pool under two producer
+        // vocabularies:  the codecaps local reader's id is
+        // local-mac:grok:subscription (series "grok:subscription") while the
+        // collector's parser emits bucketId "xai:subscription"
+        // (scripts/lib/subscription-quota-parsers.mjs), and the app's own
+        // UnifiedSubscriptionPool already unifies the two.  The qa4 wire
+        // capture (2026-11-06) shows both copies at the same reset second
+        // and reading.  Bounded to the subscription pool;  every other xAI
+        // series keeps its own identity.
+        if providerKey == "xai", series == "grok:subscription" {
+            return "xai:subscription"
+        }
+        return series
+    }
+
     static func capRuleFlags(
         provider: String,
         providerKey: String?,
@@ -2770,8 +3098,9 @@ public final class CompanionQuotaModel: ObservableObject {
             let sharedFile = container.appendingPathComponent("quota-windows.json")
             if let data = try? Data(contentsOf: sharedFile) {
                 if parseSnapshot(data: data) {
-                    if self.lastUpdated == nil,
-                       let attrs = try? FileManager.default.attributesOfItem(atPath: sharedFile.path),
+                    // A fallback render is the snapshot's age, not a fresh pull, so
+                       // the stamp always says what the file says (CC-214).
+                       if let attrs = try? FileManager.default.attributesOfItem(atPath: sharedFile.path),
                        let modDate = attrs[.modificationDate] as? Date {
                         self.lastUpdated = modDate
                     }
@@ -2786,8 +3115,9 @@ public final class CompanionQuotaModel: ObservableObject {
             if FileManager.default.fileExists(atPath: localFile.path),
                let data = try? Data(contentsOf: localFile) {
                 if parseSnapshot(data: data) {
-                    if self.lastUpdated == nil,
-                       let attrs = try? FileManager.default.attributesOfItem(atPath: localFile.path),
+                    // A fallback render is the snapshot's age, not a fresh pull, so
+                       // the stamp always says what the file says (CC-214).
+                       if let attrs = try? FileManager.default.attributesOfItem(atPath: localFile.path),
                        let modDate = attrs[.modificationDate] as? Date {
                         self.lastUpdated = modDate
                     }
@@ -2802,8 +3132,9 @@ public final class CompanionQuotaModel: ObservableObject {
             if FileManager.default.fileExists(atPath: cacheFile.path),
                let data = try? Data(contentsOf: cacheFile) {
                 if parseSnapshot(data: data) {
-                    if self.lastUpdated == nil,
-                       let attrs = try? FileManager.default.attributesOfItem(atPath: cacheFile.path),
+                    // A fallback render is the snapshot's age, not a fresh pull, so
+                       // the stamp always says what the file says (CC-214).
+                       if let attrs = try? FileManager.default.attributesOfItem(atPath: cacheFile.path),
                        let modDate = attrs[.modificationDate] as? Date {
                         self.lastUpdated = modDate
                     }
@@ -2820,8 +3151,9 @@ public final class CompanionQuotaModel: ObservableObject {
             if FileManager.default.fileExists(atPath: hostPath),
                let data = try? Data(contentsOf: URL(fileURLWithPath: hostPath)) {
                 if parseSnapshot(data: data) {
-                    if self.lastUpdated == nil,
-                       let attrs = try? FileManager.default.attributesOfItem(atPath: hostPath),
+                    // A fallback render is the snapshot's age, not a fresh pull, so
+                       // the stamp always says what the file says (CC-214).
+                       if let attrs = try? FileManager.default.attributesOfItem(atPath: hostPath),
                        let modDate = attrs[.modificationDate] as? Date {
                         self.lastUpdated = modDate
                     }
@@ -2836,8 +3168,9 @@ public final class CompanionQuotaModel: ObservableObject {
         if FileManager.default.fileExists(atPath: fallbackPath),
            let data = try? Data(contentsOf: URL(fileURLWithPath: fallbackPath)) {
             if parseSnapshot(data: data) {
-                if self.lastUpdated == nil,
-                   let attrs = try? FileManager.default.attributesOfItem(atPath: fallbackPath),
+                // A fallback render is the snapshot's age, not a fresh pull, so
+                   // the stamp always says what the file says (CC-214).
+                   if let attrs = try? FileManager.default.attributesOfItem(atPath: fallbackPath),
                    let modDate = attrs[.modificationDate] as? Date {
                     self.lastUpdated = modDate
                 }

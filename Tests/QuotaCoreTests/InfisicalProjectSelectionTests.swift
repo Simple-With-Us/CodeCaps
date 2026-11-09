@@ -68,7 +68,11 @@ private actor ProjectSelectionTransport: InfisicalSettings.Transport {
 }
 
 private func projectConfiguration(_ project: String) -> InfisicalSettings.Configuration {
-    .init(projectId: project, environment: "prod", clientId: "synthetic-id", clientSecret: "synthetic-secret")
+    var configuration = InfisicalSettings.Configuration(projectId: project, environment: "prod", clientId: "synthetic-id", clientSecret: "synthetic-secret")
+    var write = configuration.readBinding
+    write.id = "explicit-test-write"; write.access = .write
+    configuration.writeBinding = write
+    return configuration
 }
 
 final class InfisicalProjectSelectionTests: XCTestCase {

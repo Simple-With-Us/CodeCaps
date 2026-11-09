@@ -99,12 +99,22 @@ final class ResetAlarmCadenceTests: XCTestCase {
         XCTAssertEqual(ResetAlarmCadence.resolve(token: "4h", label: "4h window"), .fixed(4 * hour))
     }
 
-    /// Cursor's included plan resets with its monthly billing cycle and carries
-    /// no cadence of its own.
-    func testCursorsIncludedPlanIsAMonth() {
+    /// A Cursor window that states its cadence is read by that cadence.
+    ///
+    /// Owner ruling 2026-11-09:  Cursor has only the seven-day pool quota now,
+    /// so the provider-specific month rule may not override the cadence the
+    /// window states.  It still speaks for the window that names no cadence at
+    /// all, which is the billing-cycle plan meter, and for the plan meter that
+    /// states its cycle outright.
+    func testACursorWindowIsReadByTheCadenceItStates() {
         XCTAssertEqual(ResetAlarmCadence.resolve(token: "weekly", label: "Included plan",
+                                                 providerKey: "cursor"), .fixed(7 * day))
+        XCTAssertEqual(ResetAlarmCadence.resolve(token: "7d", label: "Included plan",
+                                                 providerKey: "cursor"), .fixed(7 * day))
+        XCTAssertEqual(ResetAlarmCadence.resolve(token: "billing-cycle", label: "Included plan",
                                                  providerKey: "cursor"), .calendarMonths(1))
-        XCTAssertEqual(ResetAlarmCadence.resolve(token: "weekly", label: "Included plan"), .fixed(7 * day))
+        XCTAssertEqual(ResetAlarmCadence.resolve(token: nil, label: "Included plan",
+                                                 providerKey: "cursor"), .calendarMonths(1))
     }
 
     /// A monthly period starts one calendar month before the reset, so a reset

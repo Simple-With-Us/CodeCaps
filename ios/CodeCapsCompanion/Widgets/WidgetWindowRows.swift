@@ -93,12 +93,21 @@ struct WindowCaptionRow: View {
             }
             Spacer(minLength: 0)
             if !caption.resetCaption.isEmpty {
-                Text(caption.resetCaption)
-                    .font(.system(size: font, weight: .medium, design: .monospaced))
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
-                    .truncationMode(.tail)
+                // A narrow row keeps the countdown and drops the words:
+                // "Resets in 24d 15h" truncating to "Resets in..." loses the
+                // only part the owner can act on, so the bare countdown is the
+                // fallback form.
+                ViewThatFits(in: .horizontal) {
+                    Text(caption.resetCaption)
+                    if !caption.compactResetCaption.isEmpty {
+                        Text(caption.compactResetCaption)
+                    }
+                }
+                .font(.system(size: font, weight: .medium, design: .monospaced))
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .truncationMode(.tail)
             }
         }
     }
@@ -148,6 +157,12 @@ struct PlanAtCapRow: View {
                 Text(Self.label)
                     .font(.system(size: percentFont, weight: .bold, design: .rounded))
                     .foregroundColor(WidgetPresentation.statusColor(percent: 0, isMasked: false))
+                    // No wrap:  without a line limit the label wrapped one
+                    // letter per line when a long title squeezed the row
+                    // (QA focus-small pixel 2026-11-06).  The title, which
+                    // already truncates, yields instead.
+                    .lineLimit(1)
+                    .fixedSize()
             }
 
             WindowCaptionRow(
@@ -157,6 +172,70 @@ struct PlanAtCapRow: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(platform.title): at cap. \(window.resetCaption())")
+    }
+}
+
+/// One meter in the Mac grammar: cadence token, flexible bar, and the
+/// percent and reset countdown trailing on the right — the same order the
+/// menu-bar dropdown and the PiP rows draw.  The metrics used to sit on a
+/// text line above a full-width bar, so the number was nowhere near the bar
+/// it belonged to (CC-213, owner 2026-11-07).
+struct WidgetMeterRow: View {
+    let window: WidgetWindowItem?
+    var fallbackPercent: Double? = nil
+    var fallbackCountdown: String = ""
+    var isMasked: Bool = false
+    let captionFont: CGFloat
+    let percentFont: CGFloat
+    let barHeight: CGFloat
+    var percentSlotWidth: CGFloat = 30
+    var countdownSlotWidth: CGFloat = 36
+
+    private var percent: Double? { window?.remainingPercent ?? fallbackPercent }
+
+    private var statusColor: Color {
+        window?.statusColor ?? WidgetPresentation.statusColor(percent: percent, isMasked: isMasked)
+    }
+
+    private var fraction: Double {
+        guard let pct = percent, !(window?.isMasked ?? isMasked) else { return 0.0 }
+        return max(0.0, min(1.0, pct / 100.0))
+    }
+
+    private var countdown: String { window?.countdown() ?? fallbackCountdown }
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Text(window?.cadenceToken ?? "")
+                .font(.system(size: captionFont, weight: .semibold))
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+                .fixedSize()
+            if window?.isCountOnly != true {
+                MiniProgressBar(
+                    fraction: fraction,
+                    color: statusColor,
+                    elapsedFraction: window?.elapsedFraction(),
+                    hasReading: !(window?.isMasked ?? isMasked) && percent?.isFinite == true,
+                    height: barHeight
+                )
+                .frame(maxWidth: .infinity)
+            } else {
+                Color.clear.frame(height: barHeight)
+            }
+            Text(window?.displayPercent ?? WidgetPresentation.displayPercent(percent: percent, isMasked: isMasked))
+                .font(.system(size: percentFont, weight: .bold, design: .rounded).monospacedDigit())
+                .foregroundColor(statusColor)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .frame(minWidth: percentSlotWidth, alignment: .trailing)
+            Text(countdown)
+                .font(.system(size: max(6, captionFont - 0.5), weight: .medium, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .frame(minWidth: countdown.isEmpty ? 0 : countdownSlotWidth, alignment: .trailing)
+        }
     }
 }
 
@@ -176,6 +255,11 @@ struct PlanBarRow: View {
     var captionFont: CGFloat = 9
     var percentFont: CGFloat = 12
     var barHeight: CGFloat = 3.5
+    /// The Mac meter grammar (token, bar, percent, countdown on one line).
+    /// The small widget opted into the meter grammar too (owner 2026-11-08):
+    /// rendered at the smallest system-small width (141pt) with long labels,
+    /// three-digit percents and long countdowns, nothing truncates.
+    var usesMeterLayout: Bool = true
 
     /// The bar's own source, so the caption names the window it came from
     /// rather than the plan's aggregate.
@@ -233,6 +317,33 @@ struct PlanBarRow: View {
                 percentFont: percentFont,
                 barHeight: barHeight
             )
+        } else if usesMeterLayout {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 5) {
+                    if showMark {
+                        ProviderMarkView(
+                            providerKey: platform.providerKey,
+                            itemId: platform.id,
+                            size: markSize
+                        )
+                    }
+                    Text(platform.title)
+                        .font(.system(size: titleFont, weight: .semibold))
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+                WidgetMeterRow(
+                    window: shown.window,
+                    fallbackPercent: percent,
+                    fallbackCountdown: platform.countdown(),
+                    isMasked: platform.isMasked,
+                    captionFont: captionFont,
+                    percentFont: percentFont,
+                    barHeight: barHeight
+                )
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("\(platform.title): \(captionToken) \(shown.window?.displayPercent ?? WidgetPresentation.displayPercent(percent: percent, isMasked: platform.isMasked)), resets in \(captionReset)")
         } else {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 5) {
@@ -313,21 +424,16 @@ struct PlanDualBarRow: View {
     }
 
     private func allowance(_ window: WidgetWindowItem, fraction: Double) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 7) {
-                Text(window.cadenceToken).font(.system(size: captionFont, weight: .semibold))
-                Text(window.displayPercent)
-                    .font(.system(size: percentFont, weight: .bold, design: .rounded))
-                    .foregroundStyle(window.statusColor)
-                Text(window.countdown().isEmpty ? "—" : window.countdown())
-                    .font(.system(size: captionFont - 0.5)).foregroundStyle(.secondary)
-            }.lineLimit(1).minimumScaleFactor(0.8)
-            if !window.isCountOnly {
-            MiniProgressBar(fraction: fraction, color: window.statusColor,
-                elapsedFraction: window.elapsedFraction(),
-                hasReading: !window.isMasked && window.remainingPercent?.isFinite == true, height: barHeight)
-            }
-        }.frame(maxWidth: .infinity, alignment: .leading)
+        WidgetMeterRow(
+            window: window,
+            isMasked: window.isMasked,
+            captionFont: captionFont,
+            percentFont: percentFont,
+            barHeight: barHeight,
+            percentSlotWidth: 28,
+            countdownSlotWidth: 32
+        )
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -399,7 +505,7 @@ struct PlanGrid: View {
                         )
                     }
                     }
-                    if let detailScope {
+                    if let detailScope, platform.hasModelDetails {
                         Button(intent: ShowWidgetPlanDetailIntent(planID: platform.id, overviewKey: detailScope)) {
                             Image(systemName: "info.circle").font(.system(size: 11))
                         }

@@ -658,11 +658,17 @@ public enum QuotaFreshnessRule {
     /// A window whose reset has passed is waiting for a fresh reading, so its
     /// old number says nothing about the plan now, and it cannot bind a cap.
     ///
-    /// An exhausted allowance (at its cap) stays at cap until it resets:
-    /// collectors skip polling while spent to avoid quota-endpoint churn, so its
-    /// reading does not update every 30 minutes, but the plan remains capped
-    /// throughout the active cycle until `resetAt`.  A reading from before this
-    /// cycle began is not believed.
+    /// An exhausted allowance (at its cap) stays at cap until it resets:  the
+    /// plan remains capped throughout the active cycle until `resetAt`, so the
+    /// last reading of the cycle is believed for the cap even when it is older
+    /// than `staleAfter`.  Note this is a cap-binding rule, not a description
+    /// of collector behavior:  no reader in this repo skips polling while
+    /// spent (an earlier wording here claimed collectors skip polling "to
+    /// avoid quota-endpoint churn"; no such skip exists in the readers or the
+    /// refresh paths).  What an external producer does is a separate question,
+    /// so a stale timestamp on an at-cap row means the reading has not been
+    /// re-confirmed, not necessarily that polling stopped.  A reading from
+    /// before this cycle began is not believed.
     public static func isFresh(
         observedAt: Date?,
         resetAt: Date?,
@@ -935,18 +941,64 @@ public enum QuotaCapRule {
                 || id.hasPrefix("openai:additional:") || id.hasPrefix("openai:code-review:")
                 || id.hasPrefix("additional:") || id.hasPrefix("code-review:")
         }
+        // Exact tokens, not substrings: "Argonaut" or "fable-era" is not a
+        // per-model limit (Kody review, PR #367).
+        func tokens(_ raw: String) -> Set<String> {
+            // A hyphen or underscore stays inside a token:  a model id like
+            // "fable-era" is one model, not the Fable limit; structural
+            // separators (":", "/", whitespace) are what split the fields.
+            Set(raw.lowercased()
+                .split(whereSeparator: { $0.isWhitespace || ":·/|,;".contains($0) })
+                .map(String.init))
+        }
         if providerKey == "google-antigravity" {
-            if let modelId = modelId?.lowercased(), modelId.contains("argon") { return true }
-            if let modelType = modelType?.lowercased(), modelType.contains("argon") { return true }
-            if label.localizedCaseInsensitiveContains("argon") { return true }
-            return false
+            if let modelId, !tokens(modelId).isDisjoint(with: ["argon"]) { return true }
+            if let modelType, !tokens(modelType).isDisjoint(with: ["argon"]) { return true }
+            return !tokens(label).isDisjoint(with: ["argon"])
         }
         if providerKey == "anthropic" {
             if let model = modelId?.lowercased(), !model.isEmpty { return true }
-            let lower = label.lowercased()
-            return lower.contains("fable") || lower.contains("sonnet") || lower.contains("opus") || lower.contains("haiku")
+            return !tokens(label).isDisjoint(with: ["fable", "sonnet", "opus", "haiku"])
         }
         return false
+    }
+
+    /// Whether this window is a money meter rather than a quota meter.
+    ///
+    /// Cursor's plan spend window reports dollars against its billing cycle.
+    /// The shared pool already keeps it out of the included allowance, and it
+    /// must not stand in for a quota meter either:  a dollar balance is not a
+    /// percentage of anything, so it never fills a meter slot and never draws
+    /// a meter line of its own (owner 2026-11-09:  the Cursor row showed an
+    /// empty `1-month | 1m | —` line beside its one weekly meter).
+    ///
+    /// A billing cycle names money, and a currency unit names money.  A window
+    /// that counts requests, videos or credits is a quota, so it stays.
+    public static func isMoneyMeter(cadenceToken: String?, quotaUnit: String?, label: String? = nil) -> Bool {
+        let token = (cadenceToken ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if ["billing-cycle", "billing_cycle", "billing cycle", "billingcycle"].contains(token) {
+            return true
+        }
+        let unit = (quotaUnit ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if ["$", "usd", "us$"].contains(unit) { return true }
+        // The labels this codebase already mints for a money window.
+        let label = (label ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return ["api credits", "billing cycle spend"].contains(label)
+    }
+
+    /// The windows that may stand as this row's quota meters.
+    ///
+    /// A money meter is not a quota meter, so it never takes a slot beside a
+    /// real quota meter:  the Cursor row keeps exactly one weekly meter and
+    /// draws no `1-month | 1m | —` line beside it (owner 2026-11-09).
+    ///
+    /// But a plan whose only reading is a dollar balance must still show that
+    /// reading.  The Mac drew it, so a phone or a widget that rendered
+    /// nothing was a cross-surface disagreement, and a blank card is worse
+    /// than a dollar meter (Sentry review, PR #439).
+    public static func meterWindows<T>(_ windows: [T], isMoneyMeter: (T) -> Bool) -> [T] {
+        let quota = windows.filter { !isMoneyMeter($0) }
+        return quota.isEmpty ? windows : quota
     }
 
     /// Whether this window is a scoped allowance that sits beside the
@@ -964,5 +1016,48 @@ public enum QuotaCapRule {
     ) -> Bool {
         guard providerKey == "openai" else { return false }
         return isSubModelLimit(providerKey: providerKey, id: id, modelId: modelId, modelType: modelType, label: label)
+    }
+}
+
+/// The model a sub-model quota belongs to, in the provider's own words.
+///
+/// A per-model window such as Claude's Fable weekly limit carries a
+/// cadence-only label ("7-day"), so a surface that hides a label that only
+/// repeats its cadence caption hid the one thing telling the owner which
+/// model the row was (owner, 2026-10-30).  The name comes from the reading
+/// itself: a reader that writes "<model> · <cadence>" already names the
+/// model, and otherwise the model id or type the reader recorded is used.
+///
+/// Nil for a primary window, and for OpenAI's scoped pools, whose labels
+/// already say what they are.
+///
+/// Plain Foundation and no other QuotaCore type, like the rest of this file,
+/// so every companion target already compiles it and the Mac menu bar, the
+/// PiP and the phone cannot drift apart (iOS compile, 2026-11-06).
+public enum SubModelNaming {
+    /// The model a sub-model quota belongs to, answered with the reading's
+    /// own fields, so every surface asks the same question the same way.
+    public static func name(isSubModelLimit: Bool, canonicalProviderKey: String, label: String,
+                            modelType: String?, modelId: String?) -> String? {
+        guard isSubModelLimit, canonicalProviderKey != "openai" else { return nil }
+        if let separator = label.range(of: " · ") {
+            let name = label[..<separator.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
+            if !name.isEmpty { return name }
+        }
+        for candidate in [modelType, modelId] {
+            let raw = (candidate ?? "")
+                .replacingOccurrences(of: "_", with: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !raw.isEmpty { return initialCapped(raw) }
+        }
+        return nil
+    }
+
+    /// Each word's first letter upper-cased and the rest left as the reader
+    /// wrote it, so "fable" reads "Fable" while "GPT-4o" keeps its casing.
+    private static func initialCapped(_ text: String) -> String {
+        text.split(separator: " ", omittingEmptySubsequences: true)
+            .map { String($0.prefix(1)).uppercased() + String($0.dropFirst()) }
+            .joined(separator: " ")
     }
 }

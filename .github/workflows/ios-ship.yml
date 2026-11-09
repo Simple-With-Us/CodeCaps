@@ -70,6 +70,7 @@ on:
       - 'Sources/QuotaCore/FleetSourceDisagreement.swift'
       - 'Sources/QuotaCore/PlanMetadata.swift'
       - 'Sources/QuotaCore/QuotaWindowCaption.swift'
+      - 'Sources/QuotaCore/QuotaWindowPairing.swift'
       - 'Sources/QuotaCore/QuotaWindowVocabulary.swift'
       - 'Sources/QuotaCore/ResetAlarmCadence.swift'
       - 'Sources/QuotaCore/ResetAlarmMessage.swift'
@@ -140,6 +141,7 @@ jobs:
             --path-prefix 'Sources/QuotaCore/FleetSourceDisagreement.swift' \
             --path-prefix 'Sources/QuotaCore/PlanMetadata.swift' \
             --path-prefix 'Sources/QuotaCore/QuotaWindowCaption.swift' \
+            --path-prefix 'Sources/QuotaCore/QuotaWindowPairing.swift' \
             --path-prefix 'Sources/QuotaCore/QuotaWindowVocabulary.swift' \
             --path-prefix 'Sources/QuotaCore/ResetAlarmCadence.swift' \
             --path-prefix 'Sources/QuotaCore/ResetAlarmMessage.swift' \
