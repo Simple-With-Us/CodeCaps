@@ -225,7 +225,7 @@ public enum QuotaCardProjection {
 
         public var isQuota: Bool {
             let lower = label.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            guard !id.lowercased().hasSuffix(":plan-metadata"), lower != "plan details" else { return false }
+            guard !id.lowercased().contains("plan-metadata"), lower != "plan details" else { return false }
             guard !QuotaCapRule.isSupplementaryVideoQuota(providerKey: providerKey, modelId: modelId,
                                                           modelType: modelType, label: label),
                   !QuotaCapRule.isScopedPoolAllowance(providerKey: providerKey, id: id, modelId: modelId,

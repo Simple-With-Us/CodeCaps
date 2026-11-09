@@ -178,4 +178,29 @@ final class WidgetParseContractTests: XCTestCase {
         let minimax = parsed.first { $0.providerKey == "minimax" }
         XCTAssertTrue(minimax?.windows.isEmpty ?? true, "a JSON-shaped metadata id is a caption, not a window")
     }
+
+    /// The phone's intake is the widget's contract twin:  a JSON-shaped
+    /// plan-metadata id that carries a reset date must never become a phone
+    /// window either (the reading-less drop only catches figure-less,
+    /// reset-less rows).  Drives the phone's real intake predicate.
+    @MainActor
+    func testPhoneIntakeDropsJsonMetadataIds() throws {
+        let stamp = ISO8601DateFormatter().string(from: Date())
+        let reset = ISO8601DateFormatter().string(from: Date().addingTimeInterval(3600))
+        let codingPlan = "[\"producer\",\"Mac.Jays.Services\",\"minimax:coding-plan\"]"
+        let metadataJsonId = "[\"producer\",\"4f938669-72f9-4386-8808-6408a031ab4d\",\"minimax:plan-metadata\"]"
+        let payload = [
+            wire(codingPlan, "minimax", "5h", 78, "Coding plan (all models)", stamp: stamp, reset: reset),
+            wire(metadataJsonId, "minimax", nil, nil, "MiniMax quota", stamp: stamp, reset: reset),
+        ]
+        let decoder = JSONDecoder()
+        var newestDeadCopy: Date? = nil
+        let admitted = try payload.map {
+            try decoder.decode(CompanionQuotaModel.WireRawWindow.self, from: JSONSerialization.data(withJSONObject: $0))
+        }.filter {
+            CompanionQuotaModel.admitsToIntake($0, providerKey: "minimax", ownInstanceId: nil,
+                                               now: Date(), newestDeadCopyObservedAt: &newestDeadCopy)
+        }
+        XCTAssertEqual(admitted.map(\.id), [codingPlan])
+    }
 }

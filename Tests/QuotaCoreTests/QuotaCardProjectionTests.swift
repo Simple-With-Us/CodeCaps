@@ -23,6 +23,18 @@ final class QuotaCardProjectionTests: XCTestCase {
         }
     }
 
+    func testJsonShapedMetadataIdIsNotAQuotaReading() {
+        // Producer-scoped window ids are serialized JSON, so a metadata id
+        // ends in `"]`, not in the bare ":plan-metadata" token (qa3 wire
+        // fixture): match the marker anywhere in the id (Kody, PR #388).
+        let jsonId = "[\"producer\",\"4f938669-72f9-4386-8808-6408a031ab4d\",\"minimax:plan-metadata\"]"
+        let metadata = row(jsonId, "minimax", nil, 100, label: "Usage notes")
+        XCTAssertFalse(metadata.isQuota)
+        let quota = row("short", "minimax", "5h", 92)
+        let rows = [metadata, quota]
+        XCTAssertEqual(QuotaCardProjection.selectedIndices(in: rows, now: now).map { rows[$0].id }, ["short"])
+    }
+
     func testPrimaryModelIdsDoNotCreateDuplicateAllowancesButFableIsDistinct() {
         let rows = [row("unknown", "anthropic", "7d", nil),
                     row("short", "anthropic", "5h", 80), row("weekly", "anthropic", "7d", 0),

@@ -1033,8 +1033,7 @@ public enum WidgetPresentation {
             // were carried it would take a bar slot beside the plan's own
             // meters (native probe, PR #367).
             let trimmedLabel = w.label.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            guard !w.id.lowercased().hasSuffix(":plan-metadata"),
-                  trimmedLabel != "plan details",
+            guard trimmedLabel != "plan details",
                   !(trimmedLabel == "plan" && w.remainingPercent == nil) else { continue }
             let parsedReset = parseDate(from: w.resetAt)
             let observed = parseDate(from: w.occurredAt)
