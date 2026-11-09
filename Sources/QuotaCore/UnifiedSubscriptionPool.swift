@@ -145,6 +145,32 @@ public enum UnifiedSubscriptionPool {
         }
     }
 
+    /// The cadence token a participant's window carries.
+    ///
+    /// The pool is one weekly allowance, so a participant's window says so,
+    /// whatever its own label says.  The donor's cadence wins when it states
+    /// one, and a weekly allowance is the pool's own cadence otherwise.
+    ///
+    /// This is what makes the Cursor row read like every other xAI row:  the
+    /// pool's canonical Cursor label is "Included plan", which the cadence
+    /// rules read as a month, so the Cursor row read `1m` while Grok, xAI and
+    /// Grok Bot read `7d` for the same pool reading (owner 2026-11-09).
+    public static func poolCadenceToken(for donor: QuotaWindow) -> String {
+        let token = (donor.window ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        switch token {
+        case "5h", "5hr", "5-hour", "300m", "session", "fast":
+            return "5h"
+        case "1d", "day", "daily", "24h":
+            return "1d"
+        case "billing-cycle", "billing_cycle", "billing cycle", "billingcycle", "monthly", "month", "30d":
+            return "30d"
+        default:
+            // The pool is a weekly allowance:  "1w", "weekly", "7d" and a
+            // donor that names no cadence at all all read as the same week.
+            return "7d"
+        }
+    }
+
     /// Creates an adapted pool window for the given participant key from a source window.
     public static func adapt(_ source: QuotaWindow, for providerKey: String) -> QuotaWindow {
         var copy = source
@@ -162,6 +188,7 @@ public enum UnifiedSubscriptionPool {
             copy.id = participantID.replacingOccurrences(of: "local-mac:", with: "shared-pool:\(originKey):")
         }
         copy.label = canonicalWindowLabel(for: providerKey)
+        copy.window = poolCadenceToken(for: source)
         copy.remainingUnknown = false
         copy.sourceApp = source.sourceApp
         // The row the pool injects is a participant of the pool and it carries
@@ -270,7 +297,9 @@ public enum UnifiedSubscriptionPool {
                     updated.source = window.source ?? best.source
                     updated.sourceApp = window.sourceApp ?? best.sourceApp ?? "local-mac"
                     updated.planName = window.planName ?? best.planName
-                    updated.window = best.window ?? window.window ?? "weekly"
+                    // The pool's own cadence, so every participant reads the
+                    // same period whatever its own label says.
+                    updated.window = poolCadenceToken(for: best)
                     updated.remainingUnknown = false
                     updated.skip = best.skip
                     updated.skipReason = best.skipReason

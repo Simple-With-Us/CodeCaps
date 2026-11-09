@@ -56,6 +56,31 @@ final class WidgetParseContractTests: XCTestCase {
         XCTAssertNil(gemini.atCapWindow())
     }
 
+    /// The Cursor row through the real widget parse path.
+    ///
+    /// Cursor has only the seven-day pool quota now (owner ruling 2026-11-09),
+    /// so the widget reads it exactly as the Mac and the phone do:  one weekly
+    /// meter, and no money meter standing in for a quota.
+    func testTheCursorRowIsOneWeeklyMeterAndNoMoneyMeter() throws {
+        let iso = ISO8601DateFormatter()
+        let stamp = iso.string(from: Date())
+        let reset = iso.string(from: Date().addingTimeInterval(2 * 86_400))
+        let payload = [
+            wire("local-mac:cursor:plan", "cursor", "weekly", 50, "Included plan",
+                 stamp: stamp, reset: reset),
+            wire("local-mac:cursor:billing", "cursor", "billing-cycle", nil, "Included plan",
+                 stamp: stamp, reset: reset),
+        ]
+        let parsed = WidgetPresentation.parseSnapshot(
+            data: try JSONSerialization.data(withJSONObject: ["windows": payload]))
+        let cursor = try XCTUnwrap(parsed.first { $0.id == "cursor" })
+        XCTAssertEqual(cursor.primaryWindows.count, 1,
+                       "the billing-cycle spend window is money, not a quota meter")
+        XCTAssertEqual(cursor.primaryWindows.first?.cadenceToken, "7d",
+                       "the pool's weekly allowance reads as a week")
+        XCTAssertEqual(cursor.primaryWindows.first?.remainingPercent, 50)
+    }
+
     /// A spent sub-model detail never stands in for the pool on the
     /// single-bar row pick:  the small widget's controlling window is the
     /// pool's own most-urgent meter (the 1% weekly), not the 0% Argon

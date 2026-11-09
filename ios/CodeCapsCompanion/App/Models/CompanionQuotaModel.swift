@@ -279,11 +279,18 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable, Sendable {
 
     /// Compact cadence beside a meter bar (`5h`, `7d`, `1m`, `+`), matching Mac Glance.
     public var meterCaption: String {
+        // A window that states its cadence is read by that cadence.  The plan
+        // label only hints at a month when the window names no cadence of its
+        // own (owner 2026-11-09:  the Cursor pool window read `1m` while every
+        // other xAI row read `7d`).
+        let statesNoCadence = cadence.isEmpty
+            || cadence.lowercased() == "plan" || cadence.lowercased() == "quota"
         let token = QuotaWindowVocabulary.popoverCaption(
             windowToken: cadence.isEmpty ? nil : cadence,
             label: label,
             resetAt: resetAt,
-            monthlyHint: label.lowercased().contains("plan") || cadence.lowercased().contains("plan")
+            monthlyHint: statesNoCadence
+                && (label.lowercased().contains("plan") || cadence.lowercased().contains("plan"))
         )
         return token == "+" ? (QuotaWindowVocabulary.isExtraAllowanceLabel(label) ? "Extra" : "Limit") : token
     }
@@ -372,13 +379,11 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable, Sendable {
     /// confirmation of the cap.  Showing the age changes no cap, quota or
     /// alarm decision; it only dates the reading.
     public func staleReadingCue(now: Date = Date()) -> String? {
-        guard !isMasked, let reportedAt else { return nil }
-        if let resetAt, resetAt <= now { return nil }
-        guard !QuotaFreshnessRule.isReadingRecent(observedAt: reportedAt, now: now) else { return nil }
-        if isExhausted {
-            return "at cap \u{00B7} updated \(UpdatedStamp.label(reportedAt, now: now))"
-        }
-        return "stale \u{00B7} updated \(UpdatedStamp.label(reportedAt, now: now))"
+        guard !isMasked else { return nil }
+        return QuotaStalenessRule.cue(observedAt: reportedAt,
+                                      resetAt: resetAt,
+                                      now: now,
+                                      isAtCap: isExhausted)
     }
 
     /// The caption a meter or window row leads with:  the cadence, plus the
@@ -627,6 +632,10 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
                 || (window.absoluteRemaining?.isFinite == true && (window.absoluteRemaining ?? -1) >= 0)
             return measured && !window.isSupplementaryVideoQuota && !window.isScopedPoolAllowance
                 && (!window.isSubModelLimit || window.label == "Fable limit" || window.label == "Argon limit")
+                // A dollar balance is not a percentage of anything, so it is
+                // not a quota meter (owner 2026-11-09).
+                && !QuotaCapRule.isMoneyMeter(cadenceToken: window.rawWindowToken,
+                                             quotaUnit: window.quotaUnit)
         }
     }
 
@@ -648,7 +657,7 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
                 return weekly
             }
         }
-        return cardMeterPair(resolved).short
+        return cardMeterPair(resolved, now: now).short
     }
 
     public func cardLongWindow(scope: CompanionSourceScope, now: Date = Date()) -> CardWindow? {
@@ -665,7 +674,7 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
                 return extra
             }
         }
-        return cardMeterPair(resolved).long
+        return cardMeterPair(resolved, now: now).long
     }
 
     /// The card's two meters, chosen by the shared rule.
@@ -678,7 +687,7 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
     /// the one the Mac's Glance panel uses:  the window nearest to its cap on
     /// each side, with the supplementary, scoped and sub-model allowances
     /// left out because none of them is the limit the plan is sold on.
-    private func cardMeterPair(_ resolved: [CardWindow]) -> (short: CardWindow?, long: CardWindow?) {
+    private func cardMeterPair(_ resolved: [CardWindow], now: Date = Date()) -> (short: CardWindow?, long: CardWindow?) {
         let candidates = resolved.map { row in
             QuotaWindowPairing.MeterCandidate(
                 id: row.window.id,
@@ -689,6 +698,15 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
                     || row.window.isScopedPoolAllowance
                     || row.window.isSubModelLimit
                     || row.window.isMasked
+                    // A dollar balance is not a percentage of anything, so it
+                    // is not a quota meter (owner 2026-11-09).
+                    || QuotaCapRule.isMoneyMeter(cadenceToken: row.window.rawWindowToken,
+                                                quotaUnit: row.window.quotaUnit),
+                // A reading of a period that has ended never takes a slot from
+                // a live one.
+                isLive: !QuotaFreshnessRule.isDeadCopy(observedAt: row.window.reportedAt,
+                                                       resetAt: row.window.resetAt,
+                                                       now: now)
             )
         }
         let pair = QuotaWindowPairing.meterPair(candidates)

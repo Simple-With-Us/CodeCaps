@@ -899,7 +899,11 @@ struct WidgetPlanDetailView: View {
                     MiniProgressBar(fraction: (window.remainingPercent ?? 0) / 100,
                         color: window.statusColor, elapsedFraction: window.elapsedFraction(),
                         hasReading: !window.isMasked && window.remainingPercent?.isFinite == true, height: 5)
-                    if window.isStale() { Text("Reading is stale").font(.caption2).foregroundStyle(.secondary) }
+                    if let cue = QuotaStalenessRule.cue(observedAt: window.observedAt,
+                                                       resetAt: window.resetAt,
+                                                       isAtCap: window.isExhausted) {
+                        Text(cue).font(.caption2).foregroundStyle(.secondary)
+                    }
                 }
             }
             Spacer(minLength: 0)

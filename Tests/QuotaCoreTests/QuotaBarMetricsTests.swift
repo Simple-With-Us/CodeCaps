@@ -501,17 +501,21 @@ final class QuotaBarMetricsTests: XCTestCase {
         XCTAssertNil(QuotaBarMetrics(snapshot: plan, now: now).elapsedFraction)
     }
 
-    /// Cursor's included plan resets with Cursor's monthly billing cycle, so
-    /// the marker beside the caption that names "1m" is drawn for that month.
+    /// Cursor's included plan states its own cadence, so the marker beside the
+    /// caption that names "7d" is drawn for that week.
     ///
     /// The caption and the marker resolve one period now, so a window whose
-    /// caption names a month draws a month.
-    func testCursorsIncludedPlanDrawsItsMonthMarker() throws {
-        let now = date("2026-09-30T12:00:00Z")
+    /// caption names a week draws a week.  Owner ruling 2026-11-09:  Cursor has
+    /// only the seven-day pool quota, so the plan meter reads a week and not a
+    /// month.
+    func testCursorsIncludedPlanDrawsItsWeekMarker() throws {
+        let now = date("2026-10-08T12:00:00Z")
         let plan = snapshot(token: "weekly", label: "Included plan",
                             reset: "2026-10-15T00:00:00Z", now: now)
         let fraction = try XCTUnwrap(plan.elapsedFraction(now: now))
-        XCTAssertEqual(fraction, 15.5 / 30.0, accuracy: 1e-6)
+        // The week started at the reset minus seven days (Oct 8, 00:00), so
+        // half a day of it had gone.
+        XCTAssertEqual(fraction, 0.5 / 7.0, accuracy: 1e-6)
     }
 
     func testAnAbsurdlyLongPeriodIsNotDrawn() {

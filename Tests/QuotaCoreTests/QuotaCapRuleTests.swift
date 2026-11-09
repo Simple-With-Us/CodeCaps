@@ -495,4 +495,21 @@ final class QuotaCapRuleTests: XCTestCase {
             now: now
         )
     }
+
+    /// A money meter is not a quota meter.
+    ///
+    /// Cursor's plan spend window reports dollars against its billing cycle,
+    /// and the pool already keeps it out of the shared allowance.  It must not
+    /// stand in for a quota meter either, so it never fills a slot and never
+    /// draws an expanded meter line (owner 2026-11-09:  the Cursor row showed an
+    /// empty `1-month | 1m | —` line beside its one weekly meter).
+    func testAMoneyMeterIsNotAQuotaMeter() {
+        XCTAssertTrue(QuotaCapRule.isMoneyMeter(cadenceToken: "billing-cycle", quotaUnit: nil))
+        XCTAssertTrue(QuotaCapRule.isMoneyMeter(cadenceToken: "weekly", quotaUnit: "USD"))
+        XCTAssertTrue(QuotaCapRule.isMoneyMeter(cadenceToken: "weekly", quotaUnit: "usd"))
+        XCTAssertFalse(QuotaCapRule.isMoneyMeter(cadenceToken: "weekly", quotaUnit: nil))
+        XCTAssertFalse(QuotaCapRule.isMoneyMeter(cadenceToken: "5h", quotaUnit: "requests"))
+        XCTAssertFalse(QuotaCapRule.isMoneyMeter(cadenceToken: nil, quotaUnit: nil))
+    }
+
 }
