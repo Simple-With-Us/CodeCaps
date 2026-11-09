@@ -72,6 +72,33 @@ tf_ready_outcome_lines() {
   esac
 }
 
+# tf_ready_rc_summary_label <rc>
+#
+# One short line for GITHUB_OUTPUT / the job summary (not the full annotation).
+tf_ready_rc_summary_label() {
+  local rc="${1:-}"
+  case "$rc" in
+    0)
+      printf '%s' "internal testers can install"
+      ;;
+    3)
+      printf '%s' "upload succeeded; ASC not yet IN_BETA_TESTING"
+      ;;
+    4)
+      printf '%s' "build never appeared in ASC within timeout"
+      ;;
+    5)
+      printf '%s' "rc=5 — zero internal testers on the internal path"
+      ;;
+    6)
+      printf '%s' "rc=6 — internal tester count unreadable"
+      ;;
+    *)
+      printf '%s' "ensure-tf-ready rc=${rc}; export compliance may not be declared"
+      ;;
+  esac
+}
+
 # tf_ready_outcome_annotation <rc> <bundle-id> <build-number>
 #
 # The one-line GitHub Actions warning for one exit code.  It has to stand on

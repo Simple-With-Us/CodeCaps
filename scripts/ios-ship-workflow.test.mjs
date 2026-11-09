@@ -358,14 +358,19 @@ test("post-sync ensure-tf-ready recheck runs after standing-tester sync", () => 
   const steps = code.split(/- name:/);
   const sync = steps.findIndex((s) => /Sync standing TestFlight testers/.test(s));
   const recheck = steps.findIndex((s) => /Recheck TestFlight readiness after standing-tester sync/.test(s));
+  const summary = steps.findIndex((s) => /iOS ship summary \(TestFlight readiness after sync\)/.test(s));
   assert.ok(sync > 0, "ios-ship.yml must sync standing TestFlight testers");
   assert.ok(recheck > sync, "the post-sync recheck step must follow standing-tester sync");
+  assert.ok(summary > recheck, "the job summary step must follow the post-sync recheck");
   const block = steps[recheck];
   assert.match(block, /continue-on-error:\s*true/);
   assert.match(block, /ios-recheck-tf-ready\.sh/);
   assert.match(block, /steps\.plan-build\.outputs\.build/);
   assert.match(block, /IOS_TF_READY_TIMEOUT_SEC/);
-  assert.match(block, /steps\.ship\.outcome == 'success'/);
+  assert.match(block, /steps\.ship\.outputs\.uploaded == 'true'/);
+  assert.doesNotMatch(block, /steps\.ship\.outcome == 'success'/);
+  const ship = steps.find((s) => /id: ship\b/.test(s));
+  assert.match(ship, /ios-observe-ship\.mjs/);
 });
 
 test("the ship job clears a stale archive lock restored from the ship-state cache", () => {
