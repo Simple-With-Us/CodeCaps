@@ -303,8 +303,8 @@ struct OverviewSmallView: View {
                 .padding(.horizontal, 13)
                 .padding(.vertical, 10)
         } else {
-            // Days-and-hours stay off the rows; one tap reveals them (owner
-            // 2026-11-09).
+            // No duration labels or countdowns on the rows; one tap reveals
+            // the 5h/7d windows with the time remaining (owner 2026-11-09).
             VStack(alignment: .leading, spacing: 7) {
                 WidgetHeaderView(markSize: 13)
 
@@ -322,7 +322,8 @@ struct OverviewSmallView: View {
                                 percentFont: 11.5,
                                 barHeight: 3.5,
                                 usesMeterLayout: true,
-                                showsCountdown: false
+                                showsCountdown: false,
+                                showsCadenceToken: false
                             )
                         }
                         .buttonStyle(.plain)
