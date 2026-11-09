@@ -46,19 +46,23 @@ public enum QuotaWindowPairing {
         /// phone picked its second meter by "the first window that is not
         /// short" and the video allowance is not short.
         public let isExcluded: Bool
+        /// Whether the window is still live.
+        public let isLive: Bool
 
         public init(
             id: String,
             remainingPercent: Double?,
             resetAt: Date?,
             isShort: Bool,
-            isExcluded: Bool = false
+            isExcluded: Bool = false,
+            isLive: Bool = true
         ) {
             self.id = id
             self.remainingPercent = remainingPercent
             self.resetAt = resetAt
             self.isShort = isShort
             self.isExcluded = isExcluded
+            self.isLive = isLive
         }
     }
 
@@ -92,16 +96,24 @@ public enum QuotaWindowPairing {
             candidate.remainingPercent != nil || candidate.resetAt != nil
         }
 
-        let shortPool = eligible.filter(\.isShort)
-        let longPool = eligible.filter { !$0.isShort }
+        // A dead reading never takes a slot from a live one.  A window whose
+        // period has ended says how the plan looked before the last refresh,
+        // so it may fill a row that has nothing live left, but it must never
+        // displace a live reading:  the stale 14% beside the pool's live 50%
+        // is what put two wrong meters on the Cursor row (owner 2026-11-09).
+        let live = eligible.filter { $0.isLive && hasInformation($0) }
+        let selectable = live.isEmpty ? eligible : live
+
+        let shortPool = selectable.filter(\.isShort)
+        let longPool = selectable.filter { !$0.isShort }
         // The short slot carries the long slot's guard:  an empty window says
         // nothing, so an informative candidate anywhere beats a blank short
         // bar, and a window with no reading and no reset never fills the
         // first slot while a real one exists.
         let short = nearestToCap(shortPool.filter(hasInformation))
-            ?? nearestToCap(eligible.filter(hasInformation))
+            ?? nearestToCap(selectable.filter(hasInformation))
             ?? nearestToCap(shortPool)
-            ?? nearestToCap(eligible)
+            ?? nearestToCap(selectable)
             ?? anchor
         func distinct(_ candidate: MeterCandidate) -> Bool {
             guard candidate.id != short.id else { return false }
@@ -109,7 +121,7 @@ public enum QuotaWindowPairing {
             return !isSameMeter(candidate, short)
         }
         let long = nearestToCap(longPool.filter(distinct).filter(hasInformation))
-            ?? nearestToCap(eligible.filter(distinct).filter(hasInformation))
+            ?? nearestToCap(selectable.filter(distinct).filter(hasInformation))
         return (short, long)
     }
 }

@@ -603,7 +603,7 @@ final class WidgetTests: XCTestCase {
         let presentation = try readSource(at: Self.widgetPresentationURL)
         XCTAssertTrue(presentation.contains("static func shortCadence"))
         XCTAssertTrue(presentation.contains("static func resetCaption"))
-        XCTAssertTrue(presentation.contains("func dualWindows()"))
+        XCTAssertTrue(presentation.contains("func dualWindows(now:"))
         // QA 2026-11-06, verified against the real wire capture (committed
         // verbatim at Tests/Fixtures/qa3-wire-regression-fixture.json):  the
         // codecaps 5h and the collector weekly share series "general", the

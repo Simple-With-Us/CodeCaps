@@ -49,6 +49,15 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
     /// windows, because a lone bar printing "7d weekly" says the same thing
     /// twice (owner 2026-10-21).
     public let barQualifier: String
+    /// The producer's own window token, exactly as it arrived, or nil when the
+    /// payload carried none.  The formatted cadence cannot stand in for it:  a
+    /// billing cycle reads "1-month" like a monthly quota meter does, and only
+    /// the token says which one it was.
+    public let rawWindowToken: String?
+    /// The unit the allowance is counted in, when the payload names one
+    /// ("USD", "credits", "requests").  A currency unit means the window is a
+    /// money meter rather than a quota meter.
+    public let quotaUnit: String?
 
     public init(
         id: String,
@@ -63,7 +72,9 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
         isExtraAllowance: Bool = false,
         isSupplementaryVideoQuota: Bool = false,
         isModelDetail: Bool = false,
-        absoluteRemaining: Double? = nil
+        absoluteRemaining: Double? = nil,
+        rawWindowToken: String? = nil,
+        quotaUnit: String? = nil
     ) {
         self.id = id
         self.label = label
@@ -75,6 +86,8 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
         self.isMasked = isMasked
         self.observedAt = observedAt
         self.barQualifier = barQualifier
+        self.rawWindowToken = rawWindowToken
+        self.quotaUnit = quotaUnit
         self.isExtraAllowance = isExtraAllowance
         self.isSupplementaryVideoQuota = isSupplementaryVideoQuota
         self.isModelDetail = isModelDetail
@@ -171,7 +184,9 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
             isExtraAllowance: isExtraAllowance,
             isSupplementaryVideoQuota: isSupplementaryVideoQuota,
             isModelDetail: isModelDetail,
-            absoluteRemaining: absoluteRemaining
+            absoluteRemaining: absoluteRemaining,
+            rawWindowToken: rawWindowToken,
+            quotaUnit: quotaUnit
         )
     }
 
@@ -219,7 +234,18 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
     /// supplementary video allowances sit beside the plan, not inside it, so
     /// a detail view or a focus bar picks from these.
     public var primaryWindows: [WidgetWindowItem] {
-        windows.filter { !$0.isModelDetail && !$0.isSupplementaryVideoQuota }
+        // A dollar balance is not a percentage of anything, so it never takes
+        // a slot beside a real quota meter (owner 2026-11-09).  But a plan
+        // whose only reading is a dollar balance still shows it, so the
+        // widget never renders an empty row where the Mac draws a meter
+        // (Sentry review, PR #439).
+        QuotaCapRule.meterWindows(
+            windows.filter { !$0.isModelDetail && !$0.isSupplementaryVideoQuota }
+        ) {
+            QuotaCapRule.isMoneyMeter(cadenceToken: $0.rawWindowToken,
+                                      quotaUnit: $0.quotaUnit,
+                                      label: $0.label)
+        }
     }
 
     /// The per-model detail windows beside the plan, in payload order.
@@ -419,7 +445,7 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
     /// MiniMax's video allowance beside the real five-hour meter:  the video
     /// allowance is a one-day window, so the row showed "5h" and "1d" while
     /// the weekly reading the owner routes on was nowhere.
-    public func dualWindows() -> (window1: WidgetWindowItem, window2: WidgetWindowItem)? {
+    public func dualWindows(now: Date = Date()) -> (window1: WidgetWindowItem, window2: WidgetWindowItem)? {
         guard primaryWindows.count >= 2 else { return nil }
         let visible = primaryWindows.filter {
             !$0.isMasked && ($0.remainingPercent != nil || $0.absoluteRemaining != nil || $0.resetAt != nil)
@@ -437,7 +463,12 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
                     || QuotaCapRule.isScopedPoolAllowance(
                         providerKey: providerKey, id: window.id, label: window.label)
                     || QuotaCapRule.isSubModelLimit(
-                        providerKey: providerKey, id: window.id, label: window.label)
+                        providerKey: providerKey, id: window.id, label: window.label),
+                // A reading of a period that has ended never takes a slot from
+                // a live one.
+                isLive: !QuotaFreshnessRule.isDeadCopy(observedAt: window.observedAt,
+                                                       resetAt: window.resetAt,
+                                                       now: now)
             )
         }
         let pair = QuotaWindowPairing.meterPair(candidates)
@@ -569,9 +600,11 @@ public enum WidgetPresentation {
             ? QuotaWindowVocabulary.standardCadence(windowToken: nil, label: window.label, resetAt: window.resetAt)
             : window.cadence
         let countdown = formatCountdown(resetAt: window.resetAt, now: now)
-        if window.isStale(now: now), let observed = window.observedAt {
-            let updated = observed.formatted(date: .omitted, time: .shortened)
-            return countdown.isEmpty ? "Updated \(updated)" : "\(cadence) · Updated \(updated)"
+        if let cue = QuotaStalenessRule.cue(observedAt: window.observedAt,
+                                           resetAt: window.resetAt,
+                                           now: now,
+                                           isAtCap: window.isExhausted) {
+            return countdown.isEmpty ? cue : "\(cadence) · \(cue)"
         }
         guard !countdown.isEmpty else { return cadence }
         return "\(cadence) · \(countdown)"
@@ -624,6 +657,7 @@ public enum WidgetPresentation {
         let producerInstanceId: String?
         let remainingUnknown: Bool?
         let absoluteRemaining: Double?
+        let quotaUnit: String?
         let plan: String?
         let planName: String?
         let planMetadata: PlanMetadata?
@@ -643,7 +677,7 @@ public enum WidgetPresentation {
         private enum CodingKeys: String, CodingKey {
             case id, provider, providerKey, label, remainingPercent, isExhausted
             case modelType, modelId, window, resetAt, occurredAt, reportedAt, via, source, machine
-            case producerInstanceId, remainingUnknown, absoluteRemaining, plan, planName, planMetadata
+            case producerInstanceId, remainingUnknown, absoluteRemaining, quotaUnit, plan, planName, planMetadata
             case planDetectedName, planUserName, planUserCostUsd, planUserRenewalDateText
             case planUserSubtitle, planShowCostAndRenewal, planHasMismatch, planUserUpdatedAt
             case windowKey
@@ -670,6 +704,7 @@ public enum WidgetPresentation {
             producerInstanceId = try container.decodeIfPresent(String.self, forKey: .producerInstanceId)
             remainingUnknown = try container.decodeIfPresent(Bool.self, forKey: .remainingUnknown)
             absoluteRemaining = try container.decodeIfPresent(Double.self, forKey: .absoluteRemaining)
+            quotaUnit = try container.decodeIfPresent(String.self, forKey: .quotaUnit)
             plan = try container.decodeIfPresent(String.self, forKey: .plan)
             planName = try container.decodeIfPresent(String.self, forKey: .planName)
             planMetadata = try container.decodeIfPresent(PlanMetadata.self, forKey: .planMetadata)
@@ -1097,7 +1132,9 @@ public enum WidgetPresentation {
                 isExtraAllowance: isExtraAllowance,
                 isSupplementaryVideoQuota: isSupplementaryVideo,
                 isModelDetail: isModelDetail,
-                absoluteRemaining: w.absoluteRemaining
+                absoluteRemaining: w.absoluteRemaining,
+                rawWindowToken: w.window,
+                quotaUnit: w.quotaUnit
             )
 
             // One window per allowance, and the freshest one.  The payload

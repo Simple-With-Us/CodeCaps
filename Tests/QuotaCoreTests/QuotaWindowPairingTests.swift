@@ -11,11 +11,12 @@ final class QuotaWindowPairingTests: XCTestCase {
         percent: Double?,
         isShort: Bool,
         excluded: Bool = false,
-        resetAt: Date? = nil
+        resetAt: Date? = nil,
+        live: Bool = true
     ) -> QuotaWindowPairing.MeterCandidate {
         QuotaWindowPairing.MeterCandidate(
             id: id, remainingPercent: percent, resetAt: resetAt,
-            isShort: isShort, isExcluded: excluded)
+            isShort: isShort, isExcluded: excluded, isLive: live)
     }
 
     /// The bug the owner reported:  MiniMax's video allowance is a one-day
@@ -134,6 +135,30 @@ final class QuotaWindowPairingTests: XCTestCase {
             providerKey: "minimax", label: "video (weekly window)"))
         XCTAssertFalse(QuotaCapRule.isSupplementaryVideoQuota(
             providerKey: "minimax", label: "5-hour window"))
+    }
+
+    /// A reading of a period that has ended is not a reading of the plan now,
+    /// so it never takes a meter slot from a live one.
+    ///
+    /// Owner 2026-11-09:  the Cursor row showed a stale 14% beside the pool's
+    /// live 50%, because the pairing rule took the lowest remaining percent
+    /// without asking whether the window was still live.
+    func testADeadReadingNeverTakesTheShortSlotFromALiveOne() {
+        let pair = QuotaWindowPairing.meterPair([
+            candidate("weekly-dead", percent: 14, isShort: false, live: false),
+            candidate("weekly-live", percent: 50, isShort: false),
+        ])
+        XCTAssertEqual(pair.short?.id, "weekly-live")
+        XCTAssertNil(pair.long, "the row has one live meter, so the second slot stays empty")
+    }
+
+    /// A provider with nothing live still shows its dead reading rather than
+    /// going blank, so the owner can see what the last known state was.
+    func testADeadReadingStillFillsTheRowWhenNothingElseIsLive() {
+        let pair = QuotaWindowPairing.meterPair([
+            candidate("weekly-dead", percent: 14, isShort: false, live: false),
+        ])
+        XCTAssertEqual(pair.short?.id, "weekly-dead")
     }
 
     func testNoCandidatesGiveNoPair() {
