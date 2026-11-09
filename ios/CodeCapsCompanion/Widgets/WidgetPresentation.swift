@@ -460,17 +460,21 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
         }
         guard visible.count >= 2 else { return nil }
         let candidates = visible.map { window in
-            let period = ResetAlarmCadence.periodSeconds(token: window.cadence, label: window.label)
             return QuotaWindowPairing.MeterCandidate(
                 id: window.id,
                 remainingPercent: window.remainingPercent,
                 resetAt: window.resetAt,
-                isShort: (period ?? 86_400) < 86_400,
-                isExcluded: QuotaCapRule.isSupplementaryVideoQuota(
-                    providerKey: providerKey, label: window.label)
+                isShort: QuotaMeterCadence.isShort(
+                    windowToken: window.rawWindowToken,
+                    label: window.label,
+                    cadence: window.cadence,
+                    resetAt: window.resetAt,
+                    now: now,
+                    isSupplementaryVideoQuota: window.isSupplementaryVideoQuota
+                ),
+                isExcluded: window.isSupplementaryVideoQuota
+                    || window.isModelDetail
                     || QuotaCapRule.isScopedPoolAllowance(
-                        providerKey: providerKey, id: window.id, label: window.label)
-                    || QuotaCapRule.isSubModelLimit(
                         providerKey: providerKey, id: window.id, label: window.label),
                 // A reading of a period that has ended never takes a slot from
                 // a live one.
@@ -480,10 +484,31 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
             )
         }
         let pair = QuotaWindowPairing.meterPair(candidates)
-        guard let first = pair.short, let second = pair.long else { return nil }
-        guard let window1 = visible.first(where: { $0.id == first.id }),
-              let window2 = visible.first(where: { $0.id == second.id }) else { return nil }
-        return (window1, window2)
+        guard let first = pair.short,
+              let window1 = visible.first(where: { $0.id == first.id }) else { return nil }
+        if let second = pair.long, let window2 = visible.first(where: { $0.id == second.id }) {
+            return (window1, window2)
+        }
+        // The Mac may still draw two meters when pairing filled only one slot;
+        // keep the other visible plan window rather than falling back to one bar.
+        let ordered = visible.sorted { left, right in
+            let ls = ResetAlarmCadence.periodSeconds(token: left.cadence, label: left.label) ?? .infinity
+            let rs = ResetAlarmCadence.periodSeconds(token: right.cadence, label: right.label) ?? .infinity
+            if ls != rs { return ls < rs }
+            return left.id < right.id
+        }
+        guard let window2 = ordered.first(where: { $0.id != window1.id }) else { return nil }
+        if QuotaMeterCadence.isShort(
+            windowToken: window1.rawWindowToken,
+            label: window1.label,
+            cadence: window1.cadence,
+            resetAt: window1.resetAt,
+            now: now,
+            isSupplementaryVideoQuota: window1.isSupplementaryVideoQuota
+        ) {
+            return (window1, window2)
+        }
+        return (window2, window1)
         // Supplementary video, scoped pools and sub-model limits are all
         // excluded by the shared rule above, so MiniMax's video daily never
         // displaces the weekly coding window and a plan with fewer than two
@@ -532,6 +557,14 @@ public enum WidgetPresentation {
         }
         return Color(red: 0.10, green: 0.70, blue: 0.45)
     }
+
+    /// The share still available on a quota bar's right segment.
+    ///
+    /// The Mac's `Theme.barRemaining` stays green/teal regardless of how low
+    /// the percentage is;  only the pill tints at the warning threshold.  The
+    /// widget used `statusColor` on the bar itself, so Claude's long window
+    /// read yellow while the Mac row stayed green (CC-223).
+    public static let quotaBarRemainingColor = Color(red: 0.03, green: 0.45, blue: 0.44)
 
     public static func providerColor(providerKey: String) -> Color {
         let low = providerKey.lowercased()

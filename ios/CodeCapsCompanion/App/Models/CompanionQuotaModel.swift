@@ -404,19 +404,13 @@ public struct CompanionWindowItem: Identifiable, Codable, Equatable, Sendable {
     }
 
     public var isShortCadence: Bool {
-        let text = (cadence.isEmpty ? label : cadence).lowercased()
-        if text.contains("7d") || text.contains("1w") || text.contains("weekly") || text.contains("month") || text.contains("billing") || text.contains("cycle") || text.contains("30d") || text.contains("1m") || text.contains("org") || text.contains("quota") { return false }
-        if text.contains("5h") || text.contains("5-hour") || text.contains("5 hour") || text.contains("five_hour")
-            || text.contains("4h") || text.contains("4-hour") || text.contains("4 hour") || text.contains("four_hour")
-            || text.contains("session") || text.contains("fast") || text.contains("coding plan") || text.contains("coding_plan") || text.contains("interval") { return true }
-        if text.contains("plan") { return false }
-        if let sec = ResetAlarmCadence.periodSeconds(token: cadence, label: label) {
-            return sec < 86_400
-        }
-        if let reset = resetAt {
-            return reset.timeIntervalSinceNow < 86_400
-        }
-        return true
+        QuotaMeterCadence.isShort(
+            windowToken: rawWindowToken,
+            label: label,
+            cadence: cadence,
+            resetAt: resetAt,
+            isSupplementaryVideoQuota: isSupplementaryVideoQuota
+        )
     }
 
     public var cadencePeriodSeconds: TimeInterval {

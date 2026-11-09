@@ -709,7 +709,7 @@ struct ProviderFocusView: View {
                                 }
                                 MiniProgressBar(
                                     fraction: max(0.0, min(1.0, (win.remainingPercent ?? 0.0) / 100.0)),
-                                    color: win.statusColor,
+                                    color: WidgetPresentation.quotaBarRemainingColor,
                                     elapsedFraction: win.elapsedFraction(),
                                     hasReading: !win.isMasked && win.remainingPercent?.isFinite == true,
                                     height: 3.5
@@ -812,14 +812,14 @@ struct AccessoryView: View {
                         HStack(spacing: 4) {
                             MiniProgressBar(
                                 fraction: max(0.0, min(1.0, (pair.window1.remainingPercent ?? 0.0) / 100.0)),
-                                color: .primary,
+                                color: WidgetPresentation.quotaBarRemainingColor,
                                 elapsedFraction: pair.window1.elapsedFraction(),
                                 hasReading: !pair.window1.isMasked && pair.window1.remainingPercent?.isFinite == true,
                                 height: 3.5
                             )
                             MiniProgressBar(
                                 fraction: max(0.0, min(1.0, (pair.window2.remainingPercent ?? 0.0) / 100.0)),
-                                color: .primary,
+                                color: WidgetPresentation.quotaBarRemainingColor,
                                 elapsedFraction: pair.window2.elapsedFraction(),
                                 hasReading: !pair.window2.isMasked && pair.window2.remainingPercent?.isFinite == true,
                                 height: 3.5
@@ -942,7 +942,7 @@ struct WidgetPlanDetailView: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     MiniProgressBar(fraction: (window.remainingPercent ?? 0) / 100,
-                        color: window.statusColor, elapsedFraction: window.elapsedFraction(),
+                        color: WidgetPresentation.quotaBarRemainingColor, elapsedFraction: window.elapsedFraction(),
                         hasReading: !window.isMasked && window.remainingPercent?.isFinite == true, height: 5)
                     if let cue = QuotaStalenessRule.cue(observedAt: window.observedAt,
                                                        resetAt: window.resetAt,

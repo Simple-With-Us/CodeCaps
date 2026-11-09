@@ -1437,24 +1437,19 @@ func glanceDrawableWindows(_ windows: [QuotaWindowSnapshot]) -> [QuotaWindowSnap
 /// bucket, a plan meter with no end date — is `.long`: a subscription-wide
 /// allowance is the long side of the pair far more often than the short one.
 func glanceCadence(_ snapshot: QuotaWindowSnapshot, now: Date) -> GlanceCadence {
-    if snapshot.window.isSupplementaryVideoQuota {
-        return .short
-    }
-    let token = (snapshot.window.window ?? "")
-        .lowercased()
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-    if let seconds = glanceDurationSeconds(token) {
-        return seconds < 86_400 ? .short : .long
-    }
-    switch token {
-    case "session", "fast": return .short
-    case "weekly", "week", "monthly", "month", "plan", "included plan": return .long
-    default: break
-    }
-    if let reset = snapshot.resetAt, reset > now {
-        return reset.timeIntervalSince(now) < 86_400 ? .short : .long
-    }
-    return .long
+    QuotaMeterCadence.isShort(
+        windowToken: snapshot.window.window,
+        label: snapshot.window.label,
+        cadence: QuotaWindowVocabulary.standardCadence(
+            windowToken: snapshot.window.window,
+            label: snapshot.window.label,
+            resetAt: snapshot.resetAt,
+            periodStart: snapshot.window.periodStartDate
+        ),
+        resetAt: snapshot.resetAt,
+        now: now,
+        isSupplementaryVideoQuota: snapshot.window.isSupplementaryVideoQuota
+    ) ? .short : .long
 }
 
 /// The unit tag beside a meter: "5h", "7d", "1m".  Kept to five characters so

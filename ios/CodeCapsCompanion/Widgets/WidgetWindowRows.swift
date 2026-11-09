@@ -222,7 +222,7 @@ struct WidgetMeterRow: View {
             if window?.isCountOnly != true {
                 MiniProgressBar(
                     fraction: fraction,
-                    color: statusColor,
+                    color: WidgetPresentation.quotaBarRemainingColor,
                     elapsedFraction: window?.elapsedFraction(),
                     hasReading: !(window?.isMasked ?? isMasked) && percent?.isFinite == true,
                     height: barHeight
@@ -385,7 +385,7 @@ struct PlanBarRow: View {
                 if shown.window?.isCountOnly != true {
                 MiniProgressBar(
                     fraction: fraction,
-                    color: statusColor,
+                    color: WidgetPresentation.quotaBarRemainingColor,
                     elapsedFraction: shown.window?.elapsedFraction(),
                     hasReading: !(shown.window?.isMasked ?? platform.isMasked) && percent?.isFinite == true,
                     height: barHeight
