@@ -88,13 +88,13 @@ tf_ready_rc_summary_label() {
       printf '%s' "build never appeared in ASC within timeout"
       ;;
     5)
-      printf '%s' "rc=5 — zero internal testers on the internal path"
+      printf '%s' "zero internal testers on the internal path"
       ;;
     6)
-      printf '%s' "rc=6 — internal tester count unreadable"
+      printf '%s' "internal tester count unreadable"
       ;;
     *)
-      printf '%s' "ensure-tf-ready rc=${rc}; export compliance may not be declared"
+      printf '%s' "export compliance may not be declared or ASC API error"
       ;;
   esac
 }

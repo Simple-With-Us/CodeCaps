@@ -48,6 +48,7 @@ fi
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 export GITHUB_OUTPUT="${tmpdir}/output.txt"
+export IOS_TF_READY_TIMEOUT_SEC=1
 set +e
 bash "$SCRIPT" codecaps 199901011200 2>/dev/null
 run_rc=$?
@@ -55,6 +56,17 @@ set -e
 [[ "$run_rc" -eq 0 ]] && ok "exits 0 after recheck (non-fatal to job)" || bad "exits 0 after recheck"
 grep -q 'tf_ready_rc=' "$GITHUB_OUTPUT" && ok "GITHUB_OUTPUT has tf_ready_rc" || bad "GITHUB_OUTPUT has tf_ready_rc"
 grep -q 'tf_ready_summary=' "$GITHUB_OUTPUT" && ok "GITHUB_OUTPUT has tf_ready_summary" || bad "GITHUB_OUTPUT has tf_ready_summary"
+grep -vq 'tf_ready_summary=rc=' "$GITHUB_OUTPUT" && ok "summary label omits duplicate rc= prefix" || bad "summary label must not repeat rc= code"
+
+set +e
+bash "$SCRIPT" no-such-app 199901011200 2>/dev/null
+missing_app_rc=$?
+set -e
+if [[ "$missing_app_rc" -eq 2 ]]; then
+  ok "missing apps.json entry exits 2"
+else
+  bad "missing apps.json entry exits 2 (got ${missing_app_rc})"
+fi
 
 if [[ "$FAIL" -eq 0 ]]; then
   echo "all tests passed (${PASS} ok)"

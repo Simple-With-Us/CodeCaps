@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # Post-sync ensure-tf-ready recheck for hosted ios-ship.yml (OPS-1052).
-# Read-only ASC polling; uses the same readiness labels as ship-testflight.sh.
+#
+# Re-invokes the same asc-api.mjs ensure-tf-ready subcommand the ship script
+# already ran (export-compliance PATCH when still unanswered, optional What to
+# Test notes, then readiness poll).  Those writes are idempotent on a build that
+# already shipped; the point of this pass is to re-read internal tester counts
+# after standing-tester sync, not to introduce new ASC mutations.
 set -euo pipefail
 
 APP_KEY="${1:-codecaps}"
@@ -25,9 +30,10 @@ fi
 mapfile -t _APP_META < <(python3 - "$APP_KEY" "$APPS_JSON" <<'PY'
 import json, sys
 app_key, path = sys.argv[1], sys.argv[2]
-app = json.load(open(path, encoding="utf-8"))["apps"][app_key]
+root = json.load(open(path, encoding="utf-8"))
+app = (root.get("apps") or {}).get(app_key) or {}
 marketing = app.get("fixedMarketingVersion") or app.get("marketingVersionDefault") or ""
-print(app["bundleId"])
+print(app.get("bundleId") or "")
 print(marketing)
 print(app.get("appleId", ""))
 PY

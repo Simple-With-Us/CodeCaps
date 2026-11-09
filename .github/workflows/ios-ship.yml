@@ -407,7 +407,8 @@ jobs:
 
       # ensure-tf-ready inside the ship step runs before standing-tester sync,
       # so rc=5 there can be a false alarm when sync creates the internal
-      # group (OPS-1052).  Re-run read-only readiness after sync for the run
+      # group (OPS-1052).  Re-run the same ensure-tf-ready pass after sync
+      # (idempotent compliance/notes, fresh internal-tester poll) for the run
       # summary; failures must not fail a run that already uploaded.
       - name: Recheck TestFlight readiness after standing-tester sync
         id: recheck_tf
