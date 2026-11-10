@@ -29,10 +29,11 @@ struct ExhaustionPopupView: View {
                     Image(systemName: "xmark")
                         .font(.system(size: 9, weight: .bold))
                         .foregroundStyle(Theme.solidMark.opacity(0.55))
-                        .frame(width: 16, height: 16)
+                        .frame(width: 28, height: 28)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .keyboardShortcut(.cancelAction)
                 .help("Dismiss")
                 .accessibilityLabel("Dismiss the quota warning")
             }
@@ -55,7 +56,6 @@ struct ExhaustionPopupView: View {
         .background(Theme.surface)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(popup.platformLabel) has about \(popup.headroom) of quota left")
-        .accessibilityAddTraits(.isStaticText)
     }
 }
 
@@ -65,7 +65,16 @@ struct ExhaustionPopupView: View {
 @MainActor
 final class ExhaustionPopupController {
     private var panel: NSPanel?
+    private var hosting: NSHostingController<ExhaustionPopupView>?
+    private var shownId: UUID?
+    private var expireTask: Task<Void, Never>?
+    private var escapeMonitor: Any?
     private weak var model: MonitorModel?
+
+    /// How long the popup stays up without interaction before it retires
+    /// itself.  The warning is also stamped as announced on dismiss, so
+    /// expiring never re-pops the same warning on the next read.
+    static let autoExpire: TimeInterval = 60
 
     init(model: MonitorModel) {
         self.model = model
@@ -73,15 +82,31 @@ final class ExhaustionPopupController {
 
     func update(_ popup: MonitorModel.ExhaustionPopup?) {
         guard let popup else {
+            expireTask?.cancel(); expireTask = nil
+            if let escapeMonitor { NSEvent.removeMonitor(escapeMonitor) }
+            escapeMonitor = nil
+            shownId = nil
             panel?.orderOut(nil)
             panel = nil
+            hosting = nil
             return
         }
-        guard panel == nil else { return }   // already up; a new warning reuses it
-        let view = ExhaustionPopupView(popup: popup) { [weak self] in
-            self?.model?.dismissExhaustionPopup()
+        // A newer warning replaces the one on screen.  The old code
+        // returned early whenever a panel existed, so the first platform
+        // to run low owned the popup until it was dismissed by hand
+        // (Slice 4, FIX-ALERTS).
+        if let hosting, shownId == popup.id {
+            return
         }
-        let hosting = NSHostingController(rootView: view)
+        if let hosting {
+            hosting.rootView = makeView(popup)
+            shownId = popup.id
+            scheduleExpiry(for: popup.id)
+            return
+        }
+        let hosting = NSHostingController(rootView: makeView(popup))
+        self.hosting = hosting
+        shownId = popup.id
         let p = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 320, height: 150),
             styleMask: [.borderless, .nonactivatingPanel],
@@ -104,5 +129,45 @@ final class ExhaustionPopupController {
         }
         panel = p
         p.orderFrontRegardless()
+        scheduleExpiry(for: popup.id)
+        installEscapeMonitor()
+    }
+
+    private func makeView(_ popup: MonitorModel.ExhaustionPopup) -> ExhaustionPopupView {
+        ExhaustionPopupView(popup: popup) { [weak self] in
+            self?.model?.dismissExhaustionPopup()
+        }
+    }
+
+    private func scheduleExpiry(for id: UUID) {
+        expireTask?.cancel()
+        expireTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Self.autoExpire * 1_000_000_000))
+            guard !Task.isCancelled, let self, self.shownId == id else { return }
+            self.model?.dismissExhaustionPopup()
+        }
+    }
+
+    /// The panel never becomes key, so the view's cancel shortcut alone
+    /// cannot receive Escape.  A local monitor gives Escape the same
+    /// dismiss path while this popup is up, and nothing else changes.
+    private func installEscapeMonitor() {
+        guard escapeMonitor == nil else { return }
+        escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard event.keyCode == 53 else { return event }
+            Task { @MainActor in self?.model?.dismissExhaustionPopup() }
+            return nil
+        }
+    }
+
+    deinit {
+        if let escapeMonitor {
+            NSEvent.removeMonitor(escapeMonitor)
+        }
+        expireTask?.cancel()
+        let closingPanel = panel
+        Task { @MainActor in
+            closingPanel?.orderOut(nil)
+        }
     }
 }

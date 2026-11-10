@@ -75,6 +75,8 @@ targets:
         group: Shared
       - path: ../../Sources/QuotaCore/CompanionReadTokenStore.swift
         group: Shared
+      - path: ../../Sources/QuotaCore/WidgetSnapshotFetcher.swift
+        group: Shared
     dependencies:
       - target: CodeCapsWidgets
         embed: true
@@ -188,6 +190,8 @@ targets:
       - path: ../../Sources/QuotaCore/QuotaWindowPairing.swift
       - path: ../../Sources/QuotaCore/QuotaMeterCadence.swift
         group: Shared
+        group: Shared
+      - path: ../../Sources/QuotaCore/WidgetSnapshotFetcher.swift
         group: Shared
     dependencies:
       - target: CodeCapsWidgetsMac
