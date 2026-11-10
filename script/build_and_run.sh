@@ -773,8 +773,8 @@ prune_other_copies() {
 package_dist() {
   CONFIGURATION="release"
   UNIVERSAL=1
-  # CFBundleVersion is `git rev-list --count HEAD`; a shallow clone would
-  # silently make every packaged build number 1 and strand Sparkle updates.
+  # CFBundleVersion comes from the merge stamp of HEAD; a shallow clone would
+  # silently corrupt the build number and strand Sparkle updates.
   if [[ "$(/usr/bin/git -C "$ROOT_DIR" rev-parse --is-shallow-repository 2>/dev/null || echo false)" == "true" ]]; then
     echo "error: refusing to package from a shallow clone; CFBundleVersion would be wrong. Fetch full history (fetch-depth: 0) first." >&2
     exit 1
