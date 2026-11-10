@@ -199,6 +199,33 @@ final class MuseCodeSessionReaderTests: XCTestCase {
         XCTAssertNil(again.issue)
     }
 
+    func testParseCacheOverflowEvictsOneEntryInsteadOfClearingAll() {
+        let cache = MuseCodeSessionReader.snapshotSegmentCache
+        cache.reset()
+        defer { cache.reset() }
+        let cap = 8_192
+        let stamp = Date(timeIntervalSince1970: 1_700_000_000)
+        let parse: () -> MuseCodeTokenSegment? = {
+            MuseCodeTokenSegment(sessionId: "s", modelId: "m", totalTokens: 1, observedAt: stamp)
+        }
+        for i in 0..<cap {
+            _ = cache.segment(sessionId: "s", url: URL(fileURLWithPath: "/tmp/fake-\(i).json"),
+                              modified: stamp, size: 1, parse: parse)
+        }
+        // One more distinct snapshot pushes the cache past its cap.
+        _ = cache.segment(sessionId: "s", url: URL(fileURLWithPath: "/tmp/fake-overflow.json"),
+                          modified: stamp, size: 1, parse: parse)
+        var hits = 0
+        for i in 0..<cap {
+            if cache.segment(sessionId: "s", url: URL(fileURLWithPath: "/tmp/fake-\(i).json"),
+                             modified: stamp, size: 1, parse: { nil }) != nil {
+                hits += 1
+            }
+        }
+        XCTAssertEqual(hits, cap - 1,
+                       "overflow evicts one entry, keeping the rest of the working set cached")
+    }
+
     func testReaderReparsesASnapshotRewrittenInPlace() throws {
         let home = try makeHome()
         defer { try? FileManager.default.removeItem(at: home) }

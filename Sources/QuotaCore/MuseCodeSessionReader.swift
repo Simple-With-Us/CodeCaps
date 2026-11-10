@@ -195,7 +195,12 @@ final class MuseCodeSnapshotSegmentCache: @unchecked Sendable {
         lock.unlock()
         guard let parsed = parse() else { return nil }
         lock.lock()
-        if entries.count >= cap { entries.removeAll(keepingCapacity: true) }
+        // Overflow evicts a single entry rather than clearing the map: a
+        // working set over the cap then degrades to partial misses instead
+        // of turning the next scan into all misses and full re-parses.
+        if entries[key] == nil && entries.count >= cap, let victim = entries.keys.first {
+            entries.removeValue(forKey: victim)
+        }
         entries[key] = parsed
         lock.unlock()
         return parsed
