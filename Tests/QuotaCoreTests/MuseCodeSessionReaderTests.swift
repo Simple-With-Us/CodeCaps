@@ -210,20 +210,28 @@ final class MuseCodeSessionReaderTests: XCTestCase {
         }
         for i in 0..<cap {
             _ = cache.segment(sessionId: "s", url: URL(fileURLWithPath: "/tmp/fake-\(i).json"),
-                              modified: stamp, size: 1, parse: parse)
+                              modified: stamp, size: 1, fileId: "fake", parse: parse)
         }
         // One more distinct snapshot pushes the cache past its cap.
         _ = cache.segment(sessionId: "s", url: URL(fileURLWithPath: "/tmp/fake-overflow.json"),
-                          modified: stamp, size: 1, parse: parse)
+                          modified: stamp, size: 1, fileId: "fake", parse: parse)
         var hits = 0
         for i in 0..<cap {
             if cache.segment(sessionId: "s", url: URL(fileURLWithPath: "/tmp/fake-\(i).json"),
-                             modified: stamp, size: 1, parse: { nil }) != nil {
+                             modified: stamp, size: 1, fileId: "fake", parse: { nil }) != nil {
                 hits += 1
             }
         }
         XCTAssertEqual(hits, cap - 1,
                        "overflow evicts one entry, keeping the rest of the working set cached")
+    }
+
+    private static func snapshotFileId(at url: URL) -> String {
+        let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+        return attrs.map {
+            String(describing: $0[.systemFileNumber] ?? 0) + "@" +
+                String((($0[.creationDate] as? Date) ?? .distantPast).timeIntervalSince1970)
+        } ?? ""
     }
 
     func testParseCacheReparseesReplacedFileWithIdenticalMetadata() throws {
@@ -249,13 +257,15 @@ final class MuseCodeSessionReaderTests: XCTestCase {
         }
         try Data(repeating: 0x61, count: 64).write(to: url)
         try FileManager.default.setAttributes([.modificationDate: stamp], ofItemAtPath: url.path)
-        let first = cache.segment(sessionId: "s", url: url, modified: stamp, size: 64, parse: parse)
+        let first = cache.segment(sessionId: "s", url: url, modified: stamp, size: 64,
+                                  fileId: Self.snapshotFileId(at: url), parse: parse)
         XCTAssertEqual(first?.totalTokens, 1)
         // Replace the file at the same path, then set the same mtime.
         try FileManager.default.removeItem(at: url)
         try Data(repeating: 0x62, count: 64).write(to: url)
         try FileManager.default.setAttributes([.modificationDate: stamp], ofItemAtPath: url.path)
-        let second = cache.segment(sessionId: "s", url: url, modified: stamp, size: 64, parse: parse)
+        let second = cache.segment(sessionId: "s", url: url, modified: stamp, size: 64,
+                                   fileId: Self.snapshotFileId(at: url), parse: parse)
         XCTAssertEqual(parses, 2, "a replacement with identical path/size/mtime must not hit the old entry")
         XCTAssertEqual(second?.totalTokens, 2, "the replacement's own content is returned, not the stale entry")
     }
