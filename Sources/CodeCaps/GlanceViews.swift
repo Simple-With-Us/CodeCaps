@@ -1419,10 +1419,10 @@ private func glanceSameAllowance(_ lhs: QuotaWindowSnapshot, _ rhs: QuotaWindowS
 /// emits a no-reading "Grok Bot weekly" window whenever the CLI cannot read,
 /// beside DashboardService's real reading of the same weekly allowance.
 func glanceDrawableWindows(_ windows: [QuotaWindowSnapshot]) -> [QuotaWindowSnapshot] {
-    let readingKeys = Set(windows.filter { $0.remainingPercent != nil }.map(glanceMeterKey))
+    let readingKeys = Set(windows.filter { $0.window.hasReading }.map(glanceMeterKey))
     var emptyKeys: Set<String> = []
     return windows.filter { snapshot in
-        guard snapshot.remainingPercent == nil else { return true }
+        guard !snapshot.window.hasReading else { return true }
         let key = glanceMeterKey(snapshot)
         let caption = glanceMeterCaption(snapshot)
         let namesNoCadence = (caption == "Quota" || caption == "Plan")

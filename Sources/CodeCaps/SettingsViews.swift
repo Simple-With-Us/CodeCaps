@@ -1862,7 +1862,7 @@ struct SettingsInfisicalPage: View {
             } header: { Eyebrow(editingID == nil ? "NEW BINDING" : "EDIT BINDING") }
             footer: {
                 Text("Use the complete service token, including its st. prefix." + sentenceGap
-                     + "Credentials stay in this build’s Keychain; Infisical enforces their actual permissions.")
+                     + "Credentials stay in the Keychain on this Mac; Infisical enforces their actual permissions.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1873,7 +1873,7 @@ struct SettingsInfisicalPage: View {
                     LabeledContent("Read Source", value: read.label)
                     LabeledContent("Environment", value: read.environment)
                     LabeledContent("Folder", value: read.secretPath)
-                } else { Text("Local settings only") }
+                } else { Text("Local Settings Only") }
                 if let loaded = settings.lastLoadedAt {
                     LabeledContent("Last Synced") { Text(loaded.formatted(date: .omitted, time: .shortened)) }
                 }
