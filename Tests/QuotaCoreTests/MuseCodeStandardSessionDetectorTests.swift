@@ -147,6 +147,44 @@ final class MuseCodeStandardSessionDetectorTests: XCTestCase {
         XCTAssertNotNil(detector.lastKnownModels["overflow"])
     }
 
+    func testModelLessPollsKeepASessionAlive() {
+        var detector = MuseCodeStandardSessionDetector()
+        XCTAssertEqual(detector.observe([observation("s1", standardModel)]).count, 1)
+        let ttl = MuseCodeStandardSessionDetector.sessionStateTTL
+        // Model-less polls every ten minutes for over a day: the session is
+        // present, so its liveness advances even without a model reading.
+        var t = TimeInterval(600)
+        while t <= ttl + 600 {
+            XCTAssertTrue(detector.observe([observation("s1", nil, at: t)]).isEmpty)
+            t += 600
+        }
+        XCTAssertTrue(detector.observe([observation("s1", standardModel, at: t)]).isEmpty,
+                      "a session kept alive by model-less polls is not evicted, so its model returning does not refire")
+    }
+
+    func testEmptyPollStillEvictsSessionsPastTTL() {
+        var detector = MuseCodeStandardSessionDetector()
+        let stale = Date().addingTimeInterval(-MuseCodeStandardSessionDetector.sessionStateTTL - 600)
+        _ = detector.observe([MuseCodeSessionModelObservation(sessionId: "s1", modelId: contributorModel,
+                                                              observedAt: stale)])
+        XCTAssertEqual(detector.lastKnownModels.count, 1)
+        _ = detector.observe([])
+        XCTAssertEqual(detector.lastKnownModels.count, 0,
+                       "an idle poll still advances expiry against the wall clock")
+    }
+
+    func testUnstampedLegacySessionsEvictBeforeStampedOnesAtCap() throws {
+        let legacy = try JSONSerialization.data(withJSONObject: ["lastKnownModels": ["old": standardModel]])
+        var detector = try JSONDecoder().decode(MuseCodeStandardSessionDetector.self, from: legacy)
+        for i in 0..<MuseCodeStandardSessionDetector.maxTrackedSessions {
+            _ = detector.observe([observation("s\(i)", contributorModel, at: TimeInterval(i + 1))])
+        }
+        XCTAssertEqual(detector.lastKnownModels.count, MuseCodeStandardSessionDetector.maxTrackedSessions)
+        XCTAssertNil(detector.lastKnownModels["old"],
+                     "the unstamped legacy session sorts oldest and is evicted first")
+        XCTAssertNotNil(detector.lastKnownModels["s0"])
+    }
+
     func testLegacyPersistedStateWithoutTimestampsStillDecodes() throws {
         let legacy = try JSONSerialization.data(withJSONObject: ["lastKnownModels": ["s1": standardModel]])
         let detector = try JSONDecoder().decode(MuseCodeStandardSessionDetector.self, from: legacy)

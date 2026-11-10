@@ -145,6 +145,7 @@ public struct MuseCodeStandardSessionDetector: Codable, Equatable, Sendable {
         evictExpiredSessions(relativeTo: observations.map(\.observedAt).max())
         var events: [MuseCodeStandardSessionEvent] = []
         for observation in observations {
+            lastObservedAt[observation.sessionId] = observation.observedAt
             guard let modelId = observation.modelId, !modelId.isEmpty else { continue }
             let previous = lastKnownModels[observation.sessionId]
             let wasContributor = previous.map { Self.isContributor(modelId: $0) } ?? false
@@ -154,7 +155,6 @@ public struct MuseCodeStandardSessionDetector: Codable, Equatable, Sendable {
                     observedAt: observation.observedAt))
             }
             lastKnownModels[observation.sessionId] = modelId
-            lastObservedAt[observation.sessionId] = observation.observedAt
         }
         trimToCap()
         return events
@@ -162,10 +162,10 @@ public struct MuseCodeStandardSessionDetector: Codable, Equatable, Sendable {
 
     /// Drops sessions whose last observation is older than the TTL.  Runs
     /// before the poll so an evicted session that returns fires once as
-    /// first-observed, which a day-long absence warrants.
+    /// first-observed, which a day-long absence warrants.  An empty poll
+    /// falls back to the wall clock so idle periods still advance expiry.
     private mutating func evictExpiredSessions(relativeTo newest: Date?) {
-        guard let newest else { return }
-        let cutoff = newest.addingTimeInterval(-Self.sessionStateTTL)
+        let cutoff = (newest ?? Date()).addingTimeInterval(-Self.sessionStateTTL)
         for (sessionId, observedAt) in lastObservedAt where observedAt < cutoff {
             lastKnownModels.removeValue(forKey: sessionId)
             lastObservedAt.removeValue(forKey: sessionId)
@@ -173,12 +173,14 @@ public struct MuseCodeStandardSessionDetector: Codable, Equatable, Sendable {
     }
 
     /// Trims the state to the cap by evicting the least recently observed.
-    /// Unstamped legacy sessions sort newest, so they are evicted last.
+    /// Sessions without a liveness stamp predate the stamp field: any session
+    /// still live after the first poll of this version has been stamped, so
+    /// an unstamped entry is stale and sorts oldest, evicted first.
     private mutating func trimToCap() {
         guard lastKnownModels.count > Self.maxTrackedSessions else { return }
         let overflow = lastKnownModels.count - Self.maxTrackedSessions
         let oldest = lastKnownModels.keys.sorted {
-            (lastObservedAt[$0] ?? .distantFuture) < (lastObservedAt[$1] ?? .distantFuture)
+            (lastObservedAt[$0] ?? .distantPast) < (lastObservedAt[$1] ?? .distantPast)
         }.prefix(overflow)
         for sessionId in oldest {
             lastKnownModels.removeValue(forKey: sessionId)
