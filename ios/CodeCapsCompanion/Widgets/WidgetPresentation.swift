@@ -523,17 +523,15 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
         // The fallback slot answers to the pairing rule, not just to
         // visibility:  a dead or uninformative window never pairs beside a
         // live meter.
-        // Window ids can repeat across sources, so the map uniqués instead of
-        // trapping:  the live reading wins, the dead copy falls away.
-        let candidatesById = Dictionary(
-            candidates.map { ($0.id, $0) },
-            uniquingKeysWith: { first, second in first.isLive ? first : second })
         guard let window2 = ordered.first(where: { item -> Bool in
-            guard item.id != window1.id, !excludedIds.contains(item.id),
-                  let candidate = candidatesById[item.id],
-                  candidate.isLive,
-                  item.remainingPercent != nil || item.resetAt != nil else { return false }
-            return true
+            guard item.id != window1.id, !excludedIds.contains(item.id) else { return false }
+            // Liveness is judged on this very item, not on a same-id
+            // candidate from another source:  a stale meter must not ride in
+            // on a live duplicate's liveness.
+            if QuotaFreshnessRule.isDeadCopy(observedAt: item.observedAt,
+                                             resetAt: item.resetAt,
+                                             now: now) { return false }
+            return item.remainingPercent != nil || item.resetAt != nil
         }) else { return nil }
         if QuotaMeterCadence.isShort(
             windowToken: window1.rawWindowToken,
