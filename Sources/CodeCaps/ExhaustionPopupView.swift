@@ -165,6 +165,9 @@ final class ExhaustionPopupController {
             NSEvent.removeMonitor(escapeMonitor)
         }
         expireTask?.cancel()
-        panel?.orderOut(nil)
+        let closingPanel = panel
+        Task { @MainActor in
+            closingPanel?.orderOut(nil)
+        }
     }
 }
