@@ -600,8 +600,15 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
                                peerRows: [DisplaySection] = []) -> [QuotaWindowSnapshot] {
         guard issue == nil else { return [] }
         let own = row.section.windows
-            .filter { !$0.window.isSupplementaryVideoQuota && !row.isMasked($0)
-                && !disabledSources.contains($0.window.source ?? "") }
+            .filter { snapshot in
+                // Split into named statements:  the combined expression
+                // outran the type-checker's budget on the hosted runner
+                // while the same code compiled on a local Mac.
+                let window = snapshot.window
+                if window.isSupplementaryVideoQuota { return false }
+                if row.isMasked(snapshot) { return false }
+                return !disabledSources.contains(window.source ?? "")
+            }
             .map { QuotaWindowSnapshot(window: $0.window, now: now) }
             // A live period with a bounded percentage is drawable however old
             // its observation is:  the Muse collectors restate their windows
