@@ -219,6 +219,7 @@ enum Theme {
         // still not enough, and at 45%/55% it was still a grey.
         ? dyn(NSColor.black.withAlphaComponent(0.72), NSColor.white.withAlphaComponent(0.85))
         : dyn(NSColor.black.withAlphaComponent(0.12), NSColor.white.withAlphaComponent(0.18))
+    }
     /// The elapsed-time marker on a quota bar.  Black on the light surface and
     /// white on the dark one, so it reads against both the red and green segments.
     static let pacingMarker = dyn(NSColor.black, NSColor.white)
@@ -246,6 +247,7 @@ enum Theme {
     static var track: Color { highContrast
         ? dyn(NSColor.black.withAlphaComponent(0.55), NSColor.white.withAlphaComponent(0.62))
         : dyn(NSColor.black.withAlphaComponent(0.08), NSColor.white.withAlphaComponent(0.14))
+    }
 
     /// Fill behind a selected or highlighted row.
     ///
@@ -264,18 +266,21 @@ enum Theme {
     static var controlBorder: Color { highContrast
         ? dyn(NSColor.black.withAlphaComponent(0.92), NSColor.white.withAlphaComponent(0.95))
         : dyn(NSColor.black.withAlphaComponent(0.16), NSColor.white.withAlphaComponent(0.22))
+    }
 
     /// The filled track a segmented control sits on, so an unselected segment
     /// reads as "not chosen" rather than as an outlined box.  Owner 2026-10-10.
     static var controlTrack: Color { highContrast
         ? dyn(NSColor.black.withAlphaComponent(0.10), NSColor.white.withAlphaComponent(0.16))
         : dyn(NSColor.black.withAlphaComponent(0.06), NSColor.white.withAlphaComponent(0.10))
+    }
 
     /// A control that is present but off, such as an unchecked row bell:
     /// visible enough to find, quiet enough not to read as a setting.
     static var faint: Color { highContrast
         ? dyn(NSColor.black.withAlphaComponent(0.88), NSColor.white.withAlphaComponent(0.92))
         : dyn(NSColor.black.withAlphaComponent(0.26), NSColor.white.withAlphaComponent(0.30))
+    }
 
     /// The band behind a source's heading in From Fleet: darker than the list
     /// background in both appearances, so each source reads as a section.
@@ -347,6 +352,7 @@ enum Theme {
     static var sliderTrack: Color { highContrast
         ? dyn(NSColor.black.withAlphaComponent(0.45), NSColor.white.withAlphaComponent(0.55))
         : dyn(NSColor.black.withAlphaComponent(0.20), NSColor.white.withAlphaComponent(0.28))
+    }
 
     /// The accent the owner chose, resolved against the current appearance.
     private static var accentColor: Color {
