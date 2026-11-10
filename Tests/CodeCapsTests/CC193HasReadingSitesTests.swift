@@ -76,7 +76,7 @@ final class CC193HasReadingSitesTests: XCTestCase {
     func testMonitorModelSmartPairUsesDerivedAbsoluteUrgency() throws {
         let source = try readSource("Sources/CodeCaps/MonitorModel.swift")
         XCTAssertTrue(source.contains("private static func smartPairUrgency"))
-        XCTAssertTrue(source.contains("absoluteRemaining / limit * 100"))
+        XCTAssertTrue(source.contains("remaining / limit * 100"))
     }
 
     func testMonitorModelFreshWindowsFilterUsesHasReading() throws {

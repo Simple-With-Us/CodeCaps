@@ -378,3 +378,74 @@ public enum QuotaCardProjection {
         }
     }
 }
+
+// MARK: - Companion provider routing (iOS widgets + phone)
+
+/// Canonical provider keys for companion/widget wire parsing.  Mirrors
+/// `QuotaProviders.canonicalKey` on the Mac host so the two surfaces agree on
+/// xAI vs Grok vs Grok Bot.
+public enum CompanionProviderRouting {
+    public static func canonicalKey(provider: String, providerKey: String?, via: String?) -> String {
+        if let viaLower = via?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !viaLower.isEmpty {
+            if viaLower == "antigravity" { return "google-antigravity" }
+            if viaLower == "assist" || viaLower == "assistant" { return "muse-assist" }
+            if viaLower == "code" { return "muse-code" }
+        }
+        let preferred = providerKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let raw = (preferred.isEmpty ? provider : preferred).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let aliases: [String: String] = [
+            "anthropic": "anthropic", "claude": "anthropic", "claude-code": "anthropic", "claude.ai": "anthropic",
+            "openai": "openai", "openai-codex": "openai", "codex": "openai",
+            "google": "google-antigravity", "google-antigravity": "google-antigravity", "antigravity": "google-antigravity",
+            "antigravity-cli": "google-antigravity", "gemini": "google-antigravity",
+            "cursor": "cursor",
+            "xai": "xai", "x-ai": "xai", "grok-build": "xai",
+            "grok": "grok", "grok-cli": "grok",
+            "grok-bot": "grok-bot", "grok bot": "grok-bot", "grokbot": "grok-bot",
+            "minimax": "minimax", "minimax-code": "minimax",
+            "muse-assist": "muse-assist", "muse assist": "muse-assist", "muse_assist": "muse-assist",
+            "muse-assistant": "muse-assist", "muse assistant": "muse-assist",
+            "muse-code": "muse-code", "muse code": "muse-code", "muse_code": "muse-code",
+            "muse": "muse-assist", "muse-cli": "muse-assist", "muse-sdk": "muse-assist",
+            "kimi": "kimi", "moonshot": "kimi", "moonshot-ai": "kimi",
+            "zcode": "zcode", "z.ai": "zcode", "z-ai": "zcode", "zai": "zcode", "glm": "zcode", "glm-coding": "zcode",
+            "gemini-cli": "gemini-cli",
+            "copilot": "github-copilot", "github-copilot": "github-copilot", "github_copilot": "github-copilot",
+            "windsurf": "windsurf", "codeium": "windsurf",
+        ]
+        return aliases[raw] ?? raw
+    }
+}
+
+/// Bundled `provider-*` asset names for the iOS companion catalog.
+public enum CompanionProviderMarkAssets {
+    public static func catalogAssetName(providerKey: String, itemId: String? = nil) -> String? {
+        let low = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let pool = (itemId ?? "").lowercased()
+        if low.contains("antigravity") && pool.contains("gemini") { return "provider-gemini" }
+        if low.contains("antigravity") && pool.contains("third-party") { return "provider-antigravity" }
+        if low.contains("claude") || low.contains("anthropic") { return "provider-claude" }
+        if low.contains("openai") || low.contains("codex") { return "provider-openai" }
+        if low.contains("cursor") { return "provider-cursor" }
+        if low.contains("minimax") { return "provider-minimax" }
+        if low.contains("kimi") { return "provider-kimi" }
+        if ["zcode", "z.ai", "z-ai", "zai"].contains(where: { low.contains($0) }) { return "provider-zai" }
+        if low.contains("copilot") || pool.contains("copilot") { return "provider-copilot" }
+        if low.contains("muse-assist") || low.contains("muse_assist") { return "provider-muse-assist" }
+        if low.contains("muse-code") || low.contains("muse_code") { return "provider-muse-code" }
+        if low.contains("muse") { return "provider-muse-assist" }
+        if low.contains("antigravity") { return "provider-antigravity" }
+        if low.contains("gemini") { return "provider-gemini" }
+
+        switch CompanionProviderRouting.canonicalKey(provider: providerKey, providerKey: providerKey, via: nil) {
+        case "grok-bot": return "provider-grok-bot"
+        case "xai": return "provider-xai"
+        case "grok": return "provider-grok"
+        default:
+            if low.contains("grok-bot") { return "provider-grok-bot" }
+            if low.contains("xai") { return "provider-xai" }
+            if low.contains("grok") { return "provider-grok" }
+            return nil
+        }
+    }
+}
