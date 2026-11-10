@@ -10,8 +10,23 @@ private final class SpyAlertChannel: CodeCapsAlertChannel {
 
 @MainActor
 final class MuseCodePluginTests: XCTestCase {
+    private static var repoRoot: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
+
     private var suiteName = ""
     private var defaults: UserDefaults!
+
+    func testBothMuseAlertsStayVisibleTogether() throws {
+        let source = try String(
+            contentsOf: Self.repoRoot.appendingPathComponent("Sources/CodeCaps/MuseCodePluginView.swift"),
+            encoding: .utf8)
+        XCTAssertFalse(source.contains("} else if let alert = model.museCodeStandardSessionAlert"),
+                       "the standard-session alert must not hide behind a burn alert; both stay visible")
+    }
 
     override func setUp() {
         super.setUp()
