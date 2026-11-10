@@ -181,6 +181,43 @@ final class MuseCodeSessionReaderTests: XCTestCase {
         XCTAssertEqual(observation?.segmentKey, "a3")
     }
 
+    func testReaderServesUnchangedSnapshotsFromParseCache() throws {
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        try writeSnapshot(home: home, session: "session-a", name: "snapshot-1.json",
+                          usage: usage(model: "muse-spark-1.3-contributor", tokens: 2_000, first: "a1", last: "b1"),
+                          modified: now.addingTimeInterval(-10 * 60))
+        let cache = MuseCodeSessionReader.snapshotSegmentCache
+        cache.reset()
+        let reader = MuseCodeSessionReader(homeDirectory: home, now: { self.now })
+        _ = reader.read()
+        let missesAfterFirst = cache.stats().misses
+        XCTAssertGreaterThan(missesAfterFirst, 0)
+        let again = reader.read()
+        XCTAssertEqual(cache.stats().misses, missesAfterFirst,
+                       "a second read of an unchanged store parses nothing again")
+        XCTAssertNil(again.issue)
+    }
+
+    func testReaderReparsesASnapshotRewrittenInPlace() throws {
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        try writeSnapshot(home: home, session: "session-a", name: "snapshot-1.json",
+                          usage: usage(model: "muse-spark-1.3-contributor", tokens: 2_000, first: "a1", last: "b1"),
+                          modified: now.addingTimeInterval(-10 * 60))
+        let cache = MuseCodeSessionReader.snapshotSegmentCache
+        cache.reset()
+        let reader = MuseCodeSessionReader(homeDirectory: home, now: { self.now })
+        let first = try XCTUnwrap(reader.read().report)
+        XCTAssertEqual(first.window(minutes: 90)?.totalTokens, 2_000)
+        try writeSnapshot(home: home, session: "session-a", name: "snapshot-1.json",
+                          usage: usage(model: "muse-spark-1.3-contributor", tokens: 5_000, first: "a1", last: "b1"),
+                          modified: now.addingTimeInterval(-5 * 60))
+        let second = try XCTUnwrap(reader.read().report)
+        XCTAssertEqual(second.window(minutes: 90)?.totalTokens, 5_000,
+                       "a rewritten snapshot has a new cache key, so the new content is parsed")
+    }
+
     func testCurrentModelUsesNullHeadWithoutBackfillingAndPreservesHistoricalUsage() throws {
         let home = try makeHome()
         defer { try? FileManager.default.removeItem(at: home) }

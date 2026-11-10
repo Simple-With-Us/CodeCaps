@@ -171,6 +171,51 @@ public struct MuseCodeSessionResult: Equatable, Sendable {
 /// snapshot files directly (the newest snapshot in a directory is the one
 /// HEAD.json names), which covers both the latest-segment and the
 /// segment-summed views the fleet's surveys validated.
+/// A process-wide parse cache for snapshot segments.  The session stores
+/// write each snapshot once and rotate by replacement, so (path, mtime, size)
+/// pins the content: an unchanged snapshot never needs a second read and
+/// parse across the one-minute refresh cycles.
+final class MuseCodeSnapshotSegmentCache: @unchecked Sendable {
+    private let lock = NSLock()
+    private var entries: [String: MuseCodeTokenSegment] = [:]
+    private let cap = 8_192
+    private var hits = 0
+    private var misses = 0
+
+    func segment(sessionId: String, url: URL, modified: Date, size: Int,
+                 parse: () -> MuseCodeTokenSegment?) -> MuseCodeTokenSegment? {
+        let key = url.path + "|" + String(modified.timeIntervalSince1970) + "|" + String(size)
+        lock.lock()
+        if let cached = entries[key] {
+            hits += 1
+            lock.unlock()
+            return cached
+        }
+        misses += 1
+        lock.unlock()
+        guard let parsed = parse() else { return nil }
+        lock.lock()
+        if entries.count >= cap { entries.removeAll(keepingCapacity: true) }
+        entries[key] = parsed
+        lock.unlock()
+        return parsed
+    }
+
+    func reset() {
+        lock.lock()
+        entries.removeAll()
+        hits = 0
+        misses = 0
+        lock.unlock()
+    }
+
+    func stats() -> (hits: Int, misses: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (hits, misses)
+    }
+}
+
 public struct MuseCodeSessionReader: Sendable {
     public static let storeRelativePath = ".local/share/muse/sessions/.msp-view-g6"
     public static let windowMinutes = [60, 90]
@@ -179,6 +224,9 @@ public struct MuseCodeSessionReader: Sendable {
     private static let maxSnapshotsPerSession = 512
     private static let maxSnapshotBytes = 33_554_432
     private static let futureTolerance: TimeInterval = 120
+
+    /// Shared across readers so the one-minute refresh reuses parses.
+    static let snapshotSegmentCache = MuseCodeSnapshotSegmentCache()
 
     private let homeDirectory: URL
     private let now: @Sendable () -> Date
@@ -324,6 +372,12 @@ public struct MuseCodeSessionReader: Sendable {
     }
 
     private static func segment(sessionId: String, url: URL, modified: Date, size: Int) -> MuseCodeTokenSegment? {
+        snapshotSegmentCache.segment(sessionId: sessionId, url: url, modified: modified, size: size) {
+            parseSegment(sessionId: sessionId, url: url, modified: modified, size: size)
+        }
+    }
+
+    private static func parseSegment(sessionId: String, url: URL, modified: Date, size: Int) -> MuseCodeTokenSegment? {
         guard size > 0, size <= maxSnapshotBytes,
               let data = try? Data(contentsOf: url),
               let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
