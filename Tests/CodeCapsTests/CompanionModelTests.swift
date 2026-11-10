@@ -164,14 +164,20 @@ final class CompanionModelTests: XCTestCase {
     /// lands in the monochrome list: the catalog carries colour vectors with
     /// dark appearances, so both render in colour and stay legible (CC-212).
     func testCompanionMapsKimiAndZAIProviderAliasesToLogos() throws {
+        // CC-224 moved the provider-to-mark routing into the shared
+        // `CompanionProviderMarkAssets.catalogAssetName`, so both the companion
+        // model and the widgets pin against that single mapping now.
+        let displaySource = try String(contentsOf: URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/QuotaCore/WidgetPlatformDisplay.swift"), encoding: .utf8)
+        XCTAssertTrue(displaySource.contains(#"if low.contains("kimi") { return "provider-kimi" }"#))
+        XCTAssertTrue(displaySource.contains(#"["zcode", "z.ai", "z-ai", "zai"].contains(where: { low.contains($0) }) { return "provider-zai" }"#))
         let source = try readCompanionModelSource()
-        XCTAssertTrue(source.contains(#"if key.contains("kimi") { return "provider-kimi" }"#))
-        XCTAssertTrue(source.contains(#"["zcode", "z.ai", "z-ai", "zai"].contains(where: { key.contains($0) }) { return "provider-zai" }"#))
+        XCTAssertTrue(source.contains("CompanionProviderMarkAssets.catalogAssetName"))
         let widgets = try String(contentsOf: URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("ios/CodeCapsCompanion/Widgets/WidgetViews.swift"), encoding: .utf8)
-        XCTAssertTrue(widgets.contains(#"if low.contains("kimi") { return "provider-kimi" }"#))
-        XCTAssertTrue(widgets.contains(#"["zcode", "z.ai", "z-ai", "zai"].contains(where: { low.contains($0) }) { return "provider-zai" }"#))
+        XCTAssertTrue(widgets.contains("CompanionProviderMarkAssets.catalogAssetName"))
         let view = try String(contentsOf: URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("ios/CodeCapsCompanion/App/Views/CompanionContentView.swift"), encoding: .utf8)

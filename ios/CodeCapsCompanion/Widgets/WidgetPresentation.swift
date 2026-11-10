@@ -961,7 +961,7 @@ public enum WidgetPresentation {
         let manifestKeys: [String] = manifest.isEmpty
             ? platformKeyOrder
             : manifest.compactMap { group in
-                let key = canonicalManifestKey(provider: group.provider, via: group.via)
+                let key = canonicalManifestKey(provider: group.provider, providerKey: group.providerKey, via: group.via)
                 return key.isEmpty ? nil : key
             }
 
@@ -1482,7 +1482,7 @@ public enum WidgetPresentation {
         // substring — so unrelated windows can never collapse onto one entry.)
         if let manifest,
            let group = manifest.first(where: {
-               canonicalManifestKey(provider: $0.provider, via: $0.via) == legacy.key
+               canonicalManifestKey(provider: $0.provider, providerKey: $0.providerKey, via: $0.via) == legacy.key
            }) {
             let label = group.providerLabel.trimmingCharacters(in: .whitespacesAndNewlines)
             let title = WidgetPlatformDisplay.title(
@@ -1536,10 +1536,16 @@ public enum WidgetPresentation {
         if pKey.contains("cursor") || prov.contains("cursor") {
             return ("cursor", "Cursor", "cursor")
         }
-        if pKey.contains("grok") || prov.contains("grok") || pKey.contains("xai") || prov.contains("xai") {
-            return ("xai", "Grok", "xai")
+        let canonical = CompanionProviderRouting.canonicalKey(
+            provider: raw.provider, providerKey: raw.providerKey, via: raw.via)
+        if canonical == "xai" {
+            return ("xai", WidgetPlatformDisplay.title(canonicalKey: "xai", wireProvider: raw.provider), "xai")
         }
-        let fallbackKey = canonicalManifestKey(provider: raw.providerKey ?? raw.provider, via: raw.via)
+        if canonical == "grok" {
+            return ("grok", WidgetPlatformDisplay.title(canonicalKey: "grok", wireProvider: raw.provider), "grok")
+        }
+        let fallbackKey = canonicalManifestKey(
+            provider: raw.provider, providerKey: raw.providerKey, via: raw.via)
         let key = fallbackKey.isEmpty ? "other" : fallbackKey
         let title = WidgetPlatformDisplay.title(canonicalKey: key, wireProvider: raw.provider)
         return (key, title, fallbackKey.isEmpty ? key : fallbackKey)
@@ -1547,37 +1553,24 @@ public enum WidgetPresentation {
 
     /// Mirror of `QuotaProviders.canonicalKey` for the wire manifest.  Kept
     /// local because the widget bundle cannot import the Mac-side helpers.
-    static func canonicalManifestKey(provider: String, via: String?) -> String {
-        let trimmedVia = via?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-        if trimmedVia == "antigravity" { return "google-antigravity" }
-        let raw = provider.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let aliases: [String: String] = [
-            "anthropic": "anthropic", "claude": "anthropic", "claude-code": "anthropic", "claude.ai": "anthropic",
-            "openai": "openai", "openai-codex": "openai", "codex": "openai",
-            "google": "google-antigravity", "google-antigravity": "google-antigravity", "antigravity": "google-antigravity", "antigravity-cli": "google-antigravity", "gemini": "google-antigravity",
-            "cursor": "cursor",
-            "xai": "xai", "grok": "xai", "grok-build": "xai",
-            "grok-bot": "grok-bot", "grok bot": "grok-bot", "grokbot": "grok-bot",
-            "minimax": "minimax", "minimax-code": "minimax",
-            "kimi": "kimi", "moonshot": "kimi", "moonshot-ai": "kimi",
-            "zcode": "zcode", "z.ai": "zcode", "z-ai": "zcode", "zai": "zcode", "glm": "zcode", "glm-coding": "zcode",
-            "gemini-cli": "gemini-cli",
-            "copilot": "github-copilot", "github-copilot": "github-copilot", "github_copilot": "github-copilot",
-            "windsurf": "windsurf", "codeium": "windsurf",
-        ]
-        return aliases[raw] ?? raw
+    static func canonicalManifestKey(provider: String, providerKey: String? = nil, via: String?) -> String {
+        CompanionProviderRouting.canonicalKey(provider: provider, providerKey: providerKey, via: via)
     }
 
     /// The manifest's `iconHint` for the canonicalized key, if any.
     private static func iconHint(for canonicalKey: String, in manifest: [WireProviderGroup]?) -> String? {
         guard let manifest else { return nil }
-        return manifest.first { canonicalManifestKey(provider: $0.provider, via: $0.via) == canonicalKey }?.iconHint
+        return manifest.first {
+            canonicalManifestKey(provider: $0.provider, providerKey: $0.providerKey, via: $0.via) == canonicalKey
+        }?.iconHint
     }
 
     /// The manifest's `terms.defaultWindowLabel` for the canonicalized key.
     private static func defaultWindowLabel(for canonicalKey: String, in manifest: [WireProviderGroup]?) -> String? {
         guard let manifest else { return nil }
-        return manifest.first { canonicalManifestKey(provider: $0.provider, via: $0.via) == canonicalKey }?.terms?.defaultWindowLabel
+        return manifest.first {
+            canonicalManifestKey(provider: $0.provider, providerKey: $0.providerKey, via: $0.via) == canonicalKey
+        }?.terms?.defaultWindowLabel
     }
 
     public static func formatCadence(_ label: String, window: String? = nil, resetAt: Date? = nil) -> String {
