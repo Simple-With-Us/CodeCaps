@@ -472,6 +472,8 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
             (window.isExtraAllowance && window.remainingPercent == nil)
                 || window.isSupplementaryVideoQuota
                 || window.isModelDetail
+                || QuotaCapRule.isSubModelLimit(
+                    providerKey: providerKey, id: window.id, label: window.label)
                 || QuotaCapRule.isScopedPoolAllowance(
                     providerKey: providerKey, id: window.id, label: window.label)
         }.map(\.id))
@@ -493,6 +495,8 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
                 isExcluded: (window.isExtraAllowance && window.remainingPercent == nil)
                     || window.isSupplementaryVideoQuota
                     || window.isModelDetail
+                    || QuotaCapRule.isSubModelLimit(
+                        providerKey: providerKey, id: window.id, label: window.label)
                     || QuotaCapRule.isScopedPoolAllowance(
                         providerKey: providerKey, id: window.id, label: window.label),
                 // A reading of a period that has ended never takes a slot from
@@ -516,7 +520,17 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
             if ls != rs { return ls < rs }
             return left.id < right.id
         }
-        guard let window2 = ordered.first(where: { $0.id != window1.id && !excludedIds.contains($0.id) }) else { return nil }
+        // The fallback slot answers to the pairing rule, not just to
+        // visibility:  a dead or uninformative window never pairs beside a
+        // live meter.
+        let candidatesById = Dictionary(uniqueKeysWithValues: candidates.map { ($0.id, $0) })
+        guard let window2 = ordered.first(where: { item -> Bool in
+            guard item.id != window1.id, !excludedIds.contains(item.id),
+                  let candidate = candidatesById[item.id],
+                  candidate.isLive,
+                  item.remainingPercent != nil || item.resetAt != nil else { return false }
+            return true
+        }) else { return nil }
         if QuotaMeterCadence.isShort(
             windowToken: window1.rawWindowToken,
             label: window1.wireLabel ?? window1.label,

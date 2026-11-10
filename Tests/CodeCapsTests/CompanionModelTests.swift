@@ -850,8 +850,8 @@ final class CompanionModelTests: XCTestCase {
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Sources/QuotaCore/QuotaMeterCadence.swift"), encoding: .utf8)
         XCTAssertTrue(
-            cadenceSource.contains(#"text.contains("coding plan")"#)
-                && cadenceSource.contains(#"text.contains("interval")"#),
+            cadenceSource.contains(#""coding plan""#)
+                && cadenceSource.contains(#""interval""#),
             "the shared short/long rule must classify MiniMax coding plan as 5h short cadence"
         )
     }

@@ -36,28 +36,43 @@ public enum QuotaMeterCadence {
         // The wording signal is read the way the companion always read it:
         // first the cadence (or, bare, the label), then the label itself, so
         // a formatted cadence that lost the interval wording ("1-day" for
-        // "general (interval window)") still finds it (CC-223).  A generic
-        // display label such as "Quota" never classifies on its own when the
-        // cadence already spoke.
+        // "general (interval window)") still finds it (CC-223).  The short
+        // signals are asked before the long ones so a generic cadence word
+        // ("Quota", "org") next to a short wording cannot overrule it, and
+        // duration tokens only count at a word boundary:  "4h" must not
+        // match inside "24h".
         let primary = (cadence.isEmpty ? label : cadence).lowercased()
         let secondary = label.lowercased()
+        let shortSignals = ["5h", "5-hour", "5 hour", "five_hour", "4h", "4-hour",
+                            "4 hour", "four_hour", "session", "fast",
+                            "coding plan", "coding_plan", "interval"]
+        let longSignals = ["7d", "1w", "weekly", "month", "billing", "cycle",
+                           "30d", "1m", "org", "quota"]
+        func hasToken(_ text: String, _ needle: String) -> Bool {
+            var searchRange = text.startIndex..<text.endIndex
+            while let found = text.range(of: needle, range: searchRange) {
+                if found.lowerBound == text.startIndex
+                    || !isDigit(text[text.index(before: found.lowerBound)])
+                {
+                    return true
+                }
+                searchRange = found.upperBound..<text.endIndex
+            }
+            return false
+        }
         for text in [primary, secondary] {
-            if text.contains("7d") || text.contains("1w") || text.contains("weekly")
-                || text.contains("month") || text.contains("billing")
-                || text.contains("cycle") || text.contains("30d")
-                || text.contains("1m") || text.contains("org") || text.contains("quota")
-            {
-                return false
+            let shortHit = shortSignals.contains { needle in
+                ["5h", "4h"].contains(needle)
+                    ? hasToken(text, needle) : text.contains(needle)
             }
-            if text.contains("5h") || text.contains("5-hour") || text.contains("5 hour")
-                || text.contains("five_hour") || text.contains("4h")
-                || text.contains("4-hour") || text.contains("4 hour")
-                || text.contains("four_hour") || text.contains("session")
-                || text.contains("fast") || text.contains("coding plan")
-                || text.contains("coding_plan") || text.contains("interval")
-            {
-                return true
+            if shortHit { return true }
+        }
+        for text in [primary, secondary] {
+            let longHit = longSignals.contains { needle in
+                ["7d", "1w", "30d", "1m"].contains(needle)
+                    ? hasToken(text, needle) : text.contains(needle)
             }
+            if longHit { return false }
         }
         if primary.contains("plan") || secondary.contains("plan") { return false }
 
@@ -74,6 +89,10 @@ public enum QuotaMeterCadence {
             return resetAt.timeIntervalSince(now) < 86_400
         }
         return false
+    }
+
+    private static func isDigit(_ character: Character) -> Bool {
+        character.isNumber && character.isASCII
     }
 
     /// Reads a duration token such as `5h`, `300m`, `168h`, or `1w` into seconds.

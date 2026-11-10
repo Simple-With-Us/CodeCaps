@@ -26,7 +26,7 @@
 		238EE47D0BA13D2064CE6DE6 /* alarm-tink.wav in Resources */ = {isa = PBXBuildFile; fileRef = 4FE56A36DCE8762AD17C6776 /* alarm-tink.wav */; };
 		2440D143F835BAD99240BE8D /* CompanionContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84C4C2C5DC3AA20234129F15 /* CompanionContentView.swift */; };
 		28EECA14D0CD8CE69B1250B6 /* QuotaWindowVocabulary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B93F39BFE99C5CA6EB141F5 /* QuotaWindowVocabulary.swift */; };
-		29DBF5AEFF65BA4C833F7D27 /* QuotaWindowPairing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D26851E2C6B60002FEF802A /* QuotaWindowPairing.swift */; };
+		297F6F2618C98F60AD28D50A /* QuotaMeterCadence.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21D8165F7982A1B6B6F0042E /* QuotaMeterCadence.swift */; };
 		2AA3DE1AA8DD20DD5AD6E403 /* WidgetViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A40D20353A8D6C1D9E9D349 /* WidgetViews.swift */; };
 		2C6E0A604B75661E791BC591 /* PlanMetadata.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCE1563220EAF648835B1290 /* PlanMetadata.swift */; };
 		2CA370B5E2149BEA3FCB3F6C /* CodeCapsCompanionApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34CE8BC7DF9DCF088BF1B805 /* CodeCapsCompanionApp.swift */; };
@@ -39,12 +39,12 @@
 		3C07D53C4EFEE8F91EEDDEC7 /* ResetAlarmCadence.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B76200EBE871E29BAC8A41B /* ResetAlarmCadence.swift */; };
 		40671F4102901DEC3F71D17D /* WidgetDetailIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBEA6F1A4CFAF2D12556922F /* WidgetDetailIntent.swift */; };
 		41F6AE401AE48C11EDDA4B80 /* SentryTelemetry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50C98744F4C98CE0C6227834 /* SentryTelemetry.swift */; };
+		44E8B963FDFA1A2C29E31EF6 /* QuotaWindowPairing.swift in Sources */ = {isa = PBXBuildFile; fileRef = D40CE779F10AFED5E4B3E9F5 /* QuotaWindowPairing.swift */; };
 		4A84751C143F11619F941B8C /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = 897AB651A949F8B5454F5C3C /* Sentry */; };
 		4BBB6BFF85C4F547B32A3035 /* QuotaWindowCaption.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CCA8CD80D52183E869EAE7A /* QuotaWindowCaption.swift */; };
 		4D9258D010AD16F059277D93 /* alarm-submarine.wav in Resources */ = {isa = PBXBuildFile; fileRef = 5F63EE805947E5707E2A0C3F /* alarm-submarine.wav */; };
 		4F76A47C0A1C84A3525F004C /* CompanionReadTokenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7E7C693CD5357E0391881F0 /* CompanionReadTokenStore.swift */; };
 		500162E6C6D0CFA94D715BD0 /* FleetSourceDisagreement.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4A7E538557D6D936242BE41 /* FleetSourceDisagreement.swift */; };
-		522E85F841B0432CA37CB876 /* QuotaWindowPairing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D26851E2C6B60002FEF802A /* QuotaWindowPairing.swift */; };
 		55B1F0DECD506D0BACFFBBB7 /* RemotePushRegistration.swift in Sources */ = {isa = PBXBuildFile; fileRef = A736FD344F79D520A16227B3 /* RemotePushRegistration.swift */; };
 		5EF6E3804FDCF37670BB45C0 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = 07191D727884C7621506D926 /* Sentry */; };
 		5F3672AB2884F3895C3B312B /* QuotaMeterCadence.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21D8165F7982A1B6B6F0042E /* QuotaMeterCadence.swift */; };
@@ -63,7 +63,8 @@
 		80AFBDA4491ADD0F917DEF11 /* FleetSourceDisagreement.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4A7E538557D6D936242BE41 /* FleetSourceDisagreement.swift */; };
 		831B4D460D912E65E3D869D3 /* ResetAlarmSound.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89A5807594DFD989CADCC6F2 /* ResetAlarmSound.swift */; };
 		8A473847ACFCA158CD1E9386 /* QuotaWindowVocabulary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B93F39BFE99C5CA6EB141F5 /* QuotaWindowVocabulary.swift */; };
-		8A912299E4F7AFC88E6CBE98 /* QuotaWindowPairing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D26851E2C6B60002FEF802A /* QuotaWindowPairing.swift */; };
+		9245DCDAE6AB1BD7AD265114 /* QuotaWindowPairing.swift in Sources */ = {isa = PBXBuildFile; fileRef = D40CE779F10AFED5E4B3E9F5 /* QuotaWindowPairing.swift */; };
+		9367E4E6A5BA9F6B4083C888 /* QuotaWindowPairing.swift in Sources */ = {isa = PBXBuildFile; fileRef = D40CE779F10AFED5E4B3E9F5 /* QuotaWindowPairing.swift */; };
 		99A788DAEA41B4AB83A93501 /* CodeCapsCompanionApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34CE8BC7DF9DCF088BF1B805 /* CodeCapsCompanionApp.swift */; };
 		99E4B46415A2BCB252FAA6C0 /* ResetAlarmMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5ECFD3E9DC2728ACB5FB5488 /* ResetAlarmMessage.swift */; };
 		9D45AEE111E1DDB76D82DC47 /* PlanMetadata.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCE1563220EAF648835B1290 /* PlanMetadata.swift */; };
@@ -84,11 +85,12 @@
 		C7498C0ACDD5320564DE32B0 /* WidgetPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 716F800EA9DEDFC597BD08BB /* WidgetPresentation.swift */; };
 		CADE19D9C4D7A21C22D894AC /* UsageAlertPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9E8877EA13789E3986BFEF9 /* UsageAlertPreferences.swift */; };
 		CBA4A987CB8B7B3813356509 /* WidgetDetailIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBEA6F1A4CFAF2D12556922F /* WidgetDetailIntent.swift */; };
+		D17D45E570A965FBC2018BAF /* QuotaMeterCadence.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21D8165F7982A1B6B6F0042E /* QuotaMeterCadence.swift */; };
 		D3C30EA2E4A6B59A22E086DB /* WidgetDataProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = F281E65EF7010842967CD100 /* WidgetDataProvider.swift */; };
 		D403E6C85AA58126F1F15557 /* WidgetPlatformDisplay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F3FDD012180112242E80DF3 /* WidgetPlatformDisplay.swift */; };
-		D6FA10004BE2F8DC5AE85B18 /* QuotaWindowPairing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D26851E2C6B60002FEF802A /* QuotaWindowPairing.swift */; };
 		D88D34F03E978D88086FFCAE /* SentryTelemetry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50C98744F4C98CE0C6227834 /* SentryTelemetry.swift */; };
 		DA221384FC017A40031C0446 /* ResetAlarmMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5ECFD3E9DC2728ACB5FB5488 /* ResetAlarmMessage.swift */; };
+		DB0DC7C4AE16BE8A897E8273 /* QuotaWindowPairing.swift in Sources */ = {isa = PBXBuildFile; fileRef = D40CE779F10AFED5E4B3E9F5 /* QuotaWindowPairing.swift */; };
 		DD572CC08FCFC7414D7236B7 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = DF46F01EE0931315955EE9AF /* Assets.xcassets */; };
 		E0EE20CDC3987E143A3FCB48 /* ResetAlarmTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5FD1EFF75431229A669FC5A /* ResetAlarmTracker.swift */; };
 		E38B758D8183E576DEE41A6C /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 13B67B47EAC3ED255FDB0018 /* PrivacyInfo.xcprivacy */; };
@@ -176,7 +178,6 @@
 		84C4C2C5DC3AA20234129F15 /* CompanionContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionContentView.swift; sourceTree = "<group>"; };
 		881BAB30A7762A0170BE4FD8 /* alarm-frog.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "alarm-frog.wav"; sourceTree = "<group>"; };
 		89A5807594DFD989CADCC6F2 /* ResetAlarmSound.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResetAlarmSound.swift; sourceTree = "<group>"; };
-		8D26851E2C6B60002FEF802A /* QuotaWindowPairing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = QuotaWindowPairing.swift; path = ../../Sources/QuotaCore/QuotaWindowPairing.swift; sourceTree = "<group>"; };
 		9DE3A7D9C36FF286A082F60E /* WidgetSnapshotFetcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WidgetSnapshotFetcher.swift; path = ../../Sources/QuotaCore/WidgetSnapshotFetcher.swift; sourceTree = "<group>"; };
 		A736FD344F79D520A16227B3 /* RemotePushRegistration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemotePushRegistration.swift; sourceTree = "<group>"; };
 		B47E0485E1902045DBFE06B1 /* CodeCapsCompanion.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = CodeCapsCompanion.entitlements; sourceTree = "<group>"; };
@@ -185,6 +186,7 @@
 		C2EA171A442F77D9348C68D4 /* InfoMac.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = InfoMac.plist; sourceTree = "<group>"; };
 		C679EF2BE96C94E938E56DC1 /* CodeCapsCompanionMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CodeCapsCompanionMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		CBEA6F1A4CFAF2D12556922F /* WidgetDetailIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetDetailIntent.swift; sourceTree = "<group>"; };
+		D40CE779F10AFED5E4B3E9F5 /* QuotaWindowPairing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaWindowPairing.swift; sourceTree = "<group>"; };
 		D4A7E538557D6D936242BE41 /* FleetSourceDisagreement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = FleetSourceDisagreement.swift; path = ../../Sources/QuotaCore/FleetSourceDisagreement.swift; sourceTree = "<group>"; };
 		D5FD1EFF75431229A669FC5A /* ResetAlarmTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ResetAlarmTracker.swift; path = ../../Sources/QuotaCore/ResetAlarmTracker.swift; sourceTree = "<group>"; };
 		D7A7EF5A19DFD2299052F4DE /* WidgetWindowRows.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetWindowRows.swift; sourceTree = "<group>"; };
@@ -261,6 +263,15 @@
 			path = App;
 			sourceTree = "<group>";
 		};
+		319638837402B91244A6BD02 /* zcode-pr457-sweep */ = {
+			isa = PBXGroup;
+			children = (
+				8223FD51818638C8B794F064 /* Sources */,
+			);
+			name = "zcode-pr457-sweep";
+			path = ../..;
+			sourceTree = "<group>";
+		};
 		4BE1EE20399A37860158A030 /* Views */ = {
 			isa = PBXGroup;
 			children = (
@@ -277,7 +288,6 @@
 				BCE1563220EAF648835B1290 /* PlanMetadata.swift */,
 				21D8165F7982A1B6B6F0042E /* QuotaMeterCadence.swift */,
 				0CCA8CD80D52183E869EAE7A /* QuotaWindowCaption.swift */,
-				8D26851E2C6B60002FEF802A /* QuotaWindowPairing.swift */,
 				1B93F39BFE99C5CA6EB141F5 /* QuotaWindowVocabulary.swift */,
 				6B76200EBE871E29BAC8A41B /* ResetAlarmCadence.swift */,
 				5ECFD3E9DC2728ACB5FB5488 /* ResetAlarmMessage.swift */,
@@ -289,12 +299,21 @@
 			name = Shared;
 			sourceTree = "<group>";
 		};
+		8223FD51818638C8B794F064 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				A5F6803946F1E3B31716BC18 /* QuotaCore */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
 		8E8ACB61F08661AAACE99C81 = {
 			isa = PBXGroup;
 			children = (
 				2C7829A5D8BD9EF9C122A4F2 /* App */,
 				51F59F827B59B2A9F342F07F /* Shared */,
 				9ACCF0D01A7CB67BFD256AC8 /* Widgets */,
+				319638837402B91244A6BD02 /* zcode-pr457-sweep */,
 				DF46F01EE0931315955EE9AF /* Assets.xcassets */,
 				C53A412A4B40988009B93D1B /* Products */,
 			);
@@ -315,6 +334,14 @@
 				D7A7EF5A19DFD2299052F4DE /* WidgetWindowRows.swift */,
 			);
 			path = Widgets;
+			sourceTree = "<group>";
+		};
+		A5F6803946F1E3B31716BC18 /* QuotaCore */ = {
+			isa = PBXGroup;
+			children = (
+				D40CE779F10AFED5E4B3E9F5 /* QuotaWindowPairing.swift */,
+			);
+			path = QuotaCore;
 			sourceTree = "<group>";
 		};
 		C53A412A4B40988009B93D1B /* Products */ = {
@@ -525,7 +552,8 @@
 				F245CD4AA6FA8D9C23A5D373 /* CompanionTheme.swift in Sources */,
 				500162E6C6D0CFA94D715BD0 /* FleetSourceDisagreement.swift in Sources */,
 				793BD53306611ADD630008E7 /* PlanMetadata.swift in Sources */,
-				522E85F841B0432CA37CB876 /* QuotaWindowPairing.swift in Sources */,
+				D17D45E570A965FBC2018BAF /* QuotaMeterCadence.swift in Sources */,
+				DB0DC7C4AE16BE8A897E8273 /* QuotaWindowPairing.swift in Sources */,
 				A82BDBD544318CBB2DC1FE96 /* QuotaWindowVocabulary.swift in Sources */,
 				9DCBAAF5AED382505D06C03D /* RemotePushRegistration.swift in Sources */,
 				1D4D70BAAB091F8992DB1693 /* ResetAlarmCadence.swift in Sources */,
@@ -552,7 +580,7 @@
 				67E08982F84A1E831F95464B /* FleetSourceDisagreement.swift in Sources */,
 				665D8BC3F9A6C85123F6D662 /* PlanMetadata.swift in Sources */,
 				5F3672AB2884F3895C3B312B /* QuotaMeterCadence.swift in Sources */,
-				29DBF5AEFF65BA4C833F7D27 /* QuotaWindowPairing.swift in Sources */,
+				44E8B963FDFA1A2C29E31EF6 /* QuotaWindowPairing.swift in Sources */,
 				7DA53137FC1697E13889298B /* QuotaWindowVocabulary.swift in Sources */,
 				55B1F0DECD506D0BACFFBBB7 /* RemotePushRegistration.swift in Sources */,
 				31CFC3813E00700F4A1D0E2F /* ResetAlarmCadence.swift in Sources */,
@@ -574,8 +602,9 @@
 				6AF2CF64E8C9F39D87C4B24C /* CompanionReadTokenStore.swift in Sources */,
 				F4FCB18D25C83B7AAD11C565 /* FleetSourceDisagreement.swift in Sources */,
 				9D45AEE111E1DDB76D82DC47 /* PlanMetadata.swift in Sources */,
+				297F6F2618C98F60AD28D50A /* QuotaMeterCadence.swift in Sources */,
 				3AB7A6CDA67C38224B7CBE08 /* QuotaWindowCaption.swift in Sources */,
-				D6FA10004BE2F8DC5AE85B18 /* QuotaWindowPairing.swift in Sources */,
+				9367E4E6A5BA9F6B4083C888 /* QuotaWindowPairing.swift in Sources */,
 				28EECA14D0CD8CE69B1250B6 /* QuotaWindowVocabulary.swift in Sources */,
 				3C07D53C4EFEE8F91EEDDEC7 /* ResetAlarmCadence.swift in Sources */,
 				0FB40BD33AB5375F6C02ACFC /* WidgetConfigurationIntent.swift in Sources */,
@@ -599,7 +628,7 @@
 				2C6E0A604B75661E791BC591 /* PlanMetadata.swift in Sources */,
 				3A44F41474E6039452FD1E8C /* QuotaMeterCadence.swift in Sources */,
 				4BBB6BFF85C4F547B32A3035 /* QuotaWindowCaption.swift in Sources */,
-				8A912299E4F7AFC88E6CBE98 /* QuotaWindowPairing.swift in Sources */,
+				9245DCDAE6AB1BD7AD265114 /* QuotaWindowPairing.swift in Sources */,
 				8A473847ACFCA158CD1E9386 /* QuotaWindowVocabulary.swift in Sources */,
 				BBE95186FD35EC37DBF13D51 /* ResetAlarmCadence.swift in Sources */,
 				A90E0EF383B2CDF27263BAF0 /* WidgetConfigurationIntent.swift in Sources */,
