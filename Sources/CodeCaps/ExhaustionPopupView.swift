@@ -141,7 +141,7 @@ final class ExhaustionPopupController {
 
     private func scheduleExpiry(for id: UUID) {
         expireTask?.cancel()
-        expireTask = Task { [weak self] in
+        expireTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(Self.autoExpire * 1_000_000_000))
             guard !Task.isCancelled, let self, self.shownId == id else { return }
             self.model?.dismissExhaustionPopup()
@@ -158,5 +158,12 @@ final class ExhaustionPopupController {
             Task { @MainActor in self?.model?.dismissExhaustionPopup() }
             return nil
         }
+    }
+
+    deinit {
+        if let escapeMonitor {
+            NSEvent.removeMonitor(escapeMonitor)
+        }
+        expireTask?.cancel()
     }
 }
