@@ -270,6 +270,38 @@ final class MuseCodeSessionReaderTests: XCTestCase {
         XCTAssertEqual(second?.totalTokens, 2, "the replacement's own content is returned, not the stale entry")
     }
 
+    func testReaderReparsesASnapshotReplacedWithIdenticalMetadata() throws {
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let stamp = now.addingTimeInterval(-10 * 60)
+        try writeSnapshot(home: home, session: "session-a", name: "snapshot-1.json",
+                          usage: usage(model: "muse-spark-1.3-contributor", tokens: 2_000, first: "a1", last: "b1"),
+                          modified: stamp)
+        let cache = MuseCodeSessionReader.snapshotSegmentCache
+        cache.reset()
+        let reader = MuseCodeSessionReader(homeDirectory: home, now: { self.now })
+        let first = try XCTUnwrap(reader.read().report)
+        XCTAssertEqual(first.window(minutes: 90)?.totalTokens, 2_000)
+        let url = home.appendingPathComponent(
+            ".local/share/muse/sessions/.msp-view-g6/session-a/snapshot-1.json")
+        let sizeBefore = try XCTUnwrap(
+            (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int)
+        // Rotation by replacement: a new file at the same path with identical
+        // size and mtime - only the file identity in the cache key
+        // distinguishes it, and the identity must arrive through the reader's
+        // own enumeration, not a caller bypass.
+        try FileManager.default.removeItem(at: url)
+        try writeSnapshot(home: home, session: "session-a", name: "snapshot-1.json",
+                          usage: usage(model: "muse-spark-1.3-contributor", tokens: 5_000, first: "a1", last: "b1"),
+                          modified: stamp)
+        let sizeAfter = try XCTUnwrap(
+            (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int)
+        XCTAssertEqual(sizeBefore, sizeAfter, "test precondition: the replacement has identical size")
+        let second = try XCTUnwrap(reader.read().report)
+        XCTAssertEqual(second.window(minutes: 90)?.totalTokens, 5_000,
+                       "a replacement with identical path/size/mtime is re-parsed through the reader's own enumeration")
+    }
+
     func testReaderReparsesASnapshotRewrittenInPlace() throws {
         let home = try makeHome()
         defer { try? FileManager.default.removeItem(at: home) }
