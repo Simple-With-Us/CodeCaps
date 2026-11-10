@@ -599,23 +599,29 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
                                disabledSources: Set<String> = [],
                                peerRows: [DisplaySection] = []) -> [QuotaWindowSnapshot] {
         guard issue == nil else { return [] }
-        let own = row.section.windows
-            .filter { !$0.window.isSupplementaryVideoQuota && !row.isMasked($0)
-                && !disabledSources.contains($0.window.source ?? "") }
-            .map { QuotaWindowSnapshot(window: $0.window, now: now) }
-            // A live period with a bounded percentage is drawable however old
-            // its observation is:  the Muse collectors restate their windows
-            // only when new usage arrives, so an unchanged quota reads
-            // .stale while the menu bar dropdown draws it as the current
-            // reading — and the HUD contradicted the dropdown on the same
-            // row (CC-216, owner 2026-11-07).  A period that has ended is
-            // .awaitingRefresh and stays out; the row then names it.
-            .filter { !$0.isAwaitingRefresh && $0.window.hasReading
-                && !isMuseAssistExtra($0)
-                && (!$0.window.skip || $0.remainingPercent == 0)
+        // The chain below is broken into annotated steps because the combined
+        // expression exceeded the type-checker's time budget once the theme
+        // tokens became computed vars.
+        let eligible: [QuotaWindowSnapshot] = row.section.windows.filter { (section: QuotaWindowSnapshot) -> Bool in
+            !section.window.isSupplementaryVideoQuota && !row.isMasked(section)
+                && !disabledSources.contains(section.window.source ?? "")
+        }
+        let snapshots: [QuotaWindowSnapshot] = eligible.map { QuotaWindowSnapshot(window: $0.window, now: now) }
+        // A live period with a bounded percentage is drawable however old
+        // its observation is:  the Muse collectors restate their windows
+        // only when new usage arrives, so an unchanged quota reads
+        // .stale while the menu bar dropdown draws it as the current
+        // reading — and the HUD contradicted the dropdown on the same
+        // row (CC-216, owner 2026-11-07).  A period that has ended is
+        // .awaitingRefresh and stays out; the row then names it.
+        let own: [QuotaWindowSnapshot] = snapshots.filter { (snapshot: QuotaWindowSnapshot) -> Bool in
+            !snapshot.isAwaitingRefresh && snapshot.window.hasReading
+                && !isMuseAssistExtra(snapshot)
+                && (!snapshot.window.skip || snapshot.remainingPercent == 0)
                 // Percent meters stay drawable when stale (CC-216).  Absolute
                 // balances need a remaining figure, not limit-only (CC-193).
-                && ($0.remainingPercent != nil || $0.window.absoluteRemaining != nil) }
+                && (snapshot.remainingPercent != nil || snapshot.window.absoluteRemaining != nil)
+        }
         // Fresh own readings outrank everything for a pool participant:  a
         // stale own reading yields to a peer's fresh one first.  Every other
         // row keeps its whole live-period set — fresh and stale-but-live
