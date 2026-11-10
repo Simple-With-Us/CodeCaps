@@ -617,12 +617,18 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
             // reading — and the HUD contradicted the dropdown on the same
             // row (CC-216, owner 2026-11-07).  A period that has ended is
             // .awaitingRefresh and stays out; the row then names it.
-            .filter { !$0.isAwaitingRefresh && $0.window.hasReading
-                && !isMuseAssistExtra($0)
-                && (!$0.window.skip || $0.remainingPercent == 0)
+            .filter { snapshot in
+                // Named statements again:  the combined predicate outruns the
+                // hosted type-checker's budget (CC-223 sweep).
+                if snapshot.isAwaitingRefresh { return false }
+                if !snapshot.window.hasReading { return false }
+                if isMuseAssistExtra(snapshot) { return false }
+                if snapshot.window.skip && snapshot.remainingPercent != 0 { return false }
                 // Percent meters stay drawable when stale (CC-216).  Absolute
                 // balances need a remaining figure, not limit-only (CC-193).
-                && ($0.remainingPercent != nil || $0.window.absoluteRemaining != nil) }
+                return snapshot.remainingPercent != nil
+                    || snapshot.window.absoluteRemaining != nil
+            }
         // Fresh own readings outrank everything for a pool participant:  a
         // stale own reading yields to a peer's fresh one first.  Every other
         // row keeps its whole live-period set — fresh and stale-but-live
