@@ -65,6 +65,8 @@ targets:
         group: Shared
       - path: ../../Sources/QuotaCore/QuotaWindowPairing.swift
         group: Shared
+      - path: ../../Sources/QuotaCore/QuotaMeterCadence.swift
+        group: Shared
       - path: ../../Sources/QuotaCore/FleetSourceDisagreement.swift
         group: Shared
       - path: ../../Sources/QuotaCore/WidgetPlatformDisplay.swift
@@ -116,6 +118,8 @@ targets:
       - path: ../../Sources/QuotaCore/QuotaWindowVocabulary.swift
         group: Shared
       - path: ../../Sources/QuotaCore/QuotaWindowPairing.swift
+        group: Shared
+      - path: ../../Sources/QuotaCore/QuotaMeterCadence.swift
         group: Shared
       - path: ../../Sources/QuotaCore/QuotaWindowCaption.swift
         group: Shared
@@ -182,6 +186,8 @@ targets:
       - path: ../../Sources/QuotaCore/CompanionReadTokenStore.swift
         group: Shared
       - path: ../../Sources/QuotaCore/QuotaWindowPairing.swift
+      - path: ../../Sources/QuotaCore/QuotaMeterCadence.swift
+        group: Shared
         group: Shared
     dependencies:
       - target: CodeCapsWidgetsMac
@@ -236,6 +242,8 @@ targets:
       - path: ../../Sources/QuotaCore/CompanionReadTokenStore.swift
         group: Shared
       - path: ../../Sources/QuotaCore/QuotaWindowPairing.swift
+      - path: ../../Sources/QuotaCore/QuotaMeterCadence.swift
+        group: Shared
         group: Shared
     entitlements:
       path: Generated/CodeCapsWidgetsMac.entitlements

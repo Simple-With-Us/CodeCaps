@@ -39,6 +39,7 @@ struct WidgetParseMirrorGenPlugin: BuildToolPlugin {
         "Sources/QuotaCore/QuotaBarMetrics.swift",
         "Sources/QuotaCore/QuotaClient.swift",
         "Sources/QuotaCore/QuotaExhaustionForecast.swift",
+        "Sources/QuotaCore/QuotaMeterCadence.swift",
         "Sources/QuotaCore/QuotaModels.swift",
         "Sources/QuotaCore/QuotaPublisher.swift",
         "Sources/QuotaCore/QuotaReaderPreferences.swift",

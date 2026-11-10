@@ -655,6 +655,26 @@ final class WidgetTests: XCTestCase {
         XCTAssertTrue(presentation.contains(#"case QuotaWindowVocabulary.sevenDay: return "7d""#))
     }
 
+    func testWidgetPairsMetersWithSharedCadenceRule() throws {
+        let presentation = try readSource(at: Self.widgetPresentationURL)
+        XCTAssertTrue(
+            presentation.contains("QuotaMeterCadence.isShort"),
+            "widget pairing must ask the shared short-cadence rule"
+        )
+        XCTAssertTrue(
+            presentation.contains("window.isSupplementaryVideoQuota"),
+            "widget pairing must honour the carried supplementary-video flag"
+        )
+    }
+
+    func testWidgetBarRemainingSegmentUsesMacGrammar() throws {
+        let presentation = try readSource(at: Self.widgetPresentationURL)
+        XCTAssertTrue(presentation.contains("quotaBarRemainingColor"))
+        let rows = try readSource(at: Self.repoRoot.appendingPathComponent("ios/CodeCapsCompanion/Widgets/WidgetWindowRows.swift"))
+        XCTAssertTrue(rows.contains("color: WidgetPresentation.quotaBarRemainingColor"))
+        XCTAssertFalse(rows.contains("color: statusColor,\n                    elapsedFraction: window?.elapsedFraction()"))
+    }
+
     func testOverviewViewsPassQuotasPerProviderToPlanGrid() throws {
         let views = try readSource(at: Self.repoRoot.appendingPathComponent("ios/CodeCapsCompanion/Widgets/WidgetViews.swift"))
         XCTAssertTrue(views.contains("quotasPerProvider: quotasPerProvider"))

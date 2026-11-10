@@ -211,6 +211,50 @@ final class WidgetParseContractTests: XCTestCase {
         XCTAssertTrue(q6c.isExhausted)
     }
 
+    /// CC-223:  MiniMax's daily interval and weekly plan window both reach
+    /// the widget pair, and the supplementary video daily must not displace
+    /// the weekly coding window.
+    func testCC223MiniMaxDailyAndWeeklyPair() throws {
+        let iso = ISO8601DateFormatter()
+        let stamp = iso.string(from: Date())
+        let resetDaily = iso.string(from: Date().addingTimeInterval(20 * 3600))
+        let resetWeekly = iso.string(from: Date().addingTimeInterval(5 * 86_400))
+        let payload = [
+            wire("mm:general:interval", "minimax", "1d", 82, "general (interval window)", stamp: stamp, reset: resetDaily),
+            wire("mm:general:weekly", "minimax", "7d", 54, "general (1w window)", stamp: stamp, reset: resetWeekly),
+            wire("mm:video:interval", "minimax", "1d", 100, "video (1d window)", model: "video", stamp: stamp, reset: resetDaily),
+        ]
+        let parsed = WidgetPresentation.parseSnapshot(
+            data: try JSONSerialization.data(withJSONObject: ["windows": payload]))
+        let minimax = try XCTUnwrap(parsed.first { $0.providerKey == "minimax" })
+        XCTAssertEqual(minimax.primaryWindows.count, 2)
+        XCTAssertEqual(minimax.primaryWindows.map(\.cadenceToken), ["1d", "7d"])
+        let pair = try XCTUnwrap(minimax.dualWindows())
+        XCTAssertEqual(pair.window1.cadenceToken, "1d")
+        XCTAssertEqual(pair.window2.cadenceToken, "7d")
+        XCTAssertFalse(minimax.primaryWindows.contains(where: \.isSupplementaryVideoQuota))
+    }
+
+    /// CC-223:  Claude's two plan meters survive the widget parse path and
+    /// pair as 5h with 7d, never as only the long window.
+    func testCC223ClaudeFiveHourAndWeeklyPair() throws {
+        let stamp = ISO8601DateFormatter().string(from: Date())
+        let resetShort = ISO8601DateFormatter().string(from: Date().addingTimeInterval(2 * 3600))
+        let resetLong = ISO8601DateFormatter().string(from: Date().addingTimeInterval(4 * 86_400))
+        let payload = [
+            wire("claude:5h", "anthropic", "5h", 24, "Claude 5-hour", stamp: stamp, reset: resetShort),
+            wire("claude:7d", "anthropic", "7d", 61, "Claude Weekly", stamp: stamp, reset: resetLong),
+        ]
+        let parsed = WidgetPresentation.parseSnapshot(
+            data: try JSONSerialization.data(withJSONObject: ["windows": payload]))
+        let claude = try XCTUnwrap(parsed.first { $0.providerKey == "anthropic" })
+        let pair = try XCTUnwrap(claude.dualWindows())
+        XCTAssertEqual(pair.window1.cadenceToken, "5h")
+        XCTAssertEqual(pair.window2.cadenceToken, "7d")
+        XCTAssertEqual(pair.window1.remainingPercent, 24)
+        XCTAssertEqual(pair.window2.remainingPercent, 61)
+    }
+
     /// The qa4 capture:  one xAI subscription pool seen by two producers
     /// merges to one 7d row, the fresher phone copy winning.
     func testQA4XaiPoolMergesAcrossProducers() throws {

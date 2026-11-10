@@ -54,6 +54,12 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
     /// billing cycle reads "1-month" like a monthly quota meter does, and only
     /// the token says which one it was.
     public let rawWindowToken: String?
+    /// The wire label, exactly as it arrived, or nil when the item was built
+    /// in code rather than parsed.  Cadence classification reads this, not the
+    /// display copy:  the rewrite turns "general (interval window)" into
+    /// "1-day window" and the interval wording the shared short/long rule
+    /// needs is gone by pairing time (CC-223).
+    public let wireLabel: String?
     /// The unit the allowance is counted in, when the payload names one
     /// ("USD", "credits", "requests").  A currency unit means the window is a
     /// money meter rather than a quota meter.
@@ -74,6 +80,7 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
         isModelDetail: Bool = false,
         absoluteRemaining: Double? = nil,
         rawWindowToken: String? = nil,
+        wireLabel: String? = nil,
         quotaUnit: String? = nil
     ) {
         self.id = id
@@ -87,6 +94,7 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
         self.observedAt = observedAt
         self.barQualifier = barQualifier
         self.rawWindowToken = rawWindowToken
+        self.wireLabel = wireLabel
         self.quotaUnit = quotaUnit
         self.isExtraAllowance = isExtraAllowance
         self.isSupplementaryVideoQuota = isSupplementaryVideoQuota
@@ -186,6 +194,7 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
             isModelDetail: isModelDetail,
             absoluteRemaining: absoluteRemaining,
             rawWindowToken: rawWindowToken,
+            wireLabel: wireLabel,
             quotaUnit: quotaUnit
         )
     }
@@ -459,18 +468,36 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
             !$0.isMasked && ($0.remainingPercent != nil || $0.absoluteRemaining != nil || $0.resetAt != nil)
         }
         guard visible.count >= 2 else { return nil }
+        let excludedIds = Set(visible.filter { window in
+            (window.isExtraAllowance && window.remainingPercent == nil)
+                || window.isSupplementaryVideoQuota
+                || window.isModelDetail
+                || QuotaCapRule.isSubModelLimit(
+                    providerKey: providerKey, id: window.id, label: window.label)
+                || QuotaCapRule.isScopedPoolAllowance(
+                    providerKey: providerKey, id: window.id, label: window.label)
+        }.map(\.id))
         let candidates = visible.map { window in
-            let period = ResetAlarmCadence.periodSeconds(token: window.cadence, label: window.label)
             return QuotaWindowPairing.MeterCandidate(
                 id: window.id,
                 remainingPercent: window.remainingPercent,
                 resetAt: window.resetAt,
-                isShort: (period ?? 86_400) < 86_400,
-                isExcluded: QuotaCapRule.isSupplementaryVideoQuota(
-                    providerKey: providerKey, label: window.label)
-                    || QuotaCapRule.isScopedPoolAllowance(
-                        providerKey: providerKey, id: window.id, label: window.label)
+                isShort: QuotaMeterCadence.isShort(
+                    windowToken: window.rawWindowToken,
+                    label: window.wireLabel ?? window.label,
+                    cadence: window.cadence,
+                    resetAt: window.resetAt,
+                    now: now,
+                    isSupplementaryVideoQuota: window.isSupplementaryVideoQuota
+                ),
+                // A count-only extra allowance has no percentage to meter,
+                // so it fills no pair slot beside a real meter (#360).
+                isExcluded: (window.isExtraAllowance && window.remainingPercent == nil)
+                    || window.isSupplementaryVideoQuota
+                    || window.isModelDetail
                     || QuotaCapRule.isSubModelLimit(
+                        providerKey: providerKey, id: window.id, label: window.label)
+                    || QuotaCapRule.isScopedPoolAllowance(
                         providerKey: providerKey, id: window.id, label: window.label),
                 // A reading of a period that has ended never takes a slot from
                 // a live one.
@@ -480,10 +507,43 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
             )
         }
         let pair = QuotaWindowPairing.meterPair(candidates)
-        guard let first = pair.short, let second = pair.long else { return nil }
-        guard let window1 = visible.first(where: { $0.id == first.id }),
-              let window2 = visible.first(where: { $0.id == second.id }) else { return nil }
-        return (window1, window2)
+        guard let first = pair.short,
+              let window1 = visible.first(where: { $0.id == first.id }) else { return nil }
+        if let second = pair.long, let window2 = visible.first(where: { $0.id == second.id }) {
+            return (window1, window2)
+        }
+        // The Mac may still draw two meters when pairing filled only one slot;
+        // keep the other visible plan window rather than falling back to one bar.
+        let ordered = visible.sorted { left, right in
+            let ls = ResetAlarmCadence.periodSeconds(token: left.cadence, label: left.label) ?? .infinity
+            let rs = ResetAlarmCadence.periodSeconds(token: right.cadence, label: right.label) ?? .infinity
+            if ls != rs { return ls < rs }
+            return left.id < right.id
+        }
+        // The fallback slot answers to the pairing rule, not just to
+        // visibility:  a dead or uninformative window never pairs beside a
+        // live meter.
+        guard let window2 = ordered.first(where: { item -> Bool in
+            guard item.id != window1.id, !excludedIds.contains(item.id) else { return false }
+            // Liveness is judged on this very item, not on a same-id
+            // candidate from another source:  a stale meter must not ride in
+            // on a live duplicate's liveness.
+            if QuotaFreshnessRule.isDeadCopy(observedAt: item.observedAt,
+                                             resetAt: item.resetAt,
+                                             now: now) { return false }
+            return item.remainingPercent != nil || item.resetAt != nil
+        }) else { return nil }
+        if QuotaMeterCadence.isShort(
+            windowToken: window1.rawWindowToken,
+            label: window1.wireLabel ?? window1.label,
+            cadence: window1.cadence,
+            resetAt: window1.resetAt,
+            now: now,
+            isSupplementaryVideoQuota: window1.isSupplementaryVideoQuota
+        ) {
+            return (window1, window2)
+        }
+        return (window2, window1)
         // Supplementary video, scoped pools and sub-model limits are all
         // excluded by the shared rule above, so MiniMax's video daily never
         // displaces the weekly coding window and a plan with fewer than two
@@ -532,6 +592,14 @@ public enum WidgetPresentation {
         }
         return Color(red: 0.10, green: 0.70, blue: 0.45)
     }
+
+    /// The share still available on a quota bar's right segment.
+    ///
+    /// The Mac's `Theme.barRemaining` stays green/teal regardless of how low
+    /// the percentage is;  only the pill tints at the warning threshold.  The
+    /// widget used `statusColor` on the bar itself, so Claude's long window
+    /// read yellow while the Mac row stayed green (CC-223).
+    public static let quotaBarRemainingColor = Color(red: 0.03, green: 0.45, blue: 0.44)
 
     public static func providerColor(providerKey: String) -> Color {
         let low = providerKey.lowercased()
@@ -1142,6 +1210,7 @@ public enum WidgetPresentation {
                 isModelDetail: isModelDetail,
                 absoluteRemaining: w.absoluteRemaining,
                 rawWindowToken: w.window,
+                wireLabel: w.label,
                 quotaUnit: w.quotaUnit
             )
 

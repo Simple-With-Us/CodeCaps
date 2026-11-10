@@ -844,9 +844,15 @@ final class CompanionModelTests: XCTestCase {
             source.contains(#"combined.contains("coding plan") || combined.contains("interval")"#),
             "formatCadence must classify MiniMax coding plan and interval as 5-hour window"
         )
+        // CC-223 moved the short/long rule into QuotaMeterCadence, so the
+        // wording pin lives there now.
+        let cadenceSource = try String(contentsOf: URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/QuotaCore/QuotaMeterCadence.swift"), encoding: .utf8)
         XCTAssertTrue(
-            source.contains(#"text.contains("coding plan") || text.contains("coding_plan") || text.contains("interval")"#),
-            "caption and isShortCadence must classify MiniMax coding plan as 5h short cadence"
+            cadenceSource.contains(#""coding plan""#)
+                && cadenceSource.contains(#""interval""#),
+            "the shared short/long rule must classify MiniMax coding plan as 5h short cadence"
         )
     }
 
