@@ -172,8 +172,10 @@ public struct MuseCodeSessionResult: Equatable, Sendable {
 /// HEAD.json names), which covers both the latest-segment and the
 /// segment-summed views the fleet's surveys validated.
 /// A process-wide parse cache for snapshot segments.  The session stores
-/// write each snapshot once and rotate by replacement, so (path, mtime, size)
-/// pins the content: an unchanged snapshot never needs a second read and
+/// write each snapshot once under a fresh UUID name and rotate by replacement
+/// (no reused snapshot names in the live store), and the key also carries the
+/// file's resource identity, so even a path reused after replacement cannot
+/// serve stale content: an unchanged snapshot never needs a second read and
 /// parse across the one-minute refresh cycles.
 final class MuseCodeSnapshotSegmentCache: @unchecked Sendable {
     private let lock = NSLock()
@@ -184,7 +186,13 @@ final class MuseCodeSnapshotSegmentCache: @unchecked Sendable {
 
     func segment(sessionId: String, url: URL, modified: Date, size: Int,
                  parse: () -> MuseCodeTokenSegment?) -> MuseCodeTokenSegment? {
-        let key = url.path + "|" + String(modified.timeIntervalSince1970) + "|" + String(size)
+        // The resource identifier is inode-based on APFS: rotation by
+        // replacement yields a new identity even if a reused path kept the
+        // same size and mtime, so the key pins content identity, not just
+        // metadata.  One extra stat per call, far cheaper than a re-parse.
+        let fileId = (try? url.resourceValues(forKeys: [.fileResourceIdentifierKey]))
+            .flatMap { $0.fileResourceIdentifier.map { String(describing: $0) } } ?? ""
+        let key = url.path + "|" + fileId + "|" + String(modified.timeIntervalSince1970) + "|" + String(size)
         lock.lock()
         if let cached = entries[key] {
             hits += 1
