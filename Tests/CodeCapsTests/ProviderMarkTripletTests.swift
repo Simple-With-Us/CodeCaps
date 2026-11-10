@@ -62,6 +62,32 @@ final class ProviderMarkTripletTests: XCTestCase {
         }
     }
 
+    func testCompanionCatalogCarriesXaiMarkWithDarkAppearance() throws {
+        let catalog = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("ios/CodeCapsCompanion/Assets.xcassets")
+        let sourceRoot = catalog.deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Sources/CodeCaps/Resources/ProviderMarks")
+        let imageset = catalog.appendingPathComponent("provider-xai.imageset")
+        let lightFile = imageset.appendingPathComponent("provider-xai.png")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: lightFile.path),
+                      "provider-xai.imageset is missing its colour mark")
+        let copiedLight = try Data(contentsOf: lightFile)
+        let suppliedLight = try Data(contentsOf: sourceRoot.appendingPathComponent("xai-color.png"))
+        XCTAssertEqual(copiedLight, suppliedLight,
+                       "provider-xai must use the byte-exact Mac colour mark")
+        let darkFile = imageset.appendingPathComponent("provider-xai-dark.png")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: darkFile.path),
+                      "provider-xai.imageset is missing its dark-appearance mark")
+        let copiedDark = try Data(contentsOf: darkFile)
+        let suppliedDark = try Data(contentsOf: sourceRoot.appendingPathComponent("xai-dark.png"))
+        XCTAssertEqual(copiedDark, suppliedDark,
+                       "provider-xai dark appearance must match the Mac template dark ink")
+        let contents = try String(contentsOf: imageset.appendingPathComponent("Contents.json"), encoding: .utf8)
+        XCTAssertTrue(contents.contains("provider-xai-dark.png"),
+                      "provider-xai.imageset must declare a dark appearance")
+    }
+
     func testCompanionCatalogCarriesCopilotMark() {
         let catalog = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
