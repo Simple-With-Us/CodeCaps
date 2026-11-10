@@ -523,7 +523,11 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
         // The fallback slot answers to the pairing rule, not just to
         // visibility:  a dead or uninformative window never pairs beside a
         // live meter.
-        let candidatesById = Dictionary(uniqueKeysWithValues: candidates.map { ($0.id, $0) })
+        // Window ids can repeat across sources, so the map uniqués instead of
+        // trapping:  the live reading wins, the dead copy falls away.
+        let candidatesById = Dictionary(
+            candidates.map { ($0.id, $0) },
+            uniquingKeysWith: { first, second in first.isLive ? first : second })
         guard let window2 = ordered.first(where: { item -> Bool in
             guard item.id != window1.id, !excludedIds.contains(item.id),
                   let candidate = candidatesById[item.id],
