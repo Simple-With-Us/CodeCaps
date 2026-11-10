@@ -939,24 +939,10 @@ public struct CompanionQuotaItem: Identifiable, Codable, Equatable {
     }
 
     public var providerLogoName: String? {
-        let key = providerKey.lowercased()
         let lowId = id.lowercased()
         if lowId.contains("gemini") { return "provider-gemini" }
         if lowId.contains("third-party") { return "provider-antigravity" }
-        if key.contains("anthropic") || key.contains("claude") { return "provider-claude" }
-        if key.contains("openai") || key.contains("codex") { return "provider-openai" }
-        if key.contains("cursor") { return "provider-cursor" }
-        if key.contains("grok-bot") { return "provider-grok-bot" }
-        if key.contains("grok") || key.contains("xai") { return "provider-grok" }
-        if key.contains("minimax") { return "provider-minimax" }
-        if key.contains("kimi") { return "provider-kimi" }
-        if ["zcode", "z.ai", "z-ai", "zai"].contains(where: { key.contains($0) }) { return "provider-zai" }
-        if key.contains("copilot") || lowId.contains("copilot") { return "provider-copilot" }
-        if key.contains("muse-assist") || key.contains("muse_assist") { return "provider-muse-assist" }
-        if key.contains("muse-code") || key.contains("muse_code") { return "provider-muse-code" }
-        if key.contains("muse") { return "provider-muse-assist" }
-        if key.contains("antigravity") || key.contains("gemini") { return "provider-gemini" }
-        return nil
+        return CompanionProviderMarkAssets.catalogAssetName(providerKey: providerKey, itemId: id)
     }
 
     public var fallbackSymbolName: String {
@@ -2084,7 +2070,7 @@ public final class CompanionQuotaModel: ObservableObject {
         let manifestKeys: [String] = manifest.isEmpty
             ? platformKeyOrder
             : manifest.compactMap { group in
-                let key = Self.canonicalManifestKey(provider: group.provider, via: group.via)
+                let key = Self.canonicalManifestKey(provider: group.provider, providerKey: group.providerKey, via: group.via)
                 return key.isEmpty ? nil : key
             }.filter { seenManifestKeys.insert($0).inserted }
 
@@ -2792,7 +2778,7 @@ public final class CompanionQuotaModel: ObservableObject {
         // substring — so unrelated windows can never collapse onto one entry.)
         if let manifest,
            let group = manifest.first(where: {
-               canonicalManifestKey(provider: $0.provider, via: $0.via) == legacy.key
+               canonicalManifestKey(provider: $0.provider, providerKey: $0.providerKey, via: $0.via) == legacy.key
            }) {
             let label = group.providerLabel.trimmingCharacters(in: .whitespacesAndNewlines)
             let title = WidgetPlatformDisplay.title(
@@ -2846,8 +2832,13 @@ public final class CompanionQuotaModel: ObservableObject {
         if pKey.contains("cursor") || prov.contains("cursor") {
             return ("cursor", "Cursor", "cursor")
         }
-        if pKey.contains("grok") || prov.contains("grok") || pKey.contains("xai") || prov.contains("xai") {
-            return ("xai", "Grok", "xai")
+        let canonical = CompanionProviderRouting.canonicalKey(
+            provider: raw.provider, providerKey: raw.providerKey, via: raw.via)
+        if canonical == "xai" {
+            return ("xai", WidgetPlatformDisplay.title(canonicalKey: "xai", wireProvider: raw.provider), "xai")
+        }
+        if canonical == "grok" {
+            return ("grok", WidgetPlatformDisplay.title(canonicalKey: "grok", wireProvider: raw.provider), "grok")
         }
         let fallbackKey = canonicalManifestKey(provider: raw.provider, providerKey: raw.providerKey, via: raw.via)
         let key = fallbackKey.isEmpty ? "other" : fallbackKey
@@ -2863,25 +2854,7 @@ public final class CompanionQuotaModel: ObservableObject {
     /// Mac prefers it, so a window canonicalises to the same key on both
     /// surfaces.
     static func canonicalManifestKey(provider: String, providerKey: String? = nil, via: String?) -> String {
-        let trimmedVia = via?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-        if trimmedVia == "antigravity" { return "google-antigravity" }
-        let preferred = providerKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let raw = (preferred.isEmpty ? provider : preferred).lowercased()
-        let aliases: [String: String] = [
-            "anthropic": "anthropic", "claude": "anthropic", "claude-code": "anthropic", "claude.ai": "anthropic",
-            "openai": "openai", "openai-codex": "openai", "codex": "openai",
-            "google": "google-antigravity", "google-antigravity": "google-antigravity", "antigravity": "google-antigravity", "antigravity-cli": "google-antigravity", "gemini": "google-antigravity",
-            "cursor": "cursor",
-            "xai": "xai", "grok": "xai", "grok-build": "xai",
-            "grok-bot": "grok-bot", "grok bot": "grok-bot", "grokbot": "grok-bot",
-            "minimax": "minimax", "minimax-code": "minimax",
-            "kimi": "kimi", "moonshot": "kimi", "moonshot-ai": "kimi",
-            "zcode": "zcode", "z.ai": "zcode", "z-ai": "zcode", "zai": "zcode", "glm": "zcode", "glm-coding": "zcode",
-            "gemini-cli": "gemini-cli",
-            "copilot": "github-copilot", "github-copilot": "github-copilot", "github_copilot": "github-copilot",
-            "windsurf": "windsurf", "codeium": "windsurf",
-        ]
-        return aliases[raw] ?? raw
+        CompanionProviderRouting.canonicalKey(provider: provider, providerKey: providerKey, via: via)
     }
 
     /// The three window kinds the shared cap rule needs, for one wire window.
@@ -2980,7 +2953,9 @@ public final class CompanionQuotaModel: ObservableObject {
     /// The manifest's `iconHint` for the canonicalized key, if any.
     private static func iconHint(for canonicalKey: String, in manifest: [WireProviderGroup]?) -> String? {
         guard let manifest else { return nil }
-        return manifest.first { canonicalManifestKey(provider: $0.provider, via: $0.via) == canonicalKey }?.iconHint
+        return manifest.first {
+            canonicalManifestKey(provider: $0.provider, providerKey: $0.providerKey, via: $0.via) == canonicalKey
+        }?.iconHint
     }
 
     /// Card subtitle cadences use the same hyphenated vocabulary as meter captions.

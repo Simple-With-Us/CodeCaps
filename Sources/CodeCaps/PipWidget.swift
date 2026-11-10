@@ -599,14 +599,19 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
                                disabledSources: Set<String> = [],
                                peerRows: [DisplaySection] = []) -> [QuotaWindowSnapshot] {
         guard issue == nil else { return [] }
-        // The chain below is broken into annotated steps because the combined
-        // expression exceeded the type-checker's time budget once the theme
-        // tokens became computed vars.
-        let eligible: [QuotaWindowSnapshot] = row.section.windows.filter { (section: QuotaWindowSnapshot) -> Bool in
-            !section.window.isSupplementaryVideoQuota && !row.isMasked(section)
-                && !disabledSources.contains(section.window.source ?? "")
+        let sectionWindows: [QuotaWindowSnapshot] = row.section.windows
+        let includedWindows: [QuotaWindowSnapshot] = sectionWindows.filter {
+            (snapshot: QuotaWindowSnapshot) -> Bool in
+            let supplementaryVideo: Bool = snapshot.window.isSupplementaryVideoQuota
+            let masked: Bool = row.isMasked(snapshot)
+            let sourceKey: String = snapshot.window.source ?? ""
+            let sourceDisabled: Bool = disabledSources.contains(sourceKey)
+            return !supplementaryVideo && !masked && !sourceDisabled
         }
-        let snapshots: [QuotaWindowSnapshot] = eligible.map { QuotaWindowSnapshot(window: $0.window, now: now) }
+        let refreshedSnapshots: [QuotaWindowSnapshot] = includedWindows.map {
+            (snapshot: QuotaWindowSnapshot) -> QuotaWindowSnapshot in
+            QuotaWindowSnapshot(window: snapshot.window, now: now)
+        }
         // A live period with a bounded percentage is drawable however old
         // its observation is:  the Muse collectors restate their windows
         // only when new usage arrives, so an unchanged quota reads
@@ -614,7 +619,7 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
         // reading — and the HUD contradicted the dropdown on the same
         // row (CC-216, owner 2026-11-07).  A period that has ended is
         // .awaitingRefresh and stays out; the row then names it.
-        let own: [QuotaWindowSnapshot] = snapshots.filter {
+        let own: [QuotaWindowSnapshot] = refreshedSnapshots.filter {
             !$0.isAwaitingRefresh && $0.window.hasReading
                 && !isMuseAssistExtra($0)
                 && (!$0.window.skip || $0.remainingPercent == 0)
@@ -810,8 +815,8 @@ struct PipWidgetView: View {
                             .frame(width: 1)
                             .frame(height: PipMetrics.rowHeight)
                     }
-                    pipRowButton(row, detail: detail, expandedCadence: expandedCadence, peerRows: peerRows,
-                                 available: rowWidth)
+                    pipRow(row, detail: detail, expandedCadence: expandedCadence, peerRows: peerRows,
+                           available: rowWidth)
                         .frame(width: rowWidth, alignment: .leading)
                 }
             }
@@ -955,12 +960,9 @@ struct PipWidgetView: View {
     /// Close, or Back when a platform detail is open.  It floats over the
     /// rows' top-right corner and appears only on hover, so it never occupies
     /// permanent space above the numbers.
-    // Always rendered: hover only fades it visually.  Removing it from
-    // the tree when the pointer left made Close/Settings unreachable to
-    // VoiceOver and Full Keyboard Access (Slice 4, FIX-A11Y-KEYBOARD).
     @ViewBuilder
     private var floatingControl: some View {
-        Group {
+        if isHovering {
             if detailRow == nil {
                 HStack(spacing: 5) {
                     settingsButton
@@ -970,7 +972,6 @@ struct PipWidgetView: View {
                 backButton
             }
         }
-        .opacity(isHovering ? 1 : 0)
     }
 
     private var settingsButton: some View {
@@ -995,7 +996,7 @@ struct PipWidgetView: View {
                         .foregroundStyle(background.ink.opacity(0.85))
                 }
             }
-            .frame(width: 28, height: 28)
+            .frame(width: 18, height: 18)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -1016,7 +1017,7 @@ struct PipWidgetView: View {
                     .font(.system(size: 8, weight: .bold))
                     .foregroundStyle(Color.black.opacity(0.75))
             }
-            .frame(width: 28, height: 28)
+            .frame(width: 18, height: 18)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -1038,7 +1039,7 @@ struct PipWidgetView: View {
                     .font(.system(size: 10, weight: .semibold))
             }
             .foregroundStyle(background.ink.opacity(0.75))
-            .frame(minWidth: 44, minHeight: 28)
+            .frame(height: 18)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -1084,8 +1085,8 @@ struct PipWidgetView: View {
             ScrollView(.vertical, showsIndicators: overflows) {
                 VStack(spacing: 0) {
                     ForEach(targetRows) { row in
-                        pipRowButton(row, detail: detail, expandedCadence: expandedCadence, peerRows: peerRows,
-                                     available: available)
+                        pipRow(row, detail: detail, expandedCadence: expandedCadence, peerRows: peerRows,
+                               available: available)
                     }
                 }
                 .padding(.horizontal, PipMetrics.padding)
@@ -1229,21 +1230,10 @@ struct PipWidgetView: View {
         .frame(height: PipMetrics.rowHeight)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
-    }
-
-    /// The row as a control: a real Button so keyboard focus and
-    /// VoiceOver can open the detail.  `pipRow` above stays the pure
-    /// layout; this wrapper owns the interaction (Slice 4).
-    private func pipRowButton(_ row: DisplaySection, detail: PipMetrics.Detail,
-                              expandedCadence: Bool, peerRows: [DisplaySection],
-                              available: CGFloat) -> some View {
-        Button { detailRowId = row.id } label: {
-            pipRow(row, detail: detail, expandedCadence: expandedCadence, peerRows: peerRows,
-                   available: available)
-        }
-        .buttonStyle(.plain)
+        .onTapGesture { detailRowId = row.id }
         .help(row.title)
         .accessibilityLabel("\(row.title) — open details")
+        .accessibilityAddTraits(.isButton)
     }
 
     // MARK: Platform detail
