@@ -147,6 +147,21 @@ final class MuseCodeStandardSessionDetectorTests: XCTestCase {
         XCTAssertNotNil(detector.lastKnownModels["overflow"])
     }
 
+    func testModelLessOrphanStampsAreCappedToo() {
+        var detector = MuseCodeStandardSessionDetector()
+        let cap = MuseCodeStandardSessionDetector.maxTrackedSessions
+        for i in 0..<(cap + 100) {
+            _ = detector.observe([observation("orphan\(i)", nil, at: TimeInterval(i))])
+        }
+        XCTAssertEqual(detector.lastKnownModels.count, 0,
+                       "model-less sessions still record no model state")
+        XCTAssertEqual(detector.lastObservedAt.count, cap,
+                       "orphan liveness stamps are capped like tracked sessions")
+        XCTAssertNil(detector.lastObservedAt["orphan0"],
+                     "the least recently observed orphan stamp is evicted first")
+        XCTAssertNotNil(detector.lastObservedAt["orphan\(cap + 99)"])
+    }
+
     func testModelLessPollsKeepASessionAlive() {
         var detector = MuseCodeStandardSessionDetector()
         XCTAssertEqual(detector.observe([observation("s1", standardModel)]).count, 1)

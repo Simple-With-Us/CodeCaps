@@ -177,14 +177,28 @@ public struct MuseCodeStandardSessionDetector: Codable, Equatable, Sendable {
     /// still live after the first poll of this version has been stamped, so
     /// an unstamped entry is stale and sorts oldest, evicted first.
     private mutating func trimToCap() {
-        guard lastKnownModels.count > Self.maxTrackedSessions else { return }
-        let overflow = lastKnownModels.count - Self.maxTrackedSessions
-        let oldest = lastKnownModels.keys.sorted {
-            (lastObservedAt[$0] ?? .distantPast) < (lastObservedAt[$1] ?? .distantPast)
-        }.prefix(overflow)
-        for sessionId in oldest {
-            lastKnownModels.removeValue(forKey: sessionId)
-            lastObservedAt.removeValue(forKey: sessionId)
+        if lastKnownModels.count > Self.maxTrackedSessions {
+            let overflow = lastKnownModels.count - Self.maxTrackedSessions
+            let oldest = lastKnownModels.keys.sorted {
+                (lastObservedAt[$0] ?? .distantPast) < (lastObservedAt[$1] ?? .distantPast)
+            }.prefix(overflow)
+            for sessionId in oldest {
+                lastKnownModels.removeValue(forKey: sessionId)
+                lastObservedAt.removeValue(forKey: sessionId)
+            }
+        }
+        // Model-less sessions never enter lastKnownModels, so without this
+        // their liveness stamps would accumulate unbounded until the TTL.
+        // Evict the oldest orphan stamps once the map itself passes the cap;
+        // stamps that back a tracked session are left alone.
+        let orphanOverflow = lastObservedAt.count - Self.maxTrackedSessions
+        if orphanOverflow > 0 {
+            let orphans = lastObservedAt.keys
+                .filter { lastKnownModels[$0] == nil }
+                .sorted { (lastObservedAt[$0] ?? .distantPast) < (lastObservedAt[$1] ?? .distantPast) }
+            for sessionId in orphans.prefix(orphanOverflow) {
+                lastObservedAt.removeValue(forKey: sessionId)
+            }
         }
     }
 
