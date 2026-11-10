@@ -614,13 +614,13 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
         // reading — and the HUD contradicted the dropdown on the same
         // row (CC-216, owner 2026-11-07).  A period that has ended is
         // .awaitingRefresh and stays out; the row then names it.
-        let own: [QuotaWindowSnapshot] = snapshots.filter { (snapshot: QuotaWindowSnapshot) -> Bool in
-            !snapshot.isAwaitingRefresh && snapshot.window.hasReading
-                && !isMuseAssistExtra(snapshot)
-                && (!snapshot.window.skip || snapshot.remainingPercent == 0)
+        let own: [QuotaWindowSnapshot] = snapshots.filter { $0 in
+            !$0.isAwaitingRefresh && $0.window.hasReading
+                && !isMuseAssistExtra($0)
+                && (!$0.window.skip || $0.remainingPercent == 0)
                 // Percent meters stay drawable when stale (CC-216).  Absolute
                 // balances need a remaining figure, not limit-only (CC-193).
-                && (snapshot.remainingPercent != nil || snapshot.window.absoluteRemaining != nil)
+                && ($0.remainingPercent != nil || $0.window.absoluteRemaining != nil)
         }
         // Fresh own readings outrank everything for a pool participant:  a
         // stale own reading yields to a peer's fresh one first.  Every other

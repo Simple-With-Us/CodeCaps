@@ -127,7 +127,7 @@ final class WidgetSnapshotFetcherTests: XCTestCase {
 
     func testFetchAllowsLoopbackHTTPAndSanitizesQuotedToken() async throws {
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer [REDACTED]")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer test-token")
             return .init(statusCode: 200, data: Data("{}".utf8))
         }
         let data = try await WidgetSnapshotFetcher.fetch(
