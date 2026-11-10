@@ -92,8 +92,29 @@ public struct MuseCodeStandardSessionDetector: Codable, Equatable, Sendable {
     /// here has never been observed with a model.
     public private(set) var lastKnownModels: [String: String]
 
-    public init(lastKnownModels: [String: String] = [:]) {
+    /// When each tracked session was last observed, for staleness eviction.
+    /// Blobs persisted before the cap existed carry no stamps; those sessions
+    /// are kept and stamped on their next observation.
+    public private(set) var lastObservedAt: [String: Date]
+
+    /// A session not observed for this long is no longer live: the reader's
+    /// window is ninety minutes, so a full day absent means it ended.
+    public static let sessionStateTTL: TimeInterval = 24 * 3_600
+    /// Backstop bound on tracked sessions; the least recently observed are
+    /// evicted first.
+    public static let maxTrackedSessions = 512
+
+    public init(lastKnownModels: [String: String] = [:], lastObservedAt: [String: Date] = [:]) {
         self.lastKnownModels = lastKnownModels
+        self.lastObservedAt = lastObservedAt
+    }
+
+    private enum CodingKeys: String, CodingKey { case lastKnownModels, lastObservedAt }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        lastKnownModels = try container.decode([String: String].self, forKey: .lastKnownModels)
+        lastObservedAt = try container.decodeIfPresent([String: Date].self, forKey: .lastObservedAt) ?? [:]
     }
 
     /// A contributor model is a model id ending in `-contributor`.
@@ -121,6 +142,7 @@ public struct MuseCodeStandardSessionDetector: Codable, Equatable, Sendable {
     public mutating func observe(
         _ observations: [MuseCodeSessionModelObservation]
     ) -> [MuseCodeStandardSessionEvent] {
+        evictExpiredSessions(relativeTo: observations.map(\.observedAt).max())
         var events: [MuseCodeStandardSessionEvent] = []
         for observation in observations {
             guard let modelId = observation.modelId, !modelId.isEmpty else { continue }
@@ -132,8 +154,36 @@ public struct MuseCodeStandardSessionDetector: Codable, Equatable, Sendable {
                     observedAt: observation.observedAt))
             }
             lastKnownModels[observation.sessionId] = modelId
+            lastObservedAt[observation.sessionId] = observation.observedAt
         }
+        trimToCap()
         return events
+    }
+
+    /// Drops sessions whose last observation is older than the TTL.  Runs
+    /// before the poll so an evicted session that returns fires once as
+    /// first-observed, which a day-long absence warrants.
+    private mutating func evictExpiredSessions(relativeTo newest: Date?) {
+        guard let newest else { return }
+        let cutoff = newest.addingTimeInterval(-Self.sessionStateTTL)
+        for (sessionId, observedAt) in lastObservedAt where observedAt < cutoff {
+            lastKnownModels.removeValue(forKey: sessionId)
+            lastObservedAt.removeValue(forKey: sessionId)
+        }
+    }
+
+    /// Trims the state to the cap by evicting the least recently observed.
+    /// Unstamped legacy sessions sort newest, so they are evicted last.
+    private mutating func trimToCap() {
+        guard lastKnownModels.count > Self.maxTrackedSessions else { return }
+        let overflow = lastKnownModels.count - Self.maxTrackedSessions
+        let oldest = lastKnownModels.keys.sorted {
+            (lastObservedAt[$0] ?? .distantFuture) < (lastObservedAt[$1] ?? .distantFuture)
+        }.prefix(overflow)
+        for sessionId in oldest {
+            lastKnownModels.removeValue(forKey: sessionId)
+            lastObservedAt.removeValue(forKey: sessionId)
+        }
     }
 
     /// The sessions in one poll whose current model is standard, as events

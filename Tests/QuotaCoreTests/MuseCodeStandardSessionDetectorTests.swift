@@ -124,4 +124,32 @@ final class MuseCodeStandardSessionDetectorTests: XCTestCase {
         XCTAssertEqual(present.map(\.sessionId), ["s2"])
         XCTAssertEqual(present.first?.modelId, standardModel)
     }
+
+    func testSessionUnobservedPastTTLIsEvictedAndRefiresAsNew() {
+        var detector = MuseCodeStandardSessionDetector()
+        XCTAssertEqual(detector.observe([observation("s1", contributorModel)]).count, 0)
+        let later = MuseCodeStandardSessionDetector.sessionStateTTL + 600
+        let events = detector.observe([observation("s2", contributorModel, at: later),
+                                       observation("s1", standardModel, at: later)])
+        XCTAssertEqual(events.map(\.sessionId), ["s1"],
+                       "a session silent past the TTL is evicted, so returning on a standard model fires as first-observed")
+    }
+
+    func testTrackedStateIsCappedByEvictingLeastRecentlyObserved() {
+        var detector = MuseCodeStandardSessionDetector()
+        for i in 0..<MuseCodeStandardSessionDetector.maxTrackedSessions {
+            _ = detector.observe([observation("s\(i)", contributorModel, at: TimeInterval(i))])
+        }
+        _ = detector.observe([observation("overflow", contributorModel,
+                                          at: TimeInterval(MuseCodeStandardSessionDetector.maxTrackedSessions + 1))])
+        XCTAssertEqual(detector.lastKnownModels.count, MuseCodeStandardSessionDetector.maxTrackedSessions)
+        XCTAssertNil(detector.lastKnownModels["s0"], "the least recently observed session is evicted first")
+        XCTAssertNotNil(detector.lastKnownModels["overflow"])
+    }
+
+    func testLegacyPersistedStateWithoutTimestampsStillDecodes() throws {
+        let legacy = try JSONSerialization.data(withJSONObject: ["lastKnownModels": ["s1": standardModel]])
+        let detector = try JSONDecoder().decode(MuseCodeStandardSessionDetector.self, from: legacy)
+        XCTAssertEqual(detector.lastKnownModels["s1"], standardModel)
+    }
 }

@@ -111,9 +111,12 @@ struct MuseCodeMonitorPage: View {
                 if let report = model.museCodeReport {
                     row("Last Read", report.generatedAt.formatted(date: .omitted, time: .standard))
                 }
+                // Burn and standard-session alerts are independent findings:
+                // both stay visible when both are present.
                 if let alert = model.museCodeBurnAlert {
                     row("Burn Alert", alert.body)
-                } else if let alert = model.museCodeStandardSessionAlert {
+                }
+                if let alert = model.museCodeStandardSessionAlert {
                     row("Standard Session Alert", alert.body)
                 }
             }
