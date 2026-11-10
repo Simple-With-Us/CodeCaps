@@ -1,6 +1,6 @@
 # CodeCaps — Effort Log
 
-> **ARCHIVED Sun, Oct 11, 2026.**  Linear is the system of record: team AFC, https://linear.app/simple-with-us/team/AFC.
+> **ARCHIVED Sun, Oct 11, 2026.**  Linear is the system of record: team CC, https://linear.app/simple-with-us/team/CC.
 > This file is read-only history.  Do not edit it or add rows.  See EFFORT-LOG-PROTOCOL.md.
 
 ## 2026-10-06 — Infisical three-field setup [dot, draft validation pending]
