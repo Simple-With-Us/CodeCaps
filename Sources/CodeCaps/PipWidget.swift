@@ -601,7 +601,6 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
         guard issue == nil else { return [] }
         let own = row.section.windows
             .filter { !$0.window.isSupplementaryVideoQuota && !row.isMasked($0)
-                && !$0.window.remainingUnknown
                 && !disabledSources.contains($0.window.source ?? "") }
             .map { QuotaWindowSnapshot(window: $0.window, now: now) }
             // A live period with a bounded percentage is drawable however old
@@ -611,8 +610,12 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
             // reading — and the HUD contradicted the dropdown on the same
             // row (CC-216, owner 2026-11-07).  A period that has ended is
             // .awaitingRefresh and stays out; the row then names it.
-            .filter { !$0.isAwaitingRefresh && $0.remainingPercent != nil
-                && (!$0.window.skip || $0.remainingPercent == 0) }
+            .filter { !$0.isAwaitingRefresh && $0.window.hasReading
+                && !isMuseAssistExtra($0)
+                && (!$0.window.skip || $0.remainingPercent == 0)
+                // Percent meters stay drawable when stale (CC-216).  Absolute
+                // balances need a remaining figure, not limit-only (CC-193).
+                && ($0.remainingPercent != nil || $0.window.absoluteRemaining != nil) }
         // Fresh own readings outrank everything for a pool participant:  a
         // stale own reading yields to a peer's fresh one first.  Every other
         // row keeps its whole live-period set — fresh and stale-but-live
@@ -621,7 +624,12 @@ final class PipWidgetController: NSObject, NSWindowDelegate {
         let isPoolParticipant = UnifiedSubscriptionPool.participantKeys.contains(row.providerKey)
         if isPoolParticipant {
             let fresh = own.filter { $0.isFresh }
-            if !fresh.isEmpty { return fresh }
+            // Fresh absolute-only readings must not block adoption of a peer's
+            // percentage meter (CC-193 review).  Percent meters still short-
+            // circuit to the full fresh live-period set.
+            if fresh.contains(where: { $0.remainingPercent != nil }), !fresh.isEmpty {
+                return fresh
+            }
         }
 
         if isPoolParticipant {

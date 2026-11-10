@@ -112,7 +112,7 @@ struct ZAIQuotaSettingsView: View {
             }
             if let status = controller.status { Text(status).font(.caption).foregroundStyle(.secondary) }
             Text("Enter an existing Coding Plan API key for the selected region." + sentenceGap
-                 + "The key and region are saved together in this build’s Keychain.")
+                 + "The key and region are saved together in the Keychain on this Mac.")
                 .font(.caption).foregroundStyle(.secondary)
         }
         .disabled(controller.isWorking)
