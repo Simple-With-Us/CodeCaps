@@ -181,6 +181,146 @@ final class MuseCodeSessionReaderTests: XCTestCase {
         XCTAssertEqual(observation?.segmentKey, "a3")
     }
 
+    func testReaderServesUnchangedSnapshotsFromParseCache() throws {
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        try writeSnapshot(home: home, session: "session-a", name: "snapshot-1.json",
+                          usage: usage(model: "muse-spark-1.3-contributor", tokens: 2_000, first: "a1", last: "b1"),
+                          modified: now.addingTimeInterval(-10 * 60))
+        let cache = MuseCodeSessionReader.snapshotSegmentCache
+        cache.reset()
+        let reader = MuseCodeSessionReader(homeDirectory: home, now: { self.now })
+        _ = reader.read()
+        let missesAfterFirst = cache.stats().misses
+        XCTAssertGreaterThan(missesAfterFirst, 0)
+        let again = reader.read()
+        XCTAssertEqual(cache.stats().misses, missesAfterFirst,
+                       "a second read of an unchanged store parses nothing again")
+        XCTAssertNil(again.issue)
+    }
+
+    func testParseCacheOverflowEvictsOneEntryInsteadOfClearingAll() {
+        let cache = MuseCodeSessionReader.snapshotSegmentCache
+        cache.reset()
+        defer { cache.reset() }
+        let cap = 8_192
+        let stamp = Date(timeIntervalSince1970: 1_700_000_000)
+        let parse: () -> MuseCodeTokenSegment? = {
+            MuseCodeTokenSegment(sessionId: "s", modelId: "m", totalTokens: 1, observedAt: stamp)
+        }
+        for i in 0..<cap {
+            _ = cache.segment(sessionId: "s", url: URL(fileURLWithPath: "/tmp/fake-\(i).json"),
+                              modified: stamp, size: 1, fileId: "fake", parse: parse)
+        }
+        // One more distinct snapshot pushes the cache past its cap.
+        _ = cache.segment(sessionId: "s", url: URL(fileURLWithPath: "/tmp/fake-overflow.json"),
+                          modified: stamp, size: 1, fileId: "fake", parse: parse)
+        var hits = 0
+        for i in 0..<cap {
+            if cache.segment(sessionId: "s", url: URL(fileURLWithPath: "/tmp/fake-\(i).json"),
+                             modified: stamp, size: 1, fileId: "fake", parse: { nil }) != nil {
+                hits += 1
+            }
+        }
+        XCTAssertEqual(hits, cap - 1,
+                       "overflow evicts one entry, keeping the rest of the working set cached")
+    }
+
+    private static func snapshotFileId(at url: URL) -> String {
+        let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+        return attrs.map {
+            String(describing: $0[.systemFileNumber] ?? 0) + "@" +
+                String((($0[.creationDate] as? Date) ?? .distantPast).timeIntervalSince1970)
+        } ?? ""
+    }
+
+    func testParseCacheReparseesReplacedFileWithIdenticalMetadata() throws {
+        // Rotation by replacement with a reused path, same size, and the same
+        // mtime: the creation-date component in the key must still force a
+        // re-parse.  mtime is set to a FUTURE stamp on both files, because
+        // backdating mtime on macOS also drags birthtime down with it, which
+        // would make the files genuinely indistinguishable by metadata.
+        let cache = MuseCodeSessionReader.snapshotSegmentCache
+        cache.reset()
+        defer { cache.reset() }
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cache-replacement-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("snapshot-1.json")
+        let stamp = Date(timeIntervalSince1970: 2_000_000_000)
+        var parses = 0
+        let parse: () -> MuseCodeTokenSegment? = {
+            parses += 1
+            return MuseCodeTokenSegment(sessionId: "s", modelId: "m",
+                                        totalTokens: parses, observedAt: stamp)
+        }
+        try Data(repeating: 0x61, count: 64).write(to: url)
+        try FileManager.default.setAttributes([.modificationDate: stamp], ofItemAtPath: url.path)
+        let first = cache.segment(sessionId: "s", url: url, modified: stamp, size: 64,
+                                  fileId: Self.snapshotFileId(at: url), parse: parse)
+        XCTAssertEqual(first?.totalTokens, 1)
+        // Replace the file at the same path, then set the same mtime.
+        try FileManager.default.removeItem(at: url)
+        try Data(repeating: 0x62, count: 64).write(to: url)
+        try FileManager.default.setAttributes([.modificationDate: stamp], ofItemAtPath: url.path)
+        let second = cache.segment(sessionId: "s", url: url, modified: stamp, size: 64,
+                                   fileId: Self.snapshotFileId(at: url), parse: parse)
+        XCTAssertEqual(parses, 2, "a replacement with identical path/size/mtime must not hit the old entry")
+        XCTAssertEqual(second?.totalTokens, 2, "the replacement's own content is returned, not the stale entry")
+    }
+
+    func testReaderReparsesASnapshotReplacedWithIdenticalMetadata() throws {
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let stamp = now.addingTimeInterval(-10 * 60)
+        try writeSnapshot(home: home, session: "session-a", name: "snapshot-1.json",
+                          usage: usage(model: "muse-spark-1.3-contributor", tokens: 2_000, first: "a1", last: "b1"),
+                          modified: stamp)
+        let cache = MuseCodeSessionReader.snapshotSegmentCache
+        cache.reset()
+        let reader = MuseCodeSessionReader(homeDirectory: home, now: { self.now })
+        let first = try XCTUnwrap(reader.read().report)
+        XCTAssertEqual(first.window(minutes: 90)?.totalTokens, 2_000)
+        let url = home.appendingPathComponent(
+            ".local/share/muse/sessions/.msp-view-g6/session-a/snapshot-1.json")
+        let sizeBefore = try XCTUnwrap(
+            (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int)
+        // Rotation by replacement: a new file at the same path with identical
+        // size and mtime - only the file identity in the cache key
+        // distinguishes it, and the identity must arrive through the reader's
+        // own enumeration, not a caller bypass.
+        try FileManager.default.removeItem(at: url)
+        try writeSnapshot(home: home, session: "session-a", name: "snapshot-1.json",
+                          usage: usage(model: "muse-spark-1.3-contributor", tokens: 5_000, first: "a1", last: "b1"),
+                          modified: stamp)
+        let sizeAfter = try XCTUnwrap(
+            (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int)
+        XCTAssertEqual(sizeBefore, sizeAfter, "test precondition: the replacement has identical size")
+        let second = try XCTUnwrap(reader.read().report)
+        XCTAssertEqual(second.window(minutes: 90)?.totalTokens, 5_000,
+                       "a replacement with identical path/size/mtime is re-parsed through the reader's own enumeration")
+    }
+
+    func testReaderReparsesASnapshotRewrittenInPlace() throws {
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        try writeSnapshot(home: home, session: "session-a", name: "snapshot-1.json",
+                          usage: usage(model: "muse-spark-1.3-contributor", tokens: 2_000, first: "a1", last: "b1"),
+                          modified: now.addingTimeInterval(-10 * 60))
+        let cache = MuseCodeSessionReader.snapshotSegmentCache
+        cache.reset()
+        let reader = MuseCodeSessionReader(homeDirectory: home, now: { self.now })
+        let first = try XCTUnwrap(reader.read().report)
+        XCTAssertEqual(first.window(minutes: 90)?.totalTokens, 2_000)
+        try writeSnapshot(home: home, session: "session-a", name: "snapshot-1.json",
+                          usage: usage(model: "muse-spark-1.3-contributor", tokens: 5_000, first: "a1", last: "b1"),
+                          modified: now.addingTimeInterval(-5 * 60))
+        let second = try XCTUnwrap(reader.read().report)
+        XCTAssertEqual(second.window(minutes: 90)?.totalTokens, 5_000,
+                       "a rewritten snapshot has a new cache key, so the new content is parsed")
+    }
+
     func testCurrentModelUsesNullHeadWithoutBackfillingAndPreservesHistoricalUsage() throws {
         let home = try makeHome()
         defer { try? FileManager.default.removeItem(at: home) }

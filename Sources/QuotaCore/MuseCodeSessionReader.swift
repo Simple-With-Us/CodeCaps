@@ -171,6 +171,63 @@ public struct MuseCodeSessionResult: Equatable, Sendable {
 /// snapshot files directly (the newest snapshot in a directory is the one
 /// HEAD.json names), which covers both the latest-segment and the
 /// segment-summed views the fleet's surveys validated.
+/// A process-wide parse cache for snapshot segments.  The session stores
+/// write each snapshot once under a fresh UUID name and rotate by replacement
+/// (no reused snapshot names in the live store), and the key also carries the
+/// file's resource identity, so even a path reused after replacement cannot
+/// serve stale content: an unchanged snapshot never needs a second read and
+/// parse across the one-minute refresh cycles.
+final class MuseCodeSnapshotSegmentCache: @unchecked Sendable {
+    private let lock = NSLock()
+    private var entries: [String: MuseCodeTokenSegment] = [:]
+    private let cap = 8_192
+    private var hits = 0
+    private var misses = 0
+
+    /// `fileId` carries the caller's inode@birthtime identity for the file,
+    /// collected in the same enumeration pass as its mtime and size so the
+    /// hot loop stats each snapshot once.  It distinguishes a replacement
+    /// from the file it replaced even when path, size, and mtime collide.
+    func segment(sessionId: String, url: URL, modified: Date, size: Int,
+                 fileId: String,
+                 parse: () -> MuseCodeTokenSegment?) -> MuseCodeTokenSegment? {
+        let key = url.path + "|" + fileId + "|" + String(modified.timeIntervalSince1970) + "|" + String(size)
+        lock.lock()
+        if let cached = entries[key] {
+            hits += 1
+            lock.unlock()
+            return cached
+        }
+        misses += 1
+        lock.unlock()
+        guard let parsed = parse() else { return nil }
+        lock.lock()
+        // Overflow evicts a single entry rather than clearing the map: a
+        // working set over the cap then degrades to partial misses instead
+        // of turning the next scan into all misses and full re-parses.
+        if entries[key] == nil && entries.count >= cap, let victim = entries.keys.first {
+            entries.removeValue(forKey: victim)
+        }
+        entries[key] = parsed
+        lock.unlock()
+        return parsed
+    }
+
+    func reset() {
+        lock.lock()
+        entries.removeAll()
+        hits = 0
+        misses = 0
+        lock.unlock()
+    }
+
+    func stats() -> (hits: Int, misses: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (hits, misses)
+    }
+}
+
 public struct MuseCodeSessionReader: Sendable {
     public static let storeRelativePath = ".local/share/muse/sessions/.msp-view-g6"
     public static let windowMinutes = [60, 90]
@@ -179,6 +236,9 @@ public struct MuseCodeSessionReader: Sendable {
     private static let maxSnapshotsPerSession = 512
     private static let maxSnapshotBytes = 33_554_432
     private static let futureTolerance: TimeInterval = 120
+
+    /// Shared across readers so the one-minute refresh reuses parses.
+    static let snapshotSegmentCache = MuseCodeSnapshotSegmentCache()
 
     private let homeDirectory: URL
     private let now: @Sendable () -> Date
@@ -214,10 +274,15 @@ public struct MuseCodeSessionReader: Sendable {
             let sessionId = directory.lastPathComponent
             guard let files = try? FileManager.default.contentsOfDirectory(
                 at: directory,
-                includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey]) else { continue }
-            let dated: [(url: URL, modified: Date, size: Int)] = files.map { url in
-                let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
-                return (url, values?.contentModificationDate ?? .distantPast, values?.fileSize ?? 0)
+                includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey,
+                                             .fileResourceIdentifierKey, .creationDateKey]) else { continue }
+            let dated: [(url: URL, modified: Date, size: Int, fileId: String)] = files.map { url in
+                let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey,
+                                                               .fileResourceIdentifierKey, .creationDateKey])
+                let fileId = values?.fileResourceIdentifier.map { String(describing: $0) } ?? ""
+                let birth = values?.creationDate.map { String($0.timeIntervalSince1970) } ?? ""
+                return (url, values?.contentModificationDate ?? .distantPast, values?.fileSize ?? 0,
+                        fileId + "@" + birth)
             }
             // A session counts as active in a window when any of its files —
             // HEAD.json included — was written inside it, the same activity
@@ -243,7 +308,7 @@ public struct MuseCodeSessionReader: Sendable {
                 selected.append(headSnapshot)
             }
             let snapshots = selected.sorted { $0.modified < $1.modified }
-            let currentSnapshot: (url: URL, modified: Date, size: Int)?
+            let currentSnapshot: (url: URL, modified: Date, size: Int, fileId: String)?
             if let headId {
                 // A valid HEAD id is authoritative. If its file is absent, the
                 // current model is unknown; never substitute an older model.
@@ -263,7 +328,8 @@ public struct MuseCodeSessionReader: Sendable {
             var parsed: [(snapshotId: String?, segment: MuseCodeTokenSegment)] = []
             for snapshot in snapshots {
                 if let segment = Self.segment(sessionId: sessionId, url: snapshot.url,
-                                              modified: snapshot.modified, size: snapshot.size) {
+                                              modified: snapshot.modified, size: snapshot.size,
+                                              fileId: snapshot.fileId) {
                     segments.append(segment)
                     parsed.append((Self.snapshotId(from: snapshot.url), segment))
                 }
@@ -296,7 +362,7 @@ public struct MuseCodeSessionReader: Sendable {
         return String(name.dropFirst("snapshot-".count).dropLast(".json".count))
     }
 
-    private static func headSnapshotId(in files: [(url: URL, modified: Date, size: Int)]) -> String? {
+    private static func headSnapshotId(in files: [(url: URL, modified: Date, size: Int, fileId: String)]) -> String? {
         guard let head = files.first(where: { $0.url.lastPathComponent == "HEAD.json" }),
               head.size > 0, head.size <= 1_048_576,
               let data = try? Data(contentsOf: head.url),
@@ -323,7 +389,15 @@ public struct MuseCodeSessionReader: Sendable {
             ?? .distantPast
     }
 
-    private static func segment(sessionId: String, url: URL, modified: Date, size: Int) -> MuseCodeTokenSegment? {
+    private static func segment(sessionId: String, url: URL, modified: Date, size: Int,
+                                fileId: String) -> MuseCodeTokenSegment? {
+        snapshotSegmentCache.segment(sessionId: sessionId, url: url, modified: modified,
+                                     size: size, fileId: fileId) {
+            parseSegment(sessionId: sessionId, url: url, modified: modified, size: size)
+        }
+    }
+
+    private static func parseSegment(sessionId: String, url: URL, modified: Date, size: Int) -> MuseCodeTokenSegment? {
         guard size > 0, size <= maxSnapshotBytes,
               let data = try? Data(contentsOf: url),
               let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
