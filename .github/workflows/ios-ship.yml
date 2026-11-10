@@ -88,6 +88,8 @@ on:
       - 'scripts/ios-fleet/**'
       - '!scripts/ios-fleet/test-*.sh'
       - 'scripts/ios-ship-testflight.sh'
+      - 'scripts/ios-observe-ship.mjs'
+      - 'scripts/ios-recheck-tf-ready.sh'
       - 'scripts/ios-appstore-gm-prepare.sh'
       - 'scripts/ios-install-appstore-profiles.sh'
       - 'scripts/ios-stage-asc-key.sh'
@@ -377,7 +379,7 @@ jobs:
           IOS_VERSIONS_PUBLISH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           source scripts/ios-load-asc-key.sh
-          bash scripts/ios-ship-testflight.sh --build "${{ steps.plan-build.outputs.build }}"
+          node scripts/ios-observe-ship.mjs bash scripts/ios-ship-testflight.sh --build "${{ steps.plan-build.outputs.build }}"
 
       - name: Sync standing TestFlight testers
         if: success()
@@ -409,6 +411,35 @@ jobs:
           if [ "$rc" -ne 0 ]; then
             echo "::warning title=TestFlight standing testers::tester sync exited ${rc}; see the standing-testers lines above.  The TestFlight upload itself succeeded."
           fi
+
+      # ensure-tf-ready inside the ship step runs before standing-tester sync,
+      # so rc=5 there can be a false alarm when sync creates the internal
+      # group (OPS-1052).  Re-run the same ensure-tf-ready pass after sync
+      # (idempotent compliance/notes, fresh internal-tester poll) for the run
+      # summary; failures must not fail a run that already uploaded.
+      - name: Recheck TestFlight readiness after standing-tester sync
+        id: recheck_tf
+        if: success() && steps.ship.outputs.uploaded == 'true'
+        continue-on-error: true
+        timeout-minutes: 8
+        env:
+          IOS_TF_READY_TIMEOUT_SEC: "240"
+        run: |
+          source scripts/ios-load-asc-key.sh
+          bash scripts/ios-recheck-tf-ready.sh codecaps "${{ steps.plan-build.outputs.build }}"
+
+      - name: iOS ship summary (TestFlight readiness after sync)
+        if: always() && steps.ship.outputs.uploaded == 'true'
+        run: |
+          set -euo pipefail
+          {
+            echo "## TestFlight readiness (after standing-tester sync)"
+            if [ "${{ steps.recheck_tf.outcome }}" = "success" ] && [ -n "${{ steps.recheck_tf.outputs.tf_ready_summary }}" ]; then
+              echo "- CodeCaps (${{ steps.recheck_tf.outputs.tf_ready_bundle }} build ${{ steps.recheck_tf.outputs.tf_ready_build }}): rc=${{ steps.recheck_tf.outputs.tf_ready_rc }} — ${{ steps.recheck_tf.outputs.tf_ready_summary }}"
+            elif [ "${{ steps.ship.outcome }}" = "success" ]; then
+              echo "- CodeCaps: post-sync readiness check did not run or produced no summary"
+            fi
+          } >>"$GITHUB_STEP_SUMMARY"
 
       # Never persist the archive lock: a cancelled ship can leave it held,
       # and saving it would hand the next run a stale lock to wait on.
