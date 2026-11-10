@@ -135,10 +135,8 @@ final class CC193HasReadingSitesTests: XCTestCase {
 
     func testPipWidgetCurrentWindowsFilterUsesHasReading() throws {
         let source = try readSource("Sources/CodeCaps/PipWidget.swift")
-        // The filter is named statements now (the combined predicate outran
-        // the hosted type-checker), so the pins follow the statements.
-        XCTAssertTrue(source.contains("if !snapshot.window.hasReading { return false }"))
-        XCTAssertTrue(source.contains("snapshot.remainingPercent != nil"))
+        XCTAssertTrue(source.contains("!$0.isAwaitingRefresh && $0.window.hasReading"))
+        XCTAssertTrue(source.contains("$0.remainingPercent != nil || $0.window.absoluteRemaining != nil"))
         XCTAssertTrue(source.contains("fresh.contains(where: { $0.remainingPercent != nil })"),
                       "pool participants must not let fresh absolute-only readings block peer adoption")
         XCTAssertFalse(source.contains("&& !$0.window.remainingUnknown\n                && !disabledSources.contains"),
