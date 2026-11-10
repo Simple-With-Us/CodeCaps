@@ -226,6 +226,40 @@ final class MuseCodeSessionReaderTests: XCTestCase {
                        "overflow evicts one entry, keeping the rest of the working set cached")
     }
 
+    func testParseCacheReparseesReplacedFileWithIdenticalMetadata() throws {
+        // Rotation by replacement with a reused path, same size, and the same
+        // mtime: the creation-date component in the key must still force a
+        // re-parse.  mtime is set to a FUTURE stamp on both files, because
+        // backdating mtime on macOS also drags birthtime down with it, which
+        // would make the files genuinely indistinguishable by metadata.
+        let cache = MuseCodeSessionReader.snapshotSegmentCache
+        cache.reset()
+        defer { cache.reset() }
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cache-replacement-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("snapshot-1.json")
+        let stamp = Date(timeIntervalSince1970: 2_000_000_000)
+        var parses = 0
+        let parse: () -> MuseCodeTokenSegment? = {
+            parses += 1
+            return MuseCodeTokenSegment(sessionId: "s", modelId: "m",
+                                        totalTokens: parses, observedAt: stamp)
+        }
+        try Data(repeating: 0x61, count: 64).write(to: url)
+        try FileManager.default.setAttributes([.modificationDate: stamp], ofItemAtPath: url.path)
+        let first = cache.segment(sessionId: "s", url: url, modified: stamp, size: 64, parse: parse)
+        XCTAssertEqual(first?.totalTokens, 1)
+        // Replace the file at the same path, then set the same mtime.
+        try FileManager.default.removeItem(at: url)
+        try Data(repeating: 0x62, count: 64).write(to: url)
+        try FileManager.default.setAttributes([.modificationDate: stamp], ofItemAtPath: url.path)
+        let second = cache.segment(sessionId: "s", url: url, modified: stamp, size: 64, parse: parse)
+        XCTAssertEqual(parses, 2, "a replacement with identical path/size/mtime must not hit the old entry")
+        XCTAssertEqual(second?.totalTokens, 2, "the replacement's own content is returned, not the stale entry")
+    }
+
     func testReaderReparsesASnapshotRewrittenInPlace() throws {
         let home = try makeHome()
         defer { try? FileManager.default.removeItem(at: home) }

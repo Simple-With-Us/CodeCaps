@@ -186,12 +186,17 @@ final class MuseCodeSnapshotSegmentCache: @unchecked Sendable {
 
     func segment(sessionId: String, url: URL, modified: Date, size: Int,
                  parse: () -> MuseCodeTokenSegment?) -> MuseCodeTokenSegment? {
-        // The resource identifier is inode-based on APFS: rotation by
-        // replacement yields a new identity even if a reused path kept the
-        // same size and mtime, so the key pins content identity, not just
-        // metadata.  One extra stat per call, far cheaper than a re-parse.
-        let fileId = (try? url.resourceValues(forKeys: [.fileResourceIdentifierKey]))
-            .flatMap { $0.fileResourceIdentifier.map { String(describing: $0) } } ?? ""
+        // Inode number plus creation date distinguish a replacement from
+        // the file it replaced even when the path, size, and mtime are
+        // identical.  attributesOfItem is used instead of URL resource
+        // values because a URL instance caches its values, which could pin
+        // the replaced file's identity.  One extra stat per call, far
+        // cheaper than a re-parse.
+        let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+        let fileId = attrs.map {
+            String(describing: $0[.systemFileNumber] ?? 0) + "@" +
+                String((($0[.creationDate] as? Date) ?? .distantPast).timeIntervalSince1970)
+        } ?? ""
         let key = url.path + "|" + fileId + "|" + String(modified.timeIntervalSince1970) + "|" + String(size)
         lock.lock()
         if let cached = entries[key] {
