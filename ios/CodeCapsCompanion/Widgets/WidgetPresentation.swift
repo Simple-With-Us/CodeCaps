@@ -54,6 +54,12 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
     /// billing cycle reads "1-month" like a monthly quota meter does, and only
     /// the token says which one it was.
     public let rawWindowToken: String?
+    /// The wire label, exactly as it arrived, or nil when the item was built
+    /// in code rather than parsed.  Cadence classification reads this, not the
+    /// display copy:  the rewrite turns "general (interval window)" into
+    /// "1-day window" and the interval wording the shared short/long rule
+    /// needs is gone by pairing time (CC-223).
+    public let wireLabel: String?
     /// The unit the allowance is counted in, when the payload names one
     /// ("USD", "credits", "requests").  A currency unit means the window is a
     /// money meter rather than a quota meter.
@@ -74,6 +80,7 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
         isModelDetail: Bool = false,
         absoluteRemaining: Double? = nil,
         rawWindowToken: String? = nil,
+        wireLabel: String? = nil,
         quotaUnit: String? = nil
     ) {
         self.id = id
@@ -87,6 +94,7 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
         self.observedAt = observedAt
         self.barQualifier = barQualifier
         self.rawWindowToken = rawWindowToken
+        self.wireLabel = wireLabel
         self.quotaUnit = quotaUnit
         self.isExtraAllowance = isExtraAllowance
         self.isSupplementaryVideoQuota = isSupplementaryVideoQuota
@@ -186,6 +194,7 @@ public struct WidgetWindowItem: Identifiable, Equatable, Sendable {
             isModelDetail: isModelDetail,
             absoluteRemaining: absoluteRemaining,
             rawWindowToken: rawWindowToken,
+            wireLabel: wireLabel,
             quotaUnit: quotaUnit
         )
     }
@@ -459,6 +468,13 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
             !$0.isMasked && ($0.remainingPercent != nil || $0.absoluteRemaining != nil || $0.resetAt != nil)
         }
         guard visible.count >= 2 else { return nil }
+        let excludedIds = Set(visible.filter { window in
+            (window.isExtraAllowance && window.remainingPercent == nil)
+                || window.isSupplementaryVideoQuota
+                || window.isModelDetail
+                || QuotaCapRule.isScopedPoolAllowance(
+                    providerKey: providerKey, id: window.id, label: window.label)
+        }.map(\.id))
         let candidates = visible.map { window in
             return QuotaWindowPairing.MeterCandidate(
                 id: window.id,
@@ -466,13 +482,16 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
                 resetAt: window.resetAt,
                 isShort: QuotaMeterCadence.isShort(
                     windowToken: window.rawWindowToken,
-                    label: window.label,
+                    label: window.wireLabel ?? window.label,
                     cadence: window.cadence,
                     resetAt: window.resetAt,
                     now: now,
                     isSupplementaryVideoQuota: window.isSupplementaryVideoQuota
                 ),
-                isExcluded: window.isSupplementaryVideoQuota
+                // A count-only extra allowance has no percentage to meter,
+                // so it fills no pair slot beside a real meter (#360).
+                isExcluded: (window.isExtraAllowance && window.remainingPercent == nil)
+                    || window.isSupplementaryVideoQuota
                     || window.isModelDetail
                     || QuotaCapRule.isScopedPoolAllowance(
                         providerKey: providerKey, id: window.id, label: window.label),
@@ -497,10 +516,10 @@ public struct WidgetPlatformItem: Identifiable, Equatable, Sendable {
             if ls != rs { return ls < rs }
             return left.id < right.id
         }
-        guard let window2 = ordered.first(where: { $0.id != window1.id }) else { return nil }
+        guard let window2 = ordered.first(where: { $0.id != window1.id && !excludedIds.contains($0.id) }) else { return nil }
         if QuotaMeterCadence.isShort(
             windowToken: window1.rawWindowToken,
-            label: window1.label,
+            label: window1.wireLabel ?? window1.label,
             cadence: window1.cadence,
             resetAt: window1.resetAt,
             now: now,
@@ -1175,6 +1194,7 @@ public enum WidgetPresentation {
                 isModelDetail: isModelDetail,
                 absoluteRemaining: w.absoluteRemaining,
                 rawWindowToken: w.window,
+                wireLabel: w.label,
                 quotaUnit: w.quotaUnit
             )
 

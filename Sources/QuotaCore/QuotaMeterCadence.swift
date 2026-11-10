@@ -24,9 +24,6 @@ public enum QuotaMeterCadence {
         let token = (windowToken ?? "")
             .lowercased()
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        if let seconds = durationSeconds(token) {
-            return seconds < 86_400
-        }
         switch token {
         case "session", "fast":
             return true
@@ -36,26 +33,40 @@ public enum QuotaMeterCadence {
             break
         }
 
-        let haystack = ((cadence.isEmpty ? label : cadence) + " " + label + " " + token)
-            .lowercased()
-        if haystack.contains("7d") || haystack.contains("1w") || haystack.contains("weekly")
-            || haystack.contains("month") || haystack.contains("billing")
-            || haystack.contains("cycle") || haystack.contains("30d")
-            || haystack.contains("1m") || haystack.contains("org") || haystack.contains("quota")
-        {
-            return false
+        // The wording signal is read the way the companion always read it:
+        // first the cadence (or, bare, the label), then the label itself, so
+        // a formatted cadence that lost the interval wording ("1-day" for
+        // "general (interval window)") still finds it (CC-223).  A generic
+        // display label such as "Quota" never classifies on its own when the
+        // cadence already spoke.
+        let primary = (cadence.isEmpty ? label : cadence).lowercased()
+        let secondary = label.lowercased()
+        for text in [primary, secondary] {
+            if text.contains("7d") || text.contains("1w") || text.contains("weekly")
+                || text.contains("month") || text.contains("billing")
+                || text.contains("cycle") || text.contains("30d")
+                || text.contains("1m") || text.contains("org") || text.contains("quota")
+            {
+                return false
+            }
+            if text.contains("5h") || text.contains("5-hour") || text.contains("5 hour")
+                || text.contains("five_hour") || text.contains("4h")
+                || text.contains("4-hour") || text.contains("4 hour")
+                || text.contains("four_hour") || text.contains("session")
+                || text.contains("fast") || text.contains("coding plan")
+                || text.contains("coding_plan") || text.contains("interval")
+            {
+                return true
+            }
         }
-        if haystack.contains("5h") || haystack.contains("5-hour") || haystack.contains("5 hour")
-            || haystack.contains("five_hour") || haystack.contains("4h")
-            || haystack.contains("4-hour") || haystack.contains("4 hour")
-            || haystack.contains("four_hour") || haystack.contains("session")
-            || haystack.contains("fast") || haystack.contains("coding plan")
-            || haystack.contains("coding_plan") || haystack.contains("interval")
-        {
-            return true
-        }
-        if haystack.contains("plan") { return false }
+        if primary.contains("plan") || secondary.contains("plan") { return false }
 
+        // A bare duration token decides only after the interval and plan
+        // wordings above:  MiniMax's daily interval reads as a short meter on
+        // every surface (CC-223), so the "1d" token alone must not overrule it.
+        if let seconds = durationSeconds(token) {
+            return seconds < 86_400
+        }
         if let sec = ResetAlarmCadence.periodSeconds(token: cadence.isEmpty ? token : cadence, label: label) {
             return sec < 86_400
         }
