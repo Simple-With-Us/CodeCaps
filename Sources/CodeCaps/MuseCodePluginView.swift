@@ -10,7 +10,7 @@ struct MuseCodePluginPage: View {
         if let plugin = CodeCapsPlugin.named(pluginId), plugin == .museCode {
             MuseCodeMonitorPage(model: model)
         } else {
-            Text("Plugin unavailable")
+            Text("Plugin Unavailable")
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(.secondary)
         }
@@ -84,7 +84,7 @@ struct MuseCodeMonitorPage: View {
                     Text("Muse Monitor")
                         .font(.system(size: 18, weight: .bold, design: .rounded))
                     if isWarning {
-                        Text("WARNING")
+                        Text("Warning")
                             .font(.system(size: 10, weight: .bold))
                             .foregroundStyle(.white)
                             .padding(.horizontal, 6)
@@ -92,7 +92,7 @@ struct MuseCodeMonitorPage: View {
                             .background(Theme.warning, in: Capsule())
                     }
                 }
-                Text("Deterministic monitoring of Muse token burn and standard-model sessions on this Mac.")
+                Text("Tracks Muse token use and standard-model sessions on this Mac.")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -150,13 +150,13 @@ struct MuseCodeMonitorPage: View {
             Eyebrow("CONTRIBUTOR SHARE")
             VStack(alignment: .leading, spacing: 8) {
                 if let window = window90, let share = window.contributorShare {
-                    row("Contributor Share (90 minutes)", MuseCodeFormatting.percent(share))
+                    row("Contributor Share (90 Minutes)", MuseCodeFormatting.percent(share))
                     row("Contributor Tokens", MuseCodeFormatting.grouped(window.contributorTokens))
                     if share < 1 {
                         row("Standard Tokens", MuseCodeFormatting.grouped(window.totalTokens - window.contributorTokens))
                     }
                 } else {
-                    row("Contributor Share (90 minutes)", "No tokens in window")
+                    row("Contributor Share (90 Minutes)", "No tokens in window")
                 }
             }
             .padding(16)
@@ -220,9 +220,9 @@ struct MuseCodeMonitorPage: View {
                             in: 100_000...50_000_000, step: 100_000)
                         .labelsHidden()
                 }
-                Text("Two alert kinds: museCodeBurn fires when burn passes the threshold while a session is on a standard model."
+                Text("Burn Alert warns you when usage passes the threshold while a session uses a standard model."
                     + sentenceGap
-                    + "museCodeStandardSession fires on its own the moment a session starts on, or switches to, a standard model, whatever the burn rate.")
+                    + "Standard Session Alert warns you when a session starts or switches to a standard model, regardless of burn rate.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -263,7 +263,7 @@ struct MuseCodeMonitorPage: View {
                     Text(tokenStatus).font(.system(size: 11)).foregroundStyle(.secondary)
                 }
                 row("Bridge Status", model.museCodeBridgeStatus ?? "Not posted yet")
-                Text("Posts each session's new tokens since the last reading to Usage Monitor, as muse-code token events."
+                Text("Posts each session's new tokens since the last reading to Usage Monitor, as Muse Code usage."
                     + sentenceGap
                     + "Replays dedupe server-side, so a failed post is safe to retry.")
                     .font(.system(size: 11))
