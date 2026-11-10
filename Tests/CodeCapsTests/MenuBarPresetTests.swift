@@ -199,7 +199,7 @@ final class MenuBarPresetTests: XCTestCase {
         return model
     }
 
-    private func window(_ id: String, provider: String, token: String?, remaining: Double,
+    private func window(_ id: String, provider: String, token: String?, remaining: Double?,
                         model: String? = nil, label: String? = nil,
                         resetAfter: TimeInterval = 86_400, now: Date) -> QuotaWindow {
         let canonicalLabel = label ?? token ?? "Quota"

@@ -430,7 +430,7 @@ public enum CompanionProviderMarkAssets {
         if low.contains("minimax") { return "provider-minimax" }
         if low.contains("kimi") { return "provider-kimi" }
         if ["zcode", "z.ai", "z-ai", "zai"].contains(where: { low.contains($0) }) { return "provider-zai" }
-        if low.contains("copilot") { return "provider-copilot" }
+        if low.contains("copilot") || pool.contains("copilot") { return "provider-copilot" }
         if low.contains("muse-assist") || low.contains("muse_assist") { return "provider-muse-assist" }
         if low.contains("muse-code") || low.contains("muse_code") { return "provider-muse-code" }
         if low.contains("muse") { return "provider-muse-assist" }
@@ -443,6 +443,8 @@ public enum CompanionProviderMarkAssets {
         case "grok": return "provider-grok"
         default:
             if low.contains("grok-bot") { return "provider-grok-bot" }
+            if low.contains("xai") { return "provider-xai" }
+            if low.contains("grok") { return "provider-grok" }
             return nil
         }
     }
