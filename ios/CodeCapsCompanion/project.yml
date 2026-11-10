@@ -184,6 +184,7 @@ targets:
       - path: ../../Sources/QuotaCore/CompanionReadTokenStore.swift
         group: Shared
       - path: ../../Sources/QuotaCore/QuotaWindowPairing.swift
+        group: Shared
       - path: ../../Sources/QuotaCore/WidgetSnapshotFetcher.swift
         group: Shared
     dependencies:
