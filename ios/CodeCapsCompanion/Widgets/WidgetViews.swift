@@ -831,7 +831,13 @@ struct AccessoryView: View {
                             Text(platform.displayPercent)
                                 .font(.system(size: 12, weight: .bold, design: .rounded))
                         }
-                        MiniProgressBar(fraction: platform.progressFraction, color: .primary, elapsedFraction: platform.elapsedFraction, hasReading: !platform.isMasked && platform.remainingPercent?.isFinite == true, height: 4)
+                        MiniProgressBar(
+                            fraction: platform.progressFraction,
+                            color: WidgetPresentation.quotaBarRemainingColor,
+                            elapsedFraction: platform.elapsedFraction,
+                            hasReading: !platform.isMasked && platform.remainingPercent?.isFinite == true,
+                            height: 4
+                        )
                         WindowCaptionRow(
                             caption: platform.controllingWindow(entry.windowPick)?.caption
                                 ?? .withoutQualifier(
