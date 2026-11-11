@@ -670,9 +670,51 @@ final class WidgetTests: XCTestCase {
     func testWidgetBarRemainingSegmentUsesMacGrammar() throws {
         let presentation = try readSource(at: Self.widgetPresentationURL)
         XCTAssertTrue(presentation.contains("quotaBarRemainingColor"))
+        let widgetPaths = [
+            "ios/CodeCapsCompanion/Widgets/WidgetWindowRows.swift",
+            "ios/CodeCapsCompanion/Widgets/WidgetViews.swift",
+        ]
+        for relativePath in widgetPaths {
+            let text = try readSource(at: Self.repoRoot.appendingPathComponent(relativePath))
+            let calls = text.components(separatedBy: "MiniProgressBar(").dropFirst()
+            XCTAssertFalse(calls.isEmpty, relativePath)
+            for call in calls {
+                let segment = String(call.prefix(600))
+                XCTAssertTrue(
+                    segment.contains("WidgetPresentation.quotaBarRemainingColor"),
+                    "\(relativePath) must tint the remaining segment with Mac glance ink, not status or primary"
+                )
+                XCTAssertFalse(
+                    segment.contains("color: .primary"),
+                    "\(relativePath) must not leave .primary on a quota bar remaining segment (CC-228)"
+                )
+                XCTAssertFalse(
+                    segment.contains("color: statusColor"),
+                    "\(relativePath) must not tint the bar from statusColor (CC-223)"
+                )
+            }
+        }
         let rows = try readSource(at: Self.repoRoot.appendingPathComponent("ios/CodeCapsCompanion/Widgets/WidgetWindowRows.swift"))
-        XCTAssertTrue(rows.contains("color: WidgetPresentation.quotaBarRemainingColor"))
         XCTAssertFalse(rows.contains("color: statusColor,\n                    elapsedFraction: window?.elapsedFraction()"))
+    }
+
+    func testAccessoryRectangularSingleWindowBarUsesQuotaInkNotPrimary() throws {
+        let views = try readSource(at: Self.repoRoot.appendingPathComponent("ios/CodeCapsCompanion/Widgets/WidgetViews.swift"))
+        let elseBranch = views.components(separatedBy: "if entry.quotasPerProvider == .twoIfAvailable, let pair = platform.dualWindows()").last ?? ""
+        let singleWindowBranch = elseBranch.components(separatedBy: "} else {").last?
+            .components(separatedBy: "case .accessoryInline:").first ?? ""
+        XCTAssertTrue(
+            singleWindowBranch.contains("MiniProgressBar"),
+            "non-dual accessory rectangular must still draw a quota bar"
+        )
+        XCTAssertTrue(
+            singleWindowBranch.contains("WidgetPresentation.quotaBarRemainingColor"),
+            "non-dual accessory rectangular must match Mac glance remaining ink (CC-228)"
+        )
+        XCTAssertFalse(
+            singleWindowBranch.contains("color: .primary"),
+            "non-dual accessory rectangular must not use .primary on the bar"
+        )
     }
 
     func testOverviewViewsPassQuotasPerProviderToPlanGrid() throws {
