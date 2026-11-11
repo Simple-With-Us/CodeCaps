@@ -701,7 +701,7 @@ final class WidgetTests: XCTestCase {
     func testAccessoryRectangularSingleWindowBarUsesQuotaInkNotPrimary() throws {
         let views = try readSource(at: Self.repoRoot.appendingPathComponent("ios/CodeCapsCompanion/Widgets/WidgetViews.swift"))
         let elseBranch = views.components(separatedBy: "if entry.quotasPerProvider == .twoIfAvailable, let pair = platform.dualWindows()").last ?? ""
-        let singleWindowBranch = elseBranch.components(separatedBy: "} else {").last?
+        let singleWindowBranch = elseBranch.components(separatedBy: "} else {").dropFirst().first?
             .components(separatedBy: "case .accessoryInline:").first ?? ""
         XCTAssertTrue(
             singleWindowBranch.contains("MiniProgressBar"),
