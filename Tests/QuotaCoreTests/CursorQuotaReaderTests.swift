@@ -267,6 +267,81 @@ final class CursorQuotaReaderTests: XCTestCase {
         XCTAssertEqual(window.window, "billing-cycle")
     }
 
+    /// A unified plan's included allowance is the shared xAI pool.  When
+    /// Cursor's current-period read reports the monthly billing cycle rather
+    /// than the weekly pool, the reader must not fall back to the monthly
+    /// dollar meter:  that meter read `1m` at 100% beside Grok, xAI and Grok
+    /// Bot's `7d` reading of the same pool (owner 2026-11-12).  The row is
+    /// the pool's placeholder instead, still carrying the detected plan.
+    func testUnifiedPlanWithMonthlyCycleYieldsPoolPlaceholderNotDollarMeter() async throws {
+        let token = Self.jwt(subject: "auth0|cursor-user-unified", expiration: observedAt.addingTimeInterval(3600))
+        let startMs = Int(observedAt.timeIntervalSince1970 * 1_000) - (12 * 86_400 * 1_000)
+        let endMs = Int(observedAt.timeIntervalSince1970 * 1_000) + (18 * 86_400 * 1_000)
+        let reader = CursorQuotaReader(
+            now: { self.observedAt },
+            accessToken: { token },
+            fetch: { request in
+                if request.url?.absoluteString.contains("GetCurrentPeriodUsage") == true {
+                    return Self.response(#"{"billingCycleStart":"\#(startMs)","billingCycleEnd":"\#(endMs)","planUsage":{"autoPercentUsed":33,"totalPercentUsed":0}}"#)
+                }
+                return Self.response(#"{"billingCycleStart":"\#(startMs)","billingCycleEnd":"\#(endMs)","membershipType":"unified_ultra","individualUsage":{"plan":{"used":40000,"limit":40000,"remaining":0,"totalPercentUsed":100}}}"#)
+            }
+        )
+        let result = await reader.read()
+        XCTAssertEqual(result.windows.count, 1)
+        let window = try XCTUnwrap(result.windows.first)
+        XCTAssertEqual(window.id, "local-mac:cursor:unknown")
+        XCTAssertFalse(window.hasReading)
+        XCTAssertNil(window.quotaUnit)
+        XCTAssertNotEqual(window.window, "billing-cycle")
+        XCTAssertEqual(window.planName, "unified_ultra")
+        XCTAssertNotNil(result.issues["cursor"], "an empty row explains itself until the pool fills it")
+        XCTAssertTrue(UnifiedSubscriptionPool.isPoolWindow(window))
+
+        // The shared pool fills the placeholder in place with the same reading
+        // Grok Bot shows:  same percentage, same reset, same seven-day window.
+        let iso = ISO8601DateFormatter()
+        let grokBot = QuotaWindow(
+            id: "local-mac:grok-bot:weekly", provider: "Grok Bot", providerKey: "grok-bot",
+            providerLabel: "Grok Bot", via: "cursor", sourceApp: "local-mac",
+            label: "Grok Bot weekly", remainingPercent: 67,
+            resetAt: iso.string(from: observedAt.addingTimeInterval(6 * 86_400 + 7 * 3_600)),
+            window: "weekly", occurredAt: iso.string(from: observedAt),
+            source: "Cursor DashboardService"
+        ).normalizedForExport()
+        let shared = UnifiedSubscriptionPool.share(
+            windows: result.windows + [grokBot], now: observedAt,
+            targetKeys: UnifiedSubscriptionPool.participantKeys)
+        let cursorRows = shared.filter { $0.canonicalProviderKey == "cursor" }
+        XCTAssertEqual(cursorRows.count, 1)
+        let cursor = try XCTUnwrap(cursorRows.first)
+        XCTAssertEqual(cursor.remainingPercent, grokBot.remainingPercent)
+        XCTAssertEqual(cursor.resetAt, grokBot.resetAt)
+        XCTAssertEqual(cursor.window, "7d")
+        XCTAssertEqual(cursor.planName, "unified_ultra")
+    }
+
+    /// A non-unified plan with no weekly pool reading keeps the monthly
+    /// summary meter, as before.
+    func testNonUnifiedPlanWithMonthlyCycleKeepsSummaryMeter() async throws {
+        let token = Self.jwt(subject: "auth0|cursor-user-pro-monthly", expiration: observedAt.addingTimeInterval(3600))
+        let reader = CursorQuotaReader(
+            now: { self.observedAt },
+            accessToken: { token },
+            fetch: { request in
+                if request.url?.absoluteString.contains("GetCurrentPeriodUsage") == true {
+                    return Self.response(#"{"billingCycleStart":"2026-09-01T00:00:00Z","billingCycleEnd":"2026-10-01T00:00:00Z","planUsage":{"totalPercentUsed":25}}"#)
+                }
+                return Self.response(#"{"billingCycleEnd":"2026-10-01T00:00:00Z","membershipType":"pro","individualUsage":{"plan":{"used":2500,"limit":10000,"remaining":7500,"totalPercentUsed":25}}}"#)
+            }
+        )
+        let result = await reader.read()
+        let window = try XCTUnwrap(result.windows.first)
+        XCTAssertEqual(window.id, "local-mac:cursor:plan")
+        XCTAssertEqual(window.window, "billing-cycle")
+        XCTAssertEqual(window.remainingPercent, 75)
+    }
+
     func testOversizedTokenFailsClosedBeforeRequest() async {
         let oversized = String(repeating: "a", count: 65_537)
         let reader = CursorQuotaReader(accessToken: { oversized }, fetch: { _ in
