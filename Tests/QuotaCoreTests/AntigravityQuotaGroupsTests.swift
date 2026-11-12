@@ -58,6 +58,21 @@ final class AntigravityQuotaGroupsTests: XCTestCase {
         XCTAssertEqual(AntigravityQuotaGroups.normalize(groups, includeMissing: true), groups)
     }
 
+    func testCadenceLabelsRequireExactCanonicalValues() {
+        var window = report("claude-sonnet", 80)
+        window.modelId = nil
+        window.label = "notweekly"
+        XCTAssertNil(AntigravityQuotaGroups.cadenceKey(for: window))
+        window.label = "weekend"
+        XCTAssertNil(AntigravityQuotaGroups.cadenceKey(for: window))
+        window.label = " 7-day window "
+        XCTAssertEqual(AntigravityQuotaGroups.cadenceKey(for: window), "weekly")
+        window.label = "not a 5-hour limit"
+        XCTAssertNil(AntigravityQuotaGroups.cadenceKey(for: window))
+        window.label = " 5-hour window "
+        XCTAssertEqual(AntigravityQuotaGroups.cadenceKey(for: window), "5h")
+    }
+
     func testASourceReportedExhaustionSurvivesGroupingAndExport() throws {
         // Antigravity called this pool dead at 15% — a rejected session, a
         // suspended plan — and the percentage is the last good reading rather

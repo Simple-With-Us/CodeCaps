@@ -16,11 +16,11 @@ settings:
     IPHONEOS_DEPLOYMENT_TARGET: "17.0"
     MACOSX_DEPLOYMENT_TARGET: "14.0"
     # RECORD OF WHAT SHIPPED, not the source of truth for what ships next:
-    # the ship script passes both values on the xcodebuild command line, and
-    # reads this one as the build-number FLOOR, so it must stay below the
-    # commit count of any commit that can ship.
-    MARKETING_VERSION: "1.0.234"
-    CURRENT_PROJECT_VERSION: "234"
+    # the ship script passes both values on the xcodebuild command line
+    # (fixed marketing version 0.1.0, one shared merge-timestamp build per
+    # release), so these are a placeholder the ship always overrides.
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "202610290000"
     DEVELOPMENT_TEAM: CC8UTF7ATG
     CODE_SIGN_STYLE: Automatic
     ENABLE_USER_SCRIPT_SANDBOXING: YES
@@ -33,7 +33,7 @@ settings:
 packages:
   Sentry:
     url: https://github.com/getsentry/sentry-cocoa.git
-    from: "9.30.2"
+    from: "9.33.0"
 
 targets:
   CodeCapsCompanion:
@@ -63,11 +63,21 @@ targets:
         group: Shared
       - path: ../../Sources/QuotaCore/QuotaWindowVocabulary.swift
         group: Shared
+      - path: ../../Sources/QuotaCore/QuotaWindowPairing.swift
+        group: Shared
+      - path: ../../Sources/QuotaCore/QuotaMeterCadence.swift
+        group: Shared
       - path: ../../Sources/QuotaCore/FleetSourceDisagreement.swift
         group: Shared
       - path: ../../Sources/QuotaCore/WidgetPlatformDisplay.swift
         group: Shared
+      - path: ../../Sources/QuotaCore/PlanMetadata.swift
+        group: Shared
       - path: ../../Sources/QuotaCore/CompanionReadTokenStore.swift
+        group: Shared
+      - path: ../../Sources/QuotaCore/WidgetSnapshotFetcher.swift
+        group: Shared
+      - path: ../../Sources/QuotaCore/AppGroupSnapshotReadPolicy.swift
         group: Shared
     dependencies:
       - target: CodeCapsWidgets
@@ -111,13 +121,23 @@ targets:
         group: Shared
       - path: ../../Sources/QuotaCore/QuotaWindowVocabulary.swift
         group: Shared
+      - path: ../../Sources/QuotaCore/QuotaWindowPairing.swift
+        group: Shared
+      - path: ../../Sources/QuotaCore/QuotaMeterCadence.swift
+        group: Shared
+      - path: ../../Sources/QuotaCore/QuotaWindowCaption.swift
+        group: Shared
       - path: ../../Sources/QuotaCore/FleetSourceDisagreement.swift
         group: Shared
       - path: ../../Sources/QuotaCore/WidgetPlatformDisplay.swift
         group: Shared
+      - path: ../../Sources/QuotaCore/PlanMetadata.swift
+        group: Shared
       - path: ../../Sources/QuotaCore/WidgetSnapshotFetcher.swift
         group: Shared
       - path: ../../Sources/QuotaCore/CompanionReadTokenStore.swift
+        group: Shared
+      - path: ../../Sources/QuotaCore/AppGroupSnapshotReadPolicy.swift
         group: Shared
     settings:
       base:
@@ -167,7 +187,15 @@ targets:
         group: Shared
       - path: ../../Sources/QuotaCore/WidgetPlatformDisplay.swift
         group: Shared
+      - path: ../../Sources/QuotaCore/PlanMetadata.swift
+        group: Shared
       - path: ../../Sources/QuotaCore/CompanionReadTokenStore.swift
+        group: Shared
+      - path: ../../Sources/QuotaCore/QuotaWindowPairing.swift
+      - path: ../../Sources/QuotaCore/QuotaMeterCadence.swift
+        group: Shared
+        group: Shared
+      - path: ../../Sources/QuotaCore/WidgetSnapshotFetcher.swift
         group: Shared
     dependencies:
       - target: CodeCapsWidgetsMac
@@ -209,13 +237,21 @@ targets:
         group: Shared
       - path: ../../Sources/QuotaCore/QuotaWindowVocabulary.swift
         group: Shared
+      - path: ../../Sources/QuotaCore/QuotaWindowCaption.swift
+        group: Shared
       - path: ../../Sources/QuotaCore/FleetSourceDisagreement.swift
         group: Shared
       - path: ../../Sources/QuotaCore/WidgetPlatformDisplay.swift
         group: Shared
+      - path: ../../Sources/QuotaCore/PlanMetadata.swift
+        group: Shared
       - path: ../../Sources/QuotaCore/WidgetSnapshotFetcher.swift
         group: Shared
       - path: ../../Sources/QuotaCore/CompanionReadTokenStore.swift
+        group: Shared
+      - path: ../../Sources/QuotaCore/QuotaWindowPairing.swift
+      - path: ../../Sources/QuotaCore/QuotaMeterCadence.swift
+        group: Shared
         group: Shared
     entitlements:
       path: Generated/CodeCapsWidgetsMac.entitlements

@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import Carbon
 import QuotaCore
 import SwiftUI
 import UserNotifications
@@ -57,6 +58,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     let model = MonitorModel()
     let consoleState = ConsoleState()
     private var statusItem: NSStatusItem?
+    private var keepsMenuBarAccessAfterBackgroundChoice = false
+    private var userConfirmedQuit = false
+    private var planWarningCycle = PlanWarningCycle()
+    private var navigatingPlanWarning = false
+    private var planWarningCheckPending = false
 
     /// CodeCaps' own mark, from the owner's cropped black-on-transparent
     /// artwork.  It is a template image so macOS tints it to the menu bar's
@@ -98,6 +104,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         // Read before anything can open a window: the launch Sparkle performs
         // after installing an update stays in the background.
         let relaunchedForUpdate = UpdateRelaunchMarker().consume()
+        // Warm the provider-mark cache off the main thread: custom marks read
+        // from disk and were always instant, while bundled marks sometimes
+        // drew placeholders first.  The retry still covers a bundle that
+        // arrives after this runs.
+        DispatchQueue.global(qos: .utility).async {
+            PlatformLogoImage.preloadBundledMarks()
+        }
         UNUserNotificationCenter.current().delegate = self
         AppUpdater.shared.start()
         configureMenu()
@@ -153,8 +166,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         // above others but left the app an accessory with no Dock icon, so
         // the owner could not switch to CodeCaps at all.  Dock + activate is
         // what they actually wanted..store(in: &subscriptions)
-        consoleState.$page.removeDuplicates().sink { [weak self] page in
-            self?.consoleWindow?.title = page.isSettings ? "CodeCaps Settings" : "CodeCaps"
+        consoleState.$page.removeDuplicates().sink { [weak self] _ in
+            self?.consoleWindow?.title = "CodeCaps Dashboard"
         }.store(in: &subscriptions)
         model.$glanceView.removeDuplicates().sink { [weak self] _ in
             DispatchQueue.main.async {
@@ -171,6 +184,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         model.objectWillChange.sink { [weak self] _ in
             DispatchQueue.main.async {
                 self?.updateStatus()
+                self?.checkPlanMismatches()
                 if let self, let window = self.floatingGlance, window.isVisible {
                     let size = NSSize(width: Metrics.glanceWidth, height: QuotaGlanceMetrics.popoverHeight(for: self.model, on: window.screen))
                     if abs(window.contentLayoutRect.height - size.height) > 1 { window.setContentSize(size) }
@@ -194,6 +208,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         }.store(in: &subscriptions)
         exhaustionPopupController = ExhaustionPopupController(model: model)
         if model.displayMode != .menuBar && !relaunchedForUpdate { showConsole(page: nil) }
+        beginPlanWarningOpen()
         model.start()
         startInfisicalSync()
         NotificationCenter.default.addObserver(
@@ -223,13 +238,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// succeeds the app simply keeps its local values.
     private func startInfisicalSync() {
         // Install persisted configuration synchronously on the main actor.
-        // A delayed startup task must never restore A after Settings saved B.
+        // A delayed startup task must never restore A after Dashboard saved B.
         let settings = InfisicalSettings.shared
-        guard let identity = InfisicalIdentityStore.load() else {
+        guard let configuration = InfisicalIdentityStore.loadSetup()?.configuration else {
             settings.clearConfiguration()
             return
         }
-        settings.configure(identity.configuration)
+        settings.configure(configuration)
         refreshInfisicalSettings()
     }
 
@@ -282,7 +297,128 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
+        beginPlanWarningOpen()
         refreshInfisicalSettings()
+    }
+
+    private func beginPlanWarningOpen() {
+        guard !navigatingPlanWarning, !planWarningCycle.isPresenting else { return }
+        planWarningCycle.beginOpen(customInfo: model.platformCustomInfo)
+        planWarningCheckPending = true
+        DispatchQueue.main.async { [weak self] in self?.checkPlanMismatches() }
+    }
+
+    private func checkPlanMismatches() {
+        guard !navigatingPlanWarning,
+              planWarningCheckPending || popover.isShown || consoleWindow?.isVisible == true || floatingGlance?.isVisible == true else { return }
+        //  Accepted overrides are filtered inside warnings(), so an
+        //  explicit choice never warns again no matter the caller.
+        let warnings = planWarningCycle.warnings(windows: model.detectedPlanWindows,
+                                                  customInfo: model.platformCustomInfo, now: Date())
+        if model.lastChecked != nil { planWarningCheckPending = false }
+        //  A model change can re-enter while the modal is up:  warnings()
+        //  returns [] for a cycle already presenting, and finishing here
+        //  would clear isPresenting under the visible alert and let a
+        //  second modal stack.  Only finish a cycle this call did not open.
+        guard !warnings.isEmpty else {
+            if !planWarningCycle.isPresenting { planWarningCycle.finishPresentation() }
+            return
+        }
+        // At most once an hour, no matter how often the app opens.
+        if let last = PlanMismatchSuppression.lastPresentedAt,
+           Date().timeIntervalSince(last) < 3600 {
+            planWarningCycle.finishPresentation()
+            return
+        }
+        // "Don't show this again" silences repeats, never first sightings: a
+        // mismatch with a new provider or a changed detected plan still shows.
+        if PlanMismatchSuppression.isSuppressed, PlanMismatchSuppression.isRepeat(warnings) {
+            planWarningCycle.finishPresentation()
+            return
+        }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        // The transparent colour mark, as on the About page, with CodeCaps
+        // beside it — not the app icon.  NSAlert draws messageText bold to
+        // the right of the icon, which is exactly the requested lockup.
+        if let brandMark = BrandMarkImage.asset { alert.icon = brandMark }
+        alert.messageText = "CodeCaps"
+        let values = warnings.map {
+            "\($0.providerLabel): entered “\($0.enteredPlan)”; provider reports “\($0.detectedPlan)”."
+        }.joined(separator: "\n")
+        alert.informativeText = "Plan Information Mismatch\n\n" + values + "\n\n"
+            + "Your entered values have been kept." + sentenceGap
+            + "Review the plan fields in Settings to resolve the difference."
+        alert.addButton(withTitle: "Open Settings")
+        alert.addButton(withTitle: "Continue")
+        alert.showsSuppressionButton = true
+        alert.suppressionButton?.title = "Don't show this again"
+        NSApp.activate(ignoringOtherApps: true)
+        let response = alert.runModal()
+        if alert.suppressionButton?.state == .on { PlanMismatchSuppression.isSuppressed = true }
+        //  The hourly throttle reads this stamp;  it only engages if the
+        //  presentation actually writes it.
+        PlanMismatchSuppression.lastPresentedAt = Date()
+        PlanMismatchSuppression.record(warnings)
+        navigatingPlanWarning = true
+        planWarningCycle.finishPresentation()
+        if response == .alertFirstButtonReturn { showSettings() }
+        DispatchQueue.main.async { [weak self] in self?.navigatingPlanWarning = false }
+    }
+
+    private let snapshotTerminationDrain = SnapshotTerminationDrain()
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        let systemTerminationReason = NSAppleEventManager.shared().currentAppleEvent?
+            .paramDescriptor(forKeyword: kAEQuitReason)?.typeCodeValue
+        if !userConfirmedQuit && QuitConfirmationPolicy.shouldConfirm(
+            systemTerminationReason: systemTerminationReason,
+            automaticInstallInProgress: AppUpdater.shared.isAutomaticInstallInProgress) {
+            switch confirmQuitChoice() {
+            case .closeAndKeepRunning:
+                closeWindowsAndKeepRunning()
+                return .terminateCancel
+            case .quit:
+                userConfirmedQuit = true
+            case .cancel:
+                return .terminateCancel
+            }
+        }
+        beginTerminationDrain(replyTo: sender)
+        return .terminateLater
+    }
+
+    private func confirmQuitChoice() -> QuitConfirmationChoice {
+        let alert = NSAlert()
+        alert.messageText = "Quit CodeCaps?"
+        alert.informativeText = "Close the windows and keep CodeCaps running in the menu bar so quota checks and alerts continue."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Close Window And Keep Running")
+        alert.addButton(withTitle: "Quit CodeCaps")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons.first?.keyEquivalent = "\r"
+        alert.buttons.last?.keyEquivalent = "\u{1b}"
+        NSApp.activate(ignoringOtherApps: true)
+        return QuitConfirmationChoice(response: alert.runModal())
+    }
+
+    private func closeWindowsAndKeepRunning() {
+        keepsMenuBarAccessAfterBackgroundChoice = true
+        ensureStatusItem()
+        updateStatus()
+        popover.performClose(nil)
+        lowerConsole()
+        for window in QuitConfirmationPolicy.windowsToHide(managed: [consoleWindow, floatingGlance]) {
+            window.orderOut(nil)
+        }
+        applyActivationPolicy()
+    }
+
+    private func beginTerminationDrain(replyTo sender: NSApplication) {
+        snapshotTerminationDrain.request(
+            stop: { model.stop() },
+            flush: { [self] in await model.flushSnapshotWrites() },
+            reply: { sender.reply(toApplicationShouldTerminate: true) })
     }
 
     func applicationWillTerminate(_ notification: Notification) { model.stop() }
@@ -295,22 +431,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     private func apply(_ mode: DisplayMode) {
         // AppKit owns only activation and status-item lifetime; content remains SwiftUI.
-        if mode != .dock && statusItem == nil {
-            let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-            item.button?.target = self
-            item.button?.action = #selector(statusItemClicked)
-            item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
-            statusItem = item
+        if QuitConfirmationPolicy.shouldShowStatusItem(displayMode: mode,
+                                                       keepRunningOverride: keepsMenuBarAccessAfterBackgroundChoice) {
+            ensureStatusItem()
         }
         NSApp.setActivationPolicy(mode == .menuBar ? .accessory : .regular)
         if mode == .menuBar { consoleWindow?.orderOut(nil) }
         if mode == .dock {
             popover.performClose(nil)
-            if let item = statusItem { NSStatusBar.system.removeStatusItem(item) }
-            statusItem = nil
+            if !keepsMenuBarAccessAfterBackgroundChoice {
+                if let item = statusItem { NSStatusBar.system.removeStatusItem(item) }
+                statusItem = nil
+            }
             showConsole(page: nil)
         }
         updateStatus()
+    }
+
+    private func ensureStatusItem() {
+        guard statusItem == nil else { return }
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        item.button?.target = self
+        item.button?.action = #selector(statusItemClicked)
+        item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        statusItem = item
     }
 
     /// Keeps the warning window in step with the model.  Called on every
@@ -423,7 +567,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         }
         add("Refresh Quotas", #selector(refresh), "r")
         add("Open CodeCaps", #selector(showMonitor), "1")
-        add("Settings…", #selector(showSettings), ",")
+        add("Dashboard…", #selector(showSettings), ",")
         menu.addItem(.separator())
         add("About CodeCaps", #selector(showAbout))
         add("Check For Updates…", #selector(checkForUpdates))
@@ -444,6 +588,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         guard let button = statusItem?.button else { showConsole(page: nil); return }
         if popover.isShown { popover.performClose(nil) }
         else {
+            beginPlanWarningOpen()
             // Sized immediately before every show, from the expected provider
             // count, so the popover cannot resize while it is open.
             // The ceiling comes from the screen the status item is on, not
@@ -458,6 +603,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     private func showFloatingGlance() {
+        beginPlanWarningOpen()
         if floatingGlance == nil {
             let size = NSSize(width: Metrics.glanceWidth,
                               height: QuotaGlanceMetrics.popoverHeight(for: model, on: NSScreen.main))
@@ -522,6 +668,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// The single window.  `page` nil means "leave the selection alone", which
     /// is what a reopen or a Dock-mode switch wants.
     func showConsole(page: ConsolePage?) {
+        beginPlanWarningOpen()
         let shouldElevate = popover.isShown
         if let page {
             consoleState.clearHistoryFocus()
@@ -553,7 +700,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             window.setFrameAutosaveName("CodeCapsConsoleWindow")
             consoleWindow = window
         }
-        consoleWindow?.title = consoleState.page.isSettings ? "CodeCaps Settings" : "CodeCaps"
+        // The window is the Dashboard: it holds every platform alongside the
+        // settings pages, so the title never depends on the selected page.
+        consoleWindow?.title = "CodeCaps Dashboard"
         // Derive the level unconditionally on every call.  The old branch
         // only ever raised and left a stale popUpMenuWindow + 1 in place when
         // the popover had been dismissed by a path that does not also resign
@@ -593,14 +742,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         showConsole(page: nil)
     }
 
-    /// `⌘,` always lands on a Settings page, the last one used.
+    /// `⌘,` always lands on a Dashboard page, the last one used.
     @objc func showSettings() { showConsole(page: consoleState.lastSettingsPage) }
 
     @objc private func showAbout() { showConsole(page: .settingsAbout) }
     @objc private func checkForUpdates() { AppUpdater.shared.checkForUpdates() }
 
     /// "Check For Updates…" is greyed out while Sparkle is busy, and on a build
-    /// that cannot update itself (Settings ▸ About says why).
+    /// that cannot update itself (Dashboard ▸ About says why).
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(checkForUpdates) { return AppUpdater.shared.canCheckForUpdates }
         return true
@@ -614,7 +763,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// rather than a window registry.
     ///
     /// The display mode wins over the window.  A menu-bar-only app must never
-    /// While Settings or Console is open, the Dock icon is visible so the
+    /// While the Dashboard or Console is open, the Dock icon is visible so the
     /// window can be switched to normally.  When closed in Menu Bar mode,
     /// the app reverts to .accessory so no stray Dock icon remains.
     private func applyActivationPolicy() {
@@ -660,7 +809,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         glanceOcclusion.isOccluded = true
         // The PiP HUD is documented to stay "visible on top of all windows at
         // all times".  The controller remembers the elevated console so a HUD
-        // recreated from the Settings toggle comes back above it too.
+        // recreated from the Dashboard toggle comes back above it too.
         PipWidgetController.shared.raise(above: consoleWindow)
     }
 
@@ -700,7 +849,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         }
         add("Open CodeCaps", #selector(showMonitor), "1")
         add("Docked Bar", #selector(togglePopover), "2")
-        add("Settings…", #selector(showSettings), ",")
+        add("Dashboard…", #selector(showSettings), ",")
         add("Refresh Quotas", #selector(refresh), "r")
         appMenu.addItem(.separator())
         add("About CodeCaps", #selector(showAbout))

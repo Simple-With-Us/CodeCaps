@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { provisionPush, pushProfileName } from './ios-enable-apns.mjs';
+import { generateKeyPairSync } from 'node:crypto';
+import { childEnvironment, credentialEnvironment, provisionPush, pushProfileName } from './ios-enable-apns.mjs';
 
 function profile(id, { name = pushProfileName, state = 'INVALID', content = 'production-profile' } = {}) {
   return { id, attributes: { name, profileState: state, profileType: 'IOS_APP_STORE', profileContent: content } };
@@ -143,4 +144,45 @@ test('an invalid replacement profile is rejected rather than accepted as ready',
   };
   await assert.rejects(provisionPush(request, () => false), /preserve it and do not create another/);
   assert.equal(f.writes.filter(write => write.path === '/v1/profiles').length, 1);
+});
+
+// The credential the consumer hands to the App Store Connect client.
+//
+// The private key is a secret, and the approved sources are the process
+// environment, a captured `fleet-secrets get NAME` and bootstrap-only
+// Keychain credentials.  A caller-supplied file is not one of them, so
+// nothing here reads a key file.
+
+test('the credential comes from the environment, and a path is not a source', () => {
+  // A throwaway key, generated here and never committed.
+  const key = generateKeyPairSync('ec', { namedCurve: 'prime256v1' }).privateKey
+    .export({ type: 'pkcs8', format: 'pem' });
+  const environment = credentialEnvironment({ ASC_KEY_P8: key });
+  assert.deepEqual(Object.keys(environment), ['ASC_KEY_P8']);
+  // A path on disk is not an approved source, so it is not read.
+  assert.deepEqual(credentialEnvironment({ ASC_KEY_PATH: '/tmp/whatever.p8' }), {});
+  // Nothing in the environment means nothing to hand over: the client
+  // resolves the credential from fleet-secrets on its own.
+  assert.deepEqual(credentialEnvironment({}), {});
+});
+
+test('a key that is set but is not a key is refused with the variable named', () => {
+  // A silent drop would leave the child without a credential and the
+  // operator with a permission message that points at nothing.
+  assert.throws(
+    () => credentialEnvironment({ ASC_KEY_P8: 'not a private key at all' }),
+    /ASC_KEY_P8 is set but does not hold a PEM private key/
+  );
+});
+
+test('the child environment is an allowlist, not a copy of the parent environment', () => {
+  const child = childEnvironment({
+    PATH: '/usr/bin',
+    HOME: '/tmp/home',
+    ASC_KEY_ID: 'SYNTHETICKEYID1',
+    ASC_ISSUER_ID: 'synthetic-issuer',
+    UNRELATED_RUNTIME_SECRET: 'unrelated-runtime-secret-4f1c9a'
+  });
+  assert.equal(child.UNRELATED_RUNTIME_SECRET, undefined, 'an unrelated secret reached the child');
+  assert.deepEqual(Object.keys(child).sort(), ['ASC_ISSUER_ID', 'ASC_KEY_ID', 'HOME', 'PATH']);
 });

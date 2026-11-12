@@ -9,12 +9,16 @@ import SwiftUI
 /// show the real mark instead of a stand-in.
 ///
 /// The menu bar keeps the owner's own black template icon, which is what that
-/// artwork is for and where it belongs.  Everything inside the app shows this
-/// one, so the black template never appears outside the menu bar.
+/// artwork is for and where it belongs.  The PiP widget header and the Glance
+/// popover header keep that same black template on purpose, so the template
+/// mark still appears in the menu bar and in those two headers, and nowhere
+/// else.
 public enum BrandMarkImage {
-    /// The mark, loaded once.  `nil` only if the bundle is missing it, in
-    /// which case every surface falls back to an SF Symbol rather than
-    /// showing an empty gap.
+    /// The mark, loaded once.  The asset is a required, bundled resource:
+    /// `BrandAssetTests` fails the test suite, and so CI, if the bundle ever
+    /// stops carrying it or the artwork stops being the owner's.  `nil` only
+    /// if the bundle is missing it, in which case every surface falls back to
+    /// an SF Symbol rather than showing an empty gap.
     public static let asset: NSImage? = {
         guard let url = ResourceBundle.resolved?.url(forResource: "CodeCapsBrandMark", withExtension: "png"),
               let image = NSImage(contentsOf: url) else { return nil }

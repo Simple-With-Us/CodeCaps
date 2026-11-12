@@ -98,26 +98,24 @@ public enum AntigravityQuotaGroups {
     /// The pool keys, in display order.
     public static let poolKeys = ["gemini", "third-party"]
 
-    /// The level a weekly cap has to reach before the pool counts as spent.
-    ///
-    /// The provider reports a fractional remaining, 0.4% is ordinary, and the
-    /// interface rounds that to 0%, so a cap that reads "at cap" on screen can
-    /// carry a number that is not exactly zero.  An exact-zero test let those
-    /// through, and the five-hour window under them was then believed when its
-    /// percentage must not be believed: owner 2026-10-19, "Antigravity is
-    /// saying vendor reset 5h quota early while the 7d is still at cap and
-    /// unchanged".  Half a point is where the interface rounds, so the mask
-    /// and the interface agree on what "at cap" means.
-    public static let weeklySpentThreshold: Double = 0.5
-
     /// Whether a pool's weekly cap is spent.  A weekly that reports a number
     /// is spent at or below the rounding threshold; one that reports no number
     /// falls back to the provider's own word for it.
+    ///
+    /// The threshold is `QuotaCapRule.spentThreshold` rather than a second
+    /// constant kept here:  the pool used to carry its own copy, and once the
+    /// weekly decision moved to the shared rule nothing read that copy, so it
+    /// survived only as dead code kept alive by a test -- which is how a live
+    /// copy of the same question could drift elsewhere without failing
+    /// anything.  The number itself, and the reason it is half a point, live
+    /// in `QuotaCapRule`:  the provider reports a fractional remaining and the
+    /// interface rounds 0.4% to 0%, so an exact-zero test let a cap through
+    /// and the five-hour window under it was then believed when its percentage
+    /// must not be (owner 2026-10-19, "Antigravity is saying vendor reset 5h
+    /// quota early while the 7d is still at cap and unchanged").
     private static func weeklyIsSpent(_ window: QuotaWindow) -> Bool {
-        if let remaining = window.boundedRemainingPercent {
-            return remaining <= weeklySpentThreshold
-        }
-        return window.isExhausted
+        QuotaCapRule.isExhausted(remainingPercent: window.boundedRemainingPercent,
+                                 providerSaysExhausted: window.isExhausted)
     }
 
     /// Splits Antigravity windows into their two pools.  Windows that belong to
@@ -138,9 +136,18 @@ public enum AntigravityQuotaGroups {
                 if leftWeekly != rightWeekly { return !leftWeekly }
                 return left.id < right.id
             }
-            let weeklyExhausted = ordered.contains {
+            // Only a fresh window may spend the pool.  A copy of a period that
+            // ended carries no live information, so it must not claim the
+            // allowance is gone, and the shared cap rule beside it is
+            // percentage-level, so it cannot tell the two apart.  The phone
+            // and the widget already ask the shared freshness rule here;  the
+            // Mac did not, so one pool read live on one surface and spent on
+            // another.
+            let spentWeekly = ordered.first {
                 !$0.isSubModelLimit && cadence($0) == "weekly" && weeklyIsSpent($0)
+                    && QuotaWindowSnapshot(window: $0, now: now).isFresh
             }
+            let weeklyExhausted = spentWeekly != nil
             let masked: Set<String> = weeklyExhausted
                 ? Set(ordered.filter { !$0.isSubModelLimit && cadence($0) == "5h" }.map(\.id))
                 : []
@@ -156,12 +163,21 @@ public enum AntigravityQuotaGroups {
             let driving = counted.min {
                 ($0.boundedRemainingPercent ?? 100) < ($1.boundedRemainingPercent ?? 100)
             }
+            // A pool whose weekly cap is spent is at its cap even when the
+            // provider reports no number for that weekly — it says the
+            // allowance is gone in words and leaves the figure out.  The
+            // weekly then drives the pool at zero, so the row names the cap
+            // that binds instead of offering a number the owner cannot act
+            // on, and its reset is the one worth counting down to.
+            let headline = driving ?? spentWeekly
             result.append(Pool(key: key,
                                windows: ordered,
-                               remainingPercent: driving?.boundedRemainingPercent,
+                               remainingPercent: QuotaCapRule.publishedReading(
+                                   remainingPercent: headline?.boundedRemainingPercent,
+                                   allowanceSpent: weeklyExhausted),
                                weeklyExhausted: weeklyExhausted,
-                               drivingWindowId: driving?.id,
-                               resetAt: driving?.resetDate,
+                               drivingWindowId: headline?.id,
+                               resetAt: headline?.resetDate,
                                maskedWindowIds: masked))
         }
         return result
@@ -192,13 +208,38 @@ public enum AntigravityQuotaGroups {
         let identity = [value.modelId, value.modelType, value.label].compactMap { $0 }.joined(separator: " ").lowercased()
         if identity.contains("gemini") || identity.contains("argon") { return "gemini" }
         if ["third-party", "third party", "third_party", "claude", "gpt", "openai", "anthropic"].contains(where: identity.contains) { return "third-party" }
+        // A producer that leaves the pool out of the label and model fields
+        // ("7-day window", no model) still names the pool in its bucket id:
+        // `gemini-weekly`, `3p-5h`, `3p-weekly`.  Without this a pool's weekly
+        // window belonged to no pool and was not drawn in any Antigravity row,
+        // while the phone, which files every non-Gemini window under
+        // Third-Party, drew it.  Only a window the fields above could not
+        // place reaches this line.
+        // The id is either the bare bucket, a `:`-joined path ending in it, or a
+        // JSON array of strings kept whole inside the id string
+        // (`["producer","instance","3p-weekly"]`), whose last element is it.
+        let bucket: String
+        if value.id.first == "[",
+           let elements = try? JSONDecoder().decode([String].self, from: Data(value.id.utf8)),
+           let last = elements.last {
+            bucket = last.lowercased()
+        } else {
+            bucket = value.id.lowercased().split(separator: ":").last.map(String.init) ?? ""
+        }
+        if bucket.hasPrefix("gemini-") { return "gemini" }
+        if bucket.hasPrefix("3p-") { return "third-party" }
         return nil
     }
 
     private static func cadence(_ value: QuotaWindow) -> String? {
         let token = value.window?.lowercased().replacingOccurrences(of: " ", with: "")
-        if ["weekly", "week", "1w", "7d", "168h", "10080m"].contains(token ?? "") || value.label.lowercased().contains("weekly") { return "weekly" }
-        if ["5h", "5hr", "5-hour", "5hours", "300m"].contains(token ?? "") { return "5h" }
+        let label = value.label.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let weeklyLabels: Set<String> = ["weekly", "week", "7-day", "7 day", "7-day window", "7 day window"]
+        let fiveHourLabels: Set<String> = ["5h", "5hr", "5-hour", "5 hours", "5-hour window", "5 hour window", "five_hour"]
+        if ["weekly", "week", "1w", "7d", "168h", "10080m"].contains(token ?? "")
+            || weeklyLabels.contains(label) { return "weekly" }
+        if ["5h", "5hr", "5-hour", "5hours", "300m"].contains(token ?? "")
+            || fiveHourLabels.contains(label) { return "5h" }
         // The helper's model quotaInfo is the short pool.  A weekly reading
         // must be explicitly identified; a reset's distance is not a duration.
         if token == nil && value.sourceApp == "local-mac" && value.modelId != nil { return "5h" }

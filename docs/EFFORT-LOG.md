@@ -1,6 +1,6 @@
 # CodeCaps — Effort Log
 
-> **ARCHIVED Sun, Oct 11, 2026.**  Linear is the system of record: team AFC, https://linear.app/simple-with-us/team/AFC.
+> **ARCHIVED Sun, Oct 11, 2026.**  Linear is the system of record: team CC, https://linear.app/simple-with-us/team/CC.
 > This file is read-only history.  Do not edit it or add rows.  See EFFORT-LOG-PROTOCOL.md.
 
 ## 2026-10-10 — Push Token and Push Endpoint labels [CLAUDE, completed, PR #209]
@@ -194,7 +194,7 @@ Lane: `ag/arrow-nav-and-board-parity`.
 - Console window minimum size: bumped `Metrics.consoleMin` in `QuotaComponents.swift` from 820 × 560 to 880 × 600 per app-wide design audit finding F-07 (issue #41).
 - iOS companion settings presentation: added `.presentationDetents([.medium, .large])` to the settings sheet on iOS in `CompanionContentView.swift` so the underlying quota list remains visible (finding F-05, issue #41).
 - Unit tests: added `ConsoleNavigationTests.swift` covering `Metrics.consoleMin`, page serialization round-trip, and settings page filtering; all 581 tests green in `swift test`.
-- AGENTS.md coordination protocol: documented inter-agent coordination stanzas, `#agent-sync` header formats, and per-bot routing policies per fleet instruction.
+- AGENTS.md coordination protocol: documented inter-agent coordination stanzas, fleet coordination header formats, and per-bot routing policies per fleet instruction.
 - Board & issue reconciliation: conducted full board review against shipping codebase.  Verified and reconciled completed work: closed issue #44 (iOS preview sound shipped in #65) and issue #57 (public site screenshots redrawn by Claude on Sep 30); resolved 17 open board items confirmed landed in previous PRs (#40, #43, #53, #65, #67, #74, #75, #103, #109, #110, #111, #112, #113, #115, #117, #118).
 - CODEX correction (Oct 3): #57 screenshots existed on main but were not published on gh-pages; live HTTP verification still found AgentBar imagery.  Publishing fix is #123.  #109 also lacks runtime anomaly evaluation, so board 20dc3a22 remains active.  These corrections preserve the implementation history while qualifying the broad closeout.
 
@@ -246,7 +246,7 @@ Lane: `feat/ios-icons-bar-parity-glance-logos` (PR #115, squash `f48fbda`).
 - Quota bar parity: added `CompanionUsageBar` with two-tone segments (red used + green remaining) and vertical pacing indicator with white halo to iOS companion cards and widget `MiniProgressBar`.
 - Fleet-wide fallback rule: replaced lookalike SF Symbols with `"questionmark.square.dashed"` across Mac and iOS.
 - Remote runner CI: iOS TestFlight build dispatched to GitHub-hosted macOS runner (`ios-ship.yml`, run 37087309918).
-- Coordination: briefed MiniMax (`[MM]`) in Slack `#agent-sync` (thread `1790990134.027879`); Apple Note created and pinned headlessly in iCloud folder `Coding`.
+- Coordination: briefed MiniMax (`[MM]`) in Slack (thread `1790990134.027879`); Apple Note created and pinned headlessly in iCloud folder `Coding`.
 
 ---
 
@@ -259,7 +259,7 @@ Lane: `ag/ui-widgets-polish-and-embed` (issue #111, PR #112, squash `7c25e14`).
 - Platform marks & fallback hygiene: Added `CustomMarkMode` (`.color` vs `.template`) and dark appearance variant support (`<key>-dark.<ext>`).  Enforced fleet-wide rule replacing sneaky SF Symbol lookalikes (`sparkles`, `cpu`, `bolt`, `cursorarrow.rays`) with `"questionmark.square.dashed"` across all unresolved logos.
 - Glance popover polish: Increased row spacing (`glanceLocalRowHeight = 42pt`) with a visible faint grey hairline divider (`Theme.hairline`), high-contrast timeframe label styling, and italic reset countdowns placed directly adjacent to percentages.
 - Settings & console layout: Removed dark tick before time elapsed; enforced strict Title Case "Under Pace" / "Over Pace" (dropped "cap"); removed duplicative provider names in footer; enlarged pacing marker (18pt height) standing proud of the quota bar; arranged multi-window models side-by-side in `HStack`.
-- Coordination: Polled and posted progress on `#agent-sync` (`[AG->MM]`), collaborating with MiniMax (`[MM]`) in `~/apps/codecaps-mm-finish`.
+- Coordination: Polled and posted progress on the fleet coordination channel (`[AG->MM]`), collaborating with MiniMax (`[MM]`) in `~/apps/codecaps-mm-finish`.
 - Verification: 576/576 unit tests green in `swift test`; staged bundle validated by `codesign --verify --deep --strict`.
 - Local installation: Staged, signed, and launched into `/Users/jay/Applications/CodeCaps.app` (PID 35926), replacing stale Oct 1 build.
 
@@ -540,7 +540,7 @@ Board 42ae688ab3b84d9aa65e445aab072a15.  Closes #37.
 
 ## 2026-10-03 — Independent Provider and File Refresh [CODEX, PR #142]
 
-repo: CodeCaps; pre-work claim: posted to #agent-sync after reading AGENT-SYNC.md; Lane: `codex/independent-source-refresh`; Board `4bcf84f1`; GitHub #137; PR #142 open on this branch (depends on #139; refs #136).
+repo: CodeCaps; pre-work claim: posted to the fleet coordination channel after reading its protocol; Lane: `codex/independent-source-refresh`; Board `4bcf84f1`; GitHub #137; PR #142 open on this branch (depends on #139; refs #136).
 
 - Added `CodexSessionQuotaReader` for bounded passive Codex session JSONL reads with exact account identity, incremental append tracking, symlink-safe paths, and original event timestamps.  Unchanged files do not invoke provider, Fleet, upload, or download work.
 - Split Settings → Sources & Fleet into independent **Provider Checks** and **Codex Session File Checks** toggles with separate 1-, 3-, 5-, and 15-minute intervals (five-minute provider default, one-minute file default).  Manual refresh runs both enabled paths; disabling one source preserves the other when possible.
@@ -694,6 +694,88 @@ repo: CodeCaps; pre-work claim: posted to #agent-sync after reading AGENT-SYNC.m
   will not mark these points either.  Left untouched: it is claimed by CODEX in
   PR #142, and flagged to them on `#codecaps` instead.
 
+## 2026-10-20 — The Mac Release Signing Key Loads From Fleet-OPS, Not A Literal [MINIMAX, in progress]
+
+- Board: `d09b44db` (CC-177).  Pull request: #257 (`jet/fix-sparkle-infisical`,
+  the seat's own diagnosis of the same outage; this change answers its two
+  gates and its two open review findings rather than opening a second pull
+  request for the same fault).
+- The Mac Release (Sparkle) workflow failed on every push to main from
+  2026-10-11 to 2026-10-20, nine days, with the last published release still
+  `v1.1.0-build.183` from 2026-10-10.  The cause was the credential source and
+  not the release script: the workflow read the App Store Connect key from
+  repository secrets that are a revoked copy (HTTP 401, CC-163), while the
+  working key lives in Fleet-OPS prod `/asc`.  That was proven read-only, by
+  authenticating the fleet key against `xcrun notarytool history`.
+- The two open review findings on that pull request were both about how the
+  credential is read.  The Infisical project id was written into a public
+  workflow and interpolated into the job log on every failed notarization, and
+  the bare `infisical secrets get` CLI bypassed the repository's safe fetch.
+- Both are fixed.  `ASC_KEY_ID` and `ASC_ISSUER_ID` come from the
+  `infisical-secrets` composite action, which masks every line of every value
+  and never prints one.  `ASC_KEY_P8` is fetched by
+  `scripts/infisical-fetch-asc-key.mjs` and streamed into
+  `scripts/ios-stage-asc-key.sh` over a pipe, so the private key still never
+  becomes an environment variable and only its mode-600 file path crosses the
+  step boundary.  The project id comes from the `INFISICAL_FLEET_OPS_PROJECT_ID`
+  secret.
+- The gate that could not be answered from the workflow is now answered: that
+  name is an organisation **secret**, not a variable.  The repository has no
+  Actions variables at all and the organisation has exactly one, which is
+  unrelated.  A variable reference would have resolved to nothing.
+- Two workflows read the key — `mac-release.yml` and `ios-ship.yml` — and both
+  carry the same text, so the fix lands in both.  `macos-ship.yml` was
+  deleted from main by #272 and needed no change.
+- A dispatch-only job, "Verify the release credentials load", fetches the key
+  and checks that Apple's notarization service still accepts it, and publishes
+  nothing.  It exists because a green pull-request check proves the workflow's
+  own contract, not that a credential can be fetched, which is exactly why this
+  outage ran for nine days without a check noticing.
+- Gates: 32 contract tests and the key-handoff shell test pass, including a
+  new offline test that drives the real fetch script and the real staging
+  script against a stubbed Infisical and checks that the key reaches a
+  mode-600 file and never the environment or the log.
+
+- Reviewer findings, and what they changed.  The first version of this work
+  added a script that called the Infisical API itself.  Two reviewers found
+  real problems with it, and both were right.  `loginUniversalAuth` returns
+  the token as a bare string, and the script destructured it as an object, so
+  the vault read would have sent `Authorization: Bearer undefined` and failed
+  with HTTP 401; the test missed it because its stub ignored the
+  Authorization header, and that test now asserts the header.  More
+  importantly, a script that reads the vault directly is outside the
+  approved secret controls, so that script is gone.  The values now come from
+  the `infisical-secrets` composite action, which is the repository's
+  approved way to read a value, and the only thing a script does is stage one
+  of them to a file: `scripts/stage-asc-key.mjs` hands the key in the
+  environment to `scripts/ios-stage-asc-key.sh` over a pipe, writes the
+  mode-600 file, and blanks the environment variable so no later step
+  carries the key.
+- One more finding from the second round, also fixed: the shared fetch
+  script's own test file ran in no workflow at all, so the new bearer-token
+  assertion would have been decoration.  It is now run by both workflows that
+  use the script.
+- The second review round found four more, all fixed.  A verify-only run
+  still installed XcodeGen after the notary preflight had already answered
+  the question, which burns a macOS runner for a toolchain it never uses; the
+  installer is gated with the build now.  The documentation claimed that
+  only the key's path crosses the step boundary, and that was no longer
+  true: the composite action puts the key in the step environment, and the
+  staging script streams it into the mode-600 file and blanks the
+  environment entry in the same step, so only the path crosses into the
+  later steps.  The wording was corrected in the release documentation, in
+  the iOS workflow and in its contract test.  The missing-key error did not
+  name the secret it was missing, which a reviewer caught against the
+  fleet's rule that an error has to name the unresolved secret variable; it
+  names `ASC_KEY_P8` now.  And nothing exercised the command-line entry
+  point the workflow actually calls, so a test now spawns it the way CI does.
+- Three more findings, all fixed.  A verify-only run skipped the notarization
+  preflight and still spent minutes building a bundle it would never publish,
+  so the gate now has a `verify_only` output: the preflight runs, the build
+  does not.  The credential check job inherited `contents: write` from the
+  workflow while holding the signing key, so it is now read-only.  The new
+  contract test file was missing from the workflow path filters, so a change
+  to it would not have triggered the checks that run it.
 ## 2026-10-19 — Provider Marks Raised To Their Same-Art Sources [MINIMAX, in progress]
 
 - Board: `7ac0039c` (CC-171).  Branch: `minimax/provider-mark-resolution`.

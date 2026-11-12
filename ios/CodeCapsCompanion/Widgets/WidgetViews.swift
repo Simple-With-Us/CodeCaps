@@ -1,5 +1,6 @@
 import SwiftUI
 import WidgetKit
+import AppIntents
 
 #if canImport(UIKit)
 import UIKit
@@ -68,8 +69,10 @@ struct ProviderMarkView: View {
                 .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
         } else if let asset = assetName(for: providerKey), let image = bundledImage(named: asset) {
             image
+                .renderingMode(asset == "provider-zai" ? .template : .original)
                 .resizable()
                 .scaledToFit()
+                .foregroundStyle(.primary)
                 .frame(width: size, height: size)
                 .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
         } else {
@@ -131,22 +134,7 @@ struct ProviderMarkView: View {
     }
 
     private func assetName(for key: String) -> String? {
-        let low = key.lowercased()
-        let pool = (itemId ?? "").lowercased()
-        if low.contains("antigravity") && pool.contains("gemini") { return "provider-gemini" }
-        if low.contains("antigravity") && pool.contains("third-party") { return "provider-antigravity" }
-        if low.contains("claude") || low.contains("anthropic") { return "provider-claude" }
-        if low.contains("openai") || low.contains("codex") { return "provider-openai" }
-        if low.contains("cursor") { return "provider-cursor" }
-        if low.contains("minimax") { return "provider-minimax" }
-        if low.contains("muse-assist") || low.contains("muse_assist") { return "provider-muse-assist" }
-        if low.contains("muse-code") || low.contains("muse_code") { return "provider-muse-code" }
-        if low.contains("muse") { return "provider-muse-assist" }
-        if low.contains("antigravity") { return "provider-antigravity" }
-        if low.contains("gemini") { return "provider-gemini" }
-        if low.contains("grok-bot") { return "provider-grok-bot" }
-        if low.contains("grok") || low.contains("xai") { return "provider-grok" }
-        return nil
+        CompanionProviderMarkAssets.catalogAssetName(providerKey: key, itemId: itemId)
     }
 }
 
@@ -156,6 +144,8 @@ struct MiniProgressBar: View {
     let fraction: Double
     var color: Color = Color(red: 0.10, green: 0.70, blue: 0.45)
     var elapsedFraction: Double? = nil
+    /// Missing and masked readings are neutral, never a numeric zero.
+    var hasReading: Bool = true
     var height: CGFloat = 4
 
     @Environment(\.colorScheme) private var colorScheme
@@ -172,7 +162,7 @@ struct MiniProgressBar: View {
                     .fill(Color.primary.opacity(0.12))
                     .frame(height: height)
 
-                if totalW > 0 {
+                if hasReading, fraction.isFinite, totalW > 0 {
                     HStack(spacing: 0) {
                         if usedW > 0 {
                             Rectangle()
@@ -189,7 +179,7 @@ struct MiniProgressBar: View {
                     .frame(height: height)
                 }
 
-                if let elapsed = elapsedFraction, elapsed >= 0, elapsed <= 1.0, totalW > 0 {
+                if hasReading, let elapsed = elapsedFraction, elapsed.isFinite, elapsed >= 0, elapsed <= 1.0, totalW > 0 {
                     let markerX = CGFloat(elapsed) * totalW
                     let markerHeight = max(height + 6, 11)
                     let markerWidth: CGFloat = 2.5
@@ -218,7 +208,7 @@ struct WidgetEmptyStateView: View {
     let title: String
     let subtitle: String
 
-    init(title: String = "No Quotas Synced", subtitle: String = "Open CodeCaps to connect AI subscription plans.") {
+    init(title: String = "No Readings Yet", subtitle: String = "Open CodeCaps to see your plans.") {
         self.title = title
         self.subtitle = subtitle
     }
@@ -281,14 +271,48 @@ struct OverviewSmallView: View {
         Array(entry.platforms.prefix(3))
     }
 
+    /// The compact detail level in the edit sheet turns the tap-through off,
+    /// the same as on the larger widgets.
+    @ViewBuilder
+    private func smallRow(_ platform: WidgetPlatformItem) -> some View {
+        let bar = PlanBarRow(
+            platform: platform,
+            pick: pick,
+            markSize: 13,
+            titleFont: 11.5,
+            captionFont: 8.5,
+            percentFont: 11.5,
+            barHeight: 3.5,
+            usesMeterLayout: true,
+            showsCountdown: false,
+            showsCadenceToken: false
+        )
+        if entry.detailLevel == .compact {
+            bar
+        } else {
+            Button(intent: ShowWidgetPlanDetailIntent(planID: platform.id, overviewKey: entry.smallDetailScope)) {
+                bar
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
     var body: some View {
         if entry.platforms.isEmpty {
             WidgetEmptyStateView(
-                title: "No Quotas Synced",
-                subtitle: "Open CodeCaps to sync"
+                title: "No Readings Yet",
+                subtitle: "Open CodeCaps to see your plans."
             )
             .padding(8)
+        } else if let selected = entry.selectedSmallDetail, entry.detailLevel != .compact {
+            // Tapped row: the plan's own windows (5h, 7d) with the time
+            // remaining beside each bar (owner 2026-11-09).
+            WidgetPlanDetailView(platform: selected, entry: entry, windows: selected.planDetailWindows, compactLabels: true, clearScope: entry.smallDetailScope)
+                .padding(.horizontal, 13)
+                .padding(.vertical, 10)
         } else {
+            // No duration labels or countdowns on the rows; one tap reveals
+            // the 5h/7d windows with the time remaining (owner 2026-11-09).
             VStack(alignment: .leading, spacing: 7) {
                 WidgetHeaderView(markSize: 13)
 
@@ -296,21 +320,14 @@ struct OverviewSmallView: View {
 
                 VStack(spacing: 6) {
                     ForEach(displayed) { platform in
-                        PlanBarRow(
-                            platform: platform,
-                            pick: pick,
-                            markSize: 13,
-                            titleFont: 11.5,
-                            captionFont: 8.5,
-                            percentFont: 11.5,
-                            barHeight: 3.5
-                        )
+                        smallRow(platform)
                     }
                 }
 
                 Spacer(minLength: 0)
             }
-            .padding(11)
+            .padding(.horizontal, 13)
+            .padding(.vertical, 10)
         }
     }
 }
@@ -335,8 +352,8 @@ struct OverviewMediumView: View {
     var body: some View {
         if entry.platforms.isEmpty {
             WidgetEmptyStateView(
-                title: "No AI Subscription Quotas Synced",
-                subtitle: "Open CodeCaps to connect AI subscription plans."
+                title: "No Readings Yet",
+                subtitle: "Open CodeCaps to see your plans."
             )
             .padding(14)
         } else {
@@ -381,7 +398,7 @@ struct OverviewLargeView: View {
 
     /// Seven rows one per row, twelve two per row.  The header dropped the app
     /// name for the mark, which is what paid for the extra row.
-    private var cap: Int { columns >= 2 ? 12 : 7 }
+    private var cap: Int { columns >= 2 ? 12 : 6 }
 
     private var displayed: [WidgetPlatformItem] {
         Array(entry.platforms.prefix(cap))
@@ -399,10 +416,13 @@ struct OverviewLargeView: View {
     var body: some View {
         if entry.platforms.isEmpty {
             WidgetEmptyStateView(
-                title: "No AI Subscription Quotas Synced",
-                subtitle: "Open CodeCaps on your Mac or iOS to connect and monitor your plans."
+                title: "No Readings Yet",
+                subtitle: "Open CodeCaps on your Mac or iPhone to see your plans."
             )
             .padding(14)
+        } else if let selected = entry.selectedDetail, entry.detailLevel != .compact {
+            WidgetPlanDetailView(platform: selected, entry: entry)
+                .padding(14)
         } else {
             VStack(alignment: .leading, spacing: 7) {
                 WidgetHeaderView(
@@ -423,7 +443,8 @@ struct OverviewLargeView: View {
                     percentFont: 12.5,
                     barHeight: 4,
                     spacing: 6,
-                    horizontalSpacing: 14
+                    horizontalSpacing: 14,
+                    detailScope: entry.detailLevel == .compact ? nil : entry.detailScope
                 )
 
                 Spacer(minLength: 0)
@@ -480,6 +501,15 @@ struct ProviderFocusView: View {
         return platform?.resetCaption() ?? ""
     }
 
+    /// The bare countdown for the narrow fallback of a caption row.  Captions
+    /// are built here without a qualifier,  so this is also where the compact
+    /// form is named:  a reset line without its compact partner would leave
+    /// the row's ViewThatFits with nothing to fall back to.
+    private var captionCountdown: String {
+        if let window = shownWindow { return window.countdown() }
+        return platform?.countdown() ?? ""
+    }
+
     var body: some View {
         if let platform {
             switch family {
@@ -490,8 +520,8 @@ struct ProviderFocusView: View {
             }
         } else {
             WidgetEmptyStateView(
-                title: "No Quota Synced",
-                subtitle: "Open CodeCaps to connect plans"
+                title: "No Reading Yet",
+                subtitle: "Open CodeCaps to see your plans."
             )
             .padding(10)
         }
@@ -547,7 +577,10 @@ struct ProviderFocusView: View {
                     .lineLimit(2)
                     .minimumScaleFactor(0.85)
             } else {
-                WindowCaptionRow(token: captionToken, resetCaption: captionReset, font: 9)
+                WindowCaptionRow(
+                    caption: .withoutQualifier(token: captionToken, resetCaption: captionReset, compactResetCaption: captionCountdown),
+                    font: 9
+                )
             }
         }
         .padding(12)
@@ -622,10 +655,10 @@ struct ProviderFocusView: View {
                         if entry.quotasPerProvider == .oneQuota, let controlling = platform.controllingWindow(pick) {
                             return [controlling]
                         }
-                        return platform.windows
+                        return platform.primaryWindows
                     }()
 
-                    if let atCap {
+                    if let atCap, platform.usableMuseExtra == nil {
                         // The plan's own windows still get listed, but with the
                         // cap named once instead of a bar each: the 5-hour
                         // window's 100% is exactly the number that reads as
@@ -640,7 +673,10 @@ struct ProviderFocusView: View {
                             percentFont: 11
                         )
                     } else if windowsToShow.isEmpty {
-                        WindowCaptionRow(token: captionToken, resetCaption: captionReset, font: 9.5)
+                        WindowCaptionRow(
+                            caption: .withoutQualifier(token: captionToken, resetCaption: captionReset, compactResetCaption: captionCountdown),
+                            font: 9.5
+                        )
                     } else {
                         ForEach(windowsToShow) { win in
                             VStack(alignment: .leading, spacing: 2) {
@@ -655,13 +691,13 @@ struct ProviderFocusView: View {
                                 }
                                 MiniProgressBar(
                                     fraction: max(0.0, min(1.0, (win.remainingPercent ?? 0.0) / 100.0)),
-                                    color: win.statusColor,
+                                    color: WidgetPresentation.quotaBarRemainingColor,
                                     elapsedFraction: win.elapsedFraction(),
+                                    hasReading: !win.isMasked && win.remainingPercent?.isFinite == true,
                                     height: 3.5
                                 )
                                 WindowCaptionRow(
-                                    token: win.cadenceToken,
-                                    resetCaption: win.resetCaption(),
+                                    caption: win.caption,
                                     font: 9
                                 )
                             }
@@ -717,8 +753,7 @@ struct AccessoryView: View {
                                 .font(.system(size: 12, weight: .bold, design: .rounded))
                         }
                         WindowCaptionRow(
-                            token: atCap.cadenceToken,
-                            resetCaption: atCap.resetCaption(),
+                            caption: atCap.caption,
                             font: 9
                         )
                     }
@@ -759,27 +794,27 @@ struct AccessoryView: View {
                         HStack(spacing: 4) {
                             MiniProgressBar(
                                 fraction: max(0.0, min(1.0, (pair.window1.remainingPercent ?? 0.0) / 100.0)),
-                                color: .primary,
+                                color: WidgetPresentation.quotaBarRemainingColor,
                                 elapsedFraction: pair.window1.elapsedFraction(),
+                                hasReading: !pair.window1.isMasked && pair.window1.remainingPercent?.isFinite == true,
                                 height: 3.5
                             )
                             MiniProgressBar(
                                 fraction: max(0.0, min(1.0, (pair.window2.remainingPercent ?? 0.0) / 100.0)),
-                                color: .primary,
+                                color: WidgetPresentation.quotaBarRemainingColor,
                                 elapsedFraction: pair.window2.elapsedFraction(),
+                                hasReading: !pair.window2.isMasked && pair.window2.remainingPercent?.isFinite == true,
                                 height: 3.5
                             )
                         }
                         HStack(spacing: 4) {
                             WindowCaptionRow(
-                                token: pair.window1.cadenceToken,
-                                resetCaption: pair.window1.resetCaption(),
+                                caption: pair.window1.caption,
                                 font: 8.5
                             )
                             .frame(maxWidth: .infinity)
                             WindowCaptionRow(
-                                token: pair.window2.cadenceToken,
-                                resetCaption: pair.window2.resetCaption(),
+                                caption: pair.window2.caption,
                                 font: 8.5
                             )
                             .frame(maxWidth: .infinity)
@@ -796,11 +831,23 @@ struct AccessoryView: View {
                             Text(platform.displayPercent)
                                 .font(.system(size: 12, weight: .bold, design: .rounded))
                         }
-                        MiniProgressBar(fraction: platform.progressFraction, color: .primary, elapsedFraction: platform.elapsedFraction, height: 4)
+                        MiniProgressBar(
+                            fraction: platform.progressFraction,
+                            color: WidgetPresentation.quotaBarRemainingColor,
+                            elapsedFraction: platform.elapsedFraction,
+                            hasReading: !platform.isMasked && platform.remainingPercent?.isFinite == true,
+                            height: 4
+                        )
                         WindowCaptionRow(
-                            token: platform.controllingWindow(entry.windowPick)?.cadenceToken
-                                ?? WidgetPresentation.shortCadence(cadence: platform.subtitle, label: platform.title),
-                            resetCaption: platform.controllingWindow(entry.windowPick)?.resetCaption() ?? platform.resetCaption(),
+                            caption: platform.controllingWindow(entry.windowPick)?.caption
+                                ?? .withoutQualifier(
+                                    token: WidgetPresentation.shortCadence(
+                                        cadence: platform.subtitle,
+                                        label: platform.title
+                                    ),
+                                    resetCaption: platform.resetCaption(),
+                                    compactResetCaption: platform.countdown()
+                                ),
                             font: 9
                         )
                     }
@@ -827,15 +874,72 @@ struct AccessoryView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("CodeCaps")
                         .font(.system(size: 12, weight: .bold))
-                    Text("No quotas synced")
+                    Text("No readings yet")
                         .font(.system(size: 10))
                         .foregroundColor(.secondary)
                 }
             case .accessoryInline:
-                Text("CodeCaps: Open to connect")
+                Text("Open CodeCaps")
             default:
                 Text("CodeCaps")
             }
+        }
+    }
+}
+
+/// Cached plan content in the large widget. No app launch or provider request
+/// is needed to enter or leave this view. WidgetKit reloads after the intent.
+struct WidgetPlanDetailView: View {
+    let platform: WidgetPlatformItem
+    let entry: CodeCapsWidgetEntry
+    /// Defaults to the sub-model breakdown; the small widget passes the
+    /// plan's own windows so its tap-through shows the 5h/7d countdowns.
+    var windows: [WidgetWindowItem]? = nil
+    /// Small width swaps the long window names for the compact tokens (5h, 7d)
+    /// so the label never truncates (owner 2026-11-09).
+    var compactLabels: Bool = false
+    /// The small widget's selection lives under its own scope; Back clears it.
+    var clearScope: String? = nil
+    var body: some View {
+        VStack(alignment: .leading, spacing: compactLabels ? 8 : 10) {
+            if compactLabels {
+                // Small width: one header row keeps three window rows inside
+                // the 141pt frame.
+                HStack(spacing: 6) {
+                    Button(intent: ShowWidgetPlanDetailIntent(planID: "", overviewKey: clearScope ?? entry.detailScope)) {
+                        Image(systemName: "chevron.left")
+                    }.buttonStyle(.plain).font(.caption)
+                    Text(platform.title).font(.headline)
+                    Spacer(minLength: 0)
+                }
+            } else {
+                HStack {
+                    Button(intent: ShowWidgetPlanDetailIntent(planID: "", overviewKey: entry.detailScope)) {
+                        Label("All Plans", systemImage: "chevron.left")
+                    }.buttonStyle(.plain).font(.caption)
+                    Spacer()
+                }
+                Text(platform.title).font(.headline)
+            }
+            ForEach(windows ?? platform.detailWindows) { window in
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        Text(compactLabels && !window.cadenceToken.isEmpty ? window.cadenceToken : window.label).font(.caption.bold())
+                        Text(window.displayPercent).font(.subheadline.bold()).foregroundStyle(window.statusColor)
+                        Text(window.countdown().isEmpty ? "—" : window.countdown())
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    MiniProgressBar(fraction: (window.remainingPercent ?? 0) / 100,
+                        color: WidgetPresentation.quotaBarRemainingColor, elapsedFraction: window.elapsedFraction(),
+                        hasReading: !window.isMasked && window.remainingPercent?.isFinite == true, height: 5)
+                    if let cue = QuotaStalenessRule.cue(observedAt: window.observedAt,
+                                                       resetAt: window.resetAt,
+                                                       isAtCap: window.isExhausted) {
+                        Text(cue).font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            Spacer(minLength: 0)
         }
     }
 }

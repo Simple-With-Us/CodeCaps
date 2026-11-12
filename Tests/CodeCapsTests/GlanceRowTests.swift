@@ -97,12 +97,15 @@ final class GlanceRowTests: XCTestCase {
         let updated = observed.formatted(date: .omitted, time: .shortened)
         let when = reset.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().hour().minute())
         XCTAssertEqual(glanceResetHelp(reset, now: now, observedAt: observed, isFresh: false),
-                       "Resets in 4h, on \(when) · updated \(updated)")
+                       "Resets in 4h, on \(when) · stale \u{00B7} updated \(updated)",
+                       "the tooltip words the staleness the way every other surface does")
         XCTAssertEqual(glanceResetHelp(reset, now: now, observedAt: observed, isFresh: true),
                        "Resets in 4h, on \(when)", "a fresh reading never repeats its update time")
         // No reset to count down to: a stale reading still says when it was
         // taken, and a fresh one has nothing to say.
-        XCTAssertEqual(glanceResetHelp(nil, now: now, observedAt: observed, isFresh: false), "Updated \(updated)")
+        XCTAssertEqual(glanceResetHelp(nil, now: now, observedAt: observed, isFresh: false),
+                       "stale \u{00B7} updated \(updated)",
+                       "the tooltip words the staleness the way every other surface does")
         XCTAssertNil(glanceResetHelp(nil, now: now, observedAt: observed, isFresh: true))
         XCTAssertNil(glanceResetHelp(nil, now: now, observedAt: nil, isFresh: false))
     }
@@ -401,7 +404,9 @@ final class GlanceMeterTests: XCTestCase {
         provider: String = "anthropic",
         source: String? = nil,
         model: String? = nil,
-        accountKey: String? = nil
+        accountKey: String? = nil,
+        quotaUnit: String? = nil,
+        observedAgo: TimeInterval = 0
     ) -> QuotaWindowSnapshot {
         let iso = ISO8601DateFormatter()
         return QuotaWindowSnapshot(window: QuotaWindow(
@@ -412,10 +417,11 @@ final class GlanceMeterTests: XCTestCase {
             modelId: model,
             label: label,
             remainingPercent: remaining,
+            quotaUnit: quotaUnit,
             remainingUnknown: remaining == nil,
             resetAt: resetIn.map { iso.string(from: now.addingTimeInterval($0)) },
             window: token,
-            occurredAt: iso.string(from: now),
+            occurredAt: iso.string(from: now.addingTimeInterval(-observedAgo)),
             source: source,
             accountKey: accountKey), now: now)
     }
@@ -463,6 +469,37 @@ final class GlanceMeterTests: XCTestCase {
         XCTAssertNil(glanceUsableMuseExtra([weekly, spent]))
     }
 
+    /// A scoped pool allowance beside the subscription (Codex's Code Review
+    /// pool) is not the limit the plan is sold on, so it never takes a meter
+    /// from the plan's own windows — the same exclusion the companion and
+    /// the widgets apply.
+    func testAScopedPoolAllowanceNeverOccupiesAMeter() {
+        let row = DisplaySection(
+            id: "openai",
+            providerKey: "openai",
+            title: "Codex",
+            platformTitle: "Codex",
+            section: QuotaPlatformSection(
+                providerKey: "openai",
+                providerLabel: "Codex",
+                via: nil,
+                expected: true,
+                windows: [
+                    makeWindow(id: "session", label: "5h window", token: "5h", remaining: 92, resetIn: 3 * 3600, provider: "openai"),
+                    makeWindow(id: "weekly", label: "7d window", token: "168h", remaining: 11, resetIn: 4 * 86_400, provider: "openai"),
+                    makeWindow(id: "local-mac:openai:code-review", label: "Code Review", token: "168h", remaining: 40, resetIn: 4 * 86_400, provider: "openai"),
+                ]),
+            poolKey: nil,
+            remainingPercent: 11,
+            resetAt: now.addingTimeInterval(4 * 86_400),
+            maskedWindowIds: [])
+        let pair = glanceMeterPair(for: row, now: now)
+        XCTAssertEqual(pair.short?.window.id, "session")
+        XCTAssertEqual(pair.long?.window.id, "weekly")
+        XCTAssertNotEqual(pair.short?.window.id, "local-mac:openai:code-review")
+        XCTAssertNotEqual(pair.long?.window.id, "local-mac:openai:code-review")
+    }
+
     func testMuseAssistSanitizedLabelsStillPairWeeklyAndExtraMeters() {
         let pair = glanceMeterPair(for: museAssistRow(), now: now)
         XCTAssertEqual(pair.short?.window.id, "weekly")
@@ -493,7 +530,7 @@ final class GlanceMeterTests: XCTestCase {
         // The whole point of the widen: two meters plus the title, the reset
         // countdown and the chevron, with the gutters, have to fit the frame
         // the popover actually opens at.  If a column grows past this, the
-        // footer clips "Open CodeCaps ⌘1" the way the old 360pt width did.
+        // footer clips "Dashboard ⌘1" the way the old 360pt width did.
         XCTAssertLessThanOrEqual(Metrics.glanceRowIntrinsicWidth, Metrics.glanceWidth,
             "the two-meter row is wider than the popover it renders in")
     }
@@ -801,6 +838,21 @@ final class GlanceMeterTests: XCTestCase {
                        ["local-mac:grok-bot:gbu-weekly", "local-mac:grok-bot:weekly", "x"])
     }
 
+    func testAbsoluteOnlyReadingCountsForGlanceDedupAndIsKept() {
+        let credits = makeWindow(id: "credits", label: "Grok Bot credits", token: "weekly", remaining: nil,
+                                 provider: "grok-bot")
+        var creditsWindow = credits.window
+        creditsWindow.absoluteRemaining = 6_099
+        creditsWindow.absoluteLimit = 40_000
+        creditsWindow.quotaUnit = "credits"
+        let creditsSnapshot = QuotaWindowSnapshot(window: creditsWindow, now: now)
+        let placeholder = makeWindow(id: "p", label: "Grok Bot weekly", token: "weekly", remaining: nil,
+                                     provider: "grok-bot")
+        let drawable = glanceDrawableWindows([creditsSnapshot, placeholder])
+        XCTAssertEqual(drawable.map(\.window.id), ["credits"],
+                       "an absolute-only reading stands for the meter and drops the empty twin")
+    }
+
     // MARK: Captions
 
     func testWeeklyTokensCaptionAsSevenDays() {
@@ -857,6 +909,49 @@ final class GlanceMeterTests: XCTestCase {
     func testCaptionFallsBackToTheLabelWhenTheTokenIsNotADuration() {
         XCTAssertEqual(glanceMeterCaption(makeWindow(id: "x", label: "Third-Party Models · Weekly", token: "shared")), "7d")
         XCTAssertEqual(glanceMeterCaption(makeWindow(id: "y", label: "Gemini Models · 5-hour", token: "shared")), "5h")
+    }
+
+    /// Owner 2026-10-22: the Muse Code five hour marker sat at about nine tenths
+    /// of the bar and looked like it was in the wrong place.
+    ///
+    /// The marker is the elapsed fraction of the window, which is the meaning
+    /// the Mac's own copy states:  "time elapsed · day 1 of 7" under a seven
+    /// day window.  A five hour window with 28 minutes to reset has 4h32m of its
+    /// five hours gone, so 90.7% is where the marker belongs, and the small red
+    /// segment at the left is the one percent of the allowance that was used.
+    ///
+    /// The real defect was that the caption and the marker were two different
+    /// resolvers, so a label naming both a five hour window and a day took a
+    /// "5h" caption beside a marker drawn for a whole day.  One resolver answers
+    /// for both now, and these tests pin that.
+    func testTheMuseCodeFiveHourMarkerSitsWhereTheElapsedFractionPutsIt() {
+        let snapshot = makeWindow(id: "muse-code", label: "5h window", token: "5h",
+                                  remaining: 99, resetIn: 28 * 60)
+        XCTAssertEqual(glanceMeterCaption(snapshot), "5h")
+        let fraction = try? XCTUnwrap(snapshot.elapsedFraction(now: now))
+        XCTAssertEqual(fraction ?? 0, 16320.0 / 18000.0, accuracy: 0.0001,
+                       "4h32m of a five hour window is 90.7% elapsed")
+    }
+
+    /// The caption and the marker resolve one period, so they cannot disagree
+    /// about the same window.
+    func testTheCaptionAndTheMarkerResolveTheSamePeriod() {
+        let cases: [(label: String, caption: String, seconds: TimeInterval)] = [
+            ("5-hour window", "5h", 5 * 3_600),
+            ("3h window", "3h", 3 * 3_600),
+            ("5-hour daily limit", "5h", 5 * 3_600),
+            ("7-day window", "7d", 7 * 86_400),
+            ("weekly window", "7d", 7 * 86_400),
+        ]
+        for testCase in cases {
+            let snapshot = makeWindow(id: testCase.label, label: testCase.label, token: "shared",
+                                      remaining: 50, resetIn: 3_600)
+            XCTAssertEqual(glanceMeterCaption(snapshot), testCase.caption,
+                           "the caption for '\(testCase.label)'")
+            let span = try? XCTUnwrap(snapshot.periodSpan())
+            XCTAssertEqual(span?.duration ?? 0, testCase.seconds, accuracy: 1,
+                           "the marker period for '\(testCase.label)'")
+        }
     }
 
     func testMuseAssistNonStandardCadenceWindowIsNotAnExtraAllowance() {
@@ -1037,6 +1132,82 @@ final class GlanceMeterTests: XCTestCase {
             makeWindow(id: "grokbot", label: "Grok Bot weekly", token: "weekly", remaining: 40),
         ])
         XCTAssertNil(fleetWeeklyGap(for: row, origin: .fleet, now: now))
+    }
+
+    /// A Cursor-shaped row:  the shared pool's weekly allowance, a dead copy of
+    /// an earlier week, and the plan's billing-cycle spend meter.
+    private func cursorRow(_ windows: [QuotaWindowSnapshot]) -> DisplaySection {
+        DisplaySection(
+            id: "cursor",
+            providerKey: "cursor",
+            title: "Cursor",
+            platformTitle: "Cursor",
+            section: QuotaPlatformSection(
+                providerKey: "cursor",
+                providerLabel: "Cursor",
+                via: nil,
+                expected: true,
+                windows: windows),
+            poolKey: nil,
+            remainingPercent: windows.compactMap(\.remainingPercent).min(),
+            resetAt: windows.compactMap(\.resetAt).min(),
+            maskedWindowIds: [])
+    }
+
+    /// Cursor has only the seven-day pool quota now, so its row reads like
+    /// every other xAI row:  one meter, the pool's weekly cadence, the pool's
+    /// reading.
+    ///
+    /// Owner 2026-11-09:  the row showed two slots (`7d 14% due` and
+    /// `1m 50% 2d 23h`) instead of one.
+    func testTheCursorRowIsOneWeeklyMeterLikeEveryOtherXaiRow() throws {
+        let row = cursorRow([
+            makeWindow(id: "local-mac:cursor:weekly-dead", label: "7d window", token: "7d",
+                       remaining: 14, resetIn: -3_600, provider: "cursor", observedAgo: 6 * 86_400),
+            makeWindow(id: "local-mac:cursor:subscription", label: "Included plan", token: "weekly",
+                       remaining: 50, resetIn: 2 * 86_400 + 23 * 3_600, provider: "cursor"),
+        ])
+        let pair = glanceMeterPair(for: row, now: now)
+        XCTAssertEqual(pair.short?.window.id, "local-mac:cursor:subscription",
+                       "the live pool reading takes the slot, not the dead copy")
+        XCTAssertNil(pair.long, "one meter, so the second slot stays empty")
+        let meter = try XCTUnwrap(pair.short)
+        XCTAssertEqual(glanceMeterCaption(meter), "7d")
+    }
+
+    /// The plan's billing-cycle spend meter reports money, so it never stands
+    /// in for a quota meter and never draws a meter line of its own.
+    func testTheCursorBillingCycleMeterIsNotDrawnAsAQuota() {
+        let row = cursorRow([
+            makeWindow(id: "local-mac:cursor:subscription", label: "Included plan", token: "weekly",
+                       remaining: 50, resetIn: 2 * 86_400 + 23 * 3_600, provider: "cursor"),
+            makeWindow(id: "local-mac:cursor:plan", label: "Included plan", token: "billing-cycle",
+                       remaining: nil, resetIn: 20 * 86_400, provider: "cursor", quotaUnit: "USD"),
+        ])
+        let pair = glanceMeterPair(for: row, now: now)
+        XCTAssertEqual(pair.short?.window.id, "local-mac:cursor:subscription")
+        XCTAssertNil(pair.long)
+        let lines = glanceExpandedLines(for: row, now: now)
+        XCTAssertTrue(lines.flatMap { [$0.short, $0.long] }.compactMap { $0 }
+                        .allSatisfy { $0.window.id != "local-mac:cursor:plan" },
+                      "a money meter is not a quota meter, so it draws no meter line")
+    }
+
+    /// A plan whose only reading is a dollar balance still draws that meter.
+    ///
+    /// The money meter never takes a slot beside a real quota meter, so the
+    /// Cursor row keeps exactly one weekly meter.  But when the dollar
+    /// balance is all the plan has, the Mac still draws it:  the phone and the
+    /// widget read the same shared rule, and a blank row is worse than a
+    /// dollar meter (Sentry review on PR #439).
+    func testAMoneyOnlyPlanStillDrawsItsMeter() {
+        let row = cursorRow([
+            makeWindow(id: "local-mac:cursor:plan", label: "Included plan", token: "billing-cycle",
+                       remaining: nil, resetIn: 20 * 86_400, provider: "cursor", quotaUnit: "USD"),
+        ])
+        let pair = glanceMeterPair(for: row, now: now)
+        XCTAssertEqual(pair.short?.window.id, "local-mac:cursor:plan")
+        XCTAssertNil(pair.long)
     }
 
     private func antigravityRow(_ windows: [QuotaWindowSnapshot], masked: Set<String> = []) -> DisplaySection {

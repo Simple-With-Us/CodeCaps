@@ -19,7 +19,47 @@ chmod 700 "$DEST"
   exit 1
 }
 
-node "$CLIENT" GET '/v1/profiles?filter[profileType]=IOS_APP_STORE&limit=200&include=bundleId' \
+# The client takes the key from the environment, because a path on disk is not
+# an approved secret source (Kody rule 42).  The only approved sources are
+# process.env.ASC_KEY_P8 and `fleet-secrets get ASC_KEY_P8`, and the client
+# resolves both on its own.  A named ASC_KEY_PATH is not a credential source
+# at all and is not read here, so a stale or foreign path can never decide
+# which credential signs the request.
+#
+# The key never reaches a command line, a log, the environment file, or a
+# temporary file.  A run that resolves no credential at all is a hard stop,
+# and it names the variables that could not be resolved, so the operator is
+# told which one to set instead of being left with a permission message that
+# points at nothing.
+run_client() {
+  local rc=0 err="$WORKDIR/client.stderr"
+  node "$CLIENT" "$@" 2>"$err" || rc=$?
+  show_client_stderr "$err"
+  name_missing_credential "$err"
+  return "$rc"
+}
+
+# Prints what the client said, so nothing it reported is lost when its
+# stderr is captured.
+show_client_stderr() {
+  local err="$1"
+  if [[ -s "$err" ]]; then
+    cat "$err" >&2
+  fi
+}
+
+# Names the variables that could not be resolved when the client found no
+# credential.  The client says which sources it tried;  this says which
+# variables to set, so the failure is actionable instead of a permission
+# message that points at nothing.
+name_missing_credential() {
+  local err="$1"
+  if grep -q "no App Store Connect credential found" "$err" 2>/dev/null; then
+    echo "error: no App Store Connect credential resolved: set ASC_KEY_P8 with ASC_KEY_ID and ASC_ISSUER_ID, or let fleet-secrets answer for Fleet-OPS prod /asc" >&2
+  fi
+}
+
+run_client GET '/v1/profiles?filter[profileType]=IOS_APP_STORE&limit=200&include=bundleId' \
   >"$WORKDIR/profiles.json"
 python3 - "$MAP" "$DEST" "$WORKDIR/profiles.json" <<'PY'
 import base64, json, os, plistlib, subprocess, sys

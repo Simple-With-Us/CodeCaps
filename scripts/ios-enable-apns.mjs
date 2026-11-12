@@ -3,6 +3,8 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 
+import { clientEnvironment, normalizePrivateKey } from './ios-fleet/asc-key.mjs';
+
 export const bundleIdentifier = 'com.simplewithus.codecaps.ios';
 export const pushProfileName = 'CodeCaps Companion AppStore';
 
@@ -166,16 +168,67 @@ function inspectProductionProfile(encoded) {
     && xml.includes(`.${bundleIdentifier}</string>`);
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// The credential the App Store Connect client runs with.
+//
+// The client resolves its credential from the process environment, from
+// fleet-secrets and from the bootstrap Keychain.  A path on disk is not an
+// approved secret source (Kody rule 42), so this wrapper never reads one:
+// ASC_KEY_PATH is not a credential source here, and the key is taken from
+// the environment and handed to the child in the child's environment.
+//
+// The key never reaches a command line, a log, the environment file or a
+// temporary file.  It does reach the child's environment, where the client
+// looks for it, and the environment of a same-user process is readable on
+// this platform (`ps eww`, `ps -E`):  the handoff keeps the key out of argv,
+// out of stdout and out of every log line, and claims nothing more.
+//
+// A key that is set but is not a PEM private key is refused here, with the
+// variable named.  A silent drop would leave the child without a credential
+// and the operator with a permission message that says nothing about the
+// input that was wrong.
+export function credentialEnvironment(env = process.env) {
+  const raw = typeof env.ASC_KEY_P8 === 'string' ? env.ASC_KEY_P8 : '';
+  if (!raw.trim()) return {};
+  const pem = normalizePrivateKey(raw);
+  if (!pem) throw new Error('ASC_KEY_P8 is set but does not hold a PEM private key');
+  return { ASC_KEY_P8: pem };
+}
+
+// The child's environment.
+//
+// It is an allowlist, not a copy of this process's environment:  a wholesale
+// copy forwards every credential on the operator's machine, including the
+// ones that have nothing to do with App Store Connect.
+export function childEnvironment(env = process.env) {
+  return clientEnvironment(env, credentialEnvironment(env));
+}
+
+async function run() {
   const client = fileURLToPath(new URL('./ios-fleet/asc-api.mjs', import.meta.url));
+  // The child gets the credential and the variables it needs, and nothing
+  // else.  The credential is in the child's environment because that is where
+  // the client looks for it.
+  let childEnv;
+  try {
+    childEnv = childEnvironment();
+  } catch (error) {
+    console.error(`ios-enable-apns: ${error.message}`);
+    process.exitCode = 1;
+    return;
+  }
   const request = async (method, path, body) => {
     const args = [client, method, path];
     if (body) args.push(JSON.stringify(body));
     try {
       return JSON.parse(execFileSync(process.execPath, args, {
-        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 8 * 1024 * 1024
+        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 8 * 1024 * 1024, env: childEnv
       }));
     } catch (error) {
+      //  The client's own diagnostic names what it could not resolve, so it
+      //  is carried over instead of being replaced by a generic permission
+      //  message that points at nothing.
+      const stderrText = error.stderr?.toString() ?? '';
+      const auth = stderrText.split('\n').filter(line => line.startsWith('asc-auth:')).join(' ');
       let codes = '';
       try {
         const failure = JSON.parse(error.stdout?.toString() ?? '{}');
@@ -185,7 +238,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
           return `${item.code}: ${item.title}`;
         }).filter(Boolean).join('; ');
       } catch { /* Keep profile contents and credential material out of errors. */ }
-      throw new Error(`Apple provisioning request failed: ${method} ${path.split('?')[0]}.${codes ? '  ' + codes : '  Check ASC credential access and API permissions.'}`);
+      const reason = auth || codes || 'Check ASC credential access and API permissions.';
+      throw new Error(`Apple provisioning request failed: ${method} ${path.split('?')[0]}.  ${reason}`);
     }
   };
   const checkOnly = process.argv.includes('--check');
@@ -193,4 +247,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     if (checkOnly) console.log(JSON.stringify(result));
     else console.log(`CodeCaps Push Notifications enabled; verified profile: ${result.profile}.`);
   }).catch(error => { console.error(error.message); process.exitCode = 1; });
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  run();
 }

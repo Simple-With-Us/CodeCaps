@@ -11,9 +11,10 @@
 # values) and exits 0 so the agent boots cleanly.  Never prints a secret
 # value at any point.
 #
-# Uses the same universal-auth + raw-secrets API as scripts/infisical-fetch.mjs
-# (which the mac-release workflow uses for GITHUB_ENV), but the dotenv
-# output here is the form a Linux non-Apple script actually needs.
+# This boot path keeps its own universal-auth login.  CI uses scoped
+# service tokens in scripts/infisical-fetch.mjs, and this script does not
+# import it.  The dotenv output here is the form a Linux non-Apple script
+# actually needs.
 set -euo pipefail
 
 REPO_NAME="codecaps"
@@ -48,10 +49,10 @@ if (( ${#MISSING[@]} > 0 )); then
   exit 0
 fi
 
-# 3.  Fetch the prod-env secrets via the same API path as
-#     scripts/infisical-fetch.mjs (loginUniversalAuth + listSecretsRaw),
-#     then emit a dotenv file on stdout.  The script does not echo values
-#     and does not log the response body.  Stderr only carries status.
+# 3.  Fetch the prod-env secrets with this script's own universal-auth
+#     login and raw-secrets read, then emit a dotenv file on stdout.  The
+#     script does not echo values and does not log the response body.
+#     Stderr only carries status.  It does not call scripts/infisical-fetch.mjs.
 mkdir -p "${ENV_DIR}"
 chmod 0700 "${ENV_DIR}"
 

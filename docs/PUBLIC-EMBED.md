@@ -55,5 +55,5 @@ CodeCaps does not implement either path; this document closes the **repo ownersh
 
 - Pull client: `Sources/QuotaCore/QuotaClient.swift`
 - Push publisher: `Sources/QuotaCore/QuotaPublisher.swift`
-- Settings UI: Console → Settings → Sources & Fleet (Quota Endpoint, Read Token)
+- Settings UI: Console → Dashboard → Sources & Fleet (Quota Endpoint, Read Token)
 - Local handoff (not a public API): `~/Library/Application Support/Usage Monitor/quota-windows.json` — credential-free, machine-local only

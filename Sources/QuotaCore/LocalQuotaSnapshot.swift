@@ -36,6 +36,16 @@ public enum LocalQuotaSnapshot {
         public let format: String
         public let version: Int
         public let producer: String?
+        /// The installation that wrote this file, so a consumer can tell this
+        /// installation's own readings from a copy of another machine's.
+        ///
+        /// Every window the fleet sends carries a producer instance, so a
+        /// consumer that cannot name the installation it is reading for has no
+        /// way to tell its own reading from somebody else's copy.  Additive
+        /// and optional on decode for the same reason `issues` is:  an older
+        /// build's file still parses, and a consumer that sees no id simply
+        /// keeps the older behaviour instead of guessing.
+        public let producerInstanceId: String?
         public let generatedAt: String
         public let windows: [QuotaWindow]
         public let issues: [String: String]?
@@ -60,6 +70,7 @@ public enum LocalQuotaSnapshot {
             format: String,
             version: Int,
             producer: String? = nil,
+            producerInstanceId: String? = nil,
             generatedAt: String,
             windows: [QuotaWindow],
             issues: [String: String]? = nil,
@@ -69,6 +80,7 @@ public enum LocalQuotaSnapshot {
             self.format = format
             self.version = version
             self.producer = producer
+            self.producerInstanceId = producerInstanceId
             self.generatedAt = generatedAt
             self.windows = windows
             self.issues = issues
@@ -139,6 +151,7 @@ public enum LocalQuotaSnapshot {
         try manager.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let published = safeIssues(issues)
         let payload = Payload(format: "usage-monitor-local-quotas", version: 1, producer: producerName,
+                              producerInstanceId: QuotaPublisher.producerInstanceId,
                               generatedAt: ISO8601DateFormatter().string(from: now),
                               windows: windows.map { window in
                                   let normalized = window.normalizedForExport()

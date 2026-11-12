@@ -42,4 +42,95 @@ final class ResetAlarmCadenceTests: XCTestCase {
         XCTAssertEqual(ResetAlarmCadence.caption(forPeriod: 31 * day), "1m")
         XCTAssertEqual(ResetAlarmCadence.caption(forPeriod: 90 * 60), "90m")
     }
+
+    // MARK: - The one period resolver
+
+    /// Owner 2026-10-22: the Muse Code five hour marker sat at 91%, and the
+    /// caption beside it and the marker were two different resolvers.  A label
+    /// that named both a five hour window and a day took a "5h" caption beside
+    /// a marker drawn for a whole day, which puts the marker in the wrong place.
+    ///
+    /// The resolver is the one every surface asks now, so these tests pin what
+    /// it says about the windows the owner actually sees.
+    func testTheResolverReadsTheHourFormsIncludingTheThreeHourOne() {
+        XCTAssertEqual(ResetAlarmCadence.resolve(token: "3h", label: "3h window"), .fixed(3 * hour))
+        XCTAssertEqual(ResetAlarmCadence.resolve(token: nil, label: "3-hour window"), .fixed(3 * hour))
+        XCTAssertEqual(ResetAlarmCadence.resolve(token: nil, label: "3h window"), .fixed(3 * hour))
+        XCTAssertEqual(ResetAlarmCadence.resolve(token: nil, label: "5-hour window"), .fixed(5 * hour))
+        XCTAssertEqual(ResetAlarmCadence.resolve(token: nil, label: "4-hour window"), .fixed(4 * hour))
+        XCTAssertEqual(ResetAlarmCadence.resolve(token: nil, label: "1-hour window"), .fixed(hour))
+    }
+
+    /// A window that names a five hour window beside a day is a five hour
+    /// window, and the caption and the marker have to say so together.
+    func testTheHourFormWinsOverTheDayAndWeekWords() {
+        XCTAssertEqual(ResetAlarmCadence.resolve(token: "shared", label: "5-hour daily limit"), .fixed(5 * hour))
+        XCTAssertEqual(ResetAlarmCadence.resolve(token: "shared", label: "5-hour weekly limit"), .fixed(5 * hour))
+        XCTAssertEqual(ResetAlarmCadence.resolve(token: "shared", label: "5-hour monthly limit"), .fixed(5 * hour))
+    }
+
+    /// The token is the reader's own statement of the period, so it wins.
+    func testTheTokenWinsOverTheLabel() {
+        XCTAssertEqual(ResetAlarmCadence.resolve(token: "5h", label: "Weekly limit"), .fixed(5 * hour))
+        XCTAssertEqual(ResetAlarmCadence.resolve(token: "7d", label: "5-hour window"), .fixed(7 * day))
+    }
+
+    /// The words are read whole, so "24h" is a day and never the four hours
+    /// inside it, and "12-hour" is twelve hours and never the two inside it.
+    func testTheWordsAreReadWhole() {
+        XCTAssertEqual(ResetAlarmCadence.resolve(token: "24h", label: ""), .fixed(day))
+        XCTAssertEqual(ResetAlarmCadence.resolve(token: nil, label: "24-hour window"), .fixed(day))
+        XCTAssertEqual(ResetAlarmCadence.resolve(token: nil, label: "12-hour window"), .fixed(12 * hour))
+        XCTAssertEqual(ResetAlarmCadence.resolve(token: nil, label: "15h window"), .fixed(15 * hour))
+    }
+
+    /// A month is a calendar month, not thirty days, so the marker on a monthly
+    /// bar is drawn for the month the provider means.
+    func testAMonthIsACalendarMonth() {
+        XCTAssertEqual(ResetAlarmCadence.resolve(token: "monthly", label: ""), .calendarMonths(1))
+        XCTAssertEqual(ResetAlarmCadence.resolve(token: nil, label: "Monthly limit"), .calendarMonths(1))
+        XCTAssertEqual(ResetAlarmCadence.resolve(token: nil, label: "Billing cycle"), .calendarMonths(1))
+    }
+
+    /// MiniMax has no four hour window:  its coding plan is five hours.
+    func testMiniMaxsFourHourWindowIsFiveHours() {
+        XCTAssertEqual(ResetAlarmCadence.resolve(token: "4h", label: "4h window",
+                                                 providerKey: "minimax"), .fixed(5 * hour))
+        XCTAssertEqual(ResetAlarmCadence.resolve(token: "4h", label: "4h window"), .fixed(4 * hour))
+    }
+
+    /// A Cursor window that states its cadence is read by that cadence.
+    ///
+    /// Owner ruling 2026-11-09:  Cursor has only the seven-day pool quota now,
+    /// so the provider-specific month rule may not override the cadence the
+    /// window states.  It still speaks for the window that names no cadence at
+    /// all, which is the billing-cycle plan meter, and for the plan meter that
+    /// states its cycle outright.
+    func testACursorWindowIsReadByTheCadenceItStates() {
+        XCTAssertEqual(ResetAlarmCadence.resolve(token: "weekly", label: "Included plan",
+                                                 providerKey: "cursor"), .fixed(7 * day))
+        XCTAssertEqual(ResetAlarmCadence.resolve(token: "7d", label: "Included plan",
+                                                 providerKey: "cursor"), .fixed(7 * day))
+        XCTAssertEqual(ResetAlarmCadence.resolve(token: "billing-cycle", label: "Included plan",
+                                                 providerKey: "cursor"), .calendarMonths(1))
+        XCTAssertEqual(ResetAlarmCadence.resolve(token: nil, label: "Included plan",
+                                                 providerKey: "cursor"), .calendarMonths(1))
+    }
+
+    /// A monthly period starts one calendar month before the reset, so a reset
+    /// on Mar 31 starts on Feb 28.
+    func testACalendarMonthStartsOnTheCalendar() {
+        var components = DateComponents()
+        components.year = 2026
+        components.month = 3
+        components.day = 31
+        components.hour = 12
+        let calendar = ResetAlarmCadence.billingCalendar
+        let end = calendar.date(from: components)!
+        let start = ResetAlarmCadence.start(of: .calendarMonths(1), endingAt: end)!
+        let parts = calendar.dateComponents([.year, .month, .day], from: start)
+        XCTAssertEqual(parts.year, 2026)
+        XCTAssertEqual(parts.month, 2)
+        XCTAssertEqual(parts.day, 28)
+    }
 }

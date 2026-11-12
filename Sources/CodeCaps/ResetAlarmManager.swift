@@ -6,7 +6,7 @@ import UserNotifications
 /// The payload sent when a quota reset alert is triggered.
 ///
 /// Carries the picked `ResetAlarmSound` so a test (and a future custom
-/// delivery handler) can verify the alert honours the Settings picker
+/// delivery handler) can verify the alert honours the Dashboard picker
 /// instead of trusting an external `UNNotificationSound` round-trip.
 public struct ResetAlarmNotification: Equatable, Sendable {
     public let id: String
@@ -153,7 +153,7 @@ public enum TestNotificationOutcome: Equatable, Sendable {
     /// rejected the request.
     case failed(String)
 
-    /// Owner-facing sentence for the Settings status line.
+    /// Owner-facing sentence for the Dashboard status line.
     public var message: String {
         switch self {
         case .sent:
@@ -242,6 +242,7 @@ public final class ResetAlarmManager: ObservableObject {
     private var updatingLegacySound = false
     private(set) var detectedResetHistory: [ResetAlertRecord] = []
     var onUsageDelivery: ((UsageAlertKind, String, String, UsageAlertOption) -> Void)?
+    var additionalDelivery: ((UsageAlertKind, String, String, String) -> Void)?
     private var popupWindows: [NSWindow] = []
     private let defaults: UserDefaults
 
@@ -283,7 +284,7 @@ public final class ResetAlarmManager: ObservableObject {
     }
 
     /// Result of the most recent "Send Test Notification", or `nil` before the
-    /// owner has ever pressed it.  Surfaced in Settings so a refused send is
+    /// owner has ever pressed it.  Surfaced in the Dashboard so a refused send is
     /// visible instead of silent.
     @Published public private(set) var testNotificationOutcome: TestNotificationOutcome?
 
@@ -302,7 +303,7 @@ public final class ResetAlarmManager: ObservableObject {
     /// Injectable sound player for unit testing.  Kept for the
     /// `sendTestNotification()` flow and for owners who set the picker
     /// to a system name we expose via `NSSound(named:)` even when
-    /// notifications are off, so the preview button in Settings still
+    /// notifications are off, so the preview button in the Dashboard still
     /// plays the chosen tone.
     var onPlaySound: (() -> Void)?
 
@@ -416,7 +417,7 @@ public final class ResetAlarmManager: ObservableObject {
         }
     }
 
-    /// Plays the picked sound.  Used by the Settings "Preview" button so
+    /// Plays the picked sound.  Used by the Dashboard "Preview" button so
     /// the owner can hear a sound before saving.
     public func previewChosenSound() {
         playAlarmSound(alarmSound)
@@ -459,7 +460,7 @@ public final class ResetAlarmManager: ObservableObject {
         Task { await requestNotificationPermission() }
     }
 
-    /// Refreshes the denied flag from the system so the Settings affordance
+    /// Refreshes the denied flag from the system so the Dashboard affordance
     /// reflects reality on open rather than only after a failed send.
     public func refreshNotificationAuthorization() async {
         guard Self.canUseUserNotifications else { return }
@@ -581,6 +582,7 @@ public final class ResetAlarmManager: ObservableObject {
                            identifier: String, navigation: AlertNavigation? = nil) {
         let option = preferences[kind]
         guard option.enabled else { return }
+        additionalDelivery?(kind, title, body, identifier)
         if let onUsageDelivery {
             onUsageDelivery(kind, title, body, option)
             return
@@ -681,7 +683,7 @@ public final class ResetAlarmManager: ObservableObject {
         content.title = "Quota Running Low: \(platformLabel)"
         content.body = "\(platformLabel) is about \(headroom) of quota left."
             + sentenceGap
-            + "Wind up or hand off anything still running against it."
+            + "Finish or hand off anything still running on this plan."
         content.sound = notificationSound(for: sound)
         let request = UNNotificationRequest(
             identifier: "codecaps.exhaustion.\(platformLabel).\(Int(Date().timeIntervalSince1970))",
@@ -793,23 +795,16 @@ public final class ResetAlarmManager: ObservableObject {
 /// or — for Cursor's plan, which carries neither — its provider.  `nil` when
 /// nothing says, which the tracker treats as "not the largest window" unless
 /// the provider has nothing better.
+///
+/// The shared resolver answers, so the tracker's period is the same period the
+/// row's caption names and the row's marker is drawn for.
 func quotaWindowPeriodSeconds(_ snapshot: QuotaWindowSnapshot) -> TimeInterval? {
-    if snapshot.window.canonicalProviderKey == "minimax", !snapshot.window.isSupplementaryVideoQuota {
-        let token = (snapshot.window.window ?? "").lowercased()
-        let label = snapshot.window.label.lowercased()
-        if !token.contains("week") && !token.contains("7d") && !label.contains("week") && !label.contains("7d") {
-            return 5 * 3_600
-        }
+    if let period = glanceWindowPeriod(snapshot) {
+        return ResetAlarmCadence.seconds(for: period)
     }
     let token = (snapshot.window.window ?? "").lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-    if let seconds = glanceDurationSeconds(token) { return seconds }
-    if glanceIsMonthly(snapshot) { return 30 * 86_400 }
-    if let parsed = WindowPacing.parseDurationSeconds(token: snapshot.window.window, label: snapshot.window.label) {
-        return parsed
-    }
     switch token {
     case "session": return 5 * 3_600
-    case "daily", "day": return 86_400
     default: return nil
     }
 }
@@ -829,6 +824,7 @@ func resetAlarmObservations(for row: DisplaySection, scope: String) -> [ResetAla
                 windowLabel: glanceMeterCaption(snapshot),
                 periodSeconds: quotaWindowPeriodSeconds(snapshot),
                 resetAt: snapshot.resetAt,
+                periodStartAt: snapshot.window.periodStartDate,
                 remainingPercent: row.isMasked(snapshot) ? nil : snapshot.remainingPercent,
                 observedAt: snapshot.observedAt,
                 identity: snapshot.window.accountKey)

@@ -489,4 +489,74 @@ final class QuotaPublisherTests: XCTestCase {
             XCTFail("Unexpected error: \(error)")
         }
     }
+
+    // MARK: - The wire's exhausted flag follows the shared cap rule
+
+    private func makeCapWindow(
+        id: String,
+        window token: String,
+        remaining: Double,
+        providerWord: Bool
+    ) -> QuotaWindow {
+        QuotaWindow(
+            id: id,
+            provider: "anthropic",
+            providerKey: "anthropic",
+            providerLabel: "Anthropic",
+            via: nil,
+            sourceApp: nil,
+            modelId: nil,
+            modelType: nil,
+            label: "Claude \(token)",
+            remainingPercent: remaining,
+            absoluteRemaining: nil,
+            absoluteLimit: nil,
+            quotaUnit: nil,
+            planName: nil,
+            remainingUnknown: false,
+            isExhausted: providerWord,
+            resetAt: "2026-09-14T22:00:00Z",
+            window: token,
+            status: .available,
+            skip: false,
+            skipReason: nil,
+            occurredAt: "2026-09-14T19:00:00Z",
+            source: "local"
+        )
+    }
+
+    /// The wire's exhausted flag has to read the same rule the interface
+    /// reads.
+    ///
+    /// A window reading 0.4% is spent by the shared rule, and the interface
+    /// rounds that to zero percent, so the wire has to say the window is
+    /// exhausted too:  otherwise the phone's cap line says "At cap" while the
+    /// exhausted alert stays quiet.  A window reading 40% is headroom, and the
+    /// provider's own exhausted word, which the Mac's export never clears,
+    /// must not overrule a reading that says there is room left
+    /// (Kody review 2026-10-21).
+    func testTheExportedExhaustedFlagFollowsTheSharedCapRule() throws {
+        let publisher = QuotaPublisher()
+        let windows = [
+            makeCapWindow(id: "spent", window: "5h", remaining: 0.4, providerWord: false),
+            makeCapWindow(id: "headroom", window: "weekly", remaining: 40, providerWord: false),
+            makeCapWindow(id: "stale-word", window: "monthly", remaining: 40, providerWord: true)
+        ]
+        let data = try publisher.buildUsageMonitorV2Payload(
+            windows: windows, occurredAtIso: "2026-09-14T19:00:00Z",
+            machineName: "Test-Mac", producerInstanceId: "test-instance")
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let events = try XCTUnwrap(json["events"] as? [[String: Any]])
+        XCTAssertEqual(events.count, 3)
+
+        let flags = events.map { event -> Bool in
+            let meta = event["metadata"] as? [String: Any]
+            return meta?["isExhausted"] as? Bool ?? false
+        }
+        XCTAssertEqual(
+            flags,
+            [true, false, false],
+            "a 0.4% reading is spent by the shared rule, and a 40% reading is headroom whatever the provider's word says"
+        )
+    }
 }

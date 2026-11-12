@@ -195,6 +195,10 @@ MAC_TARGETS: list[Target] = [
     Target("Sources/CodeCaps/Resources/ProviderMarks/cursor-color.png", repo_svg("cursor.svg"), "svg", "own"),
     Target("Sources/CodeCaps/Resources/ProviderMarks/cursor-dark.png", repo_svg("cursor.svg"), "svg", "own"),
     Target("Sources/CodeCaps/Resources/ProviderMarks/cursor-light.png", repo_svg("cursor.svg"), "svg", "own"),
+    # Copilot -- own vector (official outline, owner-supplied).
+    Target("Sources/CodeCaps/Resources/ProviderMarks/copilot-color.png", repo_svg("copilot.svg"), "svg", "own"),
+    Target("Sources/CodeCaps/Resources/ProviderMarks/copilot-dark.png", repo_svg("copilot.svg"), "svg", "own"),
+    Target("Sources/CodeCaps/Resources/ProviderMarks/copilot-light.png", repo_svg("copilot.svg"), "svg", "own"),
     # OpenAI -- own vector.
     # Grok -- own vector.
     Target("Sources/CodeCaps/Resources/ProviderMarks/grok-color.png", repo_svg("grok.svg"), "svg", "own"),
@@ -217,13 +221,9 @@ MAC_TARGETS: list[Target] = [
     Target("Sources/CodeCaps/Resources/ProviderMarks/gemini-light.png", repo_svg("gemini.svg"), "svg", "own"),
     # Muse -- owner raster with 840px of art.
     Target("Sources/CodeCaps/Resources/ProviderMarks/muse.png", MUSE, "png", "owner"),
-    Target("Sources/CodeCaps/Resources/ProviderMarks/muse-assist.png", MUSE, "png", "owner"),
     Target("Sources/CodeCaps/Resources/ProviderMarks/muse-color.png", MUSE, "png", "owner"),
     Target("Sources/CodeCaps/Resources/ProviderMarks/muse-dark.png", MUSE, "png", "owner"),
     Target("Sources/CodeCaps/Resources/ProviderMarks/muse-light.png", MUSE, "png", "owner"),
-    Target("Sources/CodeCaps/Resources/ProviderMarks/muse-assist-color.png", MUSE, "png", "owner"),
-    Target("Sources/CodeCaps/Resources/ProviderMarks/muse-assist-dark.png", MUSE, "png", "owner"),
-    Target("Sources/CodeCaps/Resources/ProviderMarks/muse-assist-light.png", MUSE, "png", "owner"),
     # Muse Code -- own vector.
     Target("Sources/CodeCaps/Resources/ProviderMarks/muse-code.png", repo_svg("muse-code.svg"), "svg", "own"),
     Target("Sources/CodeCaps/Resources/ProviderMarks/muse-code-color.png", repo_svg("muse-code.svg"), "svg", "own"),
