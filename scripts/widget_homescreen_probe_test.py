@@ -21,6 +21,7 @@ from widget_homescreen_probe import (  # noqa: E402
     DEVICE_PREFIX,
     EXIT_UNSUPPORTED,
     HOST_TARGET,
+    PINNED_UI_TEST,
     PROBE_SOURCES,
     ROOT,
     UI_TARGET,
@@ -37,13 +38,16 @@ from widget_homescreen_probe import (  # noqa: E402
     ProbeFailure,
     _cleanup,
     deletion_allowed,
+    find_udid_by_name,
     interpret_log,
     main,
     materialize_probe_project,
     outcome_code,
     parse_created_udid,
     parse_data_container,
+    parse_devices_listing,
     parse_group_container,
+    pinned_ui_test_ran,
     prepare_environment,
     probe_bundle_ids,
     probe_test_argv,
@@ -132,6 +136,86 @@ class HostAndRuntimeTests(unittest.TestCase):
         self.assertIsNone(refusal)
         self.assertEqual(device["name"], "iPhone 17")
 
+    def test_device_type_must_be_supported_by_the_selected_runtime(self):
+        runtime = {
+            "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-27-2",
+            "version": "27.2",
+            "isAvailable": True,
+            "supportedDevices": [
+                "com.apple.CoreSimulator.SimDeviceType.iPhone-16",
+                "com.apple.CoreSimulator.SimDeviceType.iPhone-16-Pro",
+            ],
+        }
+        device, refusal = select_device_type(
+            [
+                {"name": "iPhone 17", "identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17"},
+                {"name": "iPhone 16 Pro", "identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-16-Pro"},
+                {"name": "iPhone 16", "identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-16"},
+            ],
+            runtime,
+        )
+        self.assertIsNone(refusal)
+        self.assertEqual(device["name"], "iPhone 16")
+
+    def test_runtime_without_a_supported_device_list_does_not_filter(self):
+        runtime = {
+            "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-27-2",
+            "version": "27.2",
+            "isAvailable": True,
+        }
+        device, refusal = select_device_type(
+            [{"name": "iPhone 17", "identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17"}],
+            runtime,
+        )
+        self.assertIsNone(refusal)
+        self.assertEqual(device["name"], "iPhone 17")
+
+    def test_incompatible_iphone_types_are_an_unsupported_path(self):
+        runtime = {
+            "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-18-0",
+            "version": "18.0",
+            "isAvailable": True,
+            "name": "iOS 18.0",
+            "supportedDevices": ["com.apple.CoreSimulator.SimDeviceType.iPad-Pro-13-inch"],
+        }
+        prepared = prepare_environment(
+            darwin_host(),
+            [runtime],
+            [{"name": "iPhone 17", "identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17"}],
+            [],
+        )
+        self.assertIsNotNone(prepared.refusal)
+        self.assertIn("unsupported-path:", prepared.refusal or "")
+        self.assertIn("compatible", prepared.refusal or "")
+        self.assertIsNone(prepared.device_type_id)
+        self.assertEqual(outcome_code(Outcome.UNSUPPORTED), EXIT_UNSUPPORTED)
+
+    def test_prepare_picks_a_runtime_compatible_iphone(self):
+        runtime = {
+            "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-27-2",
+            "version": "27.2",
+            "isAvailable": True,
+            "name": "iOS 27.2",
+            "supportedDeviceTypes": [
+                {
+                    "name": "iPhone 17",
+                    "identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17",
+                }
+            ],
+        }
+        prepared = prepare_environment(
+            darwin_host(),
+            [runtime],
+            [
+                {"name": "iPhone 17", "identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17"},
+                {"name": "iPhone 16", "identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-16"},
+            ],
+            [],
+        )
+        self.assertIsNone(prepared.refusal)
+        self.assertEqual(prepared.device_type_id, "com.apple.CoreSimulator.SimDeviceType.iPhone-17")
+        self.assertEqual(prepared.runtime_id, runtime["identifier"])
+
     def test_booted_udids_ignore_shutdown_devices(self):
         udids = booted_udids(
             {
@@ -192,12 +276,25 @@ class SeedAndResultTests(unittest.TestCase):
 
     def test_source_dump_of_the_failure_string_is_not_a_refusal(self):
         log = (
+            "Test Case '-[WidgetHomeScreenProbeUITests testHomeScreenRendersSeededQuota]' started.\n"
             'XCTFail("unsupported-path: Edit control missing after long-press")\n'
+            "Test Case '-[WidgetHomeScreenProbeUITests testHomeScreenRendersSeededQuota]' passed (1.0 seconds).\n"
             "** TEST SUCCEEDED **\n"
         )
         self.assertIsNone(unsupported_failure_line(log))
+        self.assertTrue(pinned_ui_test_ran(log))
         outcome, _ = interpret_log(log, 12000)
         self.assertEqual(outcome, Outcome.VERIFIED)
+
+    def test_success_without_the_pinned_ui_test_is_a_failure(self):
+        log = (
+            "Test Case '-[SomeOtherTests testSomethingElse]' started.\n"
+            "** TEST SUCCEEDED **\n"
+        )
+        self.assertFalse(pinned_ui_test_ran(log))
+        outcome, message = interpret_log(log, 12000)
+        self.assertEqual(outcome, Outcome.FAILED)
+        self.assertIn("pinned UI test never ran", message)
 
     def test_a_real_gallery_mismatch_stays_a_refusal(self):
         log = (
@@ -211,7 +308,11 @@ class SeedAndResultTests(unittest.TestCase):
         self.assertIn("Edit control missing", message)
 
     def test_success_without_a_screenshot_is_a_failure(self):
-        outcome, message = interpret_log("** TEST SUCCEEDED **\n", 0)
+        log = (
+            "Test Case '-[WidgetHomeScreenProbeUITests testHomeScreenRendersSeededQuota]' started.\n"
+            "** TEST SUCCEEDED **\n"
+        )
+        outcome, message = interpret_log(log, 0)
         self.assertEqual(outcome, Outcome.FAILED)
         self.assertIn("screenshot", message)
 
@@ -253,6 +354,89 @@ class SeedAndResultTests(unittest.TestCase):
         _cleanup(runner, UDID, name)
         self.assertIn("delete", runner.calls[-1])
 
+    def test_cleanup_does_not_delete_when_the_listing_is_unparsable(self):
+        name = f"{DEVICE_PREFIX}9"
+
+        class Runner:
+            def __init__(self) -> None:
+                self.calls: list[list[str]] = []
+
+            def run(self, argv, check=True, timeout=180, cwd=None):
+                del check, timeout, cwd
+                self.calls.append(list(argv))
+                if "list" in argv:
+                    return 0, "not-json"
+                return 0, ""
+
+        runner = Runner()
+        _cleanup(runner, UDID, name)
+        self.assertTrue(any("shutdown" in call for call in runner.calls))
+        self.assertFalse(any("delete" in call for call in runner.calls))
+
+    def test_cleanup_does_not_delete_when_the_listing_is_not_a_dict(self):
+        name = f"{DEVICE_PREFIX}9"
+
+        class Runner:
+            def __init__(self) -> None:
+                self.calls: list[list[str]] = []
+
+            def run(self, argv, check=True, timeout=180, cwd=None):
+                del check, timeout, cwd
+                self.calls.append(list(argv))
+                if "list" in argv:
+                    return 0, json.dumps(["not", "a", "dict"])
+                return 0, ""
+
+        runner = Runner()
+        _cleanup(runner, UDID, name)
+        self.assertFalse(any("delete" in call for call in runner.calls))
+        self.assertIsNone(parse_devices_listing(json.dumps(["not", "a", "dict"])))
+        self.assertIsNone(parse_devices_listing("not-json"))
+        self.assertIsNone(parse_devices_listing(""))
+
+    def test_cleanup_recovers_udid_by_created_name_when_create_printed_none(self):
+        name = f"{DEVICE_PREFIX}9"
+
+        class Runner:
+            def __init__(self) -> None:
+                self.calls: list[list[str]] = []
+
+            def run(self, argv, check=True, timeout=180, cwd=None):
+                del check, timeout, cwd
+                self.calls.append(list(argv))
+                if "list" in argv:
+                    return 0, json.dumps(
+                        {"devices": {"iOS 27.2": [{"udid": UDID, "name": name, "state": "Shutdown"}]}}
+                    )
+                return 0, ""
+
+        runner = Runner()
+        _cleanup(runner, None, name)
+        self.assertTrue(any("shutdown" in call and UDID in call for call in runner.calls))
+        self.assertTrue(any("delete" in call and UDID in call for call in runner.calls))
+
+    def test_find_udid_by_name_only_matches_this_run_prefix(self):
+        devices = {
+            "devices": {
+                "iOS 27.2": [
+                    {"udid": UDID, "name": f"{DEVICE_PREFIX}9", "state": "Shutdown"},
+                    {"udid": "OTHER", "name": "iPhone 17", "state": "Shutdown"},
+                ]
+            }
+        }
+        self.assertEqual(find_udid_by_name(devices, f"{DEVICE_PREFIX}9"), UDID)
+        self.assertIsNone(find_udid_by_name(devices, "iPhone 17"))
+        self.assertIsNone(find_udid_by_name(devices, f"{DEVICE_PREFIX}missing"))
+        doubled = {
+            "devices": {
+                "iOS 27.2": [
+                    {"udid": UDID, "name": f"{DEVICE_PREFIX}9", "state": "Shutdown"},
+                    {"udid": "DUP", "name": f"{DEVICE_PREFIX}9", "state": "Booted"},
+                ]
+            }
+        }
+        self.assertIsNone(find_udid_by_name(doubled, f"{DEVICE_PREFIX}9"))
+
 
 class CommandPlanTests(unittest.TestCase):
     def test_commands_do_not_open_simulator_app(self):
@@ -278,6 +462,7 @@ class CommandPlanTests(unittest.TestCase):
         self.assertEqual(argv[argv.index("-parallel-testing-enabled") + 1], "NO")
         self.assertNotIn("-retry-tests-on-failure", argv)
         self.assertIn(f"platform=iOS Simulator,id={UDID}", argv)
+        self.assertIn(f"-only-testing:{PINNED_UI_TEST}", argv)
         self.assertIn("simctl", screenshot_argv(UDID, Path("/tmp/home-screen.png"))[1])
         self.assertIn("screenshot", screenshot_argv(UDID, Path("/tmp/home-screen.png")))
 
@@ -370,6 +555,11 @@ class ProjectAndContractTests(unittest.TestCase):
         self.assertIn("macos-latest", workflow)
         self.assertIn("scripts/test-widget-homescreen.sh", workflow)
         self.assertIn("scripts/widget_homescreen_probe_test.py", workflow)
+        self.assertIn("Sources/QuotaCore/**", workflow)
+        self.assertIn("ios/CodeCapsCompanion/App/**", workflow)
+        self.assertIn("timeout-minutes: 80", workflow)
+        self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", workflow)
+        self.assertNotIn("cancel-in-progress: true", workflow)
         self.assertNotIn("force-ship", workflow)
         self.assertNotIn("ios-ship.yml", workflow)
         self.assertNotIn("mac-release.yml", workflow)

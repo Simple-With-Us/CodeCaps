@@ -64,6 +64,14 @@ WIDGET_ENTITLEMENTS = (
 
 HOST_TARGET = "A10000000000000000000002"
 UI_TARGET = "A10000000000000000000003"
+PINNED_UI_TEST = (
+    "WidgetHomeScreenProbeUITests/WidgetHomeScreenProbeUITests/"
+    "testHomeScreenRendersSeededQuota"
+)
+PINNED_UI_TEST_CASE_RE = re.compile(
+    r"Test Case '-\[(?:\w+\.)?WidgetHomeScreenProbeUITests "
+    r"testHomeScreenRendersSeededQuota\]' (?:started|passed)"
+)
 
 
 class ProbeFailure(Exception):
@@ -154,7 +162,29 @@ def device_rank(identifier: str) -> tuple[int, int]:
     return number, kind
 
 
-def select_device_type(device_types: list[dict]) -> tuple[dict | None, str | None]:
+def runtime_supported_device_ids(runtime: dict) -> set[str] | None:
+    """Device type identifiers the runtime lists, or None when simctl gave no list."""
+    raw = runtime.get("supportedDevices")
+    if raw is None:
+        raw = runtime.get("supportedDeviceTypes")
+    if not isinstance(raw, list):
+        return None
+    identifiers: set[str] = set()
+    for item in raw:
+        if isinstance(item, str) and item:
+            identifiers.add(item)
+        elif isinstance(item, dict):
+            ident = item.get("identifier")
+            if ident:
+                identifiers.add(str(ident))
+    return identifiers
+
+
+def select_device_type(
+    device_types: list[dict],
+    runtime: dict | None = None,
+) -> tuple[dict | None, str | None]:
+    allowed = runtime_supported_device_ids(runtime) if runtime is not None else None
     iphones = []
     for item in device_types:
         if not isinstance(item, dict):
@@ -163,8 +193,15 @@ def select_device_type(device_types: list[dict]) -> tuple[dict | None, str | Non
         name = str(item.get("name", ""))
         if "iPhone" not in name or "iPhone-" not in identifier:
             continue
+        if allowed is not None and identifier not in allowed:
+            continue
         iphones.append(item)
     if not iphones:
+        if allowed is not None:
+            return None, (
+                "unsupported-path: no iPhone simulator device type installed is "
+                "compatible with the selected iOS runtime"
+            )
         return None, "unsupported-path: no iPhone simulator device type is installed"
     iphones.sort(key=lambda item: device_rank(str(item.get("identifier", ""))))
     return iphones[-1], None
@@ -201,7 +238,7 @@ def prepare_environment(
     runtime, runtime_refusal = select_runtime(runtimes)
     if runtime is None:
         return PrepareResult(None, None, None, runtime_refusal)
-    device, device_refusal = select_device_type(device_types)
+    device, device_refusal = select_device_type(device_types, runtime)
     if device is None:
         return PrepareResult(None, None, None, device_refusal)
     return PrepareResult(
@@ -360,6 +397,33 @@ def find_device(devices_json: dict, udid: str) -> dict | None:
     return None
 
 
+def find_udid_by_name(devices_json: dict, expected_name: str) -> str | None:
+    if not expected_name.startswith(DEVICE_PREFIX):
+        return None
+    matches: list[str] = []
+    for group in devices_json.get("devices", {}).values():
+        if not isinstance(group, list):
+            continue
+        for device in group:
+            if (
+                isinstance(device, dict)
+                and device.get("name") == expected_name
+                and device.get("udid")
+            ):
+                matches.append(str(device["udid"]))
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
+def parse_devices_listing(listing: str) -> dict | None:
+    try:
+        parsed = json.loads(listing) if listing else None
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
 def deletion_allowed(devices_json: dict, udid: str, expected_name: str) -> bool:
     if not expected_name.startswith(DEVICE_PREFIX):
         return False
@@ -424,7 +488,7 @@ def probe_test_argv(project: Path, udid: str, derived: Path, result: Path) -> li
         str(derived),
         "-resultBundlePath",
         str(result),
-        "-only-testing:WidgetHomeScreenProbeUITests/WidgetHomeScreenProbeUITests/testHomeScreenRendersSeededQuota",
+        f"-only-testing:{PINNED_UI_TEST}",
         "-parallel-testing-enabled",
         "NO",
         "CODE_SIGNING_ALLOWED=NO",
@@ -446,17 +510,23 @@ def unsupported_failure_line(log: str) -> str | None:
     return None
 
 
+def pinned_ui_test_ran(log: str) -> bool:
+    return PINNED_UI_TEST_CASE_RE.search(log) is not None
+
+
 def interpret_log(log: str, screenshot_bytes: int) -> tuple[Outcome, str]:
     detail = unsupported_failure_line(log)
     if detail:
         return Outcome.UNSUPPORTED, detail
-    if "** TEST SUCCEEDED **" in log and screenshot_bytes > 0:
+    if "** TEST SUCCEEDED **" in log:
+        if not pinned_ui_test_ran(log):
+            return Outcome.FAILED, "failed: TEST SUCCEEDED but the pinned UI test never ran"
+        if screenshot_bytes <= 0:
+            return Outcome.FAILED, "failed: UI test succeeded but simctl did not write a screenshot"
         return (
             Outcome.VERIFIED,
             "home-screen widget rendered the seeded GitHub Copilot 37% reading",
         )
-    if "** TEST SUCCEEDED **" in log:
-        return Outcome.FAILED, "failed: UI test succeeded but simctl did not write a screenshot"
     return Outcome.FAILED, "failed: home-screen widget probe did not succeed"
 
 
@@ -1040,20 +1110,29 @@ def _best_effort(runner: ProcessRunner, argv: list[str]) -> tuple[int, str]:
         return 1, ""
 
 
+def _recover_udid_by_name(runner: ProcessRunner, expected_name: str) -> str | None:
+    _code, listing = _best_effort(runner, ["xcrun", "simctl", "list", "devices", "-j"])
+    devices = parse_devices_listing(listing)
+    if not isinstance(devices, dict):
+        return None
+    return find_udid_by_name(devices, expected_name)
+
+
 def _cleanup(runner: ProcessRunner, udid: str | None, expected_name: str | None) -> None:
-    if not udid or not expected_name:
+    if not expected_name or not expected_name.startswith(DEVICE_PREFIX):
         return
+    if not udid:
+        udid = _recover_udid_by_name(runner, expected_name)
+        if not udid:
+            return
     _best_effort(runner, ["xcrun", "simctl", "shutdown", udid])
     _code, listing = _best_effort(runner, ["xcrun", "simctl", "list", "devices", "-j"])
-    devices: dict | None
-    try:
-        parsed = json.loads(listing) if listing else None
-    except json.JSONDecodeError:
-        parsed = None
-    devices = parsed if isinstance(parsed, dict) else None
-    if isinstance(devices, dict) and not deletion_allowed(devices, udid, expected_name):
+    devices = parse_devices_listing(listing)
+    if not isinstance(devices, dict) or not deletion_allowed(devices, udid, expected_name):
         print(
-            "widget-homescreen: failed: refusing to delete a simulator that is not the disposable probe",
+            "widget-homescreen: failed: simctl device listing was unparsable; refusing to delete"
+            if not isinstance(devices, dict)
+            else "widget-homescreen: failed: refusing to delete a simulator that is not the disposable probe",
             flush=True,
         )
         return
@@ -1095,7 +1174,11 @@ def execute(host: Host, work: Path) -> int:
         _, created = runner.run(
             ["xcrun", "simctl", "create", name, prepared.device_type_id or "", prepared.runtime_id or ""]
         )
-        udid = parse_created_udid(created)
+        try:
+            udid = parse_created_udid(created)
+        except ProbeFailure:
+            udid = _recover_udid_by_name(runner, name)
+            raise
         derived = work / "companion-derived"
         build_log = work / "xcodebuild-companion.log"
         code, _ = runner.stream(

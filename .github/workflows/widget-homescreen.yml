@@ -15,15 +15,17 @@ on:
       - "scripts/widget_homescreen_probe_test.py"
       - "ios/WidgetHomeScreenProbe/**"
       - "ios/CodeCapsCompanion/Widgets/**"
+      - "ios/CodeCapsCompanion/App/**"
       - "ios/CodeCapsCompanion/App/CodeCapsCompanion.entitlements"
       - "ios/CodeCapsCompanion/Widgets/CodeCapsWidgets.entitlements"
       - "ios/CodeCapsCompanion/project.yml"
+      - "Sources/QuotaCore/**"
       - "docs/WIDGETS.md"
       - "docs/rollouts/2026-10-27-iphone-widget-quota-ui.md"
 
 concurrency:
   group: widget-homescreen-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -32,7 +34,7 @@ jobs:
   homescreen:
     name: Home-screen WidgetKit render
     runs-on: macos-latest
-    timeout-minutes: 50
+    timeout-minutes: 80
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Probe unit tests
