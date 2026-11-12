@@ -320,10 +320,7 @@ public enum WidgetPresentation {
     }
 
     /// Mirrors the backend manifest's provider group on the wire.  Optional
-    /// fields decode as absent — older envelopes keep working.  `providerLabel`
-    /// falls back to `provider` exactly like the canonical
-    /// `QuotaProviderGroup` decoder, so a manifest group that omits the label
-    /// can never make the whole `WireEnvelope` decode throw.
+    /// fields decode as absent — older envelopes keep working.
     private struct WireProviderGroup: Decodable {
         let provider: String
         let providerKey: String?
@@ -332,21 +329,6 @@ public enum WidgetPresentation {
         let sortOrder: Int?
         let iconHint: String?
         let terms: WireProviderTerms?
-
-        private enum CodingKeys: String, CodingKey {
-            case provider, providerKey, providerLabel, via, sortOrder, iconHint, terms
-        }
-
-        init(from decoder: Decoder) throws {
-            let container = try decoder.container(keyedBy: CodingKeys.self)
-            provider = try container.decode(String.self, forKey: .provider)
-            providerLabel = try container.decodeIfPresent(String.self, forKey: .providerLabel) ?? provider
-            providerKey = try container.decodeIfPresent(String.self, forKey: .providerKey)
-            via = try container.decodeIfPresent(String.self, forKey: .via)
-            sortOrder = try container.decodeIfPresent(Int.self, forKey: .sortOrder)
-            iconHint = try container.decodeIfPresent(String.self, forKey: .iconHint)
-            terms = try container.decodeIfPresent(WireProviderTerms.self, forKey: .terms)
-        }
     }
 
     private struct WireProviderTerms: Decodable {
@@ -541,8 +523,8 @@ public enum WidgetPresentation {
         let subtitle: String
         if let firstCadence = childWindows.first?.cadence, !firstCadence.isEmpty {
             subtitle = firstCadence
-        } else if let defaultWindowLabel, !defaultWindowLabel.isEmpty {
-            subtitle = defaultWindowLabel
+        } else if let defaultLabel, !defaultLabel.isEmpty {
+            subtitle = defaultLabel
         } else {
             subtitle = "Subscription Plan"
         }
@@ -714,13 +696,13 @@ public enum WidgetPresentation {
     }
 
     /// The manifest's `iconHint` for the canonicalized key, if any.
-    private static func iconHint(for canonicalKey: String, in manifest: [WireProviderGroup]?) -> String? {
+    static func iconHint(for canonicalKey: String, in manifest: [WireProviderGroup]?) -> String? {
         guard let manifest else { return nil }
         return manifest.first { canonicalManifestKey(provider: $0.provider, via: $0.via) == canonicalKey }?.iconHint
     }
 
     /// The manifest's `terms.defaultWindowLabel` for the canonicalized key.
-    private static func defaultWindowLabel(for canonicalKey: String, in manifest: [WireProviderGroup]?) -> String? {
+    static func defaultWindowLabel(for canonicalKey: String, in manifest: [WireProviderGroup]?) -> String? {
         guard let manifest else { return nil }
         return manifest.first { canonicalManifestKey(provider: $0.provider, via: $0.via) == canonicalKey }?.terms?.defaultWindowLabel
     }

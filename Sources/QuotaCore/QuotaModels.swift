@@ -464,68 +464,32 @@ public extension QuotaResponse {
         }
 
         // Build the manifest view: key, label, via, expected, iconHint, and
-        // sort order, keyed by canonical key.  Groups that canonicalize to
-        // the same key merge onto one entry (first-seen fields win) instead
-        // of producing two sections with the same providerKey.  Future keys
-        // without a manifest entry still cannot collide with a
-        // canonicalized form.
-        var manifest: [(key: String, label: String, labelFromServer: Bool, via: String?, expected: Bool, iconHint: String?, sortOrder: Int?)] = []
+        // sort order, keyed by canonical key so future keys without a manifest
+        // entry do not collide with their canonicalized form.
+        var manifest: [(key: String, label: String, via: String?, expected: Bool, iconHint: String?, sortOrder: Int)] = []
         if providerGroups.isEmpty {
             // OFFLINE FALLBACK: server returned no provider groups.  Use the
             // bundled list as the only source of order/labels.  An admin who
             // adds a provider must ship it through the server manifest, not by
             // editing this list.
             for provider in QuotaProviders.expected {
-                manifest.append((provider.key, provider.label, false, provider.via, true, nil, 0))
+                manifest.append((provider.key, provider.label, provider.via, true, nil, 0))
             }
         } else {
             // Server-first: the manifest is authoritative.  Iterate in the
-            // server-supplied array order (it already arrives sorted by
-            // sortOrder), merging groups that canonicalize to the same key
-            // (e.g. two `via == "antigravity"` groups fold onto
-            // "google-antigravity") onto the first entry instead of emitting
-            // duplicate sections with the same providerKey.  Fields the
-            // first entry lacked are filled in from the later group; a
-            // non-empty server label in a later group also replaces the
-            // hardcoded fallback the entry carried when its own group
-            // omitted the label.
-            var manifestIndex: [String: Int] = [:]
+            // server-supplied order (it already arrives sorted by sortOrder)
+            // and only fall back to `QuotaProviders.label(for:)` when the group
+            // did not carry its own label.
             for group in providerGroups {
                 let key = QuotaProviders.canonicalKey(provider: group.provider, providerKey: nil, via: group.via)
                 guard !QuotaProviders.hidden.contains(key) else { continue }
-                if let existing = manifestIndex[key] {
-                    var entry = manifest[existing]
-                    let serverLabel = group.providerLabel.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !entry.labelFromServer, !serverLabel.isEmpty {
-                        entry.label = serverLabel
-                        entry.labelFromServer = true
-                    }
-                    entry.via = entry.via ?? group.via
-                    entry.expected = entry.expected || group.expected
-                    entry.iconHint = entry.iconHint ?? group.iconHint
-                    entry.sortOrder = entry.sortOrder ?? group.sortOrder
-                    manifest[existing] = entry
-                } else {
-                    manifestIndex[key] = manifest.count
-                    let trimmed = group.providerLabel.trimmingCharacters(in: .whitespacesAndNewlines)
-                    let label = trimmed.isEmpty ? QuotaProviders.label(for: key) : trimmed
-                    manifest.append((key, label, !trimmed.isEmpty, group.via, group.expected, group.iconHint, group.sortOrder))
-                }
+                let trimmed = group.providerLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+                let label = trimmed.isEmpty ? QuotaProviders.label(for: key) : trimmed
+                manifest.append((key, label, group.via, group.expected, group.iconHint, group.sortOrder ?? 0))
             }
-            // Re-sort only when at least one group actually supplied a
-            // `sortOrder`.  A Phase-1 backend emits `providerGroups` with no
-            // `sortOrder` at all; a tiebreak over all-zero orders would reorder
-            // the dashboard alphabetically by label, contradict the documented
-            // server order, and make the curated `QuotaProviders.expected`
-            // order unreachable.  With no `sortOrder` anywhere, the server's
-            // array order stands.
-            if manifest.contains(where: { $0.sortOrder != nil }) {
-                manifest.sort { lhs, rhs in
-                    let l = lhs.sortOrder ?? 0
-                    let r = rhs.sortOrder ?? 0
-                    if l != r { return l < r }
-                    return lhs.label.localizedCaseInsensitiveCompare(rhs.label) == .orderedAscending
-                }
+            manifest.sort { lhs, rhs in
+                if lhs.sortOrder != rhs.sortOrder { return lhs.sortOrder < rhs.sortOrder }
+                return lhs.label.localizedCaseInsensitiveCompare(rhs.label) == .orderedAscending
             }
         }
 
