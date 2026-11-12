@@ -199,7 +199,13 @@ public struct PlatformLogo: View {
     public var body: some View {
         let isDark = colorScheme == .dark
         let epoch = PlatformLogoImage.markCacheEpoch
-        let catalog = PlatformLogoImage.customMarkCatalogEpoch
+        // Bumped when a bundled mark lands, including one decoded for a
+        // different surface.  The popover and the mini panel do not share a
+        // cache key (colour vs template, light vs dark), so a hit on one
+        // must still wake the other.
+        let catalog = PlatformLogoImage.markCatalogEpoch
+        // Bumped when the background custom-mark directory snapshot changes.
+        let customCatalog = PlatformLogoImage.customMarkCatalogEpoch
         let image = displayedMark(isDark: isDark)
         Group {
             if let image {
@@ -223,10 +229,12 @@ public struct PlatformLogo: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .task(id: "\(providerKey)|\(iconHint ?? "")|\(style.rawValue)|\(isDark)|\(epoch)|\(catalog)|\(missingMarkRetry)") {
+        .task(id: "\(providerKey)|\(iconHint ?? "")|\(style.rawValue)|\(isDark)|\(epoch)|\(catalog)|\(customCatalog)|\(missingMarkRetry)") {
             // Disk work stays off the main thread.  A warm cache returns
-            // without a probe; a miss loads once, then the retry interval
-            // is the only thing that looks again.
+            // without a probe.  A miss is not drawn as a cached image: the
+            // placeholder is only this branch, and a later catalog wave
+            // (preload, or another surface's decode) starts a new load
+            // instead of waiting out the backoff.
             let resolved = await Self.resolveMark(providerKey: providerKey,
                                                    iconHint: iconHint,
                                                    style: style,
@@ -241,6 +249,12 @@ public struct PlatformLogo: View {
             try? await Task.sleep(nanoseconds: delay)
             guard !Task.isCancelled else { return }
             missingMarkRetry += 1
+        }
+        .onReceive(NotificationCenter.default.publisher(for: PlatformLogoImage.marksDidResolve)) { _ in
+            // The body only reads the cache.  Without this, a row that
+            // already drew the placeholder keeps drawing it after the
+            // bitmap arrives, because none of its inputs changed.
+            refreshTick += 1
         }
         .frame(width: size, height: size)
         .accessibilityHidden(true)
@@ -366,14 +380,30 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
     /// invalidation must not pin its result afterwards, or the clear is
     /// silently undone.
     private static var bundleGeneration: UInt64 = 0
-    /// Cache keys whose bundled artwork was already sought and not found.
-    /// A SwiftUI update must not walk the candidate list again until a retry
-    /// or an invalidation asks for a fresh probe.
-    private static var missingBundledKeys = Set<String>()
-    /// Candidate file URLs keyed by filename and bundle generation.  Building
-    /// them with an unhinted `appendingPathComponent` stats through the
-    /// sandbox, which is the CODECAPS-4 hang when a ForEach row does it.
-    private static var candidateURLCache: [String: (generation: UInt64, urls: [URL])] = [:]
+    /// Cache keys whose bundled artwork was already sought and not found,
+    /// tagged with the catalog epoch of that probe.  A newer epoch means a
+    /// mark has since been decoded (or the bundle became reachable), so the
+    /// old miss must not keep drawing the placeholder.  The placeholder
+    /// itself is never stored: a miss is the absence of an image.
+    private static var missingBundledKeys: [String: UInt64] = [:]
+    /// Bumped when bundled artwork becomes readable.  Rows mix this into
+    /// their task identity so a published wave reloads a style that is
+    /// still empty.
+    private static var catalogEpoch: UInt64 = 0
+    /// Coalesces a burst of decodes (a preload walks every mark) into one
+    /// notification and one epoch bump.
+    private static var marksNoteScheduled = false
+    /// While a preload is decoding, per-file successes must not publish
+    /// until the pass finishes, or open rows reload against a half-warm cache.
+    private static var suppressMarkNotes = 0
+    /// Test seam.  A probe under this flag returns nil and is not remembered,
+    /// which is the launch window before the resource bundle can be resolved.
+    static var bundleUnavailableForTesting = false
+    /// Candidate file URLs keyed by filename, bundle generation, and the
+    /// bundle path they were built from.  An empty path is not cached: the
+    /// list built before the bundle existed would otherwise be reused once
+    /// the bundle is there, and every mark would stay missing.
+    private static var candidateURLCache: [String: (generation: UInt64, bundlePath: String, urls: [URL])] = [:]
     /// Decoded custom marks.  The view reads this; it does not open the file.
     private static let customImageCache = NSCache<NSString, NSImage>()
     /// Keys placed in `customImageCache`.  `NSCache` cannot be enumerated, and
@@ -413,6 +443,15 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
         return customIndexEpoch
     }
 
+    /// Epoch mixed into the logo view's task identity when a decode lands.
+    /// Distinct from `markCacheEpoch`: invalidation and a successful load
+    /// are different events, and a load must not clear every other cache.
+    static var markCatalogEpoch: UInt64 {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return catalogEpoch
+    }
+
     /// Append a file component without asking the filesystem whether the
     /// result is a directory.  The single-argument
     /// `appendingPathComponent` calls `URLByAppendingPathComponent:`, which
@@ -442,10 +481,16 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
         stateLock.unlock()
         //  Resolution is kept outside the lock:  it runs arbitrary bundle
         //  code and only the pin needs guarding.
+        if bundleUnavailableForTesting { return nil }
         if let b = ResourceBundle.resolved ?? ResourceBundle.resolveBundle() {
             stateLock.lock()
+            let pinned = generation == bundleGeneration && cachedBundle == nil
             if generation == bundleGeneration { cachedBundle = b }
             stateLock.unlock()
+            // The first time the bundle can be opened, rows that already
+            // drew a placeholder need to look again.  A miss recorded while
+            // it was unreachable is not a reason to keep the placeholder.
+            if pinned { publishMarksResolved() }
             return b
         }
         return nil
@@ -456,16 +501,71 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
     /// filesystem probes while the window is already on screen.  The custom
     /// mark directory is indexed in the same pass: a row must not list or
     /// stat it while SwiftUI is updating.
+    ///
+    /// Passes `refreshing` so a miss a row already recorded cannot turn this
+    /// warm-up into a no-op.  When the pass decodes anything, one notification
+    /// goes out so every surface re-reads the cache.
     public static func preloadBundledMarks() {
         rebuildCustomMarkIndex()
+        let found = decodeBundledMarks(refreshing: true)
+        // Nothing decoded: the bundle was not reachable yet.  Publishing
+        // would only bump the epoch.  One follow-up covers the launch
+        // window; a mark that is genuinely absent stays on the view's backoff.
+        guard found > 0 else {
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + .seconds(1)) {
+                guard decodeBundledMarks(refreshing: true) > 0 else { return }
+                publishMarksResolved()
+            }
+            return
+        }
+        publishMarksResolved()
+    }
+
+    /// How many bundled variants this pass actually decoded.  Callers use it
+    /// to decide whether a later pass is worth scheduling.
+    @discardableResult
+    private static func decodeBundledMarks(refreshing: Bool) -> Int {
+        stateLock.lock()
+        suppressMarkNotes += 1
+        stateLock.unlock()
+        var found = 0
         for key in resourceNames.keys {
             for style in [MarkStyle.standard, .template] {
                 for isDark in [false, true] {
-                    _ = bundledImage(providerKey: key, style: style, isDark: isDark)
+                    if bundledImage(providerKey: key, style: style, isDark: isDark, refreshing: refreshing) != nil {
+                        found += 1
+                    }
                 }
             }
         }
         _ = BrandMarkImage.asset
+        stateLock.lock()
+        suppressMarkNotes -= 1
+        stateLock.unlock()
+        return found
+    }
+
+    /// Ask every open logo to re-read the cache.  A burst of decodes bumps
+    /// the catalog epoch once; rows whose style is still empty start a new
+    /// load, and rows that were waiting on the backoff do not keep the
+    /// placeholder until that delay ends.
+    static func publishMarksResolved() {
+        stateLock.lock()
+        if suppressMarkNotes > 0 {
+            stateLock.unlock()
+            return
+        }
+        let already = marksNoteScheduled
+        marksNoteScheduled = true
+        if !already { catalogEpoch &+= 1 }
+        stateLock.unlock()
+        guard !already else { return }
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: marksDidResolve, object: nil)
+            stateLock.lock()
+            marksNoteScheduled = false
+            stateLock.unlock()
+        }
     }
 
     /// Forget every cached bundle and mark.  Called when something changes that
@@ -527,15 +627,24 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
         let cacheKeyString = identity.cacheKey as String
         if refreshing {
             stateLock.lock()
-            missingBundledKeys.remove(cacheKeyString)
+            missingBundledKeys.removeValue(forKey: cacheKeyString)
             stateLock.unlock()
         } else if let cached = identity.cache.object(forKey: identity.cacheKey) {
             return cached
         } else {
             stateLock.lock()
-            let missing = missingBundledKeys.contains(cacheKeyString)
+            let missing = missingBundledKeys[cacheKeyString] == catalogEpoch
             stateLock.unlock()
             if missing { return nil }
+        }
+        if bundleUnavailableForTesting {
+            // The bundle cannot deliver yet.  Remembering that as a miss is
+            // what left the mini panel on '?' after the popover had already
+            // decoded the same providers.
+            stateLock.lock()
+            bundledCandidateProbes += 1
+            stateLock.unlock()
+            return nil
         }
         if let cached = identity.cache.object(forKey: identity.cacheKey) { return cached }
         let hintName = iconHint?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -552,11 +661,19 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
         }
         for filename in filenames {
             if let image = imageFromBundle(filename: filename, key: identity.key, cacheKey: identity.cacheKey, cache: identity.cache, refreshing: refreshing) {
+                // A decode is what makes every surface drop the placeholder,
+                // including a row whose own task is still inside its backoff.
+                publishMarksResolved()
                 return image
             }
         }
         stateLock.lock()
-        missingBundledKeys.insert(cacheKeyString)
+        // No bundle yet: the failure is environmental.  Storing it would
+        // make the next draw, and the launch preload, keep returning nil
+        // after the bundle is there.
+        if cachedBundle != nil && !bundleUnavailableForTesting {
+            missingBundledKeys[cacheKeyString] = catalogEpoch
+        }
         stateLock.unlock()
         return nil
     }
@@ -605,15 +722,21 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
     private static func candidateURLs(filename: String, refreshing: Bool) -> [URL] {
         stateLock.lock()
         let generation = bundleGeneration
-        if !refreshing, let cached = candidateURLCache[filename], cached.generation == generation {
+        let bundlePath = cachedBundle?.bundleURL.path ?? ""
+        if !refreshing, !bundlePath.isEmpty,
+           let cached = candidateURLCache[filename],
+           cached.generation == generation, cached.bundlePath == bundlePath {
             stateLock.unlock()
             return cached.urls
         }
         stateLock.unlock()
         let urls = makeCandidateURLs(filename: filename)
         stateLock.lock()
-        if bundleGeneration == generation {
-            candidateURLCache[filename] = (generation, urls)
+        let pathNow = cachedBundle?.bundleURL.path ?? ""
+        // A list built with no bundle is not an answer worth keeping.  The
+        // next probe, once the bundle is pinned, has to see the real files.
+        if bundleGeneration == generation, !pathNow.isEmpty {
+            candidateURLCache[filename] = (generation, pathNow, urls)
         }
         stateLock.unlock()
         return urls
@@ -948,7 +1071,7 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
         stateLock.lock()
         bundleGeneration &+= 1
         cachedBundle = nil
-        missingBundledKeys = missingBundledKeys.filter { !bundledMissMatches($0, providerKey: key) }
+        missingBundledKeys = missingBundledKeys.filter { !bundledMissMatches($0.key, providerKey: key) }
         let customKeys = customImageCacheKeys.filter { customCacheKeyMatches($0, providerKey: key) }
         customImageCacheKeys.subtract(customKeys)
         for cacheKey in customKeys {
@@ -1060,6 +1183,16 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
     static func allowCustomIndexBuildsForTesting() {
         stateLock.lock()
         customIndexBuildQueued = false
+        stateLock.unlock()
+    }
+
+    /// Test seam: remember a bundled miss at the current catalog epoch, the
+    /// way a row's first probe does when the file is not found.  The
+    /// placeholder is not an image; `cachedImage` stays nil.
+    static func recordBundledMissForTesting(providerKey: String, iconHint: String? = nil, style: MarkStyle, isDarkMode: Bool) {
+        let identity = bundledCacheIdentity(providerKey: providerKey, iconHint: iconHint, style: style, isDark: isDarkMode)
+        stateLock.lock()
+        missingBundledKeys[identity.cacheKey as String] = catalogEpoch
         stateLock.unlock()
     }
 
