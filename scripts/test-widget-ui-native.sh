@@ -10,7 +10,7 @@ sources=()
 for file in "${files[@]}"; do
   [[ "$file" == */CodeCapsWidgetBundle.swift ]] || sources+=("$file")
 done
-for name in ResetAlarmCadence QuotaWindowVocabulary QuotaWindowCaption FleetSourceDisagreement WidgetPlatformDisplay PlanMetadata WidgetSnapshotFetcher CompanionReadTokenStore; do
+for name in AppGroupSnapshotReadPolicy ResetAlarmCadence QuotaWindowVocabulary QuotaWindowCaption FleetSourceDisagreement WidgetPlatformDisplay PlanMetadata WidgetSnapshotFetcher CompanionReadTokenStore; do
   sources+=("Sources/QuotaCore/$name.swift")
 done
 # Compile the actual companion model and views without constructing the stateful model.

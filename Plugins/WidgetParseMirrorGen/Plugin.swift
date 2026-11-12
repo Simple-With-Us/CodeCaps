@@ -18,6 +18,7 @@ struct WidgetParseMirrorGenPlugin: BuildToolPlugin {
         "ios/CodeCapsCompanion/App/Models/AlarmSoundPlayer.swift",
         "Sources/QuotaCore/AnomalyDetector.swift",
         "Sources/QuotaCore/AntigravityQuotaGroups.swift",
+        "Sources/QuotaCore/AppGroupSnapshotReadPolicy.swift",
         "Sources/QuotaCore/BoundedHTTPFetch.swift",
         "Sources/QuotaCore/BoundedQuotaProcess.swift",
         "ios/CodeCapsCompanion/App/Models/CompanionQuotaModel.swift",
