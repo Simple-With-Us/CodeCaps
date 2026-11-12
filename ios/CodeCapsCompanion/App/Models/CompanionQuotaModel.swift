@@ -1526,28 +1526,28 @@ public final class CompanionQuotaModel: ObservableObject {
                     lastUpdated = hasDataSource ? latestObservedAt : nil
                     return
                 }
-                failure = "The sync endpoint returned an invalid quota snapshot." + sentenceGap
-                    + "Check the endpoint response and try again."
+                failure = "The share address returned a reading CodeCaps could not read." + sentenceGap
+                    + "Check the address and try again."
             } catch let error as WidgetSnapshotFetcher.FetchError {
                 guard requestedRevision == syncConfigurationRevision,
                       requestedEndpoint == syncEndpoint,
                       requestedToken == syncToken else { return }
                 switch error {
                 case .unacceptableStatus(let status):
-                    failure = "The sync endpoint answered \(status)." + sentenceGap
-                        + "Check the endpoint and token in CodeCaps Settings."
+                    failure = "The share address answered \(status)." + sentenceGap
+                        + "Check the address and access code in Settings."
                 case .invalidHTTPSURL:
-                    failure = "The sync endpoint URL is not allowed." + sentenceGap
-                        + "Use an HTTPS endpoint (or loopback HTTP) without credentials, a query, or a fragment."
+                    failure = "That share address is not allowed." + sentenceGap
+                        + "Use an https address. A local address on this device may use http."
                 case .invalidToken:
-                    failure = "The sync token is not usable." + sentenceGap
-                        + "Paste the token again in CodeCaps Settings."
+                    failure = "The access code is not usable." + sentenceGap
+                        + "Paste the access code again in Settings."
                 case .responseTooLarge:
-                    failure = "The sync endpoint response is too large." + sentenceGap
-                        + "Check the endpoint response and try again."
+                    failure = "The response from the share address is too large." + sentenceGap
+                        + "Check the address and try again."
                 case .nonHTTPResponse:
-                    failure = "The sync endpoint did not answer with HTTP." + sentenceGap
-                        + "Check the endpoint and try again."
+                    failure = "The share address did not answer." + sentenceGap
+                        + "Check the address and try again."
                 }
             } catch {
                 guard requestedRevision == syncConfigurationRevision,
@@ -1561,8 +1561,8 @@ public final class CompanionQuotaModel: ObservableObject {
                 // existing readings and stay quiet (CC-214).
                 if error is CancellationError { return }
                 if let urlError = error as? URLError, urlError.code == .cancelled { return }
-                failure = "Could not reach the sync endpoint." + sentenceGap
-                    + "Check the endpoint and token in CodeCaps Settings."
+                failure = "Could not reach the share address." + sentenceGap
+                    + "Check the address and access code in Settings."
             }
         }
 
@@ -1573,8 +1573,8 @@ public final class CompanionQuotaModel: ObservableObject {
         } else if hasDataSource {
             lastError = nil
         } else {
-            lastError = "No quota readings yet." + sentenceGap
-                + "Add a sync endpoint, or open CodeCaps on your Mac."
+            lastError = "No readings yet." + sentenceGap
+                + "Add a share address, or open CodeCaps on your Mac."
         }
         if hasDataSource, let latestObservedAt {
             lastUpdated = latestObservedAt
@@ -3092,20 +3092,27 @@ public final class CompanionQuotaModel: ObservableObject {
         if let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: Self.appGroupId) {
             let sharedFile = container.appendingPathComponent("quota-windows.json")
             if FileManager.default.fileExists(atPath: sharedFile.path) {
-                // The App Group file is authoritative once it exists: a
-                // malformed or empty copy means the source currently has
-                // nothing valid, not that an older store should resurrect.
-                guard let data = try? Data(contentsOf: sharedFile) else { return }
-                if parseSnapshot(data: data) {
-                    // A fallback render is the snapshot's age, not a fresh pull, so
-                       // the stamp always says what the file says (CC-214).
-                       if let attrs = try? FileManager.default.attributesOfItem(atPath: sharedFile.path),
-                       let modDate = attrs[.modificationDate] as? Date {
-                        self.lastUpdated = modDate
+                if let data = try? Data(contentsOf: sharedFile) {
+                    let parsed = parseSnapshot(data: data)
+                    let decodedEmpty = parsed && items.isEmpty
+                    switch AppGroupSnapshotReadPolicy.decision(
+                        filePresent: true,
+                        readSucceeded: true,
+                        decodeSucceeded: parsed,
+                        decodedExplicitlyEmpty: decodedEmpty
+                    ) {
+                    case .consultNextTier:
+                        break
+                    case .stopAuthoritativeEmpty, .stopAuthoritativeContent:
+                        // A fallback render is the snapshot's age, not a fresh pull, so
+                        // the stamp always says what the file says (CC-214).
+                        if let attrs = try? FileManager.default.attributesOfItem(atPath: sharedFile.path),
+                           let modDate = attrs[.modificationDate] as? Date {
+                            self.lastUpdated = modDate
+                        }
+                        return
                     }
-                    return
                 }
-                return
             }
         }
 

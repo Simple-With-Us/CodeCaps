@@ -780,8 +780,8 @@ struct AllPlatformsPage: View {
                 if model.serverEnabled { fleetGroup }
             }
 
-            Text("Quota windows are independent." + sentenceGap
-                 + "Antigravity meters two model pools separately, so each pool has its own row.")
+            Text("Each limit is separate." + sentenceGap
+                 + "Antigravity lists its model groups on their own rows.")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -802,12 +802,12 @@ struct AllPlatformsPage: View {
                         value: model.nextReset.map { glanceResetCountdown($0, now: model.now) } ?? "—",
                         symbol: "clock",
                         detail: nextResetDetail)
-            SummaryTile(label: "Fleet",
-                        value: model.serverEnabled ? "\(model.fleetWindowCount) windows" : "Off",
+            SummaryTile(label: "Other Devices",
+                        value: model.serverEnabled ? "\(model.fleetWindowCount) readings" : "Off",
                         symbol: "arrow.up.arrow.down.circle",
                         detail: model.serverEnabled
-                            ? (model.lastPullTime.map { "pulled \($0.formatted(date: .omitted, time: .shortened))" } ?? "never pulled")
-                            : "set up fleet pull")
+                            ? (model.lastPullTime.map { "updated \($0.formatted(date: .omitted, time: .shortened))" } ?? "not loaded yet")
+                            : "set up sharing")
         }
     }
 
@@ -826,7 +826,7 @@ struct AllPlatformsPage: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(Theme.warning)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Fleet pull issue").font(.system(size: 12, weight: .semibold))
+                Text("Could Not Load Other Devices").font(.system(size: 12, weight: .semibold))
                 Text(error).font(.system(size: 11)).foregroundStyle(.secondary)
             }
             Spacer()
@@ -844,16 +844,16 @@ struct AllPlatformsPage: View {
         ContentUnavailableView {
             Label("Connect a Quota Source", systemImage: "link")
         } description: {
-            Text("CodeCaps reads quota from the agent CLIs already signed in on this Mac."
-                 + sentenceGap + "You can also pull quota from your other machines.")
+            Text("CodeCaps reads the AI plans already signed in on this Mac."
+                 + sentenceGap + "You can also show plans from your other devices.")
         } actions: {
             HStack(spacing: 10) {
-                Button("Turn On Local Readers") {
+                Button("Use This Mac") {
                     model.setLocalEnabled(true)
                     state.page = .settingsSourcesFleet
                 }
                 .buttonStyle(.borderedProminent)
-                Button("Set Up Fleet Pull") { state.page = .settingsSourcesFleet }
+                Button("Show Other Devices") { state.page = .settingsSourcesFleet }
             }
         }
     }
@@ -864,9 +864,9 @@ struct AllPlatformsPage: View {
             Rectangle().fill(Theme.fleet).frame(width: 2)
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    Text("Fleet").font(.system(size: 13, weight: .semibold))
+                    Text("Other Devices").font(.system(size: 13, weight: .semibold))
                     Spacer()
-                    Text(model.lastPullTime.map { "Pulled \($0.formatted(date: .omitted, time: .shortened))" } ?? "Never pulled")
+                    Text(model.lastPullTime.map { "Updated \($0.formatted(date: .omitted, time: .shortened))" } ?? "Not loaded yet")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }
@@ -879,7 +879,7 @@ struct AllPlatformsPage: View {
                         HStack {
                             Text(group.title).font(.system(size: 12, weight: .semibold))
                             Spacer()
-                            Text("\(group.windowCount) window\(group.windowCount == 1 ? "" : "s")")
+                            Text("\(group.windowCount) reading\(group.windowCount == 1 ? "" : "s")")
                                 .font(.system(size: 11))
                                 .foregroundStyle(.secondary)
                         }

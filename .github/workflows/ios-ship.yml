@@ -69,6 +69,7 @@ on:
       # Shared sources the iOS app and widget targets compile.  Exact files, not
       # Sources/QuotaCore/**: most QuotaCore edits are Mac-only and must not
       # ship a TestFlight build.
+      - 'Sources/QuotaCore/AppGroupSnapshotReadPolicy.swift'
       - 'Sources/QuotaCore/CompanionReadTokenStore.swift'
       - 'Sources/QuotaCore/FleetSourceDisagreement.swift'
       - 'Sources/QuotaCore/PlanMetadata.swift'
@@ -143,6 +144,7 @@ jobs:
           bash "$GITHUB_WORKSPACE/scripts/ios-fleet/scheduled-ship-gate.sh" \
             --event "${{ github.event_name }}" \
             --path-prefix 'ios/CodeCapsCompanion/' \
+            --path-prefix 'Sources/QuotaCore/AppGroupSnapshotReadPolicy.swift' \
             --path-prefix 'Sources/QuotaCore/CompanionReadTokenStore.swift' \
             --path-prefix 'Sources/QuotaCore/FleetSourceDisagreement.swift' \
             --path-prefix 'Sources/QuotaCore/PlanMetadata.swift' \
@@ -159,6 +161,10 @@ jobs:
             --repo-root "$GITHUB_WORKSPACE" \
             codecaps
 
+      # No Swift CI check run on this SHA fails after MISSING_GRACE_SECONDS
+      # (scripts/await-swift-ci-checks.sh) instead of polling to
+      # DEADLINE_SECONDS.  workflow_dispatch cannot pin the SHA, so this step
+      # does not start Swift CI.  ios-ship and mac-release share this gate.
       - name: Wait for Swift CI compile checks on this commit
         if: steps.gate.outputs.should_ship == '1'
         env:

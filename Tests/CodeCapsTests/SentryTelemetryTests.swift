@@ -1,5 +1,6 @@
 import XCTest
 @testable import CodeCaps
+import QuotaCore
 
 /// Pins DSN resolution only.  `SentryTelemetry.start()` is never called from
 /// these tests — a missing or unsubstituted DSN must stay a no-op, and a
@@ -53,5 +54,25 @@ final class SentryTelemetryTests: XCTestCase {
         // A look-alike host is not a suffix match.
         XCTAssertFalse(SentryTelemetry.isThirdPartyFailedRequest(
             url: "https://notcursor.sh/x", exceptionTypes: ["HTTPClientError"]))
+    }
+
+    func testSuppressesAutomaticQuotaPull503WhileRetriesAreInFlight() {
+        let url = "https://usage.jays.services/api/quota-windows"
+        let endpoint = URL(string: url)!
+        IdempotentGETRetryFilter.beginFetch(endpoint: endpoint)
+        defer { IdempotentGETRetryFilter.endFetch(endpoint: endpoint) }
+
+        XCTAssertTrue(IdempotentGETRetryFilter.shouldSuppressAutomaticFailedRequest(
+            url: url,
+            httpMethod: "GET",
+            exceptionTypes: ["HTTPClientError"],
+            exceptionValues: ["HTTP Client Error with status code: 503"]
+        ))
+        XCTAssertEqual(
+            IdempotentGETRetryFilter.parseHTTPClientErrorStatus(from: [
+                "HTTP Client Error with status code: 503"
+            ]),
+            503
+        )
     }
 }

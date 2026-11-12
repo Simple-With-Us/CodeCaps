@@ -683,7 +683,7 @@ public final class ResetAlarmManager: ObservableObject {
         content.title = "Quota Running Low: \(platformLabel)"
         content.body = "\(platformLabel) is about \(headroom) of quota left."
             + sentenceGap
-            + "Wind up or hand off anything still running against it."
+            + "Finish or hand off anything still running on this plan."
         content.sound = notificationSound(for: sound)
         let request = UNNotificationRequest(
             identifier: "codecaps.exhaustion.\(platformLabel).\(Int(Date().timeIntervalSince1970))",

@@ -36,6 +36,6 @@ let package = Package(
         .executableTarget(name: "WidgetParseMirrorTool"),
         .plugin(name: "WidgetParseMirrorGen", capability: .buildTool(), dependencies: ["WidgetParseMirrorTool"]),
         .testTarget(name: "WidgetParseTests", plugins: ["WidgetParseMirrorGen"]),
-        .testTarget(name: "CodeCapsTests", dependencies: ["CodeCaps"]),
+        .testTarget(name: "CodeCapsTests", dependencies: ["CodeCaps", "QuotaCore"]),
     ]
 )

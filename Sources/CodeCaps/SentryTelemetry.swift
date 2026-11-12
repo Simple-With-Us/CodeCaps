@@ -1,4 +1,5 @@
 import Foundation
+import QuotaCore
 import Sentry
 
 /// Native Sentry crash reporting and telemetry for the CodeCaps Mac menu-bar app.
@@ -40,11 +41,27 @@ enum SentryTelemetry {
             options.failedRequestStatusCodes = [HttpStatusCodeRange(min: 500, max: 599)]
             options.sendDefaultPii = false
             options.beforeSend = { event in
+                let exceptionTypes = event.exceptions?.compactMap { $0.type } ?? []
+                let exceptionValues = event.exceptions?.compactMap { $0.value } ?? []
                 if isThirdPartyFailedRequest(
                     url: event.request?.url,
-                    exceptionTypes: event.exceptions?.compactMap { $0.type } ?? []
+                    exceptionTypes: exceptionTypes
+                ) { return nil }
+                if IdempotentGETRetryFilter.shouldSuppressAutomaticFailedRequest(
+                    url: event.request?.url,
+                    httpMethod: event.request?.method,
+                    exceptionTypes: exceptionTypes,
+                    exceptionValues: exceptionValues
                 ) { return nil }
                 return sanitize(event)
+            }
+        }
+        QuotaClientExhaustedTransientRead.onExhausted = { (endpoint: URL, error: QuotaClientError) in
+            let host = endpoint.host ?? "endpoint"
+            let detail = (error as LocalizedError).errorDescription ?? "transient transport failure"
+            let message = "Quota pull to \(host) failed after retries: \(detail)"
+            SentrySDK.capture(message: message) { scope in
+                scope.setLevel(.warning)
             }
         }
     }
