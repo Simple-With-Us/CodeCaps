@@ -114,7 +114,9 @@ public enum WidgetSnapshotStore {
             augmented = data
         }
         let platforms = WidgetPresentation.parseSnapshot(data: augmented, platformOrder: platformOrder, now: now)
-        return platforms.isEmpty ? nil : platforms
+        // A structurally valid snapshot with no visible rows after freshness
+        // filtering is still authoritative empty — not a decode failure.
+        return platforms
     }
 
     /// The iOS companion writes the manifest it parsed from the wire envelope

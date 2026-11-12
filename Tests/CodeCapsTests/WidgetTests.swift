@@ -579,6 +579,10 @@ final class WidgetTests: XCTestCase {
             provider.contains("Read or decode failures fall through."),
             "the widget must document fall-through on decode failure"
         )
+        XCTAssertFalse(
+            provider.contains("platforms.isEmpty ? nil : platforms"),
+            "filtered-empty snapshots must stay authoritative, not fall through as decode failures"
+        )
     }
 
     // MARK: - Copy
