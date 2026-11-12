@@ -1,34 +1,31 @@
 name: iOS ship contract
 
-# Pins the iOS and Mac auto-ship wiring (owner 2026-10-17): a merge to main that
-# touches an app's native tree, including the shared Sources/QuotaCore files its
-# targets compile, uploads a TestFlight build with no human step.  Offline and
+# Pins the iOS auto-ship wiring (owner 2026-10-17): a merge to main that
+# touches the iOS app's native tree, including the shared Sources/QuotaCore files
+# its targets compile, uploads a TestFlight build with no human step.  The Mac
+# app no longer ships to TestFlight (CC-169, owner ruling 2026-10-19).  Offline and
 # credential-free: it reads the workflow text and project.yml, and runs the
 # scheduled-gate and key-handoff shell tests.  See
-# scripts/ios-ship-workflow.test.mjs and scripts/macos-ship-workflow.test.mjs.
+# scripts/ios-ship-workflow.test.mjs.
 
 on:
   pull_request:
     paths:
       - '.github/workflows/ios-ship*.yml'
-      - '.github/workflows/macos-ship.yml'
       - 'ios/CodeCapsCompanion/project.yml'
-      - 'ios/CodeCapsCompanion/mac-appstore-profiles.json'
       - 'scripts/ios-*'
-      - 'scripts/mac-*'
-      - 'scripts/macos-ship-workflow.test.mjs'
+      - 'scripts/infisical-fetch*.mjs'
+      - 'scripts/stage-asc-key*'
       - 'scripts/ios-fleet/**'
       - 'scripts/test-ios-stage-asc-key.sh'
   push:
     branches: [main]
     paths:
       - '.github/workflows/ios-ship*.yml'
-      - '.github/workflows/macos-ship.yml'
       - 'ios/CodeCapsCompanion/project.yml'
-      - 'ios/CodeCapsCompanion/mac-appstore-profiles.json'
       - 'scripts/ios-*'
-      - 'scripts/mac-*'
-      - 'scripts/macos-ship-workflow.test.mjs'
+      - 'scripts/infisical-fetch*.mjs'
+      - 'scripts/stage-asc-key*'
       - 'scripts/ios-fleet/**'
       - 'scripts/test-ios-stage-asc-key.sh'
   workflow_dispatch:
@@ -48,4 +45,17 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Pin the auto-ship wiring
-        run: node --test scripts/ios-ship-workflow.test.mjs scripts/macos-ship-workflow.test.mjs
+        run: |
+          node --test scripts/ios-ship-workflow.test.mjs scripts/ios-observe-ship.test.mjs scripts/stage-asc-key.node-test.mjs scripts/infisical-fetch.node-test.mjs scripts/infisical-fetch-expand.node-test.mjs scripts/ios-enable-apns.test.mjs
+          bash scripts/ios-fleet/test-asc-credentials.sh
+          bash scripts/ios-fleet/test-tf-ready-outcome.sh
+          node --test scripts/ios-fleet/test-asc-credentials.mjs
+          node --test scripts/ios-fleet/test-asc-client.mjs
+          node --test scripts/ios-fleet/test-asc-upload.mjs
+          node --test scripts/ios-fleet/test-asc-submit.mjs
+          node --test scripts/ios-fleet/test-asc-key.test.mjs
+          python3 scripts/ios-fleet/test_pick_simulator.py
+          python3 scripts/ios-fleet/test_screenshot_ink.py
+          bash scripts/ios-fleet/test-capture-script.sh
+          bash scripts/ios-fleet/test-publish-ios-versions.sh
+          bash scripts/test-ios-recheck-tf-ready.sh

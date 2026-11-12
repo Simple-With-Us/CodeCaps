@@ -182,9 +182,12 @@ enum Theme {
         highContrast ? dyn(NSColor.black, NSColor.white) : dyn(hex(0x1F2B3A), hex(0xE8ECF1))
     }
     /// The owner's high-contrast choice, read on every resolve so a change
-    /// takes effect without relaunching.
+    /// takes effect without relaunching.  The system Increase Contrast
+    /// setting counts too: turning it on in System Settings must strengthen
+    /// the same tokens instead of being ignored (Slice 4, CONTRAST-01).
     static var highContrast: Bool {
         UserDefaults.standard.bool(forKey: "highContrast")
+            || NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
     }
 
     /// High contrast drops the soft navy-grey for pure black/white, so text is
@@ -198,15 +201,25 @@ enum Theme {
 
     static let warning = dyn(hex(0xA85C05), hex(0xF0B45A))
     static let danger = dyn(hex(0xBF3339), hex(0xFF6B6B))
-    static let background: Color = highContrastBackground
-    static let surface: Color = highContrastSurface
-    static let hairline: Color = highContrast
+    /// A fixed, readable green for success marks.  It must not follow the
+    /// owner's accent choice: a pale accent (lemon, sky, lime) as small text or
+    /// a checkmark on a light surface fails contrast.
+    static let success = dyn(hex(0x1E7B3A), hex(0x6EE7A0))
+    // Computed, not `let`: a `let` freezes the high-contrast branch at
+    // first access, so toggling High Contrast (in-app or system) after
+    // launch changed `ink` but left surfaces and hairlines stale until
+    // relaunch (Slice 4, FIX-THEME).  Every token that branches on
+    // `highContrast` is therefore a `var`.
+    static var background: Color { highContrastBackground }
+    static var surface: Color { highContrastSurface }
+    static var hairline: Color { highContrast
         // AG's #112 raised the default hairline from 6%/10% to 12%/18%, which
         // is the better default and is kept.  High contrast is pushed further
         // on top of it: the owner had high contrast on and said there was
         // still not enough, and at 45%/55% it was still a grey.
         ? dyn(NSColor.black.withAlphaComponent(0.72), NSColor.white.withAlphaComponent(0.85))
         : dyn(NSColor.black.withAlphaComponent(0.12), NSColor.white.withAlphaComponent(0.18))
+    }
     /// The elapsed-time marker on a quota bar.  Black on the light surface and
     /// white on the dark one, so it reads against both the red and green segments.
     static let pacingMarker = dyn(NSColor.black, NSColor.white)
@@ -231,9 +244,10 @@ enum Theme {
 
     /// Unfilled portion of any progress bar.  A black 6% track disappears on a
     /// dark surface, so this is a token rather than a literal at each call site.
-    static let track: Color = highContrast
+    static var track: Color { highContrast
         ? dyn(NSColor.black.withAlphaComponent(0.55), NSColor.white.withAlphaComponent(0.62))
         : dyn(NSColor.black.withAlphaComponent(0.08), NSColor.white.withAlphaComponent(0.14))
+    }
 
     /// Fill behind a selected or highlighted row.
     ///
@@ -249,21 +263,24 @@ enum Theme {
     }
 
     /// The outline of a small header control: the From Mac / From Fleet switch.
-    static let controlBorder: Color = highContrast
+    static var controlBorder: Color { highContrast
         ? dyn(NSColor.black.withAlphaComponent(0.92), NSColor.white.withAlphaComponent(0.95))
         : dyn(NSColor.black.withAlphaComponent(0.16), NSColor.white.withAlphaComponent(0.22))
+    }
 
     /// The filled track a segmented control sits on, so an unselected segment
     /// reads as "not chosen" rather than as an outlined box.  Owner 2026-10-10.
-    static let controlTrack: Color = highContrast
+    static var controlTrack: Color { highContrast
         ? dyn(NSColor.black.withAlphaComponent(0.10), NSColor.white.withAlphaComponent(0.16))
         : dyn(NSColor.black.withAlphaComponent(0.06), NSColor.white.withAlphaComponent(0.10))
+    }
 
     /// A control that is present but off, such as an unchecked row bell:
     /// visible enough to find, quiet enough not to read as a setting.
-    static let faint: Color = highContrast
+    static var faint: Color { highContrast
         ? dyn(NSColor.black.withAlphaComponent(0.88), NSColor.white.withAlphaComponent(0.92))
         : dyn(NSColor.black.withAlphaComponent(0.26), NSColor.white.withAlphaComponent(0.30))
+    }
 
     /// The band behind a source's heading in From Fleet: darker than the list
     /// background in both appearances, so each source reads as a section.
@@ -332,9 +349,10 @@ enum Theme {
     /// dark accent on the dark rows surface produced a rail that disappeared.
     /// This is a token with a floor rather than a computed alpha, because the
     /// failure was the floor being zero.
-    static let sliderTrack: Color = highContrast
+    static var sliderTrack: Color { highContrast
         ? dyn(NSColor.black.withAlphaComponent(0.45), NSColor.white.withAlphaComponent(0.55))
         : dyn(NSColor.black.withAlphaComponent(0.20), NSColor.white.withAlphaComponent(0.28))
+    }
 
     /// The accent the owner chose, resolved against the current appearance.
     private static var accentColor: Color {
@@ -501,7 +519,7 @@ enum Metrics {
     ///
     /// This is the contract `glanceWidth` has to honour.  It is computed rather
     /// than restated so a column change cannot silently overflow the popover —
-    /// a wider row inside a fixed frame is what truncated "Open CodeCaps ⌘1"
+    /// a wider row inside a fixed frame is what truncated "Dashboard ⌘1"
     /// in the footer once already.
     static let glanceRowIntrinsicWidth: CGFloat = glanceAlarmBellWidth + glanceLogoGap
         + glanceLogoWidth + glanceLogoGap
@@ -769,7 +787,48 @@ struct Eyebrow: View {
     }
 }
 
+struct ProviderDetailRow: Identifiable, Equatable {
+    let label: String
+    let value: String
+    var id: String { label }
+}
+
+struct ProviderDetailsView: View {
+    let rows: [ProviderDetailRow]
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(rows) { row in
+                HStack(alignment: .firstTextBaseline) {
+                    Text(row.label).foregroundStyle(.secondary)
+                    Spacer(minLength: 8)
+                    Text(row.value).textSelection(.enabled)
+                }
+                .font(.system(size: 11))
+            }
+        }
+    }
+}
+
 extension QuotaPlatformSection {
+    var automaticPlanName: String? {
+        windows.compactMap(\.window.planName).first { !$0.isEmpty }
+    }
+
+    /// Details are textual so a credit balance cannot become a quota meter.
+    var providerDetailRows: [ProviderDetailRow] {
+        var rows: [ProviderDetailRow] = []
+        if let plan = automaticPlanName { rows.append(.init(label: "Detected Plan", value: plan)) }
+        guard let details = windows.compactMap(\.window.usageDetails).first else { return rows }
+        if let email = details.accountEmail { rows.append(.init(label: "Account", value: email)) }
+        if let balance = details.creditBalance {
+            rows.append(.init(label: "Credits", value: "\(balance.formatted(.number.precision(.fractionLength(0...2)))) left"))
+        }
+        if let enabled = details.extraUsageEnabled {
+            rows.append(.init(label: "Extra Usage", value: enabled ? "enabled" : "disabled"))
+        }
+        return rows
+    }
+
     /// The single subtitle rule, replacing three near-identical copies that
     /// disagreed about the Antigravity fallback.
     func displaySubtitle(customInfo: PlatformCustomInfo?) -> String? {
@@ -780,7 +839,7 @@ extension QuotaPlatformSection {
             return detail
         }
         if via == "antigravity" { return "Antigravity subscription" }
-        if let plan = windows.compactMap(\.window.planName).first, !plan.isEmpty { return plan }
+        if let plan = automaticPlanName { return plan }
         return nil
     }
 
@@ -793,7 +852,7 @@ extension QuotaPlatformSection {
         let renewal = custom.renewalDateText.isEmpty
             ? (BillingRenewal.text(for: windows.map(\.window)) ?? "")
             : custom.renewalDateText
-        let parts = [custom.planName,
+        let parts = [custom.planName.isEmpty ? (automaticPlanName ?? "") : custom.planName,
                      custom.costUsd,
                      renewal.isEmpty ? "" : "Renews \(renewal)"]
             .filter { !$0.isEmpty }
@@ -802,7 +861,10 @@ extension QuotaPlatformSection {
 
     /// The window a one-line row speaks for: whichever is closest to its cap.
     var drivingWindow: QuotaWindowSnapshot? {
-        let eligible = windows.filter { !$0.window.isSupplementaryVideoQuota }
+        // Scoped Codex pools sit beside the subscription and never cap it
+        // (`atCapWindow`), so they cannot speak for the row either: the
+        // headline and the cap verdict come from one window set.
+        let eligible = windows.filter { !$0.window.isSupplementaryVideoQuota && !$0.window.isScopedPoolAllowance }
         let primary = eligible.filter { !$0.window.isSubModelLimit }
         let pool = primary.isEmpty ? eligible : primary
         return pool.filter { $0.remainingPercent != nil }
@@ -812,7 +874,7 @@ extension QuotaPlatformSection {
 
     /// The lowest remaining percentage across the windows a sidebar row summarises.
     var minimumRemainingPercent: Double? {
-        let fresh = windows.filter { $0.isFresh && !$0.window.isSupplementaryVideoQuota }
+        let fresh = windows.filter { $0.isFresh && !$0.window.isSupplementaryVideoQuota && !$0.window.isScopedPoolAllowance }
         let primary = fresh.filter { !$0.window.isSubModelLimit }
         let pool = primary.isEmpty ? fresh : primary
         return pool
@@ -868,6 +930,16 @@ enum QuotaGlanceMetrics {
 
     @MainActor
     static func popoverHeight(for model: MonitorModel, on screen: NSScreen? = nil) -> CGFloat {
+        let total = uncappedPopoverHeight(for: model)
+        return min(Metrics.glanceMaxHeight(on: screen), max(Metrics.glanceMinHeight, total))
+    }
+
+    /// The popover height before the screen cap and the minimum are applied.
+    /// Layout tests measure against this: capping to a small screen is a
+    /// separate, deliberate behavior (the list scrolls), so pinning the
+    /// budget arithmetic must not depend on the host's display size.
+    @MainActor
+    static func uncappedPopoverHeight(for model: MonitorModel) -> CGFloat {
         let actualRows = model.displaySections.count
         let rows = actualRows > 0 ? actualRows : expectedLocalRows(for: model)
         let showsSetupCard = !model.syncEnabled && !model.serverEnabled
@@ -888,8 +960,7 @@ enum QuotaGlanceMetrics {
         // Both lists are still measured, because a mode switch resizes through
         // the same path and must not have to wait for that view's rows to load.
         let active: CGFloat = model.glanceView == .fromFleet ? max(local, fleet) : local
-        let total = popoverHeight(forListHeight: active)
-        return min(Metrics.glanceMaxHeight(on: screen), max(Metrics.glanceMinHeight, total))
+        return popoverHeight(forListHeight: active)
     }
 }
 
@@ -939,7 +1010,7 @@ struct PlatformCard: View {
     /// alarms are picked per provider; under All there is nothing to pick.
     var isAlarmArmed: Bool = false
     var onToggleAlarm: (() -> Void)? = nil
-    /// Set only when the issue is one the owner can actually fix in Settings —
+    /// Set only when the issue is one the owner can actually fix in the Dashboard —
     /// today, the one-time Allow Access To Claude Code step.  The card then
     /// carries the same deep link the fleet banner uses.
     var onOpenSettings: (() -> Void)? = nil
@@ -988,6 +1059,9 @@ struct PlatformCard: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 windowsBody
+                if origin == .local && !section.providerDetailRows.isEmpty {
+                    ProviderDetailsView(rows: section.providerDetailRows)
+                }
             }
         }
         .padding(compact ? 12 : 16)
@@ -1135,10 +1209,10 @@ struct PlatformCard: View {
     @ViewBuilder
     private var openSettingsButton: some View {
         if let onOpenSettings {
-            Button("Open Settings", action: onOpenSettings)
+            Button("Open Dashboard", action: onOpenSettings)
                 .controlSize(.small)
-                .help("Open Settings")
-                .accessibilityLabel("Open Settings")
+                .help("Open Dashboard")
+                .accessibilityLabel("Open Dashboard")
                 .padding(.top, 2)
         }
     }

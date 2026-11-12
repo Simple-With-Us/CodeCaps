@@ -1,5 +1,6 @@
 import XCTest
 @testable import CodeCaps
+import QuotaCore
 
 /// Pins DSN resolution only.  `SentryTelemetry.start()` is never called from
 /// these tests — a missing or unsubstituted DSN must stay a no-op, and a
@@ -36,5 +37,42 @@ final class SentryTelemetryTests: XCTestCase {
         XCTAssertEqual(
             SentryTelemetry.usableDSN("\n https://example.invalid/2 \t"),
             "https://example.invalid/2")
+    }
+
+    func testDropsFailedRequestsFromThirdPartyProviderAPIs() {
+        // Control: the same failed-request event against our own host is kept.
+        XCTAssertFalse(SentryTelemetry.isThirdPartyFailedRequest(
+            url: "https://codecaps.simplewithus.com/api/v2/ingest", exceptionTypes: ["HTTPClientError"]))
+        XCTAssertTrue(SentryTelemetry.isThirdPartyFailedRequest(
+            url: "https://api2.cursor.sh/aiserver.v1.DashboardService/GetSandUsageStatus",
+            exceptionTypes: ["HTTPClientError"]))
+        XCTAssertTrue(SentryTelemetry.isThirdPartyFailedRequest(
+            url: "https://api.anthropic.com/api/oauth/usage", exceptionTypes: ["HTTPClientError"]))
+        // A real exception that merely carries a provider URL is not dropped.
+        XCTAssertFalse(SentryTelemetry.isThirdPartyFailedRequest(
+            url: "https://api2.cursor.sh/x", exceptionTypes: ["DecodingError"]))
+        // A look-alike host is not a suffix match.
+        XCTAssertFalse(SentryTelemetry.isThirdPartyFailedRequest(
+            url: "https://notcursor.sh/x", exceptionTypes: ["HTTPClientError"]))
+    }
+
+    func testSuppressesAutomaticQuotaPull503WhileRetriesAreInFlight() {
+        let url = "https://usage.jays.services/api/quota-windows"
+        let endpoint = URL(string: url)!
+        IdempotentGETRetryFilter.beginFetch(endpoint: endpoint)
+        defer { IdempotentGETRetryFilter.endFetch(endpoint: endpoint) }
+
+        XCTAssertTrue(IdempotentGETRetryFilter.shouldSuppressAutomaticFailedRequest(
+            url: url,
+            httpMethod: "GET",
+            exceptionTypes: ["HTTPClientError"],
+            exceptionValues: ["HTTP Client Error with status code: 503"]
+        ))
+        XCTAssertEqual(
+            IdempotentGETRetryFilter.parseHTTPClientErrorStatus(from: [
+                "HTTP Client Error with status code: 503"
+            ]),
+            503
+        )
     }
 }

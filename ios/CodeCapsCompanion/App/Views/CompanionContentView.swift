@@ -4,9 +4,11 @@ import SwiftUI
 public struct CompanionContentView: View {
     @ObservedObject public var model: CompanionQuotaModel
     @StateObject private var soundPlayer = AlarmSoundPlayer()
+    @State private var previewingKind: UsageAlertKind?
+    @Environment(\.scenePhase) private var scenePhase
     @State private var showingSettings: Bool
     @State private var expandedIds: Set<String> = []
-    @State private var settingsTab: CompanionSettingsTab = .display
+    @State private var settingsTab: CompanionSettingsTab
     #if os(iOS)
     @State private var platformOrderEditMode: EditMode = .inactive
     #endif
@@ -22,6 +24,13 @@ public struct CompanionContentView: View {
     public init(model: CompanionQuotaModel, showingSettings: Bool = ProcessInfo.processInfo.arguments.contains("-openSettings")) {
         self.model = model
         self._showingSettings = State(initialValue: showingSettings)
+        // A launch argument picks the tab the settings sheet opens on, so the
+        // screenshot capture can reach a tab without a tap.  Both spellings
+        // are accepted:  -openAlarms is the capture's, and -openAlerts is
+        // the one the alert work introduced for the same tab.
+        let opensAlarms = ProcessInfo.processInfo.arguments.contains("-openAlarms")
+            || ProcessInfo.processInfo.arguments.contains("-openAlerts")
+        self._settingsTab = State(initialValue: opensAlarms ? .alarms : .display)
         #if os(iOS)
         self._platformOrderEditMode = State(
             initialValue: ProcessInfo.processInfo.arguments.contains("-reorderPlatforms") ? .active : .inactive
@@ -33,8 +42,6 @@ public struct CompanionContentView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 16) {
-                    headerCard
-
                     if let error = model.lastError {
                         errorBanner(error)
                     }
@@ -78,6 +85,32 @@ public struct CompanionContentView: View {
                     await model.refresh()
                 }
             }
+            .task(id: "\(scenePhase)-\(model.foregroundRefreshSeconds)") {
+                guard scenePhase == .active, model.foregroundRefreshSeconds > 0 else { return }
+                await model.refreshNotificationAuthorization()
+                while !Task.isCancelled {
+                    do { try await Task.sleep(nanoseconds: UInt64(model.foregroundRefreshSeconds) * 1_000_000_000) }
+                    catch { return }
+                    guard !Task.isCancelled, scenePhase == .active else { return }
+                    await model.refresh()
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("CodeCapsInAppAlert"))) { event in
+                guard let values = event.userInfo, let id = values["id"] as? String,
+                      let raw = values["kind"] as? String, let kind = UsageAlertKind(rawValue: raw),
+                      let title = values["title"] as? String, let body = values["body"] as? String else { return }
+                model.presentInAppAlert(id: id, kind: kind, title: title, body: body,
+                                       sourceInstanceId: values["sourceInstanceId"] as? String)
+            }
+            .onChange(of: model.inAppAlert?.id) { _, _ in
+                guard let alert = model.inAppAlert, !model.alertPreferences[alert.kind].notification else { return }
+                let sound = model.alertPreferences[alert.kind].sound
+                // In-app messages stay independent of system notification permission.
+                soundPlayer.playInApp(sound)
+            }
+            .alert(item: Binding(get: { model.inAppAlert }, set: { if $0 == nil { model.dismissInAppAlert() } })) { alert in
+                Alert(title: Text(alert.title), message: Text(alert.body), dismissButton: .default(Text("Done")))
+            }
             #if os(iOS)
             .fullScreenCover(isPresented: $showingSettings) {
                 companionSettingsView
@@ -113,6 +146,8 @@ public struct CompanionContentView: View {
             showingSettings = true
         } label: {
             Image(systemName: "gearshape")
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
         }
         .accessibilityLabel("CodeCaps Settings")
     }
@@ -130,9 +165,9 @@ public struct CompanionContentView: View {
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 1) {
-                Text("Fleet Status")
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(.secondary)
+                Text("Your Plans")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(CompanionTheme.supporting)
                     .lineLimit(1)
                 Text("\(model.items.count) Platforms Monitored")
                     .font(.subheadline.weight(.semibold))
@@ -143,29 +178,15 @@ public struct CompanionContentView: View {
             Spacer(minLength: 4)
 
             if let updated = model.lastUpdated {
-                Text(updated.formatted(date: .omitted, time: .shortened))
-                    .font(.caption2)
-                    .italic()
-                    .foregroundStyle(.secondary)
+                Text(UpdatedStamp.label(updated))
+                    .font(.caption)
+                    .foregroundStyle(CompanionTheme.supporting)
                     .lineLimit(1)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Fleet Status, \(model.items.count) platforms monitored")
-    }
-
-    // MARK: - Source scope
-
-    private var headerCard: some View {
-        Picker("Source scope", selection: $model.sourceScope) {
-            ForEach(CompanionSourceScope.allCases) { scope in
-                Text(scope.rawValue).tag(scope)
-            }
-        }
-        .pickerStyle(.segmented)
-        .padding(14)
-        .background(cardBackground, in: RoundedRectangle(cornerRadius: 12))
+        .accessibilityLabel("Your Plans, \(model.items.count) platforms monitored")
     }
 
     // MARK: - Error Banner
@@ -197,7 +218,8 @@ public struct CompanionContentView: View {
                 .foregroundStyle(.secondary)
             Text("No Quota Report Yet")
                 .font(.headline)
-            Text("Point this app at your Mac's sync endpoint, or open CodeCaps on the Mac so it can share readings.")
+            Text("Open CodeCaps on your Mac so it can share readings." + sentenceGap
+                 + "Or add the share address in Settings.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -207,7 +229,7 @@ public struct CompanionContentView: View {
                 HStack(spacing: 8) {
                     ProgressView()
                         .progressViewStyle(.circular)
-                    Text("Refreshing Quotas...")
+                    Text("Refreshing…")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -270,14 +292,29 @@ public struct CompanionContentView: View {
     }
 
     private func quotaCard(_ item: CompanionQuotaItem) -> some View {
+        // One canonical reading per allowance, the same resolution the Mac
+        // app leads with.  Source detail lives in Settings, for debugging;
+        // the main list just shows quotas.
+        let scope: CompanionSourceScope = .allSources
         let isExpanded = expandedIds.contains(item.id) && item.isExpandable
-        let short = item.cardShortWindow(scope: model.sourceScope)
-        let long = item.cardLongWindow(scope: model.sourceScope)
-        let cardWindows = item.cardWindows(scope: model.sourceScope)
-        let extraWindows = cardWindows.filter {
-            $0.id != short?.window.id && $0.id != long?.window.id
-        }
-        let headlineUpdatedLabel = [short?.updatedLabel, long?.updatedLabel].compactMap { $0 }.first
+        let short = item.cardShortWindow(scope: scope)
+        let long = item.cardLongWindow(scope: scope)
+        let cardWindows = item.cardWindows(scope: scope)
+        let extraWindows = item.cardDetailWindows(scope: scope)
+        let atCapWindow = item.atCapWindow(scope: scope)
+        let isAtCap = atCapWindow != nil
+        // Two pools of one provider share a title (Antigravity's Gemini and
+        // Third-Party pools), so a collapsed card whose title is not unique
+        // also shows the pool subtitle - the same gate as Settings >
+        // Platform Order (owner, 2026-11-06).
+        let duplicatedTitles = Set(model.items.map(\.title).filter { title in
+            model.items.count(where: { $0.title == title }) > 1
+        })
+        let usableMuseExtra = item.providerKey == "muse-assist" ? cardWindows.first(where: {
+            QuotaWindowVocabulary.isMuseAssistExtra(providerKey: item.providerKey, windowToken: $0.rawWindowToken, label: $0.label, resetAt: $0.resetAt)
+            && (($0.remainingPercent ?? 0) > 0 || ($0.absoluteRemaining ?? 0) > 0)
+        }) : nil
+        let shouldDimTitle = isAtCap && usableMuseExtra == nil
 
         return VStack(alignment: .leading, spacing: 12) {
             // Main clickable row
@@ -288,26 +325,15 @@ public struct CompanionContentView: View {
                     HStack(spacing: 6) {
                         Text(item.title)
                             .font(.system(size: 15, weight: .semibold))
-
-                        if model.sourceScope == .allSources, item.sourceCount > 1 {
-                            Text("\(item.sourceCount) sources")
-                                .font(.system(size: 10, weight: .semibold))
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Color.secondary.opacity(0.14), in: Capsule())
-                        }
-
-                        if model.sourceScope == .allSources, item.sourceCount > 1,
-                           item.hasSourceDiscrepancy(scope: model.sourceScope) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(.orange)
-                                .accessibilityLabel("Warning: sources disagree on this allowance")
-                        }
+                            .italic(shouldDimTitle)
+                            .foregroundStyle(shouldDimTitle ? CompanionTheme.supporting : .primary)
                     }
-
-                    if let sub = item.subtitle {
-                        companionSubtitleView(sub)
+                    if duplicatedTitles.contains(item.title),
+                       let subtitle = item.subtitle, !subtitle.isEmpty {
+                        Text(subtitle)
+                            .font(.system(size: 11))
+                            .foregroundStyle(shouldDimTitle ? CompanionTheme.supporting : .secondary)
+                            .lineLimit(1)
                     }
                 }
                 Spacer()
@@ -331,14 +357,17 @@ public struct CompanionContentView: View {
                     }
 
                     VStack(alignment: .trailing, spacing: 2) {
-                        Text(item.cardDisplayPercent(scope: model.sourceScope))
-                            .font(.system(size: 17, weight: .bold, design: .rounded).monospacedDigit())
-                            .foregroundStyle(item.cardStatusColor(scope: model.sourceScope))
-                        if let headlineUpdatedLabel {
-                            Text(headlineUpdatedLabel)
+                        if let extra = usableMuseExtra {
+                            Text("Extra balance")
                                 .font(.system(size: 10, weight: .medium))
                                 .foregroundStyle(.secondary)
-                                .lineLimit(1)
+                            Text(extra.displayPercent)
+                                .font(.system(size: 17, weight: .bold, design: .rounded).monospacedDigit())
+                                .foregroundStyle(extra.statusColor)
+                        } else {
+                            Text(item.cardDisplayPercent(scope: scope))
+                                .font(.system(size: 17, weight: .bold, design: .rounded).monospacedDigit())
+                                .foregroundStyle(item.cardStatusColor(scope: scope))
                         }
                     }
 
@@ -353,61 +382,115 @@ public struct CompanionContentView: View {
                 }
             }
 
-            // Quota Bars side by side
-            HStack(spacing: 12) {
-                if let short {
-                    CompanionMeterView(
-                        caption: short.window.caption,
-                        window: short.window,
-                        updatedLabel: short.updatedLabel
-                    )
+            // The cap line or meters: when capped, the bars hide and one clean line names the cap and exact reset time.
+            if let atCapSummary = item.atCapSummary(scope: scope) {
+                if let extra = usableMuseExtra {
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Using extra balance")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(Color.primary)
+                            Text(atCapSummary)
+                                .font(.system(size: 10))
+                                .foregroundStyle(.secondary)
+                            if let ageCue = item.atCapReadingAgeCue(scope: scope) {
+                                Text(ageCue)
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                        CompanionMeterView(caption: extra.caption, window: extra)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("At cap. \(atCapSummary)")
+                } else {
+                    VStack(alignment: .center, spacing: 3) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(CompanionTheme.danger)
+                            Text(atCapSummary)
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(CompanionTheme.danger)
+                                .lineLimit(2)
+                                .minimumScaleFactor(0.85)
+                        }
+                        if let exact = item.atCapResetExactTime(scope: scope), !exact.isEmpty {
+                            Text(exact)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        if let ageCue = item.atCapReadingAgeCue(scope: scope) {
+                            Text(ageCue)
+                                .font(.system(size: 10))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 4)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("At cap. \(atCapSummary)")
                 }
-                if let long, long.window.id != short?.window.id {
-                    CompanionMeterView(
-                        caption: long.window.caption,
-                        window: long.window,
-                        updatedLabel: long.updatedLabel
-                    )
-                } else if short == nil {
-                    if let first = cardWindows.first {
-                        CompanionMeterView(caption: first.caption, window: first)
+            } else if cardWindows.isEmpty, let lastReading = item.deadCopyObservedAt {
+                // Every window this provider reported is a copy of a period
+                // that has already ended, so there is no honest bar to draw:
+                // say the reading is stale, and when the provider was last
+                // heard from, instead of leaving the card blank or reviving a
+                // figure whose window is over.
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Waiting for a fresh reading")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(CompanionTheme.supporting)
+                    Text("Last reading \(UpdatedStamp.label(lastReading))")
+                        .font(.system(size: 12))
+                        .foregroundStyle(CompanionTheme.supporting)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 4)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Waiting for a fresh reading, last reading \(UpdatedStamp.label(lastReading))")
+            } else {
+                // Quota Bars side by side in a clean 2-column grid
+                HStack(spacing: 12) {
+                    if let short {
+                        CompanionMeterView(
+                            caption: short.window.caption,
+                            window: short.window
+                        )
+                        .frame(maxWidth: .infinity)
+                    }
+                    if let long, long.window.id != short?.window.id {
+                        CompanionMeterView(
+                            caption: long.window.caption,
+                            window: long.window
+                        )
+                        .frame(maxWidth: .infinity)
+                    } else if short == nil {
+                        if let first = cardWindows.first {
+                            CompanionMeterView(caption: first.caption, window: first)
+                                .frame(maxWidth: .infinity)
+                            Spacer()
+                                .frame(maxWidth: .infinity)
+                        }
+                    } else {
+                        // Single meter row: keep first meter in column 1 and column 2 empty
+                        Spacer()
+                            .frame(maxWidth: .infinity)
                     }
                 }
             }
 
-            if model.sourceScope == .allSources, item.sourceCount > 1,
-               item.hasSourceDiscrepancy(scope: model.sourceScope) {
-                HStack(spacing: 6) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.orange)
-                    Text(item.sourceDiscrepancies(scope: model.sourceScope).first?.description ?? "Sources differ")
-                        .font(.system(size: 11.5, weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
-                    Spacer()
-                }
-                .padding(.horizontal, 9)
-                .padding(.vertical, 5)
-                .background(Color.orange.opacity(0.14), in: RoundedRectangle(cornerRadius: 6))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(Color.orange.opacity(0.28), lineWidth: 0.5)
-                )
-            }
-
-            // Multiple time periods / windows when expanded (only extra allowances not already displayed on the card)
             if isExpanded && !extraWindows.isEmpty {
-                Divider()
-                    .padding(.vertical, 2)
-
+                Divider().padding(.vertical, 2)
                 VStack(alignment: .leading, spacing: 10) {
-                    ForEach(extraWindows) { win in
-                        windowRow(win)
-                    }
+                    ForEach(extraWindows) { win in windowRow(win) }
                 }
-                .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
         .padding(14)
@@ -420,12 +503,39 @@ public struct CompanionContentView: View {
         }
     }
 
+    // MARK: - Companion Provider Details View
+
+    public struct CompanionProviderDetailsView: View {
+        public let rows: [CompanionProviderDetailRow]
+
+        public init(rows: [CompanionProviderDetailRow]) {
+            self.rows = rows
+        }
+
+        public var body: some View {
+            VStack(alignment: .leading, spacing: 5) {
+                ForEach(rows) { row in
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(row.label)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.secondary)
+                        Spacer(minLength: 8)
+                        Text(row.value)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.primary)
+                    }
+                }
+            }
+            .padding(.vertical, 2)
+        }
+    }
+
     // MARK: - Individual Window Row
 
     private func windowRow(_ win: CompanionWindowItem) -> some View {
         HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(win.meterCaption)
+                Text(win.caption)
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.primary)
                 let cd = win.meterCountdown()
@@ -438,8 +548,8 @@ public struct CompanionContentView: View {
             Spacer(minLength: 8)
 
             CompanionUsageBar(
-                remainingPercent: win.remainingPercent,
-                elapsedFraction: win.elapsedFraction(),
+                remainingPercent: win.isMasked ? nil : win.remainingPercent,
+                elapsedFraction: win.isMasked ? nil : win.elapsedFraction(),
                 height: 7
             )
             .frame(width: 52)
@@ -483,6 +593,11 @@ public struct CompanionContentView: View {
                         }
                     }
                     .onAppear {
+                        if ProcessInfo.processInfo.arguments.contains("-showAlertCategories") {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                                proxy.scrollTo(UsageAlertKind.anomaly.rawValue, anchor: .top)
+                            }
+                        }
                         if ProcessInfo.processInfo.arguments.contains("-scrollToRefresh") {
                             settingsTab = .sources
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
@@ -520,12 +635,27 @@ public struct CompanionContentView: View {
 
     @ViewBuilder
     private var settingsDisplaySections: some View {
+        // Two pools of one provider share a title (Antigravity's Gemini and
+        // Third-Party pools), so a row whose title is not unique also shows
+        // the subtitle its home card carries (owner, 2026-11-06).
+        let duplicatedTitles = Set(model.items.map(\.title).filter { title in
+            model.items.count(where: { $0.title == title }) > 1
+        })
         Section {
             ForEach(model.items) { item in
                 HStack(spacing: 10) {
                     CompanionProviderLogo(item: item, size: 24)
-                    Text(item.title)
-                        .font(.system(size: 14, weight: .medium))
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(item.title)
+                            .font(.system(size: 14, weight: .medium))
+                        if duplicatedTitles.contains(item.title),
+                           let subtitle = item.subtitle, !subtitle.isEmpty {
+                            Text(subtitle)
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
                     Spacer()
                 }
             }
@@ -561,17 +691,17 @@ public struct CompanionContentView: View {
 
     @ViewBuilder
     private var settingsSourcesSections: some View {
-        Section("Mac Sync Endpoint") {
+        Section("Share Address") {
             #if os(iOS)
-            TextField("Endpoint URL (https://...)", text: $model.syncEndpoint)
+            TextField("Share Address (https://...)", text: $model.syncEndpoint)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled(true)
             #else
-            TextField("Endpoint URL (https://...)", text: $model.syncEndpoint)
+            TextField("Share Address (https://...)", text: $model.syncEndpoint)
                 .autocorrectionDisabled(true)
             #endif
-            SecureField("Sync Bearer Token", text: $model.syncToken)
-            Button("Remove Token", role: .destructive) {
+            SecureField("Access Code", text: $model.syncToken)
+            Button("Remove Access Code", role: .destructive) {
                 model.removeSyncToken()
             }
             .accessibilityIdentifier("removeSyncToken")
@@ -586,8 +716,8 @@ public struct CompanionContentView: View {
 
         Section {
                     if itemsWithDuplicates.isEmpty {
-                        Text("No secondary or mirror sources detected." + sentenceGap
-                             + "All allowance windows are sourced directly from your primary sync feed.")
+                        Text("No extra readings yet." + sentenceGap
+                             + "Each plan shows the newest reading.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     } else {
@@ -598,9 +728,9 @@ public struct CompanionContentView: View {
                                     Text(item.title)
                                         .font(.system(size: 14, weight: .semibold))
                                     Spacer()
-                                    if model.sourceScope == .allSources, item.sourceCount > 1,
-                                       item.hasSourceDiscrepancy(scope: model.sourceScope) {
-                                        Label("Sources differ ≥ 10 pts", systemImage: "exclamationmark.triangle.fill")
+                                    if item.sourceCount > 1,
+                                       item.hasSourceDiscrepancy(scope: .allSources) {
+                                        Label("Readings Differ", systemImage: "exclamationmark.triangle.fill")
                                             .font(.system(size: 11, weight: .medium))
                                             .foregroundStyle(.orange)
                                     }
@@ -620,7 +750,7 @@ public struct CompanionContentView: View {
                                                         .padding(.vertical, 1.5)
                                                         .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 4))
                                                 }
-                                                if item.isStaleInSourceDetail(reading, scope: model.sourceScope) {
+                                                if item.isStaleInSourceDetail(reading, scope: .allSources) {
                                                     Text("Stale")
                                                         .font(.system(size: 10, weight: .semibold))
                                                         .foregroundStyle(.secondary)
@@ -641,12 +771,12 @@ public struct CompanionContentView: View {
                                             .foregroundStyle(reading.statusColor)
                                     }
                                     .padding(.vertical, 2)
-                                    .opacity(item.isStaleInSourceDetail(reading, scope: model.sourceScope) ? 0.72 : 1)
+                                    .opacity(item.isStaleInSourceDetail(reading, scope: .allSources) ? 0.72 : 1)
                                 }
 
-                                if model.sourceScope == .allSources, item.sourceCount > 1,
-                                   item.hasSourceDiscrepancy(scope: model.sourceScope) {
-                                    ForEach(item.sourceDiscrepancies(scope: model.sourceScope)) { disc in
+                                if item.sourceCount > 1,
+                                   item.hasSourceDiscrepancy(scope: .allSources) {
+                                    ForEach(item.sourceDiscrepancies(scope: .allSources)) { disc in
                                         HStack(spacing: 5) {
                                             Image(systemName: "exclamationmark.triangle.fill")
                                                 .font(.system(size: 10, weight: .semibold))
@@ -662,20 +792,30 @@ public struct CompanionContentView: View {
                         }
                     }
                 } header: {
-                    Text("Data Sources & Mirrors")
+                    Text("Other Readings")
                 } footer: {
-                    Text("CodeCaps monitors primary and mirror feeds for each platform." + sentenceGap
-                         + "In All Sources, when a card lists two or more feeds reported within 20 minutes that disagree by 10 points or more, a warning appears on the card (hostnames are ignored). Otherwise the newest reading is shown and older feeds are marked Stale here.")
+                    Text("Readings from each source." + sentenceGap
+                         + "When two sources that reported within 20 minutes differ by 10 points or more, the difference shows here." + sentenceGap
+                         + "The main list always shows the newest reading.")
                 }
                 .id("dataSourcesMirrorsSection")
                 .accessibilityIdentifier("dataSourcesMirrorsSection")
 
         Section("Help") {
-                    Link(
-                        "Setup & Data Guide",
-                        destination: URL(string: "https://codecaps.simplewithus.com/setup.html")!
-                    )
-                }
+            Link(
+                "Setup & Data Guide",
+                destination: URL(string: "https://codecaps.simplewithus.com/setup.html")!
+            )
+        }
+
+        Section("About") {
+            LabeledContent("Version") {
+                let short = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
+                let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "1"
+                Text("\(short) (\(build))")
+                    .foregroundStyle(.secondary)
+            }
+        }
 
                 Section {
                     Button {
@@ -689,7 +829,7 @@ public struct CompanionContentView: View {
                             if model.isRefreshing {
                                 ProgressView()
                                     .progressViewStyle(.circular)
-                                Text("Refreshing Quotas...")
+                                Text("Refreshing…")
                                     .font(.system(size: 15, weight: .semibold))
                                     .foregroundStyle(.secondary)
                             } else {
@@ -711,7 +851,7 @@ public struct CompanionContentView: View {
                 } footer: {
                     VStack(alignment: .leading, spacing: 4) {
                         if let updated = model.lastUpdated {
-                            Text("Last updated \(updated.formatted(date: .omitted, time: .shortened))")
+                            Text("Last updated \(UpdatedStamp.label(updated))")
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
@@ -727,14 +867,104 @@ public struct CompanionContentView: View {
 
     @ViewBuilder
     private var settingsAlarmsSections: some View {
+        Section("Alert Delivery") {
+            Text(model.notificationStatus).font(.caption).foregroundStyle(.secondary)
+            Button("Allow System Notifications") { Task { await model.requestNotificationPermission() } }
+            #if os(iOS)
+            Button("Open Notification Settings") {
+                if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+            }
+            #endif
+            Picker("Refresh While Open", selection: $model.foregroundRefreshSeconds) {
+                Text("Manual").tag(0)
+                Text("Every 30 seconds").tag(30)
+                Text("Every minute").tag(60)
+                Text("Every 5 minutes").tag(300)
+            }
+            Text("In-app messages and foreground refresh stop when CodeCaps closes." + sentenceGap
+                 + "Remote push is optional and is required for system notifications while the app is closed.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        Section("Alert Devices") {
+            Picker("Receive Alerts From", selection: Binding(
+                get: { model.alertPreferences.sourceInstanceId ?? "" },
+                set: { model.alertPreferences.sourceInstanceId = $0.isEmpty ? nil : $0 })) {
+                Text("All reporting devices").tag("")
+                ForEach(model.alertSourceDevices.keys.sorted(), id: \.self) { id in
+                    Text(model.alertSourceDevices[id] ?? "Mac").tag(id)
+                }
+                if let selected = model.alertPreferences.sourceInstanceId, model.alertSourceDevices[selected] == nil {
+                    Text("Selected device unavailable").tag(selected)
+                }
+            }
+            Text("Device choices use the identity reported by the collector." + sentenceGap
+                 + "A selected device excludes reports with no matching device identity; display source choices remain separate.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        #if os(iOS)
+        RemotePushSettingsView()
+        #endif
+        ForEach(UsageAlertKind.allCases) { kind in
+            Section(kind.title) {
+                Toggle("Enable Alerts", isOn: Binding(
+                    get: { model.alertPreferences[kind].enabled },
+                    set: { model.alertPreferences[kind].enabled = $0 }))
+                Text(kind.detail).font(.caption2).foregroundStyle(.secondary)
+                if model.alertPreferences[kind].enabled {
+                    Toggle("System Notifications", isOn: Binding(
+                        get: { model.alertPreferences[kind].notification },
+                        set: { model.alertPreferences[kind].notification = $0 }))
+                    Toggle("In-App Messages", isOn: Binding(
+                        get: { model.alertPreferences[kind].popup },
+                        set: { model.alertPreferences[kind].popup = $0 }))
+                    Picker("Sound", selection: Binding(
+                        get: { model.alertPreferences[kind].sound },
+                        set: { model.alertPreferences[kind].sound = $0 })) {
+                        ForEach(ResetAlarmSound.defaultPickerOrder, id: \.self) { sound in
+                            Text(sound.displayName).tag(sound)
+                        }
+                    }
+                    Text(model.alertPreferences[kind].sound.pickerDetail)
+                        .font(.caption2).foregroundStyle(.secondary)
+                    if model.alertPreferences[kind].sound == .systemDefault {
+                        Text("The default chime plays only through system notifications; in-app messages stay silent.")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                    Button(model.alertPreferences[kind].sound == .systemDefault ? "Preview System Chime" : "Preview Sound") {
+                        previewingKind = kind
+                        soundPlayer.preview(model.alertPreferences[kind].sound)
+                    }
+                        .disabled(model.alertPreferences[kind].sound == .silent)
+                    if previewingKind == kind, let result = soundPlayer.lastPreview {
+                        Text(result.message).font(.caption2)
+                            .foregroundStyle(result.isFailure ? Color.orange : Color.secondary)
+                    }
+                }
+            }
+            .id(kind.rawValue)
+        }
         Section("Reset Alarms") {
             Toggle("Reset Alarms For All Providers", isOn: $model.alarmsAll)
+            if !model.alarmsAll {
+                ForEach(Array(Set(model.items.map(\.providerKey))).sorted(), id: \.self) { provider in
+                    Toggle((model.items.first(where: { $0.providerKey == provider })?.title ?? provider)
+                            .components(separatedBy: " · ").first ?? provider,
+                           isOn: Binding(get: { model.remoteResetProviderIsSelected(provider) },
+                                         set: { model.setRemoteResetProvider(provider, enabled: $0) }))
+                }
+            }
+            Text("These provider choices apply to remote resets too." + sentenceGap
+                 + "Remote resets cover whole providers; a partial model-pool selection on cards stays local and excludes that provider from remote resets.")
+                .font(.caption2).foregroundStyle(.secondary)
+            Text("Anomalies and runaway usage use measurements from the Mac collector." + sentenceGap
+                 + "Quota Exhaustion means zero quota remaining; the Mac's forecast Running Out warning is not supplied by this feed.")
+                .font(.caption2).foregroundStyle(.secondary)
             Text("A provider's longest window alarms every time it resets." + sentenceGap
                  + "A shorter window alarms only if it came within 20% of its cap first."
                  + sentenceGap + "Turn this off to pick providers one by one with the bell on each card.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
-            Picker("Reset Alert Sound", selection: $model.alarmSound) {
+            Picker("Test Notification Sound", selection: $model.alarmSound) {
                 ForEach(ResetAlarmSound.defaultPickerOrder, id: \.self) { sound in
                     Text(sound.displayName).tag(sound)
                 }
@@ -798,56 +1028,53 @@ public struct CompanionContentView: View {
 public struct CompanionMeterView: View {
     public let caption: String
     public let window: CompanionWindowItem
-    public let updatedLabel: String?
 
-    public init(caption: String, window: CompanionWindowItem, updatedLabel: String? = nil) {
+    public init(caption: String, window: CompanionWindowItem) {
         self.caption = caption
         self.window = window
-        self.updatedLabel = updatedLabel
     }
 
     public var body: some View {
-        VStack(alignment: .trailing, spacing: 2) {
-        HStack(spacing: 4) {
-            Text(caption)
-                .font(.system(size: 11, weight: .bold))
-                .foregroundStyle(.primary)
-                .lineLimit(2)
-                .minimumScaleFactor(0.75)
-                .multilineTextAlignment(.trailing)
-                .frame(width: 52, alignment: .trailing)
+        // Each allowance owns its caption, reading and reset.  The percentage
+        // and reset stay together at the leading edge, even in narrow columns.
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 8) {
+                Text(caption)
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+
+                Text(window.displayPercent)
+                    .font(.system(size: 12, weight: .bold, design: .rounded).monospacedDigit())
+                    .foregroundStyle(window.statusColor)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+
+                Text(window.meterCountdown())
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             CompanionUsageBar(
-                remainingPercent: window.remainingPercent,
-                elapsedFraction: window.elapsedFraction(),
+                remainingPercent: window.isMasked ? nil : window.remainingPercent.flatMap { $0.isFinite ? $0 : nil },
+                elapsedFraction: window.isMasked ? nil : window.elapsedFraction().flatMap { $0.isFinite ? $0 : nil },
                 height: 7
             )
-            .frame(minWidth: 35, maxWidth: .infinity)
+            .frame(maxWidth: .infinity)
 
-            Text(window.displayPercent)
-                .font(.system(size: 12, weight: .bold, design: .rounded).monospacedDigit())
-                .foregroundStyle(window.statusColor)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-                .frame(width: 36, alignment: .trailing)
-
-            Text(window.meterCountdown())
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.primary.opacity(0.85))
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-                .frame(width: 44, alignment: .center)
+            if let cue = window.staleReadingCue() {
+                Text(cue)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(CompanionTheme.warning)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
         }
-        .minimumScaleFactor(0.85)
-        if let updatedLabel {
-            Text(updatedLabel)
-                .font(.system(size: 9, weight: .medium))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-        }
-        }
-        .frame(maxWidth: .infinity, alignment: .trailing)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -893,7 +1120,7 @@ public struct CompanionUsageBar: View {
     public var body: some View {
         GeometryReader { geo in
             let totalWidth = geo.size.width
-            let safeRemaining = remainingPercent.map { min(100.0, max(0.0, $0)) }
+            let safeRemaining = remainingPercent.flatMap { $0.isFinite ? min(100.0, max(0.0, $0)) : nil }
             let remainingWidth = safeRemaining.map { CGFloat($0 / 100.0) * totalWidth }
             let usedWidth = remainingWidth.map { totalWidth - $0 }
 
@@ -922,7 +1149,7 @@ public struct CompanionUsageBar: View {
                 }
 
                 // Pacing marker line (elapsed time fraction)
-                if let frac = elapsedFraction, frac >= 0, frac <= 1.0, totalWidth > 0 {
+                if safeRemaining != nil, let frac = elapsedFraction, frac.isFinite, frac >= 0, frac <= 1.0, totalWidth > 0 {
                     let markerX = CGFloat(frac) * totalWidth
                     let markerHeight: CGFloat = 18
                     let markerWidth: CGFloat = 3.0
@@ -970,7 +1197,7 @@ public struct CompanionProviderLogo: View {
     /// Antigravity's supplied arch and Gemini's star keep their color here.
     private var isMonochrome: Bool {
         guard let name = resolvedLogoName else { return false }
-        return ["provider-openai", "provider-cursor", "provider-grok", "provider-grok-bot"]
+        return ["provider-openai", "provider-cursor", "provider-grok", "provider-grok-bot", "provider-copilot"]
             .contains(name)
     }
 

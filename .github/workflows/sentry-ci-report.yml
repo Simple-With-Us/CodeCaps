@@ -22,7 +22,7 @@ on:
       - Claude Code Autofix
       - Deploy GitHub Pages
       - iOS TestFlight ship (GitHub-hosted macOS)
-      - Kody MiniMax M3 Fix Proposals
+      - Kody MiniMax M3.1 Flash Fix Proposals
       - Mac Release (Sparkle)
       - Mac TestFlight ship (GitHub-hosted macOS)
       - PR Autofix

@@ -1,0 +1,20 @@
+{
+ "windows": [
+  {
+   "id": "[\"producer\",\"4f938669-72f9-4386-8808-6408a031ab4d\",\"video\"]",
+   "provider": "minimax",
+   "providerKey": "minimax",
+   "label": "Video",
+   "window": "1d",
+   "windowKey": "1d",
+   "modelId": "video",
+   "modelType": "video",
+   "remainingPercent": 0,
+   "remainingUnknown": false,
+   "isExhausted": true,
+   "occurredAt": "2026-11-06T10:25:00.000Z",
+   "reportedAt": "2026-11-06T10:25:00.000Z",
+   "resetAt": "2026-11-07T00:00:00.000Z"
+  }
+ ]
+}

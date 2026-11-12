@@ -28,6 +28,7 @@ final class AtCapTests: XCTestCase {
         token: String? = nil,
         remaining: Double? = 50,
         resetIn: TimeInterval? = nil,
+        observedIn: TimeInterval = 0,
         provider: String = "anthropic",
         model: String? = nil
     ) -> QuotaWindowSnapshot {
@@ -43,7 +44,7 @@ final class AtCapTests: XCTestCase {
             remainingUnknown: remaining == nil,
             resetAt: resetIn.map { iso.string(from: now.addingTimeInterval($0)) },
             window: token,
-            occurredAt: iso.string(from: now),
+            occurredAt: iso.string(from: now.addingTimeInterval(observedIn)),
             source: provider), now: now)
     }
 
@@ -81,8 +82,14 @@ final class AtCapTests: XCTestCase {
 
     func testAWindowWithHeadroomIsNotAtItsCap() {
         XCTAssertFalse(makeWindow(id: "w", label: "Weekly", remaining: 100).isAtCap)
-        XCTAssertFalse(makeWindow(id: "w", label: "Weekly", remaining: 0.4).isAtCap,
-                       "a rounding artefact above zero is not a spent allowance")
+        XCTAssertFalse(makeWindow(id: "w", label: "Weekly", remaining: 0.6).isAtCap)
+    }
+
+    /// A reading of 0.4% is drawn as 0%, so the rule has to call it spent:
+    /// telling the owner a plan is not capped while its meter reads 0% is the
+    /// drift the reviewer found between the pool's weekly test and this rule.
+    func testAWindowThatRoundsToZeroIsAtItsCap() {
+        XCTAssertTrue(makeWindow(id: "w", label: "Weekly", remaining: 0.4).isAtCap)
     }
 
     func testAnUnknownReadingIsNotACap() {
@@ -131,6 +138,45 @@ final class AtCapTests: XCTestCase {
         XCTAssertNil(row.atCapWindow)
     }
 
+    /// Owner 2026-10-22, with a screenshot of the xAI row:  it read "7-day cap"
+    /// while the sidebar beside it read 96%.
+    ///
+    /// The section carried a fresh 96% window beside two windows that reported
+    /// an exhausted allowance days ago.  The sidebar's number filtered on
+    /// freshness and the cap rule beside it did not, so one account read 96% in
+    /// one place and "7-day cap" in the other.
+    func testAStaleExhaustedWindowDoesNotCapTheRow() {
+        let row = makeRow([
+            makeWindow(id: "fresh", label: "7-day window", token: "weekly", remaining: 96, resetIn: 5 * day),
+            makeWindow(id: "stale", label: "1w window", token: "1w", remaining: 0,
+                       resetIn: -hour, observedIn: -5 * day),
+        ])
+        XCTAssertFalse(row.isAtCap, "a stale window must not cap the row")
+        XCTAssertNil(row.atCapWindow)
+        XCTAssertEqual(row.section.minimumRemainingPercent, 96,
+                       "the sidebar's number reads the fresh window")
+    }
+
+    /// Owner 2026-10-25: Muse Code sat at 0% with a 5-hour countdown, but showed
+    /// a 0% meter bar instead of the quota exhausted notice like Claude and AG.
+    ///
+    /// The collector had skipped polling because the weekly allowance was spent,
+    /// so `occurredAt` was 24 hours old.  The reset was still in the future, so
+    /// the allowance remained spent for the active cycle, but `isReadingRecent`
+    /// called it stale and the cap rule refused to bind, leaving the row drawing
+    /// meters instead of the cap notice.  An exhausted allowance whose cycle is
+    /// unexpired binds the cap.
+    func testAnUnexpiredExhaustedWindowObservedEarlierInCycleCapsTheRow() {
+        let row = makeRow([
+            makeWindow(id: "weekly", label: "7-day window", token: "weekly", remaining: 0,
+                       resetIn: 5 * hour + 16 * 60, observedIn: -24 * hour, provider: "muse-code"),
+        ])
+        XCTAssertTrue(row.isAtCap, "an unexpired spent window must cap the row")
+        XCTAssertEqual(row.atCapWindow?.window.id, "weekly")
+        XCTAssertEqual(glanceAtCapSummary(try! XCTUnwrap(row.atCapWindow), now: now),
+                       "7-day cap resets in 5h 16m")
+    }
+
     func testAMaskedWindowIsNotEvidenceOfACap() {
         // An Antigravity 5-hour window under a spent weekly is masked: the
         // number is real and meaningless.  Only the unmasked weekly may cap.
@@ -160,6 +206,31 @@ final class AtCapTests: XCTestCase {
             makeWindow(id: "weekly", label: "7d window", token: "168h", remaining: 40, resetIn: 4 * day),
         ])
         XCTAssertFalse(row.isAtCap)
+    }
+
+    func testAScopedCodexAllowanceDoesNotCapTheSubscription() {
+        // A Codex response with only Code Review and additional pools has no
+        // primary window.  These sit beside the subscription, so spending one
+        // must not make the whole Codex row read "At Cap".
+        let row = makeRow([
+            makeWindow(id: "code-review:primary", label: "Code Review · 5-hour", token: "5h",
+                       remaining: 0, resetIn: 3 * hour, provider: "openai"),
+            makeWindow(id: "additional:spark", label: "Spark · 7-day", token: "168h",
+                       remaining: 0, resetIn: 4 * day, provider: "openai"),
+        ])
+        XCTAssertFalse(row.isAtCap)
+        XCTAssertNil(row.atCapWindow)
+    }
+
+    func testACodexSubscriptionWindowStillCapsBesideASpentScopedPool() {
+        let row = makeRow([
+            makeWindow(id: "primary", label: "5h window", token: "5h",
+                       remaining: 0, resetIn: 3 * hour, provider: "openai"),
+            makeWindow(id: "code-review:primary", label: "Code Review · 5-hour", token: "5h",
+                       remaining: 0, resetIn: 2 * hour, provider: "openai"),
+        ])
+        XCTAssertTrue(row.isAtCap)
+        XCTAssertEqual(row.atCapWindow?.window.id, "primary")
     }
 
     // MARK: What the row says

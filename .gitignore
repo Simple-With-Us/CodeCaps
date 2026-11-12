@@ -6,3 +6,5 @@ DerivedData/
 xcuserdata/
 _site/
 ios/CodeCapsCompanion/build/
+__pycache__/
+*.pyc

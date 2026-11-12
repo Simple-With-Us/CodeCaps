@@ -5,94 +5,131 @@ import QuotaCore
 final class PipLowQuotaTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_700_000_000)
 
-    private func window(id: String, remaining: Double?) -> QuotaWindowSnapshot {
-        QuotaWindowSnapshot(window: QuotaWindow(
-            id: id,
-            provider: "anthropic",
-            providerKey: "anthropic",
-            label: "5h window",
-            remainingPercent: remaining,
-            remainingUnknown: remaining == nil,
-            window: "5h",
-            occurredAt: "2026-09-14T19:00:00Z"
-        ), now: now)
-    }
-
-    private func row(id: String, windows: [QuotaWindowSnapshot]) -> DisplaySection {
-        DisplaySection(
-            id: id,
-            providerKey: "anthropic",
-            title: "Claude",
+    private func row(remaining: Double?, seconds: Double = 0, stale: Bool = false,
+                     unknown: Bool = false, masked: Bool = false, skip: Bool = false) -> DisplaySection {
+        let observedAt = now.addingTimeInterval(seconds - (stale ? 3_600 : 0))
+        let snapshot = QuotaWindowSnapshot(window: QuotaWindow(
+            id: "w", provider: "anthropic", providerKey: "anthropic", label: "5h window",
+            remainingPercent: remaining, remainingUnknown: unknown || remaining == nil,
+            window: "5h", skip: skip, occurredAt: ISO8601DateFormatter().string(from: observedAt),
+            source: "local-test"), now: now.addingTimeInterval(seconds))
+        return DisplaySection(id: "anthropic", providerKey: "anthropic", title: "Claude",
             platformTitle: "Claude",
-            section: QuotaPlatformSection(
-                providerKey: "anthropic",
-                providerLabel: "Claude",
-                via: nil,
-                expected: true,
-                windows: windows),
-            poolKey: nil,
-            remainingPercent: windows.compactMap(\.remainingPercent).min(),
-            resetAt: nil,
-            maskedWindowIds: [])
+            section: QuotaPlatformSection(providerKey: "anthropic", providerLabel: "Claude",
+                                          via: nil, expected: true, windows: [snapshot]),
+            poolKey: nil, remainingPercent: remaining, resetAt: nil,
+            maskedWindowIds: masked ? ["w"] : [])
     }
 
-    func testCrossingDownAutoAddsAndOpens() {
-        var session = PipLowQuotaSession()
-        let rows = [row(id: "anthropic", windows: [window(id: "w", remaining: 12)])]
-        XCTAssertFalse(PipLowQuota.evaluate(rows: rows, thresholdPercent: 15, enabled: true,
-                                            session: &session))
-        XCTAssertTrue(session.seeded)
+    private func evaluate(_ row: DisplaySection?, session: inout PipLowQuotaSession,
+                          issues: [String: String] = [:], disabled: Set<String> = []) -> Bool {
+        PipLowQuota.evaluate(rows: row.map { [$0] } ?? [], thresholdPercent: 15, enabled: true,
+                             issues: issues, disabledSources: disabled, session: &session)
+    }
 
-        let shouldOpen = PipLowQuota.evaluate(rows: rows, thresholdPercent: 15, enabled: true,
-                                              session: &session)
-        XCTAssertTrue(shouldOpen)
+    func testInitialLowSnapshotSeedsWithoutOpeningOnRepeatedChecks() {
+        var session = PipLowQuotaSession()
+        XCTAssertFalse(evaluate(row(remaining: 5), session: &session))
+        XCTAssertFalse(evaluate(row(remaining: 5, seconds: 1), session: &session))
+        XCTAssertEqual(session.rowsBelowThreshold, ["anthropic"])
+        XCTAssertTrue(session.autoAddedRowIds.isEmpty)
+    }
+
+    func testExplicitNonzeroSkipCannotTriggerOrRecoverButZeroStillCrosses() {
+        var session = PipLowQuotaSession()
+        _ = evaluate(row(remaining: 50), session: &session)
+        let skippedLow = row(remaining: 5, seconds: 1, skip: true)
+        XCTAssertFalse(PipLowQuota.rowIsLow(skippedLow, thresholdPercent: 15))
+        XCTAssertFalse(evaluate(skippedLow, session: &session))
+        XCTAssertTrue(evaluate(row(remaining: 0, seconds: 2, skip: true), session: &session))
+        XCTAssertFalse(evaluate(row(remaining: 50, seconds: 3, skip: true), session: &session))
+        XCTAssertEqual(session.rowsBelowThreshold, ["anthropic"])
+    }
+
+    func testNewWindowAlreadyLowSeedsDespiteHealthySiblingThenCanCrossAfterRecovery() {
+        var session = PipLowQuotaSession()
+        func combined(newRemaining: Double?, seconds: Double) -> DisplaySection {
+            let healthy = row(remaining: 70, seconds: seconds)
+            var windows = healthy.section.windows
+            if let newRemaining {
+                var newWindow = row(remaining: newRemaining, seconds: seconds).section.windows[0].window
+                newWindow.id = "new-account-window"
+                newWindow.accountKey = "new-account"
+                windows.append(QuotaWindowSnapshot(window: newWindow, now: now.addingTimeInterval(seconds)))
+            }
+            return DisplaySection(id: healthy.id, providerKey: healthy.providerKey, title: healthy.title,
+                platformTitle: healthy.platformTitle,
+                section: QuotaPlatformSection(providerKey: healthy.providerKey,
+                    providerLabel: healthy.section.providerLabel, expected: true, windows: windows),
+                poolKey: nil, remainingPercent: newRemaining ?? 70, resetAt: nil, maskedWindowIds: [])
+        }
+        XCTAssertFalse(evaluate(combined(newRemaining: nil, seconds: 0), session: &session))
+        XCTAssertFalse(evaluate(combined(newRemaining: 5, seconds: 1), session: &session),
+                       "an unrelated healthy sibling cannot establish the new window's prior allowance")
+        XCTAssertFalse(evaluate(combined(newRemaining: 4, seconds: 2), session: &session))
+        XCTAssertTrue(session.autoAddedRowIds.isEmpty)
+        XCTAssertFalse(evaluate(combined(newRemaining: 60, seconds: 3), session: &session))
+        XCTAssertTrue(evaluate(combined(newRemaining: 5, seconds: 4), session: &session),
+                      "the same window now has its own measured healthy-to-low transition")
         XCTAssertEqual(session.autoAddedRowIds, ["anthropic"])
     }
 
-    func testRecoveryRemovesAutoAddedRow() {
+    func testHealthyThenLowCrossingOpensAndRecoveryRemoves() {
         var session = PipLowQuotaSession()
-        let low = [row(id: "anthropic", windows: [window(id: "w", remaining: 5)])]
-        _ = PipLowQuota.evaluate(rows: low, thresholdPercent: 15, enabled: true, session: &session)
-        _ = PipLowQuota.evaluate(rows: low, thresholdPercent: 15, enabled: true, session: &session)
+        XCTAssertFalse(evaluate(row(remaining: 50), session: &session))
+        XCTAssertTrue(evaluate(row(remaining: 5, seconds: 1), session: &session))
         XCTAssertEqual(session.autoAddedRowIds, ["anthropic"])
-
-        let recovered = [row(id: "anthropic", windows: [window(id: "w", remaining: 40)])]
-        _ = PipLowQuota.evaluate(rows: recovered, thresholdPercent: 15, enabled: true,
-                                 session: &session)
-        XCTAssertTrue(session.autoAddedRowIds.isEmpty,
-                      "auto-added rows drop after recovery; pinned rows stay via pins alone")
+        XCTAssertFalse(evaluate(row(remaining: 40, seconds: 2), session: &session))
+        XCTAssertTrue(session.autoAddedRowIds.isEmpty)
     }
 
-    func testUserCloseSuppressesReopenUntilNextCross() {
+    func testExhaustedRoutingSkipStillCountsAsFreshLowQuota() {
         var session = PipLowQuotaSession()
-        let low = [row(id: "anthropic", windows: [window(id: "w", remaining: 5)])]
-        _ = PipLowQuota.evaluate(rows: low, thresholdPercent: 15, enabled: true, session: &session)
-        XCTAssertTrue(PipLowQuota.evaluate(rows: low, thresholdPercent: 15, enabled: true,
-                                           session: &session))
-
-        PipLowQuota.noteUserClosedPip(session: &session)
-        XCTAssertFalse(PipLowQuota.evaluate(rows: low, thresholdPercent: 15, enabled: true,
-                                            session: &session))
-
-        let other = [
-            row(id: "anthropic", windows: [window(id: "w", remaining: 5)]),
-            row(id: "openai", windows: [window(id: "o", remaining: 4)]),
-        ]
-        XCTAssertTrue(PipLowQuota.evaluate(rows: other, thresholdPercent: 15, enabled: true,
-                                          session: &session))
+        XCTAssertFalse(evaluate(row(remaining: 50), session: &session))
+        let exhausted = row(remaining: 0, seconds: 1)
+        XCTAssertTrue(exhausted.section.windows[0].window.skip)
+        XCTAssertTrue(PipLowQuota.rowIsLow(exhausted, thresholdPercent: 15))
+        XCTAssertTrue(evaluate(exhausted, session: &session))
     }
 
-    func testResetAndCrossAgainOpensAfterSuppress() {
+    func testUnavailableAndMissingReadingsCannotRearmClosedLowRow() {
         var session = PipLowQuotaSession()
-        let low = [row(id: "anthropic", windows: [window(id: "w", remaining: 5)])]
-        _ = PipLowQuota.evaluate(rows: low, thresholdPercent: 15, enabled: true, session: &session)
-        _ = PipLowQuota.evaluate(rows: low, thresholdPercent: 15, enabled: true, session: &session)
+        _ = evaluate(row(remaining: 50), session: &session)
+        XCTAssertTrue(evaluate(row(remaining: 5, seconds: 1), session: &session))
         PipLowQuota.noteUserClosedPip(session: &session)
-        _ = PipLowQuota.evaluate(rows: low, thresholdPercent: 15, enabled: true, session: &session)
+        XCTAssertFalse(evaluate(nil, session: &session))
+        XCTAssertFalse(evaluate(row(remaining: 50, seconds: 2), session: &session,
+                                issues: ["anthropic": "Unavailable"]))
+        XCTAssertFalse(evaluate(row(remaining: 50, seconds: 3), session: &session,
+                                disabled: ["local-test"]))
+        XCTAssertFalse(evaluate(row(remaining: 50, seconds: 4, stale: true), session: &session))
+        XCTAssertFalse(evaluate(row(remaining: 50, seconds: 5, unknown: true), session: &session))
+        XCTAssertFalse(evaluate(row(remaining: 5, seconds: 6), session: &session))
+        XCTAssertTrue(session.autoOpenSuppressed)
+        XCTAssertEqual(session.rowsBelowThreshold, ["anthropic"])
+        _ = evaluate(row(remaining: 50, seconds: 7), session: &session)
+        XCTAssertTrue(evaluate(row(remaining: 5, seconds: 8), session: &session))
+        XCTAssertFalse(session.autoOpenSuppressed)
+    }
 
-        let recovered = [row(id: "anthropic", windows: [window(id: "w", remaining: 80)])]
-        _ = PipLowQuota.evaluate(rows: recovered, thresholdPercent: 15, enabled: true, session: &session)
-        XCTAssertTrue(PipLowQuota.evaluate(rows: low, thresholdPercent: 15, enabled: true, session: &session))
+    func testOlderOrEqualHealthySnapshotCannotRearmLowRow() {
+        var session = PipLowQuotaSession()
+        _ = evaluate(row(remaining: 5, seconds: 10), session: &session)
+        _ = evaluate(row(remaining: 80, seconds: 9), session: &session)
+        _ = evaluate(row(remaining: 80, seconds: 10), session: &session)
+        XCTAssertFalse(evaluate(row(remaining: 5, seconds: 11), session: &session))
+        XCTAssertEqual(session.rowsBelowThreshold, ["anthropic"])
+    }
+
+    func testStaleUnknownAndMaskedQuotaCannotSeedOrTrigger() {
+        var session = PipLowQuotaSession()
+        for invalid in [row(remaining: 0, stale: true), row(remaining: 0, unknown: true),
+                        row(remaining: 0, masked: true), row(remaining: nil)] {
+            XCTAssertFalse(evaluate(invalid, session: &session))
+            XCTAssertFalse(PipLowQuota.rowIsLow(invalid, thresholdPercent: 15))
+        }
+        XCTAssertTrue(session.lastObservedAtByRow.isEmpty)
+        XCTAssertFalse(evaluate(row(remaining: 0, seconds: 1), session: &session))
     }
 
     @MainActor
@@ -105,5 +142,32 @@ final class PipLowQuotaTests: XCTestCase {
         let model = MonitorModel(defaults: defaults)
         XCTAssertTrue(model.pipOpenWhenLow)
         XCTAssertEqual(model.pipLowThresholdPercent, 20)
+    }
+
+    func testDecisiveWindowRecoversDespiteUnknownAndOlderSibling() {
+        var session = PipLowQuotaSession()
+        func combined(_ remaining: Double, seconds: Double, omitPrimary: Bool = false) -> DisplaySection {
+            var windows = omitPrimary ? [] : row(remaining: remaining, seconds: seconds).section.windows
+            var sibling = row(remaining: 50).section.windows[0].window
+            sibling.id = "older-sibling"
+            windows.append(QuotaWindowSnapshot(window: sibling, now: now.addingTimeInterval(seconds)))
+            var placeholder = sibling
+            placeholder.id = "unknown-placeholder"
+            placeholder.remainingPercent = nil
+            placeholder.remainingUnknown = true
+            windows.append(QuotaWindowSnapshot(window: placeholder, now: now.addingTimeInterval(seconds)))
+            return DisplaySection(id: "anthropic", providerKey: "anthropic", title: "Claude",
+                platformTitle: "Claude", section: QuotaPlatformSection(providerKey: "anthropic",
+                    providerLabel: "Claude", expected: true, windows: windows),
+                poolKey: nil, remainingPercent: remaining, resetAt: nil, maskedWindowIds: [])
+        }
+        XCTAssertFalse(evaluate(combined(50, seconds: 0), session: &session))
+        XCTAssertTrue(evaluate(combined(5, seconds: 10), session: &session))
+        XCTAssertFalse(evaluate(combined(50, seconds: 11, omitPrimary: true), session: &session))
+        XCTAssertEqual(session.rowsBelowThreshold, ["anthropic"], "missing decisive evidence cannot rearm")
+        XCTAssertFalse(evaluate(combined(50, seconds: 12), session: &session))
+        XCTAssertTrue(session.rowsBelowThreshold.isEmpty)
+        XCTAssertTrue(session.autoAddedRowIds.isEmpty)
+        XCTAssertTrue(evaluate(combined(5, seconds: 13), session: &session))
     }
 }

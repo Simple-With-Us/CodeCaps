@@ -411,7 +411,14 @@ final class ResetAlarmTrackerTests: XCTestCase {
     /// vendor that gives back a partial allowance looked like ordinary drift.
     /// A fixed-period window cannot regain quota inside its own period, so a
     /// large rise is the signal and the level it lands at is not.
-    func testAVendorRestoreBelow95PercentIsDetected() {
+    ///
+    /// Owner ruling 2026-10-20 supersedes the last sentence.  A rise is still
+    /// detected and still alarms, but the level it lands at now decides the
+    /// name: at or above `vendorRestoreLevel` it is a vendor reset, below it a
+    /// change of plan is the likelier reason.  The same numbers as before are
+    /// used, because they are the ones that were argued about: a restore that
+    /// comes back to 89% now reads as a plan change, and 95% would not.
+    func testARestoreThatLandsBelow95PercentIsReportedAsAPlanChange() {
         var tracker = ResetAlarmTracker()
         // Cursor: a 30-day billing cycle, thirteen days left when it was restored.
         let cursorEnd = t0 + 13 * day
@@ -423,8 +430,9 @@ final class ResetAlarmTrackerTests: XCTestCase {
         let cursorEvents = tracker.process(
             [reading("plan", period: 30 * day, resetAt: cursorEnd, remaining: 89.02, observedAt: cursorLater, provider: "cursor")],
             now: cursorLater)
-        XCTAssertEqual(cursorEvents.map(\.windowId), ["plan"])
-        XCTAssertEqual(cursorEvents.first?.isVendorReset, true, "A mid-cycle restore is a vendor reset.")
+        XCTAssertEqual(cursorEvents.map(\.windowId), ["plan"], "A mid-cycle rise is still detected.")
+        XCTAssertEqual(cursorEvents.first?.isVendorReset, false, "89% is below the level a vendor reset has to reach.")
+        XCTAssertEqual(cursorEvents.first?.isPlanChange, true, "A rise that lands below the level is a likely plan change.")
     }
 
     func testAPartialRestoreOfEverySizeIsDetected() {
@@ -440,14 +448,73 @@ final class ResetAlarmTrackerTests: XCTestCase {
             [reading("weekly", period: 7 * day, resetAt: weekEnd, remaining: 91.96, observedAt: later, provider: "grok-bot")],
             now: later)
         XCTAssertEqual(events.map(\.windowId), ["weekly"])
-        XCTAssertEqual(events.first?.isVendorReset, true)
+        XCTAssertEqual(events.first?.isPlanChange, true, "It landed at 91.96%, below the vendor-reset level.")
+        XCTAssertEqual(events.first?.isVendorReset, false)
+    }
+
+    func testReusedWindowIdWithChangedCadenceStartsANewBaseline() {
+        var tracker = ResetAlarmTracker()
+        let intervalEnd = t0 + 3 * hour
+        _ = tracker.process(
+            [reading("general", period: 5 * hour, resetAt: intervalEnd, remaining: 80,
+                     observedAt: t0, provider: "minimax", label: "5h")],
+            now: t0)
+
+        let switchedAt = t0 + hour
+        let weeklyEnd = t0 + 6 * day
+        let switched = tracker.process(
+            [reading("general", period: 7 * day, resetAt: weeklyEnd, remaining: 75,
+                     observedAt: switchedAt, provider: "minimax", label: "7d")],
+            now: switchedAt)
+
+        XCTAssertTrue(switched.isEmpty, "A reused ID with a new cadence is a new baseline, not a reset.")
+        let key = ResetAlarmTracker.windowKey(scope: "local", providerId: "minimax", windowId: "general")
+        XCTAssertEqual(tracker.state.windows[key]?.periodSeconds, 7 * day)
+        XCTAssertEqual(tracker.state.windows[key]?.periodResetAt, weeklyEnd)
+        XCTAssertEqual(tracker.state.windows[key]?.minimumRemaining, 75)
+        XCTAssertEqual(tracker.state.windows[key]?.lastRemaining, 75)
+
+        let scheduledAt = weeklyEnd + hour
+        let scheduled = tracker.process(
+            [reading("general", period: 7 * day, resetAt: weeklyEnd + 7 * day, remaining: 100,
+                     observedAt: scheduledAt, provider: "minimax", label: "7d")],
+            now: scheduledAt)
+        XCTAssertEqual(scheduled.map(\.reason), [.newPeriod], "A later weekly rollover with quota restored remains a scheduled reset.")
+    }
+
+    func testPreEndResetTimeCorrectionWithoutQuotaRiseIsNotAnAlarm() {
+        for remaining in [75.0, 65.0] {
+            var tracker = ResetAlarmTracker()
+            let initialEnd = t0 + 7 * day
+            _ = tracker.process(
+                [reading("weekly", period: 7 * day, resetAt: initialEnd, remaining: 75,
+                         observedAt: t0, provider: "minimax", label: "7d")],
+                now: t0)
+
+            let correctedAt = t0 + day
+            // Within the period-share bound:  half the weekly period is the
+            // decisive-move bar (CC-215),  so a one-day correction stays a
+            // quiet correction while a move past it is a vendor reset.
+            let correctedEnd = initialEnd + day
+            let events = tracker.process(
+                [reading("weekly", period: 7 * day, resetAt: correctedEnd, remaining: remaining,
+                         observedAt: correctedAt, provider: "minimax", label: "7d")],
+                now: correctedAt)
+
+            XCTAssertTrue(events.isEmpty, "A forward time correction without quota restoration must not announce a reset.")
+            let key = ResetAlarmTracker.windowKey(scope: "local", providerId: "minimax", windowId: "weekly")
+            XCTAssertEqual(tracker.state.windows[key]?.periodResetAt, correctedEnd)
+            XCTAssertEqual(tracker.state.windows[key]?.minimumRemaining, min(75, remaining))
+            XCTAssertEqual(tracker.state.windows[key]?.lastRemaining, remaining)
+        }
     }
 
     /// A rise is only new evidence when the period end holds still.  When the
-    /// end moves too, the earlier rule already calls it an early reset — a
-    /// provider resetting a limit early moves its reset time and the quota
-    /// climbs — so this rule adds nothing there and must not change it.
-    func testARiseWhosePeriodEndAlsoMovesIsStillAnEarlyReset() {
+    /// end moves in step with the poll gap and the quota climbs back, that is
+    /// the rolling-window signature, and CC-215 (owner ruling 2026-11-07,
+    /// #378) deliberately reads it as a window rolling, not an early reset —
+    /// the end holding still is what marks the real restore.
+    func testARiseWhosePeriodEndSlidesWithTheClockIsSilentLikeARollingWindow() {
         var tracker = ResetAlarmTracker()
         let end = t0 + 5 * day
         _ = tracker.process(
@@ -458,7 +525,8 @@ final class ResetAlarmTrackerTests: XCTestCase {
         let events = tracker.process(
             [reading("weekly", period: 7 * day, resetAt: end + 3 * hour, remaining: 91.96, observedAt: later, provider: "grok-bot")],
             now: later)
-        XCTAssertEqual(events.map(\.windowId), ["weekly"], "A moved period end is an early reset.")
+        XCTAssertTrue(events.isEmpty,
+                      "an end that slides with the clock plus a climb is a rolling window, not a restore")
     }
 
     /// A large rise inside the drift tolerance is still the end holding still:
@@ -474,7 +542,7 @@ final class ResetAlarmTrackerTests: XCTestCase {
             [reading("weekly", period: 7 * day, resetAt: end + 60, remaining: 89.0, observedAt: later, provider: "grok-bot")],
             now: later)
         XCTAssertEqual(events.map(\.windowId), ["weekly"])
-        XCTAssertEqual(events.first?.isVendorReset, true)
+        XCTAssertEqual(events.first?.isPlanChange, true, "It landed at 89%, so the name is a plan change.")
     }
 
     /// Small drift is still drift, not a restore.
@@ -546,7 +614,7 @@ final class ResetAlarmTrackerTests: XCTestCase {
                 now: t0)
             let later = t0 + gap
             let events = tracker.process(
-                [reading("weekly", period: 7 * day, resetAt: end, remaining: 89.0, observedAt: later, provider: "grok-bot")],
+                [reading("weekly", period: 7 * day, resetAt: end, remaining: 100.0, observedAt: later, provider: "grok-bot")],
                 now: later)
             XCTAssertEqual(events.map(\.windowId), ["weekly"], "Gap of \(Int(gap))s must still detect a restore.")
             XCTAssertEqual(events.first?.isVendorReset, true, "Gap of \(Int(gap))s.")
@@ -585,7 +653,7 @@ final class ResetAlarmTrackerTests: XCTestCase {
             now: t0)
         let later = t0 + 300
         let events = tracker.process(
-            [reading("weekly", period: 7 * day, resetAt: end, remaining: 89.0, observedAt: nil, provider: "grok-bot")],
+            [reading("weekly", period: 7 * day, resetAt: end, remaining: 100.0, observedAt: nil, provider: "grok-bot")],
             now: later)
         XCTAssertEqual(events.map(\.windowId), ["weekly"])
         XCTAssertEqual(events.first?.isVendorReset, true)
@@ -724,19 +792,61 @@ final class ResetAlarmTrackerTests: XCTestCase {
         XCTAssertEqual(events.map(\.windowId), ["7d"])
     }
 
-    func testAnEarlyResetWithAShortJumpStillCountsWhenThePercentageClimbsBack() {
-        // The week is at 30% with 5 days left; the provider resets it and the
-        // new reset time is 7 days away, a move of 2 days, well under half a
-        // 7-day period.  The percentage going back to 100 settles it.
+    func testAShortJumpWithAClimbIsSilentLikeARollingWindow() {
+        // The week is at 30% with 5 days left; the Mac wakes a little over
+        // two days later and the reported end has slid forward by exactly the
+        // elapsed time, well under half a 7-day period.  That in-step slide
+        // plus a climb back to 100 is a rolling window aging usage out
+        // across the sleep, not a reset.  The tracker adopts the reported
+        // end, so this covers only the silent observation;
+        // testAnEarlyResetByTheProviderStillCounts covers the jumps that do
+        // still count, and testACourtesyResetReissuingTheWeekOverAShortGapStillAlerts
+        // covers the same numbers across a short gap, where the end move is
+        // a real reissue.
+        var tracker = ResetAlarmTracker()
+        _ = tracker.process(claude(at: t0, fiveResetAt: t0 + 4 * hour, five: 90,
+                                   weekResetAt: t0 + 5 * day, week: 30), now: t0)
+        let later = t0 + 2 * day + hour
+        let events = tracker.process(claude(at: later, fiveResetAt: t0 + 4 * hour, five: 90,
+                                            weekResetAt: t0 + 7 * day + hour, week: 100), now: later)
+        XCTAssertTrue(events.isEmpty,
+                      "an end sliding in step with the elapsed time plus a climb is the rolling-window shape")
+        XCTAssertEqual(tracker.state.windows["local|anthropic|7d"]?.minimumRemaining, 30,
+                       "a rolling-window update keeps the current period's low-water mark")
+    }
+
+    /// The same numbers across a SHORT gap are not a rolling slide: the end
+    /// moved 49 hours while one hour of clock time passed, which no rolling
+    /// window can do.  That is the courtesy-reset shape - the week came back
+    /// to full with a fresh period reissued from now - and it must alert.
+    func testACourtesyResetReissuingTheWeekOverAShortGapStillAlerts() {
         var tracker = ResetAlarmTracker()
         _ = tracker.process(claude(at: t0, fiveResetAt: t0 + 4 * hour, five: 90,
                                    weekResetAt: t0 + 5 * day, week: 30), now: t0)
         let later = t0 + hour
         let events = tracker.process(claude(at: later, fiveResetAt: t0 + 4 * hour, five: 90,
                                             weekResetAt: later + 7 * day, week: 100), now: later)
-        XCTAssertEqual(events.map(\.windowId), ["7d"])
-        XCTAssertEqual(tracker.state.windows["local|anthropic|7d"]?.minimumRemaining, 100,
-                       "the new period starts from the new reading, not the old minimum")
+        XCTAssertEqual(events.count, 1,
+                       "a quota restore with a decisively moved end across a short gap produced no alert")
+        XCTAssertTrue(events.first?.isVendorReset ?? false,
+                      "a refill back to full is a vendor reset, not a plan change")
+    }
+
+    /// A genuine reset late in a long sleep is not a slide: the end moved
+    /// three hours while four hours passed - decisively less than the gap -
+    /// and the quota came back to full.  Missing it would leave the owner
+    /// working against a cap that no longer exists.
+    func testAnEarlyResetLateInALongSleepStillAlerts() {
+        var tracker = ResetAlarmTracker()
+        let end = t0 + 5 * self.hour
+        _ = tracker.process([reading("5h", period: 5 * hour, resetAt: end, remaining: 15, observedAt: t0)], now: t0)
+
+        let wake = t0 + 4 * self.hour
+        let reissued = t0 + 8 * self.hour
+        let events = tracker.process([reading("5h", period: 5 * hour, resetAt: reissued, remaining: 100, observedAt: wake)], now: wake)
+
+        XCTAssertEqual(events.count, 1,
+                       "a decisive end move smaller than the sleep gap was silenced as a rolling slide")
     }
 
     func testAShortJumpWithoutAClimbIsStillJustADrift() {
@@ -927,7 +1037,7 @@ extension ResetAlarmTrackerTests {
 
         XCTAssertEqual(events.count, 1,
                        "a vendor restore after the published end produced no alert at all")
-        XCTAssertTrue(events[0].isVendorReset,
+        XCTAssertTrue(events.first?.isVendorReset ?? false,
                       "it should be reported as a vendor reset, not an ordinary period end")
     }
 
@@ -949,7 +1059,7 @@ extension ResetAlarmTrackerTests {
 
         XCTAssertEqual(events.count, 1,
                        "a partial restore after the published end produced no alert")
-        XCTAssertTrue(events[0].isVendorReset)
+        XCTAssertTrue(events.first?.isVendorReset ?? false)
     }
 
     /// The rule must not become a false-positive machine: a window that merely
@@ -999,6 +1109,77 @@ extension ResetAlarmTrackerTests {
     }
 }
 
+// MARK: - Missed periods while the Mac was asleep
+//
+// Owner, 2026-11-06: a roll-immediately provider restarts each period when
+// the last one ends, so a Mac asleep through several periods wakes to an end
+// that moved by a whole multiple of the cadence.  Matching exactly one period
+// missed every one of those rollovers.  A wait-for-usage provider's end does
+// not move on a schedule, so nothing here treats elapsed cadence alone as
+// proof of a reset: the vendor's reported times must have moved.
+
+extension ResetAlarmTrackerTests {
+    /// Two whole 5-hour periods passed while the Mac was asleep; the vendor's
+    /// reported end moved by exactly two cadences.  This must alert.
+    func testAWakeAfterTwoMissedPeriodsWithItsWeeklyWindowAlerts() {
+        var tracker = ResetAlarmTracker()
+        let end = t0 + 5 * self.hour
+        _ = tracker.process(courtesyWindow(resetAt: end, at: t0, remaining: 40), now: t0)
+
+        let wake = t0.addingTimeInterval(11 * self.hour)
+        let rolled = end.addingTimeInterval(2 * 5 * self.hour)
+        let events = tracker.process(courtesyWindow(resetAt: rolled, at: wake, remaining: 100), now: wake)
+
+        XCTAssertEqual(events.count, 1, "a rollover of two whole periods while asleep produced no alert")
+    }
+
+
+    /// The wait-for-usage provider shape, owner 2026-11-06: "some wait until
+    /// there is some usage".  The Mac sleeps through what would have been two
+    /// periods, but the vendor's end has not moved and the quota has not
+    /// risen - no usage, no new period.  Nothing may alert: elapsed cadence
+    /// alone is not a reset.
+    func testAWaitForUsageProviderSilentThroughTheGapWithItsFiveHourWindowDoesNotAlert() {
+        var tracker = ResetAlarmTracker()
+        let end = t0 + 7 * self.day
+        _ = tracker.process(courtesyWindow(resetAt: end, at: t0, remaining: 40), now: t0)
+
+        let wake = t0.addingTimeInterval(16 * self.day)
+        let events = tracker.process(courtesyWindow(resetAt: end, at: wake, remaining: 40), now: wake)
+
+        XCTAssertTrue(events.isEmpty,
+                      "an unmoved end with no quota rise after a long sleep was reported as a reset")
+    }
+
+    /// The same provider after usage resumes: the quota is back at full while
+    /// the end stays where it was, which the restore-shape rules already
+    /// alert.  The missed-periods rule must not double-report it.
+    func testAWaitForUsageProviderRestoreWithItsFiveHourWindowAlertsOnceNotTwice() {
+        var tracker = ResetAlarmTracker()
+        let end = t0 + 7 * self.day
+        _ = tracker.process(courtesyWindow(resetAt: end, at: t0, remaining: 12), now: t0)
+
+        let wake = t0.addingTimeInterval(16 * self.day)
+        let events = tracker.process(courtesyWindow(resetAt: end, at: wake, remaining: 100), now: wake)
+
+        XCTAssertEqual(events.count, 1, "a post-usage restore after a long sleep alerted zero or multiple times")
+    }
+
+    /// The false-positive side: an end that moved by one and a half periods is
+    /// not a whole-period rollover shape, so this rule must not claim it.
+    func testAFractionalAdvanceIsNotClaimedAsMissedPeriods() {
+        var tracker = ResetAlarmTracker()
+        let end = t0 + 5 * self.hour
+        _ = tracker.process(courtesyWindow(resetAt: end, at: t0, remaining: 40), now: t0)
+
+        let wake = t0.addingTimeInterval(11 * self.hour)
+        let drifted = end.addingTimeInterval(5 * self.hour + 90 * 60)
+        XCTAssertTrue(
+            tracker.process(courtesyWindow(resetAt: drifted, at: wake, remaining: 40), now: wake).isEmpty,
+            "a 1.5-period end drift with no quota rise was reported as a reset")
+    }
+}
+
 // MARK: - Courtesy resets
 //
 // Owner request, 2026-10-08: "can't the app tell if usage suddenly jumps to
@@ -1033,13 +1214,19 @@ extension ResetAlarmTrackerTests {
         let events = tracker.process(courtesyWindow(resetAt: end, at: later, remaining: 100), now: later)
 
         XCTAssertEqual(events.count, 1, "a courtesy reset produced no alert, so the cap silently came back")
-        XCTAssertTrue(events[0].isVendorReset, "it should be flagged as a restore rather than a new period")
+        XCTAssertTrue(events.first?.isVendorReset ?? false, "it should be flagged as a restore rather than a new period")
     }
 
-    /// A courtesy reset that also rolls the window forward.  Here the period
-    /// end genuinely moves, which is the case the previous rules missed
-    /// entirely because they keyed on the end holding still.
-    func testACourtesyResetThatRollsTheWindowForwardAlerts() {
+    /// A courtesy reset that also rolls the window forward.  A forward end
+    /// move in proportion to the poll gap plus a climb back up is exactly the
+    /// rolling-window signature, and CC-215 (owner ruling 2026-11-07, #378)
+    /// deliberately reads that as a window rolling, not a vendor reset: a
+    /// courtesy reset that also slides the end forward by less than the
+    /// early-reset share of the period stays silent, the same as the Mac
+    /// asleep across a five-hour meter.  The end holding still is what
+    /// distinguishes the real courtesy reset (see
+    /// testACourtesyResetMidPeriodAlerts).
+    func testACourtesyResetThatRollsTheWindowForwardIsSilentLikeARollingWindow() {
         var tracker = ResetAlarmTracker()
         let end = t0 + 5 * self.hour
         _ = tracker.process(courtesyWindow(resetAt: end, at: t0, remaining: 30), now: t0)
@@ -1048,8 +1235,8 @@ extension ResetAlarmTrackerTests {
         let rolled = later.addingTimeInterval(5 * self.hour)
         let events = tracker.process(courtesyWindow(resetAt: rolled, at: later, remaining: 100), now: later)
 
-        XCTAssertEqual(events.count, 1, "a reset that moved the window end was missed entirely")
-        XCTAssertTrue(events[0].isVendorReset)
+        XCTAssertTrue(events.isEmpty,
+                      "a forward end slide in step with the poll gap is a rolling window, not a restore")
     }
 
     /// Usage was never low, so near-cap could not have fired either: 60% to
@@ -1099,7 +1286,7 @@ extension ResetAlarmTrackerTests {
             "the same reset alerted again on a later poll")
     }
 
-    func testWeeklyCapResettingEarlyWithNormalTimeRemainingTriggersVendorReset() {
+    func testWeeklyCapRollingForwardWithNormalTimeRemainingIsSilent() {
         var tracker = ResetAlarmTracker()
         let initialResetAt = t0 + 7 * day
         // Initial reading: weekly cap scheduled for 7 days ahead, at 33% remaining.
@@ -1108,8 +1295,12 @@ extension ResetAlarmTrackerTests {
                     observedAt: t0, provider: "openai", label: "7d")
         ], now: t0)
 
-        // 24 hours later (well under 36 hours, normal time remaining has not passed):
-        // cap gets reset early to 100%, resetAt rolls forward 7 days from now.
+        // 24 hours later the end rolls forward by exactly the poll gap and
+        // the quota is back to 100.  Before the CC-215 safeguard this read as
+        // an early vendor reset, but an end that moves in step with the clock
+        // plus a climb is the rolling-window signature, and the owner ruling
+        // of 2026-11-07 (#378) keeps it silent; a real early reset moves the
+        // end decisively (see testAnEarlyResetByTheProviderStillCounts).
         let resetTime = t0 + 24 * hour
         let newResetAt = resetTime + 7 * day
         let events = tracker.process([
@@ -1117,11 +1308,134 @@ extension ResetAlarmTrackerTests {
                     observedAt: resetTime, provider: "openai", label: "7d")
         ], now: resetTime)
 
-        XCTAssertEqual(events.count, 1, "Early weekly cap reset must generate an alarm event")
-        guard let event = events.first else { return }
-        XCTAssertEqual(event.windowId, "7d")
-        XCTAssertEqual(event.providerId, "openai")
-        XCTAssertEqual(event.remainingPercent, 100)
-        XCTAssertTrue(event.isVendorReset, "Cap reset before scheduled end is an early vendor reset")
+        XCTAssertTrue(events.isEmpty,
+                      "an end rolled forward in step with the poll gap is a rolling window, not a restore")
+    }
+}
+
+// MARK: - Missed periods while the Mac was asleep
+//
+// Owner, 2026-11-06: "some providers have their 7d period restart right at
+// end of last one and some wait until there is some usage".  A roll-
+// immediately provider's reported end advances by whole periods while the
+// Mac sleeps; a wait-for-usage provider's end does not move on a schedule.
+// These tests pin both semantics: elapsed cadence alone is never a reset.
+
+extension ResetAlarmTrackerTests {
+    /// Two whole 5-hour periods passed while the Mac was asleep; the vendor's
+    /// reported end moved by exactly two cadences.  This must alert.
+    func testAWakeAfterTwoMissedPeriodsAlerts() {
+        var tracker = ResetAlarmTracker()
+        let end = t0 + 5 * self.hour
+        _ = tracker.process([reading("5h", period: 5 * hour, resetAt: end, remaining: 40, observedAt: t0)], now: t0)
+
+        let wake = t0.addingTimeInterval(11 * self.hour)
+        let rolled = end.addingTimeInterval(2 * 5 * self.hour)
+        let events = tracker.process([reading("5h", period: 5 * hour, resetAt: rolled, remaining: 100, observedAt: wake)], now: wake)
+
+        XCTAssertEqual(events.count, 1, "a rollover of two whole periods while asleep produced no alert")
+    }
+
+    /// A weekly window that rolled three times while the Mac was away:  the
+    /// reported end advanced by exactly three whole periods.
+    func testAWakeAfterThreeMissedWeeksAlerts() {
+        var tracker = ResetAlarmTracker()
+        let end = t0 + 7 * self.day
+        _ = tracker.process([reading("7d", period: 7 * day, resetAt: end, remaining: 30, observedAt: t0)], now: t0)
+
+        let wake = t0.addingTimeInterval(23 * self.day)
+        let rolled = end.addingTimeInterval(3 * 7 * self.day)
+        let events = tracker.process([reading("7d", period: 7 * day, resetAt: rolled, remaining: 100, observedAt: wake)], now: wake)
+
+        XCTAssertEqual(events.count, 1, "a rollover of three whole weeks while away produced no alert")
+    }
+
+    /// The wait-for-usage provider shape.  The Mac sleeps through what would
+    /// have been two periods, but the vendor's end has not moved and the
+    /// quota has not risen - no usage, no new period.  Nothing may alert:
+    /// elapsed cadence alone is not a reset.
+    func testAWaitForUsageProviderSilentThroughTheGapDoesNotAlert() {
+        var tracker = ResetAlarmTracker()
+        let end = t0 + 7 * self.day
+        _ = tracker.process([reading("7d", period: 7 * day, resetAt: end, remaining: 40, observedAt: t0)], now: t0)
+
+        let wake = t0.addingTimeInterval(16 * self.day)
+        let events = tracker.process([reading("7d", period: 7 * day, resetAt: end, remaining: 40, observedAt: wake)], now: wake)
+
+        XCTAssertTrue(events.isEmpty,
+                      "an unmoved end with no quota rise after a long sleep was reported as a reset")
+    }
+
+    /// The same provider after usage resumes: the quota is back at full while
+    /// the end stays where it was, which the restore-shape rules already
+    /// alert.  It must alert exactly once.
+    func testAWaitForUsageProviderRestoreAlertsOnceNotTwice() {
+        var tracker = ResetAlarmTracker()
+        let end = t0 + 7 * self.day
+        _ = tracker.process([reading("7d", period: 7 * day, resetAt: end, remaining: 12, observedAt: t0)], now: t0)
+
+        let wake = t0.addingTimeInterval(16 * self.day)
+        let events = tracker.process([reading("7d", period: 7 * day, resetAt: end, remaining: 100, observedAt: wake)], now: wake)
+
+        XCTAssertEqual(events.count, 1, "a post-usage restore after a long sleep alerted zero or multiple times")
+
+        let repeatEvents = tracker.process([reading("7d", period: 7 * day, resetAt: end, remaining: 100, observedAt: wake)], now: wake)
+
+        XCTAssertTrue(repeatEvents.isEmpty,
+                      "the same restore reading alerted again on a repeat poll")
+    }
+
+    // MARK: Rolling windows (CC-215)
+
+    /// MiniMax's five-hour window rolls: old usage ages out, the percentage
+    /// climbs gradually, and the period end slides ahead with the clock.  A
+    /// poll that crosses the spent-to-nearly-full boundary fired a "vendor
+    /// reset" with no vendor action at all (owner, 2026-11-07).  A rolling
+    /// climb fires nothing.
+    func testARollingWindowsGradualClimbDoesNotFireAVendorReset() {
+        var tracker = ResetAlarmTracker()
+        var now = t0
+        // Seed the rolling window: near-spent, end one period ahead.
+        let startReset = now.addingTimeInterval(4 * hour)
+        tracker.process([reading("5h", period: 5 * hour, resetAt: startReset,
+                                 remaining: 12, observedAt: now, provider: "minimax")],
+                        now: now)
+        // A burst: a large forward slide and a climb across the 80-to-95
+        // boundary as the burst's usage ages out.  Nothing happened a vendor
+        // did, so nothing may fire.
+        for step in 1...3 {
+            now = now.addingTimeInterval(2 * hour)
+            let end = now.addingTimeInterval(4 * hour)
+            let remaining = [46.0, 78.0, 96.0][step - 1]
+            let events = tracker.process(
+                [reading("5h", period: 5 * hour, resetAt: end,
+                         remaining: remaining, observedAt: now, provider: "minimax")],
+                now: now)
+            XCTAssertTrue(events.isEmpty,
+                          "poll \(step): a rolling climb is aging, not a vendor reset \(events)")
+        }
+    }
+
+    /// The same climb against a period end that held still is exactly the
+    /// courtesy restore the owner asked to hear about, and it must keep
+    /// firing.
+    func testAHeldEndRiseStillFiresTheCourtesyRestore() {
+        var tracker = ResetAlarmTracker()
+        var now = t0
+        let end = now.addingTimeInterval(8 * hour)
+        tracker.process([reading("5h", period: 5 * hour, resetAt: end,
+                                 remaining: 12, observedAt: now, provider: "minimax")],
+                        now: now)
+        now = now.addingTimeInterval(2 * hour)
+        tracker.process([reading("5h", period: 5 * hour, resetAt: end,
+                                 remaining: 78, observedAt: now, provider: "minimax")],
+                        now: now)
+        now = now.addingTimeInterval(2 * hour)
+        let events = tracker.process(
+            [reading("5h", period: 5 * hour, resetAt: end,
+                     remaining: 96, observedAt: now, provider: "minimax")],
+            now: now)
+        XCTAssertTrue(events.contains { $0.isVendorReset },
+                      "the held-end courtesy restore is what the alert is for")
     }
 }

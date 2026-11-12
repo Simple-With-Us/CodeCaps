@@ -25,13 +25,15 @@ final class QuotaBarMetricsTests: XCTestCase {
         remaining: Double? = 50,
         reset: String?,
         periodStart: String? = nil,
+        provider: String = "Cursor",
+        providerKey: String = "cursor",
         now: Date
     ) -> QuotaWindowSnapshot {
         let iso = ISO8601DateFormatter()
         return QuotaWindowSnapshot(window: QuotaWindow(
             id: "w",
-            provider: "Cursor",
-            providerKey: "cursor",
+            provider: provider,
+            providerKey: providerKey,
             label: label,
             remainingPercent: remaining,
             remainingUnknown: remaining == nil,
@@ -493,9 +495,27 @@ final class QuotaBarMetricsTests: XCTestCase {
 
     func testNoDerivablePeriodMeansNoMarker() {
         let now = date("2026-09-30T12:00:00Z")
-        let plan = snapshot(token: "plan", label: "Included plan", reset: "2026-10-15T00:00:00Z", now: now)
+        let plan = snapshot(token: "opaque", label: "Usage window", reset: "2026-10-15T00:00:00Z",
+                            provider: "Anthropic", providerKey: "anthropic", now: now)
         XCTAssertNil(plan.elapsedFraction(now: now))
         XCTAssertNil(QuotaBarMetrics(snapshot: plan, now: now).elapsedFraction)
+    }
+
+    /// Cursor's included plan states its own cadence, so the marker beside the
+    /// caption that names "7d" is drawn for that week.
+    ///
+    /// The caption and the marker resolve one period now, so a window whose
+    /// caption names a week draws a week.  Owner ruling 2026-11-09:  Cursor has
+    /// only the seven-day pool quota, so the plan meter reads a week and not a
+    /// month.
+    func testCursorsIncludedPlanDrawsItsWeekMarker() throws {
+        let now = date("2026-10-08T12:00:00Z")
+        let plan = snapshot(token: "weekly", label: "Included plan",
+                            reset: "2026-10-15T00:00:00Z", now: now)
+        let fraction = try XCTUnwrap(plan.elapsedFraction(now: now))
+        // The week started at the reset minus seven days (Oct 8, 00:00), so
+        // half a day of it had gone.
+        XCTAssertEqual(fraction, 0.5 / 7.0, accuracy: 1e-6)
     }
 
     func testAnAbsurdlyLongPeriodIsNotDrawn() {
