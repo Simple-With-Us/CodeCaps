@@ -571,17 +571,43 @@ final class WidgetTests: XCTestCase {
             provider.contains("case .stopAuthoritativeContent:"),
             "a valid non-empty snapshot must be authoritative"
         )
-        // The honest empty state after every fallback still returns this tuple.
-        // The ban applies only to the App Group tier, where a read or decode
-        // failure used to stop the widget before the sandbox stores were tried.
-        let beforeFallbacks = provider.components(separatedBy: "// 2. Sandbox Application Support").first ?? provider
-        XCTAssertNotEqual(beforeFallbacks, provider, "the App Group tier must stay above the sandbox fallback")
+        // A failed App Group read used to return this tuple before any fallback.
+        // The same tuple is the honest empty state after every store has been tried,
+        // so the ban covers the App Group tier and the later stores, and the one
+        // allowed occurrence has to sit in the final empty state.
+        let appGroupMarker = "// 1. App Group container"
+        let sandboxMarker = "// 2. Sandbox Application Support"
+        let honestEmptyMarker = "// 5. Unconfigured / no data synced state"
+        let emptyReturn = "return ([], nil, true)"
+        guard
+            let appGroupStart = provider.range(of: appGroupMarker)?.lowerBound,
+            let sandboxStart = provider.range(of: sandboxMarker)?.lowerBound,
+            let honestEmptyStart = provider.range(of: honestEmptyMarker)?.lowerBound,
+            appGroupStart < sandboxStart,
+            sandboxStart < honestEmptyStart
+        else {
+            return XCTFail("App Group, sandbox, and the final empty state must stay in that order")
+        }
+        let appGroupTier = provider[appGroupStart..<sandboxStart]
+        XCTAssertTrue(
+            appGroupTier.contains(appGroupMarker),
+            "the App Group tier must stay above the sandbox fallback"
+        )
         XCTAssertFalse(
-            beforeFallbacks.contains("return ([], nil, true)"),
+            appGroupTier.contains(emptyReturn),
             "decode failure must not blank the widget before probing fallbacks"
         )
+        XCTAssertFalse(
+            provider[sandboxStart..<honestEmptyStart].contains(emptyReturn),
+            "a missed sandbox reading must keep probing the later stores"
+        )
+        XCTAssertEqual(
+            provider.components(separatedBy: emptyReturn).count - 1,
+            1,
+            "the blanking return belongs only to the final empty state"
+        )
         XCTAssertTrue(
-            provider.contains("return ([], nil, true)"),
+            provider[honestEmptyStart...].contains(emptyReturn),
             "an unconfigured widget still ends on the honest empty state"
         )
         XCTAssertTrue(
