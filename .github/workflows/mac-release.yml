@@ -107,6 +107,10 @@ jobs:
       - name: Test Sparkle release contract without credentials
         run: node --test scripts/mac-release-workflow.test.mjs scripts/plan-mac-release-build.test.mjs scripts/stage-asc-key.node-test.mjs scripts/infisical-fetch.node-test.mjs scripts/infisical-fetch-expand.node-test.mjs
 
+      # No Swift CI check run on this SHA fails after MISSING_GRACE_SECONDS
+      # (scripts/await-swift-ci-checks.sh) instead of polling to
+      # DEADLINE_SECONDS.  workflow_dispatch cannot pin the SHA, so this step
+      # does not start Swift CI.  ios-ship and mac-release share this gate.
       - name: Wait for Swift CI compile checks on this commit
         env:
           GH_TOKEN: ${{ github.token }}

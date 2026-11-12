@@ -159,6 +159,10 @@ jobs:
             --repo-root "$GITHUB_WORKSPACE" \
             codecaps
 
+      # No Swift CI check run on this SHA fails after MISSING_GRACE_SECONDS
+      # (scripts/await-swift-ci-checks.sh) instead of polling to
+      # DEADLINE_SECONDS.  workflow_dispatch cannot pin the SHA, so this step
+      # does not start Swift CI.  ios-ship and mac-release share this gate.
       - name: Wait for Swift CI compile checks on this commit
         if: steps.gate.outputs.should_ship == '1'
         env:

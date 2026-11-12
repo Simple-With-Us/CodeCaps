@@ -13,6 +13,14 @@
 # Optional environment:
 #   DEADLINE_SECONDS  how long to poll (default: 5100, just under 90 minutes)
 #   POLL_SECONDS      delay between polls (default: 30)
+#   MISSING_GRACE_SECONDS
+#                     how long a SHA with no check run at all may stay
+#                     pending before the gate fails (default: 120).  A merge
+#                     made with GITHUB_TOKEN starts no push workflow, so the
+#                     runs never appear.  Waiting out DEADLINE_SECONDS holds
+#                     the ship concurrency group.  Capped by DEADLINE_SECONDS.
+#                     Check runs can take a few seconds to register, which is
+#                     what the grace covers.  It is not a second deadline.
 #   ONCE              if 1, decide from one fetch and do not poll
 #   CHECKS_JSON       one-shot fixture path; skips the network
 #   REDISPATCH_ON_CANCEL  if 1, a cancelled compile run is pending rather than
@@ -29,10 +37,18 @@
 #
 # Exit 0 when every named check's newest github-actions run succeeded.
 # Exit 1 on a failed or skipped check, on a timeout, and on a cancelled
-#          check when REDISPATCH_ON_CANCEL is 0.
+#          check when REDISPATCH_ON_CANCEL is 0.  Also after the grace, when
+#          no check run exists for this SHA at all.
 # Exit 2 when ONCE or CHECKS_JSON sees a check that has not finished.  With
 #          REDISPATCH_ON_CANCEL=1 a cancelled check is also exit 2: it waits
 #          for its replacement.
+# Exit 3 is the classifier's "missing" verdict: no github-actions run exists
+#          for any requested name.  CHECKS_JSON passes that status through.
+#          The live gate, including ONCE, turns it into exit 1 with a notice
+#          once MISSING_GRACE_SECONDS have elapsed.  It does not poll until
+#          DEADLINE_SECONDS.  It does not workflow_dispatch, because that API
+#          takes a branch or tag name and rejects a commit sha with
+#          "No ref found", so a dispatch would not keep this SHA.
 
 set -euo pipefail
 
@@ -41,6 +57,7 @@ REPO="${REPO:-}"
 SHA="${SHA:-}"
 DEADLINE_SECONDS="${DEADLINE_SECONDS:-5100}"
 POLL_SECONDS="${POLL_SECONDS:-30}"
+MISSING_GRACE_SECONDS="${MISSING_GRACE_SECONDS:-120}"
 ONCE="${ONCE:-0}"
 REDISPATCH_ON_CANCEL="${REDISPATCH_ON_CANCEL:-0}"
 MAX_REDISPATCH="${MAX_REDISPATCH:-3}"
@@ -84,6 +101,12 @@ join_details() {
   printf '%s' "$summary"
 }
 
+[[ "$MISSING_GRACE_SECONDS" =~ ^[0-9]+$ ]] || die "MISSING_GRACE_SECONDS must be a non-negative integer"
+[[ "$DEADLINE_SECONDS" =~ ^[0-9]+$ ]] || die "DEADLINE_SECONDS must be a non-negative integer"
+if [[ "$MISSING_GRACE_SECONDS" -gt "$DEADLINE_SECONDS" ]]; then
+  MISSING_GRACE_SECONDS="$DEADLINE_SECONDS"
+fi
+
 [[ -n "$REPO" || -n "${CHECKS_JSON:-}" ]] || die "REPO is required"
 [[ -n "$SHA" || -n "${CHECKS_JSON:-}" ]] || die "SHA is required"
 if [[ -z "${CHECKS_JSON:-}" ]]; then
@@ -111,7 +134,9 @@ if [[ -n "${CHECKS_JSON:-}" ]]; then
   exit $?
 fi
 
-deadline=$(( $(date +%s) + DEADLINE_SECONDS ))
+started=$(date +%s)
+deadline=$(( started + DEADLINE_SECONDS ))
+missing_deadline=$(( started + MISSING_GRACE_SECONDS ))
 details="$(mktemp)"
 trap 'rm -f "$details"' EXIT
 while true; do
@@ -154,6 +179,21 @@ while true; do
     fi
     echo "::error::Swift CI checks failed on ${SHA}: ${summary}"
     exit 1
+  fi
+  # No github-actions run for any requested name.  A short grace covers the
+  # lag before a run that did start shows up in the API.  After that, the
+  # runs are not late: they were never created.  workflow_dispatch cannot
+  # pin this SHA (it rejects a commit sha with "No ref found"), so the gate
+  # stops instead of holding the ship concurrency group until the deadline.
+  if [[ "$code" -eq 3 ]]; then
+    summary="$(join_details "$details")"
+    if [[ "$ONCE" == "1" || "$(date +%s)" -ge "$missing_deadline" ]]; then
+      echo "::notice title=Swift CI never started::No Swift CI check run exists on ${SHA}: ${summary}.  The gate waited ${MISSING_GRACE_SECONDS}s for a run to register.  It stops here instead of polling for the rest of the deadline.  A merge made with GITHUB_TOKEN starts no push workflow, and workflow_dispatch cannot pin this commit."
+      exit 1
+    fi
+    echo "Waiting for Swift CI on ${SHA}: ${summary} (no check run yet)"
+    sleep "$POLL_SECONDS"
+    continue
   fi
   if [[ "$code" -ne 2 ]]; then
     echo "::error::Could not read Swift CI checks on ${SHA} (exit ${code})"
