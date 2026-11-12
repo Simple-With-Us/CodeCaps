@@ -990,6 +990,29 @@ def _boot(runner: ProcessRunner, udid: str) -> None:
     runner.run(["xcrun", "simctl", "bootstatus", udid, "-b"], timeout=240)
 
 
+LAUNCH_ATTEMPTS = 6
+LAUNCH_RETRY_SECONDS = 15
+# SpringBoard can refuse a launch for a while after bootstatus returns on a
+# slow hosted runner.  Only that refusal is retried;  any other launch error
+# fails at once.
+SPRINGBOARD_NOT_READY = ("SBMainWorkspace", "FBSOpenApplicationServiceErrorDomain")
+
+
+def _launch(runner: ProcessRunner, udid: str, app_bundle: str) -> tuple[int, str]:
+    code, output = 1, ""
+    for attempt in range(1, LAUNCH_ATTEMPTS + 1):
+        code, output = runner.run(["xcrun", "simctl", "launch", udid, app_bundle], check=False)
+        if code == 0 or not any(marker in output for marker in SPRINGBOARD_NOT_READY):
+            return code, output
+        if attempt < LAUNCH_ATTEMPTS:
+            print(
+                f"widget-homescreen: SpringBoard refused launch (attempt {attempt}/{LAUNCH_ATTEMPTS}); retrying",
+                flush=True,
+            )
+            time.sleep(LAUNCH_RETRY_SECONDS)
+    return code, output
+
+
 def _wait_for_container(
     runner: ProcessRunner,
     argv: list[str],
@@ -1093,9 +1116,7 @@ def execute(host: Host, work: Path) -> int:
         runner.run(["xcrun", "simctl", "install", udid, str(app)])
         runner.run(["xcrun", "simctl", "shutdown", udid], check=False)
         _boot(runner, udid)
-        launch_code, launch_out = runner.run(
-            ["xcrun", "simctl", "launch", udid, app_bundle], check=False
-        )
+        launch_code, launch_out = _launch(runner, udid, app_bundle)
         if launch_code != 0:
             raise ProbeFailure(
                 f"failed: companion did not launch\n{launch_out[-1000:]}",
