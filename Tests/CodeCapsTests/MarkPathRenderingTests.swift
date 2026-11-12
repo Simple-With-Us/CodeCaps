@@ -114,4 +114,29 @@ final class MarkPathRenderingTests: XCTestCase {
         XCTAssertTrue(PlatformLogoImage.hasCustomMark(providerKey: poolKey))
         XCTAssertNil(PlatformLogoImage.customDarkMarkURL(providerKey: poolKey))
     }
+
+    /// A pool row that already cached the bundled fallback must drop that
+    /// bitmap when the platform mark is imported.  `cachedImage` checks the
+    /// pool key first, so a leftover entry hides the new file.
+    func testPlatformInvalidationDropsPoolScopedCustomFallbacks() {
+        let platform = "cc229-\(UUID().uuidString)"
+        let pool = "\(platform):gemini"
+        let other = "other-\(UUID().uuidString)"
+        let prefixed = "\(platform)-extra"
+        let image = NSImage(size: NSSize(width: 2, height: 2))
+        PlatformLogoImage.cacheCustomImageForTesting(image, providerKey: pool, isDarkMode: false)
+        PlatformLogoImage.cacheCustomImageForTesting(image, providerKey: pool, isDarkMode: true)
+        PlatformLogoImage.cacheCustomImageForTesting(image, providerKey: platform, isDarkMode: false)
+        PlatformLogoImage.cacheCustomImageForTesting(image, providerKey: other, isDarkMode: false)
+        PlatformLogoImage.cacheCustomImageForTesting(image, providerKey: prefixed, isDarkMode: false)
+
+        XCTAssertNotNil(PlatformLogoImage.cachedImage(providerKey: pool, style: .custom))
+        PlatformLogoImage.invalidateCache(for: platform)
+
+        XCTAssertNil(PlatformLogoImage.cachedImage(providerKey: pool, style: .custom, isDarkMode: false))
+        XCTAssertNil(PlatformLogoImage.cachedImage(providerKey: pool, style: .custom, isDarkMode: true))
+        XCTAssertNil(PlatformLogoImage.cachedImage(providerKey: platform, style: .custom))
+        XCTAssertNotNil(PlatformLogoImage.cachedImage(providerKey: other, style: .custom))
+        XCTAssertNotNil(PlatformLogoImage.cachedImage(providerKey: prefixed, style: .custom))
+    }
 }

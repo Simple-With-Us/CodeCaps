@@ -375,6 +375,9 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
     private static var candidateURLCache: [String: (generation: UInt64, urls: [URL])] = [:]
     /// Decoded custom marks.  The view reads this; it does not open the file.
     private static let customImageCache = NSCache<NSString, NSImage>()
+    /// Keys placed in `customImageCache`.  `NSCache` cannot be enumerated, and
+    /// a pool row (`platform:pool`) must be dropped when the platform mark changes.
+    private static var customImageCacheKeys = Set<String>()
     /// Basename (no extension) to extension to file.  One directory listing
     /// fills it.  Row rendering only reads the snapshot.
     private static var customIndex: CustomMarkIndex?
@@ -462,6 +465,7 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
         cachedBundle = nil
         missingBundledKeys.removeAll()
         candidateURLCache.removeAll()
+        customImageCacheKeys.removeAll()
         stateLock.unlock()
         standardCache.removeAllObjects()
         templateCache.removeAllObjects()
@@ -734,8 +738,9 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
             return bundledImage(providerKey: key, style: .template, iconHint: iconHint, isDark: isDarkMode, refreshing: refreshing)
         case .custom:
             if refreshing { rebuildCustomMarkIndex() }
-            if let custom = loadCustom(providerKey: key, isDarkMode: isDarkMode)
-                ?? loadCustom(providerKey: platformKey(of: key), isDarkMode: isDarkMode) {
+            let generation = currentCacheGeneration()
+            if let custom = loadCustom(providerKey: key, isDarkMode: isDarkMode, startedAt: generation)
+                ?? loadCustom(providerKey: platformKey(of: key), isDarkMode: isDarkMode, startedAt: generation) {
                 return custom
             }
             // No custom mark on disk for this provider: fall back to the
@@ -744,7 +749,9 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
             // custom cache key so a later memory-only read matches this result.
             let bundled = bundledImage(providerKey: key, style: .standard, iconHint: iconHint, isDark: isDarkMode, refreshing: refreshing)
             if let bundled {
-                customImageCache.setObject(bundled, forKey: customImageCacheKey(providerKey: key, isDarkMode: isDarkMode))
+                guard rememberCustomImage(bundled, providerKey: key, isDarkMode: isDarkMode, startedAt: generation) else {
+                    return nil
+                }
             }
             return bundled
         }
@@ -913,13 +920,16 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
         stateLock.lock()
         bundleGeneration &+= 1
         cachedBundle = nil
-        missingBundledKeys = missingBundledKeys.filter { !$0.hasPrefix("\(key)|") }
+        missingBundledKeys = missingBundledKeys.filter { !bundledMissMatches($0, providerKey: key) }
+        let customKeys = customImageCacheKeys.filter { customCacheKeyMatches($0, providerKey: key) }
+        customImageCacheKeys.subtract(customKeys)
+        for cacheKey in customKeys {
+            customImageCache.removeObject(forKey: cacheKey as NSString)
+        }
         candidateURLCache.removeAll()
         stateLock.unlock()
         standardCache.removeObject(forKey: key as NSString)
         templateCache.removeObject(forKey: key as NSString)
-        customImageCache.removeObject(forKey: customImageCacheKey(providerKey: key, isDarkMode: false))
-        customImageCache.removeObject(forKey: customImageCacheKey(providerKey: key, isDarkMode: true))
         for style in MarkStyle.allCases {
             menuBarCache.removeObject(forKey: "\(key)|\(style.rawValue)" as NSString)
             menuBarCache.removeObject(forKey: "\(key)|\(style.rawValue)|dark" as NSString)
@@ -935,15 +945,67 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
         customImageCache.object(forKey: customImageCacheKey(providerKey: providerKey, isDarkMode: isDarkMode))
     }
 
-    private static func loadCustom(providerKey: String, isDarkMode: Bool = false) -> NSImage? {
+    private static func loadCustom(providerKey: String, isDarkMode: Bool, startedAt generation: UInt64) -> NSImage? {
         let cacheKey = customImageCacheKey(providerKey: providerKey, isDarkMode: isDarkMode)
         if let cached = customImageCache.object(forKey: cacheKey) { return cached }
         guard let url = customMarkURL(providerKey: providerKey, isDarkMode: isDarkMode) else { return nil }
         guard let image = NSImage(contentsOf: url) else { return nil }
         let mode = customMarkMode(for: providerKey)
         image.isTemplate = (mode == .template)
-        customImageCache.setObject(image, forKey: cacheKey)
+        guard rememberCustomImage(image, providerKey: providerKey, isDarkMode: isDarkMode, startedAt: generation) else {
+            return nil
+        }
         return image
+    }
+
+    private static func currentCacheGeneration() -> UInt64 {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return bundleGeneration
+    }
+
+    /// Keep a custom-mark bitmap only when `startedAt` is still the cache
+    /// generation.  An import that lands mid-decode must not have its clear
+    /// undone by the late store.
+    @discardableResult
+    private static func rememberCustomImage(_ image: NSImage, providerKey: String, isDarkMode: Bool, startedAt generation: UInt64) -> Bool {
+        let cacheKey = customImageCacheKey(providerKey: providerKey, isDarkMode: isDarkMode)
+        stateLock.lock()
+        guard generation == bundleGeneration else {
+            stateLock.unlock()
+            return false
+        }
+        customImageCache.setObject(image, forKey: cacheKey)
+        customImageCacheKeys.insert(cacheKey as String)
+        stateLock.unlock()
+        return true
+    }
+
+    /// A pool row's cache key is `platform:pool|light`.  Invalidating `platform`
+    /// has to drop that row as well as the platform key itself.
+    private static func customCacheKeyMatches(_ cacheKey: String, providerKey: String) -> Bool {
+        let base: String
+        if cacheKey.hasSuffix("|light") {
+            base = String(cacheKey.dropLast("|light".count))
+        } else if cacheKey.hasSuffix("|dark") {
+            base = String(cacheKey.dropLast("|dark".count))
+        } else {
+            return false
+        }
+        return base == providerKey || base.hasPrefix(providerKey + ":")
+    }
+
+    /// Bundled-miss keys look like `provider|v2|style|appearance` or
+    /// `provider:pool|hint|v2|style|appearance`.  The stem is the first component.
+    private static func bundledMissMatches(_ cacheKey: String, providerKey: String) -> Bool {
+        guard let stem = cacheKey.split(separator: "|", maxSplits: 1).first else { return false }
+        let base = String(stem)
+        return base == providerKey || base.hasPrefix(providerKey + ":")
+    }
+
+    /// Test seam: put a bitmap where a pool row's custom fallback would sit.
+    static func cacheCustomImageForTesting(_ image: NSImage, providerKey: String, isDarkMode: Bool) {
+        rememberCustomImage(image, providerKey: providerKey, isDarkMode: isDarkMode, startedAt: currentCacheGeneration())
     }
 
     /// Result of asking the in-memory custom-mark snapshot about a stored path.
