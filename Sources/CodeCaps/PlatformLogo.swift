@@ -966,8 +966,9 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
     }
 
     private static func customImageCacheKey(providerKey: String, isDarkMode: Bool, iconHint: String?) -> NSString {
+        let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let hint = iconHint?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-        return "\(providerKey)|\(hint)|\(isDarkMode ? "dark" : "light")" as NSString
+        return "\(key)|\(hint)|\(isDarkMode ? "dark" : "light")" as NSString
     }
 
     private static func cachedCustom(providerKey: String, iconHint: String?, isDarkMode: Bool) -> NSImage? {
