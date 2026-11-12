@@ -571,9 +571,18 @@ final class WidgetTests: XCTestCase {
             provider.contains("case .stopAuthoritativeContent:"),
             "a valid non-empty snapshot must be authoritative"
         )
+        // The honest empty state after every fallback still returns this tuple.
+        // The ban applies only to the App Group tier, where a read or decode
+        // failure used to stop the widget before the sandbox stores were tried.
+        let beforeFallbacks = provider.components(separatedBy: "// 2. Sandbox Application Support").first ?? provider
+        XCTAssertNotEqual(beforeFallbacks, provider, "the App Group tier must stay above the sandbox fallback")
         XCTAssertFalse(
-            provider.contains("return ([], nil, true)"),
+            beforeFallbacks.contains("return ([], nil, true)"),
             "decode failure must not blank the widget before probing fallbacks"
+        )
+        XCTAssertTrue(
+            provider.contains("return ([], nil, true)"),
+            "an unconfigured widget still ends on the honest empty state"
         )
         XCTAssertTrue(
             provider.contains("Read or decode failures fall through."),
