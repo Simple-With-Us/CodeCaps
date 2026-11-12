@@ -33,6 +33,8 @@ from widget_homescreen_probe import (  # noqa: E402
     companion_app,
     companion_build_argv,
     companion_bundle_ids,
+    ProbeFailure,
+    _cleanup,
     deletion_allowed,
     interpret_log,
     main,
@@ -225,6 +227,30 @@ class SeedAndResultTests(unittest.TestCase):
         self.assertFalse(deletion_allowed(devices, "USER", "iPhone 17"))
         self.assertFalse(deletion_allowed(devices, UDID, "iPhone 17"))
         self.assertFalse(deletion_allowed(devices, UDID, "codecaps-other"))
+
+    def test_cleanup_deletes_after_a_shutdown_timeout(self):
+        name = f"{DEVICE_PREFIX}9"
+
+        class Runner:
+            def __init__(self) -> None:
+                self.calls: list[list[str]] = []
+
+            def run(self, argv, check=True, timeout=180, cwd=None):
+                del check, timeout, cwd
+                self.calls.append(list(argv))
+                if "shutdown" in argv:
+                    raise ProbeFailure("failed: xcrun simctl shutdown timed out after 180s", 1)
+                if "list" in argv:
+                    return 0, json.dumps(
+                        {"devices": {"iOS 27.2": [{"udid": UDID, "name": name, "state": "Booted"}]}}
+                    )
+                if "delete" in argv:
+                    raise ProbeFailure("failed: xcrun simctl delete timed out after 180s", 1)
+                return 0, ""
+
+        runner = Runner()
+        _cleanup(runner, UDID, name)
+        self.assertIn("delete", runner.calls[-1])
 
 
 class CommandPlanTests(unittest.TestCase):

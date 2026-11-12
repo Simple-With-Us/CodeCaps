@@ -1008,22 +1008,33 @@ def _wait_for_container(
     raise ProbeFailure(refusal + (f"\n{last[-500:]}" if last else ""), EXIT_UNSUPPORTED)
 
 
+def _best_effort(runner: ProcessRunner, argv: list[str]) -> tuple[int, str]:
+    """Run a cleanup command.  A timeout or non-zero exit must not replace the probe result."""
+    try:
+        return runner.run(argv, check=False)
+    except ProbeFailure as exc:
+        print(f"widget-homescreen: cleanup: {exc}", flush=True)
+        return 1, ""
+
+
 def _cleanup(runner: ProcessRunner, udid: str | None, expected_name: str | None) -> None:
     if not udid or not expected_name:
         return
-    runner.run(["xcrun", "simctl", "shutdown", udid], check=False)
+    _best_effort(runner, ["xcrun", "simctl", "shutdown", udid])
+    _code, listing = _best_effort(runner, ["xcrun", "simctl", "list", "devices", "-j"])
+    devices: dict | None
     try:
-        _, listing = runner.run(["xcrun", "simctl", "list", "devices", "-j"], check=False)
-        devices = json.loads(listing)
-    except (json.JSONDecodeError, ProbeFailure):
-        devices = None
+        parsed = json.loads(listing) if listing else None
+    except json.JSONDecodeError:
+        parsed = None
+    devices = parsed if isinstance(parsed, dict) else None
     if isinstance(devices, dict) and not deletion_allowed(devices, udid, expected_name):
         print(
             "widget-homescreen: failed: refusing to delete a simulator that is not the disposable probe",
             flush=True,
         )
         return
-    runner.run(["xcrun", "simctl", "delete", udid], check=False)
+    _best_effort(runner, ["xcrun", "simctl", "delete", udid])
 
 
 def execute(host: Host, work: Path) -> int:
