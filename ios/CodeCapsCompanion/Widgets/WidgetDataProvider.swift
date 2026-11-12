@@ -175,19 +175,31 @@ public enum WidgetSnapshotStore {
         let order = defaults.stringArray(forKey: "platformOrder") ?? []
         let manifest = readPersistedManifest(defaults: defaults)
 
-        // 1. App Group container.  Once this file exists it is authoritative:
-        // a malformed or empty copy means the source currently has nothing
-        // valid, and must not let an older store below resurrect stale rows.
+        // 1. App Group container.  A successfully decoded snapshot (including
+        // an explicit empty) is authoritative and must not resurrect stale rows
+        // from lower stores.  Read or decode failures fall through.
         if let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupId) {
             let file = container.appendingPathComponent("quota-windows.json")
             if FileManager.default.fileExists(atPath: file.path) {
-                guard let data = try? Data(contentsOf: file),
-                      let parsed = decodeSnapshot(data, platformOrder: order, now: now, manifest: manifest) else {
-                    return ([], nil, true)
+                if let data = try? Data(contentsOf: file) {
+                    if let parsed = decodeSnapshot(data, platformOrder: order, now: now, manifest: manifest) {
+                        let attrs = try? FileManager.default.attributesOfItem(atPath: file.path)
+                        let modDate = observedAt(in: data) ?? (attrs?[.modificationDate] as? Date)
+                        switch AppGroupSnapshotReadPolicy.decision(
+                            filePresent: true,
+                            readSucceeded: true,
+                            decodeSucceeded: true,
+                            decodedExplicitlyEmpty: parsed.isEmpty
+                        ) {
+                        case .consultNextTier:
+                            break
+                        case .stopAuthoritativeEmpty:
+                            return ([], modDate, true)
+                        case .stopAuthoritativeContent:
+                            return (parsed, modDate, false)
+                        }
+                    }
                 }
-                let attrs = try? FileManager.default.attributesOfItem(atPath: file.path)
-                let modDate = observedAt(in: data) ?? (attrs?[.modificationDate] as? Date)
-                return (parsed, modDate, parsed.isEmpty)
             }
         }
 
