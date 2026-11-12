@@ -401,7 +401,7 @@ struct SettingsSourcesFleetPage: View {
         SettingsPage {
             Section {
                 Link("Setup & Data Guide", destination: URL(string: "https://codecaps.simplewithus.com/setup.html")!)
-                Text("Choose local reading, uploads, and downloads independently.")
+                Text("Turn on this Mac, sharing, and other devices separately.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             thisMacSection
@@ -474,13 +474,13 @@ struct SettingsSourcesFleetPage: View {
             Eyebrow("THIS MAC")
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Most provider quotas use each CLI's existing local sign-in." + sentenceGap
-                     + "Z.ai Coding Plan quota reads use your ZCode sign-in, or the regional API key you save here.")
-                Text("Provider Checks use existing local sign-ins and provider quota endpoints." + sentenceGap
-                     + "Copilot uses your existing GitHub CLI sign-in.")
-                Text("Codex Session File Checks: 1 local quota source." + sentenceGap
+                Text("Most plans use the sign-in already on this Mac." + sentenceGap
+                     + "Z.ai Coding Plan reads use your ZCode sign-in, or the regional API key you save here.")
+                Text("Plan checks use the sign-in already on this Mac." + sentenceGap
+                     + "Copilot uses your existing GitHub sign-in.")
+                Text("Codex session checks read a file on this Mac." + sentenceGap
                      + "File checks do not upload or download on their own.")
-                Text("A snapshot is written to ~/Library/Application Support/Usage Monitor/quota-windows.json for BotFleet and other connected fleet apps.")
+                Text("Readings stay on this Mac so CodeCaps can share them with the apps you connect.")
                 if let widgetSharingError = model.widgetSharingError {
                     Text(widgetSharingError).foregroundStyle(Theme.warning)
                 }
@@ -911,7 +911,7 @@ private struct ReauthorizeCaption: View {
                         }
                         Button("Cancel", role: .cancel) {}
                     } message: {
-                        Text("CodeCaps will stop pulling fleet quotas until a new token is saved." + sentenceGap + "The token is removed from your Keychain.")
+                        Text("CodeCaps will stop showing other devices until a new token is saved." + sentenceGap + "The token is removed from your Keychain.")
                     }
                 }
                 Spacer()
@@ -928,7 +928,7 @@ private struct ReauthorizeCaption: View {
         } header: {
             VStack(alignment: .leading, spacing: 3) {
             HStack {
-                Eyebrow("PULL THE FLEET")
+                Eyebrow("OTHER DEVICES")
                 Spacer()
                 if let dashboardURL {
                     Button {
@@ -1403,8 +1403,8 @@ struct SettingsAboutPage: View {
                 .help("Project Page")
                 .accessibilityLabel("Project Page")
             } footer: {
-                Text("CodeCaps reads quota from agent CLIs already signed in on this Mac." + sentenceGap
-                     + "It never stores a provider API key.")
+                Text("CodeCaps reads the AI plans already signed in on this Mac." + sentenceGap
+                     + "It does not save a provider API key.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

@@ -54,6 +54,11 @@ public enum CompanionTheme {
     /// Danger token for exhausted quotas (0xBF3339 light, 0xFF6B6B dark).
     public static let danger = dynamic(light: 0xBF3339, dark: 0xFF6B6B)
 
+    /// Supporting ink for captions. System secondary grey is about 3:1 at
+    /// this size, which fails WCAG AA. These values clear 4.5:1 on the
+    /// light and dark page backgrounds.
+    public static let supporting = dynamic(light: 0x3D4A57, dark: 0xC5CDD6)
+
     /// Segment colors for quota bars mirroring macOS Theme.
     public static let barUsed = danger
     public static let barRemaining = accent
