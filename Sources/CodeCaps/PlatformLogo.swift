@@ -761,11 +761,13 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
             // manifest hint, so an earlier "index not ready" answer cannot
             // stick and a hint change cannot keep the previous artwork.
             let bundled = bundledImage(providerKey: key, style: .standard, iconHint: iconHint, isDark: isDarkMode, refreshing: refreshing)
+            // A generation mismatch means an import cleared the cache while
+            // this decode was in flight.  Keep the bitmap for this caller.
+            // The cache write is refused, and the row treats success as
+            // "cachedImage hit", so the rejected write still retries.
             guard peekCustomIndex() != nil else { return bundled }
             if let bundled {
-                guard rememberCustomImage(bundled, providerKey: key, iconHint: iconHint, isDarkMode: isDarkMode, startedAt: generation) else {
-                    return nil
-                }
+                _ = rememberCustomImage(bundled, providerKey: key, iconHint: iconHint, isDarkMode: isDarkMode, startedAt: generation)
             }
             return bundled
         }
@@ -794,8 +796,9 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
     static func loadIntoCacheOffMain(providerKey: String, iconHint: String?, style: MarkStyle, isDarkMode: Bool, refreshing: Bool) async -> Bool {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .utility).async {
-                let image = load(providerKey: providerKey, iconHint: iconHint, style: style, isDarkMode: isDarkMode, refreshing: refreshing)
-                continuation.resume(returning: image != nil)
+                _ = load(providerKey: providerKey, iconHint: iconHint, style: style, isDarkMode: isDarkMode, refreshing: refreshing)
+                let cached = cachedImage(providerKey: providerKey, iconHint: iconHint, style: style, isDarkMode: isDarkMode) != nil
+                continuation.resume(returning: cached)
             }
         }
     }
