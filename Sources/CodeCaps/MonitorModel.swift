@@ -1918,10 +1918,14 @@ final class MonitorModel: ObservableObject {
                 break
             }
         }
+        // Settings asks whether a file is installed.  The memory-only lookup
+        // answers nil until the background snapshot exists, which reads as
+        // "no file" for a mark that is already on disk.  This is one snapshot
+        // for the page, not the per-row render path.
         if isDarkMode {
-            return PlatformLogoImage.cachedCustomDarkMarkURL(providerKey: key)
+            return PlatformLogoImage.customDarkMarkURL(providerKey: key)
         }
-        return PlatformLogoImage.cachedCustomPrimaryMarkURL(providerKey: key)
+        return PlatformLogoImage.customPrimaryMarkURL(providerKey: key)
     }
 
     /// Persist a custom mark for `providerKey`.  Reads the file out of the

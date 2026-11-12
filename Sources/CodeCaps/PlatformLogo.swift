@@ -199,6 +199,7 @@ public struct PlatformLogo: View {
     public var body: some View {
         let isDark = colorScheme == .dark
         let epoch = PlatformLogoImage.markCacheEpoch
+        let catalog = PlatformLogoImage.customMarkCatalogEpoch
         let image = displayedMark(isDark: isDark)
         Group {
             if let image {
@@ -222,7 +223,7 @@ public struct PlatformLogo: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .task(id: "\(providerKey)|\(iconHint ?? "")|\(style.rawValue)|\(isDark)|\(epoch)|\(missingMarkRetry)") {
+        .task(id: "\(providerKey)|\(iconHint ?? "")|\(style.rawValue)|\(isDark)|\(epoch)|\(catalog)|\(missingMarkRetry)") {
             // Disk work stays off the main thread.  A warm cache returns
             // without a probe; a miss loads once, then the retry interval
             // is the only thing that looks again.
@@ -382,6 +383,9 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
     /// fills it.  Row rendering only reads the snapshot.
     private static var customIndex: CustomMarkIndex?
     private static var customIndexGeneration: UInt64 = 0
+    /// Bumped when the snapshot changes.  Open logo rows mix this into their
+    /// task identity so a listing that lands after a fallback draw reloads.
+    private static var customIndexEpoch: UInt64 = 0
     private static var customIndexBuildQueued = false
     /// How many times the custom-mark directory has been listed.  Tests use
     /// this to prove a row of lookups does not list again.
@@ -399,6 +403,14 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
         stateLock.lock()
         defer { stateLock.unlock() }
         return bundleGeneration
+    }
+
+    /// Epoch for the custom-mark directory snapshot.  Distinct from
+    /// `markCacheEpoch` so a listing does not throw away the bundled-asset pin.
+    static var customMarkCatalogEpoch: UInt64 {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return customIndexEpoch
     }
 
     /// Append a file component without asking the filesystem whether the
@@ -739,17 +751,19 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
         case .custom:
             if refreshing { rebuildCustomMarkIndex() }
             let generation = currentCacheGeneration()
-            if let custom = loadCustom(providerKey: key, isDarkMode: isDarkMode, startedAt: generation)
-                ?? loadCustom(providerKey: platformKey(of: key), isDarkMode: isDarkMode, startedAt: generation) {
+            if let custom = loadCustom(providerKey: key, iconHint: iconHint, isDarkMode: isDarkMode, startedAt: generation)
+                ?? loadCustom(providerKey: platformKey(of: key), iconHint: iconHint, isDarkMode: isDarkMode, startedAt: generation) {
                 return custom
             }
-            // No custom mark on disk for this provider: fall back to the
-            // bundled colour mark so the row still shows something real rather
-            // than the placeholder glyph.  Stash that fallback under the
-            // custom cache key so a later memory-only read matches this result.
+            // No custom file in the snapshot: fall back to the bundled colour
+            // mark so the row still shows something real.  Stash that fallback
+            // only once the snapshot exists, and under a key that includes the
+            // manifest hint, so an earlier "index not ready" answer cannot
+            // stick and a hint change cannot keep the previous artwork.
             let bundled = bundledImage(providerKey: key, style: .standard, iconHint: iconHint, isDark: isDarkMode, refreshing: refreshing)
+            guard peekCustomIndex() != nil else { return bundled }
             if let bundled {
-                guard rememberCustomImage(bundled, providerKey: key, isDarkMode: isDarkMode, startedAt: generation) else {
+                guard rememberCustomImage(bundled, providerKey: key, iconHint: iconHint, isDarkMode: isDarkMode, startedAt: generation) else {
                     return nil
                 }
             }
@@ -769,8 +783,8 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
         case .custom:
             // Only an image `load` stored for this style.  A warm bundled
             // cache must not masquerade as the custom mark and skip the load.
-            return cachedCustom(providerKey: key, isDarkMode: isDarkMode)
-                ?? cachedCustom(providerKey: platformKey(of: key), isDarkMode: isDarkMode)
+            return cachedCustom(providerKey: key, iconHint: iconHint, isDarkMode: isDarkMode)
+                ?? cachedCustom(providerKey: platformKey(of: key), iconHint: iconHint, isDarkMode: isDarkMode)
         }
     }
 
@@ -887,7 +901,14 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
             return nil
         }
         invalidateCache(for: key)
-        rebuildCustomMarkIndex()
+        if peekCustomIndex() == nil {
+            // The snapshot has not been built yet.  One listing here sees the
+            // file just written plus every other mark.  A warm snapshot is
+            // updated in place below and does not list.
+            rebuildCustomMarkIndex()
+        } else {
+            noteCustomMarkFiles(removedBases: [baseName], added: (base: baseName, ext: ext, url: destination))
+        }
         return destination
     }
 
@@ -907,7 +928,11 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
             }
         }
         invalidateCache(for: key)
-        rebuildCustomMarkIndex()
+        if peekCustomIndex() == nil {
+            scheduleCustomIndexBuild()
+        } else {
+            noteCustomMarkFiles(removedBases: namesToRemove, added: nil)
+        }
     }
 
     /// Bust the render cache so marks reload on the next draw.
@@ -937,25 +962,40 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
         }
     }
 
-    private static func customImageCacheKey(providerKey: String, isDarkMode: Bool) -> NSString {
-        "\(providerKey)|\(isDarkMode ? "dark" : "light")" as NSString
+    private static func customImageCacheKey(providerKey: String, isDarkMode: Bool, iconHint: String?) -> NSString {
+        let hint = iconHint?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        return "\(providerKey)|\(hint)|\(isDarkMode ? "dark" : "light")" as NSString
     }
 
-    private static func cachedCustom(providerKey: String, isDarkMode: Bool) -> NSImage? {
-        customImageCache.object(forKey: customImageCacheKey(providerKey: providerKey, isDarkMode: isDarkMode))
+    private static func cachedCustom(providerKey: String, iconHint: String?, isDarkMode: Bool) -> NSImage? {
+        customImageCache.object(forKey: customImageCacheKey(providerKey: providerKey, isDarkMode: isDarkMode, iconHint: iconHint))
     }
 
-    private static func loadCustom(providerKey: String, isDarkMode: Bool, startedAt generation: UInt64) -> NSImage? {
-        let cacheKey = customImageCacheKey(providerKey: providerKey, isDarkMode: isDarkMode)
+    /// Decode a custom file from the in-memory snapshot.  A missing snapshot
+    /// schedules one background listing and returns nil.  It does not list
+    /// the directory on the caller, which is the menu-bar path.
+    private static func loadCustom(providerKey: String, iconHint: String?, isDarkMode: Bool, startedAt generation: UInt64) -> NSImage? {
+        let cacheKey = customImageCacheKey(providerKey: providerKey, isDarkMode: isDarkMode, iconHint: iconHint)
         if let cached = customImageCache.object(forKey: cacheKey) { return cached }
-        guard let url = customMarkURL(providerKey: providerKey, isDarkMode: isDarkMode) else { return nil }
+        guard let url = memoryCustomMarkURL(providerKey: providerKey, isDarkMode: isDarkMode) else { return nil }
         guard let image = NSImage(contentsOf: url) else { return nil }
         let mode = customMarkMode(for: providerKey)
         image.isTemplate = (mode == .template)
-        guard rememberCustomImage(image, providerKey: providerKey, isDarkMode: isDarkMode, startedAt: generation) else {
+        guard rememberCustomImage(image, providerKey: providerKey, iconHint: iconHint, isDarkMode: isDarkMode, startedAt: generation) else {
             return nil
         }
         return image
+    }
+
+    private static func memoryCustomMarkURL(providerKey: String, isDarkMode: Bool) -> URL? {
+        guard let index = peekCustomIndex() else {
+            scheduleCustomIndexBuild()
+            return nil
+        }
+        if isDarkMode, let dark = darkMarkURL(providerKey: providerKey, index: index) {
+            return dark
+        }
+        return primaryMarkURL(providerKey: providerKey, index: index)
     }
 
     private static func currentCacheGeneration() -> UInt64 {
@@ -968,8 +1008,8 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
     /// generation.  An import that lands mid-decode must not have its clear
     /// undone by the late store.
     @discardableResult
-    private static func rememberCustomImage(_ image: NSImage, providerKey: String, isDarkMode: Bool, startedAt generation: UInt64) -> Bool {
-        let cacheKey = customImageCacheKey(providerKey: providerKey, isDarkMode: isDarkMode)
+    private static func rememberCustomImage(_ image: NSImage, providerKey: String, iconHint: String?, isDarkMode: Bool, startedAt generation: UInt64) -> Bool {
+        let cacheKey = customImageCacheKey(providerKey: providerKey, isDarkMode: isDarkMode, iconHint: iconHint)
         stateLock.lock()
         guard generation == bundleGeneration else {
             stateLock.unlock()
@@ -981,17 +1021,14 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
         return true
     }
 
-    /// A pool row's cache key is `platform:pool|light`.  Invalidating `platform`
-    /// has to drop that row as well as the platform key itself.
+    /// A pool row's cache key is `platform:pool|<hint>|light`.  Invalidating
+    /// `platform` has to drop that row, every hint, and the platform key itself.
     private static func customCacheKeyMatches(_ cacheKey: String, providerKey: String) -> Bool {
-        let base: String
-        if cacheKey.hasSuffix("|light") {
-            base = String(cacheKey.dropLast("|light".count))
-        } else if cacheKey.hasSuffix("|dark") {
-            base = String(cacheKey.dropLast("|dark".count))
-        } else {
-            return false
-        }
+        let parts = cacheKey.split(separator: "|", omittingEmptySubsequences: false)
+        guard parts.count >= 2 else { return false }
+        let appearance = String(parts[parts.count - 1])
+        guard appearance == "light" || appearance == "dark" else { return false }
+        let base = String(parts[0])
         return base == providerKey || base.hasPrefix(providerKey + ":")
     }
 
@@ -1004,8 +1041,22 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
     }
 
     /// Test seam: put a bitmap where a pool row's custom fallback would sit.
-    static func cacheCustomImageForTesting(_ image: NSImage, providerKey: String, isDarkMode: Bool) {
-        rememberCustomImage(image, providerKey: providerKey, isDarkMode: isDarkMode, startedAt: currentCacheGeneration())
+    static func cacheCustomImageForTesting(_ image: NSImage, providerKey: String, isDarkMode: Bool, iconHint: String? = nil) {
+        rememberCustomImage(image, providerKey: providerKey, iconHint: iconHint, isDarkMode: isDarkMode, startedAt: currentCacheGeneration())
+    }
+
+    /// Drop the snapshot so a test can prove a cold load does not list.
+    static func discardCustomIndexForTesting() {
+        stateLock.lock()
+        customIndex = nil
+        customIndexBuildQueued = true
+        stateLock.unlock()
+    }
+
+    static func allowCustomIndexBuildsForTesting() {
+        stateLock.lock()
+        customIndexBuildQueued = false
+        stateLock.unlock()
     }
 
     /// Result of asking the in-memory custom-mark snapshot about a stored path.
@@ -1022,11 +1073,7 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
         func url(base: String) -> URL? {
             guard let exts = files[base] else { return nil }
             for ext in PlatformLogoImage.customMarkExtensions {
-                guard exts[ext] != nil else { continue }
-                // Rebuild the same URL import writes, with an explicit file
-                // hint, so a hit does not stat to discover the extension.
-                return PlatformLogoImage.fileURL(appending: "\(base).\(ext)",
-                                                 to: PlatformLogoImage.customMarksDirectory)
+                if let url = exts[ext] { return url }
             }
             return nil
         }
@@ -1068,6 +1115,29 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
             index.paths.insert(file.standardizedFileURL.path)
             index.paths.insert(file.resolvingSymlinksInPath().path)
         }
+        commitCustomIndex(index, generation: generation, dropDecodedMarks: true)
+    }
+
+    /// Insert or remove files in a snapshot that already exists.  Used by
+    /// import and remove so a button action does not list the directory.
+    private static func noteCustomMarkFiles(removedBases: [String], added: (base: String, ext: String, url: URL)?) {
+        stateLock.lock()
+        customIndexGeneration &+= 1
+        let generation = customIndexGeneration
+        var index = customIndex ?? CustomMarkIndex()
+        stateLock.unlock()
+        for base in removedBases {
+            untrack(base: base, index: &index)
+        }
+        if let added {
+            untrack(base: added.base, index: &index)
+            track(url: added.url, base: added.base, ext: added.ext, index: &index)
+        }
+        // invalidateCache already dropped this provider's decoded marks.
+        commitCustomIndex(index, generation: generation, dropDecodedMarks: false)
+    }
+
+    private static func commitCustomIndex(_ index: CustomMarkIndex, generation: UInt64, dropDecodedMarks: Bool) {
         stateLock.lock()
         guard generation == customIndexGeneration else {
             stateLock.unlock()
@@ -1075,10 +1145,34 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
         }
         let changed = customIndex != index
         customIndex = index
+        if changed {
+            customIndexEpoch &+= 1
+            if dropDecodedMarks {
+                customImageCache.removeAllObjects()
+                customImageCacheKeys.removeAll()
+            }
+        }
         stateLock.unlock()
         guard changed else { return }
+        menuBarCache.removeAllObjects()
         DispatchQueue.main.async {
             NotificationCenter.default.post(name: marksDidResolve, object: nil)
+        }
+    }
+
+    private static func track(url: URL, base: String, ext: String, index: inout CustomMarkIndex) {
+        index.files[base, default: [:]][ext] = url
+        index.paths.insert(url.path)
+        index.paths.insert(url.standardizedFileURL.path)
+        index.paths.insert(url.resolvingSymlinksInPath().path)
+    }
+
+    private static func untrack(base: String, index: inout CustomMarkIndex) {
+        guard let exts = index.files.removeValue(forKey: base) else { return }
+        for url in exts.values {
+            index.paths.remove(url.path)
+            index.paths.remove(url.standardizedFileURL.path)
+            index.paths.remove(url.resolvingSymlinksInPath().path)
         }
     }
 
@@ -1166,7 +1260,11 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
         } else {
             img.isTemplate = (style == .template) || isMonochromeMark(key)
         }
-        menuBarCache.setObject(img, forKey: cacheKey)
+        // A custom paint made before the snapshot exists must not stick.
+        // The following status update reads the snapshot.
+        if style != .custom || cachedImage(providerKey: key, style: .custom, isDarkMode: isDark) != nil {
+            menuBarCache.setObject(img, forKey: cacheKey)
+        }
         return img
     }
 

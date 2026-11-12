@@ -139,4 +139,71 @@ final class MarkPathRenderingTests: XCTestCase {
         XCTAssertNotNil(PlatformLogoImage.cachedImage(providerKey: other, style: .custom))
         XCTAssertNotNil(PlatformLogoImage.cachedImage(providerKey: prefixed, style: .custom))
     }
+
+    /// The snapshot stores the URL `contentsOfDirectory` returned.  Rebuilding
+    /// that URL from the lowercased base misses a mixed-case file on a
+    /// case-sensitive volume.
+    func testCustomMarkURLKeepsTheOnDiskFilenameCase() throws {
+        let directory = PlatformLogoImage.customMarksDirectory
+        let name = "Cc229Case-\(UUID().uuidString.prefix(8)).PNG"
+        let file = directory.appendingPathComponent(name, isDirectory: false)
+        try Data([0x89, 0x50, 0x4E, 0x47]).write(to: file)
+        defer {
+            try? FileManager.default.removeItem(at: file)
+            PlatformLogoImage.rebuildCustomMarkIndex()
+        }
+        PlatformLogoImage.rebuildCustomMarkIndex()
+
+        let key = file.deletingPathExtension().lastPathComponent.lowercased()
+        XCTAssertEqual(PlatformLogoImage.customPrimaryMarkURL(providerKey: key)?.lastPathComponent, name)
+    }
+
+    func testWarmImportDoesNotListTheMarkDirectory() throws {
+        PlatformLogoImage.rebuildCustomMarkIndex()
+        let before = PlatformLogoImage.customMarkDirectoryListings
+        let key = "import-list-\(UUID().uuidString)"
+        let source = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(key)-src.png", isDirectory: false)
+        try Data([0x89, 0x50, 0x4E, 0x47]).write(to: source)
+        defer {
+            try? FileManager.default.removeItem(at: source)
+            PlatformLogoImage.removeCustomMark(providerKey: key)
+            PlatformLogoImage.rebuildCustomMarkIndex()
+        }
+
+        let stored = PlatformLogoImage.importCustomMark(from: source, providerKey: key)
+        XCTAssertEqual(PlatformLogoImage.customMarkDirectoryListings, before)
+        XCTAssertEqual(PlatformLogoImage.customPrimaryMarkURL(providerKey: key)?.standardizedFileURL,
+                       stored?.standardizedFileURL)
+
+        PlatformLogoImage.removeCustomMark(providerKey: key)
+        XCTAssertEqual(PlatformLogoImage.customMarkDirectoryListings, before)
+        XCTAssertNil(PlatformLogoImage.customPrimaryMarkURL(providerKey: key))
+    }
+
+    func testCustomLoadDoesNotListWhileTheIndexIsCold() {
+        PlatformLogoImage.discardCustomIndexForTesting()
+        defer { PlatformLogoImage.allowCustomIndexBuildsForTesting() }
+        let before = PlatformLogoImage.customMarkDirectoryListings
+        _ = PlatformLogoImage.load(providerKey: "cursor", style: .custom)
+        XCTAssertEqual(PlatformLogoImage.customMarkDirectoryListings, before)
+    }
+
+    /// A bundled fallback stored for `.custom` is resolved with the manifest
+    /// hint.  A later hint must not reuse that bitmap, and invalidating the
+    /// platform still drops a hinted pool key.
+    func testCustomFallbackCacheIncludesTheManifestHint() {
+        let key = "hint-\(UUID().uuidString)"
+        let pool = "\(key):gemini"
+        let image = NSImage(size: NSSize(width: 2, height: 2))
+        PlatformLogoImage.cacheCustomImageForTesting(image, providerKey: key, isDarkMode: false, iconHint: "old")
+        PlatformLogoImage.cacheCustomImageForTesting(image, providerKey: pool, isDarkMode: true, iconHint: "star")
+
+        XCTAssertNotNil(PlatformLogoImage.cachedImage(providerKey: key, iconHint: "old", style: .custom))
+        XCTAssertNil(PlatformLogoImage.cachedImage(providerKey: key, iconHint: "new", style: .custom))
+
+        PlatformLogoImage.invalidateCache(for: key)
+        XCTAssertNil(PlatformLogoImage.cachedImage(providerKey: key, iconHint: "old", style: .custom))
+        XCTAssertNil(PlatformLogoImage.cachedImage(providerKey: pool, iconHint: "star", style: .custom, isDarkMode: true))
+    }
 }
