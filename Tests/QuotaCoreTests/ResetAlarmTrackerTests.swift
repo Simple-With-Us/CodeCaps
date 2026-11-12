@@ -453,10 +453,11 @@ final class ResetAlarmTrackerTests: XCTestCase {
     }
 
     /// A rise is only new evidence when the period end holds still.  When the
-    /// end moves too, the earlier rule already calls it an early reset — a
-    /// provider resetting a limit early moves its reset time and the quota
-    /// climbs — so this rule adds nothing there and must not change it.
-    func testARiseWhosePeriodEndAlsoMovesIsStillAnEarlyReset() {
+    /// end moves in step with the poll gap and the quota climbs back, that is
+    /// the rolling-window signature, and CC-215 (owner ruling 2026-11-07,
+    /// #378) deliberately reads it as a window rolling, not an early reset —
+    /// the end holding still is what marks the real restore.
+    func testARiseWhosePeriodEndSlidesWithTheClockIsSilentLikeARollingWindow() {
         var tracker = ResetAlarmTracker()
         let end = t0 + 5 * day
         _ = tracker.process(
@@ -467,7 +468,8 @@ final class ResetAlarmTrackerTests: XCTestCase {
         let events = tracker.process(
             [reading("weekly", period: 7 * day, resetAt: end + 3 * hour, remaining: 91.96, observedAt: later, provider: "grok-bot")],
             now: later)
-        XCTAssertEqual(events.map(\.windowId), ["weekly"], "A moved period end is an early reset.")
+        XCTAssertTrue(events.isEmpty,
+                      "an end that slides with the clock plus a climb is a rolling window, not a restore")
     }
 
     /// A large rise inside the drift tolerance is still the end holding still:
@@ -733,19 +735,24 @@ final class ResetAlarmTrackerTests: XCTestCase {
         XCTAssertEqual(events.map(\.windowId), ["7d"])
     }
 
-    func testAnEarlyResetWithAShortJumpStillCountsWhenThePercentageClimbsBack() {
+    func testAShortJumpWithAClimbIsSilentUntilTheEndPasses() {
         // The week is at 30% with 5 days left; the provider resets it and the
         // new reset time is 7 days away, a move of 2 days, well under half a
-        // 7-day period.  The percentage going back to 100 settles it.
+        // 7-day period.  Before the CC-215 safeguard a climb back to 100
+        // settled it as an early reset, but that same short forward jump plus
+        // a climb is how a rolling window ages across a long sleep, so the
+        // owner ruling of 2026-11-07 (#378) keeps it silent until the old end
+        // has actually passed (see testResetIsDetectedWhenTheOldResetPassedAndRemainingRoseWithoutANewResetTime
+        // and testAnEarlyResetByTheProviderStillCounts for the jumps that do
+        // still count).
         var tracker = ResetAlarmTracker()
         _ = tracker.process(claude(at: t0, fiveResetAt: t0 + 4 * hour, five: 90,
                                    weekResetAt: t0 + 5 * day, week: 30), now: t0)
         let later = t0 + hour
         let events = tracker.process(claude(at: later, fiveResetAt: t0 + 4 * hour, five: 90,
                                             weekResetAt: later + 7 * day, week: 100), now: later)
-        XCTAssertEqual(events.map(\.windowId), ["7d"])
-        XCTAssertEqual(tracker.state.windows["local|anthropic|7d"]?.minimumRemaining, 100,
-                       "the new period starts from the new reading, not the old minimum")
+        XCTAssertTrue(events.isEmpty,
+                      "a short forward jump plus a climb before the end is the rolling-window shape")
     }
 
     func testAShortJumpWithoutAClimbIsStillJustADrift() {
@@ -1045,10 +1052,16 @@ extension ResetAlarmTrackerTests {
         XCTAssertTrue(events.first?.isVendorReset ?? false, "it should be flagged as a restore rather than a new period")
     }
 
-    /// A courtesy reset that also rolls the window forward.  Here the period
-    /// end genuinely moves, which is the case the previous rules missed
-    /// entirely because they keyed on the end holding still.
-    func testACourtesyResetThatRollsTheWindowForwardAlerts() {
+    /// A courtesy reset that also rolls the window forward.  A forward end
+    /// move in proportion to the poll gap plus a climb back up is exactly the
+    /// rolling-window signature, and CC-215 (owner ruling 2026-11-07, #378)
+    /// deliberately reads that as a window rolling, not a vendor reset: a
+    /// courtesy reset that also slides the end forward by less than the
+    /// early-reset share of the period stays silent, the same as the Mac
+    /// asleep across a five-hour meter.  The end holding still is what
+    /// distinguishes the real courtesy reset (see
+    /// testACourtesyResetMidPeriodAlerts).
+    func testACourtesyResetThatRollsTheWindowForwardIsSilentLikeARollingWindow() {
         var tracker = ResetAlarmTracker()
         let end = t0 + 5 * self.hour
         _ = tracker.process(courtesyWindow(resetAt: end, at: t0, remaining: 30), now: t0)
@@ -1057,8 +1070,8 @@ extension ResetAlarmTrackerTests {
         let rolled = later.addingTimeInterval(5 * self.hour)
         let events = tracker.process(courtesyWindow(resetAt: rolled, at: later, remaining: 100), now: later)
 
-        XCTAssertEqual(events.count, 1, "a reset that moved the window end was missed entirely")
-        XCTAssertTrue(events.first?.isVendorReset ?? false)
+        XCTAssertTrue(events.isEmpty,
+                      "a forward end slide in step with the poll gap is a rolling window, not a restore")
     }
 
     /// Usage was never low, so near-cap could not have fired either: 60% to
@@ -1108,7 +1121,7 @@ extension ResetAlarmTrackerTests {
             "the same reset alerted again on a later poll")
     }
 
-    func testWeeklyCapResettingEarlyWithNormalTimeRemainingTriggersVendorReset() {
+    func testWeeklyCapRollingForwardWithNormalTimeRemainingIsSilent() {
         var tracker = ResetAlarmTracker()
         let initialResetAt = t0 + 7 * day
         // Initial reading: weekly cap scheduled for 7 days ahead, at 33% remaining.
@@ -1117,8 +1130,12 @@ extension ResetAlarmTrackerTests {
                     observedAt: t0, provider: "openai", label: "7d")
         ], now: t0)
 
-        // 24 hours later (well under 36 hours, normal time remaining has not passed):
-        // cap gets reset early to 100%, resetAt rolls forward 7 days from now.
+        // 24 hours later the end rolls forward by exactly the poll gap and
+        // the quota is back to 100.  Before the CC-215 safeguard this read as
+        // an early vendor reset, but an end that moves in step with the clock
+        // plus a climb is the rolling-window signature, and the owner ruling
+        // of 2026-11-07 (#378) keeps it silent; a real early reset moves the
+        // end decisively (see testAnEarlyResetByTheProviderStillCounts).
         let resetTime = t0 + 24 * hour
         let newResetAt = resetTime + 7 * day
         let events = tracker.process([
@@ -1126,12 +1143,8 @@ extension ResetAlarmTrackerTests {
                     observedAt: resetTime, provider: "openai", label: "7d")
         ], now: resetTime)
 
-        XCTAssertEqual(events.count, 1, "Early weekly cap reset must generate an alarm event")
-        guard let event = events.first else { return }
-        XCTAssertEqual(event.windowId, "7d")
-        XCTAssertEqual(event.providerId, "openai")
-        XCTAssertEqual(event.remainingPercent, 100)
-        XCTAssertTrue(event.isVendorReset, "Cap reset before scheduled end is an early vendor reset")
+        XCTAssertTrue(events.isEmpty,
+                      "an end rolled forward in step with the poll gap is a rolling window, not a restore")
     }
 }
 
