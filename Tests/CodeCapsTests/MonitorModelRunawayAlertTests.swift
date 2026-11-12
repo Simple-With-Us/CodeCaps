@@ -290,11 +290,18 @@ final class MonitorModelRunawayAlertTests: XCTestCase {
         await waitForRefresh(model)
     }
 
+    /// Awaits the refresh task itself. Polling `isRefreshing` can observe the
+    /// flag before the task's writes to the anomaly list are visible.
     private func waitForRefresh(_ model: MonitorModel) async {
-        for _ in 0..<2_000 {
-            if !model.isRefreshing { return }
-            try? await Task.sleep(nanoseconds: 1_000_000)
+        let task = model.refreshTaskForTesting
+        await task?.value
+        if model.isRefreshing {
+            for _ in 0..<2_000 where model.isRefreshing {
+                try? await Task.sleep(nanoseconds: 1_000_000)
+            }
         }
-        XCTFail("The injected local refresh did not finish")
+        if model.isRefreshing {
+            XCTFail("The injected local refresh did not finish")
+        }
     }
 }

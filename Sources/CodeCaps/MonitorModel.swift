@@ -2521,7 +2521,18 @@ final class MonitorModel: ObservableObject {
                 if let serverFetchForTesting {
                     do { newServer = try await serverFetchForTesting() }
                     catch is CancellationError { return }
-                    catch { failure = error.localizedDescription }
+                    catch {
+                        // The injected fetch has to follow the same rule as
+                        // QuotaClient: a retriable HTTP status keeps the last
+                        // good fleet reading and does not raise the banner.
+                        if preserveFleetOnTransientFailure,
+                           IdempotentGETRetryFilter.preservesLastGoodFleetOnPullFailure(error) {
+                            failure = nil
+                        } else {
+                            failure = (error as? LocalizedError)?.errorDescription
+                                ?? error.localizedDescription
+                        }
+                    }
                 } else {
                     let token = await TokenStore.read(server: currentEndpoint, service: TokenStore.readService)
                         .map(sanitizedToken(_:))
