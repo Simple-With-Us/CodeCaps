@@ -2515,6 +2515,7 @@ final class MonitorModel: ObservableObject {
             // After the first read of the launch it is served from memory, and
             // a failed read is not retried here (see `TokenCache`).
             var savedTokenReadable = false
+            let preserveFleetOnTransientFailure = self?.serverWindows.isEmpty == false
             if useServer {
                 if let serverFetchForTesting {
                     do { newServer = try await serverFetchForTesting() }
@@ -2531,8 +2532,13 @@ final class MonitorModel: ObservableObject {
                         newServer = try await client.fetch()
                     } catch is CancellationError { return }
                     catch {
-                        failure = (error as? LocalizedError)?.errorDescription
-                            ?? ("Unable to reach the server." + sentenceGap + "Check the Quota Endpoint and the Read Token.")
+                        if preserveFleetOnTransientFailure,
+                           IdempotentGETRetryFilter.preservesLastGoodFleetOnPullFailure(error) {
+                            failure = nil
+                        } else {
+                            failure = (error as? LocalizedError)?.errorDescription
+                                ?? ("Unable to reach the server." + sentenceGap + "Check the Quota Endpoint and the Read Token.")
+                        }
                     }
                 }
             }
