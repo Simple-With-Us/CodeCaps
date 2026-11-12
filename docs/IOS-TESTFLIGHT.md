@@ -39,5 +39,5 @@ The rules live in `scripts/ios-fleet/version-plan.mjs`, unit-tested by `scripts/
 CodeCaps for Mac no longer ships to TestFlight or the Mac App Store (CC-169, owner ruling Mon, Oct 19, 2026).  The Mac app is a direct download: the Sparkle app under `Sources/`, released as a signed and notarized DMG on GitHub Releases by `.github/workflows/mac-release.yml` and linked from https://simplewithus.com/codecaps/.
 
 - **What was removed.**  `.github/workflows/macos-ship.yml` and its contract test, the Mac App Store signing and export scripts, `mac-appstore-profiles.json`, the `codecaps-mac` entry in `scripts/ios-fleet/apps.json`, and the Apple Distribution signing overrides on the `CodeCapsCompanionMac` and `CodeCapsWidgetsMac` targets in `project.yml`.  `scripts/mac-ship-testflight.sh` remains as a stub that exits non-zero.
-- **What stays.**  The `CodeCapsCompanionMac` and `CodeCapsWidgetsMac` targets still build (Swift CI compiles the widget extension without signing), but nothing archives or uploads them.
+- **What stays.**  The `CodeCapsCompanionMac` and `CodeCapsWidgetsMac` targets still build (Swift CI compiles the Mac app scheme and the widget extension without signing), but nothing archives or uploads them.
 - **Not changed.**  The iOS ship above, and `mac-release.yml`.

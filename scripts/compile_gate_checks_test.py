@@ -78,6 +78,50 @@ class DecideTests(unittest.TestCase):
         self.assertEqual(verdict, "pending")
         self.assertEqual(details, ["companion=missing"])
 
+    def test_no_check_run_at_all_is_missing(self):
+        verdict, details = status.decide([{"check_runs": []}], self.names)
+        self.assertEqual(verdict, "missing")
+        self.assertEqual(details, ["package=missing", "companion=missing"])
+
+    def test_only_foreign_apps_counts_as_no_swift_ci_run(self):
+        payload = {"check_runs": [
+            run_check("package", "success", 8, app="some-other-app"),
+            run_check("companion", "success", 9, app="some-other-app"),
+        ]}
+        verdict, details = status.decide([payload], self.names)
+        self.assertEqual(verdict, "missing")
+        self.assertEqual(details, ["package=missing", "companion=missing"])
+
+    def test_missing_pending_failed_cancelled_and_success(self):
+        # One row per outcome the gate has to tell apart.  A cancelled run
+        # with no replacement is a failure: it finished without passing.
+        # A cancelled run the caller can replace stays pending, which the
+        # opt-in test covers on its own.
+        cases = [
+            ("missing", [], "missing", ["package=missing", "companion=missing"]),
+            ("pending", [
+                run_check("package", None, 1, state="in_progress"),
+                run_check("companion", "success", 2),
+            ], "pending", ["package=in_progress"]),
+            ("failed", [
+                run_check("package", "failure", 1),
+                run_check("companion", "success", 2),
+            ], "failure", ["package=failure"]),
+            ("cancelled", [
+                run_check("package", "cancelled", 1),
+                run_check("companion", "success", 2),
+            ], "failure", ["package=cancelled"]),
+            ("success", [
+                run_check("package", "success", 1),
+                run_check("companion", "success", 2),
+            ], "success", []),
+        ]
+        for label, runs, verdict, details in cases:
+            with self.subTest(label=label):
+                got, got_details = status.decide([{"check_runs": runs}], self.names)
+                self.assertEqual(got, verdict)
+                self.assertEqual(got_details, details)
+
     def test_newer_success_replaces_cancelled(self):
         payload = {"check_runs": [
             run_check("package", "cancelled", 1),
@@ -182,6 +226,19 @@ class DecideTests(unittest.TestCase):
             )
             self.assertEqual(completed.returncode, 0)
             self.assertEqual(completed.stdout.strip(), "success")
+
+            path.write_text(json.dumps({"check_runs": []}), encoding="utf-8")
+            missing = subprocess.run(
+                ["python3", str(ROOT / "swift_ci_check_status.py"),
+                 "--names", "package", "companion", "--json", str(path)],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(missing.returncode, 3, missing.stderr)
+            self.assertEqual(missing.stdout.strip(), "missing")
+            self.assertIn("package=missing", missing.stderr)
+            self.assertIn("companion=missing", missing.stderr)
 
 
 class LatestRunsTests(unittest.TestCase):
@@ -302,6 +359,44 @@ class AwaitScriptTests(unittest.TestCase):
                 env={"CHECKS_JSON": str(path), "PATH": "/usr/bin:/bin"},
             )
             self.assertEqual(pending.returncode, 2, pending.stderr)
+
+    def test_fixture_reports_missing_pending_failed_cancelled_and_success(self):
+        # CHECKS_JSON is one shot, so "missing" is the classifier's own
+        # exit 3.  The live gate turns that into exit 1 after the grace.
+        script = ROOT / "await-swift-ci-checks.sh"
+        cases = [
+            ("missing", {"check_runs": []}, 3, "missing"),
+            ("pending", {"check_runs": [
+                run_check(PACKAGE, None, 1, state="in_progress"),
+                run_check(COMPANION, "success", 2),
+            ]}, 2, "pending"),
+            ("failed", {"check_runs": [
+                run_check(PACKAGE, "failure", 1),
+                run_check(COMPANION, "success", 2),
+            ]}, 1, "failure"),
+            ("cancelled", {"check_runs": [
+                run_check(PACKAGE, "cancelled", 1),
+                run_check(COMPANION, "success", 2),
+            ]}, 1, "failure"),
+            ("success", {"check_runs": [
+                run_check(PACKAGE, "success", 1),
+                run_check(COMPANION, "success", 2),
+            ]}, 0, "success"),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "checks.json"
+            for label, payload, code, word in cases:
+                with self.subTest(label=label):
+                    path.write_text(json.dumps(payload), encoding="utf-8")
+                    completed = subprocess.run(
+                        ["bash", str(script)],
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                        env={"CHECKS_JSON": str(path), "PATH": "/usr/bin:/bin"},
+                    )
+                    self.assertEqual(completed.returncode, code, completed.stderr)
+                    self.assertEqual(completed.stdout.strip(), word)
 
     def test_cancelled_fixture_is_a_failure_without_the_opt_in(self):
         # A cancelled run is a failure when the gate cannot replace it:  the
@@ -529,14 +624,89 @@ class RedispatchTests(unittest.TestCase):
             self.assertEqual(stub.reruns(), [], "the gate replaced a run that was still running")
 
     def test_no_replacement_when_no_run_exists_at_all(self):
+        # Redispatch is on, and there is still nothing to re-run.  The grace
+        # is 0 so the first look fails the gate.  The deadline stays at the
+        # production 5100s to prove the gate does not poll it out.
         sha = "0" * 40
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             stub = GateStub(root)
             stub.write_payload({"check_runs": []})
-            completed = self.run_gate(stub, sha)
+            started = time.monotonic()
+            completed = self.run_gate(stub, sha, extra_env={
+                "MISSING_GRACE_SECONDS": "0",
+                "DEADLINE_SECONDS": "5100",
+            })
+            elapsed = time.monotonic() - started
             self.assertEqual(completed.returncode, 1, completed.stderr)
+            self.assertLess(elapsed, 30, "the gate polled toward the 5100s deadline")
+            self.assertIn("Swift CI never started", completed.stdout)
+            self.assertIn("waited 0s", completed.stdout)
+            self.assertIn(f"{PACKAGE}=missing", completed.stdout)
+            self.assertNotIn("Timed out", completed.stdout)
             self.assertEqual(stub.reruns(), [], "the gate replaced a run that never existed")
+            fetches = [call for call in stub.calls() if "check-runs" in call]
+            self.assertEqual(len(fetches), 2, f"expected one poll, got {fetches}")
+
+    def test_missing_run_waits_out_the_grace_then_stops_before_the_deadline(self):
+        sha = "0" * 40
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stub = GateStub(root)
+            stub.write_payload({"check_runs": []})
+            completed = self.run_gate(stub, sha, extra_env={
+                "MISSING_GRACE_SECONDS": "2",
+                "DEADLINE_SECONDS": "5100",
+                "POLL_SECONDS": "0",
+            })
+            self.assertEqual(completed.returncode, 1, completed.stderr)
+            self.assertIn("no check run yet", completed.stdout)
+            self.assertIn("Swift CI never started", completed.stdout)
+            self.assertIn("waited 2s", completed.stdout)
+            self.assertNotIn("Timed out", completed.stdout)
+            self.assertEqual(stub.reruns(), [])
+            fetches = [call for call in stub.calls() if "check-runs" in call]
+            # Two polls (the grace look, then the look that ends it) and two
+            # check names per poll.
+            self.assertEqual(len(fetches), 4, f"expected two polls, got {fetches}")
+
+    def test_once_fails_immediately_when_no_check_exists(self):
+        # ONCE does not spend the grace.  A single look with no run is the
+        # missing outcome, and the gate says so instead of exiting 2.
+        sha = "0" * 40
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stub = GateStub(root)
+            stub.write_payload({"check_runs": []})
+            completed = self.run_gate(stub, sha, extra_env={
+                "ONCE": "1",
+                "MISSING_GRACE_SECONDS": "120",
+                "DEADLINE_SECONDS": "5100",
+            })
+            self.assertEqual(completed.returncode, 1, completed.stderr)
+            self.assertIn("Swift CI never started", completed.stdout)
+            self.assertIn("does not wait", completed.stdout)
+            self.assertNotIn("waited", completed.stdout)
+            self.assertNotIn("still pending", completed.stderr)
+            fetches = [call for call in stub.calls() if "check-runs" in call]
+            self.assertEqual(len(fetches), 2, f"ONCE looked more than once: {fetches}")
+
+    def test_a_sibling_check_keeps_a_missing_name_pending_until_the_deadline(self):
+        sha = "0" * 40
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stub = GateStub(root)
+            stub.write_payload({"check_runs": [
+                run_check(PACKAGE, "success", 1, details_url=job_url(4242, 1)),
+            ]})
+            completed = self.run_gate(stub, sha, extra_env={
+                "MISSING_GRACE_SECONDS": "0",
+                "DEADLINE_SECONDS": "3",
+            })
+            self.assertEqual(completed.returncode, 1, completed.stderr)
+            self.assertIn("Timed out", completed.stdout)
+            self.assertNotIn("Swift CI never started", completed.stdout)
+            self.assertEqual(stub.reruns(), [])
 
     def test_a_failed_replacement_does_not_spend_the_budget(self):
         sha = "0" * 40

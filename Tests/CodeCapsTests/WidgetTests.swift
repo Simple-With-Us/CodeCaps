@@ -555,6 +555,71 @@ final class WidgetTests: XCTestCase {
         XCTAssertTrue(intent.contains("WidgetSnapshotStore.readSnapshot()"))
     }
 
+    /// CC-227: malformed App Group JSON must fall through to sandbox stores;
+    /// only a decoded empty snapshot stops without resurrecting stale rows.
+    func testWidgetAppGroupSnapshotReadUsesSharedPolicy() throws {
+        let provider = try readSource(at: Self.repoRoot.appendingPathComponent("ios/CodeCapsCompanion/Widgets/WidgetDataProvider.swift"))
+        XCTAssertTrue(
+            provider.contains("AppGroupSnapshotReadPolicy.decision"),
+            "the widget must classify App Group reads through the shared policy"
+        )
+        XCTAssertTrue(
+            provider.contains("case .stopAuthoritativeEmpty:"),
+            "a valid empty snapshot must be authoritative"
+        )
+        XCTAssertTrue(
+            provider.contains("case .stopAuthoritativeContent:"),
+            "a valid non-empty snapshot must be authoritative"
+        )
+        // A failed App Group read used to return this tuple before any fallback.
+        // The same tuple is the honest empty state after every store has been tried,
+        // so the ban covers the App Group tier and the later stores, and the one
+        // allowed occurrence has to sit in the final empty state.
+        let appGroupMarker = "// 1. App Group container"
+        let sandboxMarker = "// 2. Sandbox Application Support"
+        let honestEmptyMarker = "// 5. Unconfigured / no data synced state"
+        let emptyReturn = "return ([], nil, true)"
+        guard
+            let appGroupStart = provider.range(of: appGroupMarker)?.lowerBound,
+            let sandboxStart = provider.range(of: sandboxMarker)?.lowerBound,
+            let honestEmptyStart = provider.range(of: honestEmptyMarker)?.lowerBound,
+            appGroupStart < sandboxStart,
+            sandboxStart < honestEmptyStart
+        else {
+            return XCTFail("App Group, sandbox, and the final empty state must stay in that order")
+        }
+        let appGroupTier = provider[appGroupStart..<sandboxStart]
+        XCTAssertTrue(
+            appGroupTier.contains("AppGroupSnapshotReadPolicy.decision"),
+            "the App Group tier must stay above the sandbox fallback"
+        )
+        XCTAssertFalse(
+            appGroupTier.contains(emptyReturn),
+            "decode failure must not blank the widget before probing fallbacks"
+        )
+        XCTAssertFalse(
+            provider[sandboxStart..<honestEmptyStart].contains(emptyReturn),
+            "a missed sandbox reading must keep probing the later stores"
+        )
+        XCTAssertEqual(
+            provider.components(separatedBy: emptyReturn).count - 1,
+            1,
+            "the blanking return belongs only to the final empty state"
+        )
+        XCTAssertTrue(
+            provider[honestEmptyStart...].contains(emptyReturn),
+            "an unconfigured widget still ends on the honest empty state"
+        )
+        XCTAssertTrue(
+            provider.contains("Read or decode failures fall through."),
+            "the widget must document fall-through on decode failure"
+        )
+        XCTAssertFalse(
+            provider.contains("platforms.isEmpty ? nil : platforms"),
+            "filtered-empty snapshots must stay authoritative, not fall through as decode failures"
+        )
+    }
+
     // MARK: - Copy
 
     /// "Active" overclaims: a tracked plan can be exhausted or unused and still

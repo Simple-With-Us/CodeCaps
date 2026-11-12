@@ -146,6 +146,8 @@ public struct CompanionContentView: View {
             showingSettings = true
         } label: {
             Image(systemName: "gearshape")
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
         }
         .accessibilityLabel("CodeCaps Settings")
     }
@@ -163,9 +165,9 @@ public struct CompanionContentView: View {
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 1) {
-                Text("Fleet Status")
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(.secondary)
+                Text("Your Plans")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(CompanionTheme.supporting)
                     .lineLimit(1)
                 Text("\(model.items.count) Platforms Monitored")
                     .font(.subheadline.weight(.semibold))
@@ -177,15 +179,14 @@ public struct CompanionContentView: View {
 
             if let updated = model.lastUpdated {
                 Text(UpdatedStamp.label(updated))
-                    .font(.caption2)
-                    .italic()
-                    .foregroundStyle(.secondary)
+                    .font(.caption)
+                    .foregroundStyle(CompanionTheme.supporting)
                     .lineLimit(1)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Fleet Status, \(model.items.count) platforms monitored")
+        .accessibilityLabel("Your Plans, \(model.items.count) platforms monitored")
     }
 
     // MARK: - Error Banner
@@ -217,7 +218,8 @@ public struct CompanionContentView: View {
                 .foregroundStyle(.secondary)
             Text("No Quota Report Yet")
                 .font(.headline)
-            Text("Point this app at your Mac's sync endpoint, or open CodeCaps on the Mac so it can share readings.")
+            Text("Open CodeCaps on your Mac so it can share readings." + sentenceGap
+                 + "Or add the share address in Settings.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -227,7 +229,7 @@ public struct CompanionContentView: View {
                 HStack(spacing: 8) {
                     ProgressView()
                         .progressViewStyle(.circular)
-                    Text("Refreshing Quotas...")
+                    Text("Refreshing…")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -324,13 +326,13 @@ public struct CompanionContentView: View {
                         Text(item.title)
                             .font(.system(size: 15, weight: .semibold))
                             .italic(shouldDimTitle)
-                            .foregroundStyle(shouldDimTitle ? Color.primary.opacity(0.45) : .primary)
+                            .foregroundStyle(shouldDimTitle ? CompanionTheme.supporting : .primary)
                     }
                     if duplicatedTitles.contains(item.title),
                        let subtitle = item.subtitle, !subtitle.isEmpty {
                         Text(subtitle)
                             .font(.system(size: 11))
-                            .foregroundStyle(shouldDimTitle ? Color.secondary.opacity(0.45) : .secondary)
+                            .foregroundStyle(shouldDimTitle ? CompanionTheme.supporting : .secondary)
                             .lineLimit(1)
                     }
                 }
@@ -444,10 +446,10 @@ public struct CompanionContentView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Waiting for a fresh reading")
                         .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(CompanionTheme.supporting)
                     Text("Last reading \(UpdatedStamp.label(lastReading))")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.tertiary)
+                        .font(.system(size: 12))
+                        .foregroundStyle(CompanionTheme.supporting)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 4)
@@ -689,17 +691,17 @@ public struct CompanionContentView: View {
 
     @ViewBuilder
     private var settingsSourcesSections: some View {
-        Section("Mac Sync Endpoint") {
+        Section("Share Address") {
             #if os(iOS)
-            TextField("Endpoint URL (https://...)", text: $model.syncEndpoint)
+            TextField("Share Address (https://...)", text: $model.syncEndpoint)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled(true)
             #else
-            TextField("Endpoint URL (https://...)", text: $model.syncEndpoint)
+            TextField("Share Address (https://...)", text: $model.syncEndpoint)
                 .autocorrectionDisabled(true)
             #endif
-            SecureField("Sync Bearer Token", text: $model.syncToken)
-            Button("Remove Token", role: .destructive) {
+            SecureField("Access Code", text: $model.syncToken)
+            Button("Remove Access Code", role: .destructive) {
                 model.removeSyncToken()
             }
             .accessibilityIdentifier("removeSyncToken")
@@ -714,8 +716,8 @@ public struct CompanionContentView: View {
 
         Section {
                     if itemsWithDuplicates.isEmpty {
-                        Text("No secondary or mirror sources detected." + sentenceGap
-                             + "All allowance windows are sourced directly from your primary sync feed.")
+                        Text("No extra readings yet." + sentenceGap
+                             + "Each plan shows the newest reading.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     } else {
@@ -728,7 +730,7 @@ public struct CompanionContentView: View {
                                     Spacer()
                                     if item.sourceCount > 1,
                                        item.hasSourceDiscrepancy(scope: .allSources) {
-                                        Label("Sources differ ≥ 10 pts", systemImage: "exclamationmark.triangle.fill")
+                                        Label("Readings Differ", systemImage: "exclamationmark.triangle.fill")
                                             .font(.system(size: 11, weight: .medium))
                                             .foregroundStyle(.orange)
                                     }
@@ -790,7 +792,7 @@ public struct CompanionContentView: View {
                         }
                     }
                 } header: {
-                    Text("Data Sources & Mirrors")
+                    Text("Other Readings")
                 } footer: {
                     Text("Readings from each source." + sentenceGap
                          + "When two sources that reported within 20 minutes differ by 10 points or more, the difference shows here." + sentenceGap
@@ -827,7 +829,7 @@ public struct CompanionContentView: View {
                             if model.isRefreshing {
                                 ProgressView()
                                     .progressViewStyle(.circular)
-                                Text("Refreshing Quotas...")
+                                Text("Refreshing…")
                                     .font(.system(size: 15, weight: .semibold))
                                     .foregroundStyle(.secondary)
                             } else {

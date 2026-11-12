@@ -772,6 +772,15 @@ final class CompanionModelTests: XCTestCase {
         XCTAssertTrue(source.contains("group.com.simplewithus.codecaps"))
     }
 
+    func testCompanionAppGroupSnapshotReadUsesSharedPolicy() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(source.contains("AppGroupSnapshotReadPolicy.decision"))
+        XCTAssertTrue(source.contains("case .stopAuthoritativeEmpty, .stopAuthoritativeContent:"))
+        XCTAssertTrue(source.contains("case .consultNextTier:"))
+        XCTAssertFalse(source.contains("guard let data = try? Data(contentsOf: sharedFile) else { return }"))
+        XCTAssertFalse(source.contains("malformed or empty copy means the source currently has"))
+    }
+
     func testMainScreenFleetStatusLivesInNavigationBar() throws {
         let source = try readCompanionContentViewSource()
         XCTAssertFalse(
@@ -814,6 +823,35 @@ final class CompanionModelTests: XCTestCase {
         XCTAssertTrue(source.contains("settingsAlarmsSections"))
         XCTAssertFalse(source.contains("Companion Settings"))
         XCTAssertFalse(source.contains(".presentationDetents"))
+        XCTAssertTrue(source.contains("Text(\"Your Plans\")"), "the navigation label is plain language")
+        XCTAssertFalse(source.contains("Text(\"Fleet Status\")"))
+        XCTAssertTrue(source.contains("Section(\"Share Address\")"))
+        XCTAssertFalse(source.contains("Section(\"Mac Sync Endpoint\")"))
+        XCTAssertTrue(source.contains("SecureField(\"Access Code\""))
+        XCTAssertTrue(
+            source.contains("Image(systemName: \"gearshape\")\n                .frame(width: 44, height: 44)"),
+            "the settings control meets a 44pt target"
+        )
+    }
+
+    func testPlainLanguageReplacesInternalLabels() throws {
+        let home = try readCompanionContentViewSource()
+        XCTAssertTrue(home.contains("Open CodeCaps on your Mac so it can share readings.\" + sentenceGap"))
+        XCTAssertTrue(home.contains("Text(\"Other Readings\")"))
+        XCTAssertFalse(home.contains("Data Sources & Mirrors"))
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let glance = try String(contentsOf: root.appendingPathComponent("Sources/CodeCaps/GlanceViews.swift"), encoding: .utf8)
+        XCTAssertTrue(glance.contains("Text(\"Share With Other Devices\")"))
+        XCTAssertFalse(glance.contains("Set Up Fleet Sync"))
+        XCTAssertTrue(glance.contains("from another device"))
+        let popup = try String(contentsOf: root.appendingPathComponent("Sources/CodeCaps/ExhaustionPopupView.swift"), encoding: .utf8)
+        XCTAssertTrue(popup.contains(".frame(width: 44, height: 44)"))
+        XCTAssertFalse(popup.contains(".frame(width: 28, height: 28)"))
+        let widgets = try String(contentsOf: root.appendingPathComponent("ios/CodeCapsCompanion/Widgets/WidgetViews.swift"), encoding: .utf8)
+        XCTAssertTrue(widgets.contains("No Readings Yet"))
+        XCTAssertFalse(widgets.contains("No Quotas Synced"))
+        XCTAssertFalse(widgets.contains("No quotas synced"))
     }
 
     func testPullToRefreshAndButtonResponsiveness() throws {
