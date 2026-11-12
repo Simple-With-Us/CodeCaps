@@ -5,8 +5,10 @@ import SwiftUI
 /// One selection type for the sidebar, the detail pane and every deep link from
 /// Glance, the app menu and the status menu.
 enum ConsolePage: Hashable {
+    case allPlatforms
     case platform(String)
     case runawayAlerts
+    case plugin(String)
     case settingsMenuBar
     case settingsPlatforms
     case settingsLogoStyle
@@ -18,15 +20,17 @@ enum ConsolePage: Hashable {
 
     var isSettings: Bool {
         switch self {
-        case .platform, .runawayAlerts: return false
+        case .allPlatforms, .platform, .runawayAlerts, .plugin: return false
         default: return true
         }
     }
 
     var storageKey: String {
         switch self {
+        case .allPlatforms: return "allPlatforms"
         case .platform(let providerKey): return "platform:" + providerKey
         case .runawayAlerts: return "runawayAlerts"
+        case .plugin(let pluginId): return "plugin:" + pluginId
         case .settingsMenuBar: return "settingsMenuBar"
         case .settingsPlatforms: return "settingsPlatforms"
         case .settingsLogoStyle: return "settingsLogoStyle"
@@ -40,6 +44,7 @@ enum ConsolePage: Hashable {
 
     static func fromStorageKey(_ value: String) -> ConsolePage? {
         switch value {
+        case "allPlatforms": return .allPlatforms
         case "runawayAlerts": return .runawayAlerts
         case "settingsMenuBar": return .settingsMenuBar
         case "settingsPlatforms": return .settingsPlatforms
@@ -50,6 +55,9 @@ enum ConsolePage: Hashable {
         case "settingsInfisical": return .settingsInfisical
         case "settingsAbout": return .settingsAbout
         default:
+            if value.hasPrefix("plugin:") {
+                return .plugin(String(value.dropFirst(7)))
+            }
             guard value.hasPrefix("platform:") else { return nil }
             return .platform(String(value.dropFirst(9)))
         }
@@ -58,7 +66,9 @@ enum ConsolePage: Hashable {
     /// Sidebar and toolbar label.  A platform page is titled by the model.
     var settingsTitle: String {
         switch self {
+        case .allPlatforms: return "All Platforms"
         case .runawayAlerts: return "Runaway Alerts"
+        case .plugin(let pluginId): return CodeCapsPlugin.named(pluginId)?.title ?? "Plugin"
         case .settingsMenuBar: return "Menu Bar & PiP"
         case .settingsPlatforms: return "Platforms"
         case .settingsLogoStyle: return "Logo Style"
@@ -73,7 +83,9 @@ enum ConsolePage: Hashable {
 
     var symbol: String {
         switch self {
+        case .allPlatforms: return "square.grid.2x2"
         case .runawayAlerts: return "flame.fill"
+        case .plugin(let pluginId): return CodeCapsPlugin.named(pluginId)?.symbol ?? "puzzlepiece.extension"
         case .settingsMenuBar: return "menubar.rectangle"
         case .settingsPlatforms: return "square.grid.2x2"
         case .settingsLogoStyle: return "photo.on.rectangle.angled"
@@ -89,6 +101,8 @@ enum ConsolePage: Hashable {
     static let settingsPages: [ConsolePage] = [
         .settingsMenuBar, .settingsPlatforms, .settingsLogoStyle, .settingsSourcesFleet, .settingsNotifications, .settingsAppearance, .settingsInfisical, .settingsAbout,
     ]
+
+    static let pluginPages: [ConsolePage] = CodeCapsPlugin.allCases.map { .plugin($0.id) }
 }
 
 struct AlertNavigation: Equatable {
@@ -182,6 +196,18 @@ final class ConsoleState: ObservableObject {
             awaitingInitialSelection = false
             return
         }
+        if page == .allPlatforms || page == .runawayAlerts {
+            pendingStoredKey = nil
+            awaitingInitialSelection = false
+            return
+        }
+        if case .plugin = page {
+            // A plugin page is local: it never waits on a quota read, and no
+            // source disappearing can invalidate it.
+            pendingStoredKey = nil
+            awaitingInitialSelection = false
+            return
+        }
         if page.isSettings && !awaitingInitialSelection { return }
         if sections.isEmpty && !readCompleted { return }
         isReconciling = true
@@ -262,6 +288,7 @@ struct ConsoleView: View {
     /// big display stays wide; a fresh install lands on
     /// `Metrics.sidebarWidthDefault`.
     @State private var sidebarWidth: CGFloat
+    @State private var query = ""
 
     init(model: MonitorModel, state: ConsoleState) {
         self.model = model
@@ -318,8 +345,14 @@ struct ConsoleView: View {
             }
             ScrollView {
                 switch state.page {
+                case .allPlatforms:
+                    AllPlatformsPage(model: model, state: state, query: query)
+                        .padding(Metrics.pagePadding)
                 case .runawayAlerts:
                     RunawayAlertsPage(model: model, state: state)
+                        .padding(Metrics.pagePadding)
+                case .plugin(let pluginId):
+                    MuseCodePluginPage(model: model, pluginId: pluginId)
                         .padding(Metrics.pagePadding)
                 case .platform(let key):
                     PlatformDetailPage(model: model, state: state, providerKey: key)
@@ -367,6 +400,22 @@ struct ConsoleView: View {
                 .frame(maxWidth: .infinity, alignment: .center)
                 .layoutPriority(1)
                 .truncationMode(.tail)
+
+            if state.page == .allPlatforms {
+                HStack(spacing: 5) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                    TextField("Find a platform", text: $query)
+                        .textFieldStyle(.plain)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 6))
+                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Theme.hairline))
+                .frame(width: 160)
+            }
 
             Spacer(minLength: 8)
 
@@ -450,9 +499,9 @@ struct ConsoleSidebar: View {
     @FocusState private var focusedPage: ConsolePage?
 
     private var allPages: [ConsolePage] {
-        var pages: [ConsolePage] = []
-        pages.append(.runawayAlerts)
+        var pages: [ConsolePage] = [.allPlatforms, .runawayAlerts]
         pages.append(contentsOf: model.displaySections.map { .platform($0.id) })
+        pages.append(contentsOf: ConsolePage.pluginPages)
         pages.append(contentsOf: ConsolePage.settingsPages)
         return pages
     }
@@ -477,6 +526,10 @@ struct ConsoleSidebar: View {
             // Drawing the highlight here settles both.
             List {
                 Section {
+                    sidebarRow(page: .allPlatforms) {
+                        Label("All Platforms", systemImage: "square.grid.2x2")
+                            .font(.system(size: 13, weight: .medium))
+                    }
                     sidebarRow(page: .runawayAlerts) {
                         HStack(spacing: 8) {
                             Image(systemName: "flame.fill")
@@ -505,6 +558,31 @@ struct ConsoleSidebar: View {
                     }
                 } header: {
                     Eyebrow("QUOTAS")
+                }
+                Section {
+                    ForEach(ConsolePage.pluginPages, id: \.self) { page in
+                        sidebarRow(page: page) {
+                            HStack(spacing: 8) {
+                                Image(systemName: page.symbol)
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(model.museCodeBurnAlert == nil ? Theme.ink : Theme.warning)
+                                    .frame(width: 18)
+                                Text(page.settingsTitle)
+                                    .font(.system(size: 13, weight: .medium))
+                                Spacer(minLength: 4)
+                                if model.museCodeBurnAlert != nil {
+                                    Text("1")
+                                        .font(.system(size: 10, weight: .bold))
+                                        .foregroundStyle(.white)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(Theme.warning, in: Capsule())
+                                }
+                            }
+                        }
+                    }
+                } header: {
+                    Eyebrow("PLUGINS")
                 }
                 Section {
                     ForEach(ConsolePage.settingsPages, id: \.self) { page in
@@ -612,7 +690,7 @@ struct ConsoleSidebar: View {
                     .foregroundStyle(Theme.accent)
                     .accessibilityLabel("Reset alarm on")
             }
-            if model.issues[row.providerKey] != nil {
+            if model.rowIssue(for: row.providerKey) != nil {
                 Image(systemName: "exclamationmark.circle")
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.warning)
@@ -654,6 +732,185 @@ struct ConsoleSidebar: View {
     }
 }
 
+// MARK: - All platforms
+
+struct AllPlatformsPage: View {
+    @ObservedObject var model: MonitorModel
+    @ObservedObject var state: ConsoleState
+    let query: String
+
+    private var matching: [DisplaySection] {
+        model.displaySections.filter {
+            query.isEmpty || $0.title.localizedCaseInsensitiveContains(query)
+        }
+    }
+    private var localSections: [DisplaySection] {
+        matching.filter { model.originByProvider[$0.providerKey] != .fleet }
+    }
+    /// Fleet rows, filtered by the same search box, grouped by machine.
+    private var fleetGroups: [FleetGroup] {
+        model.fleetGroups.map { group in
+            FleetGroup(id: group.id,
+                       title: group.title,
+                       windowCount: group.windowCount,
+                       rows: group.rows.filter { query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) })
+        }
+        .filter { !$0.rows.isEmpty }
+    }
+    private var compact: Bool { model.viewLayout == .summary }
+    private var columns: [GridItem] { [GridItem(.adaptive(minimum: compact ? 240 : 290), alignment: .top)] }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            tiles
+            if let error = model.serverError { errorBanner(error) }
+
+            if !model.localEnabled && !model.serverEnabled {
+                emptyState
+            } else {
+                HStack {
+                    Text("This Mac").font(.system(size: 13, weight: .semibold))
+                    Spacer()
+                }
+                LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
+                    ForEach(localSections) { row in
+                        card(row, origin: .local)
+                    }
+                }
+                if model.serverEnabled { fleetGroup }
+            }
+
+            Text("Each limit is separate." + sentenceGap
+                 + "Antigravity lists its model groups on their own rows.")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var tiles: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), alignment: .top)], spacing: 12) {
+            SummaryTile(label: "Reporting",
+                        value: model.lastChecked == nil ? "—" : "\(model.reportingCount) of \(model.sections.count)",
+                        symbol: "antenna.radiowaves.left.and.right",
+                        detail: "reporting")
+            SummaryTile(label: "Near Cap",
+                        value: model.lastChecked == nil ? "—" : "\(model.nearCapCount)",
+                        symbol: "gauge.with.dots.needle.100percent",
+                        detail: "at 20% or less")
+            SummaryTile(label: "Next Reset",
+                        value: model.nextReset.map { glanceResetCountdown($0, now: model.now) } ?? "—",
+                        symbol: "clock",
+                        detail: nextResetDetail)
+            SummaryTile(label: "Other Devices",
+                        value: model.serverEnabled ? "\(model.fleetWindowCount) readings" : "Off",
+                        symbol: "arrow.up.arrow.down.circle",
+                        detail: model.serverEnabled
+                            ? (model.lastPullTime.map { "updated \($0.formatted(date: .omitted, time: .shortened))" } ?? "not loaded yet")
+                            : "set up sharing")
+        }
+    }
+
+    private var nextResetDetail: String {
+        guard let next = model.nextReset else { return "no reset reported" }
+        for row in model.displaySections {
+            for snapshot in row.section.windows where snapshot.resetAt == next && !row.isMasked(snapshot) {
+                return "\(row.title), \(windowCadenceName(snapshot.window))"
+            }
+        }
+        return next.formatted(date: .omitted, time: .shortened)
+    }
+
+    private func errorBanner(_ error: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(Theme.warning)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Could Not Load Other Devices").font(.system(size: 12, weight: .semibold))
+                Text(error).font(.system(size: 11)).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("Open Dashboard") { state.page = .settingsSourcesFleet }
+                .help("Open Dashboard")
+                .accessibilityLabel("Open Dashboard")
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.warning.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Theme.warning.opacity(0.35)))
+    }
+
+    private var emptyState: some View {
+        ContentUnavailableView {
+            Label("Connect a Quota Source", systemImage: "link")
+        } description: {
+            Text("CodeCaps reads the AI plans already signed in on this Mac."
+                 + sentenceGap + "You can also show plans from your other devices.")
+        } actions: {
+            HStack(spacing: 10) {
+                Button("Use This Mac") {
+                    model.setLocalEnabled(true)
+                    state.page = .settingsSourcesFleet
+                }
+                .buttonStyle(.borderedProminent)
+                Button("Show Other Devices") { state.page = .settingsSourcesFleet }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var fleetGroup: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Rectangle().fill(Theme.fleet).frame(width: 2)
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("Other Devices").font(.system(size: 13, weight: .semibold))
+                    Spacer()
+                    Text(model.lastPullTime.map { "Updated \($0.formatted(date: .omitted, time: .shortened))" } ?? "Not loaded yet")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                if fleetGroups.isEmpty {
+                    Text("No other machines have reported yet.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(fleetGroups) { group in
+                        HStack {
+                            Text(group.title).font(.system(size: 12, weight: .semibold))
+                            Spacer()
+                            Text("\(group.windowCount) reading\(group.windowCount == 1 ? "" : "s")")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                        }
+                        LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
+                            ForEach(group.rows) { row in
+                                card(row, origin: .fleet)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func card(_ row: DisplaySection, origin: QuotaOrigin) -> some View {
+        PlatformCard(row: row,
+                     now: model.now,
+                     issue: origin == .fleet ? nil : model.rowIssue(for: row.providerKey),
+                     compact: compact,
+                     wide: false,
+                     origin: origin,
+                     customInfo: model.platformCustomInfo[row.providerKey],
+                     markStyle: model.markStyle(for: row.id),
+                     isAlarmArmed: model.isAlarmEnabled(for: row.id),
+                     onToggleAlarm: model.alarmsAll ? nil : { model.toggleAlarm(for: row.id) },
+                     onOpenSettings: model.consentNeeded.contains(row.providerKey)
+                        ? { state.page = .settingsSourcesFleet } : nil)
+    }
+}
+
 // MARK: - Single platform
 
 struct PlatformDetailPage: View {
@@ -689,7 +946,7 @@ struct PlatformDetailPage: View {
                 UsageHistoryView(model: model, state: state, row: row)
                 PlatformCard(row: row,
                              now: model.now,
-                             issue: model.issues[row.providerKey],
+                             issue: model.rowIssue(for: row.providerKey),
                              compact: false,
                              wide: true,
                              origin: model.originByProvider[row.providerKey] ?? .local,
@@ -734,7 +991,9 @@ struct PlatformDetailPage: View {
                 Divider()
                 Toggle("Display Plan, Cost and Renewal", isOn: $showCostAndRenewal)
                     .onChange(of: showCostAndRenewal) { _, _ in save() }
-                field("Plan Name", "e.g. Max 20x, Pro", $planName, disabled: !showCostAndRenewal)
+                field("Plan Name", "e.g. Max 20x, Pro", $planName,
+                      caption: planNameCaption, disabled: !showCostAndRenewal)
+                planOverrideRow
                 field("Cost", "e.g. $20/mo", $costUsd, disabled: !showCostAndRenewal)
                 field("Renewal Date", "e.g. Oct 12 or Monthly", renewalField,
                       caption: renewalDate.isEmpty && !suggestedRenewal.isEmpty
@@ -745,6 +1004,72 @@ struct PlatformDetailPage: View {
             .padding(16)
             .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10))
             .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Theme.hairline))
+        }
+    }
+
+    /// The provider-reported plan beside the owner's typed one, so a mismatch
+    /// can be resolved where the name is set instead of only in the popup.
+    private var detectedPlan: String? {
+        let key = row?.providerKey ?? customInfoKey
+        let entered = planName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let candidates = model.detectedPlanWindows
+            .filter { $0.canonicalProviderKey == key }
+            .compactMap { $0.planName?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        //  The page must name the same plan the popup warns about:  prefer
+        //  the window that actually disagrees with the entered value, as
+        //  PlanWarningCycle.warnings does.
+        return candidates.first(where: {
+            PlanComparison.disagrees(detected: $0, entered: entered, providerKey: key)
+        }) ?? candidates.first
+    }
+
+    private var planMismatch: Bool {
+        guard let detected = detectedPlan else { return false }
+        let entered = planName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !entered.isEmpty else { return false }
+        let key = row?.providerKey ?? customInfoKey
+        //  An accepted pair is resolved, not a live mismatch:  the page
+        //  stops offering a resolution for a choice the owner already made.
+        guard !PlanMismatchSuppression.isAccepted(providerKey: key, entered: entered, detected: detected)
+        else { return false }
+        return PlanComparison.disagrees(detected: detected, entered: entered,
+                                        providerKey: key)
+    }
+
+    private var planNameCaption: String? {
+        guard let detected = detectedPlan else { return nil }
+        if planMismatch {
+            return "Detected: \(detected)." + sentenceGap + "Does not match — fix the name or the popup keeps appearing."
+        }
+        return "Detected: \(detected)."
+    }
+
+    /// One-click resolution where the name is typed.  "Use detected" fills
+    /// the field; "Keep mine" records the exact pair so an explicit choice
+    /// never warns again.  Either edit re-arms the warning for new values.
+    @ViewBuilder
+    private var planOverrideRow: some View {
+        if let detected = detectedPlan, showCostAndRenewal,
+           (planName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || planMismatch) {
+            HStack(spacing: 10) {
+                Text("").frame(width: 150, alignment: .leading).accessibilityHidden(true)
+                Button("Use Detected") {
+                    planName = detected
+                    save()
+                }
+                .help("Replace the plan name with what the provider reports.")
+                .accessibilityLabel("Use detected plan name")
+                if planMismatch {
+                    Button("Keep Mine") {
+                        PlanMismatchSuppression.accept(providerKey: row?.providerKey ?? customInfoKey,
+                                                       entered: planName, detected: detected)
+                    }
+                    .help("Keep the entered name and stop warning about this exact mismatch.")
+                    .accessibilityLabel("Keep my plan name, stop warning")
+                }
+                Spacer(minLength: 0)
+            }
         }
     }
 

@@ -86,25 +86,27 @@ final class TokenStoreTests: XCTestCase {
 
     // MARK: Whose items
 
-    /// Only CodeCaps's own two items are ever named.  Claude Code's saved login
+    /// Only CodeCaps's own three items are ever named.  Claude Code's saved login
     /// is read by `ClaudeCredentialSource` through `/usr/bin/security` and must
     /// never reach this store.
     func testOnlyCodeCapsItemsAreOwn() {
         XCTAssertTrue(TokenStore.isOwnService(TokenStore.readService))
         XCTAssertTrue(TokenStore.isOwnService(TokenStore.syncService))
+        XCTAssertTrue(TokenStore.isOwnService(TokenStore.museCodeIngestService))
         XCTAssertFalse(TokenStore.isOwnService("Claude Code-credentials"))
         XCTAssertFalse(TokenStore.isOwnService(""))
     }
 
     /// Matching on the suffix would accept any app's `.sync-token`, and a
-    /// `.dev` build would accept the release app's names.  Only this build's
-    /// own two names count.
+    /// `.dev` build would accept the release app's names.  Only this build's
+    /// own explicit names count.
     func testServicesThatMerelyEndTheSameWayAreNotOwn() {
         XCTAssertFalse(TokenStore.isOwnService("com.other.app.sync-token"))
         XCTAssertFalse(TokenStore.isOwnService("com.other.app.read-token"))
         XCTAssertFalse(TokenStore.isOwnService(TokenStore.readService + ".extra"))
         XCTAssertFalse(TokenStore.isOwnService(TokenStore.serviceName(suffix: "read-token", bundleIdentifier: "com.other.app")))
-        XCTAssertEqual(TokenStore.ownServices, [TokenStore.readService, TokenStore.syncService])
+        XCTAssertEqual(TokenStore.ownServices,
+                       [TokenStore.readService, TokenStore.syncService, TokenStore.museCodeIngestService])
     }
 
     // MARK: Failure wording

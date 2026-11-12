@@ -43,6 +43,19 @@ public enum ClaudeOAuthParser {
         return true
     }
 
+    /// Whether Claude Code may be asked to refresh after Anthropic rejected the
+    /// access token on a usage call.  Unlike `isRenewable`, the access token
+    /// may still be unexpired locally when the server rotated or revoked it
+    /// early; a non-empty refresh token is enough to try one renewal run.
+    public static func canRenewAfterUsageRejection(in root: [String: Any], now: Date) -> Bool {
+        let value = record(root["claudeAiOauth"])
+        guard firstString(value, ["accessToken", "access_token"]) != nil,
+              firstString(value, ["refreshToken", "refresh_token"]) != nil else { return false }
+        if let refreshExpiry = firstTimestamp(value, ["refreshTokenExpiresAt", "refresh_token_expires_at"]),
+           let refreshDate = parseDate(refreshExpiry), refreshDate <= now { return false }
+        return true
+    }
+
     /// Decodes the raw JSON bytes of a credentials file (or a Keychain
     /// payload) into a dictionary, returning `nil` for anything that is not
     /// valid JSON.  Caps the input size so a hostile file cannot make the

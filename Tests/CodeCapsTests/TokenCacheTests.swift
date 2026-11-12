@@ -25,7 +25,7 @@ final class TokenCacheTests: XCTestCase {
         XCTAssertEqual(status, .cached)
     }
 
-    /// Each token is its own entry, so the Read Token and the Ingest Token are
+    /// Each token is its own entry, so the Read Token and the Push Token are
     /// each read once, and a new endpoint is read once too.
     func testEachTokenIsReadOncePerLaunch() async {
         let keychain = FakeKeychain(stored: sentinel)

@@ -134,6 +134,14 @@ public enum CustomMarkMode: String, CaseIterable, Identifiable, Codable, Sendabl
 /// deliberately use a neutral SF Symbol instead of guessing at a brand.
 public struct PlatformLogo: View {
     @Environment(\.colorScheme) private var colorScheme
+    /// Re-probe count for a mark that failed to load.  A missing mark can be
+    /// transient -- the resource bundle can arrive after the first draw (an
+    /// install swap, an update relaunch, a custom mark the owner imports while
+    /// the panel is open) -- and SwiftUI will never re-run this body on its own
+    /// while every input stays equal, so a failed first draw used to stick for
+    /// the life of the view hierarchy.  Bumping this re-evaluates the body and
+    /// re-runs the load until the mark lands.
+    @State private var missingMarkRetry = 0
     public let providerKey: String
     /// Server-supplied mark asset hint (from the manifest's `iconHint`).  When
     /// non-nil, `PlatformLogoImage` looks it up first and only falls back to
@@ -143,6 +151,7 @@ public struct PlatformLogo: View {
     public let style: MarkStyle
     public let customMode: CustomMarkMode?
     public let tint: Color?
+    public let forceMonochrome: Bool
 
     /// `style` deliberately has **no default**.  A call site that forgets it
     /// used to compile and silently draw a monochrome template — which is how
@@ -155,7 +164,9 @@ public struct PlatformLogo: View {
                 style: MarkStyle,
                 customMode: CustomMarkMode? = nil,
                 tint: Color? = nil,
-                iconHint: String? = nil) {
+                iconHint: String? = nil,
+                forceMonochrome: Bool = false) {
+        self.forceMonochrome = forceMonochrome
         self.providerKey = providerKey
         self.iconHint = iconHint
         self.size = size
@@ -172,6 +183,7 @@ public struct PlatformLogo: View {
     /// style, so it follows Light and Dark instead of drawing black on black.
     /// Custom marks honor the user's customMode preference (Color vs Template).
     private var rendersAsTemplate: Bool {
+        if forceMonochrome { return true }
         if style == .custom {
             return effectiveCustomMode == .template
         }
@@ -203,6 +215,16 @@ public struct PlatformLogo: View {
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .foregroundStyle(.secondary)
+                    .task(id: missingMarkRetry) {
+                        // Quickly at first, then once a minute: the common case
+                        // is a bundle that lands seconds after the first draw.
+                        // A genuinely absent mark costs one cheap filesystem
+                        // probe per interval and the row is never disturbed.
+                        let delay = PlatformLogoImage.missingMarkRetryDelay(forAttempt: missingMarkRetry)
+                        try? await Task.sleep(nanoseconds: delay)
+                        guard !Task.isCancelled else { return }
+                        missingMarkRetry += 1
+                    }
             }
         }
         .frame(width: size, height: size)
@@ -250,23 +272,33 @@ private static let resourceNames: [String: String] = [
     "claude": "claude",
     "openai": "openai",
     "codex": "openai",
-    "google-antigravity": "gemini",
-    "antigravity": "gemini",
+    "google-antigravity": "antigravity",
+    "antigravity": "antigravity",
     // The two Antigravity pools are told apart by their mark as well as
-    // their name: the Gemini pool wears the colour Gemini star, and the
-    // Third-Party pool the same star as a solid one-colour glyph.
+    // their name: Gemini wears its star; Third-Party uses the supplied
+    // Antigravity arch, with color and light/dark versions.
     "google-antigravity:gemini": "gemini-color",
-    "google-antigravity:third-party": "gemini-mono",
+    "google-antigravity:third-party": "antigravity",
     "gemini": "gemini",
-    "xai": "grok",
+    "xai": "xai",
+    "x-ai": "xai",
     "grok": "grok",
     "grok-cli": "grok",
     "grok-bot": "grok-bot",
     "minimax": "minimax",
+    "kimi": "kimi",
+    // Z.ai is the brand; zcode remains the quota provider's stable key.
+    "zcode": "zai",
+    "z.ai": "zai",
+    "z-ai": "zai",
+    "zai": "zai",
     "muse": "muse",
-    "muse-assist": "muse-assist",
+    // Muse Assist ships byte-identical artwork to Muse; one base serves both.
+    "muse-assist": "muse",
     "muse-code": "muse-code",
     "cursor": "cursor",
+    "github-copilot": "copilot",
+    "copilot": "copilot",
 ]
 
 /// The file a style and appearance ask for, or `nil` when the mark is absent.
@@ -280,7 +312,15 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
     /// Return the bundled asset for `providerKey`, or `nil` if no artwork ships.
     /// The standard cache preserves brand colors; the template cache marks the
     /// image as a template so it adapts to Light/Dark and menu bar selection.
+    /// Guards cachedBundle and lastFailure:  preloadBundledMarks() warms the
+    /// caches on a background queue while the main thread reads, and an
+    /// unguarded String?/Bundle? write can tear.
+    private static let stateLock = NSLock()
     private static var cachedBundle: Bundle? = nil
+    /// Bumped by every invalidation.  A resolve that started before an
+    /// invalidation must not pin its result afterwards, or the clear is
+    /// silently undone.
+    private static var bundleGeneration: UInt64 = 0
     /// A latch that only remembers success is a latch that can be poisoned
     /// before the bundle is reachable: the first call can land while the
     /// resource bundle is not yet resolvable, and every later call would then
@@ -292,19 +332,45 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
     /// anything in the PiP, which looked like a broken artwork cache but was a
     /// bundle that resolved and could not deliver.
     private static func currentBundle() -> Bundle? {
-        if let cached = cachedBundle { return cached }
+        stateLock.lock()
+        if let cached = cachedBundle { stateLock.unlock(); return cached }
+        let generation = bundleGeneration
+        stateLock.unlock()
+        //  Resolution is kept outside the lock:  it runs arbitrary bundle
+        //  code and only the pin needs guarding.
         if let b = ResourceBundle.resolved ?? ResourceBundle.resolveBundle() {
-            cachedBundle = b
+            stateLock.lock()
+            if generation == bundleGeneration { cachedBundle = b }
+            stateLock.unlock()
             return b
         }
         return nil
+    }
+
+    /// Decode every bundled mark once, on a background queue, so the first
+    /// draw of every surface finds a warm cache instead of paying per-row
+    /// filesystem probes while the window is already on screen.  Custom
+    /// marks load from disk and were never slow; this closes that gap for
+    /// the bundled set.
+    public static func preloadBundledMarks() {
+        for key in resourceNames.keys {
+            for style in [MarkStyle.standard, .template] {
+                for isDark in [false, true] {
+                    _ = bundledImage(providerKey: key, style: style, isDark: isDark)
+                }
+            }
+        }
+        _ = BrandMarkImage.asset
     }
 
     /// Forget every cached bundle and mark.  Called when something changes that
     /// could have invalidated them — a custom mark import, or a resource bundle
     /// that appears after the first lookup.
     public static func invalidateCaches() {
+        stateLock.lock()
+        bundleGeneration &+= 1
         cachedBundle = nil
+        stateLock.unlock()
         standardCache.removeAllObjects()
         templateCache.removeAllObjects()
         menuBarCache.removeAllObjects()
@@ -317,8 +383,10 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
     private static var lastFailure: String? = nil
 
     private static func noteFailure(_ reason: String) {
-        guard lastFailure != reason else { return }
+        stateLock.lock()
+        guard lastFailure != reason else { stateLock.unlock(); return }
         lastFailure = reason
+        stateLock.unlock()
         NSLog("CodeCaps: provider mark unavailable — %@", reason)
     }
 
@@ -328,34 +396,44 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
         // previously cached mark for the same provider key, and appearance must
         // never serve a Light silhouette onto a Dark surface (or the reverse).
         let hintName = iconHint?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let stem = (hintName?.isEmpty == false) ? "\(key)|\(hintName!)" : (key as String)
-        let cacheKey = "\(stem)|v2|\(style.rawValue)|\(isDark ? "dark" : "light")" as NSString
         let cache = (style == .standard) ? standardCache : templateCache
-        if let cached = cache.object(forKey: cacheKey) { return cached }
         // Server-first: try the manifest-supplied hint name first; fall back to
         // the built-in map when the hint does not resolve to a file, so a bad
         // hint can never blank a mark the map would have found.
-        let hintResource: String? = hintName.flatMap { name in
+        let hintBase = hintName.flatMap { name -> String? in
             guard !name.isEmpty else { return nil }
-            // Known provider keys are base names ("claude"), not filenames.
-            // Route them through variantFile so we ask for claude-color.png
-            // (or -light/-dark) instead of looking up a file named "claude".
-            if let base = resourceNames[name] {
-                return variantFile(base: base, style: style, isDark: isDark)
-            }
-            return "\(name)-color.png"
+            return resourceNames[name] ?? name
         }
-        let mapResource: String? = {
-            let base = resourceNames[key as String] ?? resourceNames[platformKey(of: key as String)]
-            return base.flatMap { variantFile(base: $0, style: style, isDark: isDark) }
-        }()
-        for filename in [hintResource, mapResource].compactMap({ $0 }) {
+        let mappedBase = resourceNames[key as String] ?? resourceNames[platformKey(of: key as String)]
+        // A hint that resolves to the same artwork as the built-in map shares
+        // the map's cache entry, so launch preloading (which cannot know the
+        // manifest's hints) still warms the first draw.
+        let stem = (hintBase != nil && hintBase != mappedBase) ? "\(key)|\(hintName!)" : (key as String)
+        let cacheKey = "\(stem)|v2|\(style.rawValue)|\(isDark ? "dark" : "light")" as NSString
+        if let cached = cache.object(forKey: cacheKey) { return cached }
+        var filenames: [String] = []
+        for base in [hintBase, mappedBase].compactMap({ $0 }) {
+            for filename in bundledFilenames(base: base, style: style, isDark: isDark) where !filenames.contains(filename) {
+                filenames.append(filename)
+            }
+        }
+        for filename in filenames {
             if let image = imageFromBundle(filename: filename, key: key, cacheKey: cacheKey, cache: cache, style: style) {
                 return image
             }
         }
         return nil
     }
+    /// A missing appearance variant should not hide a usable brand mark.
+    /// Template rendering can tint the colour mark's alpha on either surface.
+    static func bundledFilenames(base: String, style: MarkStyle, isDark: Bool) -> [String] {
+        var names: [String] = []
+        for name in [variantFile(base: base, style: style, isDark: isDark), "\(base)-color.png", "\(base).png"].compactMap({ $0 }) where !names.contains(name) {
+            names.append(name)
+        }
+        return names
+    }
+
     private static func imageFromBundle(filename: String, key: NSString, cacheKey: NSString, cache: NSCache<NSString, NSImage>, style: MarkStyle) -> NSImage? {
         // Walk EVERY candidate, decoding as we go, and take the first that
         // yields pixels.
@@ -432,7 +510,16 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
     /// Claude and the colour Gemini star keep their brand colour.
     public static func isMonochromeMark(_ providerKey: String) -> Bool {
         let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return monochromeKeys.contains(key)
+        // Pool-scoped keys ("github-copilot:premium") classify by platform,
+        // matching the artwork lookup below.
+        return monochromeKeys.contains(key) || monochromeKeys.contains(platformKey(of: key))
+    }
+
+    /// Marks that must always render in brand colour (orange Claude starburst,
+    /// colour Gemini star, etc.), never as a black template silhouette.
+    public static func requiresBrandColorMark(_ providerKey: String) -> Bool {
+        let key = platformKey(of: providerKey)
+        return key == "anthropic" || key == "claude"
     }
 
     /// One-colour marks that draw pure black on Light and pure white on Dark
@@ -447,8 +534,8 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
     private static let solidToneKeys: Set<String> = ["google-antigravity:third-party"]
 
     private static let monochromeKeys: Set<String> = [
-        "grok-bot", "google-antigravity:third-party",
-        "openai", "codex", "cursor", "minimax", "xai", "grok", "grok-cli",
+        "grok-bot", "openai", "codex", "cursor", "xai", "x-ai", "grok", "grok-cli",
+        "github-copilot", "copilot",
     ]
 
     /// Presentation mode for a user-supplied custom mark.  Defaults to `.color`
@@ -611,7 +698,10 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
         // pinned bundle gets re-resolved too: it may have been resolved before
         // the bundle existed, and that stale pin is what leaves every bundled
         // mark drawing as a fallback for the rest of the process.
+        stateLock.lock()
+        bundleGeneration &+= 1
         cachedBundle = nil
+        stateLock.unlock()
         standardCache.removeObject(forKey: key as NSString)
         templateCache.removeObject(forKey: key as NSString)
         for style in MarkStyle.allCases {
@@ -658,6 +748,17 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
     /// Fleet-wide rule: never use lookalike SF symbols to disguise missing marks.
     public static func fallbackSymbolName(for providerKey: String) -> String {
         "questionmark.square.dashed"
+    }
+
+    /// Delay before re-probing a mark that failed to load, by attempt number:
+    /// the first three tries come fast (a bundle that lands seconds after the
+    /// first draw should not leave placeholder glyphs lingering), then five
+    /// seconds for the install/update window, then once a minute so a mark
+    /// that appears later — a custom import, a late-mounted bundle — still
+    /// heals without a relaunch.
+    public static func missingMarkRetryDelay(forAttempt attempt: Int) -> UInt64 {
+        if attempt < 3 { return 1_000_000_000 }
+        return attempt < 12 ? 5_000_000_000 : 60_000_000_000
     }
 }
 

@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 public enum QuotaSyncFormat: String, CaseIterable, Identifiable, Codable, Sendable {
     case usageMonitorV2 = "usage_monitor_v2"
@@ -29,6 +30,7 @@ public struct QuotaPublishResult: Sendable, Equatable {
 public enum QuotaPublisherError: Error, Equatable, Sendable, LocalizedError {
     case invalidEndpoint
     case emptyWindows
+    case noPublishableWindows
     case unauthorized
     case httpStatus(Int, String?)
     case timedOut
@@ -41,8 +43,10 @@ public enum QuotaPublisherError: Error, Equatable, Sendable, LocalizedError {
             return "The sync endpoint URL is invalid or not allowed (must be HTTPS or localhost)."
         case .emptyWindows:
             return "No quota windows to publish."
+        case .noPublishableWindows:
+            return "No quota windows with a known remaining percentage to publish."
         case .unauthorized:
-            return "Unauthorized (HTTP 401)." + sentenceGap + "Check your Ingest Token."
+            return "Unauthorized (HTTP 401)." + sentenceGap + "Check your Push Token."
         case let .httpStatus(status, detail):
             if let detail, !detail.isEmpty {
                 return "Server returned HTTP \(status): \(detail)"
@@ -61,7 +65,7 @@ public enum QuotaPublisherError: Error, Equatable, Sendable, LocalizedError {
 public actor QuotaPublisher {
     /// The app-level producer namespace.  Ownership of a pulled reading is
     /// determined by producerInstanceId, never by this shared app name alone.
-    public static let producerId = "codecaps"
+    public static let producerId = QuotaWindowVocabulary.localProducerId
 
     /// Pre-rename producer labels remain readable as unidentified machines.
     public static let legacyProducerAliases: [String] = ["agent-bar"]
@@ -111,16 +115,24 @@ public actor QuotaPublisher {
         guard !windows.isEmpty else {
             throw QuotaPublisherError.emptyWindows
         }
+        let windows = windows.map { $0.filledInstallationProvenance() }
 
         let bodyData: Data
+        let eventCount: Int
         let now = Date()
         let occurredAtIso = ISO8601DateFormatter().string(from: now)
 
         switch format {
         case .usageMonitorV2:
-            bodyData = try buildUsageMonitorV2Payload(windows: windows, occurredAtIso: occurredAtIso, machineName: machineName)
+            let payload = try makeUsageMonitorV2Payload(windows: windows, occurredAtIso: occurredAtIso, machineName: machineName)
+            guard payload.eventCount > 0 else {
+                throw QuotaPublisherError.noPublishableWindows
+            }
+            bodyData = payload.data
+            eventCount = payload.eventCount
         case .genericWebhook:
             bodyData = try buildGenericWebhookPayload(windows: windows, occurredAtIso: occurredAtIso, machineName: machineName)
+            eventCount = windows.count
         }
 
         var request = URLRequest(url: endpoint)
@@ -144,6 +156,11 @@ public actor QuotaPublisher {
             }
 
             if (200..<300).contains(http.statusCode) {
+                if format == .usageMonitorV2 {
+                    let acknowledgment = try validateUsageMonitorAcknowledgment(data, eventCount: eventCount)
+                    let message = "Synced \(acknowledgment.received) quotas (\(acknowledgment.persisted) persisted, \(acknowledgment.duplicates) duplicates, \(acknowledgment.pruned) pruned)."
+                    return QuotaPublishResult(statusCode: http.statusCode, count: eventCount, message: message)
+                }
                 var message = "Pushed \(windows.count) quota windows successfully."
                 if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                     if let persisted = json["persisted"] as? Int, let received = json["received"] as? Int {
@@ -170,45 +187,107 @@ public actor QuotaPublisher {
         }
     }
 
+    private struct UsageMonitorAcknowledgment: Decodable {
+        let ok: Bool
+        let schemaVersion: Int
+        let received: Int
+        let persisted: Int
+        let duplicates: Int
+        let pruned: Int
+        let rejected: Int
+    }
+
+    private func validateUsageMonitorAcknowledgment(_ data: Data, eventCount: Int) throws -> UsageMonitorAcknowledgment {
+        // Typed decoding rejects booleans, strings, fractions and out-of-range
+        // counters instead of Foundation's permissive NSNumber bridging.
+        guard let acknowledgment = try? JSONDecoder().decode(UsageMonitorAcknowledgment.self, from: data),
+              acknowledgment.ok, acknowledgment.schemaVersion == 2 else {
+            throw QuotaPublisherError.serverError("Usage Monitor returned an invalid v2 acknowledgment.")
+        }
+        let counts = [acknowledgment.persisted, acknowledgment.duplicates, acknowledgment.pruned, acknowledgment.rejected]
+        guard acknowledgment.received >= 0, counts.allSatisfy({ $0 >= 0 }) else {
+            throw QuotaPublisherError.serverError("Usage Monitor returned invalid acknowledgment counts.")
+        }
+        guard acknowledgment.received == eventCount else {
+            throw QuotaPublisherError.serverError("Usage Monitor acknowledged \(acknowledgment.received) quota events; the request contained \(eventCount).")
+        }
+        // Subtract from the bounded sent count, so hostile counts cannot
+        // overflow while checking the complete disposition of the batch.
+        var unaccounted = acknowledgment.received
+        for count in counts {
+            guard count <= unaccounted else {
+                throw QuotaPublisherError.serverError("Usage Monitor acknowledgment counts do not add up to the received total.")
+            }
+            unaccounted -= count
+        }
+        guard unaccounted == 0 else {
+            throw QuotaPublisherError.serverError("Usage Monitor acknowledgment counts do not add up to the received total.")
+        }
+        guard acknowledgment.rejected == 0 else {
+            // Include only validated counters, never raw server error details.
+            throw QuotaPublisherError.serverError("Usage Monitor rejected \(acknowledgment.rejected) of \(acknowledgment.received) quota events (\(acknowledgment.persisted) persisted, \(acknowledgment.duplicates) duplicates, \(acknowledgment.pruned) pruned).")
+        }
+        return acknowledgment
+    }
+
     public nonisolated func buildUsageMonitorV2Payload(windows: [QuotaWindow], occurredAtIso: String, machineName: String? = nil, producerInstanceId: String = QuotaPublisher.producerInstanceId) throws -> Data {
+        try makeUsageMonitorV2Payload(windows: windows, occurredAtIso: occurredAtIso, machineName: machineName, producerInstanceId: producerInstanceId).data
+    }
+
+    private nonisolated func makeUsageMonitorV2Payload(windows: [QuotaWindow], occurredAtIso: String, machineName: String?, producerInstanceId: String = QuotaPublisher.producerInstanceId) throws -> (data: Data, eventCount: Int) {
         let machine = machineName ?? Self.machineName
         let events: [[String: Any]] = windows.compactMap { window in
-            guard let remaining = window.boundedRemainingPercent ?? window.remainingPercent else { return nil }
+            let remaining = window.boundedRemainingPercent
+            guard window.hasReading || window.planMetadata != nil else { return nil }
             let seriesKey = window.resetAt ?? "\(occurredAtIso.prefix(13)):00"
-            let bucketId: String = {
-                if let modelId = window.modelId, !modelId.isEmpty {
-                    return "\(modelId)-\(window.window ?? "window")"
-                }
-                if !window.id.isEmpty && window.id.contains(":") {
-                    let parts = window.id.split(separator: ":").map(String.init)
-                    if parts.count >= 2 {
-                        return parts.dropFirst().joined(separator: "-")
-                    }
-                }
-                return window.window ?? window.label.lowercased().replacingOccurrences(of: " ", with: "-")
-            }()
+            let bucketId = UsageMonitorPushMetadata.bucketId(for: window)
             let readingTime = window.occurredAt.isEmpty ? occurredAtIso : window.occurredAt
             // Include the instance in a length-prefixed key: two Macs can observe
             // the same bucket at the same instant, while retries stay idempotent.
-            let eventId = "subq:" + [producerInstanceId, window.canonicalProviderKey, bucketId, seriesKey, readingTime]
+            var eventId = "subq:" + [producerInstanceId, window.canonicalProviderKey, bucketId, seriesKey, readingTime]
                 .map { "\($0.utf8.count):\($0)" }.joined()
-            let clampedRemaining = round(remaining * 100.0) / 100.0
-            let usedPercent = round(max(0, min(100, 100.0 - clampedRemaining)) * 100.0) / 100.0
+            let planFields = window.planMetadata.map(Self.planTransportFields) ?? [:]
+            if !planFields.isEmpty, let data = try? JSONSerialization.data(withJSONObject: planFields, options: [.sortedKeys]) {
+                let identity = Data(eventId.utf8) + Data([0x1f]) + data
+                eventId = "subq:plan:" + SHA256.hash(data: identity).map { String(format: "%02x", $0) }.joined()
+            }
+            let clampedRemaining = remaining.map { round($0 * 100.0) / 100.0 }
 
             var meta: [String: Any] = [
                 "bucketId": bucketId,
-                "isExhausted": window.isExhausted || clampedRemaining <= 0,
-                "remainingUnknown": false,
+                //  The shared cap rule decides, as it does on every surface:  a
+                //  reading at or below the threshold is a spent allowance, and
+                //  the provider's own exhausted word is the fallback for a
+                //  window that reports no figure at all.  A local zero test
+                //  here left the wire disagreeing with the at-cap line the
+                //  owner reads (Kody review 2026-10-21).
+                "isExhausted": QuotaCapRule.isExhausted(remainingPercent: clampedRemaining,
+                                                         providerSaysExhausted: window.isExhausted),
+                "remainingUnknown": clampedRemaining == nil,
                 "scale": "percent_0_100",
                 "source": Self.producerId,
                 "machine": machine,
                 "producerInstanceId": producerInstanceId
             ]
             if let resetAt = window.resetAt { meta["resetAt"] = resetAt }
-            if let w = window.window { meta["quotaWindow"] = w }
+            if let w = UsageMonitorPushMetadata.quotaWindow(for: window) ?? window.window {
+                meta["quotaWindow"] = w
+            }
             if let modelId = window.modelId { meta["modelId"] = modelId }
             if let plan = window.planName { meta["planType"] = plan }
-            meta["usedPercent"] = usedPercent
+            meta.merge(planFields) { _, new in new }
+            if let remaining = clampedRemaining {
+                meta["usedPercent"] = round(max(0, min(100, 100 - remaining)) * 100) / 100
+            } else if let absoluteRemaining = window.absoluteRemaining {
+                meta["absoluteRemaining"] = absoluteRemaining
+                if let absoluteLimit = window.absoluteLimit { meta["absoluteLimit"] = absoluteLimit }
+                if let quotaUnit = window.quotaUnit { meta["quotaUnit"] = quotaUnit }
+                meta["remainingUnknown"] = false
+                if let absoluteLimit = window.absoluteLimit, absoluteLimit > 0 {
+                    let remainingPercent = absoluteRemaining / absoluteLimit * 100
+                    meta["usedPercent"] = round(max(0, min(100, 100 - remainingPercent)) * 100) / 100
+                }
+            }
 
             var event: [String: Any] = [
                 "eventId": eventId,
@@ -218,11 +297,16 @@ public actor QuotaPublisher {
                 "metricType": "quota",
                 "billingMode": "actual",
                 "confidence": "actual",
-                "limit": 100,
-                "credits": clampedRemaining,
                 "occurredAt": readingTime,
                 "metadata": meta
             ]
+            if let remaining = clampedRemaining {
+                event["limit"] = 100
+                event["credits"] = remaining
+            } else if let absoluteRemaining = window.absoluteRemaining, let absoluteLimit = window.absoluteLimit {
+                event["limit"] = absoluteLimit
+                event["credits"] = absoluteRemaining
+            }
             // Provenance lives in `metadata` only.  The v2 event schema is
             // strict and `additionalProperties: false`: putting `machine` or
             // `producerInstanceId` on the event itself is rejected as
@@ -241,12 +325,25 @@ public actor QuotaPublisher {
             "producerInstanceId": producerInstanceId,
             "events": events
         ]
-        return try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
+        return (try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys]), events.count)
+    }
+
+    /// Usage Monitor permits scalar metadata values only.
+    private nonisolated static func planTransportFields(_ plan: PlanMetadata) -> [String: Any] {
+        var fields: [String: Any] = ["planHasMismatch": plan.hasMismatch]
+        fields["planDetectedName"] = plan.detectedPlanName
+        fields["planUserUpdatedAt"] = plan.userUpdatedAt
+        fields["planUserName"] = plan.userPlanName
+        fields["planUserCostUsd"] = plan.userCostUsd
+        fields["planUserRenewalDateText"] = plan.userRenewalDateText
+        fields["planUserSubtitle"] = plan.userSubtitle
+        fields["planShowCostAndRenewal"] = plan.showCostAndRenewal
+        return fields
     }
 
     public nonisolated func buildGenericWebhookPayload(windows: [QuotaWindow], occurredAtIso: String, machineName: String?, producerInstanceId: String = QuotaPublisher.producerInstanceId) throws -> Data {
         let machine = machineName ?? Self.machineName
-        let windowPayloads: [[String: Any]] = windows.map { w in
+        let windowPayloads: [[String: Any]] = try windows.map { w in
             var dict: [String: Any] = [
                 "id": w.id,
                 "provider": w.provider,
@@ -260,6 +357,9 @@ public actor QuotaPublisher {
             if let reset = w.resetAt { dict["resetAt"] = reset }
             if let win = w.window { dict["window"] = win }
             if let plan = w.planName { dict["plan"] = plan }
+            if let planMetadata = w.planMetadata {
+                dict["planMetadata"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(planMetadata))
+            }
             dict["occurredAt"] = w.occurredAt
             return dict
         }

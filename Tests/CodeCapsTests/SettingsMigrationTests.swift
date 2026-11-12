@@ -37,6 +37,13 @@ final class SettingsMigrationTests: XCTestCase {
         }
     }
 
+    func testGrokReaderStatusUsesTheLocalGrokProviderKey() throws {
+        let reader = try XCTUnwrap(ReaderStatus.all.first { $0.source == "Grok CLI credentials" })
+        XCTAssertEqual(reader.providerKey, "grok")
+        XCTAssertEqual(reader.label, "Grok")
+        XCTAssertFalse(ReaderStatus.all.contains { $0.providerKey == "xai" })
+    }
+
     func testFreshInstallPostsNowhere() {
         let model = MonitorModel(defaults: defaults)
         XCTAssertEqual(model.endpoint, "")
@@ -104,6 +111,7 @@ final class SettingsMigrationTests: XCTestCase {
 final class ConsolePageStorageTests: XCTestCase {
     func testEveryPageRoundTripsThroughItsStorageKey() {
         let pages: [ConsolePage] = [
+            .allPlatforms,
             .platform("anthropic"), .platform("google-antigravity:gemini"),
             .platform("a:b"), .settingsMenuBar, .settingsPlatforms, .settingsSourcesFleet,
             .settingsAppearance, .settingsAbout,
@@ -115,12 +123,13 @@ final class ConsolePageStorageTests: XCTestCase {
 
     func testAnUnknownKeyIsRejectedRatherThanGuessed() {
         XCTAssertNil(ConsolePage.fromStorageKey(""))
-        XCTAssertNil(ConsolePage.fromStorageKey("allPlatforms"))
+        XCTAssertNil(ConsolePage.fromStorageKey("bogusKey"))
         XCTAssertNil(ConsolePage.fromStorageKey("settingsNothing"))
         XCTAssertEqual(ConsolePage.fromStorageKey("platform:"), .platform(""))
     }
 
     func testOnlySettingsPagesReportThemselvesAsSettings() {
+        XCTAssertFalse(ConsolePage.allPlatforms.isSettings)
         XCTAssertFalse(ConsolePage.platform("anthropic").isSettings)
         for page in ConsolePage.settingsPages { XCTAssertTrue(page.isSettings) }
     }

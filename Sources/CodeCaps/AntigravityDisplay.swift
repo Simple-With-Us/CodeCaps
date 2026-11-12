@@ -96,6 +96,32 @@ struct DisplaySection: Identifiable, Equatable {
         maskedWindowIds.contains(snapshot.window.id)
     }
 
+    /// The exhausted window that resets last among spent allowances, honouring
+    /// the pool's masked windows.  See `QuotaPlatformSection.atCapWindow()` for
+    /// the rule; this only adds the mask filter, because a masked reading is a
+    /// real number that must not be believed and only the pool knows it.
+    var atCapWindow: QuotaWindowSnapshot? {
+        let facts = section.windows.map {
+            QuotaCapRule.WindowFacts(
+                id: $0.window.id,
+                remainingPercent: $0.remainingPercent,
+                resetAt: $0.resetAt,
+                isFresh: $0.isFresh,
+                isMasked: isMasked($0),
+                isSupplementaryVideoQuota: $0.window.isSupplementaryVideoQuota,
+                isScopedPoolAllowance: $0.window.isScopedPoolAllowance,
+                isSubModelLimit: $0.window.isSubModelLimit
+            )
+        }
+        guard let bindingIndex = QuotaCapRule.bindingWindowIndex(in: facts) else { return nil }
+        return section.windows[bindingIndex]
+    }
+
+    /// Whether this row is at its cap, so every surface can ask the same
+    /// question and get the same answer.  Owner 2026-10-11: a capped plan draws
+    /// no bars and says so in words instead.
+    var isAtCap: Bool { atCapWindow != nil }
+
     /// Splits one platform section into the rows the UI shows for it.
     static func rows(for section: QuotaPlatformSection, now: Date) -> [DisplaySection] {
         guard section.providerKey == AntigravityDisplay.providerKey else {
@@ -115,7 +141,7 @@ struct DisplaySection: Identifiable, Equatable {
             // A pool whose windows are all stale still shows its last reading,
             // greyed, rather than dropping to a dash.
             let lastReported = scoped.windows
-                .filter { !pool.maskedWindowIds.contains($0.window.id) && $0.remainingPercent != nil }
+                .filter { !pool.maskedWindowIds.contains($0.window.id) && $0.remainingPercent != nil && !$0.window.isSubModelLimit }
                 .min { ($0.remainingPercent ?? 100) < ($1.remainingPercent ?? 100) }
             return DisplaySection(id: "\(section.providerKey):\(pool.key)",
                                   providerKey: section.providerKey,

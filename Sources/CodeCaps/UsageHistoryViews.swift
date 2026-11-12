@@ -18,6 +18,9 @@ private struct HistoryPoint: Identifiable {
     let remainingPercent: Double
     let reset: Bool
     let isVendorReset: Bool
+    /// A mid-cycle rise that did not reach the level a vendor reset has to
+    /// reach, so a change of plan is the likelier reason.
+    let isPlanChange: Bool
 }
 
 /// Only persisted local samples are plotted.  Every quota window is a separate
@@ -64,7 +67,7 @@ struct UsageHistoryView: View {
             let (index, snapshot) = item
             let label = snapshot.window.label
             labels[snapshot.window.id] = (labelCounts[label] ?? 0) > 1
-                ? "\(label) · \(snapshot.window.source ?? "Window") \(index + 1)" : label
+                ? "\(label) · \(snapshot.window.source ?? "window") \(index + 1)" : label
         }
         let byWindow = Dictionary(grouping: relevantSamples, by: \.windowId)
         return byWindow.keys.sorted().flatMap { windowId in
@@ -85,14 +88,32 @@ struct UsageHistoryView: View {
                     let jumpedToFull = percent >= 99.5 && lastPercent < 98.0
                     let surgedMidWindow = lastPercent < 80.0 && percent >= 95.0
                     let quotaHandedBack = percent >= lastPercent + 30.0
-                    let isVendorReset = midWindow && (jumpedToFull || surgedMidWindow || quotaHandedBack)
+                    let resetDateJumpedEarly = prevSample?.resetAt.map { oldReset in
+                        sample.resetAt.map { newReset in
+                            newReset > oldReset && sample.observedAt < oldReset.addingTimeInterval(-60)
+                        } ?? false
+                    } ?? false
+                    let quotaIncreased = percent >= lastPercent + 5.0
+                    let roseMidWindow = midWindow && (percent >= lastPercent + 15.0 || jumpedToFull || surgedMidWindow || quotaHandedBack)
+                    let rose = (midWindow && (jumpedToFull || surgedMidWindow || quotaHandedBack))
+                        || (resetDateJumpedEarly && quotaIncreased)
+                        || roseMidWindow
+                    // The same rule the alarm uses, so the chart and the
+                    // notification never disagree: a mid-cycle rise is a vendor
+                    // reset only when the quota actually came back to near
+                    // full.  Owner ruling 2026-10-20.  Below that floor the
+                    // likelier reason is that the plan changed, and the point
+                    // is marked as that rather than as a reset.
+                    let isVendorReset = rose && percent >= ResetAlarmPolicy.vendorRestoreLevel
+                    let isPlanChange = rose && percent < ResetAlarmPolicy.vendorRestoreLevel
                     return HistoryPoint(id: "\(windowId):\(segmentIndex):\(index)",
                                         series: "\(windowId):\(segmentIndex)",
-                                        windowLabel: labels[windowId] ?? "Quota Window",
+                                        windowLabel: labels[windowId] ?? "Quota window",
                                         observedAt: sample.observedAt,
                                         remainingPercent: percent,
                                         reset: reset,
-                                        isVendorReset: isVendorReset)
+                                        isVendorReset: isVendorReset,
+                                        isPlanChange: isPlanChange)
                 }
             }
         }
@@ -108,6 +129,86 @@ struct UsageHistoryView: View {
                 && alert.timestamp >= start && alert.timestamp <= now
         }
     }
+    private var resetAlerts: [ResetAlertRecord] {
+        let rowCanonical = quotaProviderKey(row.providerKey, providerKey: row.providerKey)
+        return model.resetAlertHistory.filter { alert in
+            let alertCanonical = quotaProviderKey(alert.providerKey, providerKey: alert.providerKey)
+            let matchesProvider = alert.providerKey == row.providerKey || alertCanonical == rowCanonical
+            let matchesWindow = alert.windowId.map { windowIds.contains($0) } ?? true
+            let matchesFocus = focusedWindowId == nil || alert.windowId == nil || alert.windowId == focusedWindowId
+            return matchesProvider && matchesWindow && matchesFocus
+                && alert.timestamp >= start && alert.timestamp <= now
+        }
+    }
+
+    private struct HistoryAlertItem: Identifiable {
+        enum Kind {
+            case runaway(RunawayAlertRecord)
+            case reset(ResetAlertRecord)
+            case vendorPoint(HistoryPoint)
+            case planChangePoint(HistoryPoint)
+        }
+        let id: String
+        let timestamp: Date
+        let windowId: String?
+        let label: String
+        let kind: Kind
+    }
+
+    private func allRecentAlerts(points: [HistoryPoint]) -> [HistoryAlertItem] {
+        let runawayItems: [HistoryAlertItem] = alerts.map { alert in
+            HistoryAlertItem(
+                id: "runaway:\(alert.id)",
+                timestamp: alert.timestamp,
+                windowId: alert.windowId,
+                label: "\(alert.windowLabel) · \(alert.timestamp.formatted(date: .abbreviated, time: .shortened)) · \(alert.multiplier.formatted(.number.precision(.fractionLength(1))))× runaway",
+                kind: .runaway(alert)
+            )
+        }
+        let resetItems: [HistoryAlertItem] = resetAlerts.map { alert in
+            let badge = alert.isPlanChange ? "Plan Change" : (alert.isVendorReset ? "Vendor Reset" : "Reset")
+            return HistoryAlertItem(
+                id: "reset:\(alert.id)",
+                timestamp: alert.timestamp,
+                windowId: alert.windowId,
+                label: "\(alert.windowLabel) · \(alert.timestamp.formatted(date: .abbreviated, time: .shortened)) · \(badge) (\(alert.remainingPercent)%)",
+                kind: .reset(alert)
+            )
+        }
+        let vendorPointItems: [HistoryAlertItem] = points.filter(\.isVendorReset).compactMap { point in
+            if resetItems.contains(where: { abs($0.timestamp.timeIntervalSince(point.observedAt)) < 300 }) {
+                return nil
+            }
+            let windowId = point.series.components(separatedBy: ":").first
+            return HistoryAlertItem(
+                id: "vendorPoint:\(point.id)",
+                timestamp: point.observedAt,
+                windowId: windowId,
+                label: "\(point.windowLabel) · \(point.observedAt.formatted(date: .abbreviated, time: .shortened)) · Vendor Reset (\(Int(point.remainingPercent.rounded()))%)",
+                kind: .vendorPoint(point)
+            )
+        }
+        // A mid-cycle rise that landed below the level a vendor reset has to
+        // reach is shown under its own name, so the owner can see the
+        // difference between a refill and a change of plan.
+        let planChangePointItems: [HistoryAlertItem] = points.filter(\.isPlanChange).compactMap { point in
+            if resetItems.contains(where: { abs($0.timestamp.timeIntervalSince(point.observedAt)) < 300 }) {
+                return nil
+            }
+            let windowId = point.series.components(separatedBy: ":").first
+            return HistoryAlertItem(
+                id: "planChangePoint:\(point.id)",
+                timestamp: point.observedAt,
+                windowId: windowId,
+                label: "\(point.windowLabel) · \(point.observedAt.formatted(date: .abbreviated, time: .shortened)) · Plan Change (\(Int(point.remainingPercent.rounded()))%)",
+                kind: .planChangePoint(point)
+            )
+        }
+        var combined = runawayItems + resetItems + vendorPointItems + planChangePointItems
+        combined.sort { $0.timestamp > $1.timestamp }
+        return combined
+    }
+
     private var selectedAlert: RunawayAlertRecord? {
         guard let selected = state.selectedTimestamp else { return nil }
         let rowCanonical = quotaProviderKey(row.providerKey, providerKey: row.providerKey)
@@ -119,9 +220,40 @@ struct UsageHistoryView: View {
                 && abs(alert.timestamp.timeIntervalSince(selected)) < 2
         }
     }
+    private var selectedResetAlert: ResetAlertRecord? {
+        guard let selected = state.selectedTimestamp else { return nil }
+        let rowCanonical = quotaProviderKey(row.providerKey, providerKey: row.providerKey)
+        return model.resetAlertHistory.first { alert in
+            let alertCanonical = quotaProviderKey(alert.providerKey, providerKey: alert.providerKey)
+            let matchesProvider = alert.providerKey == row.providerKey || alertCanonical == rowCanonical
+            return matchesProvider
+                && (focusedWindowId == nil || alert.windowId == nil || alert.windowId == focusedWindowId)
+                && abs(alert.timestamp.timeIntervalSince(selected)) < 120
+        }
+    }
+    private func selectedVendorResetPoint(points: [HistoryPoint]) -> HistoryPoint? {
+        guard let selected = state.selectedTimestamp else { return nil }
+        return points.first { point in
+            point.isVendorReset && abs(point.observedAt.timeIntervalSince(selected)) < 120
+        }
+    }
+
+    private func selectedPlanChangePoint(points: [HistoryPoint]) -> HistoryPoint? {
+        guard let selected = state.selectedTimestamp else { return nil }
+        return points.first { point in
+            point.isPlanChange && abs(point.observedAt.timeIntervalSince(selected)) < 120
+        }
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        // The chart's points are the expensive part of this panel: the samples
+        // are filtered, grouped by window and run through the anomaly detector
+        // every time the property is read.  They are built once here and handed
+        // to everything that needs them, so one body pass does that work once
+        // instead of once per consumer.
+        let points = self.points
+        let recentAlerts = allRecentAlerts(points: points)
+        return VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Usage History")
@@ -142,7 +274,7 @@ struct UsageHistoryView: View {
                             }
                         }
                     )) {
-                        Text("All Windows").tag("all")
+                        Text("All windows").tag("all")
                         ForEach(primaryWindows, id: \.window.id) { snapshot in
                             Text(snapshot.window.label).tag(snapshot.window.id)
                         }
@@ -150,7 +282,7 @@ struct UsageHistoryView: View {
                     .pickerStyle(.menu)
                     .font(.system(size: 11))
                     .frame(maxWidth: 160)
-                    .accessibilityLabel("Filter Window")
+                    .accessibilityLabel("Filter window")
                 }
                 Picker("History Range", selection: $span) {
                     ForEach(HistorySpan.allCases) { span in Text(span.rawValue).tag(span) }
@@ -165,7 +297,7 @@ struct UsageHistoryView: View {
                     Text("Filtered to: \(primaryWindows.first { $0.window.id == focusedWindowId }?.window.label ?? focusedWindowId)")
                         .font(.system(size: 11, weight: .medium))
                     Spacer()
-                    Button("Show All Windows") { state.clearHistoryFocus() }
+                    Button("Show all windows") { state.clearHistoryFocus() }
                         .font(.system(size: 11))
                 }
             }
@@ -201,6 +333,13 @@ struct UsageHistoryView: View {
                                 .symbolSize(45)
                                 .foregroundStyle(Color.green)
                                 .accessibilityLabel("\(point.windowLabel) vendor reset to \(Int(point.remainingPercent.rounded())) percent at \(point.observedAt.formatted())")
+                        } else if point.isPlanChange {
+                            PointMark(x: .value("Time", point.observedAt),
+                                      y: .value("Remaining", point.remainingPercent))
+                                .symbol(.square)
+                                .symbolSize(45)
+                                .foregroundStyle(Theme.warning)
+                                .accessibilityLabel("\(point.windowLabel) likely plan change to \(Int(point.remainingPercent.rounded())) percent at \(point.observedAt.formatted())")
                         } else {
                             PointMark(x: .value("Time", point.observedAt),
                                       y: .value("Remaining", point.remainingPercent))
@@ -233,8 +372,14 @@ struct UsageHistoryView: View {
                     Text("One reading so far.  The trend will appear after another reading.")
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                 }
-                Text("Each line is one quota window.  Gaps separate unobserved time, account changes, and new quota periods.  Diamonds mark scheduled resets; green squares mark mid-cycle vendor resets; orange lines mark runaway alerts.")
+                Text("Each line is one quota window." + sentenceGap
+                    + "Gaps separate unobserved time, account changes, and new quota periods." + sentenceGap
+                    + "Diamonds mark scheduled resets; green squares mark mid-cycle vendor resets; amber squares mark likely plan changes; amber dashed lines mark runaway alerts.")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
+                Text("Burn stats are based on % of quota over time, unless absolute token data is available for the platform — in which case the detector prefers the absolute figures.")
+                    .font(.system(size: 10)).foregroundStyle(.tertiary)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .multilineTextAlignment(.trailing)
             }
             if let inspectedSnapshot, !inspectedSnapshot.isFresh {
                 Text(inspectedSnapshot.observedAt.map {
@@ -263,6 +408,88 @@ struct UsageHistoryView: View {
                     .padding(10)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Theme.warning.opacity(0.1), in: RoundedRectangle(cornerRadius: 7))
+                } else if let resetAlert = selectedResetAlert {
+                    // A plan change gets its own name and its own colour, so
+                    // the owner can tell a refill from a change of plan at a
+                    // glance.  Owner ruling 2026-10-20.
+                    let accent: Color = resetAlert.isPlanChange ? Theme.warning : Color.green
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 6) {
+                            Text(resetAlert.isPlanChange
+                                ? "Likely Plan Change · \(resetAlert.timestamp.formatted(date: .abbreviated, time: .shortened))"
+                                : (resetAlert.isVendorReset
+                                    ? "Vendor Reset · \(resetAlert.timestamp.formatted(date: .abbreviated, time: .shortened))"
+                                    : "Quota Reset · \(resetAlert.timestamp.formatted(date: .abbreviated, time: .shortened))"))
+                                .font(.system(size: 12, weight: .semibold))
+                            if resetAlert.isVendorReset {
+                                Text("Mid-cycle restore")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .padding(.horizontal, 5)
+                                    .padding(.vertical, 2)
+                                    .background(Color.green.opacity(0.2), in: Capsule())
+                                    .foregroundStyle(Color.green)
+                            } else if resetAlert.isPlanChange {
+                                Text("Likely plan change")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .padding(.horizontal, 5)
+                                    .padding(.vertical, 2)
+                                    .background(Theme.warning.opacity(0.2), in: Capsule())
+                                    .foregroundStyle(Theme.warning)
+                            }
+                        }
+                        Text(resetAlert.title).font(.system(size: 11, weight: .medium))
+                        Text(resetAlert.body).font(.system(size: 11)).foregroundStyle(.secondary)
+                        Text(resetAlert.isPlanChange
+                            ? "\(resetAlert.planChangeWindowLabel ?? resetAlert.windowLabel) quota rose to \(resetAlert.planChangeRemainingPercent ?? resetAlert.remainingPercent)% remaining."
+                            : "\(resetAlert.windowLabel) restored to \(resetAlert.remainingPercent)% quota remaining.")
+                            .font(.system(size: 11)).foregroundStyle(.secondary)
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(accent.opacity(0.1), in: RoundedRectangle(cornerRadius: 7))
+                    .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(accent.opacity(0.3), lineWidth: 1))
+                } else if let point = selectedVendorResetPoint(points: points) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 6) {
+                            Text("Vendor Reset · \(point.observedAt.formatted(date: .abbreviated, time: .shortened))")
+                                .font(.system(size: 12, weight: .semibold))
+                            Text("Mid-cycle restore")
+                                .font(.system(size: 9, weight: .bold))
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 2)
+                                .background(Color.green.opacity(0.2), in: Capsule())
+                                .foregroundStyle(Color.green)
+                        }
+                        Text("\(point.windowLabel) quota was restored mid-cycle before scheduled rollover.")
+                            .font(.system(size: 11))
+                        Text("Reset to \(Int(point.remainingPercent.rounded()))% quota available.")
+                            .font(.system(size: 11)).foregroundStyle(.secondary)
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.green.opacity(0.1), in: RoundedRectangle(cornerRadius: 7))
+                    .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Color.green.opacity(0.3), lineWidth: 1))
+                } else if let point = selectedPlanChangePoint(points: points) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 6) {
+                            Text("Likely Plan Change · \(point.observedAt.formatted(date: .abbreviated, time: .shortened))")
+                                .font(.system(size: 12, weight: .semibold))
+                            Text("Likely plan change")
+                                .font(.system(size: 9, weight: .bold))
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 2)
+                                .background(Theme.warning.opacity(0.2), in: Capsule())
+                                .foregroundStyle(Theme.warning)
+                        }
+                        Text("\(point.windowLabel) quota rose mid-cycle before scheduled rollover, without reaching the level a vendor reset does.")
+                            .font(.system(size: 11))
+                        Text("Rose to \(Int(point.remainingPercent.rounded()))% quota available.")
+                            .font(.system(size: 11)).foregroundStyle(.secondary)
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Theme.warning.opacity(0.1), in: RoundedRectangle(cornerRadius: 7))
+                    .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Theme.warning.opacity(0.3), lineWidth: 1))
                 } else {
                     Text("Selected alert: \(selected.formatted(date: .abbreviated, time: .shortened)).  Its saved detail is unavailable.")
                         .font(.system(size: 11)).foregroundStyle(.secondary)
@@ -272,13 +499,13 @@ struct UsageHistoryView: View {
                         .font(.system(size: 11)).foregroundStyle(Theme.warning)
                 }
             }
-            if !alerts.isEmpty {
+            if !recentAlerts.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Recent Alerts").font(.system(size: 11, weight: .semibold))
-                    ForEach(alerts.prefix(3)) { alert in
-                        Button("\(alert.windowLabel) · \(alert.timestamp.formatted(date: .abbreviated, time: .shortened)) · \(alert.multiplier.formatted(.number.precision(.fractionLength(1))))×") {
-                            state.select(providerKey: row.id, windowId: alert.windowId,
-                                         at: alert.timestamp, in: model.displaySections)
+                    ForEach(recentAlerts.prefix(5)) { item in
+                        Button(item.label) {
+                            state.select(providerKey: row.id, windowId: item.windowId,
+                                         at: item.timestamp, in: model.displaySections)
                         }
                         .buttonStyle(.link)
                         .font(.system(size: 11))

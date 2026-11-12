@@ -94,7 +94,12 @@ final class DocsScreenshotTests: XCTestCase {
                                             "the alert window needs its own visible history")
             }
         }
+        if page == .settingsMenuBar { model.isPipEnabled = true }
         let state = ConsoleState(defaults: defaults)
+        // Reconcile first: `.settingsSourcesFleet` is the init default, so an
+        // eager `page =` is a no-op and `onAppear` reconcile would land on a
+        // platform page before the PNG is drawn.
+        state.reconcile(available: model.displaySections, readCompleted: model.lastChecked != nil)
         state.page = page
         if selectedAlert {
             state.select(providerKey: "anthropic", windowId: "claude-5h", at: alert.timestamp,
@@ -123,5 +128,62 @@ final class DocsScreenshotTests: XCTestCase {
         try write(try console(page: .settingsNotifications, dark: false, settingsAlert: true),
                   "settings-alerts-history.png", to: directory)
         try write(try console(page: .settingsSourcesFleet, dark: false), "settings-sources-fleet.png", to: directory)
+    }
+
+    func testRenderPipScreenshots() throws {
+        guard let path = ProcessInfo.processInfo.environment["CODECAPS_DOCS_RENDER_DIR"] else {
+            throw XCTSkip("Set CODECAPS_DOCS_RENDER_DIR to render PiP screenshots")
+        }
+        let directory = URL(fileURLWithPath: path, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let (model, defaults, suite) = GlanceFixtures.makeModel(view: .fromMac, alarmsAll: true, fleet: false, localReadersOn: true)
+        defer { defaults.removePersistentDomain(forName: suite) }
+        model.isPipEnabled = true
+        model.pipPinnedRowIds = Set(model.displaySections.map(\.id))
+        for background in PipBackground.allCases {
+            model.pipBackground = background
+            let view = PipWidgetView(model: model)
+            try write(GlanceFixtures.png(of: view, size: CGSize(width: PipMetrics.singleMeterDefaultWidth, height: 230), dark: background.isDark),
+                      "pip-\(background.rawValue).png", to: directory)
+        }
+        try write(try console(page: .runawayAlerts, dark: false, settingsAlert: true),
+                  "runaway-alerts.png", to: directory)
+        let pinnedOptions = PipOptionsReorderList(model: model).padding(12).background(Color.white)
+        try write(GlanceFixtures.png(of: pinnedOptions, size: CGSize(width: 360, height: 380), dark: false),
+                  "settings-pip-logos.png", to: directory)
+        try write(try console(page: .settingsMenuBar, dark: false), "settings-pip.png", to: directory)
+    }
+
+    func testRenderCappedRowsScreenshots() throws {
+        guard let path = ProcessInfo.processInfo.environment["CODECAPS_DOCS_RENDER_DIR"] else {
+            throw XCTSkip("Set CODECAPS_DOCS_RENDER_DIR to render capped rows")
+        }
+        let directory = URL(fileURLWithPath: path, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        XCTAssertNotNil(PlatformLogoImage.load(providerKey: "anthropic", style: .standard, isDarkMode: false),
+                        "Screenshot proof requires the real provider artwork")
+        let caps = ["cursor", "xai", "grok-bot"].map { key in
+            GlanceFixtures.window("\(key):proof-cap", provider: key, label: "7-day window", token: "7d",
+                                  remaining: 0, resetIn: 5 * GlanceFixtures.day + GlanceFixtures.hour)
+        }
+        let (model, defaults, suite) = GlanceFixtures.makeModel(view: .fromMac, alarmsAll: false, fleet: false,
+                                                               localReadersOn: true, extraWindows: caps)
+        defer { defaults.removePersistentDomain(forName: suite) }
+        model.pipPinnedRowIds = Set(model.displaySections.map(\.id))
+        model.pipBackground = .black
+        try write(GlanceFixtures.png(of: GlancePopover(model: model, openConsole: { _ in }, openSettings: {}),
+                                    size: CGSize(width: Metrics.glanceWidth, height: QuotaGlanceMetrics.popoverHeight(for: model)),
+                                    dark: false), "glance-capped.png", to: directory)
+        for width in [240.0, 280.0, 360.0, 430.0, 520.0] {
+            try write(GlanceFixtures.png(of: PipWidgetView(model: model), size: CGSize(width: width, height: 280), dark: true),
+                      "pip-capped-\(Int(width)).png", to: directory)
+        }
+    }
+
+    func testSettingsSourcesFleetRenderIsNotConsoleLightPage() throws {
+        let settings = try XCTUnwrap(try console(page: .settingsSourcesFleet, dark: false))
+        let consoleLight = try XCTUnwrap(try console(page: .platform("anthropic"), dark: false))
+        XCTAssertNotEqual(settings, consoleLight,
+                          "Sources & Fleet must not reuse the Claude platform Console frame")
     }
 }

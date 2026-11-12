@@ -2,8 +2,10 @@
   "teamId": "CC8UTF7ATG",
   "apps": {
     "codecaps": {
+      "fixedMarketingVersion": "0.1.0",
       "displayName": "CodeCaps Companion",
       "bundleId": "com.simplewithus.codecaps.ios",
+      "pairedBuildFeed": "https://github.com/Simple-With-Us/CodeCaps/releases/latest/download/appcast.xml",
       "appleId": 6814623846,
       "platform": "iOS",
       "scheme": "CodeCapsCompanion",
@@ -11,19 +13,7 @@
       "xcodegenDir": "ios/CodeCapsCompanion",
       "worktreeHint": "~/Code/codecaps",
       "marketingVersionDefault": "0.1.0",
-      "notes": "CodeCaps Companion \u2014 iOS companion for CodeCaps AI subscription monitor. Apple ID 6814623846 registered on ASC. ASC SKU codecaps-companion-ios."
-    },
-    "codecaps-mac": {
-      "displayName": "CodeCaps for Mac",
-      "bundleId": "com.simplewithus.codecaps.macos",
-      "appleId": 6814951477,
-      "platform": "macOS",
-      "scheme": "CodeCapsCompanionMac",
-      "projectRel": "ios/CodeCapsCompanion/CodeCapsCompanion.xcodeproj",
-      "xcodegenDir": "ios/CodeCapsCompanion",
-      "worktreeHint": "~/Code/codecaps",
-      "marketingVersionDefault": "0.1.0",
-      "notes": "CodeCaps Companion for Mac. Bundle ID com.simplewithus.codecaps.macos. Team CC8UTF7ATG. AppleId 6814951477. ASC SKU codecaps-macos. Marketing train 0.1.N; build UTC YYYYMMDDHHMM."
+      "notes": "CodeCaps Companion \u2014 iOS companion for CodeCaps AI subscription monitor. Apple ID 6814623846 registered on ASC. ASC SKU codecaps-companion-ios. CodeCaps stays on the fixed 0.1.0 marketing version; each release gets a shared merge-time build number above the App Store Connect floor."
     }
   }
 }

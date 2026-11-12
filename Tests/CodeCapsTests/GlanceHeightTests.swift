@@ -125,7 +125,13 @@ final class GlanceHeightTests: XCTestCase {
     /// far its list overflows the scroll area, in points.
     private func overflow(of view: GlanceViewMode) throws -> CGFloat {
         let model = makeModel(view: view)
-        let height = QuotaGlanceMetrics.popoverHeight(for: model)
+        // Measure against the UNCAPPED budget: when the screen is shorter than
+        // the content the popover is capped and the list scrolls by design, so
+        // asserting the budget arithmetic through the capped height would make
+        // the result depend on the host's display size (runner-probe finding:
+        // a 650pt runner cap made the list "overflow" by exactly the capped
+        // deficit, 27pt, with no layout bug).
+        let height = QuotaGlanceMetrics.uncappedPopoverHeight(for: model)
         let popover = GlancePopover(model: model, openConsole: { _ in }, openSettings: {})
         let host = NSHostingView(rootView: popover)
         host.frame = NSRect(x: 0, y: 0, width: Metrics.glanceWidth, height: height)

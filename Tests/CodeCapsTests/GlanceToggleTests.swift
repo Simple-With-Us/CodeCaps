@@ -151,9 +151,12 @@ final class GlanceToggleTests: XCTestCase {
         XCTAssertEqual(gemini?.isTemplate, false, "the colour star keeps its gradient")
 
         let thirdParty = PlatformLogoImage.load(providerKey: "google-antigravity:third-party", style: .standard)
-        XCTAssertNotNil(thirdParty, "the Third-Party pool uses the one-colour star")
-        XCTAssertEqual(thirdParty?.isTemplate, true, "a one-colour mark follows Light and Dark")
-        XCTAssertTrue(PlatformLogoImage.isMonochromeMark("google-antigravity:third-party"))
+        XCTAssertNotNil(thirdParty, "the Third-Party pool uses the supplied Antigravity arch")
+        XCTAssertEqual(thirdParty?.isTemplate, false, "the standard arch keeps its supplied colors")
+        XCTAssertFalse(PlatformLogoImage.isMonochromeMark("google-antigravity:third-party"))
+        let monochrome = PlatformLogoImage.load(providerKey: "google-antigravity:third-party", style: .template)
+        XCTAssertNotNil(monochrome)
+        XCTAssertEqual(monochrome?.isTemplate, true, "the monochrome arch follows Light and Dark")
         XCTAssertFalse(PlatformLogoImage.isMonochromeMark("google-antigravity:gemini"))
         XCTAssertNotNil(PlatformLogoImage.load(providerKey: "google-antigravity:some-new-pool", style: .template),
                         "a pool with no mark of its own falls back to the platform's mark")
@@ -179,6 +182,14 @@ final class GlanceToggleTests: XCTestCase {
         XCTAssertEqual(dark?.redComponent ?? -1, 1, accuracy: 0.001)
         XCTAssertEqual(dark?.greenComponent ?? -1, 1, accuracy: 0.001)
         XCTAssertEqual(dark?.blueComponent ?? -1, 1, accuracy: 0.001)
+    }
+
+    func testClaudeStaysBrandColourWhenAccentLogosAreOn() {
+        let model = MonitorModel(defaults: defaults)
+        model.glanceLogosFollowAccent = true
+        XCTAssertEqual(model.glanceMarkStyle(for: "anthropic"), .standard)
+        let mark = PlatformLogoImage.load(providerKey: "anthropic", style: model.glanceMarkStyle(for: "anthropic"))
+        XCTAssertEqual(mark?.isTemplate, false, "Claude must stay the orange starburst, not a black template")
     }
 
     func testTheGeminiRowShowsTheColourStarInTheDefaultGlanceStyle() {
@@ -234,6 +245,28 @@ final class GlanceToggleTests: XCTestCase {
                        "chatgpt.com")
     }
 
+    func testPipCountdownInkMeetsContrastOnEveryBackground() {
+        func relativeLuminance(_ c: (r: CGFloat, g: CGFloat, b: CGFloat)) -> CGFloat {
+            func lin(_ v: CGFloat) -> CGFloat { v <= 0.03928 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
+            return 0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
+        }
+        func components(_ color: Color) -> (r: CGFloat, g: CGFloat, b: CGFloat) {
+            var value: (r: CGFloat, g: CGFloat, b: CGFloat) = (0, 0, 0)
+            NSAppearance(named: .aqua)?.performAsCurrentDrawingAppearance {
+                if let rgb = NSColor(color).usingColorSpace(.sRGB) {
+                    value = (rgb.redComponent, rgb.greenComponent, rgb.blueComponent)
+                }
+            }
+            return value
+        }
+        for background in PipBackground.allCases {
+            let fill = relativeLuminance(components(background.fill))
+            let countdown = relativeLuminance(components(background.countdownInk))
+            let contrast = (max(fill, countdown) + 0.05) / (min(fill, countdown) + 0.05)
+            XCTAssertGreaterThanOrEqual(contrast, 4.5, "\(background.title) countdown ink")
+        }
+    }
+
     func testTextOnTheHeadingBandIsReadableInBothAppearances() {
         func components(_ color: Color, _ appearance: NSAppearance.Name) -> (r: CGFloat, g: CGFloat, b: CGFloat) {
             var value: (r: CGFloat, g: CGFloat, b: CGFloat) = (0, 0, 0)
@@ -285,12 +318,12 @@ final class GlanceToggleTests: XCTestCase {
 
     func testOneColourMarksFollowLightAndDarkAndBrandColoursStay() {
         // Near-black on the dark Glance surface was the bug for these four.
-        for key in ["openai", "codex", "cursor", "minimax", "xai", "grok", "grok-cli", "grok-bot"] {
+        for key in ["openai", "codex", "cursor", "xai", "grok", "grok-cli", "grok-bot"] {
             XCTAssertTrue(PlatformLogoImage.isMonochromeMark(key), "\(key) is a one-colour mark")
             XCTAssertEqual(PlatformLogoImage.load(providerKey: key, style: .standard)?.isTemplate, true,
                            "\(key) must adapt to a dark surface in the default Glance style")
         }
-        for key in ["anthropic", "claude", "google-antigravity:gemini", "google-antigravity"] {
+        for key in ["anthropic", "claude", "google-antigravity:gemini", "google-antigravity", "minimax"] {
             XCTAssertFalse(PlatformLogoImage.isMonochromeMark(key), "\(key) keeps its brand colour")
         }
     }
@@ -405,7 +438,11 @@ final class GlanceToggleTests: XCTestCase {
         // the gutters, title, switch, bell, enlarged refresh button, and settings button.
         let toggle = NSHostingView(rootView: GlanceViewToggle(selection: .constant(.fromMac), model: model)).fittingSize.width
         let bell = NSHostingView(rootView: GlanceAlarmAllToggle(isOn: .constant(true), model: model)).fittingSize.width
-        let expected = Metrics.glanceGutter * 2 + width("CodeCaps", size: 13, weight: .semibold)
+        // The header also carries the owner's mark at the top-left (owner
+        // 2026-10-10), so its size and gap are part of the budget here too.
+        let expected = Metrics.glanceGutter * 2
+            + Metrics.glanceBrandMarkSize + Metrics.glanceBrandMarkGap
+            + width("CodeCaps", size: 13, weight: .semibold)
             + 8 + toggle + 12 + bell + 12 + 22 + 6 + 22
         XCTAssertEqual(headerIdealWidth(parts: [], model: model), expected, accuracy: 3)
     }

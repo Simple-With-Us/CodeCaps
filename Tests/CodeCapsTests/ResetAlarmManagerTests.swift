@@ -384,4 +384,74 @@ final class ResetAlarmManagerTests: XCTestCase {
         let manager = ResetAlarmManager(defaults: store)
         XCTAssertEqual(manager.alarmSound, .submarine)
     }
+
+    func testAlertHistoryRecordsDeliveredResetAlertsAndPersistsAcrossInit() {
+        let store = UserDefaults(suiteName: "codecaps.test.history." + UUID().uuidString)!
+        defer { store.removePersistentDomain(forName: store.dictionaryRepresentation().keys.first ?? "") }
+
+        let manager = ResetAlarmManager(defaults: store)
+        XCTAssertTrue(manager.alertHistory.isEmpty)
+
+        let initialReset = Date(timeIntervalSince1970: 1_790_000_000)
+        let obs1 = ResetAlarmObservation(
+            scope: "local",
+            providerId: "openai",
+            providerTitle: "Codex",
+            windowId: "7d",
+            windowLabel: "7d",
+            periodSeconds: 7 * 86_400,
+            resetAt: initialReset,
+            remainingPercent: 33,
+            observedAt: initialReset.addingTimeInterval(-86_400)
+        )
+        _ = manager.evaluate(observations: [obs1], now: initialReset.addingTimeInterval(-86_400))
+        XCTAssertTrue(manager.alertHistory.isEmpty, "Initial observation never fires or records")
+
+        // 24 hours later, cap resets early to 100%
+        let resetTime = initialReset.addingTimeInterval(-10 * 3_600)
+        let obs2 = ResetAlarmObservation(
+            scope: "local",
+            providerId: "openai",
+            providerTitle: "Codex",
+            windowId: "7d",
+            windowLabel: "7d",
+            periodSeconds: 7 * 86_400,
+            resetAt: resetTime.addingTimeInterval(7 * 86_400),
+            remainingPercent: 100,
+            observedAt: resetTime
+        )
+        let notifications = manager.evaluate(observations: [obs2], now: resetTime)
+        XCTAssertEqual(notifications.count, 1)
+
+        XCTAssertEqual(manager.alertHistory.count, 1)
+        guard let record = manager.alertHistory.first else { return }
+        XCTAssertEqual(record.providerKey, "openai")
+        XCTAssertEqual(record.providerTitle, "Codex")
+        XCTAssertEqual(record.windowId, "7d")
+        XCTAssertEqual(record.remainingPercent, 100)
+        XCTAssertTrue(record.isVendorReset)
+
+        // New manager instance restores from persisted UserDefaults
+        let manager2 = ResetAlarmManager(defaults: store)
+        XCTAssertEqual(manager2.alertHistory.count, 1)
+        XCTAssertEqual(manager2.alertHistory.first?.id, record.id)
+        XCTAssertEqual(manager2.alertHistory.first?.providerKey, "openai")
+
+        // Clearing history wipes memory and persistent store
+        manager2.clearAlertHistory()
+        XCTAssertTrue(manager2.alertHistory.isEmpty)
+        XCTAssertNil(store.data(forKey: ResetAlarmManager.Keys.alertHistory))
+    }
+
+    func testAlertNavigationIncludesTimestamp() {
+        let date = Date(timeIntervalSince1970: 1_790_500_000)
+        let nav = AlertNavigation(providerKey: "openai", windowId: "7d", timestamp: date)
+        let userInfo = nav.userInfo
+        let restored = AlertNavigation(userInfo: userInfo)
+
+        XCTAssertNotNil(restored)
+        XCTAssertEqual(restored?.providerKey, "openai")
+        XCTAssertEqual(restored?.windowId, "7d")
+        XCTAssertEqual(restored?.timestamp?.timeIntervalSince1970, date.timeIntervalSince1970)
+    }
 }

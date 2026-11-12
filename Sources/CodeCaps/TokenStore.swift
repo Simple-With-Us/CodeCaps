@@ -26,11 +26,15 @@ enum TokenStore {
 
     static let readService = serviceName(suffix: "read-token")
     static let syncService = serviceName(suffix: "sync-token")
+    /// The Muse plugin's bridge token: a producer-scoped Usage Monitor
+    /// ingest token for `muse-code`, kept apart from this app's own Push
+    /// Token because a scoped token authorizes exactly one producer.
+    static let museCodeIngestService = serviceName(suffix: "muse-code-ingest-token")
 
-    /// The two service names this build owns: its Read Token and its Ingest
-    /// Token.  A `.dev` build's names differ from the release app's, so neither
-    /// can reach the other's items.
-    static var ownServices: Set<String> { [readService, syncService] }
+    /// The service names this build owns: its Read Token, its Push Token,
+    /// and the Muse bridge token.  A `.dev` build's names differ from the
+    /// release app's, so neither can reach the other's items.
+    static var ownServices: Set<String> { [readService, syncService, museCodeIngestService] }
 
     /// Whether `service` is exactly one of CodeCaps's own two items.  The store
     /// refuses every other name before any Keychain call is made, so nothing
@@ -159,9 +163,8 @@ struct KeychainCalls: Sendable {
             query[kSecMatchLimit as String] = kSecMatchLimitOne
             if !allowInteraction {
                 // Ask macOS not to prompt.  `LAContext.interactionNotAllowed`
-                // covers LocalAuthentication UI for items with an access control
-                // policy, and `kSecUseAuthenticationUIFail` (deprecated) covers
-                // the login Keychain's unlock panel.  Neither suppresses the
+                // is the supported replacement for the deprecated
+                // `kSecUseAuthenticationUIFail` flag.  Neither suppresses the
                 // legacy access-list or partition panel: on Sep 30 2026
                 // securityd logged `ACL partition mismatch` and `displaying
                 // keychain prompt` for a data read that carried both.  What
@@ -172,7 +175,6 @@ struct KeychainCalls: Sendable {
                 let context = LAContext()
                 context.interactionNotAllowed = true
                 query[kSecUseAuthenticationContext as String] = context
-                query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
             }
             var result: CFTypeRef?
             let status = SecItemCopyMatching(query as CFDictionary, &result)

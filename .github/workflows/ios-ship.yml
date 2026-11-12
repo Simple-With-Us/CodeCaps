@@ -1,28 +1,101 @@
 name: iOS TestFlight ship (GitHub-hosted macOS)
 
-# Archive + upload on GitHub-hosted macos-latest (fleet protocol 2026-08-24).
-# Signing + ASC keys come from repo secrets:
-#   ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8,
-#   IOS_DIST_P12_BASE64, IOS_DIST_P12_PASSWORD
-# scripts/ios-appstore-gm-prepare.sh writes ~/.secrets/appstore-connect.env
-# and imports the Distribution identity. Values are never printed.
-# IOS_MANUAL_SIGN=1 signs Release with the installed App Store profiles.
-# Xcode's provisioning service rejects this API key, so the job must not
-# ask it to create or update profiles.
+# AUTO-SHIP CONTRACT (owner 2026-10-17): a merge to main that touches the iOS
+# native tree uploads a fresh TestFlight build with no human step and publishes
+# What to Test (IOS_TF_RELEASE_NOTES=1).  "The native tree" is
+# ios/CodeCapsCompanion/** PLUS the shared Sources/QuotaCore files the app and
+# widget targets compile (project.yml `../../Sources/QuotaCore/...`).  Both
+# lists below (push paths and the scheduled gate's prefixes) are pinned to
+# project.yml by scripts/ios-ship-workflow.test.mjs, so a file added to the
+# iOS targets cannot quietly stop shipping.  workflow_dispatch is the manual
+# path.  The rate gate and the same-HEAD skip are the ship script's defaults:
+# never set IOS_TF_MIN_INTERVAL_SEC or --force-ship in this file.
 #
-# Marketing train is 0.1.N; build is UTC YYYYMMDDHHMM.
-# Bundle `com.simplewithus.codecaps.ios` and team `CC8UTF7ATG`.
+# Archive + upload on GitHub-hosted macos-latest (a stable Xcode on a GM macOS,
+# never the owned Mac, which runs a beta that App Store review rejects as
+# INVALID_BINARY).
+#
+# Credentials (names only; no value is ever printed):
+#   * INFISICAL_ASC_READ_TOKEN reads Fleet-OPS prod /asc (ASC_KEY_ID,
+#     ASC_ISSUER_ID, ASC_KEY_P8).  The same-named repository secrets are a
+#     stale copy that App Store Connect answers with HTTP 401 (CC-163), so
+#     they are not read and there is no fallback to them.  asc-mode stages
+#     the private key to a mode-600 file.  Only ASC_KEY_PATH and the two
+#     identifiers cross a step boundary.
+#   * IOS_DIST_P12_BASE64 / IOS_DIST_P12_PASSWORD (Apple Distribution identity)
+#     stay repository secrets.
+#   * INFISICAL_CODECAPS_READ_TOKEN reads the CodeCaps Infisical project
+#     (prod /) for SENTRY_DSN, SENTRY_AUTH_TOKEN and
+#     SENTRY_AUTH_TOKEN_FULLSCOPE.  The project's SENTRY_DSN is the codecaps
+#     DSN (project id 4512207409840129).  SENTRY_DSN is required so a bad
+#     service token fails the load step instead of silently using a wrong
+#     fallback.  Repository SENTRY_DSN_CODECAPS is the explicit codecaps
+#     fallback (preferred over secrets.SENTRY_DSN).  An inert Sentry still
+#     beats a missed TestFlight ship for the upload itself; the status step
+#     turns the run red when the DSN is not codecaps.
+#
+# scripts/ios-appstore-gm-prepare.sh imports the Distribution identity (the job
+# environment carries ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_PATH to the ship step).  IOS_MANUAL_SIGN=1 signs Release with the
+# installed App Store profiles.  Xcode's provisioning service rejects this API
+# key, so the job must not ask it to create or update profiles.
+#
+# Versioning is the fixed marketing version 0.1.0 with ONE shared
+# merge-timestamp build per release (owner 2026-10-29): max(S, M + 1), where S
+# is the committer date of HEAD in America/Chicago as YYYYMMDDHHMM and M is the
+# highest build the app and its pair hold.  The plan-build step computes that
+# value once; the ship step reuses it through --build and never plans its own.
+# Bundle `com.simplewithus.codecaps.ios`, team `CC8UTF7ATG`.
+#
+# WHY THERE IS A `schedule:` TRIGGER
+# A PR merged by github-actions[bot] (auto-merge armed with GITHUB_TOKEN) lands
+# on main under GitHub's recursion guard and dispatches NO push run.  The cron
+# is exempt from that guard, so it notices what the push never announced.  It
+# is gated twice: scripts/ios-fleet/scheduled-ship-gate.sh refuses unless one
+# of the iOS paths changed since the last successful ship, and the ship script
+# rate-limits and skips an already-shipped HEAD.  push and workflow_dispatch
+# bypass the path gate (a push already passed the paths: filter).
+#
+# The ship state (~/.cache/ios-fleet) is restored from actions/cache because a
+# hosted runner starts with an empty home.  The key family is
+# `ios-fleet-state-codecaps-ios-`: the old `ios-fleet-state-codecaps-` prefix
+# also matched the Mac ship's `...-codecaps-mac-` caches, and its build-seq
+# file carried the retired 0.1.N sequence into the 1.0.N train.
 
 on:
   push:
     branches: [main]
     paths:
       - 'ios/CodeCapsCompanion/**'
+      # Shared sources the iOS app and widget targets compile.  Exact files, not
+      # Sources/QuotaCore/**: most QuotaCore edits are Mac-only and must not
+      # ship a TestFlight build.
+      - 'Sources/QuotaCore/AppGroupSnapshotReadPolicy.swift'
+      - 'Sources/QuotaCore/CompanionReadTokenStore.swift'
+      - 'Sources/QuotaCore/FleetSourceDisagreement.swift'
+      - 'Sources/QuotaCore/PlanMetadata.swift'
+      - 'Sources/QuotaCore/QuotaWindowCaption.swift'
+      - 'Sources/QuotaCore/QuotaWindowPairing.swift'
+      - 'Sources/QuotaCore/QuotaMeterCadence.swift'
+      - 'Sources/QuotaCore/QuotaWindowVocabulary.swift'
+      - 'Sources/QuotaCore/ResetAlarmCadence.swift'
+      - 'Sources/QuotaCore/ResetAlarmMessage.swift'
+      - 'Sources/QuotaCore/ResetAlarmTracker.swift'
+      - 'Sources/QuotaCore/UsageAlertPreferences.swift'
+      - 'Sources/QuotaCore/WidgetPlatformDisplay.swift'
+      - 'Sources/QuotaCore/WidgetSnapshotFetcher.swift'
       - '.github/workflows/ios-ship.yml'
+      - '.github/actions/infisical-secrets/**'
+      - 'scripts/infisical-fetch.mjs'
+      - 'scripts/stage-asc-key*'
       - 'scripts/ios-fleet/**'
+      - '!scripts/ios-fleet/test-*.sh'
       - 'scripts/ios-ship-testflight.sh'
+      - 'scripts/ios-observe-ship.mjs'
+      - 'scripts/ios-recheck-tf-ready.sh'
       - 'scripts/ios-appstore-gm-prepare.sh'
       - 'scripts/ios-install-appstore-profiles.sh'
+      - 'scripts/ios-stage-asc-key.sh'
+      - 'scripts/ios-load-asc-key.sh'
   workflow_dispatch:
   schedule:
     # Twice an hour, offset from other fleet apps
@@ -30,49 +103,117 @@ on:
 
 permissions:
   contents: read
+  checks: read
 
 concurrency:
   group: ios-ship-codecaps
   cancel-in-progress: false
 
 jobs:
-  ship:
-    name: TestFlight archive + upload
+  # The scheduled tick used to queue macos-latest just to decide "skip".
+  # That decision, and the wait for Swift CI, both run on ubuntu.  The Mac
+  # runner starts only when this commit should ship and has compiled.
+  gate:
+    name: Ship gate
     if: github.event.repository.fork == false
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
     timeout-minutes: 90
-    env:
-      DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
-      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
-      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
-      ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
-      IOS_DIST_P12_BASE64: ${{ secrets.IOS_DIST_P12_BASE64 }}
-      IOS_DIST_P12_PASSWORD: ${{ secrets.IOS_DIST_P12_PASSWORD }}
+    outputs:
+      should_ship: ${{ steps.gate.outputs.should_ship }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          # The gate diffs HEAD against the sha recorded by the last successful
+          # ship, which can be many commits back.
           fetch-depth: 0
 
       - name: Restore ship-state cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ios-fleet
-          key: ios-fleet-state-codecaps-${{ github.run_id }}-${{ github.run_attempt }}
+          key: ios-fleet-state-codecaps-ios-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            ios-fleet-state-codecaps-${{ github.run_id }}-
-            ios-fleet-state-codecaps-
+            ios-fleet-state-codecaps-ios-${{ github.run_id }}-
+            ios-fleet-state-codecaps-ios-
 
+      # Prefixes mirror on.push.paths (minus workflow and script files, which
+      # only a push or dispatch should act on).
       - name: Scheduled ship gate (skip unless iOS code changed)
         id: gate
         run: |
           bash "$GITHUB_WORKSPACE/scripts/ios-fleet/scheduled-ship-gate.sh" \
             --event "${{ github.event_name }}" \
             --path-prefix 'ios/CodeCapsCompanion/' \
+            --path-prefix 'Sources/QuotaCore/AppGroupSnapshotReadPolicy.swift' \
+            --path-prefix 'Sources/QuotaCore/CompanionReadTokenStore.swift' \
+            --path-prefix 'Sources/QuotaCore/FleetSourceDisagreement.swift' \
+            --path-prefix 'Sources/QuotaCore/PlanMetadata.swift' \
+            --path-prefix 'Sources/QuotaCore/QuotaWindowCaption.swift' \
+            --path-prefix 'Sources/QuotaCore/QuotaWindowPairing.swift' \
+            --path-prefix 'Sources/QuotaCore/QuotaMeterCadence.swift' \
+            --path-prefix 'Sources/QuotaCore/QuotaWindowVocabulary.swift' \
+            --path-prefix 'Sources/QuotaCore/ResetAlarmCadence.swift' \
+            --path-prefix 'Sources/QuotaCore/ResetAlarmMessage.swift' \
+            --path-prefix 'Sources/QuotaCore/ResetAlarmTracker.swift' \
+            --path-prefix 'Sources/QuotaCore/UsageAlertPreferences.swift' \
+            --path-prefix 'Sources/QuotaCore/WidgetPlatformDisplay.swift' \
+            --path-prefix 'Sources/QuotaCore/WidgetSnapshotFetcher.swift' \
             --repo-root "$GITHUB_WORKSPACE" \
             codecaps
 
-      - name: Assert stable Xcode (never beta)
+      # No Swift CI check run on this SHA fails after MISSING_GRACE_SECONDS
+      # (scripts/await-swift-ci-checks.sh) instead of polling to
+      # DEADLINE_SECONDS.  workflow_dispatch cannot pin the SHA, so this step
+      # does not start Swift CI.  ios-ship and mac-release share this gate.
+      - name: Wait for Swift CI compile checks on this commit
         if: steps.gate.outputs.should_ship == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: bash scripts/await-swift-ci-checks.sh
+
+  ship:
+    name: TestFlight archive + upload
+    needs: gate
+    if: >-
+      github.event.repository.fork == false &&
+      needs.gate.result == 'success' &&
+      needs.gate.outputs.should_ship == '1'
+    runs-on: macos-latest
+    timeout-minutes: 90
+    env:
+      DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # The release notes need the commit range since the last ship.
+          fetch-depth: 0
+
+      - name: Restore ship-state cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ios-fleet
+          key: ios-fleet-state-codecaps-ios-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ios-fleet-state-codecaps-ios-${{ github.run_id }}-
+            ios-fleet-state-codecaps-ios-
+
+      - name: Clear stale archive lock from ship-state cache
+        run: |
+          # A cancelled ship can save ship-testflight.sh's mkdir lock
+          # (archive.lockdir) into the ship-state cache.  Hosted runners are
+          # single-use, so no other ship can hold it when this job starts;
+          # left in place it blocks this run until "archive lock timeout".
+          lockdir="${HOME}/.cache/ios-fleet/archive.lockdir"
+          if [ -e "$lockdir" ]; then
+            rm -rf "${HOME}/.cache/ios-fleet/archive.lockdir"
+            echo "Stale archive lock found and removed."
+          else
+            echo "No stale archive lock found."
+          fi
+
+      - name: Assert stable Xcode (never beta)
         run: |
           echo "DEVELOPER_DIR=${DEVELOPER_DIR}"
           xcodebuild -version
@@ -86,7 +227,6 @@ jobs:
           esac
 
       - name: Install xcodegen
-        if: steps.gate.outputs.should_ship == '1'
         run: |
           if command -v xcodegen >/dev/null 2>&1; then
             xcodegen --version
@@ -94,29 +234,277 @@ jobs:
             brew install xcodegen
           fi
 
-      - name: Import signing + ASC key
-        if: steps.gate.outputs.should_ship == '1'
+      # CodeCaps project prod /.  SENTRY_DSN there is the codecaps DSN
+      # (numeric project 4512207409840129).  Also load
+      # SENTRY_AUTH_TOKEN_FULLSCOPE — sentry-cli refuses a DSN-shaped
+      # SENTRY_AUTH_TOKEN (CC-200).  INFISICAL_PROJECT_ID +
+      # INFISICAL_CODECAPS_READ_TOKEN must be the CodeCaps project id and a
+      # read-only service token scoped to prod:/.  SENTRY_DSN is NOT required
+      # here: a totally missing vault+fallback value must not block
+      # TestFlight (docs/IOS-TESTFLIGHT.md).  Loudness for a missing or
+      # non-codecaps DSN is the pick step note + Sentry status step.  Keep
+      # GH_FALLBACK_SENTRY_DSN (prefer SENTRY_DSN_CODECAPS) so a scoped-read
+      # miss can still supply a DSN for the pick step to validate.
+      - name: Load Sentry ship secrets (Infisical, then repository secrets)
+        uses: ./.github/actions/infisical-secrets
+        with:
+          names: SENTRY_DSN SENTRY_AUTH_TOKEN SENTRY_AUTH_TOKEN_FULLSCOPE
+          project-id: ${{ secrets.INFISICAL_PROJECT_ID }}
+          service-token: ${{ secrets.INFISICAL_CODECAPS_READ_TOKEN }}
+        env:
+          GH_FALLBACK_SENTRY_DSN: ${{ secrets.SENTRY_DSN_CODECAPS || secrets.SENTRY_DSN }}
+          GH_FALLBACK_SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          GH_FALLBACK_SENTRY_AUTH_TOKEN_FULLSCOPE: ${{ secrets.SENTRY_AUTH_TOKEN_FULLSCOPE }}
+
+      # Accept a DSN only when it names the codecaps project id.  Comparing
+      # vault_dsn != secrets.SENTRY_DSN was a false negative whenever the
+      # repository secret was already the codecaps DSN (run 42550310144).
+      # Prefer SENTRY_DSN_CODECAPS over any non-codecaps vault/fallback value.
+      # A miss still does not block TestFlight; it writes the status-step note.
+      - name: Use the CodeCaps Sentry DSN
+        env:
+          SENTRY_DSN_CODECAPS: ${{ secrets.SENTRY_DSN_CODECAPS }}
+          CODECAPS_SENTRY_PROJECT_ID: "4512207409840129"
         run: |
-          if [ -z "${ASC_KEY_ID:-}" ]; then
-            echo "::error::ASC_KEY_ID empty. Confirm ASC_/IOS_DIST_ secrets are configured."
+          set +o xtrace
+          set -euo pipefail
+          dsn_project_id() {
+            # DSN path tail is the numeric project id; never print the DSN.
+            # Strip query/fragment and trailing slashes so a valid DSN like
+            # .../4512207409840129/ or .../4512207409840129?x=1 still matches.
+            printf '%s' "${1:-}" | sed -E 's/[?#].*$//; s#/+$##' | awk -F/ '{print $NF}' | tr -d '\r\n'
+          }
+          vault_dsn="${SENTRY_DSN:-}"
+          vault_proj="$(dsn_project_id "$vault_dsn")"
+          caps_proj="$(dsn_project_id "${SENTRY_DSN_CODECAPS:-}")"
+          if [ -n "$vault_dsn" ] && [ "$vault_proj" = "${CODECAPS_SENTRY_PROJECT_ID}" ]; then
+            echo "SENTRY_DSN names Sentry project codecaps (${CODECAPS_SENTRY_PROJECT_ID})."
+          elif [ -n "${SENTRY_DSN_CODECAPS:-}" ] && [ "$caps_proj" = "${CODECAPS_SENTRY_PROJECT_ID}" ]; then
+            {
+              echo "SENTRY_DSN<<SENTRY_DSN_CODECAPS_EOF"
+              printf '%s\n' "$SENTRY_DSN_CODECAPS"
+              echo "SENTRY_DSN_CODECAPS_EOF"
+            } >>"$GITHUB_ENV"
+            echo "SENTRY_DSN now comes from SENTRY_DSN_CODECAPS (Sentry project codecaps)."
+          else
+            msg="No codecaps Sentry DSN: Infisical CodeCaps prod / SENTRY_DSN and repository SENTRY_DSN_CODECAPS are missing or do not name project ${CODECAPS_SENTRY_PROJECT_ID} (got vault_project_id=${vault_proj:-empty}). Crashes from this build will not land in codecaps."
+            echo "::error title=Sentry DSN::${msg}"
+            printf '%s\n' "$msg" >>"$RUNNER_TEMP/ios-ship-sentry-dsn-missing"
+          fi
+          if [ -z "${SENTRY_AUTH_TOKEN_FULLSCOPE:-}" ]; then
+            echo "::warning title=Sentry auth::SENTRY_AUTH_TOKEN_FULLSCOPE is empty; dSYM / Size Analysis upload needs an org API token (not a DSN-shaped SENTRY_AUTH_TOKEN). See CC-200."
+          fi
+
+      # Do not use `secrets.*` in `if:` -- GitHub's dispatch parser rejects it
+      # (`Unrecognized named-value: secrets`) and the whole workflow dies at 0s.
+
+      # ASC key from Fleet-OPS prod /asc via INFISICAL_ASC_READ_TOKEN.
+      # asc-mode stages the PEM with scripts/ios-stage-asc-key.sh and exports
+      # ASC_KEY_PATH, ASC_KEY_ID and ASC_ISSUER_ID.  The raw PEM is not written
+      # to GITHUB_ENV.
+      - name: Load and stage the ASC credentials (Fleet-OPS prod /asc)
+        uses: ./.github/actions/infisical-secrets
+        with:
+          names: ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8
+          required: ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8
+          project-id: ${{ secrets.INFISICAL_FLEET_OPS_PROJECT_ID }}
+          secret-path: /asc
+          service-token: ${{ secrets.INFISICAL_ASC_READ_TOKEN }}
+          asc-mode: "true"
+
+      - name: Check the ASC credentials arrived
+        run: |
+          set +o xtrace
+          set -euo pipefail
+          for name in ASC_KEY_ID ASC_ISSUER_ID; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::Missing $name in Fleet-OPS prod /asc; verify the CI identity has read access to Fleet-OPS prod /asc." >&2
+              exit 1
+            fi
+          done
+          if [ -z "${ASC_KEY_PATH:-}" ] || [ ! -s "${ASC_KEY_PATH:-}" ]; then
+            echo '::error::Missing ASC key material in Fleet-OPS prod /asc; verify the CI identity has read access to Fleet-OPS prod /asc.' >&2
+            exit 1
+          fi
+      - name: Import signing identity
+        env:
+          IOS_DIST_P12_BASE64: ${{ secrets.IOS_DIST_P12_BASE64 }}
+          IOS_DIST_P12_PASSWORD: ${{ secrets.IOS_DIST_P12_PASSWORD }}
+        run: |
+          if [ -z "${ASC_KEY_ID:-}" ] || [ -z "${ASC_KEY_PATH:-}" ]; then
+            echo "::error::ASC credentials were not loaded from Fleet-OPS prod /asc."
+            exit 1
+          fi
+          if [ -z "${IOS_DIST_P12_BASE64:-}" ]; then
+            echo "::error::IOS_DIST_P12_BASE64 is empty.  Confirm the IOS_DIST_ repository secrets are configured."
             exit 1
           fi
           bash "$GITHUB_WORKSPACE/scripts/ios-appstore-gm-prepare.sh"
 
+      # The clients take the credential from the environment and never from a
+      # path (Kody rule 42), so the staged key is handed to each of them
+      # through its environment.  The loader reads the file the load step
+      # staged and exports ASC_KEY_P8 into this step's shell; the value never
+      # enters $GITHUB_ENV, never becomes an argument and never reaches a log
+      # line.
+      - name: Enable CodeCaps APNs and verify production push profile
+        run: |
+          source scripts/ios-load-asc-key.sh
+          node "$GITHUB_WORKSPACE/scripts/ios-enable-apns.mjs"
+
       - name: Install App Store profiles
-        if: steps.gate.outputs.should_ship == '1'
-        run: bash "$GITHUB_WORKSPACE/scripts/ios-install-appstore-profiles.sh"
+        run: |
+          source scripts/ios-load-asc-key.sh
+          bash "$GITHUB_WORKSPACE/scripts/ios-install-appstore-profiles.sh"
+
+      # The release's ONE build number, computed once (owner 2026-10-29).
+      # Every ship step of this release reuses the value below through --build;
+      # no ship step plans its own.  The rate gate and the same-HEAD skip still
+      # live in the ship script, so when the gate skips, nothing is uploaded.
+      - name: Plan the release build (once per release)
+        id: plan-build
+        run: |
+          source scripts/ios-load-asc-key.sh
+          build="$(bash scripts/ios-fleet/ship-testflight.sh codecaps --repo-root "$GITHUB_WORKSPACE" --plan-build-only)"
+          if ! printf '%s' "$build" | grep -qE '^[1-9][0-9]{11}$'; then
+            echo "::error::plan-build did not print a 12-digit merge-timestamp build."
+            exit 1
+          fi
+          echo "build=${build}" >>"$GITHUB_OUTPUT"
+          echo "Planned release build: ${build}"
 
       - name: Ship CodeCaps to TestFlight
-        if: steps.gate.outputs.should_ship == '1'
+        id: ship
         env:
           IOS_TF_RELEASE_NOTES: "1"
           IOS_MANUAL_SIGN: "1"
-        run: bash scripts/ios-ship-testflight.sh
+          # The version-manifest publisher writes site/ios-versions.json on
+          # Simple-With-Us/ai-fleet-coordinator through a branch and pull
+          # request.  This job's GITHUB_TOKEN is contents:read here and cannot
+          # write that repository, so the publisher gets the org GH_PAT secret
+          # scoped to this step only.  The value is never printed, and a publish
+          # miss stays non-fatal for the TestFlight upload (CC-202).
+          IOS_VERSIONS_PUBLISH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          source scripts/ios-load-asc-key.sh
+          node scripts/ios-observe-ship.mjs bash scripts/ios-ship-testflight.sh --build "${{ steps.plan-build.outputs.build }}"
+
+      - name: Sync standing TestFlight testers
+        if: success()
+        continue-on-error: true
+        env:
+          ASC_STANDING_TESTERS: ${{ secrets.ASC_STANDING_TESTERS }}
+        run: |
+          for e in $(printf '%s' "${ASC_STANDING_TESTERS:-}" | tr ',;' '  '); do
+            echo "::add-mask::${e}"
+          done
+          set +e
+          appleid="$(python3 -c 'import json;print(json.load(open("scripts/ios-fleet/apps.json"))["apps"]["codecaps"]["appleId"])')"
+          appleid_rc=$?
+          set -e
+          if [ "$appleid_rc" -ne 0 ] || [ -z "$appleid" ]; then
+            echo "::warning title=TestFlight standing testers::could not read the codecaps appleId from scripts/ios-fleet/apps.json (rc=${appleid_rc}); tester sync skipped.  The TestFlight upload itself succeeded."
+            exit 0
+          fi
+          set +e
+          # The client resolves the signing key from its environment and never
+          # from a path (Kody rule 42), so the staged key is handed to the
+          # child through the child's environment by the loader.  The key
+          # stays out of argv, out of stdout, out of $GITHUB_ENV and out of
+          # the log.
+          source scripts/ios-load-asc-key.sh
+          node scripts/ios-fleet/asc-api.mjs ensure-standing-testers "$appleid"
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            echo "::warning title=TestFlight standing testers::tester sync exited ${rc}; see the standing-testers lines above.  The TestFlight upload itself succeeded."
+          fi
+
+      # ensure-tf-ready inside the ship step runs before standing-tester sync,
+      # so rc=5 there can be a false alarm when sync creates the internal
+      # group (OPS-1052).  Re-run the same ensure-tf-ready pass after sync
+      # (idempotent compliance/notes, fresh internal-tester poll) for the run
+      # summary; failures must not fail a run that already uploaded.
+      - name: Recheck TestFlight readiness after standing-tester sync
+        id: recheck_tf
+        if: success() && steps.ship.outputs.uploaded == 'true'
+        continue-on-error: true
+        timeout-minutes: 8
+        env:
+          IOS_TF_READY_TIMEOUT_SEC: "240"
+        run: |
+          source scripts/ios-load-asc-key.sh
+          bash scripts/ios-recheck-tf-ready.sh codecaps "${{ steps.plan-build.outputs.build }}"
+
+      - name: iOS ship summary (TestFlight readiness after sync)
+        if: always() && steps.ship.outputs.uploaded == 'true'
+        run: |
+          set -euo pipefail
+          {
+            echo "## TestFlight readiness (after standing-tester sync)"
+            if [ "${{ steps.recheck_tf.outcome }}" = "success" ] && [ -n "${{ steps.recheck_tf.outputs.tf_ready_summary }}" ]; then
+              echo "- CodeCaps (${{ steps.recheck_tf.outputs.tf_ready_bundle }} build ${{ steps.recheck_tf.outputs.tf_ready_build }}): rc=${{ steps.recheck_tf.outputs.tf_ready_rc }} — ${{ steps.recheck_tf.outputs.tf_ready_summary }}"
+            elif [ "${{ steps.ship.outcome }}" = "success" ]; then
+              echo "- CodeCaps: post-sync readiness check did not run or produced no summary"
+            fi
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      # Never persist the archive lock: a cancelled ship can leave it held,
+      # and saving it would hand the next run a stale lock to wait on.
+      - name: Remove archive lock before saving ship-state cache
+        if: always()
+        run: |
+          rm -rf "${HOME}/.cache/ios-fleet/archive.lockdir"
 
       - name: Save ship-state cache
         if: always()
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ios-fleet
-          key: ios-fleet-state-codecaps-${{ github.run_id }}-${{ github.run_attempt }}
+          key: ios-fleet-state-codecaps-ios-${{ github.run_id }}-${{ github.run_attempt }}
+
+      # A failed Sentry upload used to be one warning line inside a green job,
+      # which is how CodeCaps iOS 1.0.263 / build 281 shipped with no dSYM and
+      # no Size Analysis build and nothing showed red (CC-200).  The ship
+      # script records every miss in this marker file, and this step turns it
+      # into a red run.
+      #
+      # It runs LAST, after the ship-state cache is saved, so a red run can
+      # neither block the release that already happened nor make the next
+      # scheduled ship repeat itself:  the cache is what the gate diffs
+      # against, and it is saved with `if: always()` above.
+      - name: Sentry artifact upload status
+        if: always()
+        run: |
+          dsn_note="$RUNNER_TEMP/ios-ship-sentry-dsn-missing"
+          dsn_missing=0
+          if [ -f "$dsn_note" ]; then
+            dsn_missing=1
+            echo "::error title=Sentry DSN::this build did not get a codecaps Sentry DSN (project 4512207409840129), so its crashes do not land in the codecaps project."
+            while IFS= read -r line; do
+              echo "  ${line}"
+            done <"$dsn_note"
+          fi
+          marker="$GITHUB_WORKSPACE/.ios-ship-sentry-failed"
+          if [ -f "$marker" ]; then
+            if [ "${{ steps.ship.outcome }}" = "success" ]; then
+              echo "::error title=Sentry upload::the dSYM / Size Analysis upload failed, so iOS crash symbolication is broken for this build.  The TestFlight upload itself succeeded."
+            else
+              echo "::error title=Sentry upload::the dSYM / Size Analysis upload failed, and the ship step did not succeed either, so this build may never have reached TestFlight.  See the ship step output for the real cause."
+            fi
+            while IFS= read -r line; do
+              echo "  ${line}"
+            done <"$marker"
+            exit 1
+          fi
+          # Report the ship outcome before the DSN exit, so a failed ship
+          # is never hidden behind the Sentry DSN error.
+          if [ "${{ steps.ship.outcome }}" != "success" ]; then
+            echo "The ship step did not succeed (result: ${{ steps.ship.outcome }}), so the Sentry upload status is unknown.  See the ship step output for the real cause."
+          fi
+          if [ "$dsn_missing" = "1" ]; then
+            exit 1
+          fi
+          if [ "${{ steps.ship.outcome }}" = "success" ]; then
+            echo "Sentry dSYM and Size Analysis upload succeeded."
+          fi

@@ -169,6 +169,112 @@ final class DataModeTests: XCTestCase {
         XCTAssertEqual(published, 0)
     }
 
+    func testAutomaticPushWithNoPublishableWindowsIsNeutral() async {
+        let model = noPublishableModel()
+        var attempts = 0
+        model.syncTokenReadForTesting = { UUID().uuidString }
+        model.pushForTesting = { windows, _, _, _ in
+            attempts += 1
+            XCTAssertTrue(windows.allSatisfy { $0.remainingPercent == nil })
+            throw QuotaPublisherError.noPublishableWindows
+        }
+
+        model.refresh()
+        let finished = await waitForRefreshToFinish(model)
+
+        XCTAssertTrue(finished)
+        XCTAssertEqual(attempts, 1)
+        XCTAssertNil(model.lastSyncTime)
+        XCTAssertNil(model.lastSyncStatus)
+        XCTAssertNil(model.lastSyncError)
+        XCTAssertFalse(model.isSyncing)
+    }
+
+    func testManualPushWithNoPublishableWindowsReportsNeutralNoOp() async {
+        let model = noPublishableModel()
+        var attempts = 0
+        model.pushForTesting = { windows, _, _, _ in
+            attempts += 1
+            XCTAssertTrue(windows.allSatisfy { $0.remainingPercent == nil })
+            throw QuotaPublisherError.noPublishableWindows
+        }
+
+        let outcome = await model.testAndPushSync(token: UUID().uuidString)
+
+        XCTAssertFalse(outcome.success, "A no-op must not claim a delivery receipt")
+        XCTAssertEqual(outcome.message, "No quota windows with a known remaining percentage to publish.")
+        XCTAssertEqual(attempts, 1)
+        XCTAssertNil(model.lastSyncTime)
+        XCTAssertNil(model.lastSyncStatus)
+        XCTAssertNil(model.lastSyncError)
+        XCTAssertFalse(model.isSyncing)
+    }
+
+    func testManualPushKeepsAcknowledgmentFailuresVisible() async {
+        let model = noPublishableModel()
+        model.pushForTesting = { _, _, _, _ in
+            throw QuotaPublisherError.serverError("Invalid acknowledgment.")
+        }
+
+        let outcome = await model.testAndPushSync(token: UUID().uuidString)
+
+        XCTAssertFalse(outcome.success)
+        XCTAssertEqual(outcome.message, "Server error: Invalid acknowledgment.")
+        XCTAssertEqual(model.lastSyncStatus, "Error: Server error: Invalid acknowledgment.")
+        XCTAssertEqual(model.lastSyncError, "Server error: Invalid acknowledgment.")
+        XCTAssertNil(model.lastSyncTime)
+        XCTAssertFalse(model.isSyncing)
+    }
+
+    func testTransientFleetPullFailureKeepsLastGoodWithoutServerError() async {
+        defaults.set(false, forKey: "localEnabled")
+        defaults.set(true, forKey: "serverEnabled")
+        defaults.set("https://usage.jays.services/api/quota-windows", forKey: "endpoint")
+        defaults.set(true, forKey: "hasSavedToken")
+        let model = MonitorModel(defaults: defaults)
+        model.skipsSnapshotIOForTesting = true
+
+        let remote = window("remote", source: "fleet")
+        model.serverFetchForTesting = { QuotaResponse(generatedAt: "seed", windows: [remote]) }
+        model.refresh()
+        XCTAssertTrue(await waitForRefreshToFinish(model))
+        XCTAssertNil(model.serverError)
+        XCTAssertEqual(model.serverWindows.count, 1)
+
+        model.serverFetchForTesting = { throw QuotaClientError.httpStatus(503) }
+        model.refresh()
+        XCTAssertTrue(await waitForRefreshToFinish(model))
+        XCTAssertNil(model.serverError)
+        XCTAssertEqual(model.serverWindows.count, 1)
+
+        model.serverFetchForTesting = { throw QuotaClientError.transport }
+        model.refresh()
+        XCTAssertTrue(await waitForRefreshToFinish(model))
+        XCTAssertNotNil(model.serverError)
+        XCTAssertEqual(model.serverWindows.count, 1)
+
+        model.serverFetchForTesting = { throw QuotaClientError.unauthorized }
+        model.refresh()
+        XCTAssertTrue(await waitForRefreshToFinish(model))
+        XCTAssertNotNil(model.serverError)
+        XCTAssertEqual(model.serverWindows.count, 1)
+    }
+
+    private func noPublishableModel() -> MonitorModel {
+        defaults.set(true, forKey: "localEnabled")
+        defaults.set(false, forKey: "serverEnabled")
+        defaults.set(true, forKey: "syncEnabled")
+        defaults.set("https://quota.example.test/api/ingest/usage", forKey: "syncEndpoint")
+        defaults.set(QuotaSyncFormat.usageMonitorV2.rawValue, forKey: "syncFormat")
+        let model = MonitorModel(defaults: defaults)
+        model.skipsSnapshotIOForTesting = true
+        var unknown = window("credits-only")
+        unknown.remainingPercent = nil
+        unknown.remainingUnknown = true
+        model.localResultForTesting = LocalQuotaResult(windows: [unknown])
+        return model
+    }
+
     private func waitForRefreshToFinish(_ model: MonitorModel) async -> Bool {
         for _ in 0..<10_000 where model.isRefreshing {
             try? await Task.sleep(nanoseconds: 100_000)

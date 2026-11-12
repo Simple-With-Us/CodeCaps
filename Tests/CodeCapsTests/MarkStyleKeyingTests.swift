@@ -55,11 +55,11 @@ final class MarkStyleKeyingTests: XCTestCase {
     /// single-colour artwork renders as a template in every style, so forcing
     /// "Colour" cannot conjure a colour that is not in the file.
     func testSingleColourMarksStayMonochromeUnderEveryMenuBarChoice() {
-        for key in ["codex", "cursor", "grok", "grok-bot", "minimax"] {
+        for key in ["codex", "cursor", "grok", "grok-bot"] {
             XCTAssertTrue(PlatformLogoImage.isMonochromeMark(key),
                           "\(key) ships single-colour artwork; the settings copy depends on this")
         }
-        for key in ["anthropic", "claude", "google-antigravity:gemini"] {
+        for key in ["anthropic", "claude", "google-antigravity:gemini", "minimax"] {
             XCTAssertFalse(PlatformLogoImage.isMonochromeMark(key),
                            "\(key) has brand colour to preserve, so Standard is meaningful")
         }

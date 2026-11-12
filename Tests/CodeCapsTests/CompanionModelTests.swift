@@ -8,6 +8,74 @@ import QuotaCore
 /// Mirrors the companion contract used on iOS so behavioral regressions
 /// are caught directly in the standard `swift test` suite.
 final class CompanionModelTests: XCTestCase {
+    @MainActor
+    func testSharedProjectionMatchesActualMacMetersForSanitizedScreenshotRows() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let stamp = ISO8601DateFormatter().string(from: now)
+        let reset = ISO8601DateFormatter().string(from: now.addingTimeInterval(3600))
+        func window(_ id: String, _ provider: String, _ token: String?, _ percent: Double?,
+                    model: String? = nil, label: String = "Quota") -> QuotaWindow {
+            QuotaWindow(id: id, provider: provider, providerKey: provider, modelId: model, label: label,
+                remainingPercent: percent, remainingUnknown: percent == nil, resetAt: reset,
+                window: token, occurredAt: stamp, source: "CodeCaps")
+        }
+        let fixtures = [
+            [window("minimax:plan", "minimax", nil, nil, label: "Plan"),
+             window("minimax:5h", "minimax", "5h", 92, model: "general"),
+             window("minimax:7d", "minimax", "7d", 74, model: "general")],
+            [window("claude:plan", "anthropic", nil, nil, label: "Plan"),
+             window("claude:5h", "anthropic", "5h", 80),
+             window("claude:missing", "anthropic", "7d", nil),
+             window("claude:7d", "anthropic", "7d", 0),
+             window("claude:fable", "anthropic", "7d", 0, model: "fable")]
+        ]
+        for windows in fixtures {
+            let section = QuotaResponse(generatedAt: stamp, windows: windows).platformSections(now: now)
+                .first { !$0.windows.isEmpty }!
+            let mac = DisplaySection.rows(for: section, now: now)[0]
+            let pair = glanceMeterPair(for: mac, now: now)
+            let macIDs = [pair.short?.window.id, pair.long?.window.id].compactMap { $0 }
+            let readings = windows.map {
+                QuotaCardProjection.Reading(id: $0.id, providerKey: $0.canonicalProviderKey, label: $0.label,
+                    window: $0.window, modelId: $0.modelId, remainingPercent: $0.boundedRemainingPercent,
+                    resetAt: $0.resetDate, reportedAt: $0.occurredDate, source: $0.source)
+            }
+            let companionIDs = QuotaCardProjection.selectedIndices(in: readings, now: now)
+                .filter { readings[$0].detailName == nil }.map { readings[$0].id }
+            XCTAssertEqual(companionIDs, macIDs)
+            XCTAssertEqual(companionIDs.count, 2)
+        }
+    }
+
+    func testPhoneNonfiniteReadingGuardsRemainAtTextAndBarBoundaries() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(source.contains("guard let remainingPercent, remainingPercent.isFinite else { return \"—\" }"))
+        XCTAssertTrue(source.contains("guard let remainingPercent, remainingPercent.isFinite else { return .secondary }"))
+        XCTAssertTrue(source.contains("Int(min(100, max(0, remainingPercent)).rounded())"))
+        let view = try String(contentsOf: Self.companionContentViewURL!, encoding: .utf8)
+        XCTAssertTrue(view.contains("window.remainingPercent.flatMap { $0.isFinite ? $0 : nil }"))
+        XCTAssertTrue(view.contains("window.elapsedFraction().flatMap { $0.isFinite ? $0 : nil }"))
+    }
+
+    func testCardNonfiniteReadingsStayUnknown() throws {
+        let source = try readCompanionModelSource()
+        // The headline's reading rule now lives in the shared `CardHeadline`;
+        // the card must ask it, and it must keep non-finite readings out.
+        XCTAssertTrue(source.contains("return CardHeadline.percent(readings)"))
+        XCTAssertTrue(source.contains("windowToken: window.rawWindowToken,"),
+                      "the headline must pass the producer's own token, not a formatted cadence")
+        XCTAssertTrue(source.contains("rawWindowToken: w.window"),
+                      "the window item must carry the producer's raw token")
+        XCTAssertFalse(source.contains("windowToken: nil, label: left.label"),
+                       "the muse sort must pass the producer's raw token")
+        XCTAssertFalse(source.contains("windowToken: nil,\n                    label: $0.window.label"),
+                       "the card windows must pass the producer's raw token")
+        let shared = try readHeadlineSource()
+        XCTAssertTrue(shared.contains(".filter { $0.isFinite }"))
+        XCTAssertTrue(source.contains("guard let remainingPercent = cardRemainingPercent(scope: scope, now: now), remainingPercent.isFinite else { return \"—\" }"))
+        XCTAssertTrue(source.contains("guard let remainingPercent = cardRemainingPercent(scope: scope, now: now), remainingPercent.isFinite else { return .secondary }"))
+    }
+
     private static var companionModelURL: URL? {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()  // Tests/CodeCapsTests
@@ -32,6 +100,18 @@ final class CompanionModelTests: XCTestCase {
             .appendingPathComponent("ios/CodeCapsCompanion/App/Views/CompanionContentView.swift")
     }
 
+    private func readHeadlineSource() throws -> String {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/QuotaCore/WidgetPlatformDisplay.swift")
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw XCTSkip("WidgetPlatformDisplay.swift is not present at \(url.path)")
+        }
+        return try String(contentsOf: url, encoding: .utf8)
+    }
+
     private func readCompanionModelSource() throws -> String {
         guard let url = Self.companionModelURL, FileManager.default.fileExists(atPath: url.path) else {
             throw XCTSkip("CompanionQuotaModel.swift is not present at \(Self.companionModelURL?.path ?? "")")
@@ -53,7 +133,75 @@ final class CompanionModelTests: XCTestCase {
         return try String(contentsOf: url, encoding: .utf8)
     }
 
+    private func readQuotaWindowVocabularySource() throws -> String {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()  // Tests/CodeCapsTests
+            .deletingLastPathComponent()  // Tests
+            .deletingLastPathComponent()  // repo root
+            .appendingPathComponent("Sources/QuotaCore/QuotaWindowVocabulary.swift")
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw XCTSkip("QuotaWindowVocabulary.swift is not present at \(url.path)")
+        }
+        return try String(contentsOf: url, encoding: .utf8)
+    }
+
     // MARK: - App Group & Hygiene
+
+    /// Two manifest groups aliasing to one key must not become two cards
+    /// with one id, and the fallback stamp must read the snapshot's file
+    /// age (CC-214).
+    func testCompanionDeduplicatesAliasedManifestKeys() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(source.contains("seenManifestKeys.insert($0).inserted"),
+                      "aliased manifest keys are deduplicated, first occurrence wins")
+        XCTAssertTrue(source.contains("isScopedAllowance: window.isScopedPoolAllowance"),
+                      "scoped pool allowances stay out of the card headline")
+        XCTAssertFalse(source.contains("if self.lastUpdated == nil,"),
+                       "the fallback stamp reads the snapshot file's age, not only the first time")
+    }
+
+    /// The companion maps Kimi and Z.ai to the supplied marks, and neither
+    /// lands in the monochrome list: the catalog carries colour vectors with
+    /// dark appearances, so both render in colour and stay legible (CC-212).
+    func testCompanionMapsKimiAndZAIProviderAliasesToLogos() throws {
+        // CC-224 moved the provider-to-mark routing into the shared
+        // `CompanionProviderMarkAssets.catalogAssetName`, so both the companion
+        // model and the widgets pin against that single mapping now.
+        let displaySource = try String(contentsOf: URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/QuotaCore/WidgetPlatformDisplay.swift"), encoding: .utf8)
+        XCTAssertTrue(displaySource.contains(#"if low.contains("kimi") { return "provider-kimi" }"#))
+        XCTAssertTrue(displaySource.contains(#"["zcode", "z.ai", "z-ai", "zai"].contains(where: { low.contains($0) }) { return "provider-zai" }"#))
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(source.contains("CompanionProviderMarkAssets.catalogAssetName"))
+        let widgets = try String(contentsOf: URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("ios/CodeCapsCompanion/Widgets/WidgetViews.swift"), encoding: .utf8)
+        XCTAssertTrue(widgets.contains("CompanionProviderMarkAssets.catalogAssetName"))
+        let view = try String(contentsOf: URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("ios/CodeCapsCompanion/App/Views/CompanionContentView.swift"), encoding: .utf8)
+        XCTAssertFalse(view.contains("\"provider-zai\""),
+                       "Z.ai keeps its colour mark, so it must not join the monochrome list")
+    }
+
+    func testCompanionResolvesCanonicalPlatformDisplayTitles() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains("WidgetPlatformDisplay.title"),
+            "Companion parsing must resolve canonical platform names, not raw provider ids"
+        )
+        XCTAssertEqual(
+            WidgetPlatformDisplay.title(canonicalKey: "cursor", manifestProviderLabel: "cursor", wireProvider: "cursor"),
+            "Cursor"
+        )
+        XCTAssertFalse(
+            WidgetPlatformDisplay.isRawProviderSlug(
+                WidgetPlatformDisplay.title(canonicalKey: "cursor", manifestProviderLabel: "cursor", wireProvider: "cursor"),
+                canonicalKey: "cursor"
+            )
+        )
+    }
 
     func testPlatformSpecificAppGroupIds() throws {
         let source = try readCompanionModelSource()
@@ -68,12 +216,24 @@ final class CompanionModelTests: XCTestCase {
     func testSentenceGapInOutcomeMessages() throws {
         let source = try readSentenceGapSource()
         XCTAssertTrue(
-            source.contains(#"Test notification sent." + sentenceGap + "Banner and sound delivered."#),
+            source.contains(#"Test notification accepted." + sentenceGap + "System settings control banners and sound."#),
             "Test notification success message must use sentenceGap"
         )
         XCTAssertTrue(
             source.contains(#"Notifications are turned off for CodeCaps." + sentenceGap"#),
             "Denied notification message must use sentenceGap"
+        )
+    }
+
+    func testDataSourcesFooterUsesSentenceGap() throws {
+        let source = try readCompanionContentViewSource()
+        XCTAssertTrue(
+            source.contains(#"Text("Readings from each source." + sentenceGap"#),
+            "The Data Sources footer must use sentenceGap after its first sentence"
+        )
+        XCTAssertTrue(
+            source.contains(#"the difference shows here." + sentenceGap"#),
+            "The Data Sources footer must use sentenceGap after its second sentence"
         )
     }
 
@@ -184,6 +344,14 @@ final class CompanionModelTests: XCTestCase {
         )
     }
 
+    func testCompanionAntigravityPeriodLabelsUseExactCanonicalValues() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(source.contains("weeklyLabels.contains(label)"))
+        XCTAssertTrue(source.contains("fiveHourLabels.contains(label)"))
+        XCTAssertFalse(source.contains("label.contains(\"week\")"))
+        XCTAssertFalse(source.contains("label.contains(\"5h\")"))
+    }
+
     /// The shared-pool rule from `AntigravityQuotaGroups`: a weekly reading has
     /// to be identified explicitly, and a reset's distance is not a duration.
     ///
@@ -233,8 +401,8 @@ final class CompanionModelTests: XCTestCase {
     func testAntigravityRowSelectsDrivingObservationWithoutAveraging() throws {
         let source = try readCompanionModelSource()
         XCTAssertTrue(
-            source.contains("(left.remainingPercent ?? 101) < (right.remainingPercent ?? 101)"),
-            "a tie between two models of one shared pool must take the lower value"
+            source.contains("QuotaCardProjection.selectedPoolIndices(in: facts, poolKey: poolKey, now: now)"),
+            "the companion must use the shared pool resolver tested for lower-value ties"
         )
         XCTAssertFalse(
             source.contains("remainingPercent) / Double("),
@@ -257,8 +425,330 @@ final class CompanionModelTests: XCTestCase {
     func testNonAntigravityPlatformsKeepTheirOwnWindows() throws {
         let source = try readCompanionModelSource()
         XCTAssertTrue(
-            source.contains("let modelQualifier = (w.modelId ?? \"\").lowercased()"),
-            "buildPlatformSection must still fold ordinary platforms by model-qualified cadence"
+            source.contains("let effectiveQualifier = isMiniMax ? \"\" : modelQualifier"),
+            "ordinary provider windows must use shared allowance identity, preserving named model details"
+        )
+    }
+
+    // MARK: - The phone says when a provider is at its cap
+
+    /// Owner 2026-10-21: the phone showed no message for Codex or Antigravity
+    /// being at its cap, while the Mac's menu-bar window and PiP said so
+    /// clearly.  The card carries the same line now.
+    func testTheCompanionCardShowsTheAtCapLine() throws {
+        let view = try readCompanionContentViewSource()
+        XCTAssertTrue(
+            view.contains("item.atCapSummary(scope: scope)"),
+            "the quota card must show the cap line"
+        )
+        XCTAssertTrue(
+            view.contains("At cap. \\(atCapSummary)"),
+            "the cap line must be announced to VoiceOver"
+        )
+    }
+
+    /// The model must be able to say which window binds the cap, and it must
+    /// use the shared wording so the phone and the Mac cannot drift.
+    func testTheCompanionModelComputesTheAtCapLine() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(source.contains("public func atCapSummary(scope: CompanionSourceScope"))
+        XCTAssertTrue(source.contains("public func atCapWindow(scope: CompanionSourceScope"))
+        XCTAssertTrue(
+            source.contains("QuotaWindowVocabulary.atCapSummary(cadence: window.atCapCadenceLabel"),
+            "the phone must use the shared cap wording, not a copy of it"
+        )
+    }
+
+    /// QA pixel review 2026-11-06: a fully-at-cap card hides the meters and
+    /// their stale cue, so an old cap reading carried no age anywhere.  The
+    /// cap line must date the reading.
+    func testTheCompanionCardDatesAnOldCapReading() throws {
+        let view = try readCompanionContentViewSource()
+        XCTAssertTrue(
+            view.contains("item.atCapReadingAgeCue(scope: scope)"),
+            "the at-cap layout must render the reading's age when it is old"
+        )
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(source.contains("public func atCapReadingAgeCue(scope: CompanionSourceScope"))
+        XCTAssertTrue(
+            source.contains("QuotaFreshnessRule.isReadingRecent(observedAt: reportedAt, now: now)"),
+            "the cap age cue must use the shared freshness threshold"
+        )
+    }
+
+    /// QA 2026-11-06, verified against the real wire capture:  the codecaps
+    /// 5h and the collector weekly share series "general", the collector's
+    /// 5h headline is series "minimax:coding-plan", and Copilot's Chat and
+    /// Completions share the canonical key "monthly".  The dedupe identity
+    /// must be the triple of video class, aliased series, and canonical
+    /// cadence - and the helpers must live on the type that uses them
+    /// (a helper defined on the item type left the model's call dangling,
+    /// compile failure on 9ad6e5f2).
+    func testDistinctAllowancesSharingACadenceKeepTheirOwnRows() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains("static func allowanceSeries(forWireId id: String) -> String"),
+            "the model must derive the server's series identity from the wire id"
+        )
+        XCTAssertTrue(
+            source.contains("Self.allowanceSeries(forWireId: w.id)"),
+            "the dedupe must key on the series identity, not the canonical windowKey"
+        )
+        XCTAssertTrue(
+            source.contains("static func normalizedAllowanceSeries(providerKey: String, series: String) -> String"),
+            "MiniMax plan-level aliasing must exist on the model"
+        )
+        XCTAssertTrue(
+            source.contains(#"isVideoWire ? "video|" : "plan|""#),
+            "video windows must partition out of plan identity before dedupe"
+        )
+        XCTAssertTrue(
+            source.contains(#"providerKey == "xai", series == "grok:subscription""#),
+            "the bounded xAI subscription-pool alias must exist (qa4 wire capture)"
+        )
+        XCTAssertTrue(
+            source.contains("static func canonicalWireCadence("),
+            "a copy without a windowKey must be canonicalised into the wire namespace, not keyed on the display cadence (kody, PR #370)"
+        )
+        XCTAssertTrue(
+            source.contains(#"case QuotaWindowVocabulary.sevenDay: return "7d""#),
+            "the collector's \"weekly\" token must land on the wire's \"7d\" so the two copies of one allowance merge"
+        )
+    }
+
+    /// The phone must ask the shared rule which window binds the cap.
+    ///
+    /// The phone's model is not compiled into the macOS test target, so its
+    /// half of the contract cannot be exercised here.  What can be checked is
+    /// that it holds no copy of the rule:  it maps its windows onto
+    /// `QuotaCapRule.WindowFacts` and calls `QuotaCapRule.bindingWindowIndex`,
+    /// carrying the rule's choice back by position rather than re-finding by
+    /// id, so the Mac's menu-bar window, the picture in picture and the phone
+    /// all answer "is this plan capped, and by which window" the same way.
+    ///
+    /// The rule's own behaviour is pinned by `QuotaCapRuleTests`, and
+    /// `QuotaCapRuleTests.testTheMacAndTheSharedRulePickTheSameWindow` proves
+    /// the Mac and the rule agree.
+    func testThePhoneAsksTheSharedRuleWhichWindowBindsTheCap() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains("QuotaCapRule.bindingWindowIndex(in: facts)"),
+            "the phone must call the shared rule, not keep its own copy of it"
+        )
+        XCTAssertTrue(
+            source.contains("QuotaCapRule.WindowFacts("),
+            "the phone must map its windows onto the shared rule's facts"
+        )
+        XCTAssertFalse(
+            source.contains("$0.isExhausted || ($0.remainingPercent ?? 100) <= 0"),
+            "the phone must not keep the old rule, where an exhausted word could override a reading"
+        )
+    }
+
+    /// Owner 2026-10-22: the xAI row read "7-day cap" while the sidebar beside
+    /// it read 96%, because the cap rule believed a window that reported an
+    /// exhausted allowance days ago.
+    ///
+    /// The phone's windows come from a live pull of the same feed the Mac
+    /// reads, and they carry the same timestamp, so the phone asks the shared
+    /// freshness rule with the shared threshold and the two surfaces answer
+    /// the same question about one account the same way.
+    func testThePhoneAgesItsReadingsByTheSharedRule() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains("QuotaFreshnessRule.isFresh(observedAt: reportedAt, resetAt: resetAt, now: now)"),
+            "the phone must ask the shared freshness rule, not carry a threshold of its own"
+        )
+        XCTAssertTrue(
+            source.contains("isFresh: $0.isFresh(now: now)"),
+            "the phone must state each window's freshness to the shared cap rule"
+        )
+        XCTAssertFalse(
+            source.contains("30 * 60"),
+            "the phone must not restate the shared threshold beside the rule"
+        )
+    }
+
+    /// The marker on the phone's bar is drawn for the same period the Mac's
+    /// caption names, so the phone cannot keep its own copy of the words that
+    /// name a period.
+    func testThePhoneResolvesItsPeriodThroughTheSharedResolver() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains("ResetAlarmCadence.resolve(token: cadence, label: label)"),
+            "the phone must ask the shared period resolver"
+        )
+        XCTAssertFalse(
+            source.contains("words.contains(\"5h\")"),
+            "the phone must not keep its own copy of the words that name a period"
+        )
+        XCTAssertFalse(
+            source.contains("words.contains(\"7d\")"),
+            "the phone must not keep its own copy of the words that name a period"
+        )
+    }
+
+    /// A masked window's reading must not be believed: it fed the card's
+    /// headline and the meter bar, so the phone drew a figure that the label
+    /// beside it called "n/a".
+    func testMaskedWindowsNeverFeedTheHeadlineOrTheBar() throws {
+        let model = try readCompanionModelSource()
+        XCTAssertTrue(
+            model.contains("return CardHeadline.percent(readings)")
+                && model.contains("isMasked: window.isMasked"),
+            "the card headline must hand every window's mask to the shared headline rule"
+        )
+        XCTAssertTrue(
+            try readHeadlineSource().contains(".filter { !$0.isMasked && !$0.isScopedAllowance }"),
+            "the shared headline rule must leave masked windows and scoped pool allowances out"
+        )
+        XCTAssertFalse(
+            model.contains("cardWindows(scope: scope, now: now).compactMap(\\.remainingPercent).min()"),
+            "the old headline counted masked windows"
+        )
+        let view = try readCompanionContentViewSource()
+        XCTAssertTrue(view.contains("remainingPercent: win.isMasked ? nil : win.remainingPercent"))
+        XCTAssertTrue(view.contains("remainingPercent: window.isMasked ? nil : window.remainingPercent"))
+    }
+
+    /// The Mac masks a pool's five-hour window at 0.5% remaining, because the
+    /// interface rounds that to 0%.  The phone tested for exactly zero, so the
+    /// same pool was capped on one surface and not on the other.
+    ///
+    /// The phone now asks the shared rule for the answer rather than carrying a
+    /// threshold of its own.  The constant it used to keep is deleted:  once
+    /// the weekly decision moved into the rule, nothing read it, and a test
+    /// that pinned a dead symbol still passed while a live copy of the same
+    /// question sat in the widget -- so the guarantee it claimed was false
+    /// (Kody review 2026-10-22).
+    func testThePhoneAndTheMacAgreeOnWhenAWeeklyCapCountsAsSpent() throws {
+        let model = try readCompanionModelSource()
+        XCTAssertFalse(
+            model.contains("weeklySpentThreshold"),
+            "the phone must not keep a weekly spent threshold of its own; the shared rule owns the number"
+        )
+        XCTAssertTrue(
+            model.contains("&& QuotaCapRule.isExhausted(remainingPercent: weeklyPct,"),
+            "the phone must decide the weekly through the shared rule, so a reading outranks the provider's exhausted word"
+        )
+    }
+
+    /// A pool is spent when any of its windows is.
+    ///
+    /// The pool decision evaluated the provider's word against `controllingPct`,
+    /// the lowest reading across the pool -- a reading that belongs to a
+    /// different window than the one the provider reports as gone.  A weekly
+    /// the provider reported as spent without a figure, beside a healthy
+    /// five-hour reading, therefore reported the plan live and the owner saw a
+    /// usable plan whose weekly allowance was gone (Kody review 2026-10-22).
+    /// Each window's own decision already went through the shared rule, so the
+    /// pool ORs those.
+    func testAPoolIsSpentWhenAnyOfItsWindowsIs() throws {
+        let model = try readCompanionModelSource()
+        XCTAssertTrue(
+            model.contains("let isExhausted = primaryWindows.contains {"),
+            "the pool must be spent when any of its windows is"
+        )
+        XCTAssertFalse(
+            model.contains("remainingPercent: controllingPct,\n            providerSaysExhausted: primaryWindows"),
+            "the provider's word must not be weighed against another window's reading"
+        )
+    }
+
+    /// The plan level exhaustion flag must not count the windows the shared
+    /// rule refuses to bind.
+    ///
+    /// `QuotaCapRule.bindingWindowIndex` never binds a sub model limit, a
+    /// scoped pool allowance or a supplementary video quota, and the phone's
+    /// own `atCapWindow()` and the Mac's `QuotaPlatformSection.atCapWindow()`
+    /// both go through it.  The plan level flag ORed every primary window, so
+    /// one of those windows reported the whole plan spent while the two
+    /// surfaces that answer the owner's question said the plan still had
+    /// headroom (Kody review 2026-10-22).
+    func testThePlanLevelExhaustionExcludesTheWindowKindsTheRuleExcludes() throws {
+        let model = try readCompanionModelSource()
+        for excluded in ["!$0.isSupplementaryVideoQuota", "!$0.isScopedPoolAllowance", "!$0.isSubModelLimit"] {
+            XCTAssertTrue(
+                model.contains(excluded),
+                "the plan level exhaustion must exclude the window kind marked by \(excluded): the shared rule never binds it"
+            )
+        }
+    }
+
+    /// A spent allowance publishes zero, whichever period it belongs to.
+    ///
+    /// The phone published the fallback zero for a weekly row only, while the
+    /// widget published one for a spent five hour allowance that carried no
+    /// figure, so one payload showed a zero bar on one surface and a dash on
+    /// the other (Kody review 2026-10-22).  The row's own provider word now
+    /// decides for every period, and the reading still outranks it.
+    func testASpentRowPublishesZeroWhicheverPeriodItIs() throws {
+        let model = try readCompanionModelSource()
+        XCTAssertTrue(
+            model.contains("let allowanceSpent = providerSaysSpent || (period == \"weekly\" && weeklyExhausted)"),
+            "a spent row must publish zero whichever period it belongs to"
+        )
+        XCTAssertFalse(
+            model.contains("allowanceSpent: period == \"weekly\" && (weeklyExhausted || providerSaysSpent)"),
+            "the fallback zero must not be gated on the weekly period alone"
+        )
+    }
+
+    /// The weekly row and its own provider word have to agree.
+    ///
+    /// `weeklyExhausted` is keyed off `weeklyWin`, picked by scanning ids and
+    /// labels, while the row is built from `driving`, picked from the period
+    /// buckets.  When the two pick different windows, a weekly the provider
+    /// reports as gone published no reading, so the cap rule could not bind it
+    /// and the cap line never appeared (Kody review 2026-10-22).
+    func testTheWeeklyRowAlsoPublishesZeroForItsOwnProviderWord() throws {
+        let model = try readCompanionModelSource()
+        XCTAssertTrue(
+            model.contains("let providerSaysSpent = driving.isExhausted ?? false"),
+            "the row must consider the exhausted word of the window it is actually built from"
+        )
+        XCTAssertTrue(
+            model.contains("let allowanceSpent = providerSaysSpent || (period == \"weekly\" && weeklyExhausted)"),
+            "a weekly the provider reports as gone must publish zero even when the pool's other weekly window differs"
+        )
+    }
+
+    /// The phone must let a reading outrank the provider's exhausted word.
+    ///
+    /// The wire never clears `isExhausted`, so a stale flag kept the phone
+    /// calling a live Antigravity pool exhausted while the Mac kept it live,
+    /// and the two surfaces told the owner different things about one account
+    /// (Kody review 2026-10-21).  Every place the phone decides "is this
+    /// spent" now asks the shared rule.
+    func testThePhoneLetsAReadingOutrankTheProvidersExhaustedWord() throws {
+        let model = try readCompanionModelSource()
+        XCTAssertTrue(
+            model.contains("QuotaCapRule.isExhausted(remainingPercent: pct,"),
+            "a window row must decide through the shared rule"
+        )
+        XCTAssertFalse(
+            model.contains("|| (weeklyWin?.isExhausted ?? false)"),
+            "the wire's exhausted word must not outvote a weekly reading that reports room left"
+        )
+        XCTAssertFalse(
+            model.contains("(?? 100) <= 0"),
+            "the phone must not carry its own zero test beside the shared rule"
+        )
+    }
+
+    /// An exhausted weekly that reports no figure still has to publish a
+    /// reading, or the shared cap rule cannot bind it and the phone's cap line
+    /// never appears (Kody review 2026-10-21).  The Mac does the same in its
+    /// Antigravity pool grouper.
+    func testAnExhaustedWeeklyWithNoFigureStillPublishesAReading() throws {
+        let model = try readCompanionModelSource()
+        XCTAssertTrue(
+            model.contains("QuotaCapRule.publishedReading("),
+            "the phone must publish its reading through the shared rule"
+        )
+        XCTAssertTrue(
+            model.contains("let allowanceSpent = providerSaysSpent || (period == \"weekly\" && weeklyExhausted)"),
+            "an exhausted weekly with no figure must publish zero"
         )
     }
 
@@ -280,6 +770,88 @@ final class CompanionModelTests: XCTestCase {
         )
         XCTAssertTrue(source.contains("CC8UTF7ATG.codecaps"))
         XCTAssertTrue(source.contains("group.com.simplewithus.codecaps"))
+    }
+
+    func testCompanionAppGroupSnapshotReadUsesSharedPolicy() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(source.contains("AppGroupSnapshotReadPolicy.decision"))
+        XCTAssertTrue(source.contains("case .stopAuthoritativeEmpty, .stopAuthoritativeContent:"))
+        XCTAssertTrue(source.contains("case .consultNextTier:"))
+        XCTAssertFalse(source.contains("guard let data = try? Data(contentsOf: sharedFile) else { return }"))
+        XCTAssertFalse(source.contains("malformed or empty copy means the source currently has"))
+    }
+
+    func testMainScreenFleetStatusLivesInNavigationBar() throws {
+        let source = try readCompanionContentViewSource()
+        XCTAssertFalse(
+            source.contains(".navigationTitle(\"CodeCaps\")"),
+            "main screen must not repeat the CodeCaps product title"
+        )
+        XCTAssertTrue(
+            source.contains("fleetStatusToolbarContent"),
+            "fleet status must be a toolbar item so it stays pinned while scrolling"
+        )
+        XCTAssertTrue(
+            source.contains("ToolbarItem(placement: .principal)"),
+            "fleet status belongs in the navigation bar title area"
+        )
+        XCTAssertFalse(
+            source.contains("Text(\"FLEET STATUS\")"),
+            "fleet status label should use title case in the navigation bar"
+        )
+        XCTAssertFalse(
+            source.contains("arrow.up.arrow.down"),
+            "reorder must live in CodeCaps Settings, not a duplicate toolbar button"
+        )
+        XCTAssertTrue(
+            source.contains("navigationTitle(\"CodeCaps Settings\")"),
+            "full-screen settings must be titled CodeCaps Settings"
+        )
+        XCTAssertTrue(
+            source.contains(".fullScreenCover(isPresented: $showingSettings)"),
+            "settings must present full screen on iOS"
+        )
+        XCTAssertTrue(
+            source.contains("enum CompanionSettingsTab"),
+            "settings must be grouped into tabs"
+        )
+        XCTAssertTrue(source.contains("case display = \"Display\""))
+        XCTAssertTrue(source.contains("case sources = \"Sources\""))
+        XCTAssertTrue(source.contains("case alarms = \"Alarms\""))
+        XCTAssertTrue(source.contains("settingsDisplaySections"))
+        XCTAssertTrue(source.contains("settingsSourcesSections"))
+        XCTAssertTrue(source.contains("settingsAlarmsSections"))
+        XCTAssertFalse(source.contains("Companion Settings"))
+        XCTAssertFalse(source.contains(".presentationDetents"))
+        XCTAssertTrue(source.contains("Text(\"Your Plans\")"), "the navigation label is plain language")
+        XCTAssertFalse(source.contains("Text(\"Fleet Status\")"))
+        XCTAssertTrue(source.contains("Section(\"Share Address\")"))
+        XCTAssertFalse(source.contains("Section(\"Mac Sync Endpoint\")"))
+        XCTAssertTrue(source.contains("SecureField(\"Access Code\""))
+        XCTAssertTrue(
+            source.contains("Image(systemName: \"gearshape\")\n                .frame(width: 44, height: 44)"),
+            "the settings control meets a 44pt target"
+        )
+    }
+
+    func testPlainLanguageReplacesInternalLabels() throws {
+        let home = try readCompanionContentViewSource()
+        XCTAssertTrue(home.contains("Open CodeCaps on your Mac so it can share readings.\" + sentenceGap"))
+        XCTAssertTrue(home.contains("Text(\"Other Readings\")"))
+        XCTAssertFalse(home.contains("Data Sources & Mirrors"))
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let glance = try String(contentsOf: root.appendingPathComponent("Sources/CodeCaps/GlanceViews.swift"), encoding: .utf8)
+        XCTAssertTrue(glance.contains("Text(\"Share With Other Devices\")"))
+        XCTAssertFalse(glance.contains("Set Up Fleet Sync"))
+        XCTAssertTrue(glance.contains("from another device"))
+        let popup = try String(contentsOf: root.appendingPathComponent("Sources/CodeCaps/ExhaustionPopupView.swift"), encoding: .utf8)
+        XCTAssertTrue(popup.contains(".frame(width: 44, height: 44)"))
+        XCTAssertFalse(popup.contains(".frame(width: 28, height: 28)"))
+        let widgets = try String(contentsOf: root.appendingPathComponent("ios/CodeCapsCompanion/Widgets/WidgetViews.swift"), encoding: .utf8)
+        XCTAssertTrue(widgets.contains("No Readings Yet"))
+        XCTAssertFalse(widgets.contains("No Quotas Synced"))
+        XCTAssertFalse(widgets.contains("No quotas synced"))
     }
 
     func testPullToRefreshAndButtonResponsiveness() throws {
@@ -310,22 +882,134 @@ final class CompanionModelTests: XCTestCase {
             source.contains(#"combined.contains("coding plan") || combined.contains("interval")"#),
             "formatCadence must classify MiniMax coding plan and interval as 5-hour window"
         )
+        // CC-223 moved the short/long rule into QuotaMeterCadence, so the
+        // wording pin lives there now.
+        let cadenceSource = try String(contentsOf: URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/QuotaCore/QuotaMeterCadence.swift"), encoding: .utf8)
         XCTAssertTrue(
-            source.contains(#"text.contains("coding plan") || text.contains("coding_plan") || text.contains("interval")"#),
-            "caption and isShortCadence must classify MiniMax coding plan as 5h short cadence"
+            cadenceSource.contains(#""coding plan""#)
+                && cadenceSource.contains(#""interval""#),
+            "the shared short/long rule must classify MiniMax coding plan as 5h short cadence"
         )
     }
 
     func testMiniMaxConsolidationToTwoWindows() throws {
         let source = try readCompanionModelSource()
+        XCTAssertTrue(source.contains("let effectiveQualifier = isMiniMax ? \"\" : modelQualifier"),
+                      "MiniMax model names must not create duplicate allowance rows")
+        XCTAssertTrue(source.contains("let cadenceKey = effectiveQualifier.isEmpty"),
+                      "MiniMax rows consolidate on the wire allowance identity without model qualifiers")
+        XCTAssertTrue(source.contains("QuotaCardProjection.preferredIndex(in: [reading(current), reading(candidate)], now: now)"),
+                      "MiniMax and other providers must share measured Mac/source precedence")
+    }
+
+    func testCompanionMeterUsesHyphenatedCaptionsNotPopoverTags() throws {
+        let source = try readCompanionModelSource()
         XCTAssertTrue(
-            source.contains(#"let isMiniMax = providerKey.lowercased().contains("minimax")"#),
-            "MiniMax must be identified during platform section building"
+            source.contains("public var meterCaption: String"),
+            "Companion meters must use hyphenated cadence captions"
         )
         XCTAssertTrue(
-            source.contains("let effectiveQualifier = isMiniMax ? \"\" : modelQualifier"),
-            "MiniMax must not split cadences by modelQualifier, collapsing into two primary windows"
+            source.contains("guard let subModelName, !subModelName.isEmpty else { return meterCaption }"),
+            "card meters lead with the cadence caption and add only the model's own name"
         )
+        let content = try readCompanionContentViewSource()
+        XCTAssertFalse(
+            content.contains("window.barQualifier"),
+            "companion meters must not render weekly/additional qualifier captions"
+        )
+    }
+
+    func testSubModelCardMetersAreNamedByTheirModel() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains("public let subModelName: String?"),
+            "the window item must carry the resolved model name to the card"
+        )
+        XCTAssertTrue(
+            source.contains("SubModelNaming.name("),
+            "the card builder must name a sub-model window through the same shared rule the Mac asks"
+        )
+        let shared = try readQuotaWindowVocabularySource()
+        XCTAssertTrue(
+            shared.contains("public enum SubModelNaming"),
+            "the rule must live where every companion target already compiles it"
+        )
+        XCTAssertTrue(
+            source.contains("label: w.label"),
+            "the shared rule needs the reader's own label, where the model signal lives"
+        )
+        XCTAssertTrue(
+            source.contains("modelType: w.modelType"),
+            "the shared rule needs the reader's model type"
+        )
+        XCTAssertTrue(
+            source.contains("modelId: w.modelId"),
+            "the shared rule needs the reader's model id, so Claude's Fable weekly is not another \"7d\""
+        )
+        let content = try readCompanionContentViewSource()
+        XCTAssertTrue(
+            content.contains("Text(win.caption)"),
+            "window rows must lead with the model-aware caption, not the bare cadence"
+        )
+    }
+
+    func testCardWhoseWindowsAreAllDeadCopiesSaysItIsWaiting() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains("public let deadCopyObservedAt: Date?"),
+            "the item must remember when the provider was last heard from"
+        )
+        let content = try readCompanionContentViewSource()
+        XCTAssertTrue(
+            content.contains(#"Text("Waiting for a fresh reading")"#),
+            "a card whose windows all ended must say so instead of drawing nothing"
+        )
+        XCTAssertTrue(
+            content.contains("UpdatedStamp.label(lastReading)"),
+            "the stale line says when the provider was last heard from, never the expired figure"
+        )
+    }
+
+    func testReorderRowShowsPoolSubtitleWhenTitleIsShared() throws {
+        let content = try readCompanionContentViewSource()
+        XCTAssertTrue(
+            content.contains("duplicatedTitles.contains(item.title)"),
+            "a row whose title another row also carries must show its pool subtitle"
+        )
+        XCTAssertTrue(
+            content.contains("let subtitle = item.subtitle"),
+            "the reorder row reuses the home card's own subtitle, never a renamed provider"
+        )
+    }
+
+    func testSourceDiscrepancyGatingRequiresAllSourcesMultiSourceAndFreshness() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(source.contains("guard scope == .allSources, sourceCount >= 2 else { return [] }"))
+        XCTAssertTrue(source.contains("FleetSourceDisagreement.shouldShowDisagreementAlert"))
+        XCTAssertTrue(source.contains("normalizedWindowKey == dup.normalizedWindowKey"))
+        XCTAssertFalse(source.contains("?? windows.first"))
+        XCTAssertTrue(source.contains("reportedAt"))
+        XCTAssertTrue(source.contains("Self.reportedAt(from: w)"))
+        XCTAssertTrue(source.contains("FleetMacReading.pickCardDisplay"))
+        XCTAssertTrue(source.contains("cardWindowRows(scope:"))
+        XCTAssertTrue(source.contains("isStaleInSourceDetail(_ window: CompanionWindowItem, scope:"))
+        XCTAssertTrue(source.contains("delta >= 10.0"))
+        XCTAssertTrue(source.contains("Sources differ ·"))
+        XCTAssertFalse(source.contains("via codecaps"))
+        XCTAssertTrue(source.contains("sourceLooksLikeHostname"))
+        let content = try readCompanionContentViewSource()
+        XCTAssertTrue(
+            content.contains("item.sourceCount > 1"),
+            "discrepancy UI must follow the multi-source gate"
+        )
+    }
+
+    func testCompanionSubtitleUsesSubtitlePhraseVocabulary() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(source.contains("static func subtitlePhrase(for windows:"))
+        XCTAssertTrue(source.contains("Self.subtitlePhrase(for: primaryWindows"))
     }
 
     func testCompanionUsageBarPacingMarkerProminence() throws {
@@ -345,6 +1029,206 @@ final class CompanionModelTests: XCTestCase {
         XCTAssertTrue(
             source.contains(".frame(width: 44, height: 44)"),
             "Reset alarm bell button must meet the 44x44 minimum touch target standard"
+        )
+    }
+
+    // MARK: - Source scope label names the device the reader is holding
+
+    func testSourceScopeLabelNamesTheDeviceFamily() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains(#"case thisIPhone = "This iPhone""#),
+            "The scope's stored raw value must stay \"This iPhone\" so a saved preference is not lost"
+        )
+        XCTAssertTrue(
+            source.contains(#"case .thisIPhone: return "This \(family)""#),
+            "The this-device scope must be labelled with the device the reader is holding"
+        )
+        XCTAssertTrue(
+            source.contains("case .allSources: return rawValue"),
+            "The all-sources scope must keep its own label"
+        )
+        XCTAssertTrue(
+            source.contains(#"UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone""#),
+            "The device family must follow the interface idiom, so an iPad never says This iPhone"
+        )
+        XCTAssertTrue(
+            source.contains(#"return "Mac""#),
+            "The Mac build of the companion must name the Mac"
+        )
+    }
+
+    /// PR #306 made the main list canonical: the card always reads
+    /// `.allSources`, so the header no longer carries a source-scope picker.
+    /// The device-aware label itself still ships, on the scope the model
+    /// exposes, and nothing on screen may fall back to the stored raw value
+    /// (which always says "This iPhone", even on an iPad).
+    func testSourceScopePickerShowsTheDeviceAwareLabel() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains("public var displayTitle: String"),
+            "The scope must keep exposing the device-aware label the picker used to render"
+        )
+        let view = try readCompanionContentViewSource()
+        XCTAssertFalse(
+            view.contains("Text(scope.rawValue).tag(scope)"),
+            "no scope control may show the stored raw value, which always says This iPhone"
+        )
+        XCTAssertFalse(
+            view.contains("Picker(\"Source scope\""),
+            "the main list is canonical-only: the source-scope picker belongs to source detail"
+        )
+    }
+
+    // MARK: - A launch argument opens the alarms tab
+
+    func testAlarmsLaunchArgumentOpensTheAlarmsTab() throws {
+        let view = try readCompanionContentViewSource()
+        //  Both spellings are accepted:  -openAlarms is the screenshot
+        //  capture's, and -openAlerts is the one the alert work introduced
+        //  for the same tab.  Either one has to open it.
+        XCTAssertTrue(
+            view.contains(#"contains("-openAlarms")"#),
+            "A launch argument must open the Alarms tab, so the screenshot capture can reach it without a tap"
+        )
+        XCTAssertTrue(
+            view.contains(#"contains("-openAlerts")"#),
+            "The alert work's launch argument must open the same tab"
+        )
+        XCTAssertTrue(
+            view.contains(#"initialValue: opensAlarms ? .alarms : .display"#),
+            "Either launch argument must select the Alarms tab"
+        )
+        XCTAssertTrue(
+            view.contains(#"case alarms = "Alarms""#),
+            "The Alarms tab must still exist as a tab of the settings sheet"
+        )
+    }
+
+    // MARK: - A copy of a period that ended is not a reading
+
+    /// Owner 2026-10-23: the xAI row showed two 7-day windows at 0% with a
+    /// "due" caption while Grok, Cursor and Grok Bot showed the same weekly
+    /// allowance at 91% with a reset on 2026-10-29.  This Mac reads no xAI
+    /// quota locally, so the fleet fallback filled the xAI row with copies of
+    /// a period that ended days earlier.
+    ///
+    /// The phone pulls the same fleet payload, so it has to drop the same
+    /// copies.  Its model is not in the macOS test target, so the rule is
+    /// pinned here by reading the source.
+    ///
+    /// The phone asks the shared rule with the reading's own observation time,
+    /// the same field the Mac and the widget ask with, so the same payload
+    /// cannot read live on the phone and stale on the Mac.  It only judges
+    /// copies:  this Mac's own reading keeps its row.
+    func testTheCompanionDropsACopyOfAPeriodThatEnded() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains("QuotaFreshnessRule.isDeadCopy(observedAt: CompanionDateFormatter.date(from: w.occurredAt),"),
+            "the phone must ask the shared rule about a window whose period already ended"
+        )
+        XCTAssertFalse(
+            source.contains("QuotaFreshnessRule.isDeadCopy(observedAt: parsedReportedAt,"),
+            "the phone must ask the shared rule with the reading's own observation time, not the feed's reported time"
+        )
+        XCTAssertFalse(
+            source.contains("QuotaFreshnessRule.isDeadCopy(observedAt: Self.reportedAt(from:"),
+            "the phone's Antigravity pool must ask the shared rule with the reading's own observation time too"
+        )
+        XCTAssertTrue(
+            source.contains("QuotaWindowVocabulary.isOwnDeviceWindow("),
+            "the phone must only judge copies, so this Mac's own reading keeps its row"
+        )
+        XCTAssertFalse(
+            source.contains("private static let staleAfter"),
+            "the phone must not carry a stale threshold of its own"
+        )
+    }
+
+    /// An ended period cannot exhaust the phone's Antigravity pool.  The
+    /// widget already guarded the exhaustion decision with the shared
+    /// freshness rule, and the phone did not, so the same payload read
+    /// exhausted on the phone and live on the widget:  the pool's copies had
+    /// all expired, the fallback put them back so the row still renders, and
+    /// the ended weekly window then read zero and spent the pool.
+    ///
+    /// The phone's model is not in the macOS test target, so the rule is
+    /// pinned here by reading the source.
+    func testTheCompanionPoolIsNotExhaustedByAnEndedPeriod() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains("let weeklyExhausted = isFresh(weeklyWin)"),
+            "only a fresh window may spend the phone's Antigravity pool"
+        )
+        XCTAssertTrue(
+            source.contains("QuotaFreshnessRule.isFresh(observedAt: CompanionDateFormatter.date(from: window.occurredAt),"),
+            "the phone must ask the shared freshness rule with the reading's own observation time"
+        )
+        XCTAssertFalse(
+            source.contains("let weeklyWin = windows.first {"),
+            "the phone must pick the freshest weekly window, not the first one in payload order"
+        )
+        XCTAssertFalse(
+            source.contains("let fiveHourWin = windows.first {"),
+            "the phone must pick the freshest five-hour window, not the first one in payload order"
+        )
+        XCTAssertTrue(
+            source.contains("let weeklyWin = selected.first { Self.antigravityPeriod(of: $0) == \"weekly\" }"),
+            "the phone's weekly window must be the freshest one that matches"
+        )
+        XCTAssertTrue(
+            source.contains("let fiveHourWin = selected.first { Self.antigravityPeriod(of: $0) == \"5h\" }"),
+            "the phone's five-hour window must be the freshest one that matches"
+        )
+        XCTAssertTrue(
+            source.contains("let windows = liveWindows.isEmpty ? windows : liveWindows"),
+            "a pool whose copies have all expired must still render its row"
+        )
+    }
+
+    /// The phone's platform row must be driven by the freshest reading of a
+    /// period, the way the widget's row is.  The payload carries a fleet copy
+    /// beside the local window, and the copy is often days old and reads zero,
+    /// so taking the first one in payload order let the stale copy win and
+    /// the phone showed figures the widget had already replaced.
+    func testTheCompanionRowIsDrivenByTheFreshestReading() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains("if isFresher(w, than: current) {"),
+            "the phone's row must take the freshest reading of a period"
+        )
+        XCTAssertTrue(
+            source.contains("func isFresher(_ candidate: WireRawWindow, than current: WireRawWindow) -> Bool {"),
+            "the phone must ask the shared freshness rule when it compares two readings"
+        )
+    }
+
+    /// This Mac's own reading is this device's own reading, and the phone can
+    /// only tell it from another machine's copy when the payload names the
+    /// installation that wrote it.  Every fleet-sourced window names a
+    /// producer instance, so without that the phone read this Mac's own
+    /// expired reading as somebody else's copy and deleted it, while the Mac
+    /// kept it, and the row vanished on the phone instead of greying out.
+    ///
+    /// The phone's model is not in the macOS test target, so the wiring is
+    /// pinned here by reading the source.
+    func testTheCompanionAsksWithThePayloadsOwningInstallation() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(
+            source.contains("let producerInstanceId: String?"),
+            "the phone's payload must carry the installation that wrote it"
+        )
+        XCTAssertTrue(
+            source.contains("payloadProducerInstanceId = envelope.producerInstanceId"),
+            "the phone must remember the installation that wrote the payload it is reading"
+        )
+        XCTAssertTrue(
+            source.contains("ownInstanceId: payloadProducerInstanceId"),
+            "the phone must ask the own-device rule with the owning installation's id"
+        )
+        XCTAssertFalse(
+            source.contains("ownInstanceId: \"codecaps\""),
+            "the phone must not invent an owning installation id"
         )
     }
 }

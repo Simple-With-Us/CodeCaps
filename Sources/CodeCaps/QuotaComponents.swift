@@ -70,13 +70,12 @@ enum AccentChoice: String, CaseIterable, Identifiable {
         case .orange: return 0xA85C05
         case .green: return 0x2E6B2E
         case .magenta: return 0xA3225E
-        // The light four are light *by design*, so their light-appearance value
-        // is the light one too.  They are still darkened for Dark appearance so
-        // they do not glare against a near-black surface.
-        case .rose: return 0xF2A8C0
-        case .lemon: return 0xE8C54A
-        case .sky: return 0x8FC9EA
-        case .lime: return 0xA9D96B
+        // The light four are light options by design, carrying dark text
+        // via Theme.onAccent.
+        case .rose: return 0xFBB6CE
+        case .lemon: return 0xF6E05E
+        case .sky: return 0x90CDF4
+        case .lime: return 0xB7EB8F
         }
     }
 
@@ -89,10 +88,10 @@ enum AccentChoice: String, CaseIterable, Identifiable {
         case .orange: return 0xF0B45A
         case .green: return 0x7FD07F
         case .magenta: return 0xF07AAF
-        case .rose: return 0xD96A8C
-        case .lemon: return 0xB99A2E
-        case .sky: return 0x5A9FC7
-        case .lime: return 0x6E9E3E
+        case .rose: return 0xF687B3
+        case .lemon: return 0xF6E05E
+        case .sky: return 0x76E4F7
+        case .lime: return 0x9AE6B4
         }
     }
 
@@ -108,15 +107,87 @@ enum AccentChoice: String, CaseIterable, Identifiable {
 /// The whole colour vocabulary, in one place, with a dark value for every
 /// token.  A dynamic `NSColor` resolves per appearance, so the SPM target needs
 /// no asset catalog and nothing has to be re-rendered when the theme changes.
+/// What the PiP HUD's own surface is painted with.
+///
+/// Owner request 2026-10-10: "the background of PiP window should be able to be
+/// white if wanted or black with the text white and appropriate logos chosen if
+/// in dark mode.  It can also have color tint like it has though that should be
+/// custom like accent color."
+///
+/// The three live here rather than at each call site because the HUD needs all
+/// three in step: the fill, the ink drawn on it, and which *variant* of each
+/// provider mark reads against it.  A mark chosen for a light fill on a dark one
+/// is the same class of mistake as white text on a light accent.
+enum PipBackground: String, CaseIterable, Identifiable {
+    case white, black, accent
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .white: return "White"
+        case .black: return "Black"
+        case .accent: return "Accent"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .white: return "Light HUD with dark text and brand-colour marks."
+        case .black: return "Dark HUD with light text and silhouette marks."
+        case .accent: return "Tinted toward your accent, with light text."
+        }
+    }
+
+    /// Whether the HUD's content is drawn light-on-dark.  Decides the ink and
+    /// the mark variant together so they cannot disagree.
+    var isDark: Bool { self != .white }
+
+    /// The panel fill.  `accent` tints toward the chosen accent while staying
+    /// dark enough that light ink still clears 4.5:1 -- a full-strength accent
+    /// would not, which is the same failure the accent-fill ink had.
+    var fill: Color {
+        switch self {
+        case .white: return Color(white: 0.98)
+        case .black: return Color(white: 0.07)
+        case .accent: return Theme.accent.opacity(0.22)
+        }
+    }
+
+    /// Ink for text and for CodeCaps' own mark.
+    var ink: Color {
+        isDark ? Color(white: 0.96) : Color(white: 0.10)
+    }
+
+    /// Secondary ink: de-emphasised labels that still clear 4.5:1 on the fill.
+    var secondaryInk: Color {
+        isDark ? Color(white: 0.82) : Color(white: 0.28)
+    }
+
+    /// Reset countdowns and time-remaining values use full-contrast ink.
+    var countdownInk: Color { ink }
+
+    /// The mark style this background needs.  A dark fill takes a light
+    /// silhouette, a light fill takes the brand-colour mark -- never the
+    /// reverse.
+    func markStyle(for providerStyle: MarkStyle) -> MarkStyle {
+        guard providerStyle != .custom else { return providerStyle }
+        return isDark ? .template : .standard
+    }
+}
+
 enum Theme {
     /// Pure black on light, pure white on dark, when high contrast is on.
     private static var highContrastInk: Color {
         highContrast ? dyn(NSColor.black, NSColor.white) : dyn(hex(0x1F2B3A), hex(0xE8ECF1))
     }
     /// The owner's high-contrast choice, read on every resolve so a change
-    /// takes effect without relaunching.
+    /// takes effect without relaunching.  The system Increase Contrast
+    /// setting counts too: turning it on in System Settings must strengthen
+    /// the same tokens instead of being ignored (Slice 4, CONTRAST-01).
     static var highContrast: Bool {
         UserDefaults.standard.bool(forKey: "highContrast")
+            || NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
     }
 
     /// High contrast drops the soft navy-grey for pure black/white, so text is
@@ -130,15 +201,25 @@ enum Theme {
 
     static let warning = dyn(hex(0xA85C05), hex(0xF0B45A))
     static let danger = dyn(hex(0xBF3339), hex(0xFF6B6B))
-    static let background: Color = highContrastBackground
-    static let surface: Color = highContrastSurface
-    static let hairline: Color = highContrast
+    /// A fixed, readable green for success marks.  It must not follow the
+    /// owner's accent choice: a pale accent (lemon, sky, lime) as small text or
+    /// a checkmark on a light surface fails contrast.
+    static let success = dyn(hex(0x1E7B3A), hex(0x6EE7A0))
+    // Computed, not `let`: a `let` freezes the high-contrast branch at
+    // first access, so toggling High Contrast (in-app or system) after
+    // launch changed `ink` but left surfaces and hairlines stale until
+    // relaunch (Slice 4, FIX-THEME).  Every token that branches on
+    // `highContrast` is therefore a `var`.
+    static var background: Color { highContrastBackground }
+    static var surface: Color { highContrastSurface }
+    static var hairline: Color { highContrast
         // AG's #112 raised the default hairline from 6%/10% to 12%/18%, which
         // is the better default and is kept.  High contrast is pushed further
         // on top of it: the owner had high contrast on and said there was
         // still not enough, and at 45%/55% it was still a grey.
         ? dyn(NSColor.black.withAlphaComponent(0.72), NSColor.white.withAlphaComponent(0.85))
         : dyn(NSColor.black.withAlphaComponent(0.12), NSColor.white.withAlphaComponent(0.18))
+    }
     /// The elapsed-time marker on a quota bar.  Black on the light surface and
     /// white on the dark one, so it reads against both the red and green segments.
     static let pacingMarker = dyn(NSColor.black, NSColor.white)
@@ -163,9 +244,10 @@ enum Theme {
 
     /// Unfilled portion of any progress bar.  A black 6% track disappears on a
     /// dark surface, so this is a token rather than a literal at each call site.
-    static let track: Color = highContrast
+    static var track: Color { highContrast
         ? dyn(NSColor.black.withAlphaComponent(0.55), NSColor.white.withAlphaComponent(0.62))
         : dyn(NSColor.black.withAlphaComponent(0.08), NSColor.white.withAlphaComponent(0.14))
+    }
 
     /// Fill behind a selected or highlighted row.
     ///
@@ -181,15 +263,24 @@ enum Theme {
     }
 
     /// The outline of a small header control: the From Mac / From Fleet switch.
-    static let controlBorder: Color = highContrast
+    static var controlBorder: Color { highContrast
         ? dyn(NSColor.black.withAlphaComponent(0.92), NSColor.white.withAlphaComponent(0.95))
         : dyn(NSColor.black.withAlphaComponent(0.16), NSColor.white.withAlphaComponent(0.22))
+    }
+
+    /// The filled track a segmented control sits on, so an unselected segment
+    /// reads as "not chosen" rather than as an outlined box.  Owner 2026-10-10.
+    static var controlTrack: Color { highContrast
+        ? dyn(NSColor.black.withAlphaComponent(0.10), NSColor.white.withAlphaComponent(0.16))
+        : dyn(NSColor.black.withAlphaComponent(0.06), NSColor.white.withAlphaComponent(0.10))
+    }
 
     /// A control that is present but off, such as an unchecked row bell:
     /// visible enough to find, quiet enough not to read as a setting.
-    static let faint: Color = highContrast
+    static var faint: Color { highContrast
         ? dyn(NSColor.black.withAlphaComponent(0.88), NSColor.white.withAlphaComponent(0.92))
         : dyn(NSColor.black.withAlphaComponent(0.26), NSColor.white.withAlphaComponent(0.30))
+    }
 
     /// The band behind a source's heading in From Fleet: darker than the list
     /// background in both appearances, so each source reads as a section.
@@ -258,9 +349,10 @@ enum Theme {
     /// dark accent on the dark rows surface produced a rail that disappeared.
     /// This is a token with a floor rather than a computed alpha, because the
     /// failure was the floor being zero.
-    static let sliderTrack: Color = highContrast
+    static var sliderTrack: Color { highContrast
         ? dyn(NSColor.black.withAlphaComponent(0.45), NSColor.white.withAlphaComponent(0.55))
         : dyn(NSColor.black.withAlphaComponent(0.20), NSColor.white.withAlphaComponent(0.28))
+    }
 
     /// The accent the owner chose, resolved against the current appearance.
     private static var accentColor: Color {
@@ -328,6 +420,12 @@ enum Metrics {
     /// was the 10pt every header gap used, which read as cramped (owner delta,
     /// 2026-09-30); twice that sets the title apart from the controls.
     static let glanceHeaderTitleGap: CGFloat = 20
+
+    /// The owner's mark at the top-left of the Glance header, 2026-10-10.
+    /// Deliberately small: the popover is 570pt wide and the header already
+    /// carries the title, the scope switch, the bell and the two buttons.
+    static let glanceBrandMarkSize: CGFloat = 12
+    static let glanceBrandMarkGap: CGFloat = 4
     /// The least space between the switch and the right-hand cluster.  The
     /// popover is wide, so the two only get this close if the cluster grows.
     static let glanceHeaderClusterGap: CGFloat = 16
@@ -421,7 +519,7 @@ enum Metrics {
     ///
     /// This is the contract `glanceWidth` has to honour.  It is computed rather
     /// than restated so a column change cannot silently overflow the popover —
-    /// a wider row inside a fixed frame is what truncated "Open CodeCaps ⌘1"
+    /// a wider row inside a fixed frame is what truncated "Dashboard ⌘1"
     /// in the footer once already.
     static let glanceRowIntrinsicWidth: CGFloat = glanceAlarmBellWidth + glanceLogoGap
         + glanceLogoWidth + glanceLogoGap
@@ -458,17 +556,21 @@ enum Metrics {
 
 /// The 20% threshold lives here and nowhere else.
 func quotaStatusColor(for snapshot: QuotaWindowSnapshot, sourceFailed: Bool) -> Color {
-    if !snapshot.isFresh || sourceFailed || snapshot.remainingPercent == nil { return .secondary }
+    // Owner 2026-10-16: a stale reading keeps the bright status colour - his
+    // Muse rows read as a dull grey-green when stale, indistinguishable from a
+    // source problem.  Only a failed source or a missing reading greys out.
+    if sourceFailed || snapshot.remainingPercent == nil { return .secondary }
     if snapshot.status == .exhausted { return Theme.danger }
     if (snapshot.remainingPercent ?? 100) <= 20 { return Theme.warning }
     return Theme.accent
 }
 
-/// Whether a bar should be drawn dimmed: the reading is old, or its source
-/// failed.  These are the same cases that turn the "% remaining" text grey, so a
-/// last-reported bar never looks as live as a fresh one.
+/// Whether a bar should be drawn dimmed.  Only a failed source dims it:
+/// owner 2026-10-16 - a last-reported (stale) bar keeps the same bright green
+/// as a fresh one; the staleness is said in words (the "Updated h:mm" caption),
+/// not by washing the bar out.
 func quotaBarIsDimmed(for snapshot: QuotaWindowSnapshot, sourceFailed: Bool) -> Bool {
-    !snapshot.isFresh || sourceFailed
+    sourceFailed
 }
 
 /// Dynamic pacing tint behind the percentage pill.
@@ -685,39 +787,97 @@ struct Eyebrow: View {
     }
 }
 
+struct ProviderDetailRow: Identifiable, Equatable {
+    let label: String
+    let value: String
+    var id: String { label }
+}
+
+struct ProviderDetailsView: View {
+    let rows: [ProviderDetailRow]
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(rows) { row in
+                HStack(alignment: .firstTextBaseline) {
+                    Text(row.label).foregroundStyle(.secondary)
+                    Spacer(minLength: 8)
+                    Text(row.value).textSelection(.enabled)
+                }
+                .font(.system(size: 11))
+            }
+        }
+    }
+}
+
 extension QuotaPlatformSection {
+    var automaticPlanName: String? {
+        windows.compactMap(\.window.planName).first { !$0.isEmpty }
+    }
+
+    /// Details are textual so a credit balance cannot become a quota meter.
+    var providerDetailRows: [ProviderDetailRow] {
+        var rows: [ProviderDetailRow] = []
+        if let plan = automaticPlanName { rows.append(.init(label: "Detected Plan", value: plan)) }
+        guard let details = windows.compactMap(\.window.usageDetails).first else { return rows }
+        if let email = details.accountEmail { rows.append(.init(label: "Account", value: email)) }
+        if let balance = details.creditBalance {
+            rows.append(.init(label: "Credits", value: "\(balance.formatted(.number.precision(.fractionLength(0...2)))) left"))
+        }
+        if let enabled = details.extraUsageEnabled {
+            rows.append(.init(label: "Extra Usage", value: enabled ? "enabled" : "disabled"))
+        }
+        return rows
+    }
+
     /// The single subtitle rule, replacing three near-identical copies that
     /// disagreed about the Antigravity fallback.
     func displaySubtitle(customInfo: PlatformCustomInfo?) -> String? {
         if let custom = customInfo, !custom.customSubtitle.isEmpty {
             return custom.customSubtitle
         }
-        if let custom = customInfo, custom.showCostAndRenewal {
-            let renewal = custom.renewalDateText.isEmpty
-                ? (BillingRenewal.text(for: windows.map(\.window)) ?? "")
-                : custom.renewalDateText
-            let parts = [custom.planName,
-                         custom.costUsd,
-                         renewal.isEmpty ? "" : "Renews \(renewal)"]
-                .filter { !$0.isEmpty }
-            if !parts.isEmpty { return parts.joined(separator: " · ") }
+        if let detail = planCostRenewalDetail(customInfo: customInfo) {
+            return detail
         }
         if via == "antigravity" { return "Antigravity subscription" }
-        if let plan = windows.compactMap(\.window.planName).first, !plan.isEmpty { return plan }
+        if let plan = automaticPlanName { return plan }
         return nil
+    }
+
+    /// The plan/cost/renewal detail line, independent of the custom subtitle.
+    /// Unlike `displaySubtitle`, a set custom subtitle does not suppress this:
+    /// the dropdown row shows both lines so plan info is never silently
+    /// swallowed.
+    func planCostRenewalDetail(customInfo: PlatformCustomInfo?) -> String? {
+        guard let custom = customInfo, custom.showCostAndRenewal else { return nil }
+        let renewal = custom.renewalDateText.isEmpty
+            ? (BillingRenewal.text(for: windows.map(\.window)) ?? "")
+            : custom.renewalDateText
+        let parts = [custom.planName.isEmpty ? (automaticPlanName ?? "") : custom.planName,
+                     custom.costUsd,
+                     renewal.isEmpty ? "" : "Renews \(renewal)"]
+            .filter { !$0.isEmpty }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     /// The window a one-line row speaks for: whichever is closest to its cap.
     var drivingWindow: QuotaWindowSnapshot? {
-        let primary = windows.filter { !$0.window.isSupplementaryVideoQuota }
-        return primary.filter { $0.remainingPercent != nil }
+        // Scoped Codex pools sit beside the subscription and never cap it
+        // (`atCapWindow`), so they cannot speak for the row either: the
+        // headline and the cap verdict come from one window set.
+        let eligible = windows.filter { !$0.window.isSupplementaryVideoQuota && !$0.window.isScopedPoolAllowance }
+        let primary = eligible.filter { !$0.window.isSubModelLimit }
+        let pool = primary.isEmpty ? eligible : primary
+        return pool.filter { $0.remainingPercent != nil }
             .min { ($0.remainingPercent ?? 100) < ($1.remainingPercent ?? 100) }
-            ?? primary.first
+            ?? pool.first
     }
 
     /// The lowest remaining percentage across the windows a sidebar row summarises.
     var minimumRemainingPercent: Double? {
-        windows.filter { $0.isFresh && !$0.window.isSupplementaryVideoQuota }
+        let fresh = windows.filter { $0.isFresh && !$0.window.isSupplementaryVideoQuota && !$0.window.isScopedPoolAllowance }
+        let primary = fresh.filter { !$0.window.isSubModelLimit }
+        let pool = primary.isEmpty ? fresh : primary
+        return pool
             .compactMap(\.remainingPercent)
             .min()
     }
@@ -770,6 +930,16 @@ enum QuotaGlanceMetrics {
 
     @MainActor
     static func popoverHeight(for model: MonitorModel, on screen: NSScreen? = nil) -> CGFloat {
+        let total = uncappedPopoverHeight(for: model)
+        return min(Metrics.glanceMaxHeight(on: screen), max(Metrics.glanceMinHeight, total))
+    }
+
+    /// The popover height before the screen cap and the minimum are applied.
+    /// Layout tests measure against this: capping to a small screen is a
+    /// separate, deliberate behavior (the list scrolls), so pinning the
+    /// budget arithmetic must not depend on the host's display size.
+    @MainActor
+    static func uncappedPopoverHeight(for model: MonitorModel) -> CGFloat {
         let actualRows = model.displaySections.count
         let rows = actualRows > 0 ? actualRows : expectedLocalRows(for: model)
         let showsSetupCard = !model.syncEnabled && !model.serverEnabled
@@ -780,8 +950,17 @@ enum QuotaGlanceMetrics {
             isEmpty: !(model.localEnabled || !model.displaySections.isEmpty)
         ) + consentHeight
         let fleet = fleetListHeight(rowsPerGroup: model.fleetGroups.map { $0.rows.count })
-        let total = popoverHeight(forListHeight: max(local, fleet))
-        return min(Metrics.glanceMaxHeight(on: screen), max(Metrics.glanceMinHeight, total))
+        // Size for the list actually on screen, not the taller of the two.
+        //
+        // `max(local, fleet)` left the popover as tall as From Fleet while
+        // showing From Mac, so any Fleet list taller than the local one left a
+        // block of empty space under the last row (owner, 2026-10-10).  It also
+        // meant switching modes never shrank the window.
+        //
+        // Both lists are still measured, because a mode switch resizes through
+        // the same path and must not have to wait for that view's rows to load.
+        let active: CGFloat = model.glanceView == .fromFleet ? max(local, fleet) : local
+        return popoverHeight(forListHeight: active)
     }
 }
 
@@ -831,7 +1010,7 @@ struct PlatformCard: View {
     /// alarms are picked per provider; under All there is nothing to pick.
     var isAlarmArmed: Bool = false
     var onToggleAlarm: (() -> Void)? = nil
-    /// Set only when the issue is one the owner can actually fix in Settings —
+    /// Set only when the issue is one the owner can actually fix in the Dashboard —
     /// today, the one-time Allow Access To Claude Code step.  The card then
     /// carries the same deep link the fleet banner uses.
     var onOpenSettings: (() -> Void)? = nil
@@ -841,13 +1020,16 @@ struct PlatformCard: View {
     private var section: QuotaPlatformSection { row.section }
 
     private var primaryWindows: [QuotaWindowSnapshot] {
-        section.windows.filter { !$0.window.isSupplementaryVideoQuota }
+        section.windows.filter { !$0.window.isSupplementaryVideoQuota && !$0.window.isSubModelLimit }
+    }
+    private var allNonVideoWindows: [QuotaWindowSnapshot] {
+        section.windows.filter { !$0.window.isSupplementaryVideoQuota && !$0.window.isExtraneousWeeklyVideoQuota }
     }
     private var videoWindows: [QuotaWindowSnapshot] {
         section.windows.filter { $0.window.isSupplementaryVideoQuota && !$0.window.isExtraneousWeeklyVideoQuota }
     }
     private var displayedWindows: [QuotaWindowSnapshot] {
-        expanded ? primaryWindows : Array(primaryWindows.prefix(4))
+        expanded ? allNonVideoWindows : Array(primaryWindows.prefix(4))
     }
     private var subtitleText: String? {
         if origin == .fleet {
@@ -877,6 +1059,9 @@ struct PlatformCard: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 windowsBody
+                if origin == .local && !section.providerDetailRows.isEmpty {
+                    ProviderDetailsView(rows: section.providerDetailRows)
+                }
             }
         }
         .padding(compact ? 12 : 16)
@@ -932,7 +1117,27 @@ struct PlatformCard: View {
 
     @ViewBuilder
     private var windowsBody: some View {
-        if displayedWindows.count > 1 {
+        if let atCap = row.atCapWindow, row.isAtCap {
+            if let extra = glanceUsableMuseExtra(row.section.windows) {
+                HStack(alignment: .top, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Using extra balance")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Theme.ink)
+                        Text(glanceAtCapSummary(atCap, now: now))
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    QuotaRow(snapshot: extra, now: now, sourceFailed: issue != nil, compact: compact,
+                             masked: row.isMasked(extra))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            } else {
+                GlanceAtCap(snapshot: atCap, now: now, spansFullMeterRow: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        } else if displayedWindows.count > 1 {
             HStack(alignment: .top, spacing: 16) {
                 ForEach(displayedWindows, id: \.window.id) { snapshot in
                     QuotaRow(snapshot: snapshot, now: now, sourceFailed: issue != nil, compact: compact,
@@ -946,8 +1151,8 @@ struct PlatformCard: View {
                          masked: row.isMasked(snapshot))
             }
         }
-        if primaryWindows.count > 4 {
-            Button(expanded ? "Show Less" : "Show All \(primaryWindows.count) Windows") {
+        if allNonVideoWindows.count > primaryWindows.count || primaryWindows.count > 4 {
+            Button(expanded ? "Show less" : "Show all \(allNonVideoWindows.count) windows") {
                 expanded.toggle()
             }
             .buttonStyle(.plain)
@@ -986,7 +1191,7 @@ struct PlatformCard: View {
                     }
                     .padding(.top, 8)
                 } label: {
-                    Label("Video Quota (\(videoWindows.count) Windows)", systemImage: "video")
+                    Label("Video quota (\(videoWindows.count) windows)", systemImage: "video")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.secondary)
                 }
@@ -1004,10 +1209,10 @@ struct PlatformCard: View {
     @ViewBuilder
     private var openSettingsButton: some View {
         if let onOpenSettings {
-            Button("Open Settings", action: onOpenSettings)
+            Button("Open Dashboard", action: onOpenSettings)
                 .controlSize(.small)
-                .help("Open Settings")
-                .accessibilityLabel("Open Settings")
+                .help("Open Dashboard")
+                .accessibilityLabel("Open Dashboard")
                 .padding(.top, 2)
         }
     }
@@ -1065,13 +1270,6 @@ struct QuotaRow: View {
     }
     private var barMetrics: QuotaBarMetrics { QuotaBarMetrics(snapshot: snapshot, now: now) }
     private var barDimmed: Bool { quotaBarIsDimmed(for: snapshot, sourceFailed: sourceFailed) }
-    private var stateText: String {
-        if masked { return "not applicable" }
-        if isDiscreteCount { return "left" }
-        if snapshot.remainingPercent == nil { return "unavailable" }
-        return snapshot.isFresh && !sourceFailed ? "remaining" : "last reported"
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(alignment: .firstTextBaseline) {
@@ -1080,14 +1278,9 @@ struct QuotaRow: View {
                     .font(.system(size: 11, weight: .medium))
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 10)
-                VStack(alignment: .trailing, spacing: 1) {
-                    Text(percentText)
-                        .font(.system(size: compact ? 18 : 22, weight: .semibold, design: .rounded).monospacedDigit())
-                        .foregroundStyle(tint)
-                    Text(stateText)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                }
+                Text(percentText)
+                    .font(.system(size: compact ? 18 : 22, weight: .semibold, design: .rounded).monospacedDigit())
+                    .foregroundStyle(tint)
             }
 
             if masked {

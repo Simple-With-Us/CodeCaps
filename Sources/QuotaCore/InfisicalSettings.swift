@@ -17,11 +17,10 @@ import Foundation
 ///    write throws and leaves the cache untouched — the cache and Infisical
 ///    never diverge silently.
 ///
-/// The universal-auth client secret is provisioned by the owner into his own
-/// Keychain (Settings → Infisical Sync) and held here only in memory.  It is
-/// never logged, never persisted by this type, and never leaves an error
-/// message.  The iOS companion never holds it at all — the Mac app owns the
-/// Infisical read and the companion keeps reading through its existing API.
+/// Full service tokens and machine client secrets come from the owner's
+/// build-scoped Keychain bindings and remain in memory on this path.
+/// Authentication values are never logged or included in error messages.
+/// The iOS companion does not hold these Infisical credentials.
 ///
 /// The class is `@unchecked Sendable`: every stored property is either a
 /// value type or guarded by `lock`, so synchronous memory-only reads are safe
@@ -50,35 +49,44 @@ public final class InfisicalSettings: @unchecked Sendable {
     /// timer into a hot loop.
     public static let minimumRefreshInterval: TimeInterval = 60
 
-    /// Release builds read the `prod` environment; `.dev` builds read `dev`,
-    /// mirroring how `TokenStore` scopes Keychain items per build.
-    public static func defaultEnvironment(
-        bundleIdentifier: String? = Bundle.main.bundleIdentifier
-    ) -> String {
-        (bundleIdentifier ?? "").hasSuffix(".dev") ? "dev" : "prod"
-    }
+    /// Legacy setups keep prod; new bindings explicitly choose their environment.
+    public static func defaultEnvironment() -> String { "prod" }
 
     // MARK: - Configuration
 
     public struct Configuration: Equatable, Sendable {
-        public var siteURL: URL
-        public var projectId: String
-        public var environment: String
-        public var clientId: String
-        public var clientSecret: String
+        public var readBinding: InfisicalBinding
+        public var writeBinding: InfisicalBinding?
 
-        public init(
-            siteURL: URL = URL(string: "https://app.infisical.com")!,
-            projectId: String,
-            environment: String,
-            clientId: String,
-            clientSecret: String
-        ) {
-            self.siteURL = siteURL
-            self.projectId = projectId
-            self.environment = environment
-            self.clientId = clientId
-            self.clientSecret = clientSecret
+        public var siteURL: URL { get { readBinding.siteURL } set { readBinding.siteURL = newValue } }
+        public var projectId: String { get { readBinding.projectId } set { readBinding.projectId = newValue } }
+        public var environment: String { get { readBinding.environment } set { readBinding.environment = newValue } }
+        public var clientId: String { get { readBinding.clientId } set { readBinding.clientId = newValue } }
+        public var clientSecret: String { get { readBinding.clientSecret } set { readBinding.clientSecret = newValue } }
+        public var secretPath: String { readBinding.secretPath }
+
+        /// Existing call sites retain machine authentication and receive no implicit write permission.
+        public init(siteURL: URL = URL(string: "https://app.infisical.com")!, projectId: String,
+                    environment: String, clientId: String, clientSecret: String) {
+            readBinding = InfisicalBinding(id: "legacy-machine-read", label: "Existing Machine Identity",
+                siteURL: siteURL, projectId: projectId, environment: environment,
+                authentication: .machineIdentity, access: .read, clientId: clientId, clientSecret: clientSecret)
+            writeBinding = nil
+        }
+
+        public init(readBinding: InfisicalBinding, writeBinding: InfisicalBinding? = nil) {
+            self.readBinding = readBinding; self.writeBinding = writeBinding
+        }
+
+        public func validate() throws {
+            try readBinding.validate()
+            guard readBinding.access == .read else { throw SettingsError.invalidDestination }
+            if let writeBinding {
+                try writeBinding.validate()
+                guard writeBinding.access == .write, writeBinding.matchesScope(of: readBinding) else {
+                    throw SettingsError.writeNotConfigured
+                }
+            }
         }
     }
 
@@ -86,6 +94,7 @@ public final class InfisicalSettings: @unchecked Sendable {
 
     public enum SettingsError: Error, LocalizedError {
         case notConfigured
+        case writeNotConfigured
         case superseded
         case invalidDestination
         case projectUnavailable(status: Int)
@@ -97,24 +106,26 @@ public final class InfisicalSettings: @unchecked Sendable {
 
         public var errorDescription: String? {
             switch self {
+            case .writeNotConfigured:
+                return "Choose an explicit write binding for the same project, environment, and folder."
             case .superseded:
                 return "Infisical setup changed while this request was running.  Try again with the current setup."
             case .invalidDestination:
-                return "Infisical did not confirm the selected Project ID and environment.  The previous setup is unchanged."
+                return "Check the Infisical binding, authentication, and scope fields.\u{00A0} The previous setup is unchanged."
             case .projectUnavailable(let status):
                 return "Infisical project verification failed (HTTP \(status)).  Check the Project ID and identity access."
             case .notConfigured:
-                return "Infisical sync is not set up.  Add your client identity under Settings → Infisical Sync (see INFISICAL.md)."
+                return "Infisical sync is not set up.\u{00A0} Select a read binding in Infisical Sync."
             case .loginFailed(let status):
                 return "Infisical login failed (HTTP \(status)).  Check the client identity under Settings → Infisical Sync."
             case .fetchFailed(let status):
                 return "Infisical settings fetch failed (HTTP \(status)).  The last-known-good values are still in effect."
             case .writeFailed(let status):
-                return "Infisical write failed (HTTP \(status)) — the setting was NOT saved, so the cache and Infisical cannot diverge."
+                return "Infisical did not confirm the write (HTTP \(status)).\u{00A0} The cached setting was kept."
             case .decoding(let what):
                 return "Infisical returned an unexpected response (\(what))."
-            case .transport(let error):
-                return "Infisical request failed: \(error.localizedDescription)"
+            case .transport:
+                return "Infisical request failed."
             }
         }
     }
@@ -155,7 +166,10 @@ public final class InfisicalSettings: @unchecked Sendable {
             request.httpBody = body
             // Ephemeral: nothing about these requests is cached, cookied, or
             // written to disk — same posture as the quota fetchers.
-            let session = URLSession(configuration: .ephemeral)
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.urlCredentialStorage = nil
+            let session = URLSession(configuration: configuration, delegate: InfisicalNoRedirects(), delegateQueue: nil)
+            defer { session.invalidateAndCancel() }
             let (data, response) = try await session.data(for: request)
             return (data, (response as? HTTPURLResponse)?.statusCode ?? -1)
         }
@@ -220,9 +234,10 @@ public final class InfisicalSettings: @unchecked Sendable {
 
     /// Persistence and the runtime switch share a synchronous commit boundary.
     /// A Keychain failure leaves the active configuration and cache intact.
-    public func clearConfiguration(persist: () throws -> Void) throws {
+    public func clearConfiguration(expectedRevision: Revision? = nil, persist: () throws -> Void) throws {
         lock.lock()
         defer { lock.unlock() }
+        if let expectedRevision, expectedRevision.generation != _generation { throw SettingsError.superseded }
         _generation &+= 1
         try persist()
         _configuration = nil
@@ -249,8 +264,7 @@ public final class InfisicalSettings: @unchecked Sendable {
         persist: () throws -> Void
     ) async throws -> Revision {
         let revision = revision ?? beginSetupChange()
-        guard !configuration.projectId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              !configuration.environment.isEmpty else { throw SettingsError.invalidDestination }
+        try configuration.validate()
         let values = try await fetchManaged(configuration: configuration, revision: revision,
                                             verifyDestination: true)
         return try commitSetup(configuration, values: values, revision: revision, persist: persist)
@@ -274,6 +288,19 @@ public final class InfisicalSettings: @unchecked Sendable {
     /// Whether the owner has provisioned an Infisical identity.  With no
     /// identity every read falls back to local values and every save stays
     /// local — today's behaviour, unchanged.
+    public var canWrite: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let configuration = _configuration, let write = configuration.writeBinding else { return false }
+        return write.access == .write && write.matchesScope(of: configuration.readBinding)
+            && (try? configuration.validate()) != nil
+    }
+
+    public var activeReadBinding: InfisicalBinding? {
+        lock.lock(); defer { lock.unlock() }
+        return _configuration?.readBinding
+    }
+
     public var isProvisioned: Bool {
         lock.lock()
         defer { lock.unlock() }
@@ -378,7 +405,11 @@ public final class InfisicalSettings: @unchecked Sendable {
     public func set(_ value: String, for key: String, expectedRevision: Revision? = nil) async throws {
         let (configuration, revision) = try configurationOrThrow()
         if let expectedRevision, expectedRevision != revision { throw SettingsError.superseded }
-        try await writeSecret(configuration: configuration, revision: revision, key: key, value: value)
+        try configuration.validate()
+        guard let write = configuration.writeBinding, write.access == .write,
+              write.matchesScope(of: configuration.readBinding) else { throw SettingsError.writeNotConfigured }
+        guard Self.managedKeys.contains(key) else { throw SettingsError.invalidDestination }
+        try await writeSecret(binding: write, revision: revision, key: key, value: value)
         try install(value, for: key, revision: revision)
     }
 
@@ -401,12 +432,14 @@ public final class InfisicalSettings: @unchecked Sendable {
 
     // MARK: - Infisical REST
 
-    private func accessToken(for configuration: Configuration, revision: Revision) async throws -> String {
+    private func accessToken(for binding: InfisicalBinding, revision: Revision) async throws -> String {
         try checkCurrent(revision)
-        let url = configuration.siteURL.appendingPathComponent("api/v1/auth/universal-auth/login")
+        try binding.validate()
+        if binding.authentication == .serviceToken { return binding.serviceToken }
+        let url = binding.siteURL.appendingPathComponent("api/v1/auth/universal-auth/login")
         let body = try JSONSerialization.data(withJSONObject: [
-            "clientId": configuration.clientId,
-            "clientSecret": configuration.clientSecret,
+            "clientId": binding.clientId,
+            "clientSecret": binding.clientSecret,
         ])
         let (data, status) = try await sending {
             try await self.transport.send(
@@ -446,8 +479,9 @@ public final class InfisicalSettings: @unchecked Sendable {
 
     private func fetchManaged(configuration: Configuration, revision: Revision,
                               verifyDestination: Bool = false) async throws -> [String: String] {
-        let token = try await accessToken(for: configuration, revision: revision)
-        if verifyDestination {
+        try configuration.validate()
+        let token = try await accessToken(for: configuration.readBinding, revision: revision)
+        if verifyDestination && configuration.readBinding.authentication == .machineIdentity {
             try await verifyProject(configuration: configuration, token: token, revision: revision)
         }
         var values: [String: String] = [:]
@@ -462,7 +496,7 @@ public final class InfisicalSettings: @unchecked Sendable {
             components.queryItems = [
                 URLQueryItem(name: "workspaceId", value: configuration.projectId),
                 URLQueryItem(name: "environment", value: configuration.environment),
-                URLQueryItem(name: "secretPath", value: "/"),
+                URLQueryItem(name: "secretPath", value: configuration.secretPath),
                 URLQueryItem(name: "type", value: "shared"),
                 URLQueryItem(name: "expandSecretReferences", value: "false"),
                 URLQueryItem(name: "include_imports", value: "false"),
@@ -492,16 +526,16 @@ public final class InfisicalSettings: @unchecked Sendable {
         return values
     }
 
-    private func writeSecret(configuration: Configuration, revision: Revision, key: String, value: String) async throws {
-        let token = try await accessToken(for: configuration, revision: revision)
+    private func writeSecret(binding: InfisicalBinding, revision: Revision, key: String, value: String) async throws {
+        let token = try await accessToken(for: binding, revision: revision)
         let encoded = key.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? key
         // The /raw/ write path accepts a plaintext secretValue (the pilot
         // validated this: the non-raw path demands client-side E2EE fields).
-        let url = configuration.siteURL.appendingPathComponent("api/v3/secrets/raw/\(encoded)")
+        let url = binding.siteURL.appendingPathComponent("api/v3/secrets/raw/\(encoded)")
         let body = try JSONSerialization.data(withJSONObject: [
-            "workspaceId": configuration.projectId,
-            "environment": configuration.environment,
-            "secretPath": "/",
+            "workspaceId": binding.projectId,
+            "environment": binding.environment,
+            "secretPath": binding.secretPath,
             "secretValue": value,
             "type": "shared",
         ])
@@ -538,5 +572,14 @@ public final class InfisicalSettings: @unchecked Sendable {
         } catch {
             throw SettingsError.transport(error)
         }
+    }
+}
+
+
+private final class InfisicalNoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(nil)
     }
 }

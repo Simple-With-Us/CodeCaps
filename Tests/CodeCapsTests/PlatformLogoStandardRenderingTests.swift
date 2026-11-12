@@ -16,7 +16,7 @@ final class PlatformLogoStandardRenderingTests: XCTestCase {
     /// matter what SwiftUI's `renderingMode` says, so one leaked template flag
     /// is enough to turn every brand colour into the surrounding grey.
     func testStandardStyleReturnsANonTemplateImageForABrandColourMark() {
-        for key in ["anthropic", "claude", "google-antigravity", "google-antigravity:gemini"] {
+        for key in ["anthropic", "claude", "google-antigravity", "google-antigravity:gemini", "google-antigravity:third-party"] {
             PlatformLogoImage.invalidateCache(for: key)
             let image = PlatformLogoImage.load(providerKey: key, style: .standard)
             XCTAssertNotNil(image, "\(key) has no Standard image at all")
@@ -62,7 +62,7 @@ final class PlatformLogoStandardRenderingTests: XCTestCase {
     /// The known single-colour marks must still adapt, or the fix for the
     /// above reintroduces black-on-black on a dark surface.
     func testSingleColourMarksStayTemplateInEveryStyle() {
-        for key in ["codex", "cursor", "grok", "grok-bot", "minimax"] {
+        for key in ["codex", "cursor", "grok", "grok-bot"] {
             XCTAssertTrue(PlatformLogoImage.isMonochromeMark(key),
                           "\(key) ships single-colour artwork and must stay a template")
         }

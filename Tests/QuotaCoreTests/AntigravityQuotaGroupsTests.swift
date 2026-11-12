@@ -10,7 +10,7 @@ final class AntigravityQuotaGroupsTests: XCTestCase {
         let groups = AntigravityQuotaGroups.normalize(reports, includeMissing: true)
         XCTAssertEqual(groups.count, 4)
         XCTAssertEqual(groups.map(\.remainingPercent), [80, 25, 40, 10])
-        XCTAssertEqual(groups.map(\.label), ["Gemini Models · 5-hour", "Gemini Models · Weekly", "Third-Party Models · 5-hour", "Third-Party Models · Weekly"])
+        XCTAssertEqual(groups.map(\.label), ["Gemini Models · 5-hour", "Gemini Models · 7-day", "Third-Party Models · 5-hour", "Third-Party Models · 7-day"])
         XCTAssertTrue(groups.allSatisfy { $0.modelId == nil && $0.absoluteLimit == nil })
         XCTAssertEqual(AntigravityQuotaGroups.normalize(groups, includeMissing: true), groups)
     }
@@ -56,6 +56,21 @@ final class AntigravityQuotaGroupsTests: XCTestCase {
         XCTAssertEqual(groups.filter { $0.label.hasPrefix("Third-Party") }.map(\.modelType), ["third-party", "third-party"])
         // The family must not re-pool a window into the wrong group on a rerun.
         XCTAssertEqual(AntigravityQuotaGroups.normalize(groups, includeMissing: true), groups)
+    }
+
+    func testCadenceLabelsRequireExactCanonicalValues() {
+        var window = report("claude-sonnet", 80)
+        window.modelId = nil
+        window.label = "notweekly"
+        XCTAssertNil(AntigravityQuotaGroups.cadenceKey(for: window))
+        window.label = "weekend"
+        XCTAssertNil(AntigravityQuotaGroups.cadenceKey(for: window))
+        window.label = " 7-day window "
+        XCTAssertEqual(AntigravityQuotaGroups.cadenceKey(for: window), "weekly")
+        window.label = "not a 5-hour limit"
+        XCTAssertNil(AntigravityQuotaGroups.cadenceKey(for: window))
+        window.label = " 5-hour window "
+        XCTAssertEqual(AntigravityQuotaGroups.cadenceKey(for: window), "5h")
     }
 
     func testASourceReportedExhaustionSurvivesGroupingAndExport() throws {

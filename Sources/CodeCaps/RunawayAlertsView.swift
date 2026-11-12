@@ -8,12 +8,11 @@ extension AnomalyDetector.Anomaly: Identifiable {
     }
 }
 
-/// Dedicated in-app inspector for runaway usage anomaly alerts.
+/// Dedicated in-app inspector for runaway usage alerts.
 ///
-/// Gives the owner a permanent forensic record of every runaway alert
-/// detected on this Mac: which provider, which quota window, the consumption
-/// rate (% points/hr), the historical comparison (vs average or peak), and a
-/// direct shortcut to inspect the live usage chart.
+/// Shows each alert recorded on this Mac: which plan, which limit, how fast
+/// it was used, how that compares with the usual pace, and a shortcut to the
+/// live usage chart.
 struct RunawayAlertsPage: View {
     @ObservedObject var model: MonitorModel
     @ObservedObject var state: ConsoleState
@@ -42,6 +41,10 @@ struct RunawayAlertsPage: View {
                 activeAnomaliesSection
             }
 
+            if !model.activePlanChanges.isEmpty {
+                planChangesSection
+            }
+
             historySection
         }
         .confirmationDialog(
@@ -54,7 +57,8 @@ struct RunawayAlertsPage: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This will remove all recorded runaway alert events from this Mac.  Sample history used for baseline calculations is preserved.")
+            Text("This will remove every recorded runaway alert from this Mac." + sentenceGap
+                 + "The history used to learn your usual pace is kept.")
         }
     }
 
@@ -80,7 +84,7 @@ struct RunawayAlertsPage: View {
                             .background(Theme.warning, in: Capsule())
                     }
                 }
-                Text("Autonomous monitoring that catches stuck loops and runaway token burn across all signed-in providers.")
+                Text("Warns you when an AI plan on this Mac is used much faster than usual.")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -94,7 +98,7 @@ struct RunawayAlertsPage: View {
     private var calibrationCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Label("Anomaly Detector Status", systemImage: "speedometer")
+                Label("How Sensitive Alerts Are", systemImage: "speedometer")
                     .font(.system(size: 12, weight: .semibold))
                 Spacer()
                 Button("Configure Sensitivity") {
@@ -159,6 +163,68 @@ struct RunawayAlertsPage: View {
                 activeAnomalyRow(anomaly)
             }
         }
+    }
+
+    /// Plan changes in their recalibration window: informational, never an
+    /// alert.  The runaway detector stands down here until the baseline is
+    /// all new-plan data.
+    private var planChangesSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label("Plan Changes — Baseline Recalibrating", systemImage: "arrow.triangle.2.circlepath")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(Theme.accent)
+                Spacer()
+            }
+
+            ForEach(model.activePlanChanges, id: \.planChangeId) { change in
+                planChangeRow(change)
+            }
+        }
+    }
+
+    private func planChangeRow(_ change: AnomalyDetector.PlanChange) -> some View {
+        let matchingSnapshot = model.displaySections.flatMap { $0.section.windows }
+            .first { $0.window.id == change.windowId }
+            ?? model.sections.flatMap(\.windows).first { $0.window.id == change.windowId }
+        let providerTitle = model.sections.first { $0.providerKey == change.providerKey }?.providerLabel
+            ?? change.providerKey.capitalized
+        let windowTitle = matchingSnapshot.map { snapshot in
+            let raw = snapshot.window.label.trimmingCharacters(in: .whitespacesAndNewlines)
+            return raw.isEmpty ? glanceMeterCaption(snapshot) : raw
+        } ?? change.windowId
+
+        let detail: String
+        if let changedAt = change.changedAt, let recalibratedAt = change.recalibratedAt {
+            let fmt = DateFormatter()
+            fmt.setLocalizedDateFormatFromTemplate("MMMd")
+            detail = "Plan Changed on \(fmt.string(from: changedAt)),"
+                + sentenceGap
+                + "Stats Less Valid Until \(fmt.string(from: recalibratedAt))"
+        } else {
+            detail = "Plan change noted in the Dashboard,"
+                + sentenceGap
+                + "stats less valid while the baseline recalibrates"
+        }
+
+        return HStack(alignment: .center, spacing: 12) {
+            Text("Δ")
+                .font(.system(size: 20, weight: .bold))
+                .foregroundStyle(Theme.accent)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(providerTitle) · \(windowTitle)")
+                    .font(.system(size: 13, weight: .semibold))
+                Text(detail)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+        }
+        .padding(10)
+        .background(Theme.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Theme.accent.opacity(0.25), lineWidth: 1))
     }
 
     private func activeAnomalyRow(_ anomaly: AnomalyDetector.Anomaly) -> some View {
@@ -227,7 +293,7 @@ struct RunawayAlertsPage: View {
     private var historySection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Label("Alert Forensic History (\(model.runawayAlertHistory.count))", systemImage: "clock.arrow.circlepath")
+                Label("Alert History (\(model.runawayAlertHistory.count))", systemImage: "clock.arrow.circlepath")
                     .font(.system(size: 12, weight: .semibold))
                 Spacer()
                 if !model.runawayAlertHistory.isEmpty {
@@ -246,7 +312,7 @@ struct RunawayAlertsPage: View {
                         .foregroundStyle(Theme.accent)
                     Text("No Runaway Alerts Recorded")
                         .font(.system(size: 13, weight: .semibold))
-                    Text("When an AI CLI or provider begins consuming tokens significantly faster than your baseline, the full forensic record will appear here.")
+                    Text("When a plan on this Mac is used much faster than usual, the alert shows up here.")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)

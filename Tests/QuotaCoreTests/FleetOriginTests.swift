@@ -3,6 +3,8 @@ import XCTest
 
 /// Legacy responses and explicit machine provenance must both remain readable.
 final class FleetOriginTests: XCTestCase {
+    private let day: TimeInterval = 86_400
+
     func testIdentityPrefersSourceAndFallsBackInOrder() {
         XCTAssertEqual(FleetOrigin.identity(of: window(source: "antigravity-usage", sourceApp: "antigravity-cli")),
                        "antigravity-usage")
@@ -89,12 +91,83 @@ final class FleetOriginTests: XCTestCase {
         XCTAssertTrue(split.groups.isEmpty)
     }
 
+    /// An arbitrary source avoids the separate legacy app-name fallback.
+    func testMissingCadenceDoesNotIdentifyDistinctLegacyPayloadAsOwn() {
+        let local = window(id: "local-mac:anthropic:five_hour", source: "synthetic-local", sourceApp: nil)
+        let foreign = window(id: "anthropic:weekly", source: "synthetic-remote", sourceApp: nil)
+        XCTAssertNil(local.window)
+        XCTAssertNil(foreign.window)
+        XCTAssertEqual(local.occurredAt, foreign.occurredAt)
+        XCTAssertFalse(FleetOrigin.isOwnPush(foreign, host: "injected-host", localWindows: [local]))
+        let split = FleetOrigin.split([foreign], host: "injected-host", localWindows: [local],
+                                     now: foreign.occurredDate ?? Date())
+        XCTAssertTrue(split.ownPush.isEmpty)
+        XCTAssertEqual(split.groups.flatMap(\.windows).map(\.id), [foreign.id])
+    }
+
+    func testLegacyMatchingPayloadIdSurvivesLocalPrefixNormalization() {
+        let local = window(id: "local-mac:anthropic:five_hour", source: "synthetic-local", sourceApp: nil)
+        let echo = window(id: "anthropic:five_hour", source: "synthetic-remote", sourceApp: nil)
+        XCTAssertTrue(FleetOrigin.isOwnPush(echo, host: "injected-host", localWindows: [local]))
+    }
+
+    func testExplicitMatchingCadenceStillIdentifiesLegacyPayload() {
+        var local = window(id: "local-mac:anthropic:a", source: "synthetic-local", sourceApp: nil)
+        var echo = window(id: "anthropic:b", source: "synthetic-remote", sourceApp: nil)
+        local.window = "five_hour"
+        echo.window = "five_hour"
+        XCTAssertTrue(FleetOrigin.isOwnPush(echo, host: "injected-host", localWindows: [local]))
+        echo.window = "weekly"
+        XCTAssertFalse(FleetOrigin.isOwnPush(echo, host: "injected-host", localWindows: [local]))
+    }
+
+    func testExplicitRemoteProducerOverridesMatchingTimestampAndId() {
+        let local = window(id: "local-mac:anthropic:five_hour", source: "synthetic-local", sourceApp: nil)
+        var remote = window(id: "anthropic:five_hour", source: "synthetic-remote", sourceApp: nil)
+        remote.producerInstanceId = "other-installation"
+        XCTAssertFalse(FleetOrigin.isOwnPush(remote, host: "injected-host", localWindows: [local]))
+    }
+
+    func testNilCadenceFixDoesNotChangeLegacyAppSourceProviderFallback() {
+        let local = window(id: "local-mac:anthropic:a", source: "synthetic-local", sourceApp: nil)
+        for source in ["codecaps", "agent-bar"] {
+            var legacy = window(id: "anthropic:b", source: source, sourceApp: nil)
+            legacy.occurredAt = "2026-09-18T03:37:53.456Z"
+            XCTAssertTrue(FleetOrigin.isOwnPush(legacy, host: "injected-host", localWindows: [local]),
+                          "the separate legacy provider fallback is deliberately unchanged")
+        }
+    }
+
     func testLocalMacPrefixAndSourceAppIdentifiesOwnPush() {
         let prefixed = window(id: "local-mac:anthropic:five_hour", source: "Claude Code", sourceApp: nil)
         XCTAssertTrue(FleetOrigin.isOwnPush(prefixed, host: "unrelated-host"))
 
         let appSourced = window(id: "some-window", source: "Claude Code", sourceApp: "local-mac")
         XCTAssertTrue(FleetOrigin.isOwnPush(appSourced, host: "unrelated-host"))
+    }
+
+    func testTwoAgentBarMacsSplitByStableInstallationId() {
+        var macA = window(id: "a", source: "agent-bar", sourceApp: "agent-bar")
+        macA.producerInstanceId = "11111111-1111-1111-1111-111111111111"
+        macA.machine = "Mac mini"
+        var macB = window(id: "b", source: "agent-bar", sourceApp: "agent-bar")
+        macB.producerInstanceId = "22222222-2222-2222-2222-222222222222"
+        macB.machine = "Mac mini"
+        let split = FleetOrigin.split([macA, macB], host: "studio-host")
+        XCTAssertEqual(split.groups.count, 2)
+        XCTAssertEqual(Set(split.groups.map(\.id)), Set([
+            "11111111-1111-1111-1111-111111111111",
+            "22222222-2222-2222-2222-222222222222",
+        ]))
+        XCTAssertEqual(split.groups.map(\.title), ["Mac mini", "Mac mini"])
+    }
+
+    func testQuotaResponseBatchInstanceStampsWindows() throws {
+        let json = #"{"generatedAt":"2026-10-15T00:00:00Z","producerInstanceId":"batch-id","machine":"Kitchen Mac","windows":[{"id":"w","provider":"anthropic","source":"agent-bar","occurredAt":"2026-10-15T00:00:00Z"}]}"#
+        let response = try JSONDecoder().decode(QuotaResponse.self, from: Data(json.utf8))
+        XCTAssertEqual(response.windows.first?.producerInstanceId, "batch-id")
+        XCTAssertEqual(response.windows.first?.machine, "Kitchen Mac")
+        XCTAssertEqual(FleetOrigin.split(response.windows, host: "other").groups.map(\.id), ["batch-id"])
     }
 
     func testMachineNormalizationRecognizesDottedHostAndLocalizedNames() {
@@ -104,6 +177,222 @@ final class FleetOriginTests: XCTestCase {
 
         win.machine = "macjaysservices"
         XCTAssertTrue(FleetOrigin.isOwnPush(win, host: "Mac.Jays.Services"))
+    }
+
+    /// A local window that carries no reading is not a local reading.  The
+    /// plan-details window of a provider this Mac cannot read must not count
+    /// as one, or the fleet's live reading for that provider never reaches its
+    /// row and the row reads no allowance at all.
+    func testALocalWindowWithoutAReadingIsNotALocalReading() {
+        let planDetails = QuotaWindow(
+            id: "local-mac:xai:plan-metadata",
+            provider: "xAI",
+            providerKey: "xai",
+            label: "Plan Details",
+            remainingUnknown: true,
+            occurredAt: "2026-10-23T22:54:46Z",
+            source: "CodeCaps Settings"
+        )
+        XCTAssertTrue(QuotaLocalScope.providers(withReadings: [planDetails]).isEmpty,
+                      "a plan-details window carries no reading, so it is not a local reading")
+
+        let grok = QuotaWindow(
+            id: "local-mac:grok:subscription",
+            provider: "Grok",
+            providerKey: "grok",
+            label: "Weekly window",
+            remainingPercent: 89,
+            occurredAt: "2026-10-23T22:54:46Z",
+            source: "Grok"
+        )
+        XCTAssertEqual(QuotaLocalScope.providers(withReadings: [planDetails, grok]), ["grok"],
+                       "only the provider this Mac has a reading for counts")
+    }
+
+    /// A local window that reports an absolute balance and no percentage is
+    /// still a reading.  Several readers report a balance that way, and
+    /// counting only the percentages said this Mac reads no such provider:
+    /// the Mac merge then did not hold the fleet out, so another machine's
+    /// reading of the same provider was merged into this Mac's row and
+    /// labelled local, giving the row two readings where it had one.
+    func testALocalWindowWithAnAbsoluteBalanceIsALocalReading() {
+        let balanceOnly = QuotaWindow(
+            id: "local-mac:grok:balance",
+            provider: "Grok",
+            providerKey: "grok",
+            label: "SuperGrok Heavy",
+            absoluteRemaining: 120,
+            absoluteLimit: 200,
+            occurredAt: "2026-10-23T22:54:46Z",
+            source: "Grok"
+        )
+        XCTAssertEqual(QuotaLocalScope.providers(withReadings: [balanceOnly]), ["grok"],
+                       "a window with an absolute balance is a reading, so this Mac reads that provider")
+
+        let planDetails = QuotaWindow(
+            id: "local-mac:xai:plan-metadata",
+            provider: "xAI",
+            providerKey: "xai",
+            label: "Plan Details",
+            remainingUnknown: true,
+            occurredAt: "2026-10-23T22:54:46Z",
+            source: "CodeCaps Settings"
+        )
+        XCTAssertTrue(QuotaLocalScope.providers(withReadings: [planDetails]).isEmpty,
+                      "a plan-details window carries no reading, so it is not a local reading")
+    }
+
+    /// This Mac's own push of a period that ended is a copy like any other
+    /// when this Mac has no local reading to grey that period out.  There is
+    /// nothing left to show for it, so it must not stand in for a reading.
+    /// An ended copy whose cadence still has a live sibling is redundant and
+    /// goes:  the live reading is the row's number.
+    func testAnEndedCopyWithALiveSiblingOfItsCadenceIsDropped() {
+        let live = xaiWindow(id: "grok:subscription", percent: 89, resetIn: 6 * 86_400, observedAgo: 60)
+        let ended = xaiWindow(id: "xai:subscription", percent: 0, resetIn: -86_400, observedAgo: 6 * 86_400)
+        let split = FleetOrigin.split([live, ended], host: "this-mac", localWindows: [], now: Date())
+        XCTAssertEqual(split.ownPush.map(\.id), [live.id],
+                      "a copy of a period that ended is not a reading while a live one stands")
+    }
+
+    /// A dead copy whose cadence has nothing live left is the last known
+    /// state of that meter, so it stays and the row keeps the cadence:  the
+    /// Muse Code collector restates its periods only when new usage arrives,
+    /// and dropping the finished 5h window took the whole 5h row off the
+    /// provider while the weekly one survived (CC-211, owner 2026-11-07).
+    func testAnEndedCopyWithNothingLiveLeftOfItsCadenceIsKept() {
+        let now = Date()
+        let ended = xaiWindow(id: "local-mac:xai:subscription", percent: 0,
+                              resetIn: -86_400, observedAgo: 6 * 86_400)
+        let split = FleetOrigin.split([ended], host: "this-mac", localWindows: [], now: now)
+        XCTAssertEqual(split.ownPush.count, 1,
+                       "with no live window of the cadence, the ended copy is what the row has")
+    }
+
+    /// Retention is this Mac's own grey-out only: a copy from another
+    /// machine feeds the fleet fallback for a provider this Mac does not
+    /// read, so an ended 0% copy from a remote machine still drops even with
+    /// nothing live left of its cadence (PR review: the CC-191 failure).
+    func testARemoteMachinesDeadCopyDropsEvenWithNothingLiveLeftOfItsCadence() {
+        let now = Date()
+        let remoteDead = xaiWindow(id: "remote:xai:subscription", percent: 0,
+                                   resetIn: -86_400, observedAgo: 6 * 86_400)
+        var remote = remoteDead
+        remote.producerInstanceId = "other-mac"
+        let split = FleetOrigin.split([remote], host: "this-mac", localWindows: [], now: now)
+        XCTAssertTrue(split.ownPush.isEmpty)
+        XCTAssertTrue(split.groups.flatMap(\.windows).isEmpty,
+                      "a remote machine's ended copy is not a reading and never reaches a row")
+    }
+
+    /// The legacy Muse collector wrote this Mac's own machine name into the
+    /// producer field (before install UUIDs), so the producer field alone
+    /// must not decide ownership:  a name falls through to the machine-name
+    /// match, and this window is this Mac's own push — which is what keeps
+    /// the dead 5h copy on the row (CC-217).
+    func testALegacyCollectorMachineNameInTheProducerFieldIsOwnPush() {
+        let now = Date()
+        let iso = ISO8601DateFormatter()
+        var muse = QuotaWindow(
+            id: "local-mac:muse-code:5h",
+            provider: "Muse Code",
+            providerKey: "muse-code",
+            label: "5h window",
+            remainingPercent: 57,
+            resetAt: iso.string(from: now.addingTimeInterval(-3 * day)),
+            window: "5h",
+            occurredAt: iso.string(from: now.addingTimeInterval(-4 * day)),
+            source: "codecaps"
+        )
+        muse.producerInstanceId = "Mac.Jays.Services"
+        // A differently spelled host keeps the first comparison from settling
+        // it, so the machine-name match is what answers — on this Mac the
+        // real host name is the same string.
+        XCTAssertTrue(FleetOrigin.isOwnPush(muse, host: "mac.jays.services."),
+                      "the legacy collector's machine name is this Mac's own producer")
+        // A UUID-shaped producer id is a different installation's identity,
+        // and the machine-name match must not override it.
+        muse.producerInstanceId = "11111111-1111-1111-1111-111111111111"
+        XCTAssertFalse(FleetOrigin.isOwnPush(muse, host: "22222222-2222-2222-2222-222222222222"),
+                       "another install's UUID is authoritative")
+    }
+
+    func testTheMuseFiveHourRowSurvivesBesideTheLiveWeeklyWindow() {
+        let now = Date()
+        let iso = ISO8601DateFormatter()
+        func museWindow(id: String, windowToken: String, label: String, percent: Double,
+                        resetIn: TimeInterval, observedAgo: TimeInterval) -> QuotaWindow {
+            QuotaWindow(
+                id: id,
+                provider: "Muse Code",
+                providerKey: "muse-code",
+                label: label,
+                remainingPercent: percent,
+                resetAt: iso.string(from: now.addingTimeInterval(resetIn)),
+                window: windowToken,
+                occurredAt: iso.string(from: now.addingTimeInterval(-observedAgo)),
+                source: "codecaps"
+            )
+        }
+        let fiveHour = museWindow(id: "local-mac:muse-code:5h", windowToken: "5h", label: "5h window",
+                                  percent: 12, resetIn: -3 * 3_600, observedAgo: 4 * 3_600)
+        let weekly = museWindow(id: "local-mac:muse-code:weekly", windowToken: "7d", label: "7d window",
+                                percent: 35, resetIn: 6 * 86_400, observedAgo: 60)
+        let split = FleetOrigin.split([fiveHour, weekly], host: "this-mac", localWindows: [], now: now)
+        XCTAssertEqual(split.ownPush.map(\.id), [fiveHour.id, weekly.id],
+                       "the ended 5h window stays beside the live weekly one")
+    }
+
+    /// The exemption stays for a provider this Mac reads locally:  the local
+    /// window is what greys the ended period out, so the copy of it coming
+    /// back from the fleet is redundant.
+    func testOwnPushOfAnEndedPeriodIsKeptWhenThisMacReadsThatProviderLocally() {
+        let now = Date()
+        let ended = xaiWindow(id: "local-mac:xai:subscription", percent: 89, resetIn: -86_400, observedAgo: 6 * 86_400)
+        let local = QuotaWindow(
+            id: "local-mac:xai:subscription",
+            provider: "xAI",
+            providerKey: "xai",
+            label: "7-day window",
+            remainingPercent: 89,
+            resetAt: ISO8601DateFormatter().string(from: now.addingTimeInterval(-86_400)),
+            window: "weekly",
+            occurredAt: ISO8601DateFormatter().string(from: now.addingTimeInterval(-6 * 86_400))
+        )
+        let split = FleetOrigin.split([ended], host: "this-mac", localWindows: [local], now: now)
+        XCTAssertEqual(split.ownPush.count, 1,
+                       "the local window greys the ended period out, so the copy is redundant")
+    }
+
+    /// The xAI row end to end at the rule level.  This Mac reads no xAI quota
+    /// locally, the fleet carries this Mac's own live SuperGrok Heavy reading
+    /// under the xAI key, and the row must show that reading rather than the
+    /// copies of two periods that ended.
+    func testTheFleetLiveReadingReachesAProviderThisMacDoesNotReadLocally() {
+        let live = xaiWindow(id: "grok:subscription", percent: 89, resetIn: 6 * 86_400, observedAgo: 60)
+        let endedOne = xaiWindow(id: "xai-subscription", percent: 0, resetIn: -86_400, observedAgo: 6 * 86_400)
+        let endedTwo = xaiWindow(id: "xai:subscription", percent: 0, resetIn: -86_400, observedAgo: 5 * 86_400)
+
+        let split = FleetOrigin.split([live, endedOne, endedTwo], host: "this-mac", localWindows: [], now: Date())
+        XCTAssertEqual(split.ownPush.map(\.id), ["grok:subscription"],
+                       "the live reading survives and the copies of ended periods do not")
+    }
+
+    private func xaiWindow(id: String, percent: Double, resetIn: TimeInterval, observedAgo: TimeInterval) -> QuotaWindow {
+        let iso = ISO8601DateFormatter()
+        let clock = Date()
+        return QuotaWindow(
+            id: id,
+            provider: "xAI",
+            providerKey: "xai",
+            label: "7-day window",
+            remainingPercent: percent,
+            resetAt: iso.string(from: clock.addingTimeInterval(resetIn)),
+            window: "weekly",
+            occurredAt: iso.string(from: clock.addingTimeInterval(-observedAgo)),
+            source: "codecaps",
+            producerInstanceId: "this-mac"
+        )
     }
 
     private func window(id: String = "w", source: String?, sourceApp: String?) -> QuotaWindow {

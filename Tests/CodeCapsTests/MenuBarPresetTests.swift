@@ -98,6 +98,19 @@ final class MenuBarPresetTests: XCTestCase {
         XCTAssertEqual(model.menuBarTitle, "5% / 45%")
     }
 
+    func testSmartPairUrgencyTreatsAbsoluteCreditsAsDerivedPercent() throws {
+        let now = Date()
+        var credits = window("grok-credits", provider: "grok-bot", token: "weekly", remaining: nil, now: now)
+        credits.absoluteRemaining = 6_099
+        credits.absoluteLimit = 40_000
+        credits.quotaUnit = "credits"
+        credits.remainingUnknown = true
+        let busyPercent = window("codex-week", provider: "openai", token: "weekly", remaining: 50, now: now)
+        let model = makeModel([credits, busyPercent], selection: "smart_pair", now: now)
+        XCTAssertEqual(model.menuBarTargetSnapshots.map(\.window.id), ["grok-credits"],
+                       "absolute credits at ~15% should beat a 50% weekly row in smart_pair")
+    }
+
     func testSmartPairShowsOneValueForExhaustedWeeklyOrSingleWindow() throws {
         let now = Date()
         let exhausted = makeModel([
@@ -186,7 +199,7 @@ final class MenuBarPresetTests: XCTestCase {
         return model
     }
 
-    private func window(_ id: String, provider: String, token: String?, remaining: Double,
+    private func window(_ id: String, provider: String, token: String?, remaining: Double?,
                         model: String? = nil, label: String? = nil,
                         resetAfter: TimeInterval = 86_400, now: Date) -> QuotaWindow {
         let canonicalLabel = label ?? token ?? "Quota"

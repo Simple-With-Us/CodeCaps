@@ -2,6 +2,8 @@
 
 CodeCaps widgets display real quota readings from the app's shared cache.  They do not generate sample readings outside the system widget preview.
 
+For quota bars on arbitrary websites (HTML or JavaScript embeds), see [`PUBLIC-EMBED.md`](PUBLIC-EMBED.md).  That work belongs on Usage Monitor, not in WidgetKit.
+
 ## Data Flow
 
 On macOS, the running CodeCaps host writes a dedicated widget snapshot to the Mac App Group container.  The snapshot includes merged local and pulled quota windows, plus custom marks.  It is separate from the local BotFleet handoff at `~/Library/Application Support/Usage Monitor/quota-windows.json`, which remains local-reader data.  The host asks WidgetKit to reload timelines after a successful shared-cache write.

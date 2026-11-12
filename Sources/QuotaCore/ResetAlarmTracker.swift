@@ -29,6 +29,8 @@ public struct ResetAlarmObservation: Equatable, Sendable {
     public var periodSeconds: TimeInterval?
     /// When the current period ends.
     public var resetAt: Date?
+    /// When the current period began, when the provider reports it explicitly.
+    public var periodStartAt: Date?
     /// Percentage remaining, or `nil` when the reading is unknown or must not
     /// be believed (an Antigravity five-hour window under a spent weekly cap).
     public var remainingPercent: Double?
@@ -50,6 +52,7 @@ public struct ResetAlarmObservation: Equatable, Sendable {
         windowLabel: String,
         periodSeconds: TimeInterval?,
         resetAt: Date?,
+        periodStartAt: Date? = nil,
         remainingPercent: Double?,
         observedAt: Date?,
         identity: String? = nil
@@ -61,6 +64,7 @@ public struct ResetAlarmObservation: Equatable, Sendable {
         self.windowLabel = windowLabel
         self.periodSeconds = periodSeconds
         self.resetAt = resetAt
+        self.periodStartAt = periodStartAt
         self.remainingPercent = remainingPercent
         self.observedAt = observedAt
         self.identity = identity
@@ -76,6 +80,9 @@ public struct ResetAlarmEvent: Equatable, Sendable {
         /// of its cap during the period that just ended.  Carries the lowest
         /// percentage remaining that was observed in that period.
         case nearCap(minimumRemaining: Double)
+        /// The quota came back mid-cycle without reaching the level a vendor
+        /// reset has to reach, so a change of plan is the likelier reason.
+        case planChange
     }
 
     public var scope: String
@@ -89,7 +96,13 @@ public struct ResetAlarmEvent: Equatable, Sendable {
     /// The reading that revealed the reset.
     public var remainingPercent: Double?
     public var reason: Reason
+    /// True when the quota was handed back mid-cycle and landed at or above
+    /// `ResetAlarmPolicy.vendorRestoreLevel`, so the vendor reset it.
     public var isVendorReset: Bool
+    /// True when the quota rose mid-cycle but landed below the level a vendor
+    /// reset has to reach.  A change of plan is the likelier reason: the
+    /// allowance is bigger, but the vendor did not refill it.
+    public var isPlanChange: Bool
 
     public init(
         scope: String,
@@ -101,7 +114,8 @@ public struct ResetAlarmEvent: Equatable, Sendable {
         endedPeriodResetAt: Date?,
         remainingPercent: Double?,
         reason: Reason,
-        isVendorReset: Bool = false
+        isVendorReset: Bool = false,
+        isPlanChange: Bool = false
     ) {
         self.scope = scope
         self.providerId = providerId
@@ -113,6 +127,7 @@ public struct ResetAlarmEvent: Equatable, Sendable {
         self.remainingPercent = remainingPercent
         self.reason = reason
         self.isVendorReset = isVendorReset
+        self.isPlanChange = isPlanChange
     }
 }
 
@@ -127,6 +142,8 @@ public struct ResetAlarmTrackerState: Codable, Equatable, Sendable {
     public struct Window: Codable, Equatable, Sendable {
         /// When the current period ends, as last reported.
         public var periodResetAt: Date?
+        /// When the current period began, when the provider reports it explicitly.
+        public var periodStartAt: Date?
         /// The lowest percentage remaining observed in the current period.
         public var minimumRemaining: Double?
         /// The latest known percentage remaining.
@@ -141,6 +158,7 @@ public struct ResetAlarmTrackerState: Codable, Equatable, Sendable {
 
         public init(
             periodResetAt: Date?,
+            periodStartAt: Date? = nil,
             minimumRemaining: Double?,
             lastRemaining: Double?,
             lastObservedAt: Date?,
@@ -149,6 +167,7 @@ public struct ResetAlarmTrackerState: Codable, Equatable, Sendable {
             identity: String? = nil
         ) {
             self.periodResetAt = periodResetAt
+            self.periodStartAt = periodStartAt
             self.minimumRemaining = minimumRemaining
             self.lastRemaining = lastRemaining
             self.lastObservedAt = lastObservedAt
@@ -230,12 +249,31 @@ public enum ResetAlarmPolicy {
     /// A mid-cycle rise of at least this many points, with the period end left
     /// where it was, is the provider handing quota back.
     ///
-    /// The level the quota lands at says nothing: on 2026-10-04 Cursor's
-    /// included plan came back at 89% and Grok Bot's week at 92%, and a rule
-    /// that only fired at 95% or above missed both.  A fixed-period window
-    /// cannot regain quota inside its own period, so the size of the rise is
-    /// the evidence and 30 points is far beyond rounding or a stale reading.
+    /// The size of the rise is the evidence that something happened: a
+    /// fixed-period window cannot regain quota inside its own period, and 30
+    /// points is far beyond rounding or a stale reading.  How high it came
+    /// back to is a separate question, answered by `vendorRestoreLevel`.
     public static let vendorRestoreRise: Double = 30
+
+    /// The level a mid-cycle restore has to reach before it is called a vendor
+    /// reset rather than a plan change.
+    ///
+    /// Owner ruling 2026-10-20: "we shouldn't consider it vendor reset unless
+    /// it jumps up a large amount and we see it actually at 97-100% or
+    /// something (just random guess, maybe 95-100 or maybe 99-100 is better,
+    /// but the point is that we may not notice the first initial usage after a
+    /// reset so we can consider that a vendor reset)".
+    ///
+    /// The floor is 95 rather than 99 because the first reading after a reset
+    /// may already carry a little usage: the owner may not have looked at the
+    /// app between the reset and the first call, so a real reset can be seen
+    /// at 96% and still be a reset.  The level that must *not* pass is the one
+    /// a plan change produces: on 2026-10-19 Muse Code went from 0% to 75%
+    /// when the owner upgraded the plan, and that was reported as a vendor
+    /// reset.  A vendor reset refills the allowance; an upgrade changes how
+    /// much the allowance is, and the difference is visible in the number the
+    /// quota lands on.
+    public static let vendorRestoreLevel: Double = 95
 
     /// A courtesy reset can land on any level, so "what did it come back to" is
     /// the wrong question.  What is reliable is the shape: between two
@@ -251,6 +289,7 @@ public enum ResetAlarmPolicy {
     /// `surgeMidWindow` rule already uses this shape, but only while the
     /// window's own end is still in the future, which is not the owner's case.
     public static let courtesyRestoreCeiling: Double = 80
+
     public static let courtesyRestoreFloor: Double = 95
     /// Windows and fires not seen for this long are forgotten.
     public static let retention: TimeInterval = 45 * 86_400
@@ -277,6 +316,11 @@ public enum ResetAlarmPolicy {
 /// fires while a larger one reads 0%: a provider's larger windows include
 /// model-only caps (Claude's Sonnet and Opus weeklies, one MiniMax weekly per
 /// model) that say nothing about whether the provider is usable.
+///
+/// A mid-cycle restore is named by how high the quota came back to, not only
+/// by the shape of the rise.  Landed at or above `vendorRestoreLevel` it is a
+/// vendor reset; landed below it, it is a likely plan change, and it is
+/// reported under that name so the owner can tell a refill from an upgrade.
 ///
 /// A window's very first reading never fires, readings with no reset time or
 /// no percentage are tolerated, and each reset fires at most once.
@@ -309,6 +353,14 @@ public struct ResetAlarmTracker: Sendable {
         let observation: ResetAlarmObservation
         let previous: ResetAlarmTrackerState.Window
         let isMidWindow: Bool
+        /// The mid-cycle rise landed below `vendorRestoreLevel`, so a change of
+        /// plan is the likelier reason and the vendor did not reset it.
+        let isPlanChange: Bool
+        /// The quota came back to at least `vendorRestoreLevel`, so the vendor
+        /// refilled it.  Kept apart from `isMidWindow` on purpose: a mid-cycle
+        /// event that fell instead of rising is neither a refill nor a plan
+        /// change, and saying so is the whole point of the split.
+        let isVendorReset: Bool
     }
 
     private mutating func processGroup(
@@ -340,13 +392,28 @@ public struct ResetAlarmTracker: Sendable {
             let observation = transition.observation
             let isLargest = Self.isLargest(observation.periodSeconds, largestPeriod: largestPeriod)
             let reason: ResetAlarmEvent.Reason
-            if isLargest {
+            if transition.isPlanChange {
+                // A change of plan outranks the ordinary new-period reading: the
+                // owner asked to hear about it by name, and on the largest
+                // window it would otherwise be filed as a routine rollover.
+                reason = .planChange
+            } else if isLargest {
                 reason = .newPeriod
             } else if let minimum = transition.previous.minimumRemaining,
                       minimum <= ResetAlarmPolicy.nearCapThreshold {
                 reason = .nearCap(minimumRemaining: minimum)
             } else if transition.isMidWindow {
                 reason = .nearCap(minimumRemaining: transition.previous.minimumRemaining ?? (transition.previous.lastRemaining ?? 80.0))
+            } else if sleptThroughMultiplePeriods(transition, now: now) {
+                // The owner accepted 2026-11-06: a Mac asleep through several
+                // quota resets must still hear that a reset happened.  The
+                // smaller window's rollover already fires when it is polled on
+                // its own;  a larger window in the same batch must not swallow
+                // it.  Only two or more WHOLE missed cadences qualify - an
+                // ordinary one-period reset of a smaller window stays quiet
+                // unless it came near its cap, and a gradual rolling slide
+                // never matches a whole multiple.
+                reason = .newPeriod
             } else {
                 continue
             }
@@ -367,13 +434,42 @@ public struct ResetAlarmTracker: Sendable {
                 endedPeriodResetAt: ended,
                 remainingPercent: observation.remainingPercent,
                 reason: reason,
-                isVendorReset: transition.isMidWindow))
+                isVendorReset: transition.isVendorReset,
+                isPlanChange: transition.isPlanChange))
         }
         // Largest first, so a combined notification leads with the new week.
         return events.sorted { lhs, rhs in
             if (lhs.reason == .newPeriod) != (rhs.reason == .newPeriod) { return lhs.reason == .newPeriod }
             return (lhs.periodSeconds ?? 0) > (rhs.periodSeconds ?? 0)
         }
+    }
+
+
+    /// Whether a fired transition spans two or more whole cadences: the Mac
+    /// slept through several resets and the vendor's end moved by a whole
+    /// multiple of the period (within drift tolerance; calendar months accept
+    /// a 28-to-31-day span per period).  Mirrors the whole-multiple rule in
+    /// the deadline-correction path.
+    private func sleptThroughMultiplePeriods(_ transition: Transition, now: Date) -> Bool {
+        guard let period = transition.observation.periodSeconds ?? transition.previous.periodSeconds,
+              period > 0,
+              let previousReset = transition.previous.periodResetAt,
+              let reported = transition.observation.resetAt else { return false }
+        // Nothing to tell without real quota readings on both sides: a window
+        // never seen with a percentage stays quiet (pinned), and a masked
+        // current reading must not alarm even with a readable past (pinned).
+        guard transition.previous.minimumRemaining != nil,
+              transition.observation.remainingPercent != nil else { return false }
+        let readAt = transition.observation.observedAt ?? now
+        guard readAt >= previousReset.addingTimeInterval(-60) else { return false }
+        let jump = reported.timeIntervalSince(previousReset)
+        let periods = (jump / period).rounded()
+        guard periods >= 2 else { return false }
+        let tolerance = ResetAlarmPolicy.resetDriftTolerance
+        if (28 * 86_400...31 * 86_400).contains(period) {
+            return jump >= periods * 28 * 86_400 - tolerance && jump <= periods * 31 * 86_400 + tolerance
+        }
+        return abs(jump - periods * period) <= tolerance
     }
 
     /// Folds one reading into its window's state, returning the previous state
@@ -391,6 +487,7 @@ public struct ResetAlarmTracker: Sendable {
 
         func firstReading() -> ResetAlarmTrackerState.Window {
             .init(periodResetAt: observation.resetAt,
+                  periodStartAt: observation.periodStartAt,
                   minimumRemaining: reading,
                   lastRemaining: reading,
                   lastObservedAt: observedAt,
@@ -413,7 +510,6 @@ public struct ResetAlarmTracker: Sendable {
         }
         if window.identity == nil { window.identity = observation.identity }
         window.lastSeenAt = now
-        if let period = observation.periodSeconds { window.periodSeconds = period }
 
         // A reading older than one already processed cannot say anything new.
         if let observed = observedAt, let last = window.lastObservedAt, observed < last {
@@ -421,15 +517,68 @@ public struct ResetAlarmTracker: Sendable {
             return nil
         }
 
+        // A producer may reuse a window ID while switching its cadence.  Its reset time and remaining percentage no longer share the old baseline.  Keep the new reading as a baseline instead of comparing across periods.
+        if let observedPeriod = observation.periodSeconds,
+           let previousPeriod = window.periodSeconds,
+           abs(observedPeriod - previousPeriod) > ResetAlarmPolicy.resetDriftTolerance {
+            state.windows[key] = firstReading()
+            return nil
+        }
+
+        if let period = observation.periodSeconds { window.periodSeconds = period }
+
         let readAt = observedAt ?? now
         var isReset = false
         var isMidWindow = false
+        var isPlanChange = false
+        var isVendorReset = false
+        var suppressAlarm = false
         var nextResetAt = window.periodResetAt
 
         if let previousReset = window.periodResetAt {
             let hasPassed = readAt >= previousReset.addingTimeInterval(-60)
             if let reported = observation.resetAt {
                 let jump = reported.timeIntervalSince(previousReset)
+                // A deadline correction needs a substantial quota rise or an elapsed full cadence.
+                // A roll-immediately provider restarts each period when the last
+                // one ends, so a Mac asleep through several periods wakes to an
+                // end that moved by a whole multiple of the cadence.  Accept any
+                // whole number of periods, not exactly one.  A wait-for-usage
+                // provider's end does not move on a schedule, so it never matches
+                // this shape; cadence alone is never proof.
+                let advancedFullCadence = window.periodSeconds.map { period in
+                    let tolerance = ResetAlarmPolicy.resetDriftTolerance
+                    let periods = (jump / period).rounded()
+                    guard periods >= 1 else { return false }
+                    // Calendar months range from 28 to 31 days; fixed cadences use drift tolerance.
+                    if (28 * 86_400...31 * 86_400).contains(period) {
+                        return jump >= periods * 28 * 86_400 - tolerance && jump <= periods * 31 * 86_400 + tolerance
+                    }
+                    return abs(jump - periods * period) <= tolerance
+                } ?? false
+                // Some providers publish both sides of the period.  When they
+                // do, an end-time correction by one cadence is not enough to
+                // prove a reset: their explicit start must advance too.  This
+                // prevents MiniMax's corrected weekly deadline from repeatedly
+                // announcing a new week while its weekly period is unchanged.
+                let explicitStartConfirmsPeriod = {
+                    guard let current = observation.periodStartAt,
+                          let previous = window.periodStartAt,
+                          let period = window.periodSeconds else { return true }
+                    let advance = current.timeIntervalSince(previous)
+                    let tolerance = ResetAlarmPolicy.resetDriftTolerance
+                    // Same whole-multiple rule as advancedFullCadence: a calendar-month
+                    // window accepts a 28-to-31-day start advance per period;
+                    // fixed cadences use drift tolerance.
+                    let periods = (advance / period).rounded()
+                    // An unmoved explicit start cannot confirm a rollover: the
+                    // provider must publish the new period on both sides.
+                    guard periods >= 1 else { return false }
+                    if (28 * 86_400...31 * 86_400).contains(period) {
+                        return advance >= periods * 28 * 86_400 - tolerance && advance <= periods * 31 * 86_400 + tolerance
+                    }
+                    return abs(advance - periods * period) <= tolerance
+                }()
                 let required = hasPassed
                     ? ResetAlarmPolicy.resetDriftTolerance
                     : max(ResetAlarmPolicy.resetDriftTolerance,
@@ -441,23 +590,99 @@ public struct ResetAlarmTracker: Sendable {
                 if let reading, let last = window.lastRemaining {
                     climbed = reading >= last + ResetAlarmPolicy.earlyResetRiseMargin
                 }
-                if jump > required || (jump > ResetAlarmPolicy.resetDriftTolerance && climbed) {
+                // A mid-window reset must move the end decisively — past the
+                // period-share bound.  A smaller forward move plus a climb is
+                // how a rolling window ages across a long gap (the Mac
+                // asleep, MiniMax's five-hour meter):  the end slides once by
+                // the whole gap and the percentage comes back with it, and
+                // before any rolling evidence has had time to accumulate
+                // that read as a vendor reset (CC-215, owner 2026-11-07:
+                // 3:48 pm, 5:03 pm and later false MiniMax and Antigravity
+                // 5h alerts).  Across a passed end the climb keeps settling
+                // small early moves as before.
+                // The deadline branch needs the quota to climb with it:  a
+                // rolling window slides its end while usage ages out (CC-215),
+                // and a stale or partially corrected deadline - the MiniMax
+                // weekly deadline advancing only five days nine hours - adopts
+                // silently.  After the end has passed, a deadline that
+                // advanced a compatible full cadence, confirmed by an explicit
+                // start when one is reported, proves a scheduled rollover on
+                // its own;  a genuine refill with the end still ahead is
+                // caught by the held-end courtesy and vendor-restore rules
+                // below.
+                // A courtesy reset that also rolls the window forward reissues
+                // a fresh full period:  the new end sits one whole period from
+                // now (a rolling climb leaves less than that) and the quota
+                // came back by a restore-sized rise (owner 2026-10-08:  quota
+                // restored before the window was due must alert).
+                let freshPeriod = window.periodSeconds.map { period in
+                    abs(reported.timeIntervalSince(readAt) - period)
+                        <= ResetAlarmPolicy.resetDriftTolerance
+                } ?? false
+                let strongQuotaRestore = reading.flatMap { current in
+                    window.lastRemaining.map { current >= $0 + ResetAlarmPolicy.vendorRestoreRise }
+                } ?? false
+                // A mid-window restore may also roll the window forward:  the
+                // vendor reissues the period instead of holding it where it
+                // was.  The evidence is the same shape the held-end rules
+                // below trust, sized up — a restore-sized rise that lands
+                // substantially restored.  A rolling slide cannot meet it:
+                // its climb is gradual, so a single poll's rise past the
+                // ceiling never carries a 30-point rise with it (CC-215's
+                // false alerts moved a few points to a few tens of points
+                // across the boundary, never thirty).  Owner 2026-11-07
+                // (CC-218):  a reset that moved the window end was missed
+                // entirely by the held-end rules.
+                let rolledRestore = reading.flatMap { current in
+                    window.lastRemaining.map {
+                        current >= ResetAlarmPolicy.courtesyRestoreCeiling
+                            && $0 <= ResetAlarmPolicy.courtesyRestoreCeiling
+                            && current >= $0 + ResetAlarmPolicy.vendorRestoreRise
+                    }
+                } ?? false
+                // A rolling window's end slides in step with the clock:
+                // across any gap it advances by roughly the elapsed time, no
+                // more - the rolling readers (MiniMax's five-hour and video
+                // meters) recompute "resets in N seconds" every poll.  A real
+                // reset moves the end by its own amount, independent of when
+                // this Mac happened to read: a courtesy reset that reissues
+                // the period lands the end one full period from the reset
+                // moment, far more than the poll gap.  An end that advanced
+                // by no more than the gap since the previous reading is the
+                // rolling-window signature, so the early and mid-window reset
+                // legs below must not claim it.  A reading without a
+                // trustworthy gap cannot prove a slide, so the legs decide as
+                // before.  The whole-cadence rollover leg is exempt: a
+                // roll-immediately provider's end advances by whole periods
+                // while the Mac sleeps, which is roughly the gap by
+                // definition, and that leg is the accepted slept-through
+                // behavior.
+                // Both stamps must be real: a fallback `readAt` is Mac
+                // processing time, not a provider-to-provider interval - the
+                // same bar the mid-window rules below apply.
+                let pollGap: TimeInterval?
+                if observedAt != nil, let lastObserved = window.lastObservedAt {
+                    pollGap = max(0, readAt.timeIntervalSince(lastObserved))
+                } else {
+                    pollGap = nil
+                }
+                // In step means in step: the end advanced by roughly the
+                // elapsed gap - not far less (a real reset late in a long
+                // sleep) and not far more (a reissue seen at the next poll).
+                let slidWithTheClock = pollGap.map {
+                    $0 > 0 && jump > 0 && abs(jump - $0) <= ResetAlarmPolicy.resetDriftTolerance
+                } ?? false
+                let forwardJump = (jump > required && climbed && (hasPassed || !slidWithTheClock))
+                    || (hasPassed && advancedFullCadence && explicitStartConfirmsPeriod)
+                    || (!hasPassed && !slidWithTheClock && freshPeriod && strongQuotaRestore)
+                    || (!hasPassed && !slidWithTheClock && rolledRestore)
+                if forwardJump {
                     isReset = true
-                    // When the quota also came back from mostly spent to nearly
-                    // untouched, and the window had *not* reached its own end,
-                    // this is a restore rather than an ordinary rollover.
-                    //
-                    // The `!hasPassed` guard is load-bearing.  A window that
-                    // simply reached the end of its period also goes from
-                    // spent to full, and the owner ruled (2026-09-30) that a
-                    // smaller window stays quiet unless it came near its cap.
-                    // Labelling that "mid window" would bypass near-cap and
-                    // alert on every ordinary rollover.  A reset before the
-                    // scheduled end is the case the owner cannot otherwise see
-                    // (2026-10-08), and that is exactly what this catches.
-                    if !hasPassed, let reading, let last = window.lastRemaining {
-                        isMidWindow = reading >= ResetAlarmPolicy.courtesyRestoreFloor
-                            && last <= ResetAlarmPolicy.courtesyRestoreCeiling
+                    // When the window had *not* reached its own scheduled end,
+                    // any reset is an early / mid-cycle vendor restore rather than
+                    // an ordinary rollover.  Normal time remaining had not passed.
+                    if !hasPassed {
+                        isMidWindow = true
                     }
                     nextResetAt = reported
                 } else if jump > -ResetAlarmPolicy.resetDriftTolerance || reported > readAt {
@@ -494,8 +719,10 @@ public struct ResetAlarmTracker: Sendable {
             }
             // The old period is over and the percentage went back up, even
             // though the reader has not published the next reset time yet.
-            if !isReset, hasPassed, let reading, let last = window.lastRemaining,
-               reading > last + ResetAlarmPolicy.riseEpsilon {
+            if !isReset, hasPassed,
+               observation.resetAt.map({ $0 <= previousReset + ResetAlarmPolicy.resetDriftTolerance }) ?? true,
+               let reading, let last = window.lastRemaining,
+               reading >= last + ResetAlarmPolicy.earlyResetRiseMargin {
                 isReset = true
                 nextResetAt = observation.resetAt.flatMap { $0 > readAt ? $0 : nil }
             }
@@ -521,7 +748,22 @@ public struct ResetAlarmTracker: Sendable {
             // the case that is otherwise invisible: quota restored *before* the
             // window was due to end, which no amount of near-cap reasoning can
             // distinguish from "nothing happened".
-            if !isReset, !hasPassed, let reading, let last = window.lastRemaining,
+            // A rolling window (MiniMax's five-hour and video meters) ages
+            // usage out, so its percentage climbs from spent towards full
+            // with the period end sliding ahead the whole way — no vendor
+            // did anything (CC-215, owner 2026-11-07: the false MiniMax
+            // vendor-reset alert).  A real restore holds the end where it
+            // was, so a rise only counts when this reading proves the end
+            // held; an end that jumped forward is the resetAt-jump branch
+            // above, and an unknown end says nothing and stays quiet.
+            // A real restore holds the end where it was:  not within a
+            // tolerance a rolling slide fits inside, but still — a five
+            // minute poll slides a rolling end about five minutes, so the
+            // held bar is one minute (sentry + kody, PR #378).
+            let reportedEndHeld = observation.resetAt.map {
+                abs($0.timeIntervalSince(previousReset)) <= 60
+            } ?? false
+            if !isReset, !hasPassed, reportedEndHeld, let reading, let last = window.lastRemaining,
                reading >= ResetAlarmPolicy.courtesyRestoreFloor,
                last <= ResetAlarmPolicy.courtesyRestoreCeiling {
                 isReset = true
@@ -536,8 +778,6 @@ public struct ResetAlarmTracker: Sendable {
             //  - the quota jumps to full from anything less.
             //  - the quota was nearly spent and is now nearly untouched.
             if !isReset, !hasPassed, let reading, let last = window.lastRemaining {
-                let jumpedToFull = reading >= 99.5 && last < 99.5
-                let surgedMidWindow = last < 80.0 && reading >= 95.0
                 // "Held still" and "slid with the clock" are two separate
                 // questions, and asking them as two separate questions keeps
                 // the verdict independent of how often this Mac happens to
@@ -588,6 +828,17 @@ public struct ResetAlarmTracker: Sendable {
                     // still read as held still.
                     slidWithTheClock = (endMoved ?? 0) > 0
                 }
+                // All three carries share one evidence bar: a rise against
+                // an end that slid with the clock is the window rolling, not
+                // a restore (CC-215).  An unknown end cannot prove a restore.
+                // A reading at or above 99.5% counts as full only when the
+                // prior reading was below it by a real margin:  a sub-point
+                // rounding wobble near full (99.4 to 99.6) is not a vendor
+                // handing the quota back.
+                let jumpedToFull = periodEndHeld && !slidWithTheClock
+                    && reading >= 99.5 && last <= 99.5 - ResetAlarmPolicy.riseEpsilon
+                let surgedMidWindow = periodEndHeld && !slidWithTheClock
+                    && last < 80.0 && reading >= 95.0
                 let quotaHandedBack = periodEndHeld && !slidWithTheClock
                     && reading >= last + ResetAlarmPolicy.vendorRestoreRise
                 if jumpedToFull || surgedMidWindow || quotaHandedBack {
@@ -602,12 +853,64 @@ public struct ResetAlarmTracker: Sendable {
                 nextResetAt = reported
             }
             if let reading, let last = window.lastRemaining {
-                let jumpedToFull = reading >= 99.5 && last < 99.5
+                let jumpedToFull = reading >= 99.5
+                    && last <= 99.5 - ResetAlarmPolicy.riseEpsilon
                 let surgedMidWindow = last < 80.0 && reading >= 95.0
                 if jumpedToFull || surgedMidWindow {
                     isReset = true
                     isMidWindow = true
                 }
+            }
+        }
+
+        // A mid-cycle rise is a vendor reset only when the quota actually came
+        // back to near full.  Owner ruling 2026-10-20: "we shouldn't consider
+        // it vendor reset unless it jumps up a large amount and we see it
+        // actually at 97-100% or something".
+        //
+        // A rise that lands below the floor is not a refill.  A plan change
+        // moves the allowance up without the vendor resetting anything, and
+        // the owner was told "vendor reset" about one of those (Muse Code, 0%
+        // to 75% the day the plan was upgraded).  The alarm still fires: what
+        // changes is the name it is given, because the owner has to be able to
+        // tell a refill from an upgrade.
+        if isMidWindow {
+            if let reading {
+                // A rise is the only evidence that quota was handed back at
+                // all.  A window whose reported reset time jumped early can
+                // also be a window whose quota went down, and calling that a
+                // plan change would tell the owner the quota rose when the
+                // opposite happened.
+                let rose = window.lastRemaining.map {
+                    reading > $0 + ResetAlarmPolicy.riseEpsilon
+                } ?? false
+                if reading >= ResetAlarmPolicy.vendorRestoreLevel {
+                    // It came back to near full: the vendor refilled it.
+                    isVendorReset = true
+                } else if rose {
+                    // It rose, but not to near full.  The allowance is bigger
+                    // than it was, so a change of plan is the likelier reason.
+                    isPlanChange = true
+                }
+                // Below the floor with no rise at all: the quota fell or held
+                // still.  That is neither a refill nor an upgrade, so it is
+                // left as an ordinary period reading and named as one.
+            } else {
+                // No readable percentage, so the quota cannot be seen to come
+                // back and this cannot be called a vendor reset.  An Antigravity
+                // five-hour window under a spent weekly cap reports no
+                // percentage on purpose, and its own reset time still moves, so
+                // without this a window whose number is known to be a lie can
+                // still raise a reset alarm.  Owner 2026-10-19:
+                // "Antigravity is saying vendor reset 5h quota early while the
+                // 7d is still at cap and unchanged".
+                //
+                // A window whose number must not be believed raises no alarm at
+                // all.  Clearing the mid-cycle flag alone would let the
+                // ordinary rollover path claim it and report a reset nobody can
+                // confirm while the weekly underneath it is still spent.
+                isMidWindow = false
+                suppressAlarm = true
             }
         }
 
@@ -623,6 +926,9 @@ public struct ResetAlarmTracker: Sendable {
                 window.lastRemaining = reading
             }
         }
+        if let periodStartAt = observation.periodStartAt {
+            window.periodStartAt = periodStartAt
+        }
         // Assigned unconditionally, so it always means "the stamp carried by the
         // previous reading" and is nil when that reading was unstamped.  Only
         // ever writing it on a stamped reading would leave a stale anchor
@@ -630,7 +936,16 @@ public struct ResetAlarmTracker: Sendable {
         // measure the gap below in spans longer than a single interval.
         window.lastObservedAt = observedAt
         state.windows[key] = window
-        return isReset ? Transition(observation: observation, previous: previous, isMidWindow: isMidWindow) : nil
+        // The window's own state is remembered either way: the reset time
+        // moved, and the next reading must not rediscover the same reset.
+        // What is withheld is the alarm.
+        if suppressAlarm { return nil }
+        guard isReset else { return nil }
+        return Transition(observation: observation,
+                          previous: previous,
+                          isMidWindow: isMidWindow,
+                          isPlanChange: isPlanChange,
+                          isVendorReset: isVendorReset)
     }
 
     // MARK: Largest window

@@ -1,3 +1,4 @@
+import SwiftUI
 import XCTest
 @testable import CodeCaps
 import QuotaCore
@@ -16,12 +17,14 @@ final class QuotaUsageBarTests: XCTestCase {
         token: String?,
         remaining: Double? = 85,
         resetIn: TimeInterval?,
-        observedAgo: TimeInterval = 0
+        observedAgo: TimeInterval = 0,
+        provider: String = "Cursor",
+        providerKey: String = "cursor"
     ) -> QuotaWindowSnapshot {
         QuotaWindowSnapshot(window: QuotaWindow(
             id: label,
-            provider: "Cursor",
-            providerKey: "cursor",
+            provider: provider,
+            providerKey: providerKey,
             label: label,
             remainingPercent: remaining,
             remainingUnknown: remaining == nil,
@@ -43,8 +46,20 @@ final class QuotaUsageBarTests: XCTestCase {
     }
 
     func testGlanceDrawsNoMarkerForAWindowWithNoDerivablePeriod() {
-        let plan = makeWindow(label: "Included plan", token: "plan", resetIn: 15 * 86_400)
+        let plan = makeWindow(label: "Usage window", token: "opaque", resetIn: 15 * 86_400,
+                              provider: "Anthropic", providerKey: "anthropic")
         XCTAssertNil(plan.elapsedFraction(now: now))
+    }
+
+    /// Cursor's included plan resets with Cursor's monthly billing cycle, so
+    /// the marker beside the caption that names "1m" is drawn for that month.
+    ///
+    /// The caption and the marker resolve one period now, so a window whose
+    /// caption names a month draws a month.
+    func testGlanceDrawsTheMonthMarkerForCursorsIncludedPlan() throws {
+        let plan = makeWindow(label: "Included plan", token: "plan", resetIn: 15 * 86_400)
+        let fraction = try XCTUnwrap(plan.elapsedFraction(now: now))
+        XCTAssertEqual(fraction, 0.5, accuracy: 0.05)
     }
 
     func testGlanceReadsTokensTheOldParserMisread() throws {
@@ -63,8 +78,9 @@ final class QuotaUsageBarTests: XCTestCase {
     }
 
     func testMeterSpeechForAWindowWithNoMarkerOmitsElapsed() {
-        let plan = makeWindow(label: "Included plan", token: "plan", remaining: 85, resetIn: 15 * 86_400)
-        XCTAssertEqual(glanceMeterSpeech(plan, now: now), "1m 85 percent remaining, 15 percent used")
+        let plan = makeWindow(label: "Usage window", token: "opaque", remaining: 85, resetIn: 15 * 86_400,
+                              provider: "Anthropic", providerKey: "anthropic")
+        XCTAssertEqual(glanceMeterSpeech(plan, now: now), "Quota 85 percent remaining, 15 percent used")
     }
 
     func testMeterSpeechForAnUnknownReading() {
@@ -79,11 +95,28 @@ final class QuotaUsageBarTests: XCTestCase {
         XCTAssertFalse(quotaBarIsDimmed(for: fresh, sourceFailed: false))
     }
 
-    func testAStaleReadingOrAFailedSourceIsDimmed() {
+    func testAFailedSourceIsDimmedButAStaleReadingKeepsItsColour() {
+        // Stale-data fixture (owner 2026-10-16): a last-reported bar keeps the
+        // bright status colour; only a failed source dims.
         let stale = makeWindow(label: "5h window", token: "5h", resetIn: 3_600, observedAgo: 3 * 3_600)
-        XCTAssertTrue(quotaBarIsDimmed(for: stale, sourceFailed: false))
+        XCTAssertFalse(quotaBarIsDimmed(for: stale, sourceFailed: false))
         let fresh = makeWindow(label: "5h window", token: "5h", resetIn: 3_600)
         XCTAssertTrue(quotaBarIsDimmed(for: fresh, sourceFailed: true))
+    }
+
+    func testAStaleReadingKeepsTheStatusTint() {
+        // Dynamic catalog colours never compare equal directly, so resolve
+        // both through NSColor and compare components.
+        let fresh = makeWindow(label: "5h window", token: "5h", remaining: 85, resetIn: 3_600)
+        let stale = makeWindow(label: "5h window", token: "5h", remaining: 85, resetIn: 3_600, observedAgo: 3 * 3_600)
+        func rgba(_ color: Color) -> [CGFloat] {
+            let c = NSColor(color).usingColorSpace(.deviceRGB)!
+            return [c.redComponent, c.greenComponent, c.blueComponent, c.alphaComponent]
+        }
+        XCTAssertEqual(rgba(quotaStatusColor(for: stale, sourceFailed: false)),
+                       rgba(quotaStatusColor(for: fresh, sourceFailed: false)))
+        XCTAssertNotEqual(rgba(quotaStatusColor(for: stale, sourceFailed: true)),
+                          rgba(quotaStatusColor(for: fresh, sourceFailed: false)))
     }
 
     // MARK: The bar view

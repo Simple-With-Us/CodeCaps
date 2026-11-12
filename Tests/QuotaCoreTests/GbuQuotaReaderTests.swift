@@ -22,7 +22,7 @@ final class GbuQuotaReaderTests: XCTestCase {
         XCTAssertEqual(window.via, "gbu")
         XCTAssertEqual(window.sourceApp, "local-mac")
         XCTAssertEqual(window.id, "local-mac:grok-bot:gbu-weekly")
-        XCTAssertEqual(window.label, "Grok Bot weekly")
+        XCTAssertEqual(window.label, "7-day window")
         XCTAssertEqual(window.remainingPercent!, 14.63, accuracy: 0.001)
         XCTAssertEqual(window.planName, "Grok Bot Plan")
         XCTAssertEqual(window.window, "weekly")

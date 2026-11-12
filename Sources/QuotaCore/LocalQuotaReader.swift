@@ -29,7 +29,7 @@ public struct LocalQuotaResult: Equatable, Sendable {
 /// only the four documented CLI files below and the single Antigravity helper
 /// path.  Network requests use an ephemeral session and refuse redirects.
 public struct LocalQuotaReader: Sendable {
-    public static let providerKeys = ["anthropic", "openai", "xai", "minimax", "google-antigravity"]
+    public static let providerKeys = ["anthropic", "openai", "grok", "minimax", "google-antigravity"]
 
     private let homeDirectory: URL
     private let now: @Sendable () -> Date
@@ -39,6 +39,7 @@ public struct LocalQuotaReader: Sendable {
     private let renewClaudeLogin: @Sendable () async -> Void
     private let renewalThrottle: ClaudeRenewalThrottle
     private let claudeKeychainTimeout: TimeInterval
+    private let claudeProfileTimeout: TimeInterval
 
     private static let maxCredentialBytes = 1_048_576
     private static let maxResponseBytes = 1_048_576
@@ -58,7 +59,8 @@ public struct LocalQuotaReader: Sendable {
         readClaudeCredential: (@Sendable () async -> ClaudeCredentialAccess)? = nil,
         renewClaudeLogin: (@Sendable () async -> Void)? = nil,
         renewalThrottle: ClaudeRenewalThrottle = .shared,
-        claudeKeychainTimeout: TimeInterval = ClaudeCredentialSource.boundedAccessTimeout
+        claudeKeychainTimeout: TimeInterval = ClaudeCredentialSource.boundedAccessTimeout,
+        claudeProfileTimeout: TimeInterval = 1
     ) {
         self.homeDirectory = homeDirectory.standardizedFileURL
         self.now = now
@@ -74,6 +76,7 @@ public struct LocalQuotaReader: Sendable {
         } else { self.renewClaudeLogin = {} }
         self.renewalThrottle = renewalThrottle
         self.claudeKeychainTimeout = claudeKeychainTimeout
+        self.claudeProfileTimeout = claudeProfileTimeout.isFinite ? min(1, max(0.001, claudeProfileTimeout)) : 1
     }
 
     /// Reads all configured local sources concurrently.  This method never
@@ -164,49 +167,94 @@ public struct LocalQuotaReader: Sendable {
         request.httpMethod = "GET"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
-        // A file token the server rejects is "sign in again."  Only a token
-        // that came from the remembered Keychain grant asks for Allow Access.
-        let tokenFromKeychain = ClaudeOAuthParser.validOAuth(in: file, now: now()) == nil
         let payload: [String: Any]
         do {
             payload = try await requestJSON(request)
         } catch LocalReaderError.reauth {
+            // A usage 401 or 403 is never the generic "sign in again" sentence.
+            // Drop remembered bytes, try one Claude Code renewal when the login
+            // is renewable, then surface idle or signed-out wording.  Allow
+            // Access stays for a silent Keychain read that was refused, not for
+            // a token Anthropic rejected.
             ClaudeCredentialSource.resetRememberedCredential()
-            if tokenFromKeychain {
-                var renewed = false
-                if renewable {
-                    renewed = await renewalThrottle.perform(now: now(), action: renewClaudeLogin)
-                }
-                if renewed {
-                    let refreshedFile = (try? readJSONObject(relativePath: ".claude/.credentials.json")) ?? [:]
-                    let refreshedAccess = await ClaudeCredentialSource.boundedAccess(timeout: claudeKeychainTimeout) { await readClaudeCredential() }
-                    let refreshedKeychain = credentialRoot(refreshedAccess)
-                    if let refreshedOAuth = ClaudeOAuthParser.validOAuth(in: refreshedFile, now: now())
-                        ?? ClaudeOAuthParser.validOAuth(in: refreshedKeychain, now: now()),
-                       let refreshedToken = firstString(refreshedOAuth, ["accessToken", "access_token"]) {
-                        var retryRequest = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/usage")!)
-                        retryRequest.httpMethod = "GET"
-                        retryRequest.setValue("Bearer \(refreshedToken)", forHTTPHeaderField: "Authorization")
-                        retryRequest.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
-                        if let retryPayload = try? await requestJSON(retryRequest) {
-                            let retryWindows = parseClaude(retryPayload, planType: firstString(refreshedOAuth, ["subscriptionType", "subscription_type"]), observedAt: now())
-                            if !retryWindows.isEmpty {
-                                return ProviderRead(provider: provider, windows: retryWindows, issue: nil)
-                            }
+            let rejectionFile = (try? readJSONObject(relativePath: ".claude/.credentials.json")) ?? file
+            let rejectionAccess = await ClaudeCredentialSource.boundedAccess(timeout: claudeKeychainTimeout) { await readClaudeCredential() }
+            let rejectionKeychain = credentialRoot(rejectionAccess)
+            let mayRenewAfterRejection =
+                ClaudeOAuthParser.canRenewAfterUsageRejection(in: rejectionFile, now: now())
+                || ClaudeOAuthParser.canRenewAfterUsageRejection(in: rejectionKeychain, now: now())
+            var renewed = false
+            if mayRenewAfterRejection {
+                renewed = await renewalThrottle.perform(now: now(), action: renewClaudeLogin)
+            }
+            if renewed {
+                let refreshedFile = (try? readJSONObject(relativePath: ".claude/.credentials.json")) ?? [:]
+                let refreshedAccess = await ClaudeCredentialSource.boundedAccess(timeout: claudeKeychainTimeout) { await readClaudeCredential() }
+                let refreshedKeychain = credentialRoot(refreshedAccess)
+                if let refreshedOAuth = ClaudeOAuthParser.validOAuth(in: refreshedFile, now: now())
+                    ?? ClaudeOAuthParser.validOAuth(in: refreshedKeychain, now: now()),
+                   let refreshedToken = firstString(refreshedOAuth, ["accessToken", "access_token"]) {
+                    var retryRequest = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/usage")!)
+                    retryRequest.httpMethod = "GET"
+                    retryRequest.setValue("Bearer \(refreshedToken)", forHTTPHeaderField: "Authorization")
+                    retryRequest.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
+                    if let retryPayload = try? await requestJSON(retryRequest) {
+                        let retryDetails = await claudeUsageDetails(payload: retryPayload, usageRequest: retryRequest)
+                        let retryWindows = parseClaude(retryPayload, planType: claudePlanName(refreshedOAuth), observedAt: now()).map { value in
+                            var value = value
+                            value.usageDetails = retryDetails
+                            return value
+                        }
+                        if !retryWindows.isEmpty {
+                            return ProviderRead(provider: provider, windows: retryWindows, issue: nil)
                         }
                     }
                 }
-                let issue = renewable ? ClaudeLoginState.idle.issue : ClaudeLoginState.signedOut.issue
-                return ProviderRead(provider: provider, windows: [], issue: issue,
-                                    needsConsent: false)
             }
-            throw LocalReaderError.reauth
+            let idleAfterRejection = ClaudeOAuthParser.isRenewable(in: rejectionFile, now: now())
+                || ClaudeOAuthParser.isRenewable(in: rejectionKeychain, now: now())
+            let issue = idleAfterRejection ? ClaudeLoginState.idle.issue : ClaudeLoginState.signedOut.issue
+            return ProviderRead(provider: provider, windows: [], issue: issue,
+                                needsConsent: false)
         }
-        let windows = parseClaude(payload, planType: firstString(oauth, ["subscriptionType", "subscription_type"]), observedAt: now())
+        let details = await claudeUsageDetails(payload: payload, usageRequest: request)
+        let windows = parseClaude(payload, planType: claudePlanName(oauth), observedAt: now()).map { value in
+            var value = value
+            value.usageDetails = details
+            return value
+        }
         guard !windows.isEmpty else {
             return ProviderRead(provider: provider, windows: [unknownWindow(provider: provider, label: "Claude quota", observedAt: now())], issue: "Claude returned no readable quota windows.")
         }
         return ProviderRead(provider: provider, windows: windows, issue: nil)
+    }
+
+    private func claudeUsageDetails(payload: [String: Any], usageRequest: URLRequest) async -> ProviderUsageDetails {
+        var profileRequest = usageRequest
+        profileRequest.url = URL(string: "https://api.anthropic.com/api/oauth/profile")!
+        profileRequest.timeoutInterval = 1
+        let request = profileRequest
+        let fallback = ProviderUsageDetails.claude(payload: payload, profile: [:])
+        // A transport may ignore cancellation, so a task-group race would
+        // still wait for it.  Resume independently and ignore late results.
+        return await withCheckedContinuation { continuation in
+            let gate = ClaudeProfileCompletion(continuation)
+            let task = Task.detached {
+                let profile = (try? await self.requestJSON(request)) ?? [:]
+                guard !profile.isEmpty else {
+                    gate.finish(fallback)
+                    return
+                }
+                var details = fallback
+                details.accountEmail = ProviderUsageDetails.claude(payload: [:], profile: profile).accountEmail
+                    ?? fallback.accountEmail
+                gate.finish(details)
+            }
+            gate.install(task)
+            DispatchQueue.global().asyncAfter(deadline: .now() + claudeProfileTimeout) {
+                gate.finish(fallback)
+            }
+        }
     }
 
     /// The decoded Keychain record, or an empty dictionary when it is absent,
@@ -233,8 +281,12 @@ public struct LocalQuotaReader: Sendable {
         if let accountID = firstString(tokens, ["account_id", "accountId"]) { request.setValue(accountID, forHTTPHeaderField: "chatgpt-account-id") }
         let payload = try await requestJSON(request)
         let accountID = firstString(tokens, ["account_id", "accountId"]).flatMap { $0.utf8.count <= 256 ? $0 : nil }
-        let windows = parseCodex(payload, planType: firstString(root, ["plan_type", "planType", "plan"]),
-                                 accountKey: accountID, observedAt: now())
+        let windows = parseCodex(payload, planType: firstString(payload, ["plan_type", "planType", "plan"]),
+                                 accountKey: accountID, observedAt: now()).map { value in
+            var value = value
+            value.usageDetails = .codex(payload: payload, tokens: tokens)
+            return value
+        }
         guard !windows.isEmpty else {
             return ProviderRead(provider: provider, windows: [unknownWindow(provider: provider, label: "Codex quota", observedAt: now())], issue: "Codex returned no readable quota windows.")
         }
@@ -289,9 +341,142 @@ public struct LocalQuotaReader: Sendable {
         var request = URLRequest(url: URL(string: "https://cli-chat-proxy.grok.com/v1/billing?format=credits")!)
         request.httpMethod = "GET"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("xai-grok-cli", forHTTPHeaderField: "x-xai-token-auth")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
         let payload = try await requestJSON(request)
-        let windows = parseGrok(payload, observedAt: now())
-        return ProviderRead(provider: provider, windows: windows, issue: windows.first?.remainingPercent == nil ? "Grok returned no readable quota percentage." : nil)
+        var windows = parseGrok(payload, observedAt: now())
+        // Two best-effort enrichments, neither on the critical path, so they
+        // are issued together instead of one after the other: run serially
+        // they added up to eight seconds to every Grok refresh, and each was
+        // paid for even when it had nothing to contribute.
+        //
+        //  - `/v1/settings` names the tier (`SuperGrok Heavy` vs `SuperGrok`),
+        //    so it is only worth a request when a window has no plan name.
+        //  - the grok.com gRPC fallback fills a percentage the proxy answer
+        //    did not publish, so with no window at all there is nothing to
+        //    fill and the request is skipped entirely.
+        let needsTier = windows.contains { $0.planName == nil }
+        let needsCredits = !windows.isEmpty && windows.first?.remainingPercent == nil
+        async let tierRequest = grokSettingsTier(token: token, onlyIf: needsTier)
+        async let creditsRequest = grokGrpcReading(token: token, onlyIf: needsCredits)
+        let (tier, credits) = await (tierRequest, creditsRequest)
+        if let tier {
+            windows = windows.map { window in
+                var window = window
+                if window.planName == nil { window.planName = tier }
+                return window
+            }
+        }
+        var fallbackRefused = false
+        switch credits {
+        case .refused:
+            // grok.com answered HTTP 401 to the credits fallback.  That is
+            // reported; it is never folded into the "no readable percentage"
+            // miss below.
+            fallbackRefused = true
+        case .unavailable:
+            break
+        case .reading(let grpc):
+            // The proxy's period bounds stay authoritative; the fallback only
+            // supplies the percentage the proxy did not publish, so a window
+            // that already carries one is never a target.  The credits pool
+            // is matched on its exact id, never on a suffix, so an unrelated
+            // `…:legacy:subscription` window cannot stand in for it.
+            let poolID = "local-mac:\(provider.key):subscription"
+            let target = windows.firstIndex(where: { $0.id == poolID && $0.remainingPercent == nil })
+                ?? windows.firstIndex(where: { $0.remainingPercent == nil })
+            if let index = target {
+                var window = windows[index]
+                window.remainingPercent = 100 - grpc.usedPercent
+                window.remainingUnknown = false
+                if window.resetAt == nil, let end = grpc.periodEnd {
+                    window.resetAt = Self.isoString(end)
+                }
+                if window.periodStart == nil, let start = grpc.periodStart {
+                    window.periodStart = Self.isoString(start)
+                }
+                // This window was normalized when it was still percentage-less,
+                // so `status`, `isExhausted`, `skip` and `skipReason` still
+                // describe the empty value.  Re-derive them from the number
+                // just filled in, or a pool the fallback alone could read
+                // publishes as "unknown" and is never drawn as spent.
+                windows[index] = window.normalizedForExport()
+            }
+        }
+        // The CLI proxy accepted this same token moments ago (a refusal there
+        // throws `.reauth` before the fallback runs), so a grok.com refusal is
+        // about that endpoint, not proof the sign-in is bad: the message
+        // names the refusal and does not send the owner to sign in again.
+        let issue = fallbackRefused
+            ? "Grok returned no readable quota percentage; grok.com refused the credits fallback for GROK_TOKEN (\(Self.maskedTokenPreview(token)))."
+            : (windows.contains(where: \.hasReading) ? nil : "Grok returned no readable quota percentage.")
+        return ProviderRead(provider: provider, windows: windows, issue: issue)
+    }
+
+    /// First 8 / last 4 of a credential, for a rejection message: enough to
+    /// tell two sign-ins apart on one Mac, never enough to replay.  A value
+    /// too short to mask safely is reported as a fixed label, never echoed.
+    private static func maskedTokenPreview(_ token: String) -> String {
+        guard token.count > 16 else { return "(hidden)" }
+        return "\(token.prefix(8))…\(token.suffix(4))"
+    }
+
+    /// `subscription_tier_display` from the CLI-proxy settings endpoint.  Skipped
+    /// outright when every window already carries a plan name: there is
+    /// nothing for the tier to name, and the request costs up to two seconds.
+    private func grokSettingsTier(token: String, onlyIf: Bool = true) async -> String? {
+        guard onlyIf else { return nil }
+        var request = URLRequest(url: URL(string: "https://cli-chat-proxy.grok.com/v1/settings")!)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 2
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("xai-grok-cli", forHTTPHeaderField: "x-xai-token-auth")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        guard let payload = try? await requestJSON(request) else { return nil }
+        let tier = firstString(payload, ["subscription_tier_display", "subscriptionTierDisplay"])
+        return tier?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? tier : nil
+    }
+
+    /// What the grok.com gRPC-web credits fallback produced.  `refused` is the
+    /// one outcome that is not a fallback miss: grok.com answered HTTP 401,
+    /// which is a different fact from absent credits data, so it has its own
+    /// case and is reported instead of being silently skipped.  It names that
+    /// endpoint's answer, not a verdict on the sign-in (see `readGrok`).
+    private enum GrokGrpcOutcome {
+        case reading(GrokGrpcCredits.Reading)
+        case refused
+        case unavailable
+    }
+
+    /// The grok.com gRPC-web credits fallback (see `GrokGrpcCredits`).
+    private func grokGrpcReading(token: String, onlyIf: Bool = true) async -> GrokGrpcOutcome {
+        // No window at all, or one that already carries a percentage, leaves
+        // this fallback with nothing to fill — so no request is made and the
+        // six-second budget is not spent on an answer nobody would use.
+        guard onlyIf else { return .unavailable }
+        var request = URLRequest(url: URL(string: "https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig")!)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 6
+        request.httpBody = GrokGrpcCredits.requestFrame
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/grpc-web+proto", forHTTPHeaderField: "Content-Type")
+        request.setValue("1", forHTTPHeaderField: "X-Grpc-Web")
+        guard let (data, response) = try? await fetchJSON(request) else { return .unavailable }
+        // Only an HTTP 401 is a refused credential.  A 403, and gRPC status
+        // 16 (`UNAUTHENTICATED`), are what grok.com answers a bearer-only
+        // probe that carries no browser-held Web Key Exchange keypair, which
+        // this probe never sends (see `GrokGrpcCredits`): that is a capability
+        // miss on a token that still works, so it stays a plain miss and the
+        // fallback stays best-effort.
+        if response.statusCode == 401 { return .refused }
+        guard (200..<300).contains(response.statusCode) else { return .unavailable }
+        if GrokGrpcCredits.isUnauthenticated(data) { return .unavailable }
+        guard let reading = GrokGrpcCredits.parse(data, now: now()) else { return .unavailable }
+        return .reading(reading)
+    }
+
+    private static func isoString(_ date: Date) -> String {
+        ISO8601DateFormatter().string(from: date)
     }
 
     private func readMiniMax() async throws -> ProviderRead {
@@ -370,7 +555,7 @@ public struct LocalQuotaReader: Sendable {
 private enum Provider: String, CaseIterable, Sendable {
     case claude, codex, grok, minimax, antigravity
     var key: String {
-        switch self { case .claude: return "anthropic"; case .codex: return "openai"; case .grok: return "xai"; case .minimax: return "minimax"; case .antigravity: return "google-antigravity" }
+        switch self { case .claude: return "anthropic"; case .codex: return "openai"; case .grok: return "grok"; case .minimax: return "minimax"; case .antigravity: return "google-antigravity" }
     }
     var label: String {
         switch self { case .claude: return "Claude Code"; case .codex: return "Codex"; case .grok: return "Grok"; case .minimax: return "MiniMax"; case .antigravity: return "Antigravity" }
@@ -451,6 +636,39 @@ private func windowToken(seconds: Double?) -> String? {
     return nil
 }
 
+/// A single winner resumes the reader without waiting for a cancelled transport.
+private final class ClaudeProfileCompletion: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<ProviderUsageDetails, Never>?
+    private var task: Task<Void, Never>?
+
+    init(_ continuation: CheckedContinuation<ProviderUsageDetails, Never>) {
+        self.continuation = continuation
+    }
+
+    func install(_ task: Task<Void, Never>) {
+        lock.lock()
+        if continuation == nil {
+            lock.unlock()
+            task.cancel()
+        } else {
+            self.task = task
+            lock.unlock()
+        }
+    }
+
+    func finish(_ details: ProviderUsageDetails) {
+        lock.lock()
+        guard let continuation else { lock.unlock(); return }
+        self.continuation = nil
+        let task = self.task
+        self.task = nil
+        lock.unlock()
+        task?.cancel()
+        continuation.resume(returning: details)
+    }
+}
+
 private func window(
     provider: Provider,
     id: String,
@@ -485,25 +703,130 @@ private func unknownWindow(provider: Provider, label: String, observedAt: Date) 
     window(provider: provider, id: "unknown", label: label, remaining: nil, resetAt: nil, windowToken: nil, observedAt: observedAt)
 }
 
+/// Only a numeric multiplier is meaningful plan metadata; arbitrary tier suffixes are not.
+private func claudePlanName(_ oauth: [String: Any]) -> String? {
+    guard let subscription = firstString(oauth, ["subscriptionType", "subscription_type"]) else { return nil }
+    let label = subscription.replacingOccurrences(of: "_", with: " ").replacingOccurrences(of: "-", with: " ").capitalized
+    guard let tier = firstString(oauth, ["rateLimitTier", "rate_limit_tier"]),
+          let suffix = tier.split(separator: "_").last,
+          suffix.range(of: #"^[1-9][0-9]*x$"#, options: .regularExpression) != nil else { return label }
+    return "\(label) \(suffix)"
+}
+
 private func parseClaude(_ root: [String: Any], planType: String?, observedAt: Date) -> [QuotaWindow] {
-    let suffixes = ["opus", "sonnet", "haiku"]
+    let suffixes = ["opus", "sonnet", "haiku", "fable"]
     var result: [QuotaWindow] = []
     for (key, raw) in root {
         let value = record(raw)
         let utilization = firstNumber(value, ["utilization", "utilization_percent", "utilizationPercent", "used_percent", "usedPercent"])
         let direct = firstNumber(value, ["remaining_percent", "remainingPercent"])
         guard utilization != nil || direct != nil else { continue }
-        var base = key; var model: String?
-        for suffix in suffixes where key.hasSuffix("_\(suffix)") { model = suffix; base = String(key.dropLast(suffix.count + 1)); break }
-        guard let token = claudeToken(base) ?? claudeToken(key) else { continue }
+        var base = key
+        var model: String?
+        for suffix in suffixes {
+            if key.hasSuffix("_\(suffix)") {
+                model = suffix
+                base = String(key.dropLast(suffix.count + 1))
+                break
+            } else if key.hasPrefix("\(suffix)_") {
+                model = suffix
+                base = String(key.dropFirst(suffix.count + 1))
+                break
+            }
+        }
+        let resetAt = firstTimestamp(value, ["resets_at", "resetsAt", "reset_at", "resetAt"])
+        let resetDate = resetAt.flatMap(parseDate)
         let remaining = direct.map(percentage) ?? utilization.map { 100 - min(100, max(0, $0)) }
-        let title = model.map { "\($0.prefix(1).uppercased())\($0.dropFirst())" }
-        // The rate-limit key's suffix names the model family, not one model id,
-        // so it is the family a consumer can route on.  Keys with no suffix
-        // cover the whole subscription and leave the family empty.
-        result.append(window(provider: .claude, id: key, label: title == nil ? "\(token) window" : "\(token) window (\(title!))", remaining: remaining, resetAt: firstTimestamp(value, ["resets_at", "resetsAt", "reset_at", "resetAt"]), windowToken: token, modelId: model, modelType: model, planName: planType, observedAt: observedAt))
+        guard let token = claudeToken(base) ?? claudeToken(key) else { continue }
+        let cadence = QuotaWindowVocabulary.standardCadence(
+            windowToken: token,
+            label: key,
+            resetAt: resetDate,
+            periodStart: nil
+        )
+        let label = QuotaWindowVocabulary.windowLabel(
+            windowToken: token,
+            existingLabel: cadence,
+            resetAt: resetDate,
+            periodStart: nil
+        )
+        result.append(window(
+            provider: .claude,
+            id: key,
+            label: label,
+            remaining: remaining,
+            resetAt: resetAt,
+            windowToken: token,
+            modelId: model,
+            modelType: model,
+            planName: planType,
+            observedAt: observedAt
+        ))
     }
+
+    if let limitsArray = root["limits"] as? [[String: Any]] {
+        for item in limitsArray {
+            let utilization = firstNumber(item, ["percent", "utilization", "used_percent"])
+            guard let utilization else { continue }
+            let remaining = 100 - min(100, max(0, utilization))
+            let resetAt = firstTimestamp(item, ["resets_at", "resetsAt", "reset_at", "resetAt"])
+            let resetDate = resetAt.flatMap(parseDate)
+
+            var modelSlug: String?
+            if let scope = item["scope"] as? [String: Any],
+               let model = scope["model"] as? [String: Any] {
+                let name = (model["display_name"] as? String ?? model["id"] as? String)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if let name, !name.isEmpty {
+                    modelSlug = name.lowercased()
+                }
+            }
+
+            let group = ((item["group"] as? String) ?? (item["kind"] as? String) ?? "").lowercased()
+            let isShort = group.contains("session") || group.contains("five") || group.contains("5h")
+            let token = isShort ? "5h" : "7d"
+            let prefix = isShort ? "five_hour" : "seven_day"
+            let key = modelSlug.map { "\(prefix)_\($0)" } ?? prefix
+
+            // Only add if not already parsed from top-level keys
+            guard !result.contains(where: { $0.id.hasSuffix(":\(key)") || $0.id == key }) else { continue }
+
+            let cadence = QuotaWindowVocabulary.standardCadence(
+                windowToken: token,
+                label: key,
+                resetAt: resetDate,
+                periodStart: nil
+            )
+            let label = QuotaWindowVocabulary.windowLabel(
+                windowToken: token,
+                existingLabel: cadence,
+                resetAt: resetDate,
+                periodStart: nil
+            )
+            result.append(window(
+                provider: .claude,
+                id: key,
+                label: label,
+                remaining: remaining,
+                resetAt: resetAt,
+                windowToken: token,
+                modelId: modelSlug,
+                modelType: modelSlug,
+                planName: planType,
+                observedAt: observedAt
+            ))
+        }
+    }
+
     return result.sorted { $0.id < $1.id }
+}
+
+private func fallbackCodexSlotToken(_ slot: String) -> String? {
+    switch slot.lowercased() {
+    case "primary": return "5h"
+    case "secondary": return "168h"
+    default: return nil
+    }
 }
 
 private func claudeToken(_ value: String) -> String? {
@@ -518,15 +841,38 @@ private func claudeToken(_ value: String) -> String? {
 private func parseCodex(_ root: [String: Any], planType: String?, accountKey: String?, observedAt: Date) -> [QuotaWindow] {
     let limits = record(root["rate_limit"] ?? root["rateLimit"] ?? root["rate_limits"] ?? root["rateLimits"] ?? root["limits"])
     var result: [QuotaWindow] = []
-    func append(_ slot: String, _ value: [String: Any], modelId: String? = nil) {
+    func append(_ slot: String, _ value: [String: Any], modelId: String? = nil, cadenceSlot: String? = nil, poolLabel: String? = nil) {
         let used = firstNumber(value, ["used_percent", "usedPercent", "utilization", "percent_used"])
         let direct = firstNumber(value, ["remaining_percent", "remainingPercent"])
         guard used != nil || direct != nil else { return }
         let token = windowToken(seconds: firstNumber(value, ["limit_window_seconds", "limitWindowSeconds", "window_seconds"])) ?? firstNumber(value, ["window_minutes", "windowMinutes"]).flatMap { windowToken(seconds: $0 * 60) }
         let reset = firstTimestamp(value, ["resets_at", "resetsAt", "reset_at", "resetAt"]) ?? firstNumber(value, ["reset_after_seconds", "resetAfterSeconds", "resets_in_seconds"]).flatMap { seconds in seconds >= 0 && seconds.isFinite && seconds <= 31_536_000 ? isoFormatter.string(from: observedAt.addingTimeInterval(seconds)) : nil }
         let remaining = direct.map(percentage) ?? used.map { 100 - min(100, max(0, $0)) }
-        let suffix = modelId.map { " (\($0))" } ?? ""
-        result.append(window(provider: .codex, id: slot, label: token.map { "\($0) window\(suffix)" } ?? "\(slot.capitalized) window\(suffix)", remaining: remaining, resetAt: reset, windowToken: token, modelId: modelId, planName: planType, accountKey: accountKey, observedAt: observedAt))
+        let resetDate = reset.flatMap(parseDate)
+        let resolvedToken = token ?? fallbackCodexSlotToken(cadenceSlot ?? slot)
+        let isAdditional = slot.lowercased().contains("additional")
+            || (modelId?.lowercased().contains("additional") == true)
+        let label = if let poolLabel {
+            poolLabel + " · " + QuotaWindowVocabulary.windowLabel(windowToken: resolvedToken, existingLabel: cadenceSlot ?? slot, resetAt: resetDate, periodStart: nil)
+        } else if isAdditional {
+            QuotaWindowVocabulary.windowLabel(windowToken: resolvedToken, existingLabel: QuotaWindowVocabulary.otherLimit, resetAt: resetDate, periodStart: nil)
+        } else if let resolvedToken {
+            QuotaWindowVocabulary.windowLabel(windowToken: resolvedToken, existingLabel: slot, resetAt: resetDate, periodStart: nil)
+        } else {
+            QuotaWindowVocabulary.windowLabel(windowToken: nil, existingLabel: slot, resetAt: resetDate, periodStart: nil)
+        }
+        result.append(window(
+            provider: .codex,
+            id: slot,
+            label: label,
+            remaining: remaining,
+            resetAt: reset,
+            windowToken: resolvedToken,
+            modelId: modelId,
+            planName: planType,
+            accountKey: accountKey,
+            observedAt: observedAt
+        ))
     }
     for (slot, names) in [("primary", ["primary_window", "primaryWindow", "primary"]), ("secondary", ["secondary_window", "secondaryWindow", "secondary"])] {
         var raw: Any?
@@ -536,13 +882,42 @@ private func parseCodex(_ root: [String: Any], planType: String?, accountKey: St
         append(slot, value)
     }
     let additional = limits["additional_rate_limits"] ?? limits["additionalRateLimits"] ?? root["additional_rate_limits"] ?? root["additionalRateLimits"]
+    func appendPool(_ entry: [String: Any], identity: String, label: String, modelId: String?) {
+        let nested = record(entry["rate_limit"] ?? entry["rateLimit"])
+        let pool = nested.isEmpty ? entry : nested
+        let initialWindowCount = result.count
+        for (slot, keys) in [("primary", ["primary_window", "primaryWindow", "primary"]), ("secondary", ["secondary_window", "secondaryWindow", "secondary"])] {
+            for key in keys where pool[key] != nil {
+                append("\(identity):\(slot)", record(pool[key]), modelId: modelId, cadenceSlot: slot, poolLabel: label)
+                break
+            }
+        }
+        if result.count == initialWindowCount {
+            append(identity, pool, modelId: modelId, poolLabel: label)
+        }
+        if result.count == initialWindowCount, !nested.isEmpty {
+            append(identity, entry, modelId: modelId, poolLabel: label)
+        }
+    }
     if let records = additional as? [[String: Any]] {
+        var occurrences: [String: Int] = [:]
         for (index, entry) in records.enumerated() {
-            let name = firstString(entry, ["name", "id", "model", "model_id", "modelId"]) ?? "additional-\(index + 1)"
-            append(name, entry, modelId: firstString(entry, ["model", "model_id", "modelId"]))
+            let name = firstString(entry, ["limit_name", "limitName", "name", "id", "model", "model_id", "modelId"]) ?? "additional-\(index + 1)"
+            let model = firstString(entry, ["metered_feature", "meteredFeature", "model", "model_id", "modelId"])
+            let base = "additional:\(name):\(model ?? "")"
+            let occurrence = occurrences[base, default: 0] + 1
+            occurrences[base] = occurrence
+            let identity = occurrence == 1 ? base : "\(base):\(occurrence)"
+            appendPool(entry, identity: identity, label: name, modelId: model)
         }
     } else if let records = additional as? [String: Any] {
-        for (name, raw) in records { append(name, record(raw), modelId: name) }
+        for (name, raw) in records.sorted(by: { $0.key < $1.key }) {
+            appendPool(record(raw), identity: "additional:\(name)", label: name, modelId: name)
+        }
+    }
+    let review = record(root["code_review_rate_limit"] ?? root["codeReviewRateLimit"] ?? limits["code_review_rate_limit"])
+    if !review.isEmpty {
+        appendPool(review, identity: "code-review", label: "Code Review", modelId: "code-review")
     }
     return result
 }
@@ -654,10 +1029,10 @@ private func parseMiniMax(_ root: [String: Any], observedAt: Date) -> [QuotaWind
         let weeklyLabel: String
         if isGeneral {
             intervalLabel = "5-hour window"
-            weeklyLabel = (weeklyToken == "1w" || weeklyToken == "weekly") ? "Weekly window" : (weeklyToken.map { "\($0) window" } ?? "Weekly window")
+            weeklyLabel = (weeklyToken == "1w" || weeklyToken == "weekly") ? "weekly window" : (weeklyToken.map { "\($0) window" } ?? "weekly window")
         } else if isVideo {
             intervalLabel = "Video"
-            weeklyLabel = "Video (Weekly window)"
+            weeklyLabel = "Video (weekly window)"
         } else {
             intervalLabel = intervalToken.map { "\(model) (\($0) window)" } ?? "\(model) (interval window)"
             weeklyLabel = weeklyToken.map { "\(model) (\($0) window)" } ?? "\(model) (weekly window)"
@@ -710,25 +1085,13 @@ private func firstTimestamp(_ root: [String: Any], _ keys: [String]) -> String? 
 private extension LocalQuotaReader {
     static func makeFetcher() -> @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse) {
         return { request in
-            let delegate = RedirectRefusingURLSessionDelegate()
-            let configuration = URLSessionConfiguration.ephemeral
-            configuration.httpCookieStorage = nil
-            configuration.urlCache = nil
-            configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-            configuration.timeoutIntervalForRequest = requestTimeout
-            configuration.timeoutIntervalForResource = requestTimeout
-            let session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
-            defer { session.invalidateAndCancel() }
-            let (bytes, response) = try await session.bytes(for: request)
-            guard let http = response as? HTTPURLResponse else { throw LocalReaderError.unavailable }
-            if let length = http.value(forHTTPHeaderField: "Content-Length"), let count = Int(length), count > maxResponseBytes { throw LocalReaderError.unavailable }
-            var data = Data()
-            data.reserveCapacity(min(maxResponseBytes, 16_384))
-            for try await byte in bytes {
-                guard data.count < maxResponseBytes else { throw LocalReaderError.unavailable }
-                data.append(byte)
+            do {
+                return try await BoundedHTTPFetch.data(for: request, timeout: requestTimeout, maxBytes: maxResponseBytes)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                throw LocalReaderError.unavailable
             }
-            return (data, http)
         }
     }
 
@@ -765,10 +1128,6 @@ private extension LocalQuotaReader {
                 timeout: processTimeout, maxBytes: maxProcessOutputBytes)
         }
     }
-}
-
-private final class RedirectRefusingURLSessionDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
-    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) { completionHandler(nil) }
 }
 
 /// Limits how often CodeCaps asks Claude Code to renew its own login, and

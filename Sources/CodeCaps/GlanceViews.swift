@@ -18,8 +18,8 @@ struct GlancePopover: View {
     @ObservedObject var occlusion: GlanceOcclusionState
     var openConsole: (ConsolePage) -> Void
     var openAlert: (String, String?, Date?) -> Void
-    /// Settings has its own entry point rather than a fixed page, so the gear
-    /// and `⌘,` land in the same place: the Settings page last used.
+    /// The Dashboard has its own entry point rather than a fixed page, so the gear
+    /// and `⌘,` land in the same place: the Dashboard page last used.
     var openSettings: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
@@ -65,7 +65,7 @@ struct GlancePopover: View {
         // often already open when the owner picks a colour, and `Theme.accent`
         // is a computed `UserDefaults` read with nothing to observe it.  The
         // body was never re-evaluated, so From Mac / From Fleet, the bell and
-        // Open CodeCaps kept the colour resolved when the window was built
+        // Dashboard kept the colour resolved when the window was built
         // (owner report 2026-10-09).
         .tint(model.accentColor)
         // The popover's own material is a vibrancy blur; the header and footer
@@ -123,17 +123,21 @@ struct GlancePopover: View {
             if localSections.isEmpty && !model.localEnabled {
                 GlanceEmptyState(
                     symbol: "laptopcomputer",
-                    title: "Local readers are off",
+                    title: "Local Readers Are Off",
                     message: "This Mac is not reading any AI plan right now." + sentenceGap
-                        + "Turn local readers on in Settings to see them here.",
-                    actionTitle: "Open Settings") { openConsole(.settingsSourcesFleet) }
+                        + "Turn on readings from this Mac in the Dashboard.",
+                    actionTitle: "Open Dashboard") { openConsole(.settingsSourcesFleet) }
             } else {
                 ForEach(Array(localSections.enumerated()), id: \.element.id) { index, row in
                     if index > 0 {
                         rowDivider
                     }
-                    glanceRow(row, issue: model.issues[row.providerKey], origin: .local)
+                    glanceRow(row, issue: model.rowIssue(for: row.providerKey), origin: .local)
                 }
+            }
+            if !model.visiblePlanChanges.isEmpty {
+                Spacer().frame(height: 8)
+                planChangeSection
             }
             if let consentMessage {
                 Spacer().frame(height: 10)
@@ -148,6 +152,26 @@ struct GlancePopover: View {
         }
     }
 
+    /// Informational plan-change notices, shown instead of runaway alerts
+    /// while the baseline recalibrates.  Placed below quotas with dismiss button.
+    private var planChangeSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(model.visiblePlanChanges, id: \.planChangeId) { change in
+                PlanChangeGlanceCard(
+                    change: change,
+                    providerLabel: model.sections.first { $0.providerKey == change.providerKey }?.providerLabel
+                        ?? change.providerKey,
+                    windowLabel: model.displaySections.flatMap { $0.section.windows }
+                        .first { $0.window.id == change.windowId }
+                        .map { glanceMeterCaption($0) },
+                    accentColor: model.accentColor,
+                    onDismiss: { model.dismissPlanChange(change.planChangeId) }
+                )
+            }
+        }
+        .padding(.horizontal, Metrics.glanceGutter)
+    }
+
     @ViewBuilder
     private var fleetContent: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -155,18 +179,18 @@ struct GlancePopover: View {
                 if model.serverEnabled {
                     GlanceEmptyState(
                         symbol: "arrow.down.circle",
-                        title: "No fleet readings yet",
+                        title: "No Readings From Other Devices",
                         message: model.serverError
-                            ?? ("Your fleet endpoint has not reported any readings yet." + sentenceGap
-                                + "Readings appear here after the next pull."),
-                        actionTitle: "Open Fleet Settings") { openConsole(.settingsSourcesFleet) }
+                            ?? ("Your other devices have not reported yet." + sentenceGap
+                                + "Readings appear here after the next check."),
+                        actionTitle: "Open Dashboard") { openConsole(.settingsSourcesFleet) }
                 } else {
                     GlanceEmptyState(
                         symbol: "arrow.up.arrow.down.circle",
-                        title: "No fleet endpoint connected",
-                        message: "From Fleet shows the quotas your other machines push to an endpoint you run."
-                            + sentenceGap + "Add the endpoint and its Read Token in Settings to connect it.",
-                        actionTitle: "Connect Fleet Endpoint") { openConsole(.settingsSourcesFleet) }
+                        title: "Other Devices Are Not Connected",
+                        message: "All Sources shows this Mac plus plans shared from your other devices."
+                            + sentenceGap + "Add the share address and its read token in the Dashboard.",
+                        actionTitle: "Connect Other Devices") { openConsole(.settingsSourcesFleet) }
                 }
             } else {
                 // One heading band per reporting source, so a row always says
@@ -199,20 +223,23 @@ struct GlancePopover: View {
                          markStyle: model.glanceMarkStyle(for: row.id),
                          showsAlarmToggle: !model.alarmsAll,
                          isAlarmEnabled: model.isProviderAlarmSelected(row.id),
-                         allowsExpansion: origin == .fleet && glanceRowAllowsExpansion(row, origin: origin),
+                         allowsExpansion: glanceRowAllowsExpansion(row, origin: origin),
                          isExpanded: expandedIds.contains(key),
                          hasAnomaly: hasAnomaly,
                          pacingHighlights: model.pacingColorHighlights,
+                         isAtRisk: model.platformIsAtRisk(row.providerKey),
+                         customInfo: model.platformCustomInfo[row.providerKey],
                          onTap: { toggleExpanded(key) },
                          onToggleAlarm: { model.toggleAlarm(for: row.id) })
     }
 
-    /// "REPORTED 9:12 AM": the source's latest reading, on the right of its
-    /// heading band.  The time lives here rather than under every row, where
+    /// "REPORTED 9:12 AM", or "REPORTED OCT 18, 9:12 AM" once the reading is
+    /// no longer from today: the source's latest reading, on the right of its
+    /// heading band.  The stamp lives here rather than under every row, where
     /// it truncated.
     private func fleetGroupReported(_ group: FleetGroup) -> String? {
         let latest = group.rows.flatMap(\.section.windows).compactMap(\.observedAt).max()
-        return latest.map { "REPORTED \($0.formatted(date: .omitted, time: .shortened).uppercased())" }
+        return latest.map { "REPORTED \(glanceReportedStamp($0, now: model.now).uppercased())" }
     }
 
     /// The short issue text for a reader whose saved login is on this Mac but
@@ -339,8 +366,10 @@ struct GlancePopover: View {
 
     private var runawayFooterItems: [String] {
         if !model.activeRunawayAnomalies.isEmpty {
+            // Flattened once for all anomalies, not once per anomaly.
+            let displayedWindows = model.displaySections.flatMap { $0.section.windows }
             return model.activeRunawayAnomalies.map { anomaly in
-                let matchingSnapshot = model.displaySections.flatMap { $0.section.windows }
+                let matchingSnapshot = displayedWindows
                     .first { $0.window.id == anomaly.windowId }
                     ?? model.sections.flatMap(\.windows).first { $0.window.id == anomaly.windowId }
                 let windowLabel = matchingSnapshot.map { glanceMeterCaption($0) }
@@ -432,6 +461,7 @@ final class GlanceOcclusionState: ObservableObject {
 }
 
 struct MarqueeText: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let text: String
     var font: Font = .system(size: 13, weight: .bold, design: .rounded)
     var color: Color = Theme.warning
@@ -457,9 +487,9 @@ struct MarqueeText: View {
                     .foregroundStyle(color)
                     .lineLimit(1)
                     .fixedSize()
-                    .offset(x: needsScroll && !isPaused ? offset : 0)
+                    .offset(x: needsScroll && !effectivePaused ? offset : 0)
 
-                if needsScroll && !isPaused {
+                if needsScroll && !effectivePaused {
                     Text(text)
                         .font(font)
                         .foregroundStyle(color)
@@ -493,8 +523,15 @@ struct MarqueeText: View {
             .onChange(of: isPaused) { _, _ in
                 restartAnimation(needsScroll: textWidth > (available - 6), width: textWidth)
             }
+            .onChange(of: reduceMotion) { _, _ in
+                restartAnimation(needsScroll: textWidth > (available - 6), width: textWidth)
+            }
         }
     }
+
+    /// Reduce Motion stills the scroll: the text rests at its leading
+    /// edge, truncated, instead of sliding forever (Slice 4, MOTION-01).
+    private var effectivePaused: Bool { isPaused || reduceMotion }
 
     private func restartAnimation(needsScroll: Bool, width: CGFloat) {
         // A fresh token invalidates any start still pending in the 1.2 s
@@ -506,13 +543,13 @@ struct MarqueeText: View {
         reset.disablesAnimations = true
         withTransaction(reset) { offset = 0 }
         isAnimating = false
-        guard needsScroll && width > 0 && !isPaused else { return }
+        guard needsScroll && width > 0 && !effectivePaused else { return }
 
         let cycleDistance = width + gap
         let duration = Double(cycleDistance) / speed
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-            guard animationToken == token, !isPaused else { return }
+            guard animationToken == token, !effectivePaused else { return }
             isAnimating = true
             withAnimation(.linear(duration: duration).repeatForever(autoreverses: false)) {
                 offset = -cycleDistance
@@ -633,6 +670,70 @@ struct RunawayAnomalyGlanceCard: View {
     }
 }
 
+/// The plan-change notice: shown instead of a runaway alert when the
+/// plan/quota size changed.  Informational teal, never the runaway
+/// red/orange — the burn stats are less valid, not alarming.
+struct PlanChangeGlanceCard: View {
+    let change: AnomalyDetector.PlanChange
+    let providerLabel: String
+    let windowLabel: String?
+    var accentColor: Color = Theme.accent
+    var onDismiss: () -> Void = {}
+
+    private var detailText: String {
+        if let changedAt = change.changedAt, let recalibratedAt = change.recalibratedAt {
+            let fmt = DateFormatter()
+            fmt.setLocalizedDateFormatFromTemplate("MMMd")
+            return "Plan Changed on \(fmt.string(from: changedAt)),"
+                + sentenceGap
+                + "Stats Less Valid Until \(fmt.string(from: recalibratedAt))"
+        }
+        return "Plan change noted in the Dashboard,"
+            + sentenceGap
+            + "stats less valid while the baseline recalibrates"
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text("Δ")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(accentColor)
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 4) {
+                    Text("Plan Change:")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(accentColor)
+                    Text(windowLabel.map { "\(providerLabel) (\($0))" } ?? providerLabel)
+                        .font(.system(size: 11, weight: .semibold))
+                        .lineLimit(1)
+                }
+                Text(detailText)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 4)
+
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.secondary)
+                    .padding(4)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Hide this notice")
+            .accessibilityLabel("Hide notice")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(accentColor.opacity(0.10), in: RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(accentColor.opacity(0.30), lineWidth: 1))
+    }
+}
+
 struct RunawayRecentAlertGlanceCard: View {
     let alert: RunawayAlertRecord
     var onInspect: () -> Void
@@ -727,6 +828,56 @@ func glanceFleetGroupHeading(_ title: String) -> String {
     return name.uppercased()
 }
 
+/// When a source last reported, for the band above its rows.  A reading from
+/// today is stamped with its time alone, but anything older carries its date as
+/// well.  A bare time is not merely terse there, it is wrong to read: beside a
+/// clock showing 3:40 AM, a fleet band stamped "4:49 AM" looks like a reading
+/// that has not happened yet today when it is really yesterday's (owner report
+/// 2026-10-18).  The year is only added when it is not the current one, so the
+/// common case stays inside the band.
+/// `locale` and `calendar` default to the reader's own, so the band is
+/// localized for whoever is looking at it.  They are parameters rather than a
+/// direct read of `.current` so a test can pin both and assert the same string
+/// on any machine: `Locale.current` in a de-DE or ja-JP runner abbreviates the
+/// month differently and renders a 24-hour clock, and `Calendar.current` on a
+/// Buddhist-locale Mac is not the Gregorian calendar the fixtures are written in.
+func glanceReportedStamp(
+    _ observedAt: Date,
+    now: Date,
+    locale: Locale = .current,
+    calendar: Calendar = .current
+) -> String {
+    func formatter(
+        template: String? = nil,
+        date dateStyle: DateFormatter.Style = .none,
+        time timeStyle: DateFormatter.Style = .none
+    ) -> DateFormatter {
+        let formatter = DateFormatter()
+        formatter.locale = locale
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        // A localized template lets the reader's own locale order the parts,
+        // which a hardcoded "MMM d" would not.
+        if let template {
+            formatter.setLocalizedDateFormatFromTemplate(template)
+        } else {
+            formatter.dateStyle = dateStyle
+            formatter.timeStyle = timeStyle
+        }
+        return formatter
+    }
+
+    let time = formatter(time: .short).string(from: observedAt)
+    guard !calendar.isDate(observedAt, inSameDayAs: now) else { return time }
+    let sameYear = calendar.component(.year, from: observedAt) == calendar.component(.year, from: now)
+    let date = sameYear
+        ? formatter(template: "MMM d").string(from: observedAt)
+        // FormatStyle's `.abbreviated` is DateFormatter's `.medium`: "Oct 18,
+        // 2025".  `.short` here would silently become the numeric "10/18/25".
+        : formatter(date: .medium).string(from: observedAt)
+    return "\(date), \(time)"
+}
+
 /// A source's own name, in words a stranger can act on.  The reader labels
 /// are internal, and `gbu` in particular named a command rather than a thing:
 /// it is the local Grok Bot CLI on this Mac, not a remote machine reporting in.
@@ -802,7 +953,19 @@ struct GlanceHeaderBar: View {
     }
 
     var body: some View {
+        // Spacing stays ZERO: this row separates its groups with explicit
+        // Spacers, and a non-zero spacing silently added itself to EVERY
+        // implicit gap in a header with eight or more children — about 32pt of
+        // a 570pt popover, which is what pushed the cluster into crowding.
+        // The mark's own gap is on the mark instead.
         HStack(spacing: 0) {
+            // Owner 2026-10-21: the upper left shows the transparent colour
+            // codecaps logo, the same artwork as the About page.  This is the
+            // Glance popover, not the PiP: the PiP header is gone by the
+            // owner's own request (#193), and the provider logos identify the
+            // HUD there.
+            GlanceBrandMark()
+                .padding(.trailing, Metrics.glanceBrandMarkGap)
             Text("CodeCaps")
                 .font(.system(size: 13, weight: .semibold))
                 .lineLimit(1)
@@ -866,20 +1029,67 @@ struct GlanceHeaderBar: View {
     }
 
     private var settingsButton: some View {
-        Button(action: openSettings) {
+        Menu {
+            QuickSettingsCommands(model: model, openSettings: openSettings)
+        } label: {
             Image(systemName: "gearshape")
                 .font(.system(size: 13, weight: .medium))
                 .frame(width: 22, height: Metrics.glanceHeaderControlHeight)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
         .foregroundStyle(.secondary)
-        .help("Settings")
-        .accessibilityLabel("Settings")
+        .help("Dashboard")
+        .accessibilityLabel("Dashboard")
     }
 }
 
-/// The two-box switch between From Mac and From Fleet, in Title Case.  The two
+/// The owner's colour mark on a transparent ground, resolved through the
+/// same bundle as the About page.  Owner 2026-10-21: this header and the
+/// About page both show the transparent colour artwork, never the black
+/// menu-bar template.  The template belongs only to the menu bar icon
+/// itself.  Never re-cut, re-exported or substituted.
+struct GlanceBrandMark: View {
+    static let asset: NSImage? = BrandMarkImage.asset
+    @Environment(\.colorScheme) private var colorScheme
+
+    /// The frame is applied to EACH branch, not to the Group around them.
+    /// A `.resizable()` image proposes its natural size, and the brand
+    /// artwork is large: under a `.fixedSize` header that leaked ~40pt
+    /// of the 570pt popover's width into a 12pt mark.  Clamping the Group from
+    /// the outside is too late — the ideal width has already been spent.
+    var body: some View {
+        Group {
+            if let image = Self.asset {
+                Image(nsImage: image)
+                    .resizable()
+                    .renderingMode(.original)
+                    .interpolation(.high)
+                    .frame(width: Metrics.glanceBrandMarkSize, height: Metrics.glanceBrandMarkSize)
+                    .background {
+                        // The needle and the dots are dark, so dark
+                        // appearance needs a light ground for them or the
+                        // mark reads as two empty rings.
+                        if colorScheme == .dark {
+                            RoundedRectangle(cornerRadius: Metrics.glanceBrandMarkSize * 0.22, style: .continuous)
+                                .fill(BrandMarkImage.lightGround)
+                        }
+                    }
+            } else {
+                // Only if the owner's artwork is ever missing from the bundle.
+                Image(systemName: "gauge.with.dots.needle.50percent")
+                    .font(.system(size: Metrics.glanceBrandMarkSize))
+                    .foregroundStyle(Theme.accent)
+                    .frame(width: Metrics.glanceBrandMarkSize, height: Metrics.glanceBrandMarkSize)
+            }
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+/// The two-box switch between From Mac and All Sources, in Title Case.  The two
 /// boxes are the same width, so the switch does not change shape as it flips.
 struct GlanceViewToggle: View {
     @Binding var selection: GlanceViewMode
@@ -890,16 +1100,22 @@ struct GlanceViewToggle: View {
     private static let widest = GlanceViewMode.allCases.map(\.title).max { $0.count < $1.count } ?? ""
 
     var body: some View {
+        // Owner 2026-10-10: "the from mac and from fleet should look more like
+        // a toggle than just outline basic shapes and should match in style
+        // more with the open codecaps in bottom right".
+        //
+        // It had a full-height 1pt rule between the boxes and an outline around
+        // the whole pair, which reads as two adjacent rectangles rather than one
+        // control.  It now reads as the footer's prominent button did: a solid
+        // filled selected segment sitting on a track, with the hairline around
+        // the whole thing instead of down the middle.  Same corner radius, same
+        // accent fill, same on-accent ink — one control vocabulary in the window.
         HStack(spacing: 0) {
-            ForEach(Array(GlanceViewMode.allCases.enumerated()), id: \.element) { index, mode in
-                if index > 0 {
-                    Rectangle()
-                        .fill(Theme.controlBorder)
-                        .frame(width: 1, height: Metrics.glanceHeaderControlHeight)
-                }
+            ForEach(Array(GlanceViewMode.allCases.enumerated()), id: \.element) { _, mode in
                 segment(mode)
             }
         }
+        .background(Theme.controlTrack)
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Theme.controlBorder))
         .fixedSize()
@@ -917,10 +1133,10 @@ struct GlanceViewToggle: View {
             .font(.system(size: 11, weight: .semibold))
             .lineLimit(1)
             .fixedSize()
-            .foregroundStyle(selected ? AnyShapeStyle(model.accentColor) : AnyShapeStyle(.secondary))
+            .foregroundStyle(selected ? Theme.onAccent : Theme.ink.opacity(0.7))
             .padding(.horizontal, Metrics.glanceHeaderSegmentPadding)
             .frame(height: Metrics.glanceHeaderControlHeight)
-            .background(selected ? Theme.selection : Color.clear)
+            .background(selected ? model.accentColor : Color.clear)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -960,7 +1176,10 @@ struct GlanceAlarmAllToggle: View {
             Text("All")
                 .font(.system(size: 13, weight: .semibold))
         }
-        .foregroundStyle(tint)
+        // Owner 2026-10-10: "the All next to alarm should be black or normal
+        // dark text not accent color".  Ink follows the appearance and the
+        // high-contrast setting; the accent stays where it carries meaning.
+        .foregroundStyle(Theme.ink)
         .frame(height: Metrics.glanceHeaderControlHeight)
         .contentShape(Rectangle())
         .fixedSize()
@@ -1029,6 +1248,12 @@ enum GlanceCadence: Equatable {
     case long
 }
 
+/// A spent subscription does not spend Muse Assist's separate extra balance.
+func glanceUsableMuseExtra(_ windows: [QuotaWindowSnapshot]) -> QuotaWindowSnapshot? {
+    windows.first { isMuseAssistExtra($0) && !$0.isAtCap &&
+        (($0.remainingPercent ?? 0) > 0 || ($0.window.absoluteRemaining ?? 0) > 0) }
+}
+
 /// The two windows a one-line row meters, chosen the way the rest of the app
 /// picks the window a row "speaks for": the one closest to its cap within its
 /// own cadence.
@@ -1043,39 +1268,76 @@ enum GlanceCadence: Equatable {
 /// that you can trust it.  If that leaves nothing, the row's own driving
 /// window is used so the row never renders blank.
 func glanceMeterPair(for row: DisplaySection, now: Date) -> GlanceMeterPair {
-    let trustworthy = glanceDrawableWindows(row.section.windows.filter {
+    let drawable = row.section.windows.filter {
         !$0.window.isSupplementaryVideoQuota && !row.isMasked($0)
-    })
-    let candidates = trustworthy.isEmpty
+    }
+    // A dollar balance is not a quota meter, so it never takes a slot beside a
+    // real quota meter; a plan whose only reading is a dollar balance still
+    // shows it, so the Mac, the phone and the widget never disagree about a
+    // blank card (Sentry review, PR #439).
+    let trustworthy = glanceDrawableWindows(drawable)
+    let meters = QuotaCapRule.meterWindows(trustworthy) {
+        QuotaCapRule.isMoneyMeter(
+            cadenceToken: $0.window.window, quotaUnit: $0.window.quotaUnit,
+            label: $0.window.label)
+    }
+    let candidates = meters.isEmpty
         ? [row.driving].compactMap { $0 }
-        : trustworthy
+        : meters
     guard let anchor = candidates.first else { return GlanceMeterPair() }
 
-    let shortest = candidates.filter { glanceCadence($0, now: now) == .short }
-    let longest = candidates.filter { glanceCadence($0, now: now) == .long }
+    if row.providerKey == "muse-assist" {
+        let weekly = candidates.first { isMuseAssistWeekly($0) }
+        let extra = candidates.first { isMuseAssistExtra($0) }
+        if let weekly, let extra {
+            return GlanceMeterPair(short: weekly, long: extra)
+        } else if let weekly {
+            return GlanceMeterPair(short: weekly, long: nil)
+        } else if let extra {
+            return GlanceMeterPair(short: extra, long: nil)
+        }
+    }
 
-    // A provider that publishes only one cadence — Grok Bot's weekly meter, or
-    // a plan-only subscription — still fills the first slot.  The second slot
-    // then falls back to the next window closest to its cap, so a provider
-    // with two unnamed windows still gets two meters.
-    let short = nearestToCap(shortest) ?? nearestToCap(candidates) ?? anchor
-    // Both fallbacks exclude the window the first slot already took, and any
-    // copy of it.  A single-window provider that classifies as long — which
-    // every weekly meter does — would otherwise resolve `longest` to the same
-    // snapshot and render one meter twice, hiding the second cadence entirely;
-    // and a second source's copy of the same meter (Grok Bot's weekly, read
-    // by both Cursor's DashboardService and `gbu`) would render it twice more.
-    func distinct(_ snapshot: QuotaWindowSnapshot) -> Bool {
-        snapshot.window.id != short.window.id && !glanceIsCopy(snapshot, of: short)
+    let primary = candidates.filter { !$0.window.isSubModelLimit }
+    let eligible = primary.isEmpty ? candidates : primary
+
+    // The general path is the shared rule, so the Mac, the companion and the
+    // widgets pick their two meters the same way.  The Mac keeps one
+    // refinement on top of it:  a second source's report of the meter the
+    // first slot already shows is not a second meter, so it never fills the
+    // second slot.
+    let meterCandidates = eligible.map { snapshot in
+        QuotaWindowPairing.MeterCandidate(
+            id: snapshot.window.id,
+            remainingPercent: snapshot.remainingPercent,
+            resetAt: snapshot.resetAt,
+            isShort: glanceCadence(snapshot, now: now) == .short,
+            // The same exclusion predicates the companion and the widgets
+            // apply, so the phone can never show a meter this Mac hides and
+            // one rule decides every surface's two meters.
+            isExcluded: QuotaCapRule.isSupplementaryVideoQuota(
+                providerKey: row.providerKey, label: snapshot.window.label)
+                || QuotaCapRule.isScopedPoolAllowance(
+                    providerKey: row.providerKey, id: snapshot.window.id, label: snapshot.window.label)
+                || QuotaCapRule.isSubModelLimit(
+                    providerKey: row.providerKey, id: snapshot.window.id, label: snapshot.window.label),
+            // A reading of a period that has ended never takes a slot from a
+            // live one.
+            isLive: !QuotaFreshnessRule.isDeadCopy(
+                observedAt: snapshot.observedAt, resetAt: snapshot.resetAt, now: now)
+        )
     }
-    // A placeholder window with neither a reading nor a reset date provides no information
-    // and should not displace an empty slot with a dummy solid bar.
-    func hasInformation(_ snapshot: QuotaWindowSnapshot) -> Bool {
-        snapshot.remainingPercent != nil || snapshot.resetAt != nil
+    let pair = QuotaWindowPairing.meterPair(meterCandidates) { candidate, other in
+        guard let snapshot = eligible.first(where: { $0.window.id == candidate.id }),
+              let held = eligible.first(where: { $0.window.id == other.id }) else { return false }
+        return glanceIsCopy(snapshot, of: held)
     }
-    let longCandidates = longest.filter(distinct).filter(hasInformation)
-    let fallbackCandidates = candidates.filter(distinct).filter(hasInformation)
-    let long = nearestToCap(longCandidates) ?? nearestToCap(fallbackCandidates)
+    func snapshot(_ candidate: QuotaWindowPairing.MeterCandidate?) -> QuotaWindowSnapshot? {
+        guard let candidate else { return nil }
+        return eligible.first { $0.window.id == candidate.id }
+    }
+    let short = snapshot(pair.short) ?? anchor
+    let long = snapshot(pair.long)
     return GlanceMeterPair(short: short, long: long)
 }
 
@@ -1112,7 +1374,12 @@ private func reportsWeeklyCadence(_ snapshot: QuotaWindowSnapshot) -> Bool {
 /// The meter a window is: what it measures and how often it resets, the same
 /// for a window and for another source's report of it.
 private func glanceMeterKey(_ snapshot: QuotaWindowSnapshot) -> String {
-    glanceLineLabel(snapshot) + "|" + glanceMeterCaption(snapshot)
+    // Line labels are cadence-only after the vocabulary stack, but meters still
+    // differ by model: a Sonnet weekly with no reading must stay beside Overall.
+    let model = (snapshot.window.modelId ?? "")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        .lowercased()
+    return glanceLineLabel(snapshot) + "|" + glanceMeterCaption(snapshot) + "|" + model
 }
 
 /// Whether `snapshot` is another source's report of the meter `other` already
@@ -1160,10 +1427,10 @@ private func glanceSameAllowance(_ lhs: QuotaWindowSnapshot, _ rhs: QuotaWindowS
 /// emits a no-reading "Grok Bot weekly" window whenever the CLI cannot read,
 /// beside DashboardService's real reading of the same weekly allowance.
 func glanceDrawableWindows(_ windows: [QuotaWindowSnapshot]) -> [QuotaWindowSnapshot] {
-    let readingKeys = Set(windows.filter { $0.remainingPercent != nil }.map(glanceMeterKey))
+    let readingKeys = Set(windows.filter { $0.window.hasReading }.map(glanceMeterKey))
     var emptyKeys: Set<String> = []
     return windows.filter { snapshot in
-        guard snapshot.remainingPercent == nil else { return true }
+        guard !snapshot.window.hasReading else { return true }
         let key = glanceMeterKey(snapshot)
         let caption = glanceMeterCaption(snapshot)
         let namesNoCadence = (caption == "Quota" || caption == "Plan")
@@ -1173,38 +1440,47 @@ func glanceDrawableWindows(_ windows: [QuotaWindowSnapshot]) -> [QuotaWindowSnap
     }
 }
 
-/// The window closest to its cap, preferring one that reports a percentage.
-/// Same rule as `QuotaPlatformSection.drivingWindow`, so the second meter and
-/// the row's headline always agree on which window is closest to trouble.
-private func nearestToCap(_ pool: [QuotaWindowSnapshot]) -> QuotaWindowSnapshot? {
-    pool.filter { $0.remainingPercent != nil }
-        .min { ($0.remainingPercent ?? 100) < ($1.remainingPercent ?? 100) }
-        ?? pool.first
-}
-
 /// A window's cadence, from its own token where the reader set one, and from
 /// how long until it resets otherwise.  A window with neither — an unknown
 /// bucket, a plan meter with no end date — is `.long`: a subscription-wide
 /// allowance is the long side of the pair far more often than the short one.
 func glanceCadence(_ snapshot: QuotaWindowSnapshot, now: Date) -> GlanceCadence {
-    if snapshot.window.isSupplementaryVideoQuota {
-        return .short
-    }
-    let token = (snapshot.window.window ?? "")
-        .lowercased()
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-    if let seconds = glanceDurationSeconds(token) {
-        return seconds < 86_400 ? .short : .long
-    }
-    switch token {
-    case "session", "fast": return .short
-    case "weekly", "week", "monthly", "month", "plan", "included plan": return .long
-    default: break
-    }
-    if let reset = snapshot.resetAt, reset > now {
-        return reset.timeIntervalSince(now) < 86_400 ? .short : .long
-    }
-    return .long
+    QuotaMeterCadence.isShort(
+        windowToken: snapshot.window.window,
+        label: snapshot.window.label,
+        cadence: QuotaWindowVocabulary.standardCadence(
+            windowToken: snapshot.window.window,
+            label: snapshot.window.label,
+            resetAt: snapshot.resetAt,
+            periodStart: snapshot.window.periodStartDate
+        ),
+        resetAt: snapshot.resetAt,
+        now: now,
+        isSupplementaryVideoQuota: snapshot.window.isSupplementaryVideoQuota
+    ) ? .short : .long
+}
+
+/// The unit tag beside a meter: "5h", "7d", "1m".  Kept to five characters so
+/// the caption column never has to truncate, and derived from the window's own
+/// cadence token rather than its label alone, because a label is allowed to be
+func isMuseAssistExtra(_ snapshot: QuotaWindowSnapshot) -> Bool {
+    QuotaWindowVocabulary.isMuseAssistExtra(
+        providerKey: snapshot.window.canonicalProviderKey,
+        windowToken: snapshot.window.window,
+        label: snapshot.window.label,
+        resetAt: snapshot.window.resetDate,
+        periodStart: snapshot.window.periodStartDate
+    )
+}
+
+func isMuseAssistWeekly(_ snapshot: QuotaWindowSnapshot) -> Bool {
+    QuotaWindowVocabulary.isMuseAssistWeekly(
+        providerKey: snapshot.window.canonicalProviderKey,
+        windowToken: snapshot.window.window,
+        label: snapshot.window.label,
+        resetAt: snapshot.window.resetDate,
+        periodStart: snapshot.window.periodStartDate
+    )
 }
 
 /// The unit tag beside a meter: "5h", "7d", "1m".  Kept to five characters so
@@ -1216,34 +1492,45 @@ func glanceCadence(_ snapshot: QuotaWindowSnapshot, now: Date) -> GlanceCadence 
 /// among them — so a month is spelled one way on every row (owner ruling
 /// 2026-09-30, replacing "Plan" and "30d").
 func glanceMeterCaption(_ snapshot: QuotaWindowSnapshot) -> String {
-    let token = (snapshot.window.window ?? "")
-        .lowercased()
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-    if let seconds = glanceDurationSeconds(token) {
-        return glanceDurationTag(seconds)
+    if isMuseAssistExtra(snapshot) {
+        return "+"
     }
-    if glanceIsMonthly(snapshot) { return "1m" }
-    let named = token + " " + snapshot.window.label.lowercased()
-    if named.contains("weekly") || named.contains("7-day") { return "7d" }
-    if named.contains("5-hour") || named.contains("5 hour") { return "5h" }
-    if named.contains("daily") { return "24h" }
+    // The shared resolver, the same one the elapsed-time marker beside this
+    // caption asks, so the two cannot read one window as two different periods.
+    let period = glanceWindowPeriod(snapshot)
+    switch period {
+    case .fixed(let seconds): return glanceDurationTag(seconds)
+    case .calendarMonths: return "1m"
+    case nil: break
+    }
+    let named = ((snapshot.window.window ?? "") + " " + snapshot.window.label).lowercased()
     if named.contains("plan") || named.contains("quota") { return "Plan" }
     return "Quota"
+}
+
+/// The period one window covers, by the shared resolver.
+///
+/// The resolver lives in `ResetAlarmCadence`, which the Mac app, the iOS app
+/// and the widget all compile, so the caption here, the marker beside it, the
+/// phone and the widget all read the same window the same way.
+func glanceWindowPeriod(_ snapshot: QuotaWindowSnapshot) -> ResetAlarmCadence.Period? {
+    ResetAlarmCadence.resolve(
+        token: snapshot.window.window,
+        label: snapshot.window.label,
+        providerKey: snapshot.window.canonicalProviderKey,
+        isSupplementaryVideoQuota: snapshot.window.isSupplementaryVideoQuota
+    )
 }
 
 /// Whether a window resets once a month: a monthly token or label, a billing
 /// cycle, a 28-31 day duration, or Cursor's included plan, which resets with
 /// Cursor's monthly billing cycle and carries no cadence of its own.
 func glanceIsMonthly(_ snapshot: QuotaWindowSnapshot) -> Bool {
-    let token = (snapshot.window.window ?? "")
-        .lowercased()
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-    if let seconds = glanceDurationSeconds(token) {
-        return (27 * 86_400...31 * 86_400).contains(seconds)
+    switch glanceWindowPeriod(snapshot) {
+    case .calendarMonths: return true
+    case .fixed(let seconds): return (27 * 86_400...31 * 86_400).contains(seconds)
+    case nil: return false
     }
-    let named = token + " " + snapshot.window.label.lowercased()
-    if named.contains("month") || named.contains("billing") || named.contains("cycle") { return true }
-    return snapshot.window.canonicalProviderKey == "cursor" && named.contains("plan")
 }
 
 /// Reads a duration token such as "5h", "300m", "168h" or "1w" into seconds.
@@ -1299,6 +1586,97 @@ private func glanceDurationTag(_ seconds: TimeInterval) -> String {
     return "\(whole)s"
 }
 
+/// Hyphenated cadence for an exhausted window: "5-hour", "7-day", "monthly", …
+func glanceAtCapCadenceLabel(_ snapshot: QuotaWindowSnapshot) -> String {
+    QuotaWindowVocabulary.standardCadence(
+        windowToken: snapshot.window.window,
+        label: snapshot.window.label,
+        resetAt: snapshot.resetAt,
+        periodStart: snapshot.window.periodStartDate,
+        monthlyHint: glanceIsMonthly(snapshot)
+    )
+}
+
+/// One-line cap summary: "7-day cap resets in 1d 13h".
+///
+/// The wording lives in `QuotaWindowVocabulary.atCapSummary` so the phone
+/// companion says the same thing as the Mac.
+func glanceAtCapSummary(_ snapshot: QuotaWindowSnapshot, now: Date) -> String {
+    QuotaWindowVocabulary.atCapSummary(cadence: glanceAtCapCadenceLabel(snapshot),
+                                       resetAt: snapshot.resetAt,
+                                       now: now)
+}
+
+/// Short weekday + time for the reset, e.g. "Tue 4:15 PM".
+func glanceResetExactTime(_ reset: Date?, now: Date) -> String {
+    guard let reset, reset > now else { return "" }
+    return reset.formatted(.dateTime.weekday(.abbreviated).hour().minute())
+}
+
+/// What a capped plan says instead of its bars.
+///
+/// Owner 2026-10-12: when any window is exhausted, every bar for that platform
+/// hides and one line names the binding cap and when it lifts — e.g.
+/// "7-day cap resets in 1d 13h", with the exact reset time on a second line.
+struct GlanceAtCap: View {
+    let snapshot: QuotaWindowSnapshot
+    let now: Date
+    /// When true, spans both meter columns in a Glance row.
+    var spansFullMeterRow: Bool = false
+
+    private var summary: String { glanceAtCapSummary(snapshot, now: now) }
+    private var exactTime: String { glanceResetExactTime(snapshot.resetAt, now: now) }
+
+    /// Legacy label kept for narrow surfaces that still say "At Cap" alone.
+    static var label: String { "At Cap" }
+
+    var body: some View {
+        VStack(alignment: .center, spacing: 1) {
+            Text(summary)
+                .font(.system(size: spansFullMeterRow ? 12 : 11, weight: .semibold))
+                .foregroundStyle(Theme.ink)
+                .lineLimit(2)
+                .minimumScaleFactor(0.8)
+                .help(glanceResetHelp(snapshot.resetAt, now: now) ?? "")
+            if !exactTime.isEmpty {
+                Text(exactTime)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(Theme.ink.opacity(0.55))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+        }
+        .frame(width: spansFullMeterRow ? Metrics.glanceMetersWidth : Metrics.glanceMeterWidth,
+               alignment: .center)
+        .multilineTextAlignment(.center)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(glanceAtCapCadenceLabel(snapshot) + " cap")
+        .accessibilityValue(spokenValue)
+    }
+
+    private var spokenValue: String { spokenDescription }
+
+    /// What VoiceOver reads: the cap, then when it lifts.  Public so the row
+    /// can speak the same words its own collapsed view shows.
+    ///
+    /// The countdown is the shared one, so the spoken value, the collapsed
+    /// view and the phone companion quote the same figure.  The old helpers
+    /// put a second and a third wording on one cap:  the spoken value carried
+    /// every unit ("4d 2h 42m") while the view and the phone carried the two
+    /// largest ("4d 2h"), and once the reset had passed the spoken value told
+    /// the owner the cap "resets in due".  The full value is still one hover
+    /// away, in the help text.
+    var spokenDescription: String {
+        let countdown = QuotaWindowVocabulary.resetCountdown(snapshot.resetAt, now: now)
+        guard !countdown.isEmpty, countdown != "due" else {
+            return "\(glanceAtCapCadenceLabel(snapshot)) cap, quota exhausted"
+        }
+        var parts = ["\(glanceAtCapCadenceLabel(snapshot)) cap, resets in \(countdown)"]
+        if !exactTime.isEmpty { parts.append("on \(exactTime)") }
+        return parts.joined(separator: ", ")
+    }
+}
+
 /// One caption, one bar, one percentage, and one reset countdown.
 struct GlanceMeter: View {
     let snapshot: QuotaWindowSnapshot
@@ -1307,7 +1685,39 @@ struct GlanceMeter: View {
 
     private var percent: Double? { snapshot.remainingPercent }
     private var tint: Color { quotaStatusColor(for: snapshot, sourceFailed: false) }
-    private var countdown: String { glanceResetCountdown(snapshot.resetAt, now: now) }
+    /// The slot a reset countdown would occupy.
+    ///
+    /// Muse Assist's extra-token meter has no reset to count down to, and
+    /// spelling "Extra Usage" there made the row wider than every other row and
+    /// read as a broken column (owner, 2026-10-10).  The owner's word is a bold
+    /// lowercase "extra", which is the same width as any other caption and says
+    /// what the meter is; the full explanation stays in the tooltip and the
+    /// spoken value, so nothing is actually lost.
+    private var countdown: String {
+        // The "extra" label is never displaced by a countdown.  The slot
+        // displays the reset countdown rather than an "Updated h:mm" timestamp
+        // which truncates and obscures the reset time (owner 2026-10-17).
+        if isMuseAssistExtra(snapshot) {
+            return "extra"
+        }
+        return glanceResetCountdown(snapshot.resetAt, now: now)
+    }
+
+    /// The tooltip for a stale meter that has no reset to count down to.
+    ///
+    /// The countdown slot is empty then, so its own tooltip (which carries the
+    /// "updated h:mm" staleness) has nothing to hang on; the bar carries it
+    /// instead, and fresh meters keep an empty tooltip.  Muse Assist and Muse Code
+    /// never display "Updated..." captions (owner 2026-10-17, 2026-10-18).
+    private var staleBarHelp: String {
+        guard countdown.isEmpty else { return "" }
+        return glanceResetHelp(nil, now: now, observedAt: snapshot.observedAt, isFresh: snapshot.isFresh) ?? ""
+    }
+
+    /// The extra meter is a bold lowercase word rather than a countdown, and it
+    /// is a label rather than a time, so it takes the caption's ink rather than
+    /// the dimmed countdown grey.
+    private var isExtraLabel: Bool { isMuseAssistExtra(snapshot) }
     private var metrics: QuotaBarMetrics { QuotaBarMetrics(snapshot: snapshot, now: now) }
 
     var body: some View {
@@ -1327,9 +1737,10 @@ struct GlanceMeter: View {
             // marker for how far through the period we are.  This is the one
             // place the status colour appears.
             QuotaUsageBar(metrics: metrics, height: Metrics.glanceMeterBarHeight,
-                          dimmed: quotaBarIsDimmed(for: snapshot, sourceFailed: false),
+                          dimmed: false,
                           markerHeight: Metrics.glanceMeterMarkerHeight)
                 .frame(width: Metrics.glanceMeterBarWidth, height: Metrics.glanceMeterBarHeight)
+                .help(staleBarHelp)
             Text(percent.map { "\(Int($0.rounded()))%" } ?? "—")
                 .font(.system(size: 11, weight: .medium).monospacedDigit())
                 .foregroundStyle(Theme.ink)
@@ -1348,11 +1759,22 @@ struct GlanceMeter: View {
                 .frame(width: Metrics.glanceMeterPercentWidth, alignment: .trailing)
             if !countdown.isEmpty {
                 Text(countdown)
-                    .font(.system(size: 10, weight: .medium).monospacedDigit())
-                    .foregroundStyle(Theme.ink.opacity(0.75))
+                    .font(isExtraLabel
+                          ? .system(size: 10, weight: .bold)
+                          : .system(size: 10, weight: .medium).monospacedDigit())
+                    // "As dark as the %", which is `Theme.ink` at full strength.
+                    // The countdown's 75% grey is right for a time that is
+                    // secondary information and wrong for a label standing in
+                    // for one (owner, 2026-10-10).
+                    .foregroundStyle(isExtraLabel ? Theme.ink : Theme.ink.opacity(0.75))
                     .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                    // Centred in its own column: the owner asked for the
+                    // days/hours/minutes column to be centred, and a
+                    // variable-width value cannot be centred in a trailing
+                    // frame.
                     .frame(width: Metrics.glanceMeterCountdownWidth, alignment: .center)
-                    .help(glanceResetHelp(snapshot.resetAt, now: now) ?? "")
+                    .help(isExtraLabel ? "Extra token usage" : (glanceResetHelp(snapshot.resetAt, now: now, observedAt: snapshot.observedAt, isFresh: snapshot.isFresh) ?? ""))
             } else {
                 Color.clear
                     .frame(width: Metrics.glanceMeterCountdownWidth, height: 1)
@@ -1366,10 +1788,22 @@ struct GlanceMeter: View {
 
     private var spokenValue: String {
         let reading = metrics.spokenSummary
-        if !countdown.isEmpty {
-            return "\(reading), resets in \(glanceResetFullCountdown(snapshot.resetAt, now: now))"
+        if isMuseAssistExtra(snapshot) {
+            return "\(reading), extra usage"
         }
-        return reading
+        var parts: [String] = [reading]
+        if !countdown.isEmpty {
+            parts.append("resets in \(glanceResetFullCountdown(snapshot.resetAt, now: now))")
+        }
+        // The same cue the phone and the widget show, so one reading says the
+        // same thing on every surface.
+        if let cue = QuotaStalenessRule.cue(observedAt: snapshot.observedAt,
+                                            resetAt: snapshot.resetAt,
+                                            now: now,
+                                            isAtCap: snapshot.isAtCap) {
+            parts.append(cue)
+        }
+        return parts.joined(separator: ", ")
     }
 }
 
@@ -1398,6 +1832,11 @@ struct GlanceMeterColumns: View {
     /// (Grok Bot's weekly, in the first column) still wants.
     var longGap: String? = nil
     var pacingHighlights: Bool = false
+    /// The exhausted window, when this line's plan is at its cap.  Owner
+    /// 2026-10-11: at cap the line drops its bars and says so, because a bar
+    /// labelled 100% next to an unusable plan reads as the opposite of the
+    /// truth.
+    var atCap: QuotaWindowSnapshot? = nil
 
     var body: some View {
         columns
@@ -1411,7 +1850,22 @@ struct GlanceMeterColumns: View {
 
     @ViewBuilder
     private var columns: some View {
-        if short != nil || long != nil {
+        if let atCap, let extra = glanceUsableMuseExtra([short, long].compactMap { $0 }) {
+            HStack(spacing: Metrics.glanceMeterGroupGap) {
+                VStack(spacing: 1) {
+                    Text("Using extra balance")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text(glanceAtCapSummary(atCap, now: now))
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                }
+                .multilineTextAlignment(.center)
+                .frame(width: Metrics.glanceMeterWidth)
+                column(extra)
+            }
+        } else if let atCap {
+            GlanceAtCap(snapshot: atCap, now: now, spansFullMeterRow: true)
+        } else if short != nil || long != nil {
             HStack(spacing: 0) {
                 column(short)
                 Spacer().frame(width: Metrics.glanceMeterGroupGap)
@@ -1488,6 +1942,8 @@ func glanceExpandedLines(for row: DisplaySection, now: Date) -> [GlanceMeterLine
     // An empty duplicate is no more an extra line than it is a second meter.
     let drawable = glanceDrawableWindows(row.section.windows.filter {
         !$0.window.isSupplementaryVideoQuota && !row.isMasked($0)
+            && !QuotaCapRule.isMoneyMeter(
+                cadenceToken: $0.window.window, quotaUnit: $0.window.quotaUnit)
     })
     for snapshot in drawable where !shown.contains(snapshot.window.id) {
         if let known = holders[key(snapshot)],
@@ -1501,8 +1957,16 @@ func glanceExpandedLines(for row: DisplaySection, now: Date) -> [GlanceMeterLine
     var grouped: [String: [QuotaWindowSnapshot]] = [:]
     for snapshot in rest {
         let label = glanceLineLabel(snapshot)
-        if grouped[label] == nil { order.append(label) }
-        grouped[label, default: []].append(snapshot)
+        let key: String
+        if snapshot.window.canonicalProviderKey == "openai", snapshot.window.isSubModelLimit {
+            let parts = snapshot.window.id.components(separatedBy: ":")
+            key = parts.last == "primary" || parts.last == "secondary"
+                ? parts.dropLast().joined(separator: ":") : snapshot.window.id
+        } else {
+            key = label
+        }
+        if grouped[key] == nil { order.append(key) }
+        grouped[key, default: []].append(snapshot)
     }
 
     return order.flatMap { label -> [GlanceMeterLine] in
@@ -1511,7 +1975,8 @@ func glanceExpandedLines(for row: DisplaySection, now: Date) -> [GlanceMeterLine
             let right = glanceWindowLength(rhs.element, now: now)
             return left == right ? lhs.offset < rhs.offset : left < right
         }.map(\.element)
-        return glanceMeterLines(label: label, windows: windows, now: now)
+        let displayLabel = windows.first.map(glanceLineLabel) ?? label
+        return glanceMeterLines(label: displayLabel, windows: windows, now: now)
     }
 }
 
@@ -1562,22 +2027,18 @@ private func glanceMeterLines(label: String, windows: [QuotaWindowSnapshot], now
 /// ("7d window (Sonnet)" reads "Sonnet"), or its pool.  A window that names
 /// only its cadence covers the whole subscription, so it reads "Overall".
 func glanceLineLabel(_ snapshot: QuotaWindowSnapshot) -> String {
-    let window = snapshot.window
-    if let model = window.modelId?.trimmingCharacters(in: .whitespacesAndNewlines), !model.isEmpty {
-        return glanceModelName(model)
+    if snapshot.window.canonicalProviderKey == "openai", snapshot.window.isSubModelLimit {
+        return snapshot.window.label.components(separatedBy: " · ").first ?? snapshot.window.label
     }
-    let label = AntigravityDisplay.windowLabel(window.label).trimmingCharacters(in: .whitespacesAndNewlines)
-    if let open = label.firstIndex(of: "("), let close = label.lastIndex(of: ")"), open < close {
-        let inner = label[label.index(after: open)..<close].trimmingCharacters(in: .whitespacesAndNewlines)
-        let head = label[..<open].trimmingCharacters(in: .whitespacesAndNewlines)
-        let innerIsCadence = inner.lowercased().contains("window") || glanceDurationSeconds(inner.lowercased()) != nil
-        if !inner.isEmpty, !innerIsCadence { return glanceModelName(inner) }
-        if !head.isEmpty, !head.lowercased().hasSuffix("window") { return glanceModelName(head) }
-    }
-    if let separator = label.range(of: " · ") {
-        return String(label[..<separator.lowerBound])
-    }
-    return label.isEmpty || label.lowercased().hasSuffix("window") ? "Overall" : label
+    let cadence = QuotaWindowVocabulary.standardCadence(
+        windowToken: snapshot.window.window,
+        label: snapshot.window.label,
+        resetAt: snapshot.resetAt,
+        periodStart: snapshot.window.periodStartDate,
+        monthlyHint: glanceIsMonthly(snapshot)
+    )
+    if cadence == QuotaWindowVocabulary.otherLimit { return QuotaWindowVocabulary.otherLimit }
+    return cadence
 }
 
 /// A model or family name as a person reads it: a single lower-case word
@@ -1591,16 +2052,10 @@ private func glanceModelName(_ name: String) -> String {
 /// How long a window's period is, for putting a group's shorter cadence in the
 /// first column.  Unknown lengths sort last.
 private func glanceWindowLength(_ snapshot: QuotaWindowSnapshot, now: Date) -> TimeInterval {
-    let token = (snapshot.window.window ?? "")
-        .lowercased()
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-    if let seconds = glanceDurationSeconds(token) { return seconds }
-    if glanceIsMonthly(snapshot) { return 30 * 86_400 }
-    switch glanceMeterCaption(snapshot) {
-    case "5h": return 5 * 3_600
-    case "24h": return 86_400
-    case "7d": return 7 * 86_400
-    default: break
+    switch glanceWindowPeriod(snapshot) {
+    case .fixed(let seconds): return seconds
+    case .calendarMonths: return 30 * 86_400
+    case nil: break
     }
     if let reset = snapshot.resetAt, reset > now { return reset.timeIntervalSince(now) }
     return .greatestFiniteMagnitude
@@ -1644,6 +2099,15 @@ struct GlanceRow: View {
     var isExpanded: Bool = false
     var hasAnomaly: Bool = false
     var pacingHighlights: Bool = false
+    /// Owner 2026-10-10: when a window is projected to run out before its next
+    /// reset, the platform name and its subtitle go italic and grey.  Passed in
+    /// rather than looked up so the row stays a plain view.
+    var isAtRisk: Bool = false
+
+    /// The owner's per-provider Settings (plan name, cost, renewal, custom
+    /// subtitle).  Lets the row show the plan/cost/renewal detail line even
+    /// when a custom subtitle is set — the two never swallow each other here.
+    var customInfo: PlatformCustomInfo? = nil
     /// Tap handler for the row's body — opening or closing the expansion.
     /// The bell is a sibling of the tappable body, so a tap on the bell never
     /// expands a row.
@@ -1655,11 +2119,22 @@ struct GlanceRow: View {
     /// The windows the row's own meters leave out, as extra lines of meters.
     /// A row showing an issue instead of meters has nothing to open.
     private var extraLines: [GlanceMeterLine] {
-        issue == nil ? glanceExpandedLines(for: row, now: now) : []
+        guard issue == nil, !row.isAtCap else { return [] }
+        return glanceExpandedLines(for: row, now: now)
+    }
+
+    private var platformNameDimmed: Bool {
+        // When Muse Assist (or any service) is at its subscription cap but is
+        // actively using extra balance, it is working fine and should not be
+        // greyed out or in italics (owner 2026-10-17).
+        if row.isAtCap && glanceUsableMuseExtra(row.section.windows) != nil {
+            return false
+        }
+        return isAtRisk || row.isAtCap
     }
 
     private var canExpand: Bool {
-        allowsExpansion && !extraLines.isEmpty
+        allowsExpansion && (!extraLines.isEmpty || (origin == .local && !section.providerDetailRows.isEmpty))
     }
 
     /// The window the row speaks for: the one closest to its cap, ignoring any
@@ -1682,6 +2157,13 @@ struct GlanceRow: View {
         glanceRowStatusText(issue: issue, hasWindows: !section.windows.isEmpty)
     }
 
+    /// The plan/cost/renewal detail line for this row, shown under the provider
+    /// name whenever the owner enabled "Display Plan, Cost and Renewal" —
+    /// regardless of any custom subtitle, which the card keeps showing.
+    private var planDetail: String? {
+        section.planCostRenewalDetail(customInfo: customInfo)
+    }
+
     /// The long column's explanation when this fleet row has no weekly meter.
     private var weeklyGap: String? {
         fleetWeeklyGap(for: row, origin: origin, now: now)
@@ -1694,6 +2176,8 @@ struct GlanceRow: View {
         let parts = [source, observed].compactMap { $0 }.filter { !$0.isEmpty }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -1713,7 +2197,7 @@ struct GlanceRow: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .animation(.easeInOut(duration: 0.18), value: isExpanded)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: isExpanded)
     }
 
     /// The logo and the name.  The row's tooltip belongs here (and to the
@@ -1735,6 +2219,10 @@ struct GlanceRow: View {
                 HStack(spacing: 3) {
                     Text(row.poolTitle == nil ? row.title : row.platformTitle)
                         .font(.system(size: 13, weight: .medium))
+                        // Italic and dimmed while the row is at risk or already
+                        // capped, so the eye reads the cap line first.
+                        .italic(platformNameDimmed)
+                        .foregroundStyle(platformNameDimmed ? Theme.ink.opacity(0.45) : Theme.ink)
                         .lineLimit(1)
                         .truncationMode(.tail)
                     if hasAnomaly {
@@ -1744,10 +2232,11 @@ struct GlanceRow: View {
                             .help("Active runaway usage anomaly detected")
                     }
                 }
-                if let subtitle = row.poolTitle {
+                if let subtitle = row.poolTitle ?? section.displaySubtitle(customInfo: customInfo) {
                     Text(subtitle)
                         .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
+                        .italic(platformNameDimmed)
+                        .foregroundStyle(platformNameDimmed ? Theme.ink.opacity(0.40) : .secondary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.85)
                         .truncationMode(.tail)
@@ -1759,18 +2248,39 @@ struct GlanceRow: View {
     }
 
     /// The logo, the name, the two meters and the chevron: the part a tap
-    /// expands, and the part VoiceOver reads as one element.
+    /// expands, and the part VoiceOver reads as one element.  Expandable
+    /// rows are real Buttons so Full Keyboard Access and VoiceOver can
+    /// operate them; a bare tap gesture is invisible to both (Slice 4,
+    /// FIX-A11Y-KEYBOARD).  Rows that cannot expand stay plain elements.
+    @ViewBuilder
     private var rowBody: some View {
+        if canExpand {
+            Button { onTap?() } label: { rowContent }
+                .buttonStyle(.plain)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(row.title)
+                .accessibilityValue(spokenValue)
+                .accessibilityHint(isExpanded ? "Double-tap to collapse." : "Double-tap to expand.")
+        } else {
+            rowContent
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(row.title)
+                .accessibilityValue(spokenValue)
+        }
+    }
+
+    private var rowContent: some View {
         HStack(spacing: 0) {
             nameBlock
             Spacer().frame(width: Metrics.glanceColumnGap)
-            if percent != nil {
+            if percent != nil || row.isAtCap {
                 // Both cadences, always.  The 4-5hr window and the
                 // weekly/monthly window are the two numbers an owner
                 // actually routes on, and hiding the second one behind a
                 // click made the compact row say half the truth.
                 GlanceMeterColumns(short: meters.short, long: meters.long, now: now,
-                                   longGap: weeklyGap, pacingHighlights: pacingHighlights)
+                                   longGap: weeklyGap, pacingHighlights: pacingHighlights,
+                                   atCap: row.atCapWindow)
             } else {
                 // Where a single meter's bar would start (Cursor's, say),
                 // left-aligned, so a row without a reading still lines up
@@ -1805,15 +2315,6 @@ struct GlanceRow: View {
             }
         }
         .contentShape(Rectangle())
-        .onTapGesture {
-            if canExpand {
-                onTap?()
-            }
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(row.title)
-        .accessibilityValue(spokenValue)
-        .accessibilityHint(canExpand ? (isExpanded ? "Double-tap to collapse." : "Double-tap to expand.") : "")
     }
 
     /// The row's tooltip: the issue when there is one, and for a fleet row
@@ -1831,7 +2332,11 @@ struct GlanceRow: View {
             Image(systemName: isAlarmEnabled ? "bell.fill" : "bell")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(isAlarmEnabled ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(Theme.faint))
-                .frame(width: Metrics.glanceAlarmBellWidth, height: Metrics.glanceAlarmBellWidth)
+                // 28pt hit area in the 16pt slot: the row's width budget
+                // is pinned by Metrics.glanceRowIntrinsicWidth, so the
+                // extra area is centred overlap, not layout (FIX-HIT-TARGET).
+                .frame(width: 28, height: 28)
+                .padding(.horizontal, (Metrics.glanceAlarmBellWidth - 28) / 2)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -1856,15 +2361,17 @@ struct GlanceRow: View {
                         Spacer().frame(width: Metrics.glanceAlarmBellWidth + Metrics.glanceLogoGap)
                     }
                     Spacer().frame(width: Metrics.glanceLogoWidth + Metrics.glanceLogoGap)
-                    Text(line.label)
+                    Text(lineTitle(line))
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
                         .frame(width: Metrics.glanceRowTitleWidth, alignment: .leading)
+                        .help(lineHelp(line))
                     Spacer().frame(width: Metrics.glanceColumnGap)
                     GlanceMeterColumns(short: line.short, long: line.long, now: now,
-                                       pacingHighlights: pacingHighlights)
+                                       pacingHighlights: pacingHighlights,
+                                       atCap: row.atCapWindow)
                     Spacer(minLength: 0)
                 }
                 .padding(.horizontal, Metrics.glanceGutter)
@@ -1873,8 +2380,13 @@ struct GlanceRow: View {
                 // An explicit value, as the row has: a label alone replaces
                 // the combined children's, which would drop the "1d" and "7d".
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel(line.label)
+                .accessibilityLabel(lineAccessibilityTitle(line))
                 .accessibilityValue(glanceMetersSpeech([line.short, line.long], now: now))
+            }
+            if origin == .local && !section.providerDetailRows.isEmpty {
+                ProviderDetailsView(rows: section.providerDetailRows)
+                    .padding(.horizontal, Metrics.glanceGutter)
+                    .padding(.vertical, 6)
             }
         }
         .padding(.bottom, 4)
@@ -1882,22 +2394,60 @@ struct GlanceRow: View {
         .background(Theme.surface.opacity(0.55))
     }
 
+    private func lineTitle(_ line: GlanceMeterLine) -> String {
+        let windows = [line.short, line.long].compactMap { $0 }
+        if let subModel = windows.first(where: { $0.window.isSubModelLimit }) {
+            if subModel.window.canonicalProviderKey == "openai" { return line.label }
+            if subModel.window.canonicalProviderKey == "google-antigravity" {
+                // "Argon", the way the Claude row names "Fable":  the model,
+                // not the pool it belongs to.
+                return "Argon"
+            }
+            if let model = subModel.window.modelId, !model.isEmpty {
+                return model.capitalized
+            }
+            if subModel.window.label.localizedCaseInsensitiveContains("fable") {
+                return "Fable"
+            }
+        }
+        return line.label
+    }
+
+    private func lineHelp(_ line: GlanceMeterLine) -> String {
+        let windows = [line.short, line.long].compactMap { $0 }
+        if let first = windows.first {
+            return first.window.label
+        }
+        return line.label
+    }
+
+    private func lineAccessibilityTitle(_ line: GlanceMeterLine) -> String {
+        let title = lineTitle(line)
+        return title == line.label ? line.label : "\(title), \(line.label)"
+    }
+
     /// Speaks both cadences, not just the row's headline number, because that
     /// is what the row now shows on the line.  A screen reader user gets the
     /// same two numbers an owner reads at a glance.
     private var spokenValue: String {
         var parts: [String] = []
-        let meterSpeech = glanceMetersSpeech([meters.short, meters.long], now: now)
-        if meterSpeech.isEmpty {
-            parts.append(percent == nil
-                         ? statusText
-                         : QuotaBarMetrics(remainingPercent: percent, elapsedFraction: nil).spokenSummary)
+        // A capped row shows no meters, so speaking them would describe
+        // something the row no longer displays.  Say the cap instead.
+        if let atCap = percent == nil ? nil : row.atCapWindow {
+            parts.append(GlanceAtCap(snapshot: atCap, now: now).spokenDescription)
         } else {
-            // Each meter says its own reset, so the row does not say it again.
-            parts.append(meterSpeech)
+            let meterSpeech = glanceMetersSpeech([meters.short, meters.long], now: now)
+            if meterSpeech.isEmpty {
+                parts.append(percent == nil
+                             ? statusText
+                             : QuotaBarMetrics(remainingPercent: percent, elapsedFraction: nil).spokenSummary)
+            } else {
+                // Each meter says its own reset, so the row does not say it again.
+                parts.append(meterSpeech)
+            }
         }
         switch origin {
-        case .fleet: parts.append("from the fleet")
+        case .fleet: parts.append("from another device")
         case .local: parts.append(isLive ? "live" : "last report")
         }
         if let issue { parts.append(issue) }
@@ -1923,10 +2473,10 @@ struct ConsentRow: View {
                 Text(message)
                     .font(.system(size: 12, weight: .medium))
                     .fixedSize(horizontal: false, vertical: true)
-                Button("Open Settings", action: action)
+                Button("Open Dashboard", action: action)
                     .controlSize(.small)
-                    .help("Open Settings")
-                    .accessibilityLabel("Open Settings")
+                    .help("Open Dashboard")
+                    .accessibilityLabel("Open Dashboard")
             }
             Spacer(minLength: 4)
         }
@@ -1951,9 +2501,9 @@ struct FleetSetupRow: View {
                     .font(.system(size: 16))
                     .foregroundStyle(Theme.fleet)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Set Up Fleet Sync")
+                    Text("Share With Other Devices")
                         .font(.system(size: 13, weight: .medium))
-                    Text("Share this Mac's quota, or show your other machines here.")
+                    Text("Share this Mac's readings, or show your other devices here.")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
@@ -1973,8 +2523,8 @@ struct FleetSetupRow: View {
         }
         .buttonStyle(.plain)
         .contentShape(Rectangle())
-        .help("Set Up Fleet Sync")
-        .accessibilityLabel("Set Up Fleet Sync")
+        .help("Share With Other Devices")
+        .accessibilityLabel("Share With Other Devices")
     }
 }
 
@@ -2002,6 +2552,28 @@ func glanceResetCountdown(_ reset: Date?, now: Date) -> String {
     return glanceCountdownUnits(seconds: seconds).prefix(2).joined(separator: " ")
 }
 
+/// Reset countdown in a single unit rounded up: "2h", "59m", "3d", "<1m", "due".
+///
+/// When the PiP HUD narrows to where two time units cannot fit, it degrades to
+/// one unit rounded up rather than dropping the countdown entirely:
+/// 1.2h (1h 12m) -> 2h, 59m -> 59m, 2d 2h -> 3d.
+func glanceResetCompactCountdown(_ reset: Date?, now: Date) -> String {
+    guard let reset else { return "" }
+    let seconds = Int(reset.timeIntervalSince(now).rounded())
+    guard seconds > 0 else { return "due" }
+    guard seconds >= 60 else { return "<1m" }
+    let minutes = seconds / 60
+    if minutes < 60 {
+        return "\(minutes)m"
+    } else if minutes < 1_440 {
+        let hours = (minutes + 59) / 60
+        return "\(hours)h"
+    } else {
+        let days = (minutes + 1_439) / 1_440
+        return "\(days)d"
+    }
+}
+
 /// The whole countdown, down to the minute, with zero units skipped the same
 /// way: "4d 2h 42m", "2h 42m", "2h", "45m".
 func glanceResetFullCountdown(_ reset: Date?, now: Date) -> String {
@@ -2012,13 +2584,30 @@ func glanceResetFullCountdown(_ reset: Date?, now: Date) -> String {
     return glanceCountdownUnits(seconds: seconds).joined(separator: " ")
 }
 
-/// The countdown's tooltip: the full value and the reset's own date and time,
-/// "Resets in 4d 2h 42m, on Fri, Oct 3, 7:09 PM".  Nil when there is no reset.
-func glanceResetHelp(_ reset: Date?, now: Date) -> String? {
-    guard let reset else { return nil }
+/// The countdown's tooltip: the full value, the reset's own date and time, and
+/// optional staleness info when not fresh:
+/// "Resets in 4d 2h 42m, on Fri, Oct 3, 7:09 PM · updated 6:15 PM".  Nil when there is no reset or update.
+func glanceResetHelp(_ reset: Date?, now: Date, observedAt: Date? = nil, isFresh: Bool = true) -> String? {
+    guard let reset else {
+        if let observedAt, !isFresh {
+            if let cue = QuotaStalenessRule.cue(observedAt: observedAt, resetAt: nil, now: now) {
+                return cue
+            }
+            return "Updated \(observedAt.formatted(date: .omitted, time: .shortened))"
+        }
+        return nil
+    }
     let when = reset.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().hour().minute())
-    guard reset > now else { return "Reset was due \(when)" }
-    return "Resets in \(glanceResetFullCountdown(reset, now: now)), on \(when)"
+    let prefix = reset > now
+        ? "Resets in \(glanceResetFullCountdown(reset, now: now)), on \(when)"
+        : "Reset was due \(when)"
+    if let observedAt, !isFresh {
+        if let cue = QuotaStalenessRule.cue(observedAt: observedAt, resetAt: reset, now: now) {
+            return "\(prefix) · \(cue)"
+        }
+        return "\(prefix) · updated \(observedAt.formatted(date: .omitted, time: .shortened))"
+    }
+    return prefix
 }
 
 /// Dedicated prominent button style matching the runaway notice banner in height (28pt)
@@ -2026,13 +2615,23 @@ func glanceResetHelp(_ reset: Date?, now: Date) -> String? {
 struct GlanceFooterProminentButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.colorScheme) private var colorScheme
-    /// Observed so Open CodeCaps follows the accent live; see `accentColor`.
+    /// Observed so Dashboard follows the accent live; see `accentColor`.
     @ObservedObject var model: MonitorModel
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 12, weight: .medium))
-            .foregroundStyle(colorScheme == .dark ? Color.black.opacity(0.92) : Color.white)
+            // The ink follows the *accent*, not the appearance.
+            //
+            // This read `colorScheme`, which is only correct while every accent
+            // is dark enough to carry white.  The four light accents (owner
+            // request 2026-10-06) broke that assumption: in Light appearance a
+            // light accent got white text on a light fill, about 1.8:1.  The
+            // owner noticed one swatch reading as black text on the System
+            // control and white text on Dashboard (2026-10-09) -- AppKit
+            // derives a native control's label colour from its own fill, so only
+            // the hand-drawn surfaces were wrong.
+            .foregroundStyle(Theme.onAccent.opacity(colorScheme == .dark ? 0.92 : 1.0))
             .padding(.horizontal, 10)
             .frame(height: 28)
             .background(
@@ -2041,7 +2640,11 @@ struct GlanceFooterProminentButtonStyle: ButtonStyle {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 6)
-                    .strokeBorder(Color.white.opacity(colorScheme == .dark ? 0.25 : 0.15), lineWidth: 0.5)
+                    // The hairline sits half on the fill and half off it, so its
+                    // contrast has to move with the ink rather than being white
+                    // outright and white-at-15%.
+                    .strokeBorder(Theme.onAccent.opacity(colorScheme == .dark ? 0.25 : 0.15),
+                                  lineWidth: 0.5)
             )
             .contentShape(RoundedRectangle(cornerRadius: 6))
             .shadow(color: Color.black.opacity(configuration.isPressed ? 0.02 : 0.12), radius: 1, y: 1)

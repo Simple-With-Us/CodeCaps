@@ -167,7 +167,8 @@ final class PlaceholderWindowsTests: XCTestCase {
         // the meter exactly as a percentage does.
         let credits = QuotaWindow(id: "local-mac:grok-bot:credits", provider: "Grok Bot", providerKey: "grok-bot",
                                   label: "Grok Bot weekly", absoluteRemaining: 6_099, absoluteLimit: 40_000,
-                                  quotaUnit: "credits", remainingUnknown: true, occurredAt: "")
+                                  quotaUnit: "credits", remainingUnknown: true, occurredAt: ""
+        ).normalizedForExport()
         XCTAssertTrue(credits.hasReading)
         let all = merged([await dashboardUnreadable(), LocalQuotaResult(windows: [credits])])
         XCTAssertNotNil(all.issues["grok-bot"])

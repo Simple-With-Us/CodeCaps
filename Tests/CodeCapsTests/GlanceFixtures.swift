@@ -67,7 +67,20 @@ enum GlanceFixtures {
                    remaining: 62, resetIn: 17 * day + 4 * hour + 57 * 60),
             window("grok-weekly", provider: "xai", label: "Weekly credits", token: "weekly",
                    remaining: 71, resetIn: 2 * day + 3 * hour),
-        ] + grokBotWindows + miniMaxWindows(prefix: "")
+        ] + grokBotWindows + miniMaxWindows(prefix: "") + museWindows
+    }
+
+    static var museWindows: [QuotaWindow] {
+        [
+            window("muse-assist:weekly", provider: "muse-assist", label: "weekly", token: "7d",
+                   remaining: 0, resetIn: day + 2 * hour),
+            window("muse-assist:extra", provider: "muse-assist", label: "Extra tokens", token: nil,
+                   remaining: 72, resetIn: nil),
+            window("muse-code:5h", provider: "muse-code", label: "5-hour window", token: "5h",
+                   remaining: 99, resetIn: 2 * hour + 27 * 60),
+            window("muse-code:weekly", provider: "muse-code", label: "weekly", token: "7d",
+                   remaining: 46, resetIn: day + 22 * hour),
+        ]
     }
 
     /// Grok Bot as the owner's Mac reports it: two readers speak for one weekly
@@ -86,11 +99,11 @@ enum GlanceFixtures {
         ]
     }
 
-    /// MiniMax as its reader reports it: a "general" 4h and weekly pair, which
+    /// MiniMax as its reader reports it: a "general" 5h and weekly pair, which
     /// the row meters, and a "video" daily and weekly pair, which it does not.
     static func miniMaxWindows(prefix: String) -> [QuotaWindow] {
         [
-            window("\(prefix)general:interval", provider: "minimax", label: "general (4h window)", token: "4h",
+            window("\(prefix)general:interval", provider: "minimax", label: "general (5h window)", token: "5h",
                    remaining: 92, resetIn: 3 * hour + 10 * 60, model: "general"),
             window("\(prefix)general:weekly", provider: "minimax", label: "general (1w window)", token: "1w",
                    remaining: 81, resetIn: 4 * day + 2 * hour + 42 * 60, model: "general"),
@@ -154,7 +167,7 @@ enum GlanceFixtures {
         if let data = try? JSONEncoder().encode(alertHistory) {
             defaults.set(data, forKey: "runawayAlertHistory")
         }
-        let model = MonitorModel(defaults: defaults, burnRateHistoryURL: historyURL)
+        let model = MonitorModel(defaults: defaults, burnRateHistoryURL: historyURL, presentsPipWindows: false)
         // A signed-out provider reports no windows and the issue its reader
         // gives, which is what the row turns into "not signed in".
         let windows = (localWindows + extraWindows).filter { !signedOut.contains($0.providerKey ?? $0.provider) }

@@ -1,5 +1,6 @@
 import SwiftUI
 import WidgetKit
+import AppIntents
 
 #if canImport(UIKit)
 import UIKit
@@ -61,32 +62,192 @@ struct CodeCapsMarkView: View {
 /// 3h 12m".  Both halves are optional — a window with no reset shows the token
 /// alone, and one with an unknown cadence shows the reset alone.
 struct WindowCaptionRow: View {
-    let token: String
-    let resetCaption: String
+    /// What the caption says.
+    ///
+    /// It is a value and not three arguments,  because the qualifier used to be an
+    /// argument with a default:  a surface that rendered a window's caption could
+    /// leave it out,  and the omission showed up only in a review.  A caption now
+    /// carries its qualifier,  and one built from a window carries that window's.
+    let caption: QuotaWindowCaption
     var font: CGFloat = 9
 
     var body: some View {
         HStack(spacing: 4) {
-            if !token.isEmpty {
-                Text(token)
-                    .font(.system(size: font, weight: .semibold, design: .rounded))
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
-                    .fixedSize()
+            if !caption.token.isEmpty || !caption.qualifier.isEmpty {
+                HStack(spacing: 3) {
+                    if !caption.token.isEmpty {
+                        Text(caption.token)
+                            .font(.system(size: font, weight: .semibold, design: .rounded))
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                            .fixedSize()
+                    }
+                    if !caption.qualifier.isEmpty {
+                        Text(caption.qualifier)
+                            .font(.system(size: font, weight: .medium))
+                            .foregroundColor(.secondary.opacity(0.8))
+                            .lineLimit(1)
+                            .fixedSize()
+                    }
+                }
             }
             Spacer(minLength: 0)
-            if !resetCaption.isEmpty {
-                Text(resetCaption)
-                    .font(.system(size: font, weight: .medium, design: .monospaced))
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
+            if !caption.resetCaption.isEmpty {
+                // A narrow row keeps the countdown and drops the words:
+                // "Resets in 24d 15h" truncating to "Resets in..." loses the
+                // only part the owner can act on, so the bare countdown is the
+                // fallback form.
+                ViewThatFits(in: .horizontal) {
+                    Text(caption.resetCaption)
+                    if !caption.compactResetCaption.isEmpty {
+                        Text(caption.compactResetCaption)
+                    }
+                }
+                .font(.system(size: font, weight: .medium, design: .monospaced))
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .truncationMode(.tail)
             }
         }
     }
 }
 
 // MARK: - Single Bar For A Plan
+
+/// What a plan at its cap shows instead of a bar.
+///
+/// Owner 2026-10-11: the same plan could show "100%" on its 5-hour window
+/// while its weekly allowance was spent, which reads as healthy on a plan that
+/// cannot be used.  So a capped row draws no bar and no percentage: it names
+/// the cap and counts down to the reset that lifts it.
+///
+/// The cadence token and the reset caption keep their usual places, so the
+/// caption line still says *which* window ran out and when it returns.
+struct PlanAtCapRow: View {
+    let platform: WidgetPlatformItem
+    let window: WidgetWindowItem
+    var showMark: Bool = true
+    var markSize: CGFloat = 14
+    var titleFont: CGFloat = 12
+    var captionFont: CGFloat = 9
+    var percentFont: CGFloat = 12
+
+    private var captionToken: String {
+        window.cadenceToken.isEmpty ? window.label : window.cadenceToken
+    }
+
+    /// The words, in Title Case like every other owner-facing string here.
+    static let label = "At Cap"
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 5) {
+                if showMark {
+                    ProviderMarkView(
+                        providerKey: platform.providerKey,
+                        itemId: platform.id,
+                        size: markSize
+                    )
+                }
+                Text(platform.title)
+                    .font(.system(size: titleFont, weight: .semibold))
+                    .lineLimit(1)
+                Spacer(minLength: 2)
+                Text(Self.label)
+                    .font(.system(size: percentFont, weight: .bold, design: .rounded))
+                    .foregroundColor(WidgetPresentation.statusColor(percent: 0, isMasked: false))
+                    // No wrap:  without a line limit the label wrapped one
+                    // letter per line when a long title squeezed the row
+                    // (QA focus-small pixel 2026-11-06).  The title, which
+                    // already truncates, yields instead.
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+
+            WindowCaptionRow(
+                caption: window.caption,
+                font: captionFont
+            )
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(platform.title): at cap. \(window.resetCaption())")
+    }
+}
+
+/// One meter in the Mac grammar: cadence token, flexible bar, and the
+/// percent and reset countdown trailing on the right — the same order the
+/// menu-bar dropdown and the PiP rows draw.  The metrics used to sit on a
+/// text line above a full-width bar, so the number was nowhere near the bar
+/// it belonged to (CC-213, owner 2026-11-07).
+struct WidgetMeterRow: View {
+    let window: WidgetWindowItem?
+    var fallbackPercent: Double? = nil
+    var fallbackCountdown: String = ""
+    var isMasked: Bool = false
+    let captionFont: CGFloat
+    let percentFont: CGFloat
+    let barHeight: CGFloat
+    var percentSlotWidth: CGFloat = 30
+    var countdownSlotWidth: CGFloat = 36
+    /// The small widget hides the days-and-hours countdown until the row is
+    /// tapped (owner 2026-11-09); every other surface keeps it on the row.
+    var showsCountdown: Bool = true
+    /// The small widget also hides the duration token (5h, 7d); it names the
+    /// windows in the tapped detail instead (owner 2026-11-09).
+    var showsCadenceToken: Bool = true
+
+    private var percent: Double? { window?.remainingPercent ?? fallbackPercent }
+
+    private var statusColor: Color {
+        window?.statusColor ?? WidgetPresentation.statusColor(percent: percent, isMasked: isMasked)
+    }
+
+    private var fraction: Double {
+        guard let pct = percent, !(window?.isMasked ?? isMasked) else { return 0.0 }
+        return max(0.0, min(1.0, pct / 100.0))
+    }
+
+    private var countdown: String { window?.countdown() ?? fallbackCountdown }
+
+    var body: some View {
+        HStack(spacing: 5) {
+            if showsCadenceToken {
+                Text(window?.cadenceToken ?? "")
+                    .font(.system(size: captionFont, weight: .semibold))
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+            if window?.isCountOnly != true {
+                MiniProgressBar(
+                    fraction: fraction,
+                    color: WidgetPresentation.quotaBarRemainingColor,
+                    elapsedFraction: window?.elapsedFraction(),
+                    hasReading: !(window?.isMasked ?? isMasked) && percent?.isFinite == true,
+                    height: barHeight
+                )
+                .frame(maxWidth: .infinity)
+            } else {
+                Color.clear.frame(height: barHeight)
+            }
+            Text(window?.displayPercent ?? WidgetPresentation.displayPercent(percent: percent, isMasked: isMasked))
+                .font(.system(size: percentFont, weight: .bold, design: .rounded).monospacedDigit())
+                .foregroundColor(statusColor)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .frame(minWidth: percentSlotWidth, alignment: .trailing)
+            if showsCountdown {
+                Text(countdown)
+                    .font(.system(size: max(6, captionFont - 0.5), weight: .medium, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                    .frame(minWidth: countdown.isEmpty ? 0 : countdownSlotWidth, alignment: .trailing)
+            }
+        }
+    }
+}
 
 /// One quota bar for a plan, with the caption row that names it.
 ///
@@ -104,6 +265,14 @@ struct PlanBarRow: View {
     var captionFont: CGFloat = 9
     var percentFont: CGFloat = 12
     var barHeight: CGFloat = 3.5
+    /// The Mac meter grammar (token, bar, percent, countdown on one line).
+    /// The small widget opted into the meter grammar too (owner 2026-11-08):
+    /// rendered at the smallest system-small width (141pt) with long labels,
+    /// three-digit percents and long countdowns, nothing truncates.
+    var usesMeterLayout: Bool = true
+    /// Forwarded to WidgetMeterRow; the small widget sets both false.
+    var showsCountdown: Bool = true
+    var showsCadenceToken: Bool = true
 
     /// The bar's own source, so the caption names the window it came from
     /// rather than the plan's aggregate.
@@ -127,7 +296,7 @@ struct PlanBarRow: View {
     }
 
     private var statusColor: Color {
-        WidgetPresentation.statusColor(percent: percent, isMasked: shown.window?.isMasked ?? platform.isMasked)
+        shown.window?.statusColor ?? WidgetPresentation.statusColor(percent: percent, isMasked: platform.isMasked)
     }
 
     private var fraction: Double {
@@ -136,7 +305,20 @@ struct PlanBarRow: View {
     }
 
     var body: some View {
-        if quotasPerProvider == .twoIfAvailable, let pair = platform.dualWindows() {
+        if let atCap = platform.atCapWindow(), platform.usableMuseExtra == nil {
+            // Owner 2026-10-11: a plan at its cap showed a bar labelled 100%
+            // beside a plan that could not be used.  The words go where the bar
+            // was, and the bar does not get drawn at all.
+            PlanAtCapRow(
+                platform: platform,
+                window: atCap,
+                showMark: showMark,
+                markSize: markSize,
+                titleFont: titleFont,
+                captionFont: captionFont,
+                percentFont: percentFont
+            )
+        } else if quotasPerProvider == .twoIfAvailable, let pair = platform.dualWindows() {
             PlanDualBarRow(
                 platform: platform,
                 window1: pair.window1,
@@ -148,6 +330,35 @@ struct PlanBarRow: View {
                 percentFont: percentFont,
                 barHeight: barHeight
             )
+        } else if usesMeterLayout {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 5) {
+                    if showMark {
+                        ProviderMarkView(
+                            providerKey: platform.providerKey,
+                            itemId: platform.id,
+                            size: markSize
+                        )
+                    }
+                    Text(platform.title)
+                        .font(.system(size: titleFont, weight: .semibold))
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+                WidgetMeterRow(
+                    window: shown.window,
+                    fallbackPercent: percent,
+                    fallbackCountdown: platform.countdown(),
+                    isMasked: platform.isMasked,
+                    captionFont: captionFont,
+                    percentFont: percentFont,
+                    barHeight: barHeight,
+                    showsCountdown: showsCountdown,
+                    showsCadenceToken: showsCadenceToken
+                )
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("\(platform.title): \(captionToken) \(shown.window?.displayPercent ?? WidgetPresentation.displayPercent(percent: percent, isMasked: platform.isMasked)), resets in \(captionReset)")
         } else {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 5) {
@@ -161,24 +372,26 @@ struct PlanBarRow: View {
                     Text(platform.title)
                         .font(.system(size: titleFont, weight: .semibold))
                         .lineLimit(1)
-                    Spacer(minLength: 2)
-                    Text(WidgetPresentation.displayPercent(percent: percent, isMasked: shown.window?.isMasked ?? platform.isMasked))
+                }
+                HStack(spacing: 8) {
+                    Text(captionToken).font(.system(size: captionFont, weight: .semibold))
+                    Text(shown.window?.displayPercent ?? WidgetPresentation.displayPercent(percent: percent, isMasked: platform.isMasked))
                         .font(.system(size: percentFont, weight: .bold, design: .rounded))
                         .foregroundColor(statusColor)
-                }
+                    Text({ let countdown = shown.window?.countdown() ?? platform.countdown(); return countdown.isEmpty ? "—" : countdown }())
+                        .font(.system(size: captionFont - 0.5)).foregroundStyle(.secondary)
+                }.lineLimit(1).minimumScaleFactor(0.8)
 
+                if shown.window?.isCountOnly != true {
                 MiniProgressBar(
                     fraction: fraction,
-                    color: statusColor,
+                    color: WidgetPresentation.quotaBarRemainingColor,
                     elapsedFraction: shown.window?.elapsedFraction(),
+                    hasReading: !(shown.window?.isMasked ?? platform.isMasked) && percent?.isFinite == true,
                     height: barHeight
                 )
+                }
 
-                WindowCaptionRow(
-                    token: captionToken,
-                    resetCaption: captionReset,
-                    font: captionFont
-                )
             }
         }
     }
@@ -211,78 +424,31 @@ struct PlanDualBarRow: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: columnSpacing) {
-                // Left Column header: Mark, title, and Window 1 percent
-                HStack(spacing: 5) {
-                    if showMark {
-                        ProviderMarkView(
-                            providerKey: platform.providerKey,
-                            itemId: platform.id,
-                            size: markSize
-                        )
-                    }
-                    Text(platform.title)
-                        .font(.system(size: titleFont, weight: .semibold))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
-                    Spacer(minLength: 2)
-                    Text(window1.displayPercent)
-                        .font(.system(size: percentFont, weight: .bold, design: .rounded))
-                        .foregroundColor(window1.statusColor)
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 5) {
+                if showMark {
+                    ProviderMarkView(providerKey: platform.providerKey, itemId: platform.id, size: markSize)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                // Right Column header: Window 2 cadence token or label, and Window 2 percent
-                HStack(spacing: 4) {
-                    Text(window2.cadenceToken.isEmpty ? window2.label : window2.cadenceToken)
-                        .font(.system(size: captionFont, weight: .semibold, design: .rounded))
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
-                    Spacer(minLength: 2)
-                    Text(window2.displayPercent)
-                        .font(.system(size: percentFont, weight: .bold, design: .rounded))
-                        .foregroundColor(window2.statusColor)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                Text(platform.title).font(.system(size: titleFont, weight: .semibold)).lineLimit(1)
             }
-
-            // Dual bars
             HStack(spacing: columnSpacing) {
-                MiniProgressBar(
-                    fraction: fraction1,
-                    color: window1.statusColor,
-                    elapsedFraction: window1.elapsedFraction(),
-                    height: barHeight
-                )
-                .frame(maxWidth: .infinity)
-
-                MiniProgressBar(
-                    fraction: fraction2,
-                    color: window2.statusColor,
-                    elapsedFraction: window2.elapsedFraction(),
-                    height: barHeight
-                )
-                .frame(maxWidth: .infinity)
-            }
-
-            // Dual captions
-            HStack(spacing: columnSpacing) {
-                WindowCaptionRow(
-                    token: window1.cadenceToken,
-                    resetCaption: window1.resetCaption(),
-                    font: captionFont
-                )
-                .frame(maxWidth: .infinity)
-
-                WindowCaptionRow(
-                    token: window2.cadenceToken,
-                    resetCaption: window2.resetCaption(),
-                    font: captionFont
-                )
-                .frame(maxWidth: .infinity)
+                allowance(window1, fraction: fraction1)
+                allowance(window2, fraction: fraction2)
             }
         }
+    }
+
+    private func allowance(_ window: WidgetWindowItem, fraction: Double) -> some View {
+        WidgetMeterRow(
+            window: window,
+            isMasked: window.isMasked,
+            captionFont: captionFont,
+            percentFont: percentFont,
+            barHeight: barHeight,
+            percentSlotWidth: 28,
+            countdownSlotWidth: 32
+        )
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -306,12 +472,28 @@ struct PlanGrid: View {
     var barHeight: CGFloat = 4
     var spacing: CGFloat = 8
     var horizontalSpacing: CGFloat = 12
+    var detailScope: String? = nil
 
     var body: some View {
         if columns <= 1 {
             VStack(spacing: spacing) {
                 ForEach(platforms) { platform in
-                    if quotasPerProvider == .twoIfAvailable, let pair = platform.dualWindows() {
+                    HStack(alignment: .top, spacing: 4) {
+                    Group {
+                    // Checked here too, not only inside `PlanBarRow`: this
+                    // branch builds `PlanDualBarRow` directly, so a capped plan
+                    // would otherwise keep both of its bars.
+                    if let atCap = platform.atCapWindow(), platform.usableMuseExtra == nil {
+                        PlanAtCapRow(
+                            platform: platform,
+                            window: atCap,
+                            showMark: true,
+                            markSize: markSize,
+                            titleFont: titleFont,
+                            captionFont: captionFont,
+                            percentFont: percentFont
+                        )
+                    } else if quotasPerProvider == .twoIfAvailable, let pair = platform.dualWindows() {
                         PlanDualBarRow(
                             platform: platform,
                             window1: pair.window1,
@@ -336,6 +518,15 @@ struct PlanGrid: View {
                             percentFont: percentFont,
                             barHeight: barHeight
                         )
+                    }
+                    }
+                    if let detailScope, platform.hasModelDetails {
+                        Button(intent: ShowWidgetPlanDetailIntent(planID: platform.id, overviewKey: detailScope)) {
+                            Image(systemName: "info.circle").font(.system(size: 11))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Details for \(platform.title)")
+                    }
                     }
                 }
             }
