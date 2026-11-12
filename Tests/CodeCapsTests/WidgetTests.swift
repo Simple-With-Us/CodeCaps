@@ -590,7 +590,7 @@ final class WidgetTests: XCTestCase {
         }
         let appGroupTier = provider[appGroupStart..<sandboxStart]
         XCTAssertTrue(
-            appGroupTier.contains(appGroupMarker),
+            appGroupTier.contains("AppGroupSnapshotReadPolicy.decision"),
             "the App Group tier must stay above the sandbox fallback"
         )
         XCTAssertFalse(
