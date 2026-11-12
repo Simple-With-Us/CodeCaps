@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 import sys
 import tempfile
@@ -285,6 +286,32 @@ class CommandPlanTests(unittest.TestCase):
 
 
 class ProjectAndContractTests(unittest.TestCase):
+    def test_snapshot_read_policy_is_in_every_companion_target(self):
+        # File presence alone misses a source attached to the wrong target.
+        pbx = (ROOT / "ios/CodeCapsCompanion/CodeCapsCompanion.xcodeproj/project.pbxproj").read_text()
+        objects = dict(re.findall(
+            r"^\t\t([A-F0-9]{24}) /\* [^\n]*? \*/ = \{(.*?)(?:^\t\t\};|\};$)",
+            pbx, re.MULTILINE | re.DOTALL,
+        ))
+        yml = COMPANION_YML.read_text()
+        for name in ("CodeCapsCompanion", "CodeCapsCompanionMac", "CodeCapsWidgets", "CodeCapsWidgetsMac"):
+            with self.subTest(target=name):
+                target = next(body for body in objects.values()
+                              if "isa = PBXNativeTarget;" in body
+                              and f"name = {name};" in body)
+                phase_ids = re.search(r"buildPhases = \((.*?)\);", target, re.DOTALL).group(1)
+                source_phase = next(objects[i] for i in re.findall(r"[A-F0-9]{24}", phase_ids)
+                                    if "isa = PBXSourcesBuildPhase;" in objects[i])
+                policy_build_ids = re.findall(
+                    r"([A-F0-9]{24}) /\* AppGroupSnapshotReadPolicy.swift in Sources \*/", source_phase)
+                self.assertEqual(len(policy_build_ids), 1)
+                ref = re.search(r"fileRef = ([A-F0-9]{24})", objects[policy_build_ids[0]]).group(1)
+                self.assertIn("path = ../../Sources/QuotaCore/AppGroupSnapshotReadPolicy.swift;", objects[ref])
+                block = re.search(rf"^  {name}:\n(.*?)(?=^  [A-Za-z]|^schemes:)", yml,
+                                  re.MULTILINE | re.DOTALL).group(1)
+                self.assertEqual(block.count("path: ../../Sources/QuotaCore/AppGroupSnapshotReadPolicy.swift"), 1)
+        self.assertTrue((ROOT / "Sources/QuotaCore/AppGroupSnapshotReadPolicy.swift").is_file())
+
     def test_companion_ids_and_shared_app_group(self):
         app, widget = companion_bundle_ids(COMPANION_YML.read_text(encoding="utf-8"))
         self.assertTrue(app.endswith(".ios"))
