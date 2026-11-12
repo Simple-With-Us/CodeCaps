@@ -641,6 +641,7 @@ class RedispatchTests(unittest.TestCase):
             self.assertEqual(completed.returncode, 1, completed.stderr)
             self.assertLess(elapsed, 30, "the gate polled toward the 5100s deadline")
             self.assertIn("Swift CI never started", completed.stdout)
+            self.assertIn("waited 0s", completed.stdout)
             self.assertIn(f"{PACKAGE}=missing", completed.stdout)
             self.assertNotIn("Timed out", completed.stdout)
             self.assertEqual(stub.reruns(), [], "the gate replaced a run that never existed")
@@ -661,6 +662,7 @@ class RedispatchTests(unittest.TestCase):
             self.assertEqual(completed.returncode, 1, completed.stderr)
             self.assertIn("no check run yet", completed.stdout)
             self.assertIn("Swift CI never started", completed.stdout)
+            self.assertIn("waited 2s", completed.stdout)
             self.assertNotIn("Timed out", completed.stdout)
             self.assertEqual(stub.reruns(), [])
             fetches = [call for call in stub.calls() if "check-runs" in call]
@@ -683,6 +685,8 @@ class RedispatchTests(unittest.TestCase):
             })
             self.assertEqual(completed.returncode, 1, completed.stderr)
             self.assertIn("Swift CI never started", completed.stdout)
+            self.assertIn("does not wait", completed.stdout)
+            self.assertNotIn("waited", completed.stdout)
             self.assertNotIn("still pending", completed.stderr)
             fetches = [call for call in stub.calls() if "check-runs" in call]
             self.assertEqual(len(fetches), 2, f"ONCE looked more than once: {fetches}")

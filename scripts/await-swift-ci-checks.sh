@@ -37,18 +37,20 @@
 #
 # Exit 0 when every named check's newest github-actions run succeeded.
 # Exit 1 on a failed or skipped check, on a timeout, and on a cancelled
-#          check when REDISPATCH_ON_CANCEL is 0.  Also after the grace, when
-#          no check run exists for this SHA at all.
+#          check when REDISPATCH_ON_CANCEL is 0.  Also when no check run
+#          exists for this SHA at all: after the grace while polling, and
+#          at once when ONCE=1.
 # Exit 2 when ONCE or CHECKS_JSON sees a check that has not finished.  With
 #          REDISPATCH_ON_CANCEL=1 a cancelled check is also exit 2: it waits
 #          for its replacement.
 # Exit 3 is the classifier's "missing" verdict: no github-actions run exists
 #          for any requested name.  CHECKS_JSON passes that status through.
-#          The live gate, including ONCE, turns it into exit 1 with a notice
-#          once MISSING_GRACE_SECONDS have elapsed.  It does not poll until
-#          DEADLINE_SECONDS.  It does not workflow_dispatch, because that API
-#          takes a branch or tag name and rejects a commit sha with
-#          "No ref found", so a dispatch would not keep this SHA.
+#          The polling gate turns it into exit 1 with a notice once
+#          MISSING_GRACE_SECONDS have elapsed.  ONCE takes one look and
+#          exits 1 at once, because it does not poll.  Neither path polls
+#          until DEADLINE_SECONDS.  Neither path calls workflow_dispatch,
+#          because that API takes a branch or tag name and rejects a commit
+#          sha with "No ref found", so a dispatch would not keep this SHA.
 
 set -euo pipefail
 
@@ -187,13 +189,19 @@ while true; do
   # stops instead of holding the ship concurrency group until the deadline.
   if [[ "$code" -eq 3 ]]; then
     summary="$(join_details "$details")"
-    if [[ "$ONCE" == "1" || "$(date +%s)" -ge "$missing_deadline" ]]; then
-      echo "::notice title=Swift CI never started::No Swift CI check run exists on ${SHA}: ${summary}.  The gate waited ${MISSING_GRACE_SECONDS}s for a run to register.  It stops here instead of polling for the rest of the deadline.  A merge made with GITHUB_TOKEN starts no push workflow, and workflow_dispatch cannot pin this commit."
-      exit 1
+    # ONCE is one fetch.  It must not claim the grace elapsed, and it must
+    # not sleep until missing_deadline: that would be a second look.
+    if [[ "$ONCE" == "1" ]]; then
+      waited="ONCE=1 takes one look and does not wait for runs to register."
+    elif [[ "$(date +%s)" -ge "$missing_deadline" ]]; then
+      waited="The gate waited ${MISSING_GRACE_SECONDS}s for a run to register.  It stops here instead of polling for the rest of the deadline."
+    else
+      echo "Waiting for Swift CI on ${SHA}: ${summary} (no check run yet)"
+      sleep "$POLL_SECONDS"
+      continue
     fi
-    echo "Waiting for Swift CI on ${SHA}: ${summary} (no check run yet)"
-    sleep "$POLL_SECONDS"
-    continue
+    echo "::notice title=Swift CI never started::No Swift CI check run exists on ${SHA}: ${summary}.  ${waited}  A merge made with GITHUB_TOKEN starts no push workflow, and workflow_dispatch cannot pin this commit."
+    exit 1
   fi
   if [[ "$code" -ne 2 ]]; then
     echo "::error::Could not read Swift CI checks on ${SHA} (exit ${code})"
