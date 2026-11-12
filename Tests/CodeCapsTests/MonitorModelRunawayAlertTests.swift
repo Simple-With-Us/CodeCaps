@@ -292,13 +292,13 @@ final class MonitorModelRunawayAlertTests: XCTestCase {
 
     /// The task handle is captured by the caller before this await, so a fast
     /// refresh cannot clear it first. The wait ends when that task finishes,
-    /// which is what makes its anomaly writes visible. A task that is still
-    /// running after two seconds is cancelled and the test fails.
+    /// which is what makes its anomaly writes visible. A task still running
+    /// after two seconds fails the test and is left running: cancelling it
+    /// returns before the model clears `isRefreshing`.
     private func waitForRefresh(_ model: MonitorModel, task: Task<Void, Never>?) async {
         if let task {
             let finished = await taskFinished(task, withinNanoseconds: 2_000_000_000)
             if !finished {
-                task.cancel()
                 XCTFail("The injected local refresh did not finish")
                 return
             }
@@ -312,31 +312,36 @@ final class MonitorModelRunawayAlertTests: XCTestCase {
         }
     }
 
-    /// Races the refresh against the deadline without waiting for the loser.
-    /// A task group would keep the test parked on `task.value` after the
-    /// deadline, which is the hang this bound exists to prevent.
+    /// Same shape as `SnapshotWriteDrain.wait`: the deadline is cancelled when
+    /// the refresh finishes, and a timeout does not join the refresh task.
     private func taskFinished(_ task: Task<Void, Never>, withinNanoseconds timeout: UInt64) async -> Bool {
-        let gate = RefreshWaitGate()
-        return await withCheckedContinuation { continuation in
-            Task.detached {
+        await withCheckedContinuation { continuation in
+            let gate = RefreshWaitGate()
+            gate.continuation = continuation
+            Task { @MainActor in
                 await task.value
-                await gate.resume(continuation, returning: true)
+                gate.finish(true)
             }
-            Task.detached {
-                try? await Task.sleep(nanoseconds: timeout)
-                await gate.resume(continuation, returning: false)
+            gate.timeoutTask = Task { @MainActor in
+                do { try await Task.sleep(nanoseconds: timeout) }
+                catch { return }
+                gate.finish(false)
             }
         }
     }
 }
 
-/// Lets the refresh wait and its deadline resume one continuation between them.
-private actor RefreshWaitGate {
-    private var resumed = false
+/// Resumes one continuation. The timeout task is cancelled when the refresh wins.
+@MainActor
+private final class RefreshWaitGate {
+    var continuation: CheckedContinuation<Bool, Never>?
+    var timeoutTask: Task<Void, Never>?
 
-    func resume(_ continuation: CheckedContinuation<Bool, Never>, returning value: Bool) {
-        guard !resumed else { return }
-        resumed = true
-        continuation.resume(returning: value)
+    func finish(_ finished: Bool) {
+        guard let continuation else { return }
+        self.continuation = nil
+        timeoutTask?.cancel()
+        timeoutTask = nil
+        continuation.resume(returning: finished)
     }
 }
