@@ -142,6 +142,9 @@ public struct PlatformLogo: View {
     /// the life of the view hierarchy.  Bumping this re-evaluates the body and
     /// re-runs the load until the mark lands.
     @State private var missingMarkRetry = 0
+    /// Bumped when a background load fills the mark cache.  The body only
+    /// reads that cache; this is what asks SwiftUI to look again.
+    @State private var refreshTick = 0
     public let providerKey: String
     /// Server-supplied mark asset hint (from the manifest's `iconHint`).  When
     /// non-nil, `PlatformLogoImage` looks it up first and only falls back to
@@ -194,9 +197,11 @@ public struct PlatformLogo: View {
     }
 
     public var body: some View {
+        let isDark = colorScheme == .dark
+        let epoch = PlatformLogoImage.markCacheEpoch
+        let image = displayedMark(isDark: isDark)
         Group {
-            let isDark = colorScheme == .dark
-            if let image = PlatformLogoImage.load(providerKey: providerKey, iconHint: iconHint, style: style, isDarkMode: isDark) {
+            if let image {
                 if rendersAsTemplate {
                     Image(nsImage: image)
                         .renderingMode(.template)
@@ -215,20 +220,59 @@ public struct PlatformLogo: View {
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .foregroundStyle(.secondary)
-                    .task(id: missingMarkRetry) {
-                        // Quickly at first, then once a minute: the common case
-                        // is a bundle that lands seconds after the first draw.
-                        // A genuinely absent mark costs one cheap filesystem
-                        // probe per interval and the row is never disturbed.
-                        let delay = PlatformLogoImage.missingMarkRetryDelay(forAttempt: missingMarkRetry)
-                        try? await Task.sleep(nanoseconds: delay)
-                        guard !Task.isCancelled else { return }
-                        missingMarkRetry += 1
-                    }
             }
+        }
+        .task(id: "\(providerKey)|\(iconHint ?? "")|\(style.rawValue)|\(isDark)|\(epoch)|\(missingMarkRetry)") {
+            // Disk work stays off the main thread.  A warm cache returns
+            // without a probe; a miss loads once, then the retry interval
+            // is the only thing that looks again.
+            let resolved = await Self.resolveMark(providerKey: providerKey,
+                                                   iconHint: iconHint,
+                                                   style: style,
+                                                   isDark: isDark,
+                                                   refreshing: missingMarkRetry > 0)
+            guard !Task.isCancelled else { return }
+            if resolved {
+                refreshTick += 1
+                return
+            }
+            let delay = PlatformLogoImage.missingMarkRetryDelay(forAttempt: missingMarkRetry)
+            try? await Task.sleep(nanoseconds: delay)
+            guard !Task.isCancelled else { return }
+            missingMarkRetry += 1
         }
         .frame(width: size, height: size)
         .accessibilityHidden(true)
+    }
+
+    /// Memory-only.  `refreshTick` is read so a background load can publish
+    /// into this row without the body touching the filesystem.
+    private func displayedMark(isDark: Bool) -> NSImage? {
+        _ = refreshTick
+        return PlatformLogoImage.cachedImage(providerKey: providerKey,
+                                              iconHint: iconHint,
+                                              style: style,
+                                              isDarkMode: isDark)
+    }
+
+    /// `true` when the cache holds a mark after this call.  The load itself
+    /// runs on a utility queue so a ForEach update never stats from `body`.
+    private static func resolveMark(providerKey: String,
+                                    iconHint: String?,
+                                    style: MarkStyle,
+                                    isDark: Bool,
+                                    refreshing: Bool) async -> Bool {
+        if PlatformLogoImage.cachedImage(providerKey: providerKey,
+                                          iconHint: iconHint,
+                                          style: style,
+                                          isDarkMode: isDark) != nil {
+            return true
+        }
+        return await PlatformLogoImage.loadIntoCacheOffMain(providerKey: providerKey,
+                                                            iconHint: iconHint,
+                                                            style: style,
+                                                            isDarkMode: isDark,
+                                                            refreshing: refreshing)
     }
 }
 
@@ -321,6 +365,51 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
     /// invalidation must not pin its result afterwards, or the clear is
     /// silently undone.
     private static var bundleGeneration: UInt64 = 0
+    /// Cache keys whose bundled artwork was already sought and not found.
+    /// A SwiftUI update must not walk the candidate list again until a retry
+    /// or an invalidation asks for a fresh probe.
+    private static var missingBundledKeys = Set<String>()
+    /// Candidate file URLs keyed by filename and bundle generation.  Building
+    /// them with an unhinted `appendingPathComponent` stats through the
+    /// sandbox, which is the CODECAPS-4 hang when a ForEach row does it.
+    private static var candidateURLCache: [String: (generation: UInt64, urls: [URL])] = [:]
+    /// Decoded custom marks.  The view reads this; it does not open the file.
+    private static let customImageCache = NSCache<NSString, NSImage>()
+    /// Basename (no extension) to extension to file.  One directory listing
+    /// fills it.  Row rendering only reads the snapshot.
+    private static var customIndex: CustomMarkIndex?
+    private static var customIndexGeneration: UInt64 = 0
+    private static var customIndexBuildQueued = false
+    /// How many times the custom-mark directory has been listed.  Tests use
+    /// this to prove a row of lookups does not list again.
+    static var customMarkDirectoryListings = 0
+    /// How many times a bundled filename walked the filesystem.  A cache hit
+    /// must not increment it.
+    static var bundledCandidateProbes = 0
+    /// Posted after the custom-mark index changes so open rows can re-read it
+    /// without having listed the directory themselves.
+    static let marksDidResolve = Notification.Name("CodeCapsProviderMarksDidResolve")
+
+    /// Epoch mixed into the logo view's task identity.  Invalidation bumps
+    /// `bundleGeneration`, which is what makes an open row load again.
+    static var markCacheEpoch: UInt64 {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return bundleGeneration
+    }
+
+    /// Append a file component without asking the filesystem whether the
+    /// result is a directory.  The single-argument
+    /// `appendingPathComponent` calls `URLByAppendingPathComponent:`, which
+    /// sandbox-checks the path.  The `isDirectory` overload does not.
+    static func fileURL(appending component: String, to base: URL) -> URL {
+        base.appendingPathComponent(component, isDirectory: false)
+    }
+
+    /// Append a directory component without a filesystem check.
+    static func directoryURL(appending component: String, to base: URL) -> URL {
+        base.appendingPathComponent(component, isDirectory: true)
+    }
     /// A latch that only remembers success is a latch that can be poisoned
     /// before the bundle is reachable: the first call can land while the
     /// resource bundle is not yet resolvable, and every later call would then
@@ -349,10 +438,11 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
 
     /// Decode every bundled mark once, on a background queue, so the first
     /// draw of every surface finds a warm cache instead of paying per-row
-    /// filesystem probes while the window is already on screen.  Custom
-    /// marks load from disk and were never slow; this closes that gap for
-    /// the bundled set.
+    /// filesystem probes while the window is already on screen.  The custom
+    /// mark directory is indexed in the same pass: a row must not list or
+    /// stat it while SwiftUI is updating.
     public static func preloadBundledMarks() {
+        rebuildCustomMarkIndex()
         for key in resourceNames.keys {
             for style in [MarkStyle.standard, .template] {
                 for isDark in [false, true] {
@@ -370,10 +460,13 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
         stateLock.lock()
         bundleGeneration &+= 1
         cachedBundle = nil
+        missingBundledKeys.removeAll()
+        candidateURLCache.removeAll()
         stateLock.unlock()
         standardCache.removeAllObjects()
         templateCache.removeAllObjects()
         menuBarCache.removeAllObjects()
+        customImageCache.removeAllObjects()
     }
 
     /// Why the last bundled lookup failed, for the log line the owner reads
@@ -390,7 +483,7 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
         NSLog("CodeCaps: provider mark unavailable — %@", reason)
     }
 
-    private static func bundledImage(providerKey: String, style: MarkStyle = .template, iconHint: String? = nil, isDark: Bool = false) -> NSImage? {
+    private static func bundledCacheIdentity(providerKey: String, iconHint: String?, style: MarkStyle, isDark: Bool) -> (key: NSString, cacheKey: NSString, cache: NSCache<NSString, NSImage>) {
         let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() as NSString
         // Cache dimension: a manifest hint change must not keep serving the
         // previously cached mark for the same provider key, and appearance must
@@ -410,7 +503,31 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
         // manifest's hints) still warms the first draw.
         let stem = (hintBase != nil && hintBase != mappedBase) ? "\(key)|\(hintName!)" : (key as String)
         let cacheKey = "\(stem)|v2|\(style.rawValue)|\(isDark ? "dark" : "light")" as NSString
-        if let cached = cache.object(forKey: cacheKey) { return cached }
+        return (key, cacheKey, cache)
+    }
+
+    private static func bundledImage(providerKey: String, style: MarkStyle = .template, iconHint: String? = nil, isDark: Bool = false, refreshing: Bool = false) -> NSImage? {
+        let identity = bundledCacheIdentity(providerKey: providerKey, iconHint: iconHint, style: style, isDark: isDark)
+        let cacheKeyString = identity.cacheKey as String
+        if refreshing {
+            stateLock.lock()
+            missingBundledKeys.remove(cacheKeyString)
+            stateLock.unlock()
+        } else if let cached = identity.cache.object(forKey: identity.cacheKey) {
+            return cached
+        } else {
+            stateLock.lock()
+            let missing = missingBundledKeys.contains(cacheKeyString)
+            stateLock.unlock()
+            if missing { return nil }
+        }
+        if let cached = identity.cache.object(forKey: identity.cacheKey) { return cached }
+        let hintName = iconHint?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let hintBase = hintName.flatMap { name -> String? in
+            guard !name.isEmpty else { return nil }
+            return resourceNames[name] ?? name
+        }
+        let mappedBase = resourceNames[identity.key as String] ?? resourceNames[platformKey(of: identity.key as String)]
         var filenames: [String] = []
         for base in [hintBase, mappedBase].compactMap({ $0 }) {
             for filename in bundledFilenames(base: base, style: style, isDark: isDark) where !filenames.contains(filename) {
@@ -418,10 +535,13 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
             }
         }
         for filename in filenames {
-            if let image = imageFromBundle(filename: filename, key: key, cacheKey: cacheKey, cache: cache, style: style) {
+            if let image = imageFromBundle(filename: filename, key: identity.key, cacheKey: identity.cacheKey, cache: identity.cache, refreshing: refreshing) {
                 return image
             }
         }
+        stateLock.lock()
+        missingBundledKeys.insert(cacheKeyString)
+        stateLock.unlock()
         return nil
     }
     /// A missing appearance variant should not hide a usable brand mark.
@@ -434,7 +554,7 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
         return names
     }
 
-    private static func imageFromBundle(filename: String, key: NSString, cacheKey: NSString, cache: NSCache<NSString, NSImage>, style: MarkStyle) -> NSImage? {
+    private static func imageFromBundle(filename: String, key: NSString, cacheKey: NSString, cache: NSCache<NSString, NSImage>, refreshing: Bool) -> NSImage? {
         // Walk EVERY candidate, decoding as we go, and take the first that
         // yields pixels.
         //
@@ -444,7 +564,11 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
         // down.  That is the shape of a bug that survives ten "cache" fixes: it
         // is not the cache at all, it is a resolution order that gives up early.
         // Existence and decodability are now checked together, per candidate.
-        for candidate in candidateURLs(filename: filename) {
+        stateLock.lock()
+        bundledCandidateProbes += 1
+        stateLock.unlock()
+        let urls = candidateURLs(filename: filename, refreshing: refreshing)
+        for candidate in urls {
             guard FileManager.default.fileExists(atPath: candidate.path) else { continue }
             guard let image = NSImage(contentsOf: candidate) ?? NSImage(contentsOfFile: candidate.path) else {
                 noteFailure("'\(filename)' exists at \(candidate.path) but would not decode; trying the next location")
@@ -453,34 +577,54 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
             return finalize(image: image, url: candidate, key: key,
                             cacheKey: cacheKey, cache: cache)
         }
-        noteFailure("'\(filename)' is mapped for '\(key as String)' but was not found in any of the \(candidateURLs(filename: filename).count) known locations")
+        noteFailure("'\(filename)' is mapped for '\(key as String)' but was not found in any of the \(urls.count) known locations")
         return nil
     }
 
     /// Every place the mark could legitimately live, across both the resolved
-    /// bundle and `Bundle.main`.  Built fresh each call so a bundle that appears
-    /// later is found without clearing anything: there is no cached answer to
-    /// go stale.
-    private static func candidateURLs(filename: String) -> [URL] {
+    /// bundle and `Bundle.main`.  The list is cached for the current bundle
+    /// generation.  A retry passes `refreshing` so a bundle that appears
+    /// later is still found.  Paths are built with an explicit directory
+    /// hint so constructing the list does not sandbox-check each component.
+    private static func candidateURLs(filename: String, refreshing: Bool) -> [URL] {
+        stateLock.lock()
+        let generation = bundleGeneration
+        if !refreshing, let cached = candidateURLCache[filename], cached.generation == generation {
+            stateLock.unlock()
+            return cached.urls
+        }
+        stateLock.unlock()
+        let urls = makeCandidateURLs(filename: filename)
+        stateLock.lock()
+        if bundleGeneration == generation {
+            candidateURLCache[filename] = (generation, urls)
+        }
+        stateLock.unlock()
+        return urls
+    }
+
+    private static func makeCandidateURLs(filename: String) -> [URL] {
         var urls: [URL] = []
-        let bundles = [currentBundle(), Bundle(url: Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/CodeCaps_CodeCaps.bundle"))]
+        let bundled = directoryURL(appending: "Contents/Resources/CodeCaps_CodeCaps.bundle", to: Bundle.main.bundleURL)
+        let bundles = [currentBundle(), Bundle(url: bundled)]
         for bundle in bundles.compactMap({ $0 }) {
             let name = (filename as NSString).deletingPathExtension
             let ext = (filename as NSString).pathExtension
             if let u = bundle.url(forResource: name, withExtension: ext) { urls.append(u) }
             if let u = bundle.url(forResource: name, withExtension: ext, subdirectory: "ProviderMarks") { urls.append(u) }
-            if let base = bundle.resourceURL { urls.append(base.appendingPathComponent(filename)) }
-            urls.append(bundle.bundleURL.appendingPathComponent("Contents/Resources/\(filename)"))
-            urls.append(bundle.bundleURL.appendingPathComponent(filename))
+            if let base = bundle.resourceURL { urls.append(fileURL(appending: filename, to: base)) }
+            urls.append(fileURL(appending: "Contents/Resources/\(filename)", to: bundle.bundleURL))
+            urls.append(fileURL(appending: filename, to: bundle.bundleURL))
         }
         if let res = Bundle.main.resourceURL {
-            urls.append(res.appendingPathComponent("CodeCaps_CodeCaps.bundle/Contents/Resources/\(filename)"))
-            urls.append(res.appendingPathComponent("CodeCaps_CodeCaps.bundle/\(filename)"))
-            urls.append(res.appendingPathComponent(filename))
+            urls.append(fileURL(appending: "CodeCaps_CodeCaps.bundle/Contents/Resources/\(filename)", to: res))
+            urls.append(fileURL(appending: "CodeCaps_CodeCaps.bundle/\(filename)", to: res))
+            urls.append(fileURL(appending: filename, to: res))
         }
-        urls.append(Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/CodeCaps_CodeCaps.bundle/Contents/Resources/\(filename)"))
-        urls.append(Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/CodeCaps_CodeCaps.bundle/\(filename)"))
-        urls.append(Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/\(filename)"))
+        let main = Bundle.main.bundleURL
+        urls.append(fileURL(appending: "Contents/Resources/CodeCaps_CodeCaps.bundle/Contents/Resources/\(filename)", to: main))
+        urls.append(fileURL(appending: "Contents/Resources/CodeCaps_CodeCaps.bundle/\(filename)", to: main))
+        urls.append(fileURL(appending: "Contents/Resources/\(filename)", to: main))
 
         // De-duplicate while preserving order, so the common case (the first
         // candidate hits) does the least work.
@@ -581,71 +725,137 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
     /// `iconHint` is the manifest-supplied asset name (Phase 2 backend).  When
     /// present, `load` tries the hint first and falls back to the legacy
     /// `resourceNames` map; when absent, behaviour is unchanged from Phase 1.
-    public static func load(providerKey: String, iconHint: String? = nil, style: MarkStyle, isDarkMode: Bool = false) -> NSImage? {
+    public static func load(providerKey: String, iconHint: String? = nil, style: MarkStyle, isDarkMode: Bool = false, refreshing: Bool = false) -> NSImage? {
         let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         switch style {
         case .standard:
-            return bundledImage(providerKey: key, style: .standard, iconHint: iconHint, isDark: isDarkMode)
+            return bundledImage(providerKey: key, style: .standard, iconHint: iconHint, isDark: isDarkMode, refreshing: refreshing)
         case .template:
-            return bundledImage(providerKey: key, style: .template, iconHint: iconHint, isDark: isDarkMode)
+            return bundledImage(providerKey: key, style: .template, iconHint: iconHint, isDark: isDarkMode, refreshing: refreshing)
         case .custom:
+            if refreshing { rebuildCustomMarkIndex() }
             if let custom = loadCustom(providerKey: key, isDarkMode: isDarkMode)
                 ?? loadCustom(providerKey: platformKey(of: key), isDarkMode: isDarkMode) {
                 return custom
             }
             // No custom mark on disk for this provider: fall back to the
             // bundled colour mark so the row still shows something real rather
-            // than the placeholder glyph.
-            return bundledImage(providerKey: key, style: .standard, iconHint: iconHint, isDark: isDarkMode)
+            // than the placeholder glyph.  Stash that fallback under the
+            // custom cache key so a later memory-only read matches this result.
+            let bundled = bundledImage(providerKey: key, style: .standard, iconHint: iconHint, isDark: isDarkMode, refreshing: refreshing)
+            if let bundled {
+                customImageCache.setObject(bundled, forKey: customImageCacheKey(providerKey: key, isDarkMode: isDarkMode))
+            }
+            return bundled
         }
+    }
+
+    /// Memory-only read of a mark `load` has already decoded.  SwiftUI rows
+    /// call this from `body`.  A miss returns nil and does not touch disk.
+    public static func cachedImage(providerKey: String, iconHint: String? = nil, style: MarkStyle, isDarkMode: Bool = false) -> NSImage? {
+        let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        switch style {
+        case .standard:
+            return cachedBundled(providerKey: key, iconHint: iconHint, style: .standard, isDark: isDarkMode)
+        case .template:
+            return cachedBundled(providerKey: key, iconHint: iconHint, style: .template, isDark: isDarkMode)
+        case .custom:
+            // Only an image `load` stored for this style.  A warm bundled
+            // cache must not masquerade as the custom mark and skip the load.
+            return cachedCustom(providerKey: key, isDarkMode: isDarkMode)
+                ?? cachedCustom(providerKey: platformKey(of: key), isDarkMode: isDarkMode)
+        }
+    }
+
+    /// Decode into the caches from a utility queue.  Returns whether a mark
+    /// is now cached.  The image itself stays in the cache so it is not sent
+    /// across the continuation.
+    static func loadIntoCacheOffMain(providerKey: String, iconHint: String?, style: MarkStyle, isDarkMode: Bool, refreshing: Bool) async -> Bool {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async {
+                let image = load(providerKey: providerKey, iconHint: iconHint, style: style, isDarkMode: isDarkMode, refreshing: refreshing)
+                continuation.resume(returning: image != nil)
+            }
+        }
+    }
+
+    private static func cachedBundled(providerKey: String, iconHint: String?, style: MarkStyle, isDark: Bool) -> NSImage? {
+        let identity = bundledCacheIdentity(providerKey: providerKey, iconHint: iconHint, style: style, isDark: isDark)
+        return identity.cache.object(forKey: identity.cacheKey)
     }
 
     /// Whether a user-supplied custom mark exists on disk for this provider or platform.
+    /// Reads the in-memory index only.  A missing index schedules one background
+    /// listing and reports false until that listing lands.
     public static func hasCustomMark(providerKey: String) -> Bool {
         let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let plat = platformKey(of: key)
-        return customPrimaryMarkURL(providerKey: key) != nil
-            || customDarkMarkURL(providerKey: key) != nil
-            || customPrimaryMarkURL(providerKey: plat) != nil
-            || customDarkMarkURL(providerKey: plat) != nil
+        guard let index = peekCustomIndex() else {
+            scheduleCustomIndexBuild()
+            return false
+        }
+        return index.url(base: key) != nil
+            || index.url(base: "\(key)-dark") != nil
+            || index.url(base: plat) != nil
+            || index.url(base: "\(plat)-dark") != nil
     }
 
     /// The on-disk path for a provider's primary custom mark, or `nil` if none
-    /// has been chosen yet.
+    /// has been chosen yet.  Builds the index on the caller when it is still
+    /// empty, which is the import, export, and test path.  Rows use
+    /// `cachedCustomPrimaryMarkURL` instead.
     public static func customPrimaryMarkURL(providerKey: String) -> URL? {
-        let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let candidates = key.contains(":") ? [key, platformKey(of: key)] : [key]
-        for candidate in candidates {
-            for ext in ["png", "svg", "jpg", "jpeg", "pdf"] {
-                let url = customMarksDirectory.appendingPathComponent("\(candidate).\(ext)")
-                if FileManager.default.fileExists(atPath: url.path) { return url }
-            }
-        }
-        return nil
+        guard let index = indexForLookup(allowingDisk: true, refreshing: false) else { return nil }
+        return primaryMarkURL(providerKey: providerKey, index: index)
     }
 
     /// The on-disk path for a provider's dark-mode custom mark, or `nil` if none
     /// has been imported yet.
     public static func customDarkMarkURL(providerKey: String) -> URL? {
-        let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let candidates = key.contains(":") ? [key, platformKey(of: key)] : [key]
-        for candidate in candidates {
-            for ext in ["png", "svg", "jpg", "jpeg", "pdf"] {
-                let darkUrl = customMarksDirectory.appendingPathComponent("\(candidate)-dark.\(ext)")
-                if FileManager.default.fileExists(atPath: darkUrl.path) { return darkUrl }
-            }
+        guard let index = indexForLookup(allowingDisk: true, refreshing: false) else { return nil }
+        return darkMarkURL(providerKey: providerKey, index: index)
+    }
+
+    /// Memory-only primary lookup.  Schedules a background listing when the
+    /// index has not been built yet and returns nil until it has.
+    static func cachedCustomPrimaryMarkURL(providerKey: String) -> URL? {
+        guard let index = peekCustomIndex() else {
+            scheduleCustomIndexBuild()
+            return nil
         }
-        return nil
+        return primaryMarkURL(providerKey: providerKey, index: index)
+    }
+
+    /// Memory-only dark-variant lookup.  Same contract as
+    /// `cachedCustomPrimaryMarkURL`.
+    static func cachedCustomDarkMarkURL(providerKey: String) -> URL? {
+        guard let index = peekCustomIndex() else {
+            scheduleCustomIndexBuild()
+            return nil
+        }
+        return darkMarkURL(providerKey: providerKey, index: index)
+    }
+
+    /// Whether a stored custom-mark path is in the current directory snapshot.
+    /// `.unknown` means the snapshot has not been built yet, so the caller
+    /// can keep trusting the path it already saved.
+    static func storedCustomMarkPresence(atPath path: String) -> CustomMarkPresence {
+        guard let index = peekCustomIndex() else {
+            scheduleCustomIndexBuild()
+            return .unknown
+        }
+        return index.contains(path: path) ? .present : .absent
     }
 
     /// The on-disk path for a provider's custom mark, or `nil` if none has been
     /// chosen yet.  Checks for a dark variant (`<key>-dark.<ext>`) first when
     /// `isDarkMode` is true, falling back to the primary custom file.
-    public static func customMarkURL(providerKey: String, isDarkMode: Bool = false) -> URL? {
-        if isDarkMode, let dark = customDarkMarkURL(providerKey: providerKey) {
+    public static func customMarkURL(providerKey: String, isDarkMode: Bool = false, refreshing: Bool = false) -> URL? {
+        guard let index = indexForLookup(allowingDisk: true, refreshing: refreshing) else { return nil }
+        if isDarkMode, let dark = darkMarkURL(providerKey: providerKey, index: index) {
             return dark
         }
-        return customPrimaryMarkURL(providerKey: providerKey)
+        return primaryMarkURL(providerKey: providerKey, index: index)
     }
 
     /// Copy `source` into `customMarksDirectory` as `<key>.<ext>` or `<key>-dark.<ext>`,
@@ -660,16 +870,17 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
         guard let data = try? Data(contentsOf: source) else { return nil }
         let baseName = isDarkMode ? "\(key)-dark" : key
         for old in ["svg", "png", "pdf"] {
-            let url = customMarksDirectory.appendingPathComponent("\(baseName).\(old)")
+            let url = fileURL(appending: "\(baseName).\(old)", to: customMarksDirectory)
             try? FileManager.default.removeItem(at: url)
         }
-        let destination = customMarksDirectory.appendingPathComponent("\(baseName).\(ext)")
+        let destination = fileURL(appending: "\(baseName).\(ext)", to: customMarksDirectory)
         do {
             try data.write(to: destination, options: [.atomic])
         } catch {
             return nil
         }
         invalidateCache(for: key)
+        rebuildCustomMarkIndex()
         return destination
     }
 
@@ -684,11 +895,12 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
         }
         for name in namesToRemove {
             for ext in ["svg", "png", "pdf"] {
-                let url = customMarksDirectory.appendingPathComponent("\(name).\(ext)")
+                let url = fileURL(appending: "\(name).\(ext)", to: customMarksDirectory)
                 try? FileManager.default.removeItem(at: url)
             }
         }
         invalidateCache(for: key)
+        rebuildCustomMarkIndex()
     }
 
     /// Bust the render cache so marks reload on the next draw.
@@ -701,9 +913,13 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
         stateLock.lock()
         bundleGeneration &+= 1
         cachedBundle = nil
+        missingBundledKeys = missingBundledKeys.filter { !$0.hasPrefix("\(key)|") }
+        candidateURLCache.removeAll()
         stateLock.unlock()
         standardCache.removeObject(forKey: key as NSString)
         templateCache.removeObject(forKey: key as NSString)
+        customImageCache.removeObject(forKey: customImageCacheKey(providerKey: key, isDarkMode: false))
+        customImageCache.removeObject(forKey: customImageCacheKey(providerKey: key, isDarkMode: true))
         for style in MarkStyle.allCases {
             menuBarCache.removeObject(forKey: "\(key)|\(style.rawValue)" as NSString)
             menuBarCache.removeObject(forKey: "\(key)|\(style.rawValue)|dark" as NSString)
@@ -711,12 +927,160 @@ private static func variantFile(base: String, style: MarkStyle, isDark: Bool) ->
         }
     }
 
+    private static func customImageCacheKey(providerKey: String, isDarkMode: Bool) -> NSString {
+        "\(providerKey)|\(isDarkMode ? "dark" : "light")" as NSString
+    }
+
+    private static func cachedCustom(providerKey: String, isDarkMode: Bool) -> NSImage? {
+        customImageCache.object(forKey: customImageCacheKey(providerKey: providerKey, isDarkMode: isDarkMode))
+    }
+
     private static func loadCustom(providerKey: String, isDarkMode: Bool = false) -> NSImage? {
+        let cacheKey = customImageCacheKey(providerKey: providerKey, isDarkMode: isDarkMode)
+        if let cached = customImageCache.object(forKey: cacheKey) { return cached }
         guard let url = customMarkURL(providerKey: providerKey, isDarkMode: isDarkMode) else { return nil }
         guard let image = NSImage(contentsOf: url) else { return nil }
         let mode = customMarkMode(for: providerKey)
         image.isTemplate = (mode == .template)
+        customImageCache.setObject(image, forKey: cacheKey)
         return image
+    }
+
+    /// Result of asking the in-memory custom-mark snapshot about a stored path.
+    enum CustomMarkPresence {
+        case unknown
+        case present
+        case absent
+    }
+
+    private struct CustomMarkIndex: Equatable {
+        var files: [String: [String: URL]] = [:]
+        var paths: Set<String> = []
+
+        func url(base: String) -> URL? {
+            guard let exts = files[base] else { return nil }
+            for ext in PlatformLogoImage.customMarkExtensions {
+                guard exts[ext] != nil else { continue }
+                // Rebuild the same URL import writes, with an explicit file
+                // hint, so a hit does not stat to discover the extension.
+                return PlatformLogoImage.fileURL(appending: "\(base).\(ext)",
+                                                 to: PlatformLogoImage.customMarksDirectory)
+            }
+            return nil
+        }
+
+        func contains(path: String) -> Bool {
+            let url = URL(fileURLWithPath: path)
+            let variants = [
+                url.path,
+                url.standardizedFileURL.path,
+                url.resolvingSymlinksInPath().path,
+            ]
+            for variant in variants where paths.contains(variant) {
+                return true
+            }
+            return false
+        }
+    }
+
+    private static let customMarkExtensions = ["png", "svg", "jpg", "jpeg", "pdf"]
+
+    /// List the custom-mark directory once and publish the snapshot.  A newer
+    /// rebuild that starts while this one is listing wins, so an import cannot
+    /// be overwritten by a stale listing.
+    static func rebuildCustomMarkIndex() {
+        stateLock.lock()
+        customIndexGeneration &+= 1
+        let generation = customIndexGeneration
+        stateLock.unlock()
+        let listed = listCustomMarkFiles()
+        var index = CustomMarkIndex()
+        for file in listed {
+            let ext = file.pathExtension.lowercased()
+            guard customMarkExtensions.contains(ext) else { continue }
+            let base = file.deletingPathExtension().lastPathComponent.lowercased()
+            if index.files[base]?[ext] == nil {
+                index.files[base, default: [:]][ext] = file
+            }
+            index.paths.insert(file.path)
+            index.paths.insert(file.standardizedFileURL.path)
+            index.paths.insert(file.resolvingSymlinksInPath().path)
+        }
+        stateLock.lock()
+        guard generation == customIndexGeneration else {
+            stateLock.unlock()
+            return
+        }
+        let changed = customIndex != index
+        customIndex = index
+        stateLock.unlock()
+        guard changed else { return }
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: marksDidResolve, object: nil)
+        }
+    }
+
+    private static func listCustomMarkFiles() -> [URL] {
+        stateLock.lock()
+        customMarkDirectoryListings += 1
+        stateLock.unlock()
+        return (try? FileManager.default.contentsOfDirectory(at: customMarksDirectory,
+                                                             includingPropertiesForKeys: nil)) ?? []
+    }
+
+    private static func peekCustomIndex() -> CustomMarkIndex? {
+        stateLock.lock()
+        let index = customIndex
+        stateLock.unlock()
+        return index
+    }
+
+    private static func scheduleCustomIndexBuild() {
+        stateLock.lock()
+        if customIndex != nil || customIndexBuildQueued {
+            stateLock.unlock()
+            return
+        }
+        customIndexBuildQueued = true
+        stateLock.unlock()
+        DispatchQueue.global(qos: .utility).async {
+            rebuildCustomMarkIndex()
+            stateLock.lock()
+            customIndexBuildQueued = false
+            stateLock.unlock()
+        }
+    }
+
+    private static func indexForLookup(allowingDisk: Bool, refreshing: Bool) -> CustomMarkIndex? {
+        if refreshing {
+            rebuildCustomMarkIndex()
+            return peekCustomIndex()
+        }
+        if let index = peekCustomIndex() { return index }
+        if allowingDisk {
+            rebuildCustomMarkIndex()
+            return peekCustomIndex()
+        }
+        scheduleCustomIndexBuild()
+        return nil
+    }
+
+    private static func primaryMarkURL(providerKey: String, index: CustomMarkIndex) -> URL? {
+        let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let candidates = key.contains(":") ? [key, platformKey(of: key)] : [key]
+        for candidate in candidates {
+            if let url = index.url(base: candidate) { return url }
+        }
+        return nil
+    }
+
+    private static func darkMarkURL(providerKey: String, index: CustomMarkIndex) -> URL? {
+        let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let candidates = key.contains(":") ? [key, platformKey(of: key)] : [key]
+        for candidate in candidates {
+            if let url = index.url(base: "\(candidate)-dark") { return url }
+        }
+        return nil
     }
 
     public static func menuBarImage(providerKey: String, size: CGFloat = 16, style: MarkStyle = .template, isDarkMode: Bool? = nil) -> NSImage? {

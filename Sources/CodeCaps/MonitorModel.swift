@@ -716,6 +716,9 @@ final class MonitorModel: ObservableObject {
     /// Re-checks the saved-token states when `TokenStore` gains a token nobody
     /// was waiting for, so the Re-Authorize button clears without a refresh.
     private var tokenChanges: AnyCancellable?
+    /// Redraws rows when the background custom-mark index finishes.  The rows
+    /// themselves only read that index.
+    private var markCatalogChanges: AnyCancellable?
 
     private enum PushOutcome {
         case success(QuotaPublishResult)
@@ -866,6 +869,11 @@ final class MonitorModel: ObservableObject {
                 // Answered from the cache: a token already held, or already
                 // failed, is not asked for again.
                 Task { @MainActor in await self?.refreshSavedTokenStates() }
+            }
+        markCatalogChanges = NotificationCenter.default.publisher(for: PlatformLogoImage.marksDidResolve)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
             }
     }
 
@@ -1901,16 +1909,19 @@ final class MonitorModel: ObservableObject {
 
     func customMarkURL(for providerKey: String, isDarkMode: Bool = false) -> URL? {
         let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if isDarkMode {
-            if let path = customMarkDarkPaths[key], FileManager.default.fileExists(atPath: path) {
-                return URL(fileURLWithPath: path)
+        let stored = isDarkMode ? customMarkDarkPaths[key] : customMarkPaths[key]
+        if let stored {
+            switch PlatformLogoImage.storedCustomMarkPresence(atPath: stored) {
+            case .present, .unknown:
+                return URL(fileURLWithPath: stored)
+            case .absent:
+                break
             }
-            return PlatformLogoImage.customDarkMarkURL(providerKey: key)
         }
-        if let path = customMarkPaths[key], FileManager.default.fileExists(atPath: path) {
-            return URL(fileURLWithPath: path)
+        if isDarkMode {
+            return PlatformLogoImage.cachedCustomDarkMarkURL(providerKey: key)
         }
-        return PlatformLogoImage.customPrimaryMarkURL(providerKey: key)
+        return PlatformLogoImage.cachedCustomPrimaryMarkURL(providerKey: key)
     }
 
     /// Persist a custom mark for `providerKey`.  Reads the file out of the
