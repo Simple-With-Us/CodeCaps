@@ -49,12 +49,16 @@ private func configuredSettings(
     values: [String: String] = [:]
 ) -> InfisicalSettings {
     let settings = InfisicalSettings(transport: transport)
-    settings.configure(InfisicalSettings.Configuration(
+    var configuration = InfisicalSettings.Configuration(
         projectId: "synthetic-project",
         environment: "prod",
         clientId: "test-client",
         clientSecret: "test-secret"
-    ))
+    )
+    var write = configuration.readBinding
+    write.id = "explicit-test-write"; write.access = .write
+    configuration.writeBinding = write
+    settings.configure(configuration)
     transport.handler = { method, url, _, _ in
         if url.path.hasSuffix("/api/v1/auth/universal-auth/login"), method == "POST" {
             return (loginPayload(), 200)
@@ -331,39 +335,37 @@ final class InfisicalSettingsTests: XCTestCase {
         XCTAssertEqual(settings.refreshInterval, InfisicalSettings.minimumRefreshInterval)
     }
 
-    /// The dev and staging environments are retired (owner, 2026-10-10), so
-    /// every build variant, `.dev` included, reads prod.
+    /// Legacy machine setups retain prod as their migration default.
     func testDefaultEnvironmentIsProdForEveryBuild() {
         XCTAssertEqual(InfisicalSettings.defaultEnvironment(), "prod")
     }
 
-    func testNonProdEnvironmentIsRefusedBeforeAnyRequest() async throws {
-        for environment in ["dev", "staging", "production", ""] {
+    func testExplicitEnvironmentAndFolderAreUsedForNamedReads() async throws {
+        for environment in ["dev", "staging", "production"] {
             let transport = MockInfisicalTransport()
+            transport.handler = { method, url, headers, _ in
+                XCTAssertEqual(method, "GET")
+                XCTAssertEqual(headers["Authorization"], "Bearer st.fixture.read-secret")
+                let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems
+                XCTAssertEqual(query?.first(where: { $0.name == "environment" })?.value, environment)
+                XCTAssertEqual(query?.first(where: { $0.name == "secretPath" })?.value, "/codecaps")
+                return (Data(), 404)
+            }
             let settings = InfisicalSettings(transport: transport)
-            settings.configure(InfisicalSettings.Configuration(
-                projectId: "synthetic-project",
-                environment: environment,
-                clientId: "test-client",
-                clientSecret: "test-secret"
-            ))
-            do {
-                try await settings.load()
-                XCTFail("Expected a refusal for environment \"\(environment)\"")
-            } catch InfisicalSettings.SettingsError.invalidDestination {
-            }
-            do {
-                try await settings.validateAndConfigure(InfisicalSettings.Configuration(
-                    projectId: "synthetic-project",
-                    environment: environment,
-                    clientId: "test-client",
-                    clientSecret: "test-secret"
-                ), persist: {})
-                XCTFail("Expected a refusal for environment \"\(environment)\"")
-            } catch InfisicalSettings.SettingsError.invalidDestination {
-            }
-            XCTAssertTrue(transport.calls.isEmpty, "no request may go out for \"\(environment)\"")
+            let read = InfisicalBinding(label: "Scoped Read", projectId: "synthetic-project", environment: environment,
+                secretPath: "/codecaps", access: .read, serviceToken: "st.fixture.read-secret")
+            try await settings.validateAndConfigure(.init(readBinding: read), persist: {})
+            XCTAssertEqual(transport.calls.count, 3)
         }
+    }
+
+    func testBlankEnvironmentIsRejectedBeforeNetwork() async {
+        let transport = MockInfisicalTransport()
+        let settings = InfisicalSettings(transport: transport)
+        settings.configure(.init(projectId: "synthetic-project", environment: "", clientId: "id", clientSecret: "secret"))
+        do { try await settings.load(); XCTFail("Blank environment must fail") }
+        catch InfisicalSettings.SettingsError.invalidDestination {} catch { XCTFail("Unexpected error") }
+        XCTAssertTrue(transport.calls.isEmpty)
     }
 
     func testClearConfigurationEmptiesCache() async throws {

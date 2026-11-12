@@ -159,6 +159,13 @@ struct SettingsMenuBarPage: View {
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
 
+                        // Owner 2026-10-28: the name is the first thing the
+                        // width ladder drops, and the room it takes is worth
+                        // more to the meters.  Off by default.
+                        Toggle("Show Provider Names In PiP", isOn: $model.pipShowProviderNames)
+                            .help("Print the platform name beside its logo in the PiP HUD." + sentenceGap + "Off keeps that room for the meters.")
+                            .accessibilityLabel("Show Provider Names In PiP")
+
                         Text("Pinned Quotas (Default: Lowest 2 Remaining)")
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(.secondary)
@@ -302,7 +309,18 @@ struct SettingsPlatformsPage: View {
             // of 226 (seven platforms) clipped the last row by 14pt.
             .frame(height: max(240, CGFloat(orderedKeys.count) * 30 + 16))
 
-            HStack {
+            HStack(spacing: 8) {
+                // Visible equivalents of the Option+Command arrow shortcuts
+                // above: drag-to-reorder alone cannot be operated with a
+                // keyboard or VoiceOver (Slice 4, FIX-A11Y-KEYBOARD).
+                Button("Move Up") { moveSelection(by: -1) }
+                    .disabled(selection == nil || selection == orderedKeys.first)
+                    .help("Move Up")
+                    .accessibilityLabel("Move Up")
+                Button("Move Down") { moveSelection(by: 1) }
+                    .disabled(selection == nil || selection == orderedKeys.last)
+                    .help("Move Down")
+                    .accessibilityLabel("Move Down")
                 Spacer()
                 Button("Reset Default Order") { model.resetPlatformOrder() }
                     .help("Reset Default Order")
@@ -360,6 +378,8 @@ struct SettingsSourcesFleetPage: View {
     @State private var reauthorizingPull = false
     @State private var pullMessage: String?
     @State private var pullSucceeded = false
+    @State private var confirmingForgetPush = false
+    @State private var confirmingForgetRead = false
     @State private var allowingClaude = false
     @State private var claudeConsentMessage: String?
     @State private var claudeConsentSucceeded = false
@@ -381,7 +401,7 @@ struct SettingsSourcesFleetPage: View {
         SettingsPage {
             Section {
                 Link("Setup & Data Guide", destination: URL(string: "https://codecaps.simplewithus.com/setup.html")!)
-                Text("Choose local reading, uploads, and downloads independently.")
+                Text("Turn on this Mac, sharing, and other devices separately.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             thisMacSection
@@ -408,7 +428,7 @@ struct SettingsSourcesFleetPage: View {
             HStack(spacing: 8) {
                 Image(systemName: "laptopcomputer")
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(Theme.accent)
+                    .foregroundStyle(Color.secondary)
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Machine Identity: \(QuotaPublisher.machineName)")
                         .font(.system(size: 12, weight: .semibold))
@@ -421,8 +441,8 @@ struct SettingsSourcesFleetPage: View {
                     .font(.system(size: 10, weight: .medium))
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
-                    .background(Theme.accent.opacity(0.12), in: Capsule())
-                    .foregroundStyle(Theme.accent)
+                    .background(Color.secondary.opacity(0.14), in: Capsule())
+                    .foregroundStyle(Color.secondary)
             }
             .padding(.vertical, 2)
 
@@ -448,18 +468,19 @@ struct SettingsSourcesFleetPage: View {
             .disabled(!model.localEnabled || !model.sessionFileChecksEnabled)
             ForEach(ReaderStatus.all, id: \.providerKey) { reader in
                 readerRow(reader)
+                if reader.optionalReaderID == "zcode" { ZAIQuotaSettingsView(controller: model.zAIQuotaSetup) }
             }
         } header: {
             Eyebrow("THIS MAC")
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
-                Text("CodeCaps reads each CLI's own saved credentials in place." + sentenceGap
-                     + "It never asks you for a provider API key.")
-                Text("Provider Checks use existing local sign-ins and provider quota endpoints." + sentenceGap
-                     + "Copilot uses your existing GitHub CLI sign-in.")
-                Text("Codex Session File Checks: 1 local quota source." + sentenceGap
+                Text("Most plans use the sign-in already on this Mac." + sentenceGap
+                     + "Z.ai Coding Plan reads use your ZCode sign-in, or the regional API key you save here.")
+                Text("Plan checks use the sign-in already on this Mac." + sentenceGap
+                     + "Copilot uses your existing GitHub sign-in.")
+                Text("Codex session checks read a file on this Mac." + sentenceGap
                      + "File checks do not upload or download on their own.")
-                Text("A snapshot is written to ~/Library/Application Support/Usage Monitor/quota-windows.json for BotFleet and other connected fleet apps.")
+                Text("Readings stay on this Mac so CodeCaps can share them with the apps you connect.")
                 if let widgetSharingError = model.widgetSharingError {
                     Text(widgetSharingError).foregroundStyle(Theme.warning)
                 }
@@ -476,7 +497,8 @@ struct SettingsSourcesFleetPage: View {
     private func readerRow(_ reader: ReaderStatus) -> some View {
         let section = model.sections.first { $0.providerKey == reader.providerKey }
         let issue = model.issues[reader.providerKey]
-        let healthy = issue == nil && !(section?.windows.isEmpty ?? true)
+        let optionalEnabled = reader.optionalReaderID.map(model.isOptionalQuotaReaderEnabled) ?? true
+        let healthy = optionalEnabled && issue == nil && !(section?.windows.isEmpty ?? true)
         // A reader whose credential is on this Mac but unreadable by this
         // build gets a button rather than a sentence it cannot act on.
         let needsConsent = model.consentNeeded.contains(reader.providerKey)
@@ -491,12 +513,28 @@ struct SettingsSourcesFleetPage: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 8)
-                Image(systemName: healthy ? "checkmark.circle" : "exclamationmark.triangle")
-                    .font(.system(size: 12))
-                    .foregroundStyle(healthy ? Theme.accent : Theme.warning)
-                    .accessibilityHidden(true)
+                if let readerID = reader.optionalReaderID {
+                    Toggle("", isOn: Binding(
+                        get: { model.isOptionalQuotaReaderEnabled(readerID) },
+                        set: { model.setOptionalQuotaReaderEnabled($0, readerID: readerID) }))
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .controlSize(.mini)
+                        .help(optionalEnabled ? "Turn Off \(reader.label) Quota Reads" : "Turn On \(reader.label) Quota Reads")
+                        .accessibilityLabel("Read \(reader.label) Quota")
+                } else {
+                    Image(systemName: healthy ? "checkmark.circle" : "exclamationmark.triangle")
+                        .font(.system(size: 12))
+                        .foregroundStyle(healthy ? Theme.success : Theme.warning)
+                        .accessibilityHidden(true)
+                }
             }
-            if let issue {
+            if !optionalEnabled {
+                Text("Quota reads are off for this provider.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if let issue {
                 Text(issue)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
@@ -546,7 +584,7 @@ struct SettingsSourcesFleetPage: View {
             if let claudeConsentMessage {
                 Text(claudeConsentMessage)
                     .font(.system(size: 11))
-                    .foregroundStyle(claudeConsentSucceeded ? Theme.accent : Theme.warning)
+                    .foregroundStyle(claudeConsentSucceeded ? Theme.success : Theme.warning)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -723,20 +761,29 @@ private struct ReauthorizeCaption: View {
                 }
                 if model.hasSavedSyncToken {
                     Button("Forget Push Token", role: .destructive) {
-                        Task {
-                            do {
-                                try await model.forgetSyncServer()
-                                syncToken = ""
-                                pushSucceeded = true
-                                pushMessage = "Push token removed."
-                            } catch {
-                                pushSucceeded = false
-                                pushMessage = error.localizedDescription
-                            }
-                        }
+                        confirmingForgetPush = true
                     }
                     .help("Forget Push Token")
                     .accessibilityLabel("Forget Push Token")
+                    .confirmationDialog("Forget the saved push token?",
+                                        isPresented: $confirmingForgetPush, titleVisibility: .visible) {
+                        Button("Forget Push Token", role: .destructive) {
+                            Task {
+                                do {
+                                    try await model.forgetSyncServer()
+                                    syncToken = ""
+                                    pushSucceeded = true
+                                    pushMessage = "Push token removed."
+                                } catch {
+                                    pushSucceeded = false
+                                    pushMessage = error.localizedDescription
+                                }
+                            }
+                        }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("CodeCaps will stop pushing quotas until a new token is saved." + sentenceGap + "The token is removed from your Keychain.")
+                    }
                 }
                 Spacer()
                 if pushing { ProgressView().controlSize(.small) }
@@ -746,7 +793,7 @@ private struct ReauthorizeCaption: View {
             if let pushMessage {
                 Text(pushMessage)
                     .font(.system(size: 11))
-                    .foregroundStyle(pushSucceeded ? Theme.accent : Theme.danger)
+                    .foregroundStyle(pushSucceeded ? Theme.success : Theme.danger)
                     .fixedSize(horizontal: false, vertical: true)
             }
         } header: {
@@ -843,20 +890,29 @@ private struct ReauthorizeCaption: View {
                 }
                 if model.hasSavedToken {
                     Button("Forget Read Token", role: .destructive) {
-                        Task {
-                            do {
-                                try await model.forgetServer()
-                                pullToken = ""
-                                pullSucceeded = true
-                                pullMessage = "Read token removed."
-                            } catch {
-                                pullSucceeded = false
-                                pullMessage = error.localizedDescription
-                            }
-                        }
+                        confirmingForgetRead = true
                     }
                     .help("Forget Read Token")
                     .accessibilityLabel("Forget Read Token")
+                    .confirmationDialog("Forget the saved read token?",
+                                        isPresented: $confirmingForgetRead, titleVisibility: .visible) {
+                        Button("Forget Read Token", role: .destructive) {
+                            Task {
+                                do {
+                                    try await model.forgetServer()
+                                    pullToken = ""
+                                    pullSucceeded = true
+                                    pullMessage = "Read token removed."
+                                } catch {
+                                    pullSucceeded = false
+                                    pullMessage = error.localizedDescription
+                                }
+                            }
+                        }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("CodeCaps will stop showing other devices until a new token is saved." + sentenceGap + "The token is removed from your Keychain.")
+                    }
                 }
                 Spacer()
                 if pulling { ProgressView().controlSize(.small) }
@@ -866,13 +922,13 @@ private struct ReauthorizeCaption: View {
             if let pullMessage {
                 Text(pullMessage)
                     .font(.system(size: 11))
-                    .foregroundStyle(pullSucceeded ? Theme.accent : Theme.danger)
+                    .foregroundStyle(pullSucceeded ? Theme.success : Theme.danger)
                     .fixedSize(horizontal: false, vertical: true)
             }
         } header: {
             VStack(alignment: .leading, spacing: 3) {
             HStack {
-                Eyebrow("PULL THE FLEET")
+                Eyebrow("OTHER DEVICES")
                 Spacer()
                 if let dashboardURL {
                     Button {
@@ -931,11 +987,12 @@ private struct ReauthorizeCaption: View {
     }
 }
 
-/// The seven local readers, named by the credential they actually read.
+/// Local quota readers, named by the credential they actually read.
 struct ReaderStatus {
     let providerKey: String
     let label: String
     let source: String
+    var optionalReaderID: String? = nil
 
     static let all: [ReaderStatus] = [
         ReaderStatus(providerKey: "anthropic", label: "Claude", source: "Claude Code credentials"),
@@ -946,6 +1003,8 @@ struct ReaderStatus {
         ReaderStatus(providerKey: "grok", label: "Grok", source: "Grok CLI credentials"),
         ReaderStatus(providerKey: "grok-bot", label: "Grok Bot", source: "Cursor app session"),
         ReaderStatus(providerKey: "minimax", label: "MiniMax", source: "MiniMax CLI credentials"),
+        ReaderStatus(providerKey: "kimi", label: "Kimi", source: "Kimi Code credentials", optionalReaderID: "kimi"),
+        ReaderStatus(providerKey: "zcode", label: "Z.ai / ZCode", source: "ZCode credentials", optionalReaderID: "zcode"),
     ]
 }
 
@@ -962,26 +1021,32 @@ private struct AccentPicker: View {
             Text("Accent")
                 .font(.system(size: 12))
             ForEach(AccentChoice.allCases) { choice in
-                Circle()
-                    .fill(Color(nsColor: NSColor(name: nil) {
-                        $0.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-                            ? NSColor(srgbRed: CGFloat((choice.darkHex >> 16) & 0xFF) / 255,
-                                      green: CGFloat((choice.darkHex >> 8) & 0xFF) / 255,
-                                      blue: CGFloat(choice.darkHex & 0xFF) / 255, alpha: 1)
-                            : NSColor(srgbRed: CGFloat((choice.lightHex >> 16) & 0xFF) / 255,
-                                      green: CGFloat((choice.lightHex >> 8) & 0xFF) / 255,
-                                      blue: CGFloat(choice.lightHex & 0xFF) / 255, alpha: 1)
-                    }))
-                    .frame(width: 18, height: 18)
-                    .overlay(
-                        Circle().strokeBorder(.primary.opacity(model.accent == choice ? 1 : 0),
-                                              lineWidth: model.accent == choice ? 2 : 0)
-                    )
-                    .contentShape(Circle())
-                    .onTapGesture { model.accent = choice }
-                    .help(choice.title)
-                    .accessibilityLabel(choice.title)
-                    .accessibilityAddTraits(model.accent == choice ? [.isSelected] : [])
+                // A real Button: a tap gesture on a shape is invisible to
+                // keyboard focus and VoiceOver control search (Slice 4).
+                // The swatch stays 18pt; the hit area is 28pt.
+                Button { model.accent = choice } label: {
+                    Circle()
+                        .fill(Color(nsColor: NSColor(name: nil) {
+                            $0.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+                                ? NSColor(srgbRed: CGFloat((choice.darkHex >> 16) & 0xFF) / 255,
+                                          green: CGFloat((choice.darkHex >> 8) & 0xFF) / 255,
+                                          blue: CGFloat(choice.darkHex & 0xFF) / 255, alpha: 1)
+                                : NSColor(srgbRed: CGFloat((choice.lightHex >> 16) & 0xFF) / 255,
+                                          green: CGFloat((choice.lightHex >> 8) & 0xFF) / 255,
+                                          blue: CGFloat(choice.lightHex & 0xFF) / 255, alpha: 1)
+                        }))
+                        .frame(width: 18, height: 18)
+                        .overlay(
+                            Circle().strokeBorder(.primary.opacity(model.accent == choice ? 1 : 0),
+                                                  lineWidth: model.accent == choice ? 2 : 0)
+                        )
+                        .frame(width: 28, height: 28)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .help(choice.title)
+                .accessibilityLabel(choice.title)
+                .accessibilityAddTraits(model.accent == choice ? [.isSelected, .isButton] : [.isButton])
             }
             Spacer(minLength: 0)
         }
@@ -1338,8 +1403,8 @@ struct SettingsAboutPage: View {
                 .help("Project Page")
                 .accessibilityLabel("Project Page")
             } footer: {
-                Text("CodeCaps reads quota from agent CLIs already signed in on this Mac." + sentenceGap
-                     + "It never stores a provider API key.")
+                Text("CodeCaps reads the AI plans already signed in on this Mac." + sentenceGap
+                     + "It does not save a provider API key.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1382,6 +1447,7 @@ struct SettingsNotificationsPage: View {
                             .frame(width: 200, alignment: .leading)
                         Toggle("Notification", isOn: alertBinding(kind, \.notification))
                         Toggle("Popup", isOn: alertBinding(kind, \.popup))
+                        SMSAlertKindToggle(controller: model.smsAlerts, kindID: kind.rawValue)
                         Picker("Sound", selection: Binding(
                             get: { model.alarmManager.preferences[kind].sound },
                             set: { model.alarmManager.setSound($0, for: kind) })) {
@@ -1398,9 +1464,10 @@ struct SettingsNotificationsPage: View {
                 Eyebrow("ALERT DELIVERY")
             } footer: {
                 Text("Anomalies compare usage with your average; runaway usage compares it with your peak." + sentenceGap
-                     + "Quota Exhausted fires at zero remaining." + sentenceGap
+                     + "Quota Exhausted alerts when \(QuotaCapRule.spentThreshold.formatted(.number.precision(.fractionLength(0...1))))% or less remains." + sentenceGap
                      + "Provider bells choose which scheduled and vendor resets alert on this Mac.")
             }
+            SMSSettingsView(controller: model.smsAlerts)
             if let row = model.displaySections.first(where: {
                 $0.providerKey == model.runawayAlertHistory.first?.providerKey
             }) ?? model.displaySections.first {
@@ -1465,6 +1532,20 @@ struct SettingsNotificationsPage: View {
             } footer: {
                 Text("Every alert is independent: turn on the ones you want and leave the rest off." + sentenceGap
                      + "Running Out measures how fast a window is being spent right now and warns before it empties; Runaway Usage compares your current hour against your own recent pattern; Reset Alerts fire when a window resets.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Section {
+                Toggle("Plan Mismatch Warnings", isOn: Binding(
+                    get: { !PlanMismatchSuppression.isSuppressed },
+                    set: { PlanMismatchSuppression.isSuppressed = !$0 }))
+                    .help("Warn when an entered plan name does not match what the provider reports.  Turning this back on resumes the popup for mismatches that were silenced with Don't show this again, at most once an hour.")
+                    .accessibilityLabel("Plan mismatch warnings")
+            } footer: {
+                Text("An explicit Keep Mine choice on a platform's page stays silent regardless of this switch." + sentenceGap
+                     + "A new plan name on either side always warns again.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1714,286 +1795,296 @@ struct CommitButton: View {
 
 /// The admin surface for Infisical as the source of truth (see INFISICAL.md).
 ///
-/// CodeCaps is a single-user local app, so the owner IS the admin and the gate
-/// is a no-op by design — this page is only reachable on his own Mac.  The
-/// client identity is his own universal-auth machine identity, stored in his
-/// Keychain like the read and push tokens already are; it is never embedded
-/// in the app and never leaves the machine.  The iOS companion cannot hold a
-/// client secret, so it stays out of Infisical entirely and keeps reading
-/// through its existing quota API — the Mac app owns the Infisical read.
+/// Optional, owner-configured Infisical access is kept in the app's own
+/// build-scoped Keychain record, with independent read and write selections.
 @MainActor
 struct SettingsInfisicalPage: View {
     @ObservedObject var model: MonitorModel
-
-    @State private var clientId = ""
-    @State private var clientSecret = ""
+    @State private var setup = InfisicalSetup()
+    @State private var editingID: String?
+    @State private var label = ""
     @State private var projectId = ""
-    @State private var savedIdentity: InfisicalIdentityStore.Identity?
-    @State private var operationId = UUID()
-    @State private var hasIdentity = false
+    @State private var environment = "prod"
+    @State private var folder = "/"
+    @State private var site = "https://app.infisical.com"
+    @State private var authentication: InfisicalBinding.Authentication = .serviceToken
+    @State private var access: InfisicalBinding.Access = .read
+    @State private var credential = ""
+    @State private var clientId = ""
+    @State private var readSelection = ""
+    @State private var writeSelection = ""
     @State private var pullEndpoint = ""
     @State private var pushEndpoint = ""
     @State private var refreshSeconds = ""
+    @State private var formRevision: InfisicalSettings.Revision?
     @State private var working = false
+    @State private var operationID = UUID()
     @State private var message: String?
-    @State private var succeeded = false
-    @State private var keyMessage: String?
-    @State private var keySucceeded = false
+    private var settings: InfisicalSettings { .shared }
 
-    private var settings: InfisicalSettings { InfisicalSettings.shared }
+    private var draftRead: InfisicalBinding? { setup.bindings.first { $0.id == readSelection && $0.access == .read } }
+    private var matchingWrites: [InfisicalBinding] {
+        guard let draftRead else { return [] }
+        return setup.bindings.filter { $0.access == .write && $0.matchesScope(of: draftRead) }
+    }
+    private var hasSavedCredential: Bool {
+        setup.bindings.contains {
+            $0.id == editingID && $0.authentication == authentication
+                && (authentication == .serviceToken || $0.clientId == clientId.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+    }
 
     var body: some View {
         SettingsPage {
-            // Owner 2026-10-08: this page looked like a required setup step,
-            // and it is not one — CodeCaps works entirely from the local AI
-            // tools when nothing is connected here.
             Section {
-                VStack(alignment: .leading, spacing: 5) {
-                    Eyebrow("OPTIONAL")
-                        .foregroundStyle(Theme.warning)
-                    Text("Share settings across your Macs, and let the fleet push quotas here.")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(Theme.ink)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Text("CodeCaps reads every quota from the AI tools already signed in on this Mac. " + sentenceGap
-                         + "Connecting Infisical is only for setting a machine up to share its own configuration, and to receive quota data from your other Macs.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(.vertical, 2)
+                Text("Infisical is optional.")
+                    .font(.headline)
+                Text("Keep settings in your Infisical projects and folders." + sentenceGap
+                     + "Quota monitoring continues locally when no read source is selected.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
-
             Section {
-                TextField("Client ID", text: $clientId,
-                          prompt: Text("Client ID"))
-                    .disabled(working)
-                SecureField("Client Secret", text: $clientSecret,
-                            prompt: Text(savedIdentity?.clientId == clientId && hasIdentity
-                                         ? "Saved in Keychain (leave blank to keep)" : "Client Secret"))
-                    .disabled(working)
-                TextField("Project ID", text: $projectId)
-                    .disabled(working)
-                HStack {
-                    if hasIdentity {
-                        Button("Forget Setup", role: .destructive, action: forgetIdentity)
+                ForEach(setup.bindings) { binding in
+                    HStack {
+                        VStack(alignment: .leading) {
+                            Text(binding.label).font(.headline)
+                            Text(binding.access.title + " · " + binding.projectId + " · " + binding.environment + " · " + binding.secretPath)
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Edit") { edit(binding) }
+                        Button("Remove", role: .destructive) { remove(binding.id) }
                     }
-                    Spacer()
+                }
+                Button("New Binding") { clearEditor() }
+                Picker("Read Settings From", selection: $readSelection) {
+                    Text("Local Settings Only").tag("")
+                    ForEach(setup.bindings.filter { $0.access == .read }) { Text($0.label).tag($0.id) }
+                }
+                .onChange(of: readSelection) { _, _ in
+                    if !matchingWrites.contains(where: { $0.id == writeSelection }) { writeSelection = "" }
+                }
+                Picker("Write Settings With", selection: $writeSelection) {
+                    Text("No Write Access").tag("")
+                    ForEach(matchingWrites) { Text($0.label).tag($0.id) }
+                }
+                Button("Save Selection") { saveSelection() }
+            } header: { Eyebrow("SAVED BINDINGS") }
+            footer: {
+                Text("Read and write access are selected separately." + sentenceGap
+                     + "A write binding must match the selected read source’s project, environment, folder, and Infisical site.")
+            }
+            .disabled(working)
+            Section {
+                TextField("Label", text: $label)
+                Picker("Authentication", selection: $authentication) {
+                    ForEach(InfisicalBinding.Authentication.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                .onChange(of: authentication) { _, _ in credential = "" }
+                Picker("Access", selection: $access) {
+                    ForEach(InfisicalBinding.Access.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                TextField("Project ID", text: $projectId)
+                TextField("Environment", text: $environment)
+                TextField("Folder", text: $folder)
+                TextField("Infisical Site", text: $site)
+                if authentication == .machineIdentity { TextField("Client ID", text: $clientId) }
+                SecureField(authentication == .serviceToken ? "Service Token" : "Client Secret", text: $credential,
+                            prompt: Text(hasSavedCredential ? "Leave Blank To Keep Saved Credential" : "Credential"))
+                HStack {
                     if working { ProgressView().controlSize(.small) }
-                    CommitButton(title: "Save Setup", prominent: !clientId.isEmpty, action: saveIdentity)
-                        .disabled(working || candidateIdentity == nil)
+                    Button(editingID == nil ? "Add Binding" : "Save Binding") { saveBinding() }
+                        .disabled(label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
-                if let message {
-                    Text(message)
-                        .font(.system(size: 11))
-                        .foregroundStyle(succeeded ? Theme.accent : Theme.danger)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            } header: {
-                Eyebrow("CLIENT IDENTITY & PROJECT")
-            } footer: {
-                Text("Your own Infisical machine identity, kept in your Keychain." + sentenceGap
-                     + "Nothing here is embedded in the app or sent anywhere but Infisical.")
+            } header: { Eyebrow(editingID == nil ? "NEW BINDING" : "EDIT BINDING") }
+            footer: {
+                Text("Use the complete service token, including its st. prefix." + sentenceGap
+                     + "Credentials stay in the Keychain on this Mac; Infisical enforces their actual permissions.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-
+            .disabled(working)
             Section {
-                LabeledContent("Status") { Text(statusLine).font(.system(size: 11)).foregroundStyle(.secondary) }
-                LabeledContent("Environment") { Text(settingsEnvironment).font(.system(size: 11)) }
-                if let savedIdentity {
-                    LabeledContent("Saved Project ID") { Text(savedIdentity.projectId).font(.system(size: 11)) }
-                }
+                if let read = settings.activeReadBinding {
+                    LabeledContent("Read Source", value: read.label)
+                    LabeledContent("Environment", value: read.environment)
+                    LabeledContent("Folder", value: read.secretPath)
+                } else { Text("Local Settings Only") }
                 if let loaded = settings.lastLoadedAt {
-                    LabeledContent("Last Synced") {
-                        Text(loaded.formatted(date: .omitted, time: .shortened)).font(.system(size: 11))
-                    }
+                    LabeledContent("Last Synced") { Text(loaded.formatted(date: .omitted, time: .shortened)) }
                 }
-                if let error = settings.lastError {
-                    Text(error)
-                        .font(.system(size: 11))
-                        .foregroundStyle(Theme.danger)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                HStack {
-                    Spacer()
-                    Button("Reload Now", action: reloadNow).disabled(working || !hasIdentity)
-                }
-            } header: {
-                Eyebrow("SYNC STATUS")
-            }
-
+                if let error = settings.lastError { Text(error).foregroundStyle(.orange) }
+                if let message { Text(message).font(.caption).foregroundStyle(.secondary) }
+                Button("Reload Now") { reloadNow() }.disabled(working || !settings.isProvisioned)
+                Button("Forget All Bindings", role: .destructive) { forgetAll() }.disabled(working || setup.bindings.isEmpty)
+            } header: { Eyebrow("SYNC STATUS") }
             Section {
                 TextField("Pull Endpoint", text: $pullEndpoint)
                 TextField("Push Endpoint", text: $pushEndpoint)
                 TextField("Refresh Seconds", text: $refreshSeconds)
-                HStack {
-                    Spacer()
-                    if working { ProgressView().controlSize(.small) }
-                    CommitButton(title: "Save Keys", prominent: keysDirty, action: saveKeys)
-                        .disabled(working || !hasIdentity)
-                }
-                if let keyMessage = keyMessage {
-                    Text(keyMessage)
-                        .font(.system(size: 11))
-                        .foregroundStyle(keySucceeded ? Theme.accent : Theme.danger)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            } header: {
-                Eyebrow("MANAGED KEYS")
-            } footer: {
-                Text("Saving writes to Infisical first; a failed write fails the save." + sentenceGap
-                     + "The pull and push pages write their endpoints through the same path.")
+                Button("Save Keys") { saveKeys() }
+                    .disabled(working || !settings.canWrite)
+            } header: { Eyebrow("MANAGED KEYS") }
+            footer: {
+                Text(settings.canWrite ? "Changes are saved to Infisical before the local cache updates."
+                     : "Choose a matching write binding to save changes to Infisical.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .onAppear { refreshFromStore(reloadSetup: true) }
-    }
-
-    private var statusLine: String {
-        if hasIdentity {
-            if let last = settings.lastLoadedAt {
-                return "Active (Synced \(last.formatted(date: .omitted, time: .shortened)))"
-            }
-            return "Active"
+        .onAppear { reloadSetup() }
+        .onReceive(NotificationCenter.default.publisher(for: .infisicalIdentityChanged)) { _ in
+            if !working { reloadSetup() }
         }
-        return "Not configured"
     }
 
-    private var settingsEnvironment: String {
-        InfisicalSettings.defaultEnvironment()
+    private func reloadSetup() {
+        setup = InfisicalIdentityStore.loadSetup() ?? InfisicalSetup()
+        readSelection = setup.readBindingID ?? ""
+        writeSelection = setup.writeBindingID ?? ""
+        refreshKeys()
     }
 
-    private var keysDirty: Bool {
-        pullEndpoint != (settings.value(for: InfisicalSettings.Keys.pullEndpoint) ?? "")
-            || pushEndpoint != (settings.value(for: InfisicalSettings.Keys.pushEndpoint) ?? "")
-            || refreshSeconds != (settings.value(for: InfisicalSettings.Keys.refreshSeconds) ?? "")
-    }
-
-    private var candidateIdentity: InfisicalIdentityStore.Identity? {
-        let id = clientId.trimmingCharacters(in: .whitespacesAndNewlines)
-        let project = projectId.trimmingCharacters(in: .whitespacesAndNewlines)
-        let secret = clientSecret.isEmpty && savedIdentity?.clientId == id
-            ? (savedIdentity?.clientSecret ?? "") : clientSecret
-        guard !id.isEmpty, !secret.isEmpty, !project.isEmpty else { return nil }
-        return InfisicalIdentityStore.Identity(clientId: id, clientSecret: secret, projectId: project)
-    }
-
-    private func refreshFromStore(reloadSetup: Bool = false) {
-        savedIdentity = InfisicalIdentityStore.load()
-        hasIdentity = savedIdentity != nil
-        if reloadSetup {
-            clientId = savedIdentity?.clientId ?? ""
-            clientSecret = ""
-            projectId = savedIdentity?.projectId ?? ""
-        }
+    private func refreshKeys() {
         pullEndpoint = settings.value(for: InfisicalSettings.Keys.pullEndpoint) ?? ""
         pushEndpoint = settings.value(for: InfisicalSettings.Keys.pushEndpoint) ?? ""
         refreshSeconds = settings.value(for: InfisicalSettings.Keys.refreshSeconds) ?? ""
+        formRevision = settings.revision
     }
 
-    private func beginOperation() -> UUID {
-        let id = UUID()
-        operationId = id
-        working = true
-        return id
+    private func clearEditor() {
+        editingID = nil; label = ""; projectId = ""; environment = "prod"; folder = "/"
+        site = "https://app.infisical.com"; authentication = .serviceToken; access = .read
+        credential = ""; clientId = ""
     }
 
-    private func saveIdentity() {
-        guard let identity = candidateIdentity else { return }
-        let operation = beginOperation()
+    private func edit(_ binding: InfisicalBinding) {
+        editingID = binding.id; label = binding.label; projectId = binding.projectId
+        environment = binding.environment; folder = binding.secretPath; site = binding.siteURL.absoluteString
+        authentication = binding.authentication; access = binding.access; clientId = binding.clientId; credential = ""
+    }
+
+    private func saveBinding() {
+        guard let url = URL(string: site.trimmingCharacters(in: .whitespacesAndNewlines)) else { message = "Enter an HTTPS Infisical site."; return }
+        let latest = InfisicalIdentityStore.loadSetup() ?? setup
+        let existing = latest.bindings.first { $0.id == editingID && $0.authentication == authentication }
+        let client = clientId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let retained = authentication == .serviceToken ? existing?.serviceToken
+            : (existing?.clientId == client ? existing?.clientSecret : nil)
+        let secret = credential.isEmpty ? (retained ?? "") : credential.trimmingCharacters(in: .whitespacesAndNewlines)
+        var binding = InfisicalBinding(id: editingID ?? UUID().uuidString,
+            label: label.trimmingCharacters(in: .whitespacesAndNewlines), siteURL: url,
+            projectId: projectId.trimmingCharacters(in: .whitespacesAndNewlines),
+            environment: environment.trimmingCharacters(in: .whitespacesAndNewlines),
+            secretPath: folder.trimmingCharacters(in: .whitespacesAndNewlines), authentication: authentication, access: access)
+        if authentication == .serviceToken { binding.serviceToken = secret }
+        else { binding.clientId = client; binding.clientSecret = secret }
+        var candidate = latest
+        candidate.bindings.removeAll { $0.id == binding.id }
+        candidate.bindings.append(binding)
+        reconcileSelections(&candidate)
+        apply(candidate)
+    }
+
+    private func reconcileSelections(_ candidate: inout InfisicalSetup) {
+        if !candidate.bindings.contains(where: { $0.id == candidate.readBindingID && $0.access == .read }) {
+            candidate.readBindingID = nil; candidate.writeBindingID = nil
+        }
+        if let writeID = candidate.writeBindingID,
+           let write = candidate.bindings.first(where: { $0.id == writeID }),
+           let read = candidate.configuration?.readBinding, write.access == .write, write.matchesScope(of: read) { return }
+        candidate.writeBindingID = nil
+    }
+
+    private func saveSelection() {
+        var candidate = InfisicalIdentityStore.loadSetup() ?? setup
+        candidate.readBindingID = readSelection.isEmpty ? nil : readSelection
+        candidate.writeBindingID = writeSelection.isEmpty ? nil : writeSelection
+        apply(candidate)
+    }
+
+    private func remove(_ id: String) {
+        var candidate = InfisicalIdentityStore.loadSetup() ?? setup
+        candidate.bindings.removeAll { $0.id == id }
+        reconcileSelections(&candidate)
+        apply(candidate)
+    }
+
+    private func apply(_ candidate: InfisicalSetup) {
+        do { try candidate.validate() }
+        catch { message = "Check the binding fields and matching read/write selections."; return }
+        let operation = UUID(); operationID = operation; working = true; message = nil
         let revision = settings.beginSetupChange()
-        message = nil
-        keyMessage = nil
         Task {
-            defer { if operationId == operation { working = false } }
+            defer { if operationID == operation { working = false } }
+            guard operationID == operation, settings.isCurrent(revision) else { return }
             do {
-                let committed = try await settings.validateAndConfigure(identity.configuration, revision: revision) {
-                    try InfisicalIdentityStore.save(identity)
+                let committed: InfisicalSettings.Revision
+                if let configuration = candidate.configuration {
+                    committed = try await settings.validateAndConfigure(configuration, revision: revision) {
+                        try InfisicalIdentityStore.saveSetup(candidate)
+                    }
+                } else {
+                    try settings.clearConfiguration(expectedRevision: revision) { try InfisicalIdentityStore.saveSetup(candidate) }
+                    committed = settings.revision
                 }
-                guard operationId == operation, settings.isCurrent(committed) else { return }
-                model.adoptInfisicalEndpointsIfUnset()
-                refreshFromStore(reloadSetup: true)
-                succeeded = true
-                message = "Setup saved and project verified against Infisical."
+                guard operationID == operation, settings.isCurrent(committed) else { return }
+                setup = candidate; readSelection = candidate.readBindingID ?? ""; writeSelection = candidate.writeBindingID ?? ""
+                credential = ""; clearEditor(); refreshKeys(); model.adoptInfisicalEndpointsIfUnset()
+                message = candidate.configuration == nil ? "Bindings saved; settings stay local." : "Bindings saved and selected read source checked."
                 NotificationCenter.default.post(name: .infisicalIdentityChanged, object: nil)
             } catch {
-                guard operationId == operation, settings.isCurrent(revision) else { return }
-                succeeded = false
-                message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                // Validation retires the old timer revision even on failure.
-                // Resume refreshes for the still-persisted setup.
+                if let failure = error as? InfisicalSettings.SettingsError, case .superseded = failure { return }
+                guard operationID == operation,
+                      candidate.configuration == nil || settings.isCurrent(revision) else { return }
+                message = (error as? InfisicalSettings.SettingsError)?.errorDescription ?? "Could not save the Infisical setup."
                 NotificationCenter.default.post(name: .infisicalIdentityChanged, object: nil)
             }
         }
     }
 
-    private func forgetIdentity() {
-        // Clear can interrupt validation or a read/write. The core's revision
-        // fence prevents their eventual completions from reinstalling old data.
-        operationId = UUID()
-        working = false
+    private func forgetAll() {
         do {
             try settings.clearConfiguration { try InfisicalIdentityStore.delete() }
-            refreshFromStore(reloadSetup: true)
-            succeeded = true
-            message = "Setup removed." + sentenceGap + "The Dashboard stays local until you add one again."
-            keyMessage = nil
+            clearEditor(); reloadSetup(); message = "Infisical bindings forgotten."
             NotificationCenter.default.post(name: .infisicalIdentityChanged, object: nil)
         } catch {
-            succeeded = false
-            message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            message = "Keychain could not forget the Infisical setup."
             NotificationCenter.default.post(name: .infisicalIdentityChanged, object: nil)
         }
     }
 
     private func reloadNow() {
-        let operation = beginOperation()
+        working = true
         let revision = settings.revision
         Task {
-            defer { if operationId == operation { working = false } }
+            defer { working = false }
             await settings.refresh()
-            guard operationId == operation, settings.isCurrent(revision) else { return }
-            model.adoptInfisicalEndpointsIfUnset()
-            refreshFromStore()
+            guard settings.isCurrent(revision) else { reloadSetup(); return }
+            refreshKeys(); model.adoptInfisicalEndpointsIfUnset()
         }
     }
 
     private func saveKeys() {
-        let operation = beginOperation()
-        let revision = settings.revision
-        keyMessage = nil
-        // Snapshot the form before any suspension; every key belongs to this
-        // setup, even if a different settings window switches projects mid-save.
-        let updates = [
-            (InfisicalSettings.Keys.pullEndpoint, pullEndpoint),
-            (InfisicalSettings.Keys.pushEndpoint, pushEndpoint),
-            (InfisicalSettings.Keys.refreshSeconds, refreshSeconds),
-        ]
+        guard let revision = formRevision, settings.isCurrent(revision) else {
+            message = "The selected source changed; reload its settings before saving."; refreshKeys(); return
+        }
+        let values = [(InfisicalSettings.Keys.pullEndpoint, pullEndpoint), (InfisicalSettings.Keys.pushEndpoint, pushEndpoint),
+                      (InfisicalSettings.Keys.refreshSeconds, refreshSeconds)]
+        working = true
         Task {
-            defer { if operationId == operation { working = false } }
+            defer { working = false }
             do {
-                var wroteAny = false
-                for (key, field) in updates {
-                    guard operationId == operation, settings.isCurrent(revision) else { return }
-                    let value = field.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard value != (settings.value(for: key) ?? "") else { continue }
-                    try await settings.set(value, for: key, expectedRevision: revision)
-                    wroteAny = true
+                for (key, value) in values where value != (settings.value(for: key) ?? "") {
+                    try await settings.set(value.trimmingCharacters(in: .whitespacesAndNewlines), for: key, expectedRevision: revision)
                 }
-                guard operationId == operation, settings.isCurrent(revision) else { return }
-                model.adoptInfisicalEndpointsIfUnset()
-                refreshFromStore()
-                keySucceeded = true
-                keyMessage = wroteAny ? "Keys saved to Infisical." : "No changes to save."
+                guard settings.isCurrent(revision) else { return }
+                refreshKeys(); model.adoptInfisicalEndpointsIfUnset(); message = "Keys saved to Infisical."
             } catch {
-                guard operationId == operation, settings.isCurrent(revision) else { return }
-                refreshFromStore()
-                keySucceeded = false
-                keyMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                guard settings.isCurrent(revision) else { return }
+                refreshKeys(); message = (error as? InfisicalSettings.SettingsError)?.errorDescription ?? "Could not save the settings."
             }
         }
     }

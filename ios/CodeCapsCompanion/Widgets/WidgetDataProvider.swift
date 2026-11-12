@@ -42,6 +42,29 @@ public struct CodeCapsWidgetEntry: TimelineEntry {
         configuration?.windowPick ?? .mostUrgent
     }
 
+    public var detailLevel: WidgetDetailLevel { configuration?.detailLevel ?? .automatic }
+
+    /// A presentation scope, not an account identity. Identical configurations
+    /// share the selected detail and the Back action clears only this scope.
+    public var detailScope: String {
+        [configuration?.plan?.id ?? "all", rowLayout.rawValue,
+         quotasPerProvider.rawValue, windowPick.rawValue, detailLevel.rawValue].joined(separator: "|")
+    }
+    /// The small widget gets its own scope so a tap there never changes what
+    /// a larger widget with the same configuration shows, and vice versa.
+    public var smallDetailScope: String { "small|" + detailScope }
+    /// The small widget details the plan's own windows, so any plan resolves,
+    /// not only ones with sub-model breakdowns.
+    public var selectedSmallDetail: WidgetPlatformItem? {
+        guard let id = UserDefaults(suiteName: WidgetSnapshotStore.appGroupId)?.string(forKey: "widgetDetail:" + smallDetailScope) else { return nil }
+        return platforms.first { $0.id == id }
+    }
+
+    public var selectedDetail: WidgetPlatformItem? {
+        guard let id = UserDefaults(suiteName: WidgetSnapshotStore.appGroupId)?.string(forKey: "widgetDetail:" + detailScope) else { return nil }
+        return platforms.first { $0.id == id && $0.hasModelDetails }
+    }
+
     /// Primary platform to display in single-provider focus widgets.
     /// Prefers the platform nearest to cap (lowest remaining percent), or the first platform.
     public var primaryPlatform: WidgetPlatformItem? {
@@ -91,7 +114,9 @@ public enum WidgetSnapshotStore {
             augmented = data
         }
         let platforms = WidgetPresentation.parseSnapshot(data: augmented, platformOrder: platformOrder, now: now)
-        return platforms.isEmpty ? nil : platforms
+        // A structurally valid snapshot with no visible rows after freshness
+        // filtering is still authoritative empty — not a decode failure.
+        return platforms
     }
 
     /// The iOS companion writes the manifest it parsed from the wire envelope
@@ -152,14 +177,30 @@ public enum WidgetSnapshotStore {
         let order = defaults.stringArray(forKey: "platformOrder") ?? []
         let manifest = readPersistedManifest(defaults: defaults)
 
-        // 1. App Group container
+        // 1. App Group container.  A successfully decoded snapshot (including
+        // an explicit empty) is authoritative and must not resurrect stale rows
+        // from lower stores.  Read or decode failures fall through.
         if let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupId) {
             let file = container.appendingPathComponent("quota-windows.json")
-            if let data = try? Data(contentsOf: file) {
-                if let parsed = decodeSnapshot(data, platformOrder: order, now: now, manifest: manifest) {
-                    let attrs = try? FileManager.default.attributesOfItem(atPath: file.path)
-                    let modDate = observedAt(in: data) ?? (attrs?[.modificationDate] as? Date)
-                    return (parsed, modDate, parsed.isEmpty)
+            if FileManager.default.fileExists(atPath: file.path) {
+                if let data = try? Data(contentsOf: file) {
+                    if let parsed = decodeSnapshot(data, platformOrder: order, now: now, manifest: manifest) {
+                        let attrs = try? FileManager.default.attributesOfItem(atPath: file.path)
+                        let modDate = observedAt(in: data) ?? (attrs?[.modificationDate] as? Date)
+                        switch AppGroupSnapshotReadPolicy.decision(
+                            filePresent: true,
+                            readSucceeded: true,
+                            decodeSucceeded: true,
+                            decodedExplicitlyEmpty: parsed.isEmpty
+                        ) {
+                        case .consultNextTier:
+                            break
+                        case .stopAuthoritativeEmpty:
+                            return ([], modDate, true)
+                        case .stopAuthoritativeContent:
+                            return (parsed, modDate, false)
+                        }
+                    }
                 }
             }
         }

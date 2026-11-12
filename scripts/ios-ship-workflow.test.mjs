@@ -10,7 +10,8 @@
 // Run: node --test scripts/ios-ship-workflow.test.mjs
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
@@ -19,6 +20,19 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 function read(rel) {
   return readFileSync(join(ROOT, rel), "utf8");
+}
+
+// Hand-written shape checks: this dependency-free script does not import zod,
+// and a malformed apps.json must fail with a configuration error, not a TypeError.
+function readFixedMarketingVersion(raw) {
+  assert.equal(raw !== null && typeof raw === "object" && !Array.isArray(raw), true, "apps config must be an object");
+  const root = raw.apps;
+  assert.equal(root !== null && typeof root === "object" && !Array.isArray(root), true, "apps.apps must be an object");
+  const codecaps = root.codecaps;
+  assert.equal(codecaps !== null && typeof codecaps === "object" && !Array.isArray(codecaps), true, "apps.apps.codecaps must be an object");
+  const version = codecaps.fixedMarketingVersion;
+  assert.equal(typeof version, "string", "apps.apps.codecaps.fixedMarketingVersion must be a string");
+  return version;
 }
 
 function withoutComments(text) {
@@ -38,6 +52,11 @@ function onBlock(yml) {
   return withoutComments(m[1]);
 }
 
+/** Push-path list entries, accepting single quotes, double quotes or no quotes. */
+function extractPushPathEntries(block) {
+  return [...block.matchAll(/^\s+-\s+(?:'([^']+)'|"([^"]+)"|(\S+))\s*(?:#.*)?$/gm)].map((m) => m[1] ?? m[2] ?? m[3]);
+}
+
 /** The `on.push.paths` entries (including any `!` exclusions), in order. */
 function pushPaths() {
   const on = onBlock(workflow);
@@ -45,12 +64,24 @@ function pushPaths() {
   assert.ok(push, "on.push must exist");
   const paths = push[1].match(/^ {4}paths:\n((?: {6}.*\n|\n)*)/m);
   assert.ok(paths, "on.push.paths must exist");
-  return [...paths[1].matchAll(/^ {6}- '([^']+)'$/gm)].map((m) => m[1]);
+  return extractPushPathEntries(paths[1]);
+}
+
+/** `--path-prefix` values, accepting single quotes, double quotes or no quotes. */
+function extractGatePrefixes(block) {
+  return [...block.matchAll(/--path-prefix\s+(?:'([^']+)'|"([^"]+)"|([^\s\\]+))/g)].map((m) => m[1] ?? m[2] ?? m[3]);
+}
+
+/** The scheduled gate step that calls scheduled-ship-gate.sh. */
+function gateBlock() {
+  const gate = code.split(/- name:/).find((s) => s.includes("scheduled-ship-gate.sh"));
+  assert.ok(gate, "ios-ship.yml must call scheduled-ship-gate.sh");
+  return gate;
 }
 
 /** Every `--path-prefix` argument the scheduled gate is called with. */
 function gatePrefixes() {
-  return [...code.matchAll(/--path-prefix '([^']+)'/g)].map((m) => m[1]);
+  return extractGatePrefixes(gateBlock());
 }
 
 /** Shared files the iOS and widget targets compile, from project.yml. */
@@ -114,7 +145,12 @@ test("ios-ship.yml ships automatically on a merge that touches the native tree",
   // What to Test is mandatory and published, never dry-rendered.
   assert.match(code, /IOS_TF_RELEASE_NOTES:\s*"1"/);
   // Ship through the wrapper that runs ship-testflight.sh (ensure-tf-ready inside).
-  assert.match(code, /bash scripts\/ios-ship-testflight\.sh\s*$/m);
+  // The build is computed ONCE by the plan-build step and handed to the ship
+  // through --build; the ship never plans its own (owner 2026-10-29).
+  assert.match(code, /id: plan-build/);
+  assert.match(code, /--plan-build-only/);
+  assert.match(code, /echo "build=\$\{build\}" >>"\$GITHUB_OUTPUT"/);
+  assert.match(code, /bash scripts\/ios-ship-testflight\.sh --build "\$\{\{ steps\.plan-build\.outputs\.build \}\}"/);
   assert.match(read("scripts/ios-fleet/ship-testflight.sh"), /ensure-tf-ready/);
   // Hosted macOS with the stable-Xcode guard, never a self-hosted label.
   assert.match(code, /runs-on:\s*macos-latest/);
@@ -156,6 +192,21 @@ test("push paths trigger on the native tree and not on test-only changes", () =>
   assert.equal(triggers("README.md", paths), false);
 });
 
+test("path extractors accept single, double and unquoted values, ignoring trailing comments", () => {
+  assert.deepEqual(
+    extractPushPathEntries(
+      "      - 'ios/A/**'\n      - \"Sources/B.swift\"\n      - Sources/C.swift\n      - 'ios/D/**' # why it ships\n      - 'my dir/E.swift'\n      - \"my dir/F.swift\"\n",
+    ),
+    ["ios/A/**", "Sources/B.swift", "Sources/C.swift", "ios/D/**", "my dir/E.swift", "my dir/F.swift"],
+  );
+  assert.deepEqual(
+    extractGatePrefixes(
+      "--path-prefix 'ios/A/' \\\n--path-prefix \"Sources/B.swift\" \\\n--path-prefix Sources/C.swift\n--path-prefix 'ios/D/' # why it is watched\n--path-prefix 'my dir/' \\\n--path-prefix \"my dir/G.swift\"\n",
+    ),
+    ["ios/A/", "Sources/B.swift", "Sources/C.swift", "ios/D/", "my dir/", "my dir/G.swift"],
+  );
+});
+
 test("ASC credentials come from Fleet-OPS /asc, never the stale repository secrets", () => {
   // The repository ASC_* secrets are a revoked copy (HTTP 401, CC-163).
   assert.doesNotMatch(code, /secrets\.ASC_KEY_ID/);
@@ -167,73 +218,32 @@ test("ASC credentials come from Fleet-OPS /asc, never the stale repository secre
   // bare Infisical CLI is not used: it prints the value to stdout.
   assert.doesNotMatch(code, /8dae6d03/);
   assert.doesNotMatch(code, /ASC_INFISICAL_PROJECT_ID/);
-  assert.match(code, /INFISICAL_PROJECT_ID: \$\{\{ secrets\.INFISICAL_FLEET_OPS_PROJECT_ID \}\}/);
   assert.match(code, /uses: \.\/\.github\/actions\/infisical-secrets/);
-  // The Sentry step names the org secret that exists.  The repository has no
-  // secret called INFISICAL_PROJECT_ID, so the vault leg resolved nothing and
-  // the step fell through to the repository copies without saying so.
-  assert.doesNotMatch(code, /project-id: \$\{\{ secrets\.INFISICAL_PROJECT_ID \}\}/);
+  // ASC stays on Fleet-OPS.  Sentry uses the CodeCaps project.
   assert.match(code, /project-id: \$\{\{ secrets\.INFISICAL_FLEET_OPS_PROJECT_ID \}\}/);
-  assert.match(code, /secrets\.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID/);
+  assert.match(code, /project-id: \$\{\{ secrets\.INFISICAL_PROJECT_ID \}\}/);
+  assert.match(code, /service-token: \$\{\{ secrets\.INFISICAL_ASC_READ_TOKEN \}\}/);
+  assert.match(code, /service-token: \$\{\{ secrets\.INFISICAL_CODECAPS_READ_TOKEN \}\}/);
+  assert.match(code, /secret-path: \/asc/);
+  assert.match(code, /asc-mode: "true"/);
+  assert.match(code, /names: ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8/);
+  assert.match(code, /required: ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8/);
+  assert.doesNotMatch(code, /client-id:/);
+  assert.doesNotMatch(code, /INFISICAL_UNIVERSAL_AUTH_CLIENT/);
+  assert.doesNotMatch(code, /INFISICAL_CLIENT_(ID|SECRET)/);
+  assert.doesNotMatch(code, /install-release-secrets-tooling/);
+  assert.doesNotMatch(code, /universal-auth/);
   assert.doesNotMatch(code, /infisical secrets get/);
   assert.doesNotMatch(code, /infisical\/get-cli/);
-  // No new code may talk to the vault directly.
+  // No workflow step talks to the vault directly.  asc-mode in the fetch
+  // script stages the key and does not write the raw PEM to GITHUB_ENV.
   assert.doesNotMatch(code, /listSecretsRaw|loginUniversalAuth/);
-
-  // The multiline key never enters the step environment.  The tooling and
-  // the staging script run in ONE step: the tooling brings the fleet's
-  // reader onto the runner, the staging script resolves the three values
-  // environment-first, streams the key over stdin into a mode-600 file and
-  // removes the ASC_KEY_P8 entry, so only the file's path and the two
-  // identifiers cross into the later steps.
-  // The step names the tooling, and the tooling names the consumer that
-  // resolves the values.
-  assert.match(code, /scripts\/install-release-secrets-tooling\.sh/);
-  // No workflow step reads the vault directly: the reader is the fleet's
-  // own, and the staging script is the only thing that resolves a value.
   assert.doesNotMatch(code, /node scripts\/infisical-fetch\.mjs/);
-  // The step is a single call to the tooling, and the tooling runs the
-  // consumer in the same process tree, so the minted token reaches it
-  // through its environment and never through a file.
-  assert.match(code, /bash scripts\/install-release-secrets-tooling\.sh/);
-  const tooling = readFileSync(join(ROOT, "scripts/install-release-secrets-tooling.sh"), "utf8");
-  assert.match(tooling, /node "\$repo_root\/scripts\/stage-asc-key\.mjs"/);
-  assert.doesNotMatch(tooling, /release-secrets-env\.sh/);
-  // The minted token must never reach the log.  The guard names every output
-  // helper the script has, because a regression that printed through `say` or
-  // `fail` would leak the token while a guard that only matched `printf`
-  // still passed.
-  assert.doesNotMatch(tooling, /\b(say|echo|printf|fail)\b[^\n]*\$(token|\{token\})/);
-  assert.doesNotMatch(code, /release-secrets-env\.sh/);
-  assert.match(tooling, /export INFISICAL_TOKEN="\$token"/);
-  assert.match(tooling, /export INFISICAL_FLEET_OPS_PROJECT_ID="\$project_id"/);
-  // The consumer runs even when the tooling install fails, and the step
-  // reports the status of the command that actually failed.
-  assert.match(tooling, /install_rc=0[\s\S]*install_tooling \|\| install_rc=\$\?/);
-  assert.match(tooling, /stage_rc=0[\s\S]*stage-asc-key\.mjs"? \|\| stage_rc=\$\?/);
-  assert.match(tooling, /if \[ "\$install_rc" -ne 0 \]; then exit "\$install_rc"; fi/);
-  assert.match(tooling, /exit "\$stage_rc"/);
-  // The tooling is part of the ship, so a change to it runs the ship the
-  // same way a change to any other ship script does.
-  assert.match(code, /'scripts\/install-release-secrets-tooling\.sh'/);
-  // The staging script resolves each value from process.env first and only
-  // then through the approved reader, so a credential in the step's own
-  // environment always wins over the vault.
-  const stage = readFileSync(join(ROOT, "scripts/stage-asc-key.mjs"), "utf8");
-  assert.match(stage, /process\.env[\s\S]*fleet-secrets/s);
-  assert.ok(
-    stage.indexOf("fromProcess.get(name)") < stage.indexOf("getSecret(name"),
-    "the environment must be looked up before the approved reader",
-  );
-  // The vault is named where it is read: the step says which vault it
-  // reads, and the staging script owns the folder inside it.
+  const fetch = readFileSync(join(ROOT, "scripts/infisical-fetch.mjs"), "utf8");
+  assert.match(fetch, /export function exportAscCredentials/);
+  assert.match(fetch, /ios-stage-asc-key\.sh/);
+  assert.doesNotMatch(fetch, /writeGithubEnvValue\(env\.GITHUB_ENV, "ASC_KEY_P8"/);
   assert.match(code, /Load and stage the ASC credentials \(Fleet-OPS prod \/asc\)/);
-  assert.match(stage, /SECRET_FOLDER = '\/asc'/);
-  // No step may ask the composite action for an ASC_* name: the action
-  // writes every requested value into $GITHUB_ENV, which would put the
-  // private key back into the environment of every later step.
-  assert.doesNotMatch(code, /names: ASC_/);
-  assert.match(readFileSync(join(ROOT, "scripts/stage-asc-key.mjs"), "utf8"), /ios-stage-asc-key\.sh/);
   // The key leaves the environment file with the entry itself removed, not
   // with a blank assignment that leaves the earlier bytes in the file for the
   // runner to import into a later step.
@@ -297,6 +307,40 @@ test("the ASC credential reaches every client through the environment, never a p
   assert.ok(pushPaths().includes("scripts/ios-load-asc-key.sh"), "editing the loader must re-ship");
 });
 
+test("the version manifest publish names its cause and can write the CodeCaps row (CC-202)", () => {
+  const ship = read("scripts/ios-fleet/ship-testflight.sh");
+  const publish = read("scripts/ios-fleet/publish-ios-versions.sh");
+
+  // The publisher's streams are never discarded, and its failure stays a
+  // warning: the TestFlight upload that already succeeded must not fail.
+  assert.doesNotMatch(ship, /publish-ios-versions\.sh[^|\n]*>\/dev\/null/);
+  assert.match(ship, /publish_output="\$\(bash "\$\{FLEET_DIR\}\/publish-ios-versions\.sh"/);
+  assert.match(ship, /version-manifest publish failed \(non-fatal, rc=\$\{publish_rc\}\)/);
+  assert.match(publish, /HTTP \$\{API_STATUS\}/);
+  assert.match(publish, /no IOS_VERSIONS_PUBLISH_TOKEN credential/);
+  assert.match(publish, /contents:read on this repository and cannot write/);
+
+  // The remote leg merges into the live manifest and writes through a
+  // branch and pull request, because ai-fleet-coordinator main requires a
+  // pull request and this job's token is contents:read here.
+  assert.match(publish, /repos\/\$\{REPO\}\/git\/refs/);
+  assert.match(publish, /repos\/\$\{REPO\}\/pulls/);
+  assert.match(publish, /"branch": branch/);
+  assert.doesNotMatch(publish, /gh api "\$\{ARGS\[@\]\}"/);
+  assert.match(publish, /other app|every other app/);
+
+  // The credential is the org GH_PAT secret, scoped to the ship step only,
+  // and this job's own permissions stay read-only.
+  assert.match(code, /IOS_VERSIONS_PUBLISH_TOKEN:\s*\$\{\{ secrets\.GH_PAT \}\}/);
+  assert.match(code, /permissions:\s*\n\s+contents: read/);
+  assert.doesNotMatch(code, /contents: write/);
+  assert.doesNotMatch(code, /(echo|printf)[^\n]*IOS_VERSIONS_PUBLISH_TOKEN/);
+  assert.match(publish, /CURL_CONFIG="\$\{WORK_DIR\}\/curl-config"/);
+  assert.match(publish, /chmod 600 "\$CURL_CONFIG"/);
+  assert.doesNotMatch(publish, /echo[^\n]*\$\{TOKEN\}/);
+  assert.doesNotMatch(publish, /Authorization: Bearer \$\{TOKEN\}/);
+});
+
 test("the ship carries no standing gate override and always publishes What to Test", () => {
   assert.doesNotMatch(code, /IOS_TF_MIN_INTERVAL_SEC/);
   assert.doesNotMatch(code, /--force-ship/);
@@ -310,9 +354,64 @@ test("ship state cache is keyed apart from the Mac ship", () => {
   for (const k of keys) assert.equal(k, "ios-fleet-state-codecaps-ios-", `bare prefix ${k} also matches the Mac ship cache`);
 });
 
-test("the marketing train is 1.0.N and release notes use the owner clock", () => {
+test("post-sync ensure-tf-ready recheck runs after standing-tester sync", () => {
+  const steps = code.split(/- name:/);
+  const sync = steps.findIndex((s) => /Sync standing TestFlight testers/.test(s));
+  const recheck = steps.findIndex((s) => /Recheck TestFlight readiness after standing-tester sync/.test(s));
+  const summary = steps.findIndex((s) => /iOS ship summary \(TestFlight readiness after sync\)/.test(s));
+  assert.ok(sync > 0, "ios-ship.yml must sync standing TestFlight testers");
+  assert.ok(recheck > sync, "the post-sync recheck step must follow standing-tester sync");
+  assert.ok(summary > recheck, "the job summary step must follow the post-sync recheck");
+  const block = steps[recheck];
+  assert.match(block, /continue-on-error:\s*true/);
+  assert.match(block, /ios-recheck-tf-ready\.sh/);
+  assert.match(block, /steps\.plan-build\.outputs\.build/);
+  assert.match(block, /IOS_TF_READY_TIMEOUT_SEC/);
+  assert.match(block, /steps\.ship\.outputs\.uploaded == 'true'/);
+  assert.doesNotMatch(block, /steps\.ship\.outcome == 'success'/);
+  const ship = steps.find((s) => /id: ship\b/.test(s));
+  assert.match(ship, /ios-observe-ship\.mjs/);
+  const observe = read("scripts/ios-observe-ship.mjs");
+  assert.match(observe, /SHIP_LOG_PREFIX.*ios-ship/, "upload/skip patterns must require the ship log prefix");
+  assert.doesNotMatch(observe, /\(\?:\\\[ios-ship\\\] \)\?/, "optional bare-marker match must not be allowed");
+  const syncBlock = steps[sync];
+  assert.match(syncBlock, /if: success\(\)/);
+  assert.doesNotMatch(syncBlock, /steps\.ship\.outputs\.uploaded/);
+});
+
+test("the ship job clears a stale archive lock restored from the ship-state cache", () => {
+  // scripts/ios-fleet/ship-testflight.sh takes an mkdir lock at
+  // ~/.cache/ios-fleet/archive.lockdir.  Hosted runners are single-use, so a
+  // lockdir restored from the cache is always stale; left in place the next
+  // ship waits on it until "archive lock timeout".  The lock must be cleared
+  // right after the ship job restores the cache, before the plan-build step
+  // first runs the ship script, and removed again before the cache is saved
+  // so a cancelled run never persists it.
+  const shipStart = code.search(/^  ship:/m);
+  assert.ok(shipStart >= 0, "ios-ship.yml must declare a ship job");
+  const steps = code.slice(shipStart).split(/- name:/);
+  const lockRm = 'rm -rf "${HOME}/.cache/ios-fleet/archive.lockdir"';
+
+  const restore = steps.findIndex((s) => /Restore ship-state cache/.test(s));
+  const clear = steps.findIndex((s) => /Clear stale archive lock from ship-state cache/.test(s));
+  const plan = steps.findIndex((s) => /id: plan-build/.test(s));
+  assert.ok(restore >= 0 && clear >= 0 && plan >= 0, "the ship job has restore, lock-clear and plan-build steps");
+  assert.equal(clear, restore + 1, "the lock-clear step runs immediately after the ship-state cache is restored");
+  assert.ok(clear < plan, "the lock is cleared before the plan-build step runs ship-testflight.sh");
+  assert.ok(steps[clear].includes(lockRm), "the lock-clear step removes the archive lockdir");
+  assert.match(steps[clear], /if \[ -e /, "the lock-clear step checks whether a stale lock exists");
+
+  const save = steps.findIndex((s) => /Save ship-state cache/.test(s));
+  assert.ok(save > 0, "the ship job saves the ship-state cache");
+  const beforeSave = steps[save - 1];
+  assert.match(beforeSave, /if: always\(\)/, "the step before the cache save runs even when the ship is cancelled");
+  assert.ok(beforeSave.includes(lockRm), "the archive lock is removed before the ship-state cache is saved");
+});
+
+test("the fixed marketing version is 0.1.0 and release notes use the owner clock", () => {
   const apps = JSON.parse(read("scripts/ios-fleet/apps.json"));
-  assert.match(apps.apps.codecaps.marketingVersionDefault, /^1\.0\.\d+$/);
+  assert.equal(readFixedMarketingVersion(apps), "0.1.0");
+  assert.equal(apps.apps.codecaps.marketingVersionDefault, "0.1.0");
 
   const src = read("scripts/ios-fleet/asc-api.mjs");
   const fn = src.match(/function centralTimestamp[\s\S]*?\n}\n/)[0];
@@ -323,6 +422,7 @@ test("the marketing train is 1.0.N and release notes use the owner clock", () =>
 test("scheduled gate and key handoff shell tests pass", () => {
   for (const script of [
     "scripts/ios-fleet/test-scheduled-ship-gate.sh",
+    "scripts/ios-fleet/test-publish-ios-versions.sh",
     "scripts/test-ios-stage-asc-key.sh",
     "scripts/test-ios-load-asc-key.sh",
   ]) {
@@ -337,4 +437,339 @@ test("scheduled gate and key handoff shell tests pass", () => {
     }
     assert.match(out, /all tests passed/, `${script} did not report success`);
   }
+});
+
+// CC-200: the iOS lane never reached Sentry.  Two defects, both quiet.  The
+// token in SENTRY_AUTH_TOKEN was the DSN, and a DSN is not an API token, so
+// sentry-cli refused it in about seventy milliseconds.  The project was the
+// app's own, while the events land in the project the shared fleet DSN names,
+// so a dSYM in the wrong project never matches an event.  The failure was a
+// warning line inside a green job.
+const shipScript = read("scripts/ios-fleet/ship-testflight.sh");
+
+test("the iOS lane loads the Sentry API token, not the DSN", () => {
+  // Workflow loads FULLSCOPE for sentry-cli (CC-200) alongside SENTRY_AUTH_TOKEN.
+  assert.match(code, /names: SENTRY_DSN SENTRY_AUTH_TOKEN SENTRY_AUTH_TOKEN_FULLSCOPE/);
+  // SENTRY_DSN must not be required: empty vault+fallback must not block TestFlight.
+  assert.doesNotMatch(code, /required: SENTRY_DSN\b/);
+  assert.match(code, /GH_FALLBACK_SENTRY_AUTH_TOKEN_FULLSCOPE: \$\{\{ secrets\.SENTRY_AUTH_TOKEN_FULLSCOPE \}\}/);
+  assert.match(shipScript, /SENTRY_AUTH_TOKEN_FULLSCOPE/);
+  assert.match(shipScript, /SENTRY_AUTH_TOKEN from the CodeCaps project/);
+  // FULLSCOPE is preferred; when unset the CodeCaps token is used, and
+  // a DSN in the token slot is still refused.
+  const loader = shipScript.match(/load_sentry_auth\(\) \{[\s\S]*?\n\}/)[0];
+  assert.ok(
+    loader.indexOf("SENTRY_AUTH_TOKEN_FULLSCOPE") < loader.indexOf('elif [[ -n "${SENTRY_AUTH_TOKEN:-}" ]]'),
+    "the CodeCaps token is the fallback when FULLSCOPE is unset",
+  );
+  assert.match(shipScript, /\*:\/\/\*\|\*@\*/);
+  assert.match(shipScript, /looks like a DSN, not an API token/);
+});
+
+// The CodeCaps token slot can hold a DSN -- the fleet's shared value, and
+// the defect this lane had.  A DSN is not an API token, but fleet-secrets may
+// still hold the full-scope one, so the reader is asked before the DSN is
+// refused.  The function is run here against a stub reader on PATH.
+function runSentryAuth(env, stub = null) {
+  const dir = mkdtempSync(join(tmpdir(), "sentry-auth-"));
+  try {
+    // The merged load_sentry_auth calls the reader helpers defined beside
+    // it, so the extracted block carries them too or the sourced function
+    // fails before the stub is ever asked (PR #357 review).
+    const helpers = ["has_infisical_service_token", "fs_get"].map((name) => {
+      const m = shipScript.match(new RegExp(`${name}\\(\\) \\{[\\s\\S]*?\\n\\}`));
+      assert.ok(m, `ship-testflight.sh defines ${name}`);
+      return m[0];
+    });
+    const fn = shipScript.match(/load_sentry_auth\(\) \{[\s\S]*?\n\}/);
+    assert.ok(fn, "ship-testflight.sh defines load_sentry_auth");
+    writeFileSync(join(dir, "fn.sh"), [...helpers, fn[0]].join("\n"));
+    if (stub) writeFileSync(join(dir, "fleet-secrets"), stub, { mode: 0o755 });
+    const out = execFileSync(
+      "bash",
+      ["-c", 'source "$DIR/fn.sh"; load_sentry_auth; rc=$?; printf "rc=%s\\n" "$rc"; printf "reason=%s\\n" "$SENTRY_TOKEN_REASON"; printf "token=%s\\n" "$SENTRY_API_TOKEN"'],
+      {
+        encoding: "utf8",
+        // The stub directory is the only place a reader can come from, so the
+        // test never reaches a real vault.
+        // FLEET_SECRETS_BIN pins the reader to the stub, so a host that has
+        // a real fleet-secrets on its PATH cannot answer instead (the tests
+        // must be hermetic on any machine).
+        env: { PATH: `${dir}:/usr/bin:/bin`, DIR: dir, FLEET_SECRETS_BIN: join(dir, "fleet-secrets"), ...env },
+      },
+    );
+    const field = (name) => (out.match(new RegExp(`^${name}=(.*)$`, "m")) || [])[1] ?? "";
+    return { rc: field("rc"), reason: field("reason"), token: field("token") };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const FLEET_SECRETS_STUB = [
+  "#!/usr/bin/env bash",
+  '[[ "${1:-}" == "get" ]] || exit 2',
+  'printf "%s" "synthetic-fullscope-token"',
+  "",
+].join("\n");
+
+test("a DSN in the CodeCaps token slot falls through to fleet-secrets", () => {
+  // The service-token guard reads the run's environment before the stub
+  // reader is asked, so the probe carries a token (PR #357 review).
+  const r = runSentryAuth(
+    { SENTRY_AUTH_TOKEN: "https://key@o1.ingest.us.sentry.io/2", INFISICAL_TOKEN: "st.test.service" },
+    FLEET_SECRETS_STUB);
+  assert.equal(r.rc, "0");
+  assert.equal(r.token, "synthetic-fullscope-token");
+  assert.equal(r.reason, "");
+});
+
+test("a DSN in the CodeCaps token slot is refused when there is no reader", () => {
+  const r = runSentryAuth({ SENTRY_AUTH_TOKEN: "https://key@o1.ingest.us.sentry.io/2" });
+  assert.equal(r.rc, "1");
+  assert.equal(r.reason, "the token looks like a DSN, not an API token");
+  assert.equal(r.token, "");
+});
+
+test("a CodeCaps token that is not a DSN still wins over fleet-secrets", () => {
+  const r = runSentryAuth(
+    { SENTRY_AUTH_TOKEN: "synthetic-codecaps-token", INFISICAL_TOKEN: "st.test.service" },
+    FLEET_SECRETS_STUB);
+  assert.equal(r.rc, "0");
+  assert.equal(r.token, "synthetic-codecaps-token");
+  assert.equal(r.reason, "");
+});
+
+test("the iOS lane uploads to the DSN project as well as the app's own", () => {
+  assert.match(shipScript, /sentry_dsn_project/);
+  assert.match(shipScript, /sentry_project_list/);
+  assert.match(shipScript, /SENTRY_PROJECT="\$p"/);
+  // The DSN project is not the same thing as the app's project, so both are
+  // uploaded to, and the same project is never uploaded to twice.
+  assert.match(shipScript, /\$dsn_project" != "\$app_project"/);
+});
+
+// The DSN names a numeric project id, and sentry-cli needs the slug.  The
+// lookup must hit the Sentry web API's project endpoint, never the DSN's
+// ingest host and never the nonexistent /organizations/{org}/projects/{id}/
+// form, which answered 404 for every input and turned every ship red
+// (2026-10-28).  The function runs here against a stub curl that answers
+// only the real endpoint.
+function runDsnProject(dsn) {
+  const dir = mkdtempSync(join(tmpdir(), "dsn-project-"));
+  const fn = shipScript.match(/^SENTRY_DSN_PROJECT_ERROR=""\n[\s\S]*?^sentry_dsn_project\(\) \{\n[\s\S]*?^\}\n/m);
+  assert.ok(fn, "ship-testflight.sh defines sentry_dsn_project");
+  writeFileSync(join(dir, "fn.sh"), fn[0]);
+  const stub = join(dir, "curl");
+  writeFileSync(
+    stub,
+    [
+      "#!/usr/bin/env bash",
+      'url="${@: -1}"',
+      'printf "%s\\n" "$url" >>"$STUB_LOG"',
+      'case "$url" in',
+      '  https://sentry.io/api/0/projects/*/4512207409840129/) echo \'{"slug":"codecaps"}\' ;;',
+      "  *) exit 22 ;;",
+      "esac",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(stub, 0o755);
+  const log = join(dir, "urls.log");
+  writeFileSync(log, "");
+  let out = "";
+  let ok = true;
+  try {
+    out = execFileSync(
+      "bash",
+      ["-c", 'source "$DIR/fn.sh"; sentry_dsn_project'],
+      {
+        env: {
+          PATH: `${dir}:${process.env.PATH}`,
+          DIR: dir,
+          LOG_DIR: dir,
+          STUB_LOG: log,
+          SENTRY_DSN: dsn,
+          SENTRY_API_TOKEN: "test-token-not-real",
+        },
+        encoding: "utf8",
+      },
+    );
+  } catch {
+    ok = false;
+  }
+  return { ok, out, urls: readFileSync(log, "utf8").trim().split("\n").filter(Boolean) };
+}
+
+test("the DSN project id is resolved through sentry.io /api/0/projects/{org}/{id}/", () => {
+  const dsn = "https://placeholder@o4511650476326912.ingest.us.sentry.io/4512207409840129";
+  const r = runDsnProject(dsn);
+  assert.ok(r.ok, "a resolvable id succeeds");
+  assert.equal(r.out, "codecaps");
+  assert.equal(r.urls[0], "https://sentry.io/api/0/projects/4511650476326912/4512207409840129/");
+  for (const u of r.urls) {
+    assert.doesNotMatch(u, /ingest/, "the API is never asked on the ingest host");
+    assert.doesNotMatch(u, /\/organizations\/[^/]+\/projects\//);
+  }
+});
+
+test("an unresolvable DSN project id fails with the reason and tries the fleet org", () => {
+  const r = runDsnProject("https://placeholder@o4511650476326912.ingest.us.sentry.io/999");
+  assert.equal(r.ok, false);
+  assert.deepEqual(r.urls, [
+    "https://sentry.io/api/0/projects/4511650476326912/999/",
+    "https://sentry.io/api/0/projects/simple-with-us/999/",
+  ]);
+});
+
+test("a slug DSN tail is used as it stands, with no API call", () => {
+  const r = runDsnProject("https://placeholder@o1.ingest.us.sentry.io/codecaps");
+  assert.ok(r.ok);
+  assert.equal(r.out, "codecaps");
+  assert.deepEqual(r.urls, []);
+});
+
+test("Sentry load is best-effort and prefers CODECAPS GH fallback", () => {
+  // Fail-fast load contract: Infisical names + FULLSCOPE, no required DSN
+  // (never block TestFlight), GH_FALLBACK prefers SENTRY_DSN_CODECAPS.
+  const steps = code.split(/- name:/);
+  const load = steps.find((s) => /Load Sentry ship secrets/.test(s));
+  assert.ok(load, "load step exists");
+  assert.match(load, /names: SENTRY_DSN SENTRY_AUTH_TOKEN SENTRY_AUTH_TOKEN_FULLSCOPE/);
+  assert.doesNotMatch(load, /required:\s*SENTRY_DSN\b/);
+  assert.match(load, /GH_FALLBACK_SENTRY_DSN: \$\{\{ secrets\.SENTRY_DSN_CODECAPS \|\| secrets\.SENTRY_DSN \}\}/);
+  assert.match(load, /GH_FALLBACK_SENTRY_AUTH_TOKEN: \$\{\{ secrets\.SENTRY_AUTH_TOKEN \}\}/);
+  assert.match(load, /GH_FALLBACK_SENTRY_AUTH_TOKEN_FULLSCOPE: \$\{\{ secrets\.SENTRY_AUTH_TOKEN_FULLSCOPE \}\}/);
+  assert.match(load, /service-token: \$\{\{ secrets\.INFISICAL_CODECAPS_READ_TOKEN \}\}/);
+});
+
+test("CodeCaps iOS ships with its own Sentry DSN, and a missing one is loud", () => {
+  // Pick-step contract: when vault/fallback is missing or not codecaps,
+  // write the RUNNER_TEMP note and let the status step turn the run red
+  // without exiting the pick step (TestFlight stays unblocked).
+  assert.match(code, /CODECAPS_SENTRY_PROJECT_ID: "4512207409840129"/);
+  const steps = code.split(/- name:/);
+  const pick = steps.findIndex((s) => /Use the CodeCaps Sentry DSN/.test(s));
+  const load = steps.findIndex((s) => /Load Sentry ship secrets/.test(s));
+  const ship = steps.findIndex((s) => /Ship CodeCaps to TestFlight/.test(s));
+  assert.ok(load > 0 && pick > load && ship > pick, "the DSN is picked after the fetch and before the ship");
+  const step = steps[pick];
+  assert.match(step, /SENTRY_DSN<</);
+  assert.match(step, /"\$SENTRY_DSN_CODECAPS"/);
+  assert.match(step, />>"\$GITHUB_ENV"/);
+  assert.match(step, /dsn_project_id/);
+  assert.match(step, /CODECAPS_SENTRY_PROJECT_ID/);
+  // Normalize trailing slash and query/fragment before comparing project id.
+  assert.match(step, /sed -E/);
+  assert.ok(step.includes("s/[?#].*$//"), "strips query/fragment");
+  assert.ok(step.includes("s#/+$##"), "strips trailing slashes");
+  assert.match(step, /::error title=Sentry DSN::/);
+  assert.match(step, /Infisical CodeCaps prod \//);
+  assert.doesNotMatch(step, /Fleet-OPS prod \//);
+  assert.match(step, /"\$RUNNER_TEMP\/ios-ship-sentry-dsn-missing"/);
+  assert.doesNotMatch(step, /GITHUB_WORKSPACE/);
+  assert.doesNotMatch(step, /exit 1/);
+  const status = steps.find((s) => /Sentry artifact upload status/.test(s));
+  assert.match(status, /\$RUNNER_TEMP\/ios-ship-sentry-dsn-missing/);
+  assert.match(status, /dsn_missing" = "1" \]; then\s+exit 1/);
+  assert.doesNotMatch(step, /echo[^\n]*\$\{?SENTRY_DSN_CODECAPS\}?"?\s*$/m);
+});
+
+test("dsn_project_id accepts trailing slash and query suffix", () => {
+  // Hermetic unit of the pick-step helper: extract via the workflow source.
+  const m = code.match(/dsn_project_id\(\) \{[\s\S]*?\n          \}/);
+  assert.ok(m, "workflow defines dsn_project_id");
+  const dir = mkdtempSync(join(tmpdir(), "dsn-pid-"));
+  try {
+    writeFileSync(join(dir, "fn.sh"), m[0] + '\n');
+    const run = (dsn) =>
+      execFileSync("bash", ["-c", 'source "$DIR/fn.sh"; dsn_project_id "$DSN"'], {
+        encoding: "utf8",
+        env: { ...process.env, DIR: dir, DSN: dsn },
+      }).trim();
+    const id = "4512207409840129";
+    const base = `https://placeholder@o1.ingest.us.sentry.io/${id}`;
+    assert.equal(run(base), id);
+    assert.equal(run(base + "/"), id);
+    assert.equal(run(base + "?x=1"), id);
+    assert.equal(run(base + "/#frag"), id);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a failed Sentry upload is an error annotation and a red run", () => {
+  assert.match(shipScript, /::error title=Sentry upload::/);
+  assert.match(shipScript, /sentry_report_failure/);
+  assert.match(shipScript, /\.ios-ship-sentry-failed/);
+  // The workflow turns the marker into a failed step, and it is the LAST
+  // step, after the ship-state cache is saved, so a red run can neither block
+  // the release that already happened nor make the next ship repeat itself.
+  assert.match(code, /Sentry artifact upload status/);
+  assert.match(code, /\.ios-ship-sentry-failed/);
+  assert.match(code, /exit 1/);
+  const shipSteps = code.split(/- name:/);
+  const statusIndex = shipSteps.findIndex((s) => /Sentry artifact upload status/.test(s));
+  const cacheIndex = shipSteps.findIndex((s) => /Save ship-state cache/.test(s));
+  assert.ok(statusIndex > 0 && cacheIndex > 0, "the ship job has both steps");
+  assert.ok(statusIndex > cacheIndex, "the Sentry status step runs after the ship-state cache is saved");
+});
+
+test("the Sentry status step never claims a TestFlight upload that never ran", () => {
+  // The marker is written before the export and the upload, so a marker can
+  // exist for a run that never uploaded anything.  The claim has to come from
+  // the ship step's own outcome, not from the mere presence of the marker.
+  assert.match(code, /- name: Ship CodeCaps to TestFlight\n\s+id: ship\b/);
+  assert.match(code, /steps\.ship\.outcome\s*\}\}" = "success"/);
+  assert.ok(
+    (code.match(/steps\.ship\.outcome/g) || []).length >= 2,
+    "the status step must read the ship step's outcome in both branches",
+  );
+});
+
+test("the Sentry upload keeps the token out of argv and reports every miss", () => {
+  // The token reaches curl on stdin, so a process listing cannot read it.
+  assert.match(shipScript, /-H @-/);
+  assert.match(shipScript, /<<<"Authorization: Bearer \$\{SENTRY_API_TOKEN\}"/);
+  assert.doesNotMatch(shipScript, /curl[^\n]*Bearer/);
+  assert.doesNotMatch(shipScript, /-H "Authorization: Bearer/);
+
+  // A credential that cannot be resolved is reported by name and fails the
+  // resolution, instead of becoming an empty token that looks like a success.
+  assert.ok(shipScript.includes("could not be read from fleet-secrets"));
+  assert.match(shipScript, /load_sentry_auth\(\) \{[\s\S]*?return 1/);
+
+  // Source bundles are a per-project artifact, so every project gets them.
+  assert.match(shipScript, /debug-files upload --include-sources "\$archive"/);
+  assert.doesNotMatch(shipScript, /debug-files upload "\$archive"/);
+
+  // The Size Analysis quota is 100 builds a month, so only the project that
+  // holds the events spends one.
+  assert.ok(shipScript.includes('if [[ -z "$dsn_project" || "$p" == "$dsn_project" ]]; then'));
+
+  // A DSN project that cannot be resolved is reported:  dropping it silently
+  // is the defect the lane exists to fix.
+  assert.ok(shipScript.includes("the Sentry project named by the DSN could not be resolved"));
+
+  // The marker write is guarded:  a bookkeeping failure must not abort the
+  // ship under set -e.
+  assert.ok(shipScript.includes('>>"$(sentry_failure_marker)" 2>/dev/null'));
+});
+
+test("upload-only never forwards the (from IPA) placeholder to the manifest publisher", () => {
+  const ship = read("scripts/ios-fleet/ship-testflight.sh");
+  const guard = ship.indexOf('"${MARKETING:-}" == "(from IPA)" || "${BUILD_NUM:-}" == "(from IPA)"');
+  const publish = ship.indexOf('bash "${FLEET_DIR}/publish-ios-versions.sh"');
+  assert.ok(guard > 0 && publish > guard, "placeholder guard must come before the publisher call");
+});
+
+test("Sentry error-file read failure cannot abort a ship under errexit", () => {
+  const restore = shipScript.match(/if \[\[ -s "\$\{LOG_DIR\}\/sentry-dsn-project\.error" \]\]; then[\s\S]*?\n    fi/)[0];
+  const script = `set -e
+LOG_DIR=$(mktemp -d)
+trap 'rm -rf "$LOG_DIR"' EXIT
+printf 'reason' >"$LOG_DIR/sentry-dsn-project.error"
+cat() { return 1; }
+${restore}
+echo continued`;
+  assert.match(execFileSync("bash", ["-c", script], {encoding:"utf8"}), /continued/);
 });

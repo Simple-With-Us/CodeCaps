@@ -20,10 +20,13 @@ The ship script keeps its own rate gate and the same-HEAD skip.  Never set `IOS_
 - The same-named repository secrets are a stale copy that App Store Connect rejects with HTTP 401 (CC-163).  The workflow does not read them and has no fallback to them.
 - `IOS_DIST_P12_BASE64` and `IOS_DIST_P12_PASSWORD` (the Apple Distribution identity) stay repository secrets.
 - `SENTRY_DSN` and `SENTRY_AUTH_TOKEN` are best-effort: Infisical first, same-named repository secrets as fallback.
+- `SENTRY_DSN_CODECAPS` is the DSN of Sentry project `codecaps` (id 4512207409840129), read from Fleet-OPS Infisical prod `/` (repository secret of the same name as fallback).  The workflow makes it the `SENTRY_DSN` the archive and the ship script see, so crashes, dSYMs and the Size Analysis build all land in `codecaps`.  When it is missing the build falls back to the shared fleet `SENTRY_DSN` (project `botfleet` since 2026-10-22), and the run goes red with a `Sentry DSN` error; the TestFlight upload is never blocked.
 
 ## Versions And Notes
 
-Marketing and build both come from the repo's commit count: `1.0.<commit_count>` and `<commit_count>`, so the pair always describes one commit (the older `0.1.N` builds stay in TestFlight and `1.0.1` is above every one of them).  UTC `YYYYMMDDHHMM` stamps are retired.  Every upload publishes What to Test from the commit subjects since the last ship, with agent names removed.
+Marketing and build are two independent numbers (owner directive 2026-10-24, AFC-517).  Marketing is the next free patch on the app's `1.0` train:  one above the highest patch App Store Connect already holds there, moved further up past any patch an App Store version or a TestFlight train (drift trains included) already holds (`nextMarketingPatch` in `version-plan.mjs`).  App Store versions and TestFlight trains both count, except a drift train -- a `1.0.N` train holding build `N`, which is what the retired scheme produced -- so those uploads no longer push the version forward.  The build is the repo's commit count, raised when it has to be above every build already in the target train and above the app's own builds, so the two numbers never describe one value.  App Store Connect shows the pair as `1.0.237 (2360)`.  UTC `YYYYMMDDHHMM` stamps are retired.  Every upload publishes What to Test from the commit subjects since the last ship, with agent names removed.
+
+The rules live in `scripts/ios-fleet/version-plan.mjs`, unit-tested by `scripts/ios-fleet/version-plan.test.mjs` (the `Version plan contract` check).  `--version X.Y.Z` pins the marketing version exactly and `--build N` pins the build number exactly;  neither moves the other.
 
 ## When A Build Is Missing
 
@@ -36,5 +39,5 @@ Marketing and build both come from the repo's commit count: `1.0.<commit_count>`
 CodeCaps for Mac no longer ships to TestFlight or the Mac App Store (CC-169, owner ruling Mon, Oct 19, 2026).  The Mac app is a direct download: the Sparkle app under `Sources/`, released as a signed and notarized DMG on GitHub Releases by `.github/workflows/mac-release.yml` and linked from https://simplewithus.com/codecaps/.
 
 - **What was removed.**  `.github/workflows/macos-ship.yml` and its contract test, the Mac App Store signing and export scripts, `mac-appstore-profiles.json`, the `codecaps-mac` entry in `scripts/ios-fleet/apps.json`, and the Apple Distribution signing overrides on the `CodeCapsCompanionMac` and `CodeCapsWidgetsMac` targets in `project.yml`.  `scripts/mac-ship-testflight.sh` remains as a stub that exits non-zero.
-- **What stays.**  The `CodeCapsCompanionMac` and `CodeCapsWidgetsMac` targets still build (Swift CI compiles the widget extension without signing), but nothing archives or uploads them.
+- **What stays.**  The `CodeCapsCompanionMac` and `CodeCapsWidgetsMac` targets still build (Swift CI compiles the Mac app scheme and the widget extension without signing), but nothing archives or uploads them.
 - **Not changed.**  The iOS ship above, and `mac-release.yml`.

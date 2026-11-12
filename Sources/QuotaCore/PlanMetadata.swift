@@ -12,6 +12,26 @@ public struct PlanMetadata: Codable, Equatable, Sendable {
     public var hasMismatch: Bool
     public var userUpdatedAt: Double?
 
+    public init(
+        detectedPlanName: String? = nil,
+        userPlanName: String? = nil,
+        userCostUsd: String? = nil,
+        userRenewalDateText: String? = nil,
+        userSubtitle: String? = nil,
+        showCostAndRenewal: Bool? = nil,
+        hasMismatch: Bool = false,
+        userUpdatedAt: Double? = nil
+    ) {
+        self.detectedPlanName = Self.clean(detectedPlanName, limit: 256)
+        self.userPlanName = Self.clean(userPlanName, limit: 256)
+        self.userCostUsd = Self.clean(userCostUsd, limit: 128)
+        self.userRenewalDateText = Self.clean(userRenewalDateText, limit: 512)
+        self.userSubtitle = Self.clean(userSubtitle, limit: 1_024)
+        self.showCostAndRenewal = showCostAndRenewal
+        self.hasMismatch = hasMismatch
+        self.userUpdatedAt = userUpdatedAt
+    }
+
     public init(detectedPlanName: String?, customInfo: PlatformCustomInfo?, providerKey: String) {
         self.detectedPlanName = Self.clean(detectedPlanName, limit: 256)
         userPlanName = Self.clean(customInfo?.planName, limit: 256)
@@ -70,6 +90,9 @@ public enum PlanComparison {
            [detected, entered].allSatisfy({ $0 == "max" || $0.range(of: #"^max[1-9][0-9]*x$"#, options: .regularExpression) != nil }) {
             return false
         }
+        // The Grok Bot feed reports the generic "Grok Bot Plan" for every plan,
+        // so it can never contradict an entered value (owner, 2026-10-22).
+        if providerKey == "grok-bot", detected == "grokbotplan" { return false }
         return true
     }
 
@@ -95,6 +118,14 @@ public enum PlanComparison {
         text = text.replacingOccurrences(of: "×", with: "x")
         let key = text.unicodeScalars.filter { (CharacterSet.alphanumerics.contains($0) || $0 == "+") }.map(String.init).joined()
         guard !key.isEmpty, !["unknown", "unavailable", "notreported"].contains(key) else { return nil }
+        // Owner-directed substring aliases (2026-10-22): anything reading
+        // "pro lite"/"prolite" is the Codex Pro Lite tier, and anything with
+        // "ultra" in it is Cursor's unified_ultra allowance.  Applied after
+        // provider-name stripping so "ChatGPT Pro Lite (5x)" and "Ultra" stop
+        // warning against the provider-reported slugs.
+        if let rules = substringAliases[providerKey] {
+            for rule in rules where key.contains(rule.fragment) { return rule.canonical }
+        }
         // Raw Copilot API plan tokens (for example `individual_pro`) name
         // the same tiers users type; alias them to the user-facing forms so
         // a standard entry is not a false mismatch (Sentry on #277).
@@ -110,4 +141,48 @@ public enum PlanComparison {
         "copilotpro": "pro",
         "copilotproplus": "pro+",
     ]
+
+    private static let substringAliases: [String: [(fragment: String, canonical: String)]] = [
+        "openai": [("prolite", "prolite")],
+        "cursor": [("ultra", "unifiedultra")],
+    ]
 }
+
+// MARK: - Platform Custom Metadata
+
+public struct PlatformCustomInfo: Codable, Equatable, Sendable {
+    /// Persisted edit revision; quota observation time remains independent.
+    public var updatedAt: Date?
+    public var customSubtitle: String
+    public var planName: String
+    public var costUsd: String
+    public var renewalDateText: String
+    public var showCostAndRenewal: Bool
+
+    public init(
+        customSubtitle: String = "",
+        planName: String = "",
+        costUsd: String = "",
+        renewalDateText: String = "",
+        showCostAndRenewal: Bool = false
+    ) {
+        self.updatedAt = nil
+        self.customSubtitle = customSubtitle
+        self.planName = planName
+        self.costUsd = costUsd
+        self.renewalDateText = renewalDateText
+        self.showCostAndRenewal = showCostAndRenewal
+    }
+
+    /// Whether the owner's free-text Settings fields mention a plan or cost
+    /// change (e.g. "↓ $50/mo plan then").  Treated as an explicit plan-change
+    /// signal: the runaway detector stands down for this provider and the
+    /// informational plan-change state shows until the text no longer
+    /// mentions a change.
+    public var mentionsPlanChange: Bool {
+        let text = [planName, costUsd, renewalDateText].joined(separator: " ").lowercased()
+        let markers = ["↓", "↑", "→", "downgrade", "upgrade"]
+        return markers.contains { text.contains($0) }
+    }
+}
+

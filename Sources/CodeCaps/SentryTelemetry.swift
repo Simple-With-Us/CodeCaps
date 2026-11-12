@@ -1,4 +1,5 @@
 import Foundation
+import QuotaCore
 import Sentry
 
 /// Native Sentry crash reporting and telemetry for the CodeCaps Mac menu-bar app.
@@ -40,7 +41,27 @@ enum SentryTelemetry {
             options.failedRequestStatusCodes = [HttpStatusCodeRange(min: 500, max: 599)]
             options.sendDefaultPii = false
             options.beforeSend = { event in
-                sanitize(event)
+                let exceptionTypes = event.exceptions?.compactMap { $0.type } ?? []
+                let exceptionValues = event.exceptions?.compactMap { $0.value } ?? []
+                if isThirdPartyFailedRequest(
+                    url: event.request?.url,
+                    exceptionTypes: exceptionTypes
+                ) { return nil }
+                if IdempotentGETRetryFilter.shouldSuppressAutomaticFailedRequest(
+                    url: event.request?.url,
+                    httpMethod: event.request?.method,
+                    exceptionTypes: exceptionTypes,
+                    exceptionValues: exceptionValues
+                ) { return nil }
+                return sanitize(event)
+            }
+        }
+        QuotaClientExhaustedTransientRead.onExhausted = { (endpoint: URL, error: QuotaClientError) in
+            let host = endpoint.host ?? "endpoint"
+            let detail = (error as LocalizedError).errorDescription ?? "transient transport failure"
+            let message = "Quota pull to \(host) failed after retries: \(detail)"
+            SentrySDK.capture(message: message) { scope in
+                scope.setLevel(.warning)
             }
         }
     }
@@ -63,6 +84,24 @@ enum SentryTelemetry {
               !trimmed.isEmpty,
               !trimmed.hasPrefix("$(") else { return nil }
         return trimmed
+    }
+
+    /// Provider APIs the quota readers call.  A 5xx from one of them is that
+    /// provider's outage, which CodeCaps already shows as a missing reading, so
+    /// it is not reported as a CodeCaps error.  Our own hosts, including a
+    /// user-configured Usage Monitor endpoint, are still captured.  BOTFLEET-2Z
+    /// was about 960 of these from api2.cursor.sh alone.
+    static let thirdPartyProviderHostSuffixes: [String] = [
+        "cursor.sh", "cursor.com", "anthropic.com", "openai.com", "chatgpt.com",
+        "x.ai", "grok.com", "minimax.io", "minimaxi.com"
+    ]
+
+    /// Whether an event is sentry-cocoa's automatic failed-request capture of a
+    /// third-party provider API.  Pure, so tests can pin it without the SDK.
+    static func isThirdPartyFailedRequest(url: String?, exceptionTypes: [String]) -> Bool {
+        guard exceptionTypes.contains("HTTPClientError"),
+              let url, let host = URL(string: url)?.host?.lowercased() else { return false }
+        return thirdPartyProviderHostSuffixes.contains { host == $0 || host.hasSuffix("." + $0) }
     }
 
     private static func sanitize(_ event: Event) -> Event? {

@@ -36,6 +36,7 @@
  */
 import { writeFileSync } from "node:fs";
 import { createPrivateKey } from "node:crypto";
+import { hasInfisicalServiceToken } from "./infisical-service-token.mjs";
 
 // Normalizes a PEM private key and refuses anything that is not one.
 //
@@ -96,6 +97,12 @@ export const CLIENT_ENV_ALLOWLIST = [
   "APPLE_API_KEY_ID",
   "APPLE_API_ISSUER_ID",
   "APPLE_API_KEY_P8_BASE64",
+  "INFISICAL_FLEET_OPS_PROJECT_ID",
+  "INFISICAL_TOKEN",
+  "INFISICAL_PROJECT_ID",
+  "INFISICAL_ENVIRONMENT",
+  "INFISICAL_SITE_URL",
+  "INFISICAL_API_URL",
   "FLEET_SECRETS_BIN",
   "FLEET_SECRETS"
 ];
@@ -107,9 +114,11 @@ export const CLIENT_ENV_ALLOWLIST = [
 export function clientEnvironment(env = process.env, extra = {}) {
   const child = {};
   for (const name of CLIENT_ENV_ALLOWLIST) {
+    if (name === "INFISICAL_TOKEN" && !hasInfisicalServiceToken(env)) continue;
     const value = env[name];
     if (typeof value === "string" && value.length > 0) child[name] = value;
   }
+  if (hasInfisicalServiceToken(env)) child.INFISICAL_TOKEN = env.INFISICAL_TOKEN;
   return { ...child, ...extra };
 }
 

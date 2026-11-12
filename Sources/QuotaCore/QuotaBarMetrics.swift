@@ -26,11 +26,7 @@ public enum QuotaPeriod: Equatable, Sendable {
     /// skews the period length (a Mar 1 03:00Z reset would start on Jan 29 in
     /// Chicago) and puts the marker in the wrong place.  A fixed calendar also
     /// means two Macs in different time zones draw the same bar.
-    public static let billingCalendar: Calendar = {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .gmt
-        return calendar
-    }()
+    public static let billingCalendar: Calendar = ResetAlarmCadence.billingCalendar
 
     /// When a window of this length that ends at `end` began.  Months are counted
     /// on `billingCalendar` unless a caller passes another.
@@ -50,51 +46,38 @@ public enum QuotaPeriod: Equatable, Sendable {
     ///
     /// The token comes from the reader, computed from real timestamps, so it
     /// wins over label prose: a "31d" token is thirty-one days.  The looser
-    /// substring rules in `WindowPacing.parseDurationSeconds` would read "31d"
-    /// as one day ("1d") and "15h" as five hours ("5h"), so they are only a
-    /// fallback for tokens that are not a number and a unit.
+    /// substring rules would read "31d" as one day ("1d") and "15h" as five
+    /// hours ("5h"), so they are only a fallback for tokens that are not a
+    /// number and a unit.
     ///
     /// Returns nil when nothing names a period, for example a plan meter whose
     /// only token is "plan".
+    ///
+    /// The answer comes from `ResetAlarmCadence.resolve`, the one resolver the
+    /// Mac's caption, the Mac's marker, the phone and the widget all ask, so
+    /// they cannot read the same window differently.
     public static func resolve(token: String?, label: String) -> QuotaPeriod? {
-        let token = (token ?? "").lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        if let strict = strictPeriod(token) { return strict }
-
-        switch token {
-        case "billing-cycle", "billing_cycle", "billing cycle", "billingcycle", "monthly", "month":
-            return .calendarMonths(1)
-        default:
-            break
-        }
-
-        let words = "\(token) \(label.lowercased())"
-        if let seconds = WindowPacing.parseDurationSeconds(token: token, label: label) {
-            // The loose parser calls any "month" a fixed 30 days.
-            if seconds == 30 * 86_400, words.contains("month") { return .calendarMonths(1) }
-            return .fixed(seconds)
-        }
-        if words.contains("billing cycle") || words.contains("billing-cycle") || words.contains("monthly") {
-            return .calendarMonths(1)
-        }
-        return nil
+        resolve(token: token, label: label, providerKey: nil, isSupplementaryVideoQuota: false)
     }
 
-    /// A number followed by a unit: "5h", "168h", "1w", "31d", "1mo".  Nil for
-    /// anything else, so free text falls through to the keyword rules.
-    private static func strictPeriod(_ token: String) -> QuotaPeriod? {
-        let digits = token.prefix { $0.isNumber || $0 == "." }
-        guard !digits.isEmpty, let value = Double(digits), value.isFinite, value > 0 else { return nil }
-        let unit = String(token.dropFirst(digits.count)).trimmingCharacters(in: .whitespaces)
-        switch unit {
-        case "s", "sec", "secs", "second", "seconds": return .fixed(value)
-        case "m", "min", "mins", "minute", "minutes": return .fixed(value * 60)
-        case "h", "hr", "hrs", "hour", "hours": return .fixed(value * 3_600)
-        case "d", "day", "days": return .fixed(value * 86_400)
-        case "w", "wk", "wks", "week", "weeks": return .fixed(value * 604_800)
-        case "mo", "mos", "month", "months":
-            guard value == value.rounded(), value <= 24 else { return nil }
-            return .calendarMonths(Int(value))
-        default: return nil
+    /// The period of a window, with the provider facts the shared resolver
+    /// needs for the rules that are one provider's own.
+    public static func resolve(
+        token: String?,
+        label: String,
+        providerKey: String?,
+        isSupplementaryVideoQuota: Bool
+    ) -> QuotaPeriod? {
+        let period = ResetAlarmCadence.resolve(
+            token: token,
+            label: label,
+            providerKey: providerKey,
+            isSupplementaryVideoQuota: isSupplementaryVideoQuota
+        )
+        switch period {
+        case .fixed(let seconds): return .fixed(seconds)
+        case .calendarMonths(let months): return .calendarMonths(months)
+        case nil: return nil
         }
     }
 }
@@ -125,18 +108,28 @@ public struct QuotaPeriodSpan: Equatable, Sendable {
     /// one calendar month before the reset date, so a reset on Mar 31 starts on
     /// Feb 28 and a reset on Mar 1 starts on Feb 1.  Returns nil when the reset
     /// is unknown or no period can be read.
+    ///
+    /// The period comes from the shared resolver, with the provider facts it
+    /// needs, so the marker beside a caption is drawn for the same period the
+    /// caption names.
     public static func resolve(
         token: String?,
         label: String,
         resetAt: Date?,
         explicitStart: Date? = nil,
+        providerKey: String? = nil,
+        isSupplementaryVideoQuota: Bool = false,
         calendar: Calendar = QuotaPeriod.billingCalendar
     ) -> QuotaPeriodSpan? {
         guard let resetAt else { return nil }
         if let explicitStart, isPlausible(start: explicitStart, end: resetAt) {
             return QuotaPeriodSpan(start: explicitStart, end: resetAt)
         }
-        guard let start = QuotaPeriod.resolve(token: token, label: label)?
+        guard let start = QuotaPeriod.resolve(
+                    token: token,
+                    label: label,
+                    providerKey: providerKey,
+                    isSupplementaryVideoQuota: isSupplementaryVideoQuota)?
             .start(endingAt: resetAt, calendar: calendar),
             isPlausible(start: start, end: resetAt) else { return nil }
         return QuotaPeriodSpan(start: start, end: resetAt)
@@ -157,6 +150,8 @@ public extension QuotaWindowSnapshot {
             label: window.label,
             resetAt: resetAt,
             explicitStart: window.periodStartDate,
+            providerKey: window.canonicalProviderKey,
+            isSupplementaryVideoQuota: window.isSupplementaryVideoQuota,
             calendar: calendar
         )
     }

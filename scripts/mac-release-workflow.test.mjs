@@ -61,101 +61,57 @@ test('Sparkle reads the ASC credentials through the fleet reader, never reposito
     assert.doesNotMatch(file, /8dae6d03/);
     assert.doesNotMatch(file, /ASC_INFISICAL_PROJECT_ID/);
   }
-  assert.match(loader, /INFISICAL_PROJECT_ID: \$\{\{ secrets\.INFISICAL_FLEET_OPS_PROJECT_ID \}\}/);
+  assert.match(loader, /project-id: \$\{\{ secrets\.INFISICAL_FLEET_OPS_PROJECT_ID \}\}/);
   assert.doesNotMatch(loader, /echo .*\$\{ASC_INFISICAL_PROJECT_ID\}/);
-  // The key material must not enter the job environment.  The tooling and the
-  // staging script run in ONE step: the tooling brings the fleet's reader
-  // onto the runner and the staging script writes the private key to a
-  // mode-600 file.  Split across two steps the key would be an environment
-  // variable of the second one, where every later step, every process
-  // listing and every environment dump can read it.
-  assert.doesNotMatch(loader, /infisical-secrets/);
-  assert.doesNotMatch(loader, /uses: \.\/\.github\/actions/);
-  // No workflow step reads the vault.  The reader is the fleet's own, and
-  // the staging script is the only thing that resolves a credential, so the
-  // direct loader must not be called from a workflow at all.
+  // asc-mode stages the PEM and exports ASC_KEY_PATH.  The raw key is not a
+  // GITHUB_ENV value.  The workflow calls the composite action, not the
+  // fetch script and not a universal-auth login.
+  assert.match(loader, /uses: \.\/\.github\/actions\/infisical-secrets/);
+  assert.match(loader, /names: ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8/);
+  assert.match(loader, /required: ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8/);
+  assert.match(loader, /secret-path: \/asc/);
+  assert.match(loader, /service-token: \$\{\{ secrets\.INFISICAL_ASC_READ_TOKEN \}\}/);
+  assert.match(loader, /asc-mode: "true"/);
+  assert.doesNotMatch(loader, /GH_FALLBACK_ASC_/);
+  assert.doesNotMatch(loader, /client-id:/);
+  assert.doesNotMatch(loader, /INFISICAL_UNIVERSAL_AUTH_CLIENT/);
+  assert.doesNotMatch(loader, /INFISICAL_CLIENT_(ID|SECRET)/);
+  assert.doesNotMatch(loader, /install-release-secrets-tooling/);
   assert.doesNotMatch(loader, /node scripts\/infisical-fetch\.mjs/);
-  // The step is a single call to the tooling, and the tooling runs the
-  // consumer in the same process tree, so the minted token reaches it
-  // through its environment and never through a file.
-  assert.match(loader, /run: \|[\s\S]*bash scripts\/install-release-secrets-tooling\.sh/);
-  const tooling = read('scripts/install-release-secrets-tooling.sh');
-  assert.match(tooling, /node "\$repo_root\/scripts\/stage-asc-key\.mjs"/);
-  assert.doesNotMatch(tooling, /release-secrets-env\.sh/);
-  // The minted token must never reach the log.  The guard names every output
-  // helper the script has, because a regression that printed through `say` or
-  // `fail` would leak the token while a guard that only matched `printf`
-  // still passed.
-  assert.doesNotMatch(tooling, /\b(say|echo|printf|fail)\b[^\n]*\$(token|\{token\})/);
-  assert.doesNotMatch(loader, /release-secrets-env\.sh/);
-  assert.match(tooling, /export INFISICAL_TOKEN="\$token"/);
-  assert.match(tooling, /export INFISICAL_FLEET_OPS_PROJECT_ID="\$project_id"/);
-  // The reader is proved before the consumer runs.  The consumer reads a
-  // failed lookup as an empty value, so without this check a broken reader
-  // and a rejected token both read as a missing credential, and the operator
-  // is sent to fix vault permissions when the fault is the tooling.
-  assert.match(tooling, /check_reader/);
-  assert.match(tooling, /names --path \/asc/);
-  // The proof is a step of the install, after the token is minted, and the
-  // install is called before the consumer.  The order is asserted at the
-  // call site:  the guard inside the function body only says the function
-  // would prove the reader, not that the release calls it first.
-  const installStart = tooling.indexOf('install_tooling() {');
-  assert.notEqual(installStart, -1, 'the install has to be one function');
-  const installBody = tooling.slice(installStart, tooling.indexOf('\n}\n', installStart));
-  assert.match(installBody, /mint_token \|\| return 1[\s\S]*check_reader \|\| return 1/);
-  const installCall = tooling.indexOf('install_tooling || install_rc=$?');
-  const consumerCall = tooling.indexOf('node "$repo_root/scripts/stage-asc-key.mjs"');
-  assert.notEqual(installCall, -1, 'the release has to call the install');
-  assert.notEqual(consumerCall, -1, 'the release has to call the consumer');
-  assert.ok(installCall < consumerCall, 'the reader has to be proved before the consumer runs');
-  // The staging script resolves every credential environment-first, so a
-  // value in the job's own environment always wins over the vault.
-  const stage = read('scripts/stage-asc-key.mjs');
-  assert.match(stage, /process\.env[\s\S]*fleet-secrets/s);
-  assert.ok(
-    stage.indexOf('fromProcess.get(name)') < stage.indexOf('getSecret(name'),
-    'the environment must be looked up before the approved reader',
-  );
-  // The consumer runs even when the tooling install fails, so a key-bearing
-  // entry can never wait in the job's environment file, and the step reports
-  // the status of the command that actually failed.
-  assert.match(tooling, /install_rc=0[\s\S]*install_tooling \|\| install_rc=\$\?/);
-  assert.match(tooling, /stage_rc=0[\s\S]*stage-asc-key\.mjs"? \|\| stage_rc=\$\?/);
-  assert.match(tooling, /if \[ "\$install_rc" -ne 0 \]; then exit "\$install_rc"; fi/);
-  assert.match(tooling, /exit "\$stage_rc"/);
-  // The tooling is part of the release, so a change to it runs the contract
-  // test and the release the same way a change to any other release script
-  // does.
-  assert.match(code, /'scripts\/install-release-secrets-tooling\.sh'/);
-  assert.match(iosCode, /'scripts\/install-release-secrets-tooling\.sh'/);
+  const fetch = read('scripts/infisical-fetch.mjs');
+  assert.match(fetch, /export function exportAscCredentials/);
+  assert.match(fetch, /ios-stage-asc-key\.sh/);
+  assert.match(fetch, /expandSecretReferences: "false"/);
+  assert.match(fetch, /recursive: "false"/);
+  assert.doesNotMatch(fetch, /writeGithubEnvValue\(env\.GITHUB_ENV, "ASC_KEY_P8"/);
+  assert.doesNotMatch(fetch, /universal-auth/);
   // The repository's stale signing secrets are never read.  The three
   // signing credentials are named on purpose: a blanket `secrets.ASC_` would
   // also catch ASC_STANDING_TESTERS, which is a list of TestFlight tester
   // addresses and is read from the repository on purpose.
   for (const file of [code, iosCode]) {
     for (const name of ['ASC_KEY_ID', 'ASC_ISSUER_ID', 'ASC_KEY_P8']) {
-      assert.doesNotMatch(file, new RegExp(`secrets\\.${name}`));
+      assert.doesNotMatch(file, new RegExp(`secrets\\.${name}\\b`));
     }
     assert.doesNotMatch(file, /ASC_KEY_P8: \$\{\{/);
-    // No step may ask the composite action for an ASC_* name: the action
-    // writes every requested value into $GITHUB_ENV, which would put the
-    // private key back into the environment of every later step.
-    assert.doesNotMatch(file, /names: ASC_/);
+    assert.doesNotMatch(file, /client-id:/);
+    assert.doesNotMatch(file, /INFISICAL_UNIVERSAL_AUTH_CLIENT/);
+    assert.doesNotMatch(file, /INFISICAL_CLIENT_(ID|SECRET)/);
+    assert.doesNotMatch(file, /install-release-secrets-tooling/);
+    assert.match(file, /names: ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8/);
+    assert.match(file, /asc-mode: "true"/);
+    assert.match(file, /service-token: \$\{\{ secrets\.INFISICAL_ASC_READ_TOKEN \}\}/);
   }
-  // The vault is named where it is read: the step says which vault it
-  // reads, and the staging script owns the folder inside it.
+  // The vault is named where it is read.
   assert.match(loader, /Load and stage the ASC credentials \(Fleet-OPS prod \/asc\)/);
-  assert.match(stage, /SECRET_FOLDER = '\/asc'/);
-  assert.match(loader, /INFISICAL_CLIENT_ID: \$\{\{ secrets\.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID \|\| secrets\.INFISICAL_CLIENT_ID \}\}/);
-  assert.match(loader, /INFISICAL_CLIENT_SECRET: \$\{\{ secrets\.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET \|\| secrets\.INFISICAL_CLIENT_SECRET \}\}/);
+  assert.match(read('scripts/stage-asc-key.mjs'), /SECRET_FOLDER = '\/asc'/);
   // The bare Infisical CLI is gone: it prints the value to stdout, and its
   // only install path is macOS-only.
   for (const file of [workflow, iosShip]) {
     assert.doesNotMatch(file, /infisical secrets get/);
     assert.doesNotMatch(file, /infisical\/get-cli/);
+    assert.doesNotMatch(file, /universal-auth/);
   }
-  assert.match(tooling, /stage-asc-key\.mjs/);
   assert.match(loader, /Missing \$name in Fleet-OPS prod \/asc; verify the CI identity has read access to Fleet-OPS prod \/asc\./);
   assert.match(loader, /Missing ASC key material in Fleet-OPS prod \/asc; verify the CI identity has read access to Fleet-OPS prod \/asc\./);
   assert.match(code, /NOTARY_KEY_PATH: \$\{\{ env.ASC_KEY_PATH \}\}/);
@@ -174,7 +130,7 @@ test('PRs cannot notarize or publish, and icon-only changes trigger releases', (
     assert.match(step(workflow, name), /if: steps.gate.outputs.publish == 'true'/);
   }
   assert.match(code, /'assets\/AppIcon.icns'/);
-  assert.match(code, /run: node --test scripts\/mac-release-workflow.test.mjs scripts\/stage-asc-key.node-test.mjs/);
+  assert.match(code, /run: node --test scripts\/mac-release-workflow.test.mjs scripts\/plan-mac-release-build.test.mjs scripts\/stage-asc-key.node-test.mjs/);
   // A manual run can be asked to prove the credentials without publishing.
   assert.match(code, /verify-only:/);
   assert.match(step(workflow, 'Decide whether this run can publish'), /inputs\.verify-only[\s\S]*publish=false/);
@@ -188,11 +144,13 @@ test('PRs cannot notarize or publish, and icon-only changes trigger releases', (
   // The credential check job holds the signing key, so it must not be able
   // to push commits, tags or releases.
   assert.match(code, /verify-release-credentials:[\s\S]*permissions:\s*\n\s*contents: read/);
-  // The vault is reached by exactly one script for the ASC material, and the
-  // workflow names that script rather than the vault helpers.  The other
-  // values still come from the approved composite action.
+  // Workflows reach the vault through the composite action, not by calling
+  // the fetch helpers directly.
   for (const file of [workflow, iosShip]) {
     assert.doesNotMatch(file, /listSecretsRaw|loginUniversalAuth/);
+    assert.doesNotMatch(file, /client-id:/);
+    assert.doesNotMatch(file, /INFISICAL_UNIVERSAL_AUTH_CLIENT/);
+    assert.doesNotMatch(file, /INFISICAL_CLIENT_(ID|SECRET)/);
   }
   assert.match(read('scripts/stage-asc-key.mjs'), /from '\.\/infisical-fetch\.mjs'/);
   // The staging script resolves every credential environment-first and then
@@ -258,23 +216,60 @@ for (const [error, category] of [['HTTP 401 PRIVATE_SENTINEL','authentication re
 test('missing credential fails before invoking Apple', () => {
   const r=preflight(0,'',true); assert.equal(r.status,1); assert.match(r.stderr,/missing ASC_KEY_ID/);
 });
-test('the certificate path reads the vault project the repository actually has', () => {
-  // The repository has no secret named INFISICAL_PROJECT_ID, so the vault leg
-  // of the certificate step resolved nothing and the step fell through to the
-  // repository copies without saying so.  The org secret that names the
-  // Fleet-OPS project is INFISICAL_FLEET_OPS_PROJECT_ID, and the ASC path in
-  // the same file already uses it.  The repository copies stay as the
-  // fallback the action already implements, so the vault leg can be fixed
-  // without taking the fallback away.
-  for (const file of [code, iosCode]) {
-    assert.doesNotMatch(file, /project-id: \$\{\{ secrets\.INFISICAL_PROJECT_ID \}\}/);
-  }
+test('each Infisical step uses its scoped project and service token', () => {
+  // Certs and ASC stay on Fleet-OPS.  Sentry comes from the CodeCaps project.
+  assert.match(workflow, /secret-path: \/mac-certs\n\s+service-token: \$\{\{ secrets\.INFISICAL_MAC_CERTS_READ_TOKEN \}\}/);
   assert.match(workflow, /project-id: \$\{\{ secrets\.INFISICAL_FLEET_OPS_PROJECT_ID \}\}/);
   assert.match(iosShip, /project-id: \$\{\{ secrets\.INFISICAL_FLEET_OPS_PROJECT_ID \}\}/);
+  assert.match(workflow, /service-token: \$\{\{ secrets\.INFISICAL_CODECAPS_READ_TOKEN \}\}/);
+  assert.match(iosShip, /service-token: \$\{\{ secrets\.INFISICAL_CODECAPS_READ_TOKEN \}\}/);
+  assert.match(workflow, /project-id: \$\{\{ secrets\.INFISICAL_PROJECT_ID \}\}/);
+  assert.match(iosShip, /project-id: \$\{\{ secrets\.INFISICAL_PROJECT_ID \}\}/);
+  const cert = step(workflow, 'Load the Developer ID certificate (Infisical, then repository secrets)');
+  assert.match(cert, /secrets\.INFISICAL_FLEET_OPS_PROJECT_ID/);
+  assert.match(cert, /secrets\.INFISICAL_MAC_CERTS_READ_TOKEN/);
+  assert.match(cert, /GH_FALLBACK_MAC_CERT_P12_BASE64/);
+  assert.doesNotMatch(cert, /SENTRY_/);
   // The loader compares physical paths, so a symlinked checkout still runs it
   // as the entry module instead of silently doing nothing.
   const loader = read('scripts/infisical-fetch.mjs');
   assert.match(loader, /function isEntryModule\(\)/);
   assert.match(loader, /realpathSync/);
   assert.doesNotMatch(loader, /pathToFileURL\(process\.argv\[1\]\)\.href === import\.meta\.url/);
+});
+
+test('the Sentry upload keeps the full-scope token away from the installer and refuses a DSN', () => {
+  // The sentry-cli installer is fetched over the network and piped to sh, so
+  // it must run in an empty environment:  a hijacked installer response must
+  // not inherit SENTRY_AUTH_TOKEN.  The token stays a shell variable
+  // and is handed only to sentry-cli, one invocation at a time.  A DSN in the
+  // token slot is refused, because sentry-cli rejects it as authentication.
+  // SENTRY_AUTH_TOKEN_FULLSCOPE is not loaded: that name lived in Fleet-OPS
+  // prod /, which no scoped token reads.
+  const sentry = step(code, 'Upload Sentry debug files');
+  assert.match(sentry, /\| env -i [^\n]*\\\n[^\n]*INSTALL_DIR="\$cli_dir"[^\n]* sh /);
+  assert.doesNotMatch(sentry, /export SENTRY_AUTH_TOKEN/);
+  assert.doesNotMatch(sentry, /^\s+SENTRY_AUTH_TOKEN(_FULLSCOPE)?:/m);
+  assert.doesNotMatch(sentry, /SENTRY_AUTH_TOKEN_FULLSCOPE/);
+  assert.match(sentry, /TOKEN="\$\{SENTRY_AUTH_TOKEN:-\}"/);
+  const handoffs = sentry.match(/SENTRY_AUTH_TOKEN="\$TOKEN"/g) ?? [];
+  assert.equal(handoffs.length, 1);
+  assert.match(sentry, /SENTRY_AUTH_TOKEN="\$TOKEN" SENTRY_PROJECT="\$project" \\\n\s+sentry-cli debug-files upload /);
+  assert.match(sentry, /\*:\/\/\*\|\*@\*\)\n[^\n]*looks like a DSN[^\n]*\n\s+exit 1/);
+});
+
+test('universal packaging fails closed and never falls back to one architecture', () => {
+  const build = read('script/build_and_run.sh');
+  assert.doesNotMatch(build, /falling back to this machine's architecture/);
+  assert.match(build, /refusing to fall back to this machine's architecture only/);
+  assert.match(build, /universal build is missing \$wanted/);
+  assert.match(build, /lipo -archs/);
+});
+
+test('packaging refuses a shallow clone so CFBundleVersion cannot collapse to 1', () => {
+  const build = read('script/build_and_run.sh');
+  assert.match(build, /rev-parse --is-shallow-repository/);
+  assert.match(build, /refusing to package from a shallow clone/);
+  // The release workflow already checks out full history for the count.
+  assert.match(code, /fetch-depth: 0/);
 });

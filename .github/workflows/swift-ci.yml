@@ -40,7 +40,33 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Cache Swift packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .build/artifacts
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') }}
+          restore-keys: ${{ runner.os }}-spm-
+      - name: Resolve Swift packages (retry)
+        run: |
+          for attempt in 1 2 3 4; do
+            if swift package resolve; then
+              exit 0
+            fi
+            echo "::warning::swift package resolve failed (attempt $attempt/4)"
+            if [ "$attempt" -eq 4 ]; then
+              echo "::error::swift package resolve failed after 4 attempts"
+              exit 1
+            fi
+            case "$attempt" in
+              1) delay=15 ;;
+              2) delay=30 ;;
+              3) delay=60 ;;
+            esac
+            sleep "$delay"
+          done
       - name: Swift build
         run: swift build
       - name: Swift test and render native UI fixtures
@@ -80,7 +106,7 @@ jobs:
       XCODEGEN_VERSION: "2.46.0"
       XCODEGEN_SHA256: "4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806"
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Install pinned XcodeGen
         run: |
           archive="$RUNNER_TEMP/xcodegen-${XCODEGEN_VERSION}.zip"
@@ -114,6 +140,26 @@ jobs:
             exit 1
           fi
           echo "The tracked companion Xcode project matches project.yml (XcodeGen ${XCODEGEN_VERSION})."
+      # Resolve packages up front with retries, so a transient GitHub 504 does not fail the build.  The derived data path matches the build step below, so the resolve lands in the same SourcePackages.
+      - name: Resolve companion packages (retry)
+        working-directory: ios/CodeCapsCompanion
+        run: |
+          for attempt in 1 2 3 4; do
+            if xcodebuild -resolvePackageDependencies -project CodeCapsCompanion.xcodeproj -scheme "$SCHEME" -derivedDataPath "$RUNNER_TEMP/codecaps-companion-derived"; then
+              exit 0
+            fi
+            echo "::warning::xcodebuild -resolvePackageDependencies failed (attempt $attempt/4)"
+            if [ "$attempt" -eq 4 ]; then
+              echo "::error::xcodebuild -resolvePackageDependencies failed after 4 attempts"
+              exit 1
+            fi
+            case "$attempt" in
+              1) delay=15 ;;
+              2) delay=30 ;;
+              3) delay=60 ;;
+            esac
+            sleep "$delay"
+          done
       - name: List schemes (debug)
         run: |
           cd ios/CodeCapsCompanion
@@ -150,12 +196,21 @@ jobs:
           observed = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
           windows = [
               {"id": "claude-5h", "provider": "anthropic", "providerKey": "anthropic", "label": "5-hour window", "remainingPercent": 72.0, "isExhausted": False, "occurredAt": observed},
+              {"id": "claude-weekly", "provider": "anthropic", "providerKey": "anthropic", "label": "Weekly", "remainingPercent": 61.0, "isExhausted": False, "occurredAt": observed},
               {"id": "codex-weekly", "provider": "openai", "providerKey": "codex", "label": "Weekly", "remainingPercent": 44.0, "isExhausted": False, "occurredAt": observed},
               {"id": "cursor-fast", "provider": "cursor", "providerKey": "cursor", "label": "Fast Requests", "remainingPercent": 28.0, "isExhausted": False, "occurredAt": observed},
           ]
           with open(sys.argv[1], "w", encoding="utf-8") as snapshot:
               json.dump({"windows": windows}, snapshot)
           PY
+          # The main quota list with the seeded windows above (the Claude
+          # card carries two meter rows), so a change to the quota cards has
+          # a simulator screenshot to review.
+          xcrun simctl launch --terminate-running-process "$SIMULATOR_ID" "$bundle_id"
+          sleep 3
+          xcrun simctl io "$SIMULATOR_ID" screenshot "$RUNNER_TEMP/codecaps-ios-quota.png"
+          test -s "$RUNNER_TEMP/codecaps-ios-quota.png"
+          xcrun simctl terminate "$SIMULATOR_ID" "$bundle_id"
           xcrun simctl launch --terminate-running-process "$SIMULATOR_ID" "$bundle_id" -openSettings -reorderPlatforms
           sleep 3
           xcrun simctl io "$SIMULATOR_ID" screenshot "$screenshot"
@@ -190,11 +245,19 @@ jobs:
             -target CodeCapsWidgetsMac -configuration Release \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             build
+      - name: Build Mac app (no signing)
+        run: |
+          cd ios/CodeCapsCompanion
+          xcodebuild -project CodeCapsCompanion.xcodeproj \
+            -scheme CodeCapsCompanionMac -configuration Release \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build
       - name: Upload iOS platform-reordering screenshot
         uses: actions/upload-artifact@v7
         with:
           name: codecaps-ios-platform-reordering
           path: |
+            ${{ runner.temp }}/codecaps-ios-quota.png
             ${{ runner.temp }}/codecaps-ios-reorder.png
             ${{ runner.temp }}/codecaps-ios-empty.png
             ${{ runner.temp }}/codecaps-ios-settings.png
