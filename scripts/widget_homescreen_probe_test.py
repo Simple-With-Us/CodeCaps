@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import plistlib
 import os
 import re
 import stat
@@ -32,6 +33,7 @@ from widget_homescreen_probe import (  # noqa: E402
     booted_udids,
     build_seed,
     codesign_argv,
+    simulator_entitlements,
     companion_app,
     companion_build_argv,
     companion_bundle_ids,
@@ -471,6 +473,52 @@ class CommandPlanTests(unittest.TestCase):
 
 
 class ProjectAndContractTests(unittest.TestCase):
+    def test_simulator_entitlements_drop_unexpanded_aps_environment(self):
+        # The raw companion file must keep the Xcode setting; only the
+        # signed copy is rewritten, or a production archive would lose it.
+        raw = plistlib.loads(APP_ENTITLEMENTS.read_bytes())
+        self.assertEqual(raw.get("aps-environment"), "$(CODECAPS_APNS_ENVIRONMENT)")
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "app.entitlements"
+            payload = plistlib.loads(simulator_entitlements(APP_ENTITLEMENTS, dest).read_bytes())
+        self.assertNotIn("aps-environment", payload)
+        self.assertNotIn("$(CODECAPS_APNS_ENVIRONMENT)", str(payload))
+        self.assertEqual(
+            payload.get("com.apple.security.application-groups"),
+            ["group.com.simplewithus.codecaps"],
+        )
+
+    def test_simulator_entitlements_keep_the_widget_app_group(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "widget.entitlements"
+            payload = plistlib.loads(simulator_entitlements(WIDGET_ENTITLEMENTS, dest).read_bytes())
+        self.assertEqual(
+            payload.get("com.apple.security.application-groups"),
+            ["group.com.simplewithus.codecaps"],
+        )
+        self.assertNotIn("aps-environment", payload)
+
+    def test_simulator_entitlements_drop_any_unexpanded_build_setting(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "raw.entitlements"
+            src.write_bytes(
+                plistlib.dumps(
+                    {
+                        "aps-environment": "development",
+                        "com.apple.security.application-groups": ["group.com.simplewithus.codecaps"],
+                        "com.apple.developer.icloud-container-identifiers": "$(CODECAPS_ICLOUD)",
+                    }
+                )
+            )
+            dest = src.with_name("clean.entitlements")
+            payload = plistlib.loads(simulator_entitlements(src, dest).read_bytes())
+        self.assertNotIn("aps-environment", payload)
+        self.assertNotIn("com.apple.developer.icloud-container-identifiers", payload)
+        self.assertEqual(
+            payload.get("com.apple.security.application-groups"),
+            ["group.com.simplewithus.codecaps"],
+        )
+
     def test_snapshot_read_policy_is_in_every_companion_target(self):
         # File presence alone misses a source attached to the wrong target.
         pbx = (ROOT / "ios/CodeCapsCompanion/CodeCapsCompanion.xcodeproj/project.pbxproj").read_text()

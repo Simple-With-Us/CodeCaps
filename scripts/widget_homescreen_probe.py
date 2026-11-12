@@ -48,6 +48,7 @@ REQUIRED_TOOLS = ("xcrun", "xcodebuild", "codesign")
 UDID_RE = re.compile(
     r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}"
 )
+_BUILD_SETTING_RE = re.compile(r"^\$\([^)]+\)$")
 UNSUPPORTED_FAILURE_MARKERS = (
     "failed - unsupported-path:",
     "failed: unsupported-path:",
@@ -273,6 +274,35 @@ def read_app_group(path: Path) -> str:
     if not isinstance(groups, list) or len(groups) != 1 or not isinstance(groups[0], str):
         raise ProbeFailure(f"failed: expected one app group in {path}", EXIT_FAILED)
     return groups[0]
+
+
+def simulator_entitlements(source: Path, dest: Path) -> Path:
+    """Write a simulator-signable copy of *source*.
+
+    The checked-in companion entitlements leave `aps-environment` as the
+    Xcode setting `$(CODECAPS_APNS_ENVIRONMENT)`.  Ad-hoc signing with that
+    raw file embeds the literal, and SpringBoard then refuses the launch
+    (`SBMainWorkspace` / `FBSOpenApplicationServiceErrorDomain`).  Push is
+    not part of this probe, so the key is omitted; every other entitlement
+    (the App Group) is kept.  Unexpanded `$(...)` values on any key are
+    dropped for the same reason.
+    """
+    payload = plistlib.loads(source.read_bytes())
+    if not isinstance(payload, dict):
+        raise ProbeFailure(
+            f"failed: entitlements in {source} were not a dictionary",
+            EXIT_FAILED,
+        )
+    cleaned: dict = {}
+    for key, value in payload.items():
+        if key == "aps-environment":
+            continue
+        if isinstance(value, str) and _BUILD_SETTING_RE.match(value.strip()):
+            continue
+        cleaned[key] = value
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(plistlib.dumps(cleaned))
+    return dest
 
 
 def _iso(moment: datetime) -> str:
@@ -1193,8 +1223,14 @@ def execute(host: Host, work: Path) -> int:
         appex = app / "PlugIns" / "CodeCapsWidgets.appex"
         if not app.is_dir() or not appex.is_dir():
             raise ProbeFailure(f"failed: companion build did not produce {app}", EXIT_FAILED)
-        runner.run(codesign_argv(appex, WIDGET_ENTITLEMENTS))
-        runner.run(codesign_argv(app, APP_ENTITLEMENTS))
+        sign_widget = simulator_entitlements(
+            WIDGET_ENTITLEMENTS, work / "widget-simulator.entitlements"
+        )
+        sign_app = simulator_entitlements(
+            APP_ENTITLEMENTS, work / "app-simulator.entitlements"
+        )
+        runner.run(codesign_argv(appex, sign_widget))
+        runner.run(codesign_argv(app, sign_app))
         _boot(runner, udid)
         runner.run(["xcrun", "simctl", "install", udid, str(app)])
         runner.run(["xcrun", "simctl", "shutdown", udid], check=False)
