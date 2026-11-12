@@ -166,8 +166,25 @@ test("the gate script documents the exit codes it actually returns", () => {
   assert.match(header, /Exit 1 on a failed or skipped check, on a timeout, and on a cancelled/);
   assert.match(header, /check when REDISPATCH_ON_CANCEL is 0\./);
   assert.match(header, /Exit 2 when ONCE or CHECKS_JSON sees a check that has not finished\./);
+  assert.match(header, /Exit 3 is the classifier's "missing" verdict/);
+  assert.match(header, /MISSING_GRACE_SECONDS/);
   // The old text promised a failure on a cancelled check in every case.
   assert.doesNotMatch(header, /Exit 1 on a failed, skipped, or cancelled check/);
+});
+
+test("ios-ship and mac-release share the missing-check fast exit", () => {
+  const marker = "No Swift CI check run on this SHA fails after MISSING_GRACE_SECONDS";
+  const release = read(".github/workflows/mac-release.yml");
+  const ship = read(".github/workflows/ios-ship.yml");
+  assert.ok(release.includes(marker), "mac-release must document the shared missing-check exit");
+  assert.ok(ship.includes(marker), "ios-ship must document the shared missing-check exit");
+  const script = read("scripts/await-swift-ci-checks.sh");
+  assert.match(script, /Swift CI never started/);
+  assert.match(script, /MISSING_GRACE_SECONDS="\$\{MISSING_GRACE_SECONDS:-120\}"/);
+  // A fresh dispatch cannot pin the merge SHA, so neither gate starts one.
+  assert.doesNotMatch(script, /actions\/workflows\/.*\/dispatches/);
+  assert.doesNotMatch(release, /actions\/workflows\/.*\/dispatches/);
+  assert.doesNotMatch(ship, /actions\/workflows\/.*\/dispatches/);
 });
 
 test("the gate replaces a cancelled run by re-running it, not by dispatching a sha", () => {
