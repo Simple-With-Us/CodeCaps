@@ -3092,20 +3092,27 @@ public final class CompanionQuotaModel: ObservableObject {
         if let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: Self.appGroupId) {
             let sharedFile = container.appendingPathComponent("quota-windows.json")
             if FileManager.default.fileExists(atPath: sharedFile.path) {
-                // The App Group file is authoritative once it exists: a
-                // malformed or empty copy means the source currently has
-                // nothing valid, not that an older store should resurrect.
-                guard let data = try? Data(contentsOf: sharedFile) else { return }
-                if parseSnapshot(data: data) {
-                    // A fallback render is the snapshot's age, not a fresh pull, so
-                       // the stamp always says what the file says (CC-214).
-                       if let attrs = try? FileManager.default.attributesOfItem(atPath: sharedFile.path),
-                       let modDate = attrs[.modificationDate] as? Date {
-                        self.lastUpdated = modDate
+                if let data = try? Data(contentsOf: sharedFile) {
+                    let parsed = parseSnapshot(data: data)
+                    let decodedEmpty = parsed && items.isEmpty
+                    switch AppGroupSnapshotReadPolicy.decision(
+                        filePresent: true,
+                        readSucceeded: true,
+                        decodeSucceeded: parsed,
+                        decodedExplicitlyEmpty: decodedEmpty
+                    ) {
+                    case .consultNextTier:
+                        break
+                    case .stopAuthoritativeEmpty, .stopAuthoritativeContent:
+                        // A fallback render is the snapshot's age, not a fresh pull, so
+                        // the stamp always says what the file says (CC-214).
+                        if let attrs = try? FileManager.default.attributesOfItem(atPath: sharedFile.path),
+                           let modDate = attrs[.modificationDate] as? Date {
+                            self.lastUpdated = modDate
+                        }
+                        return
                     }
-                    return
                 }
-                return
             }
         }
 

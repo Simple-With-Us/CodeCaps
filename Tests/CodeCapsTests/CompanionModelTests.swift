@@ -772,6 +772,15 @@ final class CompanionModelTests: XCTestCase {
         XCTAssertTrue(source.contains("group.com.simplewithus.codecaps"))
     }
 
+    func testCompanionAppGroupSnapshotReadUsesSharedPolicy() throws {
+        let source = try readCompanionModelSource()
+        XCTAssertTrue(source.contains("AppGroupSnapshotReadPolicy.decision"))
+        XCTAssertTrue(source.contains("case .stopAuthoritativeEmpty, .stopAuthoritativeContent:"))
+        XCTAssertTrue(source.contains("case .consultNextTier:"))
+        XCTAssertFalse(source.contains("guard let data = try? Data(contentsOf: sharedFile) else { return }"))
+        XCTAssertFalse(source.contains("malformed or empty copy means the source currently has"))
+    }
+
     func testMainScreenFleetStatusLivesInNavigationBar() throws {
         let source = try readCompanionContentViewSource()
         XCTAssertFalse(

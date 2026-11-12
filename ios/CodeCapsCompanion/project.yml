@@ -77,6 +77,8 @@ targets:
         group: Shared
       - path: ../../Sources/QuotaCore/WidgetSnapshotFetcher.swift
         group: Shared
+      - path: ../../Sources/QuotaCore/AppGroupSnapshotReadPolicy.swift
+        group: Shared
     dependencies:
       - target: CodeCapsWidgets
         embed: true
@@ -134,6 +136,8 @@ targets:
       - path: ../../Sources/QuotaCore/WidgetSnapshotFetcher.swift
         group: Shared
       - path: ../../Sources/QuotaCore/CompanionReadTokenStore.swift
+        group: Shared
+      - path: ../../Sources/QuotaCore/AppGroupSnapshotReadPolicy.swift
         group: Shared
     settings:
       base:

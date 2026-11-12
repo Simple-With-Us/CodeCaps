@@ -555,6 +555,36 @@ final class WidgetTests: XCTestCase {
         XCTAssertTrue(intent.contains("WidgetSnapshotStore.readSnapshot()"))
     }
 
+    /// CC-227: malformed App Group JSON must fall through to sandbox stores;
+    /// only a decoded empty snapshot stops without resurrecting stale rows.
+    func testWidgetAppGroupSnapshotReadUsesSharedPolicy() throws {
+        let provider = try readSource(at: Self.repoRoot.appendingPathComponent("ios/CodeCapsCompanion/Widgets/WidgetDataProvider.swift"))
+        XCTAssertTrue(
+            provider.contains("AppGroupSnapshotReadPolicy.decision"),
+            "the widget must classify App Group reads through the shared policy"
+        )
+        XCTAssertTrue(
+            provider.contains("case .stopAuthoritativeEmpty:"),
+            "a valid empty snapshot must be authoritative"
+        )
+        XCTAssertTrue(
+            provider.contains("case .stopAuthoritativeContent:"),
+            "a valid non-empty snapshot must be authoritative"
+        )
+        XCTAssertFalse(
+            provider.contains("return ([], nil, true)"),
+            "decode failure must not blank the widget before probing fallbacks"
+        )
+        XCTAssertTrue(
+            provider.contains("Read or decode failures fall through."),
+            "the widget must document fall-through on decode failure"
+        )
+        XCTAssertFalse(
+            provider.contains("platforms.isEmpty ? nil : platforms"),
+            "filtered-empty snapshots must stay authoritative, not fall through as decode failures"
+        )
+    }
+
     // MARK: - Copy
 
     /// "Active" overclaims: a tracked plan can be exhausted or unused and still
