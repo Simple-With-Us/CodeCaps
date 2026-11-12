@@ -240,6 +240,7 @@ final class DataModeTests: XCTestCase {
         let seeded = await waitForRefreshToFinish(model)
         XCTAssertTrue(seeded)
         XCTAssertNil(model.serverError)
+        XCTAssertFalse(model.fleetGroups.isEmpty)
         XCTAssertEqual(model.serverWindowsForTesting.count, 1)
 
         model.serverFetchForTesting = { throw QuotaClientError.httpStatus(503) }
@@ -260,6 +261,35 @@ final class DataModeTests: XCTestCase {
         model.refresh()
         let afterUnauthorized = await waitForRefreshToFinish(model)
         XCTAssertTrue(afterUnauthorized)
+        XCTAssertNotNil(model.serverError)
+        XCTAssertEqual(model.serverWindowsForTesting.count, 1)
+    }
+
+    func testExpiredFleetKeepsAGatewayPullFailureVisible() async {
+        defaults.set(false, forKey: "localEnabled")
+        defaults.set(true, forKey: "serverEnabled")
+        defaults.set("https://usage.jays.services/api/quota-windows", forKey: "endpoint")
+        defaults.set(true, forKey: "hasSavedToken")
+        let model = MonitorModel(defaults: defaults)
+        model.skipsSnapshotIOForTesting = true
+
+        let formatter = ISO8601DateFormatter()
+        let now = Date()
+        var expired = window("expired", source: "fleet")
+        expired.occurredAt = formatter.string(from: now.addingTimeInterval(-2 * 60 * 60))
+        expired.resetAt = formatter.string(from: now.addingTimeInterval(-60 * 60))
+        expired.producerInstanceId = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"
+        model.serverFetchForTesting = { QuotaResponse(generatedAt: "seed", windows: [expired]) }
+        model.refresh()
+        let seeded = await waitForRefreshToFinish(model)
+        XCTAssertTrue(seeded)
+        XCTAssertEqual(model.serverWindowsForTesting.count, 1)
+        XCTAssertTrue(model.fleetGroups.isEmpty)
+
+        model.serverFetchForTesting = { throw QuotaClientError.httpStatus(503) }
+        model.refresh()
+        let afterGatewayFailure = await waitForRefreshToFinish(model)
+        XCTAssertTrue(afterGatewayFailure)
         XCTAssertNotNil(model.serverError)
         XCTAssertEqual(model.serverWindowsForTesting.count, 1)
     }

@@ -2531,7 +2531,10 @@ final class MonitorModel: ObservableObject {
             // After the first read of the launch it is served from memory, and
             // a failed read is not retried here (see `TokenCache`).
             var savedTokenReadable = false
-            let preserveFleetOnTransientFailure = self?.serverWindows.isEmpty == false
+            // A gateway failure stays quiet only while a fleet row is on screen.
+            // Expired copies can still sit in serverWindows and produce no group,
+            // and the glance would then say that no device has reported.
+            let preserveFleetOnTransientFailure = self?.fleetWindowGroups.isEmpty == false
             if useServer {
                 if let serverFetchForTesting {
                     do { newServer = try await serverFetchForTesting() }
