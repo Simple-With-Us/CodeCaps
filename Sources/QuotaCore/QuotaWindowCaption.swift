@@ -25,19 +25,28 @@ public struct QuotaWindowCaption: Equatable, Sendable {
     public let qualifier: String
     /// The reset line:  "Resets in 12d 22m".
     public let resetCaption: String
+    /// The space-tight form of the reset line:  the bare countdown,  "12d 22m".
+    /// A row too narrow for the full line falls back to this rather than
+    /// truncating the countdown itself away.  Empty when there is no reset.
+    public let compactResetCaption: String
 
-    public init(token: String, qualifier: String, resetCaption: String) {
+    public init(token: String, qualifier: String, resetCaption: String, compactResetCaption: String = "") {
         self.token = token
         self.qualifier = qualifier
         self.resetCaption = resetCaption
+        self.compactResetCaption = compactResetCaption
     }
 
     /// The caption of a bar that has no sibling,  and so no qualifier to print.
     ///
     /// It is a separate name on purpose:  a caller that has a window uses the
     /// window's own caption,  and a caller that has no window says so here.
-    public static func withoutQualifier(token: String, resetCaption: String) -> QuotaWindowCaption {
-        QuotaWindowCaption(token: token, qualifier: "", resetCaption: resetCaption)
+    /// `compactResetCaption` has no default on purpose:  a caption row falls
+    /// back to it when the full reset line cannot fit,  and a caller that left
+    /// it out would print a caption whose only narrow form is the truncation
+    /// the fallback exists to avoid.  Pass the countdown with the reset line.
+    public static func withoutQualifier(token: String, resetCaption: String, compactResetCaption: String) -> QuotaWindowCaption {
+        QuotaWindowCaption(token: token, qualifier: "", resetCaption: resetCaption, compactResetCaption: compactResetCaption)
     }
 
     /// Whether the caption says anything at all.

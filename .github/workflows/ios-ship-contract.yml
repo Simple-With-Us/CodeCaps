@@ -46,8 +46,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Pin the auto-ship wiring
         run: |
-          node --test scripts/ios-ship-workflow.test.mjs scripts/stage-asc-key.node-test.mjs scripts/infisical-fetch.node-test.mjs scripts/infisical-fetch-expand.node-test.mjs scripts/ios-enable-apns.test.mjs
+          node --test scripts/ios-ship-workflow.test.mjs scripts/ios-observe-ship.test.mjs scripts/stage-asc-key.node-test.mjs scripts/infisical-fetch.node-test.mjs scripts/infisical-fetch-expand.node-test.mjs scripts/ios-enable-apns.test.mjs
           bash scripts/ios-fleet/test-asc-credentials.sh
+          bash scripts/ios-fleet/test-tf-ready-outcome.sh
           node --test scripts/ios-fleet/test-asc-credentials.mjs
           node --test scripts/ios-fleet/test-asc-client.mjs
           node --test scripts/ios-fleet/test-asc-upload.mjs
@@ -56,3 +57,5 @@ jobs:
           python3 scripts/ios-fleet/test_pick_simulator.py
           python3 scripts/ios-fleet/test_screenshot_ink.py
           bash scripts/ios-fleet/test-capture-script.sh
+          bash scripts/ios-fleet/test-publish-ios-versions.sh
+          bash scripts/test-ios-recheck-tf-ready.sh

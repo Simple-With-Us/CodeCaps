@@ -103,6 +103,8 @@ final class AppUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
     private var canCheckObservation: NSKeyValueObservation?
     private var resignActiveObserver: NSObjectProtocol?
     private var pendingInstall: (() -> Void)?
+    private var becameActiveObserver: NSObjectProtocol?
+    private(set) var isAutomaticInstallInProgress = false
 
     private override init() {
         availability = AutoUpdateAvailability.evaluate(info: Bundle.main.infoDictionary,
@@ -124,6 +126,11 @@ final class AppUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
             forName: NSApplication.didResignActiveNotification, object: nil, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.installPendingUpdateIfIdle() }
+        }
+        becameActiveObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.isAutomaticInstallInProgress = false }
         }
     }
 
@@ -150,6 +157,7 @@ final class AppUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
         guard let install = pendingInstall, !NSApp.isActive else { return }
         pendingInstall = nil
         UpdateRelaunchMarker().mark()
+        isAutomaticInstallInProgress = true
         install()
     }
 }

@@ -65,7 +65,7 @@ public enum QuotaPublisherError: Error, Equatable, Sendable, LocalizedError {
 public actor QuotaPublisher {
     /// The app-level producer namespace.  Ownership of a pulled reading is
     /// determined by producerInstanceId, never by this shared app name alone.
-    public static let producerId = "codecaps"
+    public static let producerId = QuotaWindowVocabulary.localProducerId
 
     /// Pre-rename producer labels remain readable as unidentified machines.
     public static let legacyProducerAliases: [String] = ["agent-bar"]
@@ -238,7 +238,7 @@ public actor QuotaPublisher {
         let machine = machineName ?? Self.machineName
         let events: [[String: Any]] = windows.compactMap { window in
             let remaining = window.boundedRemainingPercent
-            guard remaining != nil || window.planMetadata != nil else { return nil }
+            guard window.hasReading || window.planMetadata != nil else { return nil }
             let seriesKey = window.resetAt ?? "\(occurredAtIso.prefix(13)):00"
             let bucketId = UsageMonitorPushMetadata.bucketId(for: window)
             let readingTime = window.occurredAt.isEmpty ? occurredAtIso : window.occurredAt
@@ -255,7 +255,14 @@ public actor QuotaPublisher {
 
             var meta: [String: Any] = [
                 "bucketId": bucketId,
-                "isExhausted": window.isExhausted || (clampedRemaining.map { $0 <= 0 } ?? false),
+                //  The shared cap rule decides, as it does on every surface:  a
+                //  reading at or below the threshold is a spent allowance, and
+                //  the provider's own exhausted word is the fallback for a
+                //  window that reports no figure at all.  A local zero test
+                //  here left the wire disagreeing with the at-cap line the
+                //  owner reads (Kody review 2026-10-21).
+                "isExhausted": QuotaCapRule.isExhausted(remainingPercent: clampedRemaining,
+                                                         providerSaysExhausted: window.isExhausted),
                 "remainingUnknown": clampedRemaining == nil,
                 "scale": "percent_0_100",
                 "source": Self.producerId,
@@ -271,6 +278,15 @@ public actor QuotaPublisher {
             meta.merge(planFields) { _, new in new }
             if let remaining = clampedRemaining {
                 meta["usedPercent"] = round(max(0, min(100, 100 - remaining)) * 100) / 100
+            } else if let absoluteRemaining = window.absoluteRemaining {
+                meta["absoluteRemaining"] = absoluteRemaining
+                if let absoluteLimit = window.absoluteLimit { meta["absoluteLimit"] = absoluteLimit }
+                if let quotaUnit = window.quotaUnit { meta["quotaUnit"] = quotaUnit }
+                meta["remainingUnknown"] = false
+                if let absoluteLimit = window.absoluteLimit, absoluteLimit > 0 {
+                    let remainingPercent = absoluteRemaining / absoluteLimit * 100
+                    meta["usedPercent"] = round(max(0, min(100, 100 - remainingPercent)) * 100) / 100
+                }
             }
 
             var event: [String: Any] = [
@@ -287,6 +303,9 @@ public actor QuotaPublisher {
             if let remaining = clampedRemaining {
                 event["limit"] = 100
                 event["credits"] = remaining
+            } else if let absoluteRemaining = window.absoluteRemaining, let absoluteLimit = window.absoluteLimit {
+                event["limit"] = absoluteLimit
+                event["credits"] = absoluteRemaining
             }
             // Provenance lives in `metadata` only.  The v2 event schema is
             // strict and `additionalProperties: false`: putting `machine` or

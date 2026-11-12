@@ -6,7 +6,7 @@ A macOS menu bar app for supported AI plan usage and quota windows.  It can shar
 
 ## Why This Exists
 
-CodeCaps reads available usage and quota windows from supported AI apps and CLIs already signed in on this Mac — no provider API key is entered into CodeCaps.  Optional push and pull connections can show readings from other configured Macs in one Glance popover.
+CodeCaps reads available usage and quota windows from supported AI apps and CLIs already signed in on this Mac.  Optional Z.ai coding-plan quota checks use a key saved in this build's Keychain.  Optional push and pull connections can show readings from other configured Macs in one Glance popover.
 
 CodeCaps keeps local readings visible in the menu bar.  If you run a collector, it can also bring multiple Macs into one view.
 
@@ -18,7 +18,7 @@ Engineered with the proactive safeguards you'll come to rely on:
 - **Visual Usage History & Trend Graphs**: Dive into rich local usage history graphs.  Inspect how your quota drains over time, evaluate burn pacing, and see anomaly alert markers directly on your timeline.
 - **Low-Quota Picture-in-Picture (PiP)**: Keep high-priority quotas visible in an on-top floating micro-HUD.  Set PiP to open automatically whenever any provider's quota runs low, so you're never caught off-guard mid-prompt.
 - **Dual-Window Cadence & Smart Reset Alarms**: Monitor 5-hour rapid windows alongside weekly/monthly plan allowances.  Reset alarms alert you on major period rollovers, and notify on short windows only when you're actually near the cap.
-- **Zero API Keys**: Reads local CLI and application sessions directly on your Mac.  No provider API key is ever entered into CodeCaps (provider CLIs keep their own credentials), and CodeCaps never exports provider sign-in tokens.
+- **Local Sign-Ins And Optional Keys**: Reads supported CLI and application sessions directly on your Mac.  Z.ai coding-plan checks offer an explicit API key stored in Keychain; CodeCaps never exports provider sign-in tokens.
 
 ## What It Shows
 
@@ -29,7 +29,7 @@ CodeCaps has two surfaces.  Nothing renders in both.
 <img src="docs/screenshots/glance-light.png" width="760" alt="Glance, light">
 <img src="docs/screenshots/glance-dark.png" width="760" alt="Glance, dark">
 
-**Console** is a resizable window, sidebar split into Quotas and Dashboard: Quotas is an all-platforms overview plus a per-platform drill-down with search; Dashboard holds the pages below.  The window title reads **CodeCaps Dashboard** while a Dashboard page is showing.
+**Console** is a resizable window, sidebar split into Quotas and Settings: Quotas is an all-platforms overview plus a per-platform drill-down with search; Settings holds the pages listed below.  The window title is always **CodeCaps Dashboard**.
 
 <img src="docs/screenshots/console-light.png" width="760" alt="Console, light">
 <img src="docs/screenshots/console-dark.png" width="760" alt="Console, dark">
@@ -48,7 +48,7 @@ Antigravity sells two independent model pools, shown as two rows, **Gemini** (th
 
 ## Reset Alarms
 
-A reset alarm is a notification, with the sound picked in Dashboard → Alerts & Alarms, when a quota window starts a new period:
+A reset alarm is a notification, with the sound picked on the Alerts & Alarms page, when a quota window starts a new period:
 
 - A provider's **largest** window — the weekly or monthly one — alarms every time it resets, even if usage never came near the cap, so you know a new week or month began.
 - A **smaller** window — the 5-hour one — alarms on reset only if, during the period that just ended, it hit its cap or came within 20% of it.
@@ -70,11 +70,11 @@ Each reset alarms once.  The state behind it is saved on every refresh, so a res
 
 None of the above ever asks for a typed credential — every reader reuses a session or file the CLI already created.
 
-CodeCaps reads Claude Code's saved login through macOS's own `security` tool, so a fresh install needs no setup and never raises a Keychain panel of its own.  The **Allow Access To Claude Code** button on the Claude row (Console → Dashboard → Sources & Fleet) appears only if macOS explicitly refuses that read; press it and choose **Always Allow** in the panel macOS puts up.  On a heavily loaded Mac the Claude row may briefly read "temporarily unavailable" and recover on the next refresh.  CodeCaps only ever reads Claude Code's saved login: it never writes to, re-permissions, or removes it.
+CodeCaps reads Claude Code's saved login through macOS's own `security` tool, so a fresh install needs no setup and never raises a Keychain panel of its own.  The **Allow Access To Claude Code** button on the Claude row (Dashboard window → Sources & Fleet) appears only if macOS explicitly refuses that read; press it and choose **Always Allow** in the panel macOS puts up.  On a heavily loaded Mac the Claude row may briefly read "temporarily unavailable" and recover on the next refresh.  CodeCaps only ever reads Claude Code's saved login: it never writes to, re-permissions, or removes it.
 
 ## Fleet Push And Pull
 
-Both off by default, configured on Console → Dashboard → Sources & Fleet.
+Both off by default, configured under Sources & Fleet in the Dashboard window.
 
 **Push formats** — two, chosen when pushing.  The producer id is `codecaps` (with `agent-bar` retained as a recognized legacy alias for seamless backwards compatibility).
 
@@ -169,7 +169,7 @@ Grab the signed and notarized `CodeCaps.dmg` from the [latest release](https://g
 
 **Updates**
 
-CodeCaps updates itself.  Every change merged to `main` becomes a signed, notarized release, and an installed copy checks hourly, downloads it in the background, and installs it the next time CodeCaps is not in front.  Dashboard ▸ About has **Check For Updates…** for the impatient.  How it works, and how to roll a release back: [`docs/AUTO-UPDATE.md`](docs/AUTO-UPDATE.md).
+CodeCaps updates itself.  Every change merged to `main` becomes a signed, notarized release, and an installed copy checks hourly, downloads it in the background, and installs it the next time CodeCaps is not in front.  The About page has **Check For Updates…** for the impatient.  How it works, and how to roll a release back: [`docs/AUTO-UPDATE.md`](docs/AUTO-UPDATE.md).
 
 **Build From Source**
 
@@ -183,7 +183,7 @@ script/build_and_run.sh            # build, install to ~/Applications, and relau
 
 Other modes: `--install` (same, no relaunch); `--dev` (separate `.dev` identifier into `dist/`, launched beside the installed copy; `--dev-stop` quits it and removes `dist/`); `--package` (universal Release, zipped into `dist/` with a SHA-256 file); `--release` (`--package`, then notarize and staple the app, and build, sign, notarize and staple `dist/CodeCaps.dmg`); `--build-only` (stage `dist/CodeCaps.app` only).
 
-`--package` and `--release` build one universal binary for Apple silicon and Intel, verified with `lipo -archs`.  `CFBundleShortVersionString` comes from the `VERSION` file at the repo root, so cutting a release is one edit, and `CFBundleVersion` is the commit count.  `--release` notarizes through the keychain profile named by `AGENTBAR_NOTARY_PROFILE` (default `agentbar-notary`), which you create once with `xcrun notarytool store-credentials`.
+`--package` and `--release` build one universal binary for Apple silicon and Intel, verified with `lipo -archs`.  `CFBundleShortVersionString` is the app's fixed marketing version (the `VERSION` file, `0.1.0` — the same version the iOS companion ships), and `CFBundleVersion` is the fleet's shared merge-timestamp build: the committer date of the commit being built in America/Chicago as `YYYYMMDDHHMM`, raised above every build the app has already published. The release plans that number once (`scripts/plan-mac-release-build.mjs`) and hands it to the build, so the macOS app and the iOS companion of one merge carry the same number whenever the merge stamp is the highest either side has used.  `--release` notarizes through the keychain profile named by `AGENTBAR_NOTARY_PROFILE` (default `agentbar-notary`), which you create once with `xcrun notarytool store-credentials`.
 
 `run` and `--install` keep exactly one installed copy, at `~/Applications/CodeCaps.app`: any other bundle with the same release identifier, in the usual install locations or this checkout's `dist/`, is Trashed and printed, including a copy still named `AgentBar.app`.  `CODECAPS_PRUNE_DRY_RUN=1` previews without moving anything; `CODECAPS_BUNDLE_ID` builds under a distinct identifier, for more than one checkout.
 
@@ -193,9 +193,9 @@ Other modes: `--install` (same, no relaunch); `--dev` (separate `.dev` identifie
 
 **Icon.**  The master in `assets/` is a full-bleed square, and stays that way.  macOS before 26 does not mask an app icon, so `script/make_icon.swift` derives the macOS shape at build time — the master drawn inside an 824x824 rounded rectangle on a 1024 canvas, with the standard drop shadow — and the `.icns` is built from that.  The master files are only ever read.
 
-## Dashboard
+## Settings
 
-Console's sidebar has eight Dashboard pages.
+Console's sidebar has eight Settings pages.
 
 - **Menu Bar & PiP** — where the icon shows (menu bar, Dock, or both), plus its Displayed Quota picker (above) and the Picture-in-Picture HUD.
 - **Platforms** — platform list order, shared by Glance, Console, and the menu bar.
@@ -210,7 +210,7 @@ Console's sidebar has eight Dashboard pages.
 
 ## Privacy
 
-- Never asks for a provider API key; each CLI's own credential file, Keychain item, or session database is reused as-is.
+- Reuses supported local CLI credentials and session stores.  Optional Z.ai coding-plan keys stay in a separate build-scoped Keychain item.
 - Nothing leaves this Mac until you turn on push or pull and enter an endpoint yourself; fields are empty by default.
 - The Push Token and Read Token are the only two secrets stored, both in the Keychain.
 - Endpoints are validated as above (HTTPS, loopback-only HTTP, no embedded credentials/query/fragment).

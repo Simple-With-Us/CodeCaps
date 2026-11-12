@@ -3,10 +3,15 @@
 
 Reads one or more check-run list payloads (the ``check_runs`` array from
 ``GET /repos/{owner}/{repo}/commits/{sha}/check-runs``) and prints one word
-on stdout: ``success``, ``failure``, or ``pending``.
+on stdout: ``success``, ``failure``, ``pending``, or ``missing``.
 
-Exit status matches that word: 0, 1, or 2.  The newest github-actions run
+Exit status matches that word: 0, 1, 2, or 3.  The newest github-actions run
 for each requested name wins, so a rerun replaces a cancelled attempt.
+
+``missing`` means no github-actions run exists for any requested name.  A
+merge made with GITHUB_TOKEN starts no push workflow, so those runs never
+appear.  A name that is absent while a sibling run exists stays ``pending``:
+the workflow started, and the name may still show up.
 
 A CANCELLED run is a FAILURE by default.  It never finished, so it says
 nothing about the code, but a caller that cannot replace it has nothing to
@@ -92,9 +97,13 @@ def decide(
     """Return (verdict, details).
 
     Any concluded non-success fails the gate immediately, including a
-    skipped companion after a failed package.  A missing or still-running
-    check stays pending so the caller can poll.  Failure wins over pending
-    so a red package is not hidden behind a companion that has not started.
+    skipped companion after a failed package.  A still-running check stays
+    pending so the caller can poll.  A name with no run stays pending while
+    a sibling run exists, because that workflow has started and the name may
+    still appear.  When every requested name has no run, the verdict is
+    ``missing``: nothing was started, and polling will not create it.
+    Failure wins over pending and missing so a red package is not hidden
+    behind a companion that has not started.
 
     A cancelled run is a failure unless the caller can replace it:  it
     never finished, so it says nothing about the code, but a caller with no
@@ -106,10 +115,12 @@ def decide(
     latest = latest_by_name(_runs_from(payloads), names)
     failed: list[str] = []
     pending: list[str] = []
+    absent = 0
     for name in names:
         run = latest.get(name)
         if run is None:
             pending.append(f"{name}=missing")
+            absent += 1
             continue
         conclusion = run.get("conclusion")
         status = run.get("status") or ""
@@ -127,6 +138,8 @@ def decide(
         pending.append(f"{name}={status or 'pending'}")
     if failed:
         return "failure", failed
+    if absent == len(names):
+        return "missing", pending
     if pending:
         return "pending", pending
     return "success", []
@@ -166,7 +179,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(verdict)
     for line in details:
         print(line, file=sys.stderr)
-    return {"success": 0, "failure": 1, "pending": 2}[verdict]
+    return {"success": 0, "failure": 1, "pending": 2, "missing": 3}[verdict]
 
 
 if __name__ == "__main__":

@@ -26,7 +26,7 @@ final class PlatformLogoResourceTests: XCTestCase {
         "google-antigravity", "antigravity",
         "google-antigravity:gemini", "google-antigravity:third-party",
         "gemini", "xai", "grok", "grok-cli", "grok-bot", "minimax",
-        "muse", "muse-assist", "muse-code", "cursor",
+        "muse", "muse-assist", "muse-code", "cursor", "kimi", "zcode", "z.ai", "zai",
     ]
 
     func testMissingAppearanceVariantFallsBackToTheColourMarkBeforePlaceholder() {
@@ -54,11 +54,45 @@ final class PlatformLogoResourceTests: XCTestCase {
     /// installed app that was built before a mark was added keeps the old
     /// bundle, so this also asserts the bundle actually carries artwork rather
     /// than existing and being empty.
+    /// Kimi keeps its supplied blue dot in Standard; Z.ai keeps its brand
+    /// navy.  Both stay legible in the Light/Dark style, which is where the
+    /// white and black silhouettes live (CC-212, owner 2026-11-07).
+    func testKimiKeepsItsBlueDotAndZaiShipsItsBrandNavy() throws {
+        let kimiStandard = try XCTUnwrap(PlatformLogoImage.load(providerKey: "kimi", style: .standard))
+        XCTAssertFalse(kimiStandard.isTemplate, "Kimi Standard must preserve its supplied blue artwork")
+        let colorPixels = try XCTUnwrap(kimiStandard.representations.first as? NSBitmapImageRep)
+        var bluePixel: NSColor?
+        scan: for y in 0..<colorPixels.pixelsHigh {
+            for x in 0..<colorPixels.pixelsWide {
+                guard let color = colorPixels.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
+                      color.alphaComponent > 0.95,
+                      color.blueComponent > color.redComponent * 1.5 else { continue }
+                bluePixel = color
+                break scan
+            }
+        }
+        XCTAssertNotNil(bluePixel, "Kimi Standard must contain the supplied blue mark")
+        XCTAssertTrue(try XCTUnwrap(PlatformLogoImage.load(providerKey: "kimi", style: .template)).isTemplate)
+
+        for key in ["zcode", "z.ai", "z-ai", "zai"] {
+            XCTAssertFalse(try XCTUnwrap(PlatformLogoImage.load(providerKey: key, style: .standard)).isTemplate,
+                           "\(key) Standard must keep the brand navy mark")
+            XCTAssertTrue(try XCTUnwrap(PlatformLogoImage.load(providerKey: key, style: .template)).isTemplate,
+                          "\(key) Light/Dark must stay an adaptive monochrome mark")
+        }
+    }
+
     func testTheResourceBundleCarriesArtwork() throws {
         let bundle = try XCTUnwrap(ResourceBundle.resolved,
                                     "the SwiftPM resource bundle could not be resolved at all")
+        // `muse-assist` is deliberately absent: PR #306 dropped its four
+        // artwork files and `PlatformLogo.resourceNames` now maps the key to
+        // the shared `muse` mark, so the bundle carries no file by that name.
+        // The key itself still has to resolve, which is what
+        // `testEveryProviderKeyResolvesABundledMark` above checks.
         let marks = ["claude", "openai", "gemini", "gemini-color", "gemini-mono",
-                     "cursor", "xai", "grok", "grok-bot", "minimax", "muse", "muse-assist", "muse-code", "muse-code-dark"]
+                     "cursor", "xai", "grok", "grok-bot", "minimax", "muse", "muse-code", "muse-code-dark",
+                     "kimi", "kimi-color", "zai", "zai-color"]
         // Every named mark must be present in some form.  Deliberately not an
         // exact count: the owner replacing the fabricated MiniMax `{M}` with
         // the real PNG mark added a file, and an equality assertion is a test
@@ -75,7 +109,7 @@ final class PlatformLogoResourceTests: XCTestCase {
     /// a different hat: `NSImage` returns an object, and the row draws nothing.
     func testEveryBundledMarkRasterises() throws {
         let bundle = try XCTUnwrap(ResourceBundle.resolved)
-        for name in ["claude", "openai", "gemini", "gemini-mono", "cursor", "xai", "grok", "grok-bot", "minimax", "muse", "muse-assist", "muse-code", "muse-code-dark"] {
+        for name in ["claude", "openai", "gemini", "gemini-mono", "cursor", "xai", "grok", "grok-bot", "minimax", "muse", "muse-code", "muse-code-dark", "kimi", "zai"] {
             for ext in ["svg", "png"] {
                 guard let url = bundle.url(forResource: name, withExtension: ext) else { continue }
                 let image = try XCTUnwrap(NSImage(contentsOf: url), "\(name).\(ext) did not load")

@@ -47,6 +47,22 @@ macIhdr.writeUInt32BE(1440, 16);
 macIhdr.writeUInt32BE(900, 20);
 writeFileSync(macPath, macIhdr);
 
+// A stub at the 13-inch iPad size and one at the 12.9-inch size.  Apple's
+// table says the 13-inch display takes 2064 x 2752 and 2048 x 2732, and the
+// 12.9-inch display takes only 2048 x 2732, so both iPad sizes land in the
+// 13-inch set, the one the submit gate requires.
+const ipad13Path = join(root, "ipad13.png");
+const ipad13Ihdr = Buffer.alloc(24);
+ipad13Ihdr.writeUInt32BE(2064, 16);
+ipad13Ihdr.writeUInt32BE(2752, 20);
+writeFileSync(ipad13Path, ipad13Ihdr);
+
+const ipad129Path = join(root, "ipad129.png");
+const ipad129Ihdr = Buffer.alloc(24);
+ipad129Ihdr.writeUInt32BE(2048, 16);
+ipad129Ihdr.writeUInt32BE(2732, 20);
+writeFileSync(ipad129Path, ipad129Ihdr);
+
 // A string the server puts in a body that the script must never echo.
 const SECRET_MARKER = "leaked-token-marker-do-not-echo";
 
@@ -55,7 +71,7 @@ const SET_ID = "set-xyz-789";
 
 // Run asc-api.mjs upload-screenshots against a local server and collect what
 // happened.  `behaviour` picks which step, if any, fails.
-function upload(behaviour, file = pngPath) {
+function upload(behaviour, file = pngPath, displayType = "auto") {
   return new Promise((resolve) => {
     const calls = [];
     const createdSets = [];
@@ -166,7 +182,7 @@ function upload(behaviour, file = pngPath) {
 
     server.listen(0, "127.0.0.1", () => {
       apiBase = `http://127.0.0.1:${server.address().port}`;
-      const child = spawn("node", [script, "upload-screenshots", "loc-1", "auto", file], {
+      const child = spawn("node", [script, "upload-screenshots", "loc-1", displayType, file], {
         env: {
           ...process.env,
           ASC_API_BASE: apiBase,
@@ -209,6 +225,86 @@ test("a Mac screenshot goes to the desktop set", async () => {
   assert.deepEqual(
     createdSets, ["APP_DESKTOP"],
     `the Mac size was mapped to the wrong set: ${JSON.stringify(createdSets)}`
+  );
+});
+
+test("the 13-inch iPad size goes to the 13-inch set", async () => {
+  //  2064 x 2752 is the resolution of the iPad Pro of the 3rd generation and
+  //  everything after it, the 13-inch M4 and M5 included, so it belongs to
+  //  APP_IPAD_PRO_3GEN_129.  Putting it in APP_IPAD_PRO_129 is a spec
+  //  mismatch, and App Store Connect answers SPEC_MISMATCH on every image
+  //  in the set and leaves them all FAILED.
+  const { code, stderr, createdSets } = await upload({}, ipad13Path);
+  assert.equal(code, 0, `expected a clean run, got ${code}: ${stderr}`);
+  assert.deepEqual(
+    createdSets, ["APP_IPAD_PRO_3GEN_129"],
+    `the 13-inch iPad size was mapped to the wrong set: ${JSON.stringify(createdSets)}`
+  );
+});
+
+test("the 12.9-inch iPad size goes to the required 13-inch set", async () => {
+  //  2048 x 2732 is the only size the legacy 12.9-inch display accepts, and
+  //  the 13-inch display accepts it as well.  The 13-inch set is the profile
+  //  App Store Connect requires, and the capture falls back to 12.9-inch
+  //  simulators when no 13-inch one is installed, so an automatic mapping
+  //  that sent this size to the legacy set would leave the required set
+  //  empty and the submission refused.  The legacy set stays reachable by
+  //  naming APP_IPAD_PRO_129 explicitly instead of "auto".
+  const { code, stderr, createdSets } = await upload({}, ipad129Path);
+  assert.equal(code, 0, `expected a clean run, got ${code}: ${stderr}`);
+  assert.deepEqual(
+    createdSets, ["APP_IPAD_PRO_3GEN_129"],
+    `the 12.9-inch iPad size was mapped to the wrong set: ${JSON.stringify(createdSets)}`
+  );
+});
+
+test("the legacy 12.9-inch set stays reachable by naming its display type", async () => {
+  //  The auto map sends 2048 x 2732 to the required 13-inch set, and Apple
+  //  accepts that size in both iPad sets, so an explicit APP_IPAD_PRO_129
+  //  upload of the same size is valid - without it the legacy set could
+  //  never be populated.
+  const { code, stderr, createdSets } = await upload({}, ipad129Path, "APP_IPAD_PRO_129");
+  assert.equal(code, 0, `expected a clean run, got ${code}: ${stderr}`);
+  assert.deepEqual(
+    createdSets, ["APP_IPAD_PRO_129"],
+    `the explicit legacy display type was not honored: ${JSON.stringify(createdSets)}`
+  );
+});
+
+test("an unknown display type is refused before anything is sent", async () => {
+  //  This guard is the only thing keeping an arbitrary string out of the
+  //  screenshotDisplayType Apple is asked to create.
+  const { code, stderr, calls, createdSets } = await upload({}, pngPath, "APP_IPAD_PRO_129_TYPO");
+  assert.equal(code, 2, `expected a refusal, got ${code}: ${stderr}`);
+  assert.ok(
+    /is not a display type this script knows/.test(stderr),
+    `the refusal did not name the unknown display type:\n${stderr}`
+  );
+  assert.deepEqual(calls, [], "the script talked to App Store Connect with an unknown display type");
+  assert.deepEqual(createdSets, [], "a screenshot set was created for an unknown display type");
+});
+
+test("an inherited member name is refused like any unknown display type", async () => {
+  //  "constructor" resolves through Object.prototype on a plain table, so
+  //  an inherited lookup would pass the guard and crash with a TypeError
+  //  and exit code 1 instead of refusing with exit code 2.
+  const { code, stderr, createdSets } = await upload({}, pngPath, "constructor");
+  assert.equal(code, 2, `expected a refusal, got ${code}: ${stderr}`);
+  assert.ok(
+    /is not a display type this script knows/.test(stderr),
+    `the refusal did not name the inherited member:\n${stderr}`
+  );
+  assert.deepEqual(createdSets, [], "a screenshot set was created for an inherited member name");
+});
+
+test("an explicit display type refuses a size it does not accept", async () => {
+  //  A 2064 x 2752 capture can never go in the legacy 12.9-inch set:
+  //  Apple calls that a spec mismatch and fails every image in the set.
+  const { code, stderr } = await upload({}, ipad13Path, "APP_IPAD_PRO_129");
+  assert.equal(code, 2, `expected a refusal, got ${code}: ${stderr}`);
+  assert.ok(
+    /APP_IPAD_PRO_129 does not accept/.test(stderr),
+    `the refusal did not name the display type and the size:\n${stderr}`
   );
 });
 

@@ -250,7 +250,9 @@ final class PlatformLogoTests: XCTestCase {
     /// A failed first draw re-probes quickly through the install/update window,
     /// then settles to once a minute so a late-arriving mark still heals.
     func testMissingMarkRetryDelayQuickThenSlow() {
-        XCTAssertEqual(PlatformLogoImage.missingMarkRetryDelay(forAttempt: 0), 5_000_000_000)
+        XCTAssertEqual(PlatformLogoImage.missingMarkRetryDelay(forAttempt: 0), 1_000_000_000)
+        XCTAssertEqual(PlatformLogoImage.missingMarkRetryDelay(forAttempt: 2), 1_000_000_000)
+        XCTAssertEqual(PlatformLogoImage.missingMarkRetryDelay(forAttempt: 3), 5_000_000_000)
         XCTAssertEqual(PlatformLogoImage.missingMarkRetryDelay(forAttempt: 11), 5_000_000_000)
         XCTAssertEqual(PlatformLogoImage.missingMarkRetryDelay(forAttempt: 12), 60_000_000_000)
         XCTAssertEqual(PlatformLogoImage.missingMarkRetryDelay(forAttempt: 500), 60_000_000_000)

@@ -372,6 +372,86 @@ final class LocalQuotaReaderTests: XCTestCase {
         XCTAssertNil(grok.absoluteRemaining)
     }
 
+    // MARK: - The grok.com credits fallback
+
+    private static let fallbackToken = "fixture-grok-credential-123456"
+
+    /// A CLI-proxy answer with no percentage, so `readGrok` runs the grok.com
+    /// fallback; `grokCom` answers that gRPC-web request.
+    private func readGrokThroughFallback(
+        _ grokCom: @escaping @Sendable () -> (Data, HTTPURLResponse)
+    ) async throws -> LocalQuotaResult {
+        let home = try makeFixtureHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        try writeJSON(["token": Self.fallbackToken], to: home.appendingPathComponent(".grok/auth.json"))
+        let reader = LocalQuotaReader(homeDirectory: home, now: { self.observedAt }, fetchJSON: { request in
+            let host = request.url?.host ?? ""
+            let path = request.url?.path ?? ""
+            if host == "grok.com" { return grokCom() }
+            if host == "cli-chat-proxy.grok.com", path == "/v1/billing" {
+                return Self.httpResponse(#"{"period":"weekly"}"#)
+            }
+            return Self.httpResponse("{}", status: 500)
+        }, runAntigravity: { Data("{}".utf8) })
+        return await reader.read()
+    }
+
+    /// `{1: {4: fixed32 used%}}`: a reply whose config carries only the usage percent.
+    private static func creditsReply(usedPercent: Float) -> [UInt8] {
+        var bits = usedPercent.bitPattern.littleEndian
+        let percent: [UInt8] = [0x25] + withUnsafeBytes(of: &bits) { Array($0) }  // field 4, fixed32
+        return [0x0A, UInt8(percent.count)] + percent  // field 1, length-delimited
+    }
+
+    /// An optional gRPC-web data frame, then a trailer frame.
+    private static func grpcWebReply(payload: [UInt8], trailer: String) -> Data {
+        let trailerBytes = Array(trailer.utf8)
+        var bytes: [UInt8] = []
+        if !payload.isEmpty { bytes += [0x00, 0, 0, 0, UInt8(payload.count)] + payload }
+        bytes += [0x80, 0, 0, 0, UInt8(trailerBytes.count)] + trailerBytes
+        return Data(bytes)
+    }
+
+    private static func grpcResponse(_ data: Data, status: Int = 200) -> (Data, HTTPURLResponse) {
+        let url = URL(string: "https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig")!
+        let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: nil,
+                                       headerFields: ["Content-Type": "application/grpc-web+proto"])!
+        return (data, response)
+    }
+
+    func testTheCreditsFallbackFillsThePercentageTheProxyLeftOut() async throws {
+        let reply = Self.grpcWebReply(payload: Self.creditsReply(usedPercent: 37.5), trailer: "grpc-status: 0\r\n")
+        let result = try await readGrokThroughFallback { Self.grpcResponse(reply) }
+        let grok = try XCTUnwrap(result.windows.first { $0.providerKey == "grok" })
+        XCTAssertEqual(grok.remainingPercent, 62.5)
+        XCTAssertFalse(grok.remainingUnknown)
+        XCTAssertNil(result.issues["grok"])
+    }
+
+    /// gRPC status 16 is grok.com's documented answer to a bearer-only probe
+    /// with no Web Key Exchange keypair.  The proxy just accepted the same
+    /// token, so this is the ordinary miss and never a "sign in again".
+    func testGrpcStatus16FromGrokComIsAFallbackMissNotARejectedToken() async throws {
+        let reply = Self.grpcWebReply(payload: [], trailer: "grpc-status: 16\r\ngrpc-message: no-credentials\r\n")
+        let result = try await readGrokThroughFallback { Self.grpcResponse(reply) }
+        XCTAssertEqual(result.issues["grok"], "Grok returned no readable quota percentage.")
+    }
+
+    func testHTTP403FromGrokComIsAFallbackMissNotARejectedToken() async throws {
+        let result = try await readGrokThroughFallback { Self.grpcResponse(Data(), status: 403) }
+        XCTAssertEqual(result.issues["grok"], "Grok returned no readable quota percentage.")
+    }
+
+    /// Only an HTTP 401 is reported as a refusal: masked to first 8 and last
+    /// 4, never the raw token, and without sending the owner to sign in.
+    func testHTTP401FromGrokComIsReportedWithAMaskedPreview() async throws {
+        let result = try await readGrokThroughFallback { Self.grpcResponse(Data(), status: 401) }
+        let issue = try XCTUnwrap(result.issues["grok"])
+        XCTAssertTrue(issue.contains("grok.com refused the credits fallback for GROK_TOKEN (fixture-…3456)"), issue)
+        XCTAssertFalse(issue.contains(Self.fallbackToken))
+        XCTAssertFalse(issue.lowercased().contains("sign in"))
+    }
+
     func testClaudeSkipsNonCadenceRateLimitKeys() async throws {
         let root = try makeFixtureHome()
         defer { try? FileManager.default.removeItem(at: root) }

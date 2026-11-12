@@ -354,6 +354,63 @@ final class MonitorModel: ObservableObject {
         dismissedPlanChangeIds.insert(id)
     }
     @Published public private(set) var runawayAlertHistory: [RunawayAlertRecord] = []
+
+    // MARK: - Muse Plugin
+
+    /// Latest Muse session-store reading, for the Plugins section.
+    @Published private(set) var museCodeReport: MuseCodeSessionReport?
+    @Published private(set) var museCodeIssue: String?
+    /// The alerts the current reading produces.  Both stay visible on the
+    /// plugin page whether or not their delivery is inside a cooldown.
+    @Published private(set) var museCodeBurnAlert: MuseCodeBurnMonitor.BurnAlert?
+    /// The most recent standard-session event the detector fired.  Unlike
+    /// the burn alert this is an event, not a state: it stays on the page
+    /// (with its observed time in the body) until a newer event replaces it.
+    @Published private(set) var museCodeStandardSessionAlert: MuseCodeStandardSessionEvent?
+    @Published private(set) var museCodeBridgeStatus: String?
+    /// Token threshold for the burn alert in the trailing 90-minute window.
+    /// A per-user tunable, so it stays in UserDefaults like the burn-rate
+    /// multipliers (see INFISICAL.md), never in Infisical.
+    @Published var museCodeBurnThresholdTokens: Int {
+        didSet {
+            defaults.set(museCodeBurnThresholdTokens, forKey: "museCodeBurnThresholdTokens")
+            if let museCodeReport { evaluateMuseCodeAlerts(report: museCodeReport) }
+        }
+    }
+    /// Ships on: the warning is the feature the plugin exists for.  Either
+    /// alert kind can still be turned off on its own in Alerts & Alarms.
+    @Published var museCodeBurnAlertsEnabled: Bool {
+        didSet {
+            defaults.set(museCodeBurnAlertsEnabled, forKey: "museCodeBurnAlertsEnabled")
+            if museCodeBurnAlertsEnabled {
+                Task { await alarmManager.requestNotificationPermission() }
+                if let museCodeReport { evaluateMuseCodeAlerts(report: museCodeReport) }
+            } else {
+                museCodeBurnAlert = nil
+                museCodeStandardSessionAlert = nil
+            }
+        }
+    }
+    /// Whether the plugin also posts its session token events to Usage
+    /// Monitor through the sync endpoint.  Off by default: the local monitor
+    /// is the feature; the bridge is provenance for the server.
+    @Published var museCodeUsageBridgeEnabled: Bool {
+        didSet {
+            defaults.set(museCodeUsageBridgeEnabled, forKey: "museCodeUsageBridgeEnabled")
+            guard oldValue != museCodeUsageBridgeEnabled else { return }
+            museCodeBridgeGeneration &+= 1
+            if museCodeUsageBridgeEnabled, let museCodeReport {
+                enqueueMuseCodeBridge(report: museCodeReport)
+            } else {
+                museCodePendingBridgeReport = nil
+                museCodeBridgeStatus = "Bridge off."
+            }
+        }
+    }
+    @Published private(set) var museCodeHasSavedIngestToken: Bool
+    @Published private(set) var museCodeIngestTokenStatus: String?
+    @Published private(set) var museCodeIngestTokenBusy = false
+
     public var resetAlertHistory: [ResetAlertRecord] {
         alarmManager.alertHistory
     }
@@ -364,7 +421,10 @@ final class MonitorModel: ObservableObject {
         didSet { defaults.set(viewLayout.rawValue, forKey: "quotaViewLayout") }
     }
     @Published var platformOrder: [String] {
-        didSet { defaults.set(platformOrder, forKey: "platformOrder") }
+        didSet {
+            defaults.set(platformOrder, forKey: "platformOrder")
+            sectionsCache = nil
+        }
     }
     @Published var platformCustomInfo: [String: PlatformCustomInfo] {
         didSet {
@@ -404,7 +464,9 @@ final class MonitorModel: ObservableObject {
     @Published var customMarkDarkPaths: [String: String] {
         didSet { defaults.set(customMarkDarkPaths, forKey: "customMarkDarkPaths") }
     }
-    @Published private(set) var response = QuotaResponse(generatedAt: "")
+    @Published private(set) var response = QuotaResponse(generatedAt: "") {
+        didSet { sectionsCache = nil }
+    }
     @Published private(set) var isRefreshing = false
     @Published private(set) var lastChecked: Date?
     @Published private(set) var issues: [String: String] = [:]
@@ -415,7 +477,15 @@ final class MonitorModel: ObservableObject {
     @Published private(set) var serverError: String?
     @Published private(set) var handoffError: String?
     @Published private(set) var widgetSharingError: String?
-    @Published private(set) var now = Date()
+    /// Serial chain of background snapshot writes.  Encoding and writing the
+    /// handoff and widget files for a large fleet pull used to run on the main
+    /// actor and hang the UI (BOTFLEET-5B); each write now runs off-main, in
+    /// order, after the one before it.
+    private var snapshotWriteChain: Task<Void, Never>?
+    private(set) var snapshotWritesClosedForTermination = false
+    @Published private(set) var now = Date() {
+        didSet { sectionsCache = nil }
+    }
 
     // Local & Remote Reading
     @Published private(set) var localEnabled: Bool
@@ -546,8 +616,21 @@ final class MonitorModel: ObservableObject {
     @Published var disabledSources: Set<String> {
         didSet { defaults.set(Array(disabledSources), forKey: "disabledSources") }
     }
+    @Published private(set) var optionalQuotaReaderPreferences: QuotaReaderPreferences
 
     public let alarmManager: ResetAlarmManager
+    let smsAlerts: SMSAlertController
+    let zAIQuotaSetup: ZAIQuotaSetupController
+
+    /// App-level alert fan-out.  Producers emit `CodeCapsAlertEvent`s here
+    /// and registered channels deliver them; today the only channel is the
+    /// local alert surface, and a future channel registers here once rather
+    /// than inside any producer.
+    lazy var alertDispatcher: CodeCapsAlertDispatcher = {
+        let dispatcher = CodeCapsAlertDispatcher()
+        dispatcher.register(LocalAlertChannel(manager: alarmManager))
+        return dispatcher
+    }()
 
     private let presentsPipWindows: Bool
     private let defaults: UserDefaults
@@ -571,6 +654,29 @@ final class MonitorModel: ObservableObject {
     var settingsWriteForTesting: (@MainActor (String, String) async throws -> Void)?
     var pushForTesting: (@MainActor ([QuotaWindow], URL, String?, QuotaSyncFormat) async throws -> QuotaPublishResult)?
     var runawayNotificationForTesting: ((BurnRateNotification) -> Void)?
+    var museCodeReadForTesting: (@MainActor () async -> MuseCodeSessionResult?)?
+    var museCodePublishForTesting: (@MainActor ([[String: Any]], URL, String?) async throws -> MuseCodeIngestSummary)?
+    var museCodeTokenReadForTesting: (@MainActor () async -> String?)?
+    var museCodeTokenSaveForTesting: (@MainActor (String) async throws -> Void)?
+    var museCodeTokenDeleteForTesting: (@MainActor () async throws -> Void)?
+    var museCodeTokenReauthorizeForTesting: (@MainActor () async -> String?)?
+    var museCodeAlertSynchronizeForTesting: (@MainActor (String) -> Bool)?
+    private var museCodeBridgeGeneration: UInt64 = 0
+    private var museCodeBridgeTask: Task<Void, Never>?
+    private var museCodePendingBridgeReport: MuseCodeSessionReport?
+    var museCodeBridgeTaskForTesting: Task<Void, Never>? { museCodeBridgeTask }
+    private var lastMuseCodeBurnAlertAt: Double = 0
+    /// The standard-session detector's tracked state, persisted across
+    /// launches with the same JSON-in-UserDefaults pattern as the bridge
+    /// baselines, so a session already reported does not refire after a
+    /// restart.  An earlier build persisted a
+    /// `museCodeContributorBelow100Active` bool for the share-based edge
+    /// trigger; that key is abandoned unread.
+    private var museCodeStandardSessionDetector = MuseCodeStandardSessionDetector()
+    private static let museCodeDetectorKey = "museCodeStandardSessionDetector"
+    private var museCodeRequest: Task<Void, Never>?
+    private var museCodeReadGeneration: UInt64 = 0
+    private let museCodePoster = MuseCodeSessionPoster()
     var exhaustionNotificationForTesting: ((String, String) -> Void)?
     var exhaustionHistoryURLForTesting: URL?
     var skipsSnapshotIOForTesting = false
@@ -605,6 +711,8 @@ final class MonitorModel: ObservableObject {
     /// Re-publishes the alarm manager's changes, so a view that observes this
     /// model redraws when All or a provider's bell flips.
     private var alarmChanges: AnyCancellable?
+    private var smsChanges: AnyCancellable?
+    private var zAIQuotaChanges: AnyCancellable?
     /// Re-checks the saved-token states when `TokenStore` gains a token nobody
     /// was waiting for, so the Re-Authorize button clears without a refresh.
     private var tokenChanges: AnyCancellable?
@@ -694,9 +802,11 @@ final class MonitorModel: ObservableObject {
             sourceRank = [:]
         }
         disabledSources = Set((defaults.stringArray(forKey: "disabledSources") ?? []))
+        optionalQuotaReaderPreferences = QuotaReaderPreferences.load(from: defaults)
         localEnabled = defaults.object(forKey: "localEnabled") as? Bool ?? true
         glanceLogosFollowAccent = defaults.bool(forKey: "glanceLogosFollowAccent")
         pipBackground = PipBackground(rawValue: defaults.string(forKey: "pipBackground") ?? "") ?? .black
+        pipShowProviderNames = defaults.bool(forKey: "pipShowProviderNames")
         providerChecksEnabled = SourceRefreshPreference.enabled(SourceRefreshPreference.providerEnabled, defaults: defaults)
         sessionFileChecksEnabled = SourceRefreshPreference.enabled(SourceRefreshPreference.sessionEnabled, defaults: defaults)
         providerCheckCadence = SourceRefreshPreference.cadence(SourceRefreshPreference.providerMinutes,
@@ -712,8 +822,20 @@ final class MonitorModel: ObservableObject {
         syncEndpoint = defaults.string(forKey: "syncEndpoint") ?? ""
         syncFormat = QuotaSyncFormat(rawValue: defaults.string(forKey: "syncFormat") ?? "") ?? .usageMonitorV2
         remoteAlertRelayEnabled = defaults.bool(forKey: "remoteAlertRelayEnabled")
+        museCodeBurnThresholdTokens = defaults.object(forKey: "museCodeBurnThresholdTokens") as? Int
+            ?? MuseCodeBurnMonitor.defaultThresholdTokens
+        museCodeBurnAlertsEnabled = defaults.object(forKey: "museCodeBurnAlertsEnabled") as? Bool ?? true
+        museCodeUsageBridgeEnabled = defaults.bool(forKey: "museCodeUsageBridgeEnabled")
+        museCodeHasSavedIngestToken = defaults.bool(forKey: "museCodeHasSavedIngestToken")
+        lastMuseCodeBurnAlertAt = defaults.double(forKey: "museCodeBurnLastSent")
+        if let data = defaults.data(forKey: Self.museCodeDetectorKey),
+           let saved = try? JSONDecoder().decode(MuseCodeStandardSessionDetector.self, from: data) {
+            museCodeStandardSessionDetector = saved
+        }
 
         alarmManager = ResetAlarmManager(defaults: defaults)
+        smsAlerts = SMSAlertController(defaults: defaults)
+        zAIQuotaSetup = ZAIQuotaSetupController(defaults: defaults)
 
         appearance = AppAppearance(rawValue: defaults.string(forKey: "appearance") ?? "") ?? .system
         glanceView = GlanceViewMode(rawValue: defaults.string(forKey: "glanceView") ?? "") ?? .fromMac
@@ -730,6 +852,14 @@ final class MonitorModel: ObservableObject {
         alarmChanges = alarmManager.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
         }
+        smsChanges = smsAlerts.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
+        zAIQuotaChanges = zAIQuotaSetup.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        zAIQuotaSetup.changed = { [weak self] in self?.zAIQuotaSetupChanged() }
+        alarmManager.additionalDelivery = { [weak self] kind, title, body, identifier in
+            self?.smsAlerts.deliver(kind: kind.rawValue, title: title, body: body, eventID: identifier)
+        }
         tokenChanges = NotificationCenter.default.publisher(for: TokenStore.tokenBecameAvailable)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
@@ -739,7 +869,28 @@ final class MonitorModel: ObservableObject {
             }
     }
 
+    /// `sections` and `displaySections` are read dozens of times per Glance,
+    /// Console and status-bar update (every row, the runaway footer once per
+    /// anomaly, every menu-bar option).  Rebuilding them on each read ran the
+    /// whole platform pipeline (dedupe, manifest, Antigravity pool matching)
+    /// on the main thread every time, which is the shared cost behind the
+    /// "App hanging for at least 2000 ms" reports on build 312.  They depend
+    /// only on `response`, `now` and `platformOrder`, so they are built once
+    /// and dropped whenever one of those changes.
+    private struct SectionsCache {
+        let sections: [QuotaPlatformSection]
+        var displaySections: [DisplaySection]?
+    }
+    private var sectionsCache: SectionsCache?
+
     var sections: [QuotaPlatformSection] {
+        if let cached = sectionsCache { return cached.sections }
+        let built = buildSections()
+        sectionsCache = SectionsCache(sections: built, displaySections: nil)
+        return built
+    }
+
+    private func buildSections() -> [QuotaPlatformSection] {
         let base = response.platformSections(now: now)
         if platformOrder.isEmpty { return base }
         var orderMap: [String: Int] = [:]
@@ -756,7 +907,10 @@ final class MonitorModel: ObservableObject {
     /// One row per platform, except Antigravity, which is one row per pool.
     /// Every surface that lists platforms reads this rather than `sections`.
     var displaySections: [DisplaySection] {
-        sections.flatMap { DisplaySection.rows(for: $0, now: now) }
+        if let rows = sectionsCache?.displaySections { return rows }
+        let rows = sections.flatMap { DisplaySection.rows(for: $0, now: now) }
+        sectionsCache?.displaySections = rows
+        return rows
     }
 
     func historySamples() -> [AnomalyDetector.Sample] {
@@ -795,9 +949,9 @@ final class MonitorModel: ObservableObject {
     var freshWindows: [QuotaWindowSnapshot] {
         let masked = maskedWindowIds
         let visible = sections.flatMap(\.windows).filter {
-            $0.isFresh && $0.remainingPercent != nil && !$0.window.isSupplementaryVideoQuota
+            $0.isFresh && $0.window.hasReading && !$0.window.isSupplementaryVideoQuota
                 && !masked.contains($0.window.id)
-                && issues[$0.window.canonicalProviderKey] == nil
+                && rowIssue(for: $0.window.canonicalProviderKey) == nil
                 && !disabledSources.contains($0.window.source ?? "")
         }
         // Order by provider rank, then by source rank within the provider, so
@@ -833,7 +987,7 @@ final class MonitorModel: ObservableObject {
     var menuBarPlatformPairOptions: [(id: String, label: String)] {
         displaySections.compactMap { row in
             let windows = row.section.windows.filter {
-                $0.isFresh && $0.remainingPercent != nil && !$0.window.isSupplementaryVideoQuota && !row.isMasked($0)
+                $0.isFresh && $0.window.hasReading && !$0.window.isSupplementaryVideoQuota && !row.isMasked($0)
             }
             guard windows.count >= 2 else { return nil }
             return (id: "platform_pair:\(row.id)", label: "Pin to \(row.title) (Both Quotas)")
@@ -852,7 +1006,7 @@ final class MonitorModel: ObservableObject {
         var result: [(id: String, label: String)] = []
         for row in displaySections {
             let windows = row.section.windows.filter {
-                $0.isFresh && $0.remainingPercent != nil && !$0.window.isSupplementaryVideoQuota && !row.isMasked($0)
+                $0.isFresh && $0.window.hasReading && !$0.window.isSupplementaryVideoQuota && !row.isMasked($0)
             }
             for snapshot in windows {
                 let label = "\(row.title) · \(AntigravityDisplay.windowLabel(snapshot.window.label))"
@@ -916,7 +1070,7 @@ final class MonitorModel: ObservableObject {
                     return [short, weekly]
                 }
                 let valid = row.section.windows.filter {
-                    $0.isFresh && $0.remainingPercent != nil && !$0.window.isSupplementaryVideoQuota && !$0.window.isSubModelLimit && !row.isMasked($0)
+                    $0.isFresh && $0.window.hasReading && !$0.window.isSupplementaryVideoQuota && !$0.window.isSubModelLimit && !row.isMasked($0)
                 }
                 if valid.count >= 2 {
                     return [valid[0], valid[1]]
@@ -967,15 +1121,30 @@ final class MonitorModel: ObservableObject {
                isShortMenuBarWindow(short), isWeeklyMenuBarWindow(weekly) {
                 selected = weekly.remainingPercent == 0 ? [weekly] : [short, weekly]
             } else {
-                let remaining = windows.filter { $0.remainingPercent != nil }
-                guard let urgent = remaining.min(by: { ($0.remainingPercent ?? 100) < ($1.remainingPercent ?? 100) }) else {
-                    return nil
+                let candidates = windows.filter { $0.window.hasReading }.compactMap { snapshot -> (QuotaWindowSnapshot, Double)? in
+                    guard let urgency = Self.smartPairUrgency(snapshot) else { return nil }
+                    return (snapshot, urgency)
                 }
-                selected = [urgent]
+                guard let urgent = candidates.min(by: { $0.1 < $1.1 }) else { return nil }
+                selected = [urgent.0]
+                return (selected, urgent.1)
             }
-            return (selected, selected.compactMap(\.remainingPercent).min() ?? 100)
+            return (selected, selected.compactMap { Self.smartPairUrgency($0) ?? $0.remainingPercent }.min() ?? 100)
         }
         return rows.min(by: { $0.urgency < $1.urgency })?.targets ?? []
+    }
+
+    /// Comparable urgency for smart-pair (percent scale).  Uses
+    /// `remainingPercent` when present; otherwise derives from absolute
+    /// remaining/limit so CC-193 credits windows can compete without a
+    /// fabricated 100% rank.
+    private static func smartPairUrgency(_ snapshot: QuotaWindowSnapshot) -> Double? {
+        if let percent = snapshot.remainingPercent { return percent }
+        if let remaining = snapshot.window.absoluteRemaining,
+           let limit = snapshot.window.absoluteLimit, limit > 0 {
+            return remaining / limit * 100
+        }
+        return nil
     }
 
     private func menuBarPeriodSeconds(_ snapshot: QuotaWindowSnapshot) -> TimeInterval? {
@@ -1099,6 +1268,40 @@ final class MonitorModel: ObservableObject {
         sourceRank[key] = current
     }
 
+    func isOptionalQuotaReaderEnabled(_ readerID: String) -> Bool {
+        optionalQuotaReaderPreferences.isEnabled(readerID)
+    }
+
+    func setOptionalQuotaReaderEnabled(_ enabled: Bool, readerID: String) {
+        guard LocalQuotaReaderRegistry.builtIn.optionalRegistrations.contains(where: { $0.id == readerID }),
+              optionalQuotaReaderPreferences.isEnabled(readerID) != enabled else { return }
+        var preferences = optionalQuotaReaderPreferences
+        preferences.setEnabled(enabled, for: readerID)
+        optionalQuotaReaderPreferences = preferences
+        preferences.save(to: defaults)
+        invalidateRefresh()
+        if !enabled, let providerResult {
+            self.providerResult = LocalQuotaResult(
+                windows: providerResult.windows.filter { $0.canonicalProviderKey != readerID },
+                issues: providerResult.issues.filter { $0.key != readerID },
+                consentNeeded: providerResult.consentNeeded.subtracting([readerID]))
+            rebuildLocalState(recordSamples: false)
+        }
+        if providerChecksEnabled || serverEnabled { refreshProviderChecks() }
+    }
+
+    private func zAIQuotaSetupChanged() {
+        invalidateRefresh()
+        if let providerResult {
+            self.providerResult = LocalQuotaResult(
+                windows: providerResult.windows.filter { $0.canonicalProviderKey != "zcode" },
+                issues: providerResult.issues.filter { $0.key != "zcode" },
+                consentNeeded: providerResult.consentNeeded.subtracting(["zcode"]))
+            rebuildLocalState(recordSamples: false)
+        }
+        if localEnabled && providerChecksEnabled && isOptionalQuotaReaderEnabled("zcode") { refreshProviderChecks() }
+    }
+
     func setSourceEnabled(_ enabled: Bool, _ source: String, for providerKey: String) {
         var disabled = disabledSources
         if enabled { disabled.remove(source) } else { disabled.insert(source) }
@@ -1121,6 +1324,12 @@ final class MonitorModel: ObservableObject {
         )
         self.now = now
         self.issues = issues
+    }
+
+    /// Advances the clock alone, without replacing `response`, so a test can
+    /// check that `now` invalidates the sections cache on its own.
+    func injectNowForTests(_ now: Date) {
+        self.now = now
     }
 
     func injectLocalHistorySourceForTests(_ windows: [QuotaWindow]) {
@@ -1347,6 +1556,10 @@ final class MonitorModel: ObservableObject {
     }
 
     func start() {
+        // Termination is terminal for this process, even after a drain timeout.
+        // A future cancelled-quit feature must define recovery without letting
+        // old filesystem writes race newer snapshots. Do not reopen admission.
+        guard !snapshotWritesClosedForTermination else { return }
         hasStarted = true
         refresh()
         scheduleSourceTimers()
@@ -1383,6 +1596,14 @@ final class MonitorModel: ObservableObject {
         refreshTimer?.invalidate()
         sessionFileTimer?.invalidate()
         clockTimer?.invalidate()
+    }
+
+    /// Suspend instead of blocking the main actor, which queued completions need.
+    /// The caller may terminate after the deadline even if filesystem I/O is stuck.
+    func flushSnapshotWrites(timeout: Duration = .seconds(2)) async -> Bool {
+        snapshotWritesClosedForTermination = true
+        let chain = snapshotWriteChain
+        return await SnapshotWriteDrain.wait(for: chain, timeout: timeout)
     }
 
     /// Fires only while something is at risk, so the forecast keeps measuring a
@@ -1566,16 +1787,11 @@ final class MonitorModel: ObservableObject {
         guard localEnabled else { return }
         let windows = exportedWindows(localWindows)
         if let writeForTesting = handoffWriteForTesting { writeForTesting(windows) }
-        else if !skipsSnapshotIOForTesting {
-            do {
-                try LocalQuotaSnapshot.write(windows: windows, issues: issues,
-                                             customMarks: exportedCustomMarks(),
-                                             alerts: exportedAlerts(now: now), now: now,
-                                             stampInstallationProvenance: true)
-                handoffError = nil
-            } catch { handoffError = "BotFleet quota sharing is unavailable." }
-        }
+        else if !skipsSnapshotIOForTesting { enqueueHandoffWrite(windows: windows) }
         // Same candidate set as the refresh paths, so a Settings edit never drops the fleet rows.
+        // `publishWidgetSnapshot` holds the rule that drops the stale fleet copy
+        // of a provider this Mac reads itself, so this path publishes the same
+        // set as the others.
         publishWidgetSnapshot(candidates: response.windows + fleetWindowGroups.flatMap(\.windows))
         if syncEnabled && !windows.isEmpty {
             Task { [weak self] in _ = await self?.pushQuotasIfEnabled(windows: windows) }
@@ -1630,6 +1846,19 @@ final class MonitorModel: ObservableObject {
     /// request, 2026-10-10).
     @Published var pipBackground: PipBackground {
         didSet { defaults.set(pipBackground.rawValue, forKey: "pipBackground") }
+    }
+
+    /// Whether the PiP HUD prints the platform name beside its logo.
+    ///
+    /// Off by default, and deliberately so.  The name is up to 150 points wide
+    /// and the meters need that room more; the owner would rather have the
+    /// meters and never the name (owner, 2026-10-28).  A per-user setting, like
+    /// the PiP background: it is a display preference, not an app-level knob.
+    @Published var pipShowProviderNames: Bool {
+        didSet {
+            defaults.set(pipShowProviderNames, forKey: "pipShowProviderNames")
+            if presentsPipWindows { PipWidgetController.shared.update(model: self) }
+        }
     }
 
     /// Whether the Glance popover's provider logos wear the chosen accent.
@@ -1755,6 +1984,9 @@ final class MonitorModel: ObservableObject {
     /// instead of waiting for a save.
     func setLocalEnabled(_ value: Bool) {
         guard value != localEnabled else { return }
+        museCodeReadGeneration &+= 1
+        museCodeRequest?.cancel()
+        museCodeRequest = nil
         invalidateRefresh()
         invalidateSessionFileRefresh()
         localEnabled = value
@@ -1767,7 +1999,7 @@ final class MonitorModel: ObservableObject {
             localWindows = []
             updateActiveAnomalies([])
             activePlanChanges = []
-            if !skipsSnapshotIOForTesting { try? LocalQuotaSnapshot.remove() }
+            if !skipsSnapshotIOForTesting { enqueueHandoffWrite(windows: nil) }
             rebuildLocalState(recordSamples: false)
         }
         refresh()
@@ -1909,7 +2141,7 @@ final class MonitorModel: ObservableObject {
     func testPullConnection(endpoint input: String, token inputToken: String) async -> (success: Bool, message: String) {
         let value = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let url = URL(string: value), QuotaClient.isAllowedEndpoint(url) else {
-            return (false, "Invalid endpoint URL." + sentenceGap + "Use HTTPS, or HTTP for localhost only.")
+            return (false, "That address is not allowed." + sentenceGap + "Use https, or http for this Mac only.")
         }
         let cleanToken = sanitizedToken(inputToken)
         let resolvedToken = !cleanToken.isEmpty ? cleanToken : await TokenStore.read(server: value, service: TokenStore.readService).map(sanitizedToken(_:))
@@ -2074,12 +2306,12 @@ final class MonitorModel: ObservableObject {
 
     func testAndPushSync(endpoint input: String = "", token inputToken: String = "", format inputFormat: QuotaSyncFormat? = nil) async -> (success: Bool, message: String) {
         guard localEnabled, syncEnabled else {
-            return (false, "Enable Local Readers and push sharing before sending.")
+            return (false, "Turn on readings from this Mac and sharing before sending.")
         }
         let endpointValue = input.trimmingCharacters(in: .whitespacesAndNewlines)
         let targetEndpoint = !endpointValue.isEmpty ? endpointValue : syncEndpoint
         guard let url = URL(string: targetEndpoint), QuotaClient.isAllowedEndpoint(url) else {
-            return (false, "Invalid endpoint URL." + sentenceGap + "Use HTTPS, or HTTP for localhost only.")
+            return (false, "That address is not allowed." + sentenceGap + "Use https, or http for this Mac only.")
         }
         guard targetEndpoint == syncEndpoint else {
             return (false, "Save the Push Endpoint before sending.")
@@ -2094,7 +2326,9 @@ final class MonitorModel: ObservableObject {
         } else if let localResultForTesting {
             windowsToPush = AntigravityQuotaGroups.normalize(localResultForTesting.windows)
         } else {
-            windowsToPush = AntigravityQuotaGroups.normalize(await Self.readLocalSources().windows)
+            let readerPreferences = optionalQuotaReaderPreferences
+            windowsToPush = AntigravityQuotaGroups.normalize(
+                await Self.readLocalSources(preferences: readerPreferences).windows)
         }
         guard isCurrentPushSettings(generation, endpoint: targetEndpoint, format: targetFormat) else {
             return (false, "Push cancelled because sharing was disabled or its settings changed.")
@@ -2263,6 +2497,7 @@ final class MonitorModel: ObservableObject {
         let useLocal = localEnabled && providerChecksEnabled
         let useServer = serverEnabled
         let currentEndpoint = endpoint
+        let readerPreferences = optionalQuotaReaderPreferences
         request = Task { [weak self] in
             let resultForTesting = self?.localResultForTesting
             let localReadForTesting = self?.localReadForTesting
@@ -2270,7 +2505,8 @@ final class MonitorModel: ObservableObject {
             async let localRead: LocalQuotaResult? = {
                 guard useLocal else { return nil }
                 if let localReadForTesting { return await localReadForTesting() }
-                return await Self.readLocalResult(useLocal: useLocal, testingResult: resultForTesting)
+                return await Self.readLocalResult(useLocal: useLocal, testingResult: resultForTesting,
+                                                  preferences: readerPreferences)
             }()
             var newServer: QuotaResponse?
             var failure: String?
@@ -2279,6 +2515,7 @@ final class MonitorModel: ObservableObject {
             // After the first read of the launch it is served from memory, and
             // a failed read is not retried here (see `TokenCache`).
             var savedTokenReadable = false
+            let preserveFleetOnTransientFailure = self?.serverWindows.isEmpty == false
             if useServer {
                 if let serverFetchForTesting {
                     do { newServer = try await serverFetchForTesting() }
@@ -2295,8 +2532,13 @@ final class MonitorModel: ObservableObject {
                         newServer = try await client.fetch()
                     } catch is CancellationError { return }
                     catch {
-                        failure = (error as? LocalizedError)?.errorDescription
-                            ?? ("Unable to reach the server." + sentenceGap + "Check the Quota Endpoint and the Read Token.")
+                        if preserveFleetOnTransientFailure,
+                           IdempotentGETRetryFilter.preservesLastGoodFleetOnPullFailure(error) {
+                            failure = nil
+                        } else {
+                            failure = (error as? LocalizedError)?.errorDescription
+                                ?? ("Unable to reach the server." + sentenceGap + "Check the Quota Endpoint and the Read Token.")
+                        }
                     }
                 }
             }
@@ -2332,25 +2574,19 @@ final class MonitorModel: ObservableObject {
                 self.activePlanChanges = []
             }
 
-            // Publish local snapshot to BotFleet on disk
-            do {
-                // `issues` is still the local read's own map here — the server
-                // failure below is merged in afterwards and must never reach a
-                // file that promises local-only readings.
-                if let writeForTesting = self.handoffWriteForTesting {
-                    writeForTesting(self.exportedWindows(self.localWindows))
-                } else if self.skipsSnapshotIOForTesting {
-                    self.handoffError = nil
-                } else if self.localEnabled && local != nil {
-                    try LocalQuotaSnapshot.write(windows: self.exportedWindows(self.localWindows), issues: self.issues,
-                                                 customMarks: exportedCustomMarks(),
-                                                 alerts: exportedAlerts(now: self.now), now: self.now,
-                                                 stampInstallationProvenance: true)
-                }
-                else { try LocalQuotaSnapshot.remove() }
+            // Publish local snapshot to BotFleet on disk.
+            // `issues` is still the local read's own map here — the server
+            // failure below is merged in afterwards and must never reach a
+            // file that promises local-only readings.  `enqueueHandoffWrite`
+            // captures it now, before that merge.
+            if let writeForTesting = self.handoffWriteForTesting {
+                writeForTesting(self.exportedWindows(self.localWindows))
                 self.handoffError = nil
-            } catch {
-                self.handoffError = "BotFleet quota sharing is unavailable."
+            } else if self.skipsSnapshotIOForTesting {
+                self.handoffError = nil
+            } else {
+                self.enqueueHandoffWrite(windows: self.localEnabled && local != nil
+                    ? self.exportedWindows(self.localWindows) : nil)
             }
 
             guard !Task.isCancelled, self.revision == generation else { return }
@@ -2367,14 +2603,26 @@ final class MonitorModel: ObservableObject {
             }
             if !useServer { self.serverWindows = [] }
             self.serverError = failure
-            let localProviders = Set(self.localWindows.map(\.canonicalProviderKey))
+            // A local window that carries no reading (a plan-details window,
+            // or any window whose percentage is unknown) does not mean this Mac
+            // reads that provider, and it must not hold the fleet's live
+            // reading out of the row.  Counting it as one left the xAI row
+            // with no reading at all, while the fleet carried this Mac's own
+            // live SuperGrok Heavy reading for it (owner, 2026-10-23).
+            let localProviders = QuotaLocalScope.providers(withReadings: self.localWindows)
 
             // A pulled window is either this Mac's own push coming back, or
             // somebody else's reading.  Every window of the second kind is
             // rendered under FLEET, grouped by its origin — the previous
             // "supplemental" filter dropped all of them on a Mac that reads
             // every provider locally, so a working pull showed nothing at all.
-            let split = FleetOrigin.split(self.serverWindows, localWindows: self.localWindows)
+            //
+            // The split is where another machine's window enters this Mac's
+            // data, so it is where the shared dead-copy rule is asked:  a copy
+            // of a period that ended before the last refresh is not a reading,
+            // and it is dropped here rather than in a section builder, so this
+            // Mac's own expired reading survives and greys out.
+            let split = FleetOrigin.split(self.serverWindows, localWindows: self.localWindows, now: self.now)
             let ownPush = split.ownPush
             self.fleetWindowGroups = split.groups.map {
                 FleetWindowGroup(id: $0.id, title: $0.title, windows: $0.windows)
@@ -2382,27 +2630,63 @@ final class MonitorModel: ObservableObject {
 
             // This Mac's own push fills in only a provider no local reader
             // produced — with local readers off, that is every provider.
-            let adopted = ownPush.filter { !localProviders.contains($0.canonicalProviderKey) }
-            let adoptedKeys = Set(adopted.map(\.canonicalProviderKey))
+            let adopted = QuotaLocalScope.adoptedOwnPush(ownPush, localWindows: self.localWindows)
+            // A window that carries no reading does not claim its provider.
+            // This Mac's plan details are its own push coming back, and they
+            // named the Antigravity key, so the fleet's live reading for
+            // Antigravity was held out of the row and the row read
+            // "unavailable" while the fleet carried a fresh reading for it.
             // A provider this Mac can never read locally still deserves its
             // server reading in the local list instead of "no report": the
             // Muse Assist collector runs on the VM, so its windows are never
             // this Mac's own push.  Limited to expected providers so unknown
             // fleet-only keys don't sprout local rows.
-            let fleetFallback = split.groups.flatMap(\.windows).filter {
-                let key = $0.canonicalProviderKey
-                return !localProviders.contains(key) && !adoptedKeys.contains(key)
-                    && expectedQuotaProviderKeys.contains(key)
-            }
-            let merged = self.localWindows + adopted + fleetFallback
+            //
+            // The fleet's copy wins whenever it was reported after this Mac's
+            // own push for the same provider, and this Mac's older copy of
+            // that period is dropped with it:  the Antigravity local reader
+            // needs a running language server, and without one the row read
+            // "unavailable" while the fleet carried a fresh reading from this
+            // same Mac, Argon included.
+            let (fleetFallback, supersededPush) = QuotaLocalScope.fleetFallback(
+                fleet: split.groups.flatMap(\.windows),
+                adopted: adopted,
+                localProviders: localProviders)
+            let adoptedKept = adopted.filter { !supersededPush.contains($0) }
+            let merged = QuotaLocalScope.localWindowsForMerge(self.localWindows, adopted: adoptedKept) + adoptedKept + fleetFallback
+            // Every participant gets the pool's reading, including one whose
+            // local read failed outright and left no window behind: Cursor and
+            // Grok Bot share xAI's quota, so a fresh xAI reading stands in for
+            // them instead of the row sitting at "unavailable" (CC-210).
+            let unifiedMerged = UnifiedSubscriptionPool.share(
+                windows: merged, now: self.now,
+                targetKeys: UnifiedSubscriptionPool.participantKeys)
+            updatePoolServedKeys(from: unifiedMerged)
             var origins: [String: QuotaOrigin] = [:]
-            for key in Set(merged.map(\.canonicalProviderKey)) { origins[key] = .local }
+            for key in Set(unifiedMerged.map(\.canonicalProviderKey)) { origins[key] = .local }
             self.originByProvider = origins
             if newServer != nil { self.lastPullTime = self.now }
-            self.response = QuotaResponse(generatedAt: ISO8601DateFormatter().string(from: self.now), windows: merged)
-            self.publishWidgetSnapshot(candidates: merged + split.groups.flatMap(\.windows))
+            self.response = QuotaResponse(generatedAt: ISO8601DateFormatter().string(from: self.now), windows: unifiedMerged)
+            // The widget publishes what the app's own rows publish.  The fleet
+            // groups carry a second copy of every provider, and for a provider
+            // this Mac reads itself that copy is the stale one:  it is days old
+            // and reads zero, so the widget showed a fleet reading beside the
+            // app's live one and read every provider as spent (owner,
+            // Oct-22-2026).
+            //
+            // `publishWidgetSnapshot` holds the rule that drops it, so all
+            // three call sites publish the same set.
+            //
+            // The rows the widget and the alerts read are the unified ones,
+            // the same rows the app publishes.  The pre-unification list read
+            // "stale" on a provider another provider had just filled in, so
+            // the widget and the exhaustion alerts contradicted the app's own
+            // rows.
+            let widgetCandidates = unifiedMerged + split.groups.flatMap(\.windows)
+            self.publishWidgetSnapshot(candidates: widgetCandidates)
             self.refreshRunawayUsageState(recordSamples: local != nil)
-            self.refreshExhaustionWarnings(windows: merged + split.groups.flatMap(\.windows), now: self.now)
+            self.refreshMuseCodePlugin()
+            self.refreshExhaustionWarnings(windows: widgetCandidates, now: self.now)
             self.alarmManager.evaluate(observations: self.resetAlarmObservationsForCurrentReadings(), now: self.now)
             self.evaluatePipLowQuota()
             // Publish after evaluating this reading so remote alerts include its new events.
@@ -2510,6 +2794,42 @@ final class MonitorModel: ObservableObject {
         return resolved
     }
 
+    /// The pool participants whose rows currently carry a fresh, bounded
+    /// reading — the row the pool served, whether it filled a placeholder in
+    /// place or injected one for an absent participant.  `issues` keeps the
+    /// raw local read's map, because the Settings reader diagnostics and the
+    /// BotFleet handoff both read it and must keep seeing the real failure;
+    /// the quota rows ask `rowIssue(for:)`, which drops a participant's
+    /// issue while the shared reading stands (CC-210).
+    @Published private(set) var poolServedKeys: Set<String> = []
+
+    /// Re-derives `poolServedKeys` from the merged windows.  The test is the
+    /// pool's own donor test — a pool window with a bounded percentage that
+    /// is fresh — so an absolute-only balance or a lapsed reading never
+    /// counts as served.
+    func updatePoolServedKeys(from windows: [QuotaWindow]) {
+        var served: Set<String> = []
+        for window in windows where UnifiedSubscriptionPool.participantKeys.contains(window.canonicalProviderKey) {
+            // The standing-in window has to be one the rows would actually
+            // draw:  a masked or disabled-source reading fills no meter, so
+            // it must not suppress the row's issue either, or the row would
+            // show neither data nor its error.
+            guard window.boundedRemainingPercent != nil,
+                  QuotaWindowSnapshot(window: window, now: now).isFresh,
+                  !maskedWindowIds.contains(window.id),
+                  !disabledSources.contains(window.source ?? "") else { continue }
+            served.insert(window.canonicalProviderKey)
+        }
+        poolServedKeys = served
+    }
+
+    /// The issue a quota row shows:  the raw local read's issue, unless the
+    /// shared pool stands in a fresh reading for that participant.
+    func rowIssue(for providerKey: String) -> String? {
+        guard poolServedKeys.contains(providerKey) else { return issues[providerKey] }
+        return nil
+    }
+
     /// File checks publish only changed local readings.  Fleet pull and push
     /// stay on the provider/manual path, so a one-minute file poll is passive.
     private func rebuildLocalState(recordSamples: Bool) {
@@ -2527,43 +2847,59 @@ final class MonitorModel: ObservableObject {
         consentNeeded = local?.consentNeeded ?? []
         localWindows = AntigravityQuotaGroups.normalize(local?.windows ?? [])
         hasCurrentLocalRead = local != nil
-        let localProviders = Set(localWindows.map(\.canonicalProviderKey))
-        let split = FleetOrigin.split(serverWindows)
+        // A local window that carries no reading (a plan-details window, or
+        // any window whose percentage is unknown) does not mean this Mac reads
+        // that provider, so it must not hold the fleet's live reading out of
+        // the row here either.  The file poll runs every minute and overwrites
+        // the response the server refresh merged, so counting the plan details
+        // as a local reading here put the xAI row back to no reading at all
+        // within a minute of the refresh fixing it (owner, 2026-10-23).
+        let localProviders = QuotaLocalScope.providers(withReadings: localWindows)
+        let split = FleetOrigin.split(serverWindows, localWindows: localWindows, now: now)
         let ownPush = split.ownPush
-        let adopted = ownPush.filter { !localProviders.contains($0.canonicalProviderKey) }
-        let adoptedKeys = Set(adopted.map(\.canonicalProviderKey))
+        let adopted = QuotaLocalScope.adoptedOwnPush(ownPush, localWindows: localWindows)
+        // A window that carries no reading does not claim its provider, the
+        // same rule the refresh path uses:  the file poll overwrites the
+        // merged response, so a plan-details window that held the fleet's
+        // live reading out of the row here would empty it a minute after the
+        // refresh filled it.
         // Same fleet fallback as the refresh path: providers this Mac can
         // never read locally (e.g. Muse Assist, collected on the VM) show
-        // their server reading instead of "no report".
-        let fleetFallback = split.groups.flatMap(\.windows).filter {
-            let key = $0.canonicalProviderKey
-            return !localProviders.contains(key) && !adoptedKeys.contains(key)
-                && expectedQuotaProviderKeys.contains(key)
-        }
-        let merged = localWindows + adopted + fleetFallback
-        originByProvider = Dictionary(uniqueKeysWithValues: Set(merged.map(\.canonicalProviderKey)).map { ($0, .local) })
-        response = QuotaResponse(generatedAt: ISO8601DateFormatter().string(from: now), windows: merged)
+        // their server reading instead of "no report", and a fleet reading
+        // newer than this Mac's own push replaces the older copy of it.
+        let (fleetFallback, supersededPush) = QuotaLocalScope.fleetFallback(
+            fleet: split.groups.flatMap(\.windows),
+            adopted: adopted,
+            localProviders: localProviders)
+        let adoptedKept = adopted.filter { !supersededPush.contains($0) }
+        let merged = QuotaLocalScope.localWindowsForMerge(localWindows, adopted: adoptedKept) + adoptedKept + fleetFallback
+        // Same pool rule as the refresh path: an absent participant still
+        // receives the shared reading (CC-210).
+        let unifiedMerged = UnifiedSubscriptionPool.share(
+            windows: merged, now: now,
+            targetKeys: UnifiedSubscriptionPool.participantKeys)
+        updatePoolServedKeys(from: unifiedMerged)
+        originByProvider = Dictionary(uniqueKeysWithValues: Set(unifiedMerged.map(\.canonicalProviderKey)).map { ($0, .local) })
+        response = QuotaResponse(generatedAt: ISO8601DateFormatter().string(from: now), windows: unifiedMerged)
         if let writeForTesting = handoffWriteForTesting {
             writeForTesting(exportedWindows(localWindows))
             handoffError = nil
         } else if !skipsSnapshotIOForTesting {
-            do {
-                if localEnabled {
-                    try LocalQuotaSnapshot.write(windows: exportedWindows(localWindows), issues: issues,
-                                                 customMarks: exportedCustomMarks(),
-                                                 alerts: exportedAlerts(now: now), now: now,
-                                                 stampInstallationProvenance: true)
-                } else {
-                    try LocalQuotaSnapshot.remove()
-                }
-                handoffError = nil
-            } catch {
-                handoffError = "BotFleet quota sharing is unavailable."
-            }
+            enqueueHandoffWrite(windows: localEnabled ? exportedWindows(localWindows) : nil)
         }
-        publishWidgetSnapshot(candidates: merged + split.groups.flatMap(\.windows))
+        // The widget publishes what the app's own rows publish: local rows
+        // plus the fleet rows.  `publishWidgetSnapshot` holds the rule that
+        // drops the stale fleet copy of a provider this Mac reads itself, so
+        // this path publishes the same set as the others.
+        //
+        // The rows are the unified ones, the same rows the app publishes, so
+        // the widget and the exhaustion alerts cannot contradict the app's
+        // own rows.
+        let widgetCandidates = unifiedMerged + split.groups.flatMap(\.windows)
+        publishWidgetSnapshot(candidates: widgetCandidates)
         refreshRunawayUsageState(recordSamples: recordSamples)
-        refreshExhaustionWarnings(windows: merged + split.groups.flatMap(\.windows), now: now)
+        refreshMuseCodePlugin()
+        refreshExhaustionWarnings(windows: widgetCandidates, now: now)
         alarmManager.evaluate(observations: resetAlarmObservationsForCurrentReadings(), now: now)
         evaluatePipLowQuota()
     }
@@ -2644,7 +2980,11 @@ final class MonitorModel: ObservableObject {
             let previous = exhaustionObservationState[key]
             guard previous == nil || observedAt > previous!.observedAt else { continue }
             changed = true
-            if remaining > 0 {
+            //  The shared cap rule decides, so the Mac's exhausted alert fires
+            //  at the same threshold as the "At cap" line and as the phone's:
+            //  a reading at or below the threshold is a spent allowance, and a
+            //  reading above it is headroom (Kody review 2026-10-21).
+            if !QuotaCapRule.isAtCap(remainingPercent: remaining) {
                 exhaustionObservationState[key] = ExhaustionObservationState(observedAt: observedAt, alert: nil)
                 activeExhaustionAlerts.removeValue(forKey: key)
                 continue
@@ -2654,7 +2994,7 @@ final class MonitorModel: ObservableObject {
                 continue
             }
             let title = "Quota Exhausted: " + window.provider
-            let body = window.label + " has no quota remaining."
+            let body = window.label + " has reached its limit."
             let payload = LocalQuotaSnapshot.AlertPayload(
                 id: "quotaExhaustion|" + key + "|" + String(observedAt.timeIntervalSince1970),
                 kind: "quotaExhaustion", providerKey: window.canonicalProviderKey,
@@ -2696,15 +3036,60 @@ final class MonitorModel: ObservableObject {
             .label ?? providerKey
     }
 
+    /// Whether a window is this Mac's own reading rather than a copy of
+    /// another machine's.
+    ///
+    /// The fleet's copies of this Mac's readings carry the same identity, so
+    /// the only way to tell them apart is to ask the two questions the model
+    /// already knows:  is this one of the windows this Mac read, and is it
+    /// this Mac's own push coming back from the server?
+    private func isOwnDeviceWindow(_ window: QuotaWindow) -> Bool {
+        if self.localWindows.contains(window) { return true }
+        return FleetOrigin.isOwnPush(window, localWindows: self.localWindows)
+    }
+
     private func publishWidgetSnapshot(candidates: [QuotaWindow]) {
+        // The snapshot publishes what the app's own rows publish.  Every fleet
+        // group carries a second copy of the providers, and for a provider this
+        // Mac reads itself that copy is the stale one:  it is days old and
+        // reads zero, so the widget showed a fleet reading beside the app's
+        // live one and read every provider as spent (owner, Oct-22-2026).
+        //
+        // The rule lives here rather than at the call sites, so a caller that
+        // forgets it cannot publish the stale copy again.
+        let localProviders = Set(self.localWindows.map(\.canonicalProviderKey))
+        let host = QuotaPublisher.producerInstanceId
+        let authoritative = FleetOrigin.authoritativeOwnCadenceKeys(in: candidates, host: host)
+        let publishable = candidates.filter { candidate in
+            // A legacy collector's copy of a meter the current collector also
+            // reports is a superseded duplicate:  the install-id copy is the
+            // row's reading, and the legacy copy must not publish beside it
+            // (CC-217).
+            if FleetOrigin.isLegacyNameProducer(candidate, host: host),
+               authoritative.contains(FleetOrigin.cadenceIdentityKey(of: candidate)) {
+                return false
+            }
+            // A copy of another machine's reading whose period ended before the
+            // last refresh is not a reading, so the widget's cache does not
+            // carry it.  The rule is the shared one, so the widget, the phone
+            // and the Mac drop the same copies.  This Mac's own windows stay:
+            // an expired own reading greys out in the row instead of vanishing.
+            if !self.isOwnDeviceWindow(candidate),
+               QuotaFreshnessRule.isDeadCopy(observedAt: candidate.occurredDate,
+                                             resetAt: candidate.resetDate,
+                                             now: now) {
+                return false
+            }
+            guard localProviders.contains(candidate.canonicalProviderKey) else { return true }
+            // This Mac reads the provider, so only its own window may be
+            // published:  never somebody else's copy of the same provider.
+            return self.localWindows.contains(candidate)
+                || FleetOrigin.isOwnPush(candidate, localWindows: self.localWindows)
+        }
         // Fleet-fallback windows already sit in `merged`, and the caller also
         // appends every fleet group.  The widget cache stores this array
         // verbatim, so an equal window is published once.
-        var unique: [QuotaWindow] = []
-        unique.reserveCapacity(candidates.count)
-        for window in candidates where !unique.contains(window) {
-            unique.append(window)
-        }
+        let unique = Self.uniqueWindows(publishable)
         let visibleProviderKeys = Set(QuotaResponse(generatedAt: "", windows: unique)
             .platformSections(now: now).map(\.providerKey))
         let windows = exportedWindows(unique, locallyProduced: false).filter {
@@ -2718,17 +3103,74 @@ final class MonitorModel: ObservableObject {
             return
         }
         guard !skipsSnapshotIOForTesting else { return }
-        do {
-            try LocalQuotaSnapshot.writeWidgetSnapshot(windows: windows,
-                                                      customMarks: exportedCustomMarks(), now: now)
-            widgetSharingError = nil
-            UserDefaults(suiteName: LocalQuotaSnapshot.appGroupId)?.set(platformOrder, forKey: "platformOrder")
-            #if canImport(WidgetKit)
-            WidgetCenter.shared.reloadAllTimelines()
-            #endif
-        } catch {
-            widgetSharingError = "Widgets cannot access the shared quota cache." + sentenceGap
-                + "Install a build with native widget sharing enabled."
+        let marks = exportedCustomMarks()
+        let stamp = now
+        enqueueSnapshotWrite({
+            try LocalQuotaSnapshot.writeWidgetSnapshot(windows: windows, customMarks: marks, now: stamp)
+        }, completion: { [weak self] succeeded in
+            guard let self else { return }
+            if succeeded {
+                self.widgetSharingError = nil
+                UserDefaults(suiteName: LocalQuotaSnapshot.appGroupId)?.set(self.platformOrder, forKey: "platformOrder")
+                #if canImport(WidgetKit)
+                WidgetCenter.shared.reloadAllTimelines()
+                #endif
+            } else {
+                self.widgetSharingError = "Widgets cannot access the shared quota cache." + sentenceGap
+                    + "Install a build with native widget sharing enabled."
+            }
+        })
+    }
+
+    /// Order-preserving de-duplication in roughly linear time.  `QuotaWindow`
+    /// is only `Equatable`, so the old `unique.contains` loop was quadratic in
+    /// the size of a fleet pull.  Equal windows always share `id`, `provider`
+    /// and `label`, so only windows in the same bucket are compared.
+    static func uniqueWindows(_ candidates: [QuotaWindow]) -> [QuotaWindow] {
+        var unique: [QuotaWindow] = []
+        unique.reserveCapacity(candidates.count)
+        var buckets: [String: [Int]] = [:]
+        for window in candidates {
+            let key = window.id + "\u{1F}" + window.provider + "\u{1F}" + window.label
+            if let indices = buckets[key], indices.contains(where: { unique[$0] == window }) { continue }
+            buckets[key, default: []].append(unique.count)
+            unique.append(window)
+        }
+        return unique
+    }
+
+    /// Writes (or, with `nil`, removes) the local-only BotFleet handoff file
+    /// off the main actor.  Inputs are captured now so later state changes
+    /// cannot leak into this snapshot.
+    private func enqueueHandoffWrite(windows: [QuotaWindow]?) {
+        let issues = self.issues
+        let marks = windows == nil ? nil : exportedCustomMarks()
+        let alerts = windows == nil ? nil : exportedAlerts(now: now)
+        let stamp = now
+        enqueueSnapshotWrite({
+            if let windows {
+                try LocalQuotaSnapshot.write(windows: windows, issues: issues,
+                                             customMarks: marks, alerts: alerts, now: stamp,
+                                             stampInstallationProvenance: true)
+            } else {
+                try LocalQuotaSnapshot.remove()
+            }
+        }, completion: { [weak self] succeeded in
+            self?.handoffError = succeeded ? nil : "BotFleet quota sharing is unavailable."
+        })
+    }
+
+    /// Runs `work` on a background executor after every previously enqueued
+    /// write, then reports success back on the main actor.
+    func enqueueSnapshotWrite(_ work: @escaping @Sendable () throws -> Void,
+                                      completion: @escaping @MainActor @Sendable (Bool) -> Void) {
+        guard !snapshotWritesClosedForTermination else { return }
+        let previous = snapshotWriteChain
+        snapshotWriteChain = Task.detached(priority: .utility) {
+            await previous?.value
+            let succeeded: Bool
+            do { try work(); succeeded = true } catch { succeeded = false }
+            await completion(succeeded)
         }
     }
 
@@ -2744,7 +3186,7 @@ final class MonitorModel: ObservableObject {
         let masked = maskedWindowIds
         let currentKeys = Set(localWindows.compactMap { window -> String? in
             let snapshot = QuotaWindowSnapshot(window: window, now: now)
-            guard snapshot.isFresh, snapshot.remainingPercent != nil,
+            guard snapshot.isFresh, window.hasReading,
                   !window.isSupplementaryVideoQuota, !masked.contains(window.id),
                   issues[window.canonicalProviderKey] == nil,
                   !disabledSources.contains(window.source ?? "") else { return nil }
@@ -2870,6 +3312,303 @@ final class MonitorModel: ObservableObject {
         defaults.set(lastRunawayAlertAt, forKey: "runawayAlertLastSent")
     }
 
+    // MARK: - Muse Plugin Evaluation
+
+    /// Reads the Muse session store alongside the quota refresh paths and
+    /// applies the result.  Mirrors the session-file reader's test guard: an
+    /// injected quota read must not silently start a real file scan in an
+    /// offline test.
+    func refreshMuseCodePlugin() {
+        guard localEnabled else {
+            museCodeReport = nil
+            museCodeIssue = nil
+            museCodeBurnAlert = nil
+            museCodeStandardSessionAlert = nil
+            return
+        }
+        if museCodeReadForTesting == nil,
+           skipsSnapshotIOForTesting || localReadForTesting != nil || localResultForTesting != nil
+                || sessionFileReadForTesting != nil || sessionAccountIDForTesting != nil
+                || serverFetchForTesting != nil { return }
+        guard museCodeRequest == nil else { return }
+        let generation = museCodeReadGeneration
+        let readForTesting = museCodeReadForTesting
+        museCodeRequest = Task { [weak self] in
+            let result: MuseCodeSessionResult?
+            if let readForTesting {
+                result = await readForTesting()
+            } else {
+                result = await Task.detached(priority: .utility) {
+                    MuseCodeSessionReader().read()
+                }.value
+            }
+            guard let self else { return }
+            guard generation == self.museCodeReadGeneration else { return }
+            self.museCodeRequest = nil
+            guard !Task.isCancelled, self.localEnabled else { return }
+            if let result { self.applyMuseCodeResult(result) }
+        }
+    }
+
+    /// Applies one session-store reading: page state first, then the alert
+    /// events, then the optional Usage Monitor bridge.
+    func applyMuseCodeResult(_ result: MuseCodeSessionResult) {
+        museCodeReport = result.report
+        museCodeIssue = result.issue
+        guard let report = result.report else {
+            museCodeBurnAlert = nil
+            museCodeStandardSessionAlert = nil
+            return
+        }
+        evaluateMuseCodeAlerts(report: report)
+        if museCodeUsageBridgeEnabled { enqueueMuseCodeBridge(report: report) }
+    }
+
+    private func evaluateMuseCodeAlerts(report: MuseCodeSessionReport) {
+        guard museCodeBurnAlertsEnabled else {
+            museCodeBurnAlert = nil
+            museCodeStandardSessionAlert = nil
+            return
+        }
+        let burn = MuseCodeBurnMonitor.evaluateBurn(report: report,
+                                                     thresholdTokens: museCodeBurnThresholdTokens)
+        museCodeBurnAlert = burn
+        if let burn,
+           now.timeIntervalSince1970 - lastMuseCodeBurnAlertAt >= MuseCodeBurnMonitor.alertCooldown {
+            let candidateSentAt = now.timeIntervalSince1970
+            if saveMuseCodeAlertState(candidateSentAt, key: "museCodeBurnLastSent") {
+                lastMuseCodeBurnAlertAt = candidateSentAt
+                alertDispatcher.emit(CodeCapsAlertEvent(
+                    kind: .museCodeBurn, title: burn.title, body: burn.body,
+                    identifier: "codecaps.musecode.burn." + UUID().uuidString, occurredAt: report.generatedAt))
+            }
+        }
+        // The contributor finding is its own alert kind, independent of the
+        // burn threshold, and it is an event, not a share: the detector
+        // fires once when a session starts on a standard model or switches
+        // to one, and re-arms per session when it returns to a contributor
+        // model, so a channel that subscribes to the finding itself (the
+        // planned SMS channel is the expected one) never has to piggyback
+        // on the burn alert.  Each event carries its own notification
+        // identifier, so two sessions' events never replace each other.
+        var candidateDetector = museCodeStandardSessionDetector
+        let events = candidateDetector.observe(report.currentModelObservations)
+        guard let data = try? JSONEncoder().encode(candidateDetector),
+              saveMuseCodeAlertState(data, key: Self.museCodeDetectorKey) else { return }
+        museCodeStandardSessionDetector = candidateDetector
+        if let latest = events.last {
+            museCodeStandardSessionAlert = latest
+        }
+        for event in events {
+            alertDispatcher.emit(CodeCapsAlertEvent(
+                kind: .museCodeStandardSession, title: event.title, body: event.body,
+                identifier: "codecaps.musecode.standard-session.\(event.sessionId)." + UUID().uuidString,
+                occurredAt: event.observedAt))
+        }
+    }
+
+    /// Failed persistence leaves both the live detector/throttle and the cached
+    /// defaults at their previous state, so a later poll can attempt the event.
+    private func saveMuseCodeAlertState(_ value: Any, key: String) -> Bool {
+        let previous = defaults.object(forKey: key)
+        defaults.set(value, forKey: key)
+        let saved = museCodeAlertSynchronizeForTesting?(key) ?? defaults.synchronize()
+        guard saved else {
+            if let previous { defaults.set(previous, forKey: key) }
+            else { defaults.removeObject(forKey: key) }
+            return false
+        }
+        return true
+    }
+
+    /// One worker plans, posts, and commits baselines in order.
+    private func enqueueMuseCodeBridge(report: MuseCodeSessionReport) {
+        guard museCodeUsageBridgeEnabled else { return }
+        if museCodePendingBridgeReport == nil || report.generatedAt >= museCodePendingBridgeReport!.generatedAt {
+            museCodePendingBridgeReport = report
+        }
+        guard museCodeBridgeTask == nil, !museCodeIngestTokenBusy else { return }
+        let workerGeneration = museCodeBridgeGeneration
+        museCodeBridgeTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                self.museCodeBridgeTask = nil
+                if self.museCodeUsageBridgeEnabled, !self.museCodeIngestTokenBusy,
+                   let pending = self.museCodePendingBridgeReport {
+                    self.enqueueMuseCodeBridge(report: pending)
+                }
+            }
+            while workerGeneration == self.museCodeBridgeGeneration,
+                  self.museCodeUsageBridgeEnabled, !self.museCodeIngestTokenBusy,
+                  let next = self.museCodePendingBridgeReport {
+                self.museCodePendingBridgeReport = nil
+                let completed = await self.postMuseCodeBridge(report: next, generation: workerGeneration)
+                // A credential or enablement change invalidates this worker.  Its defer
+                // starts a fresh main-actor worker for any newer pending report.
+                guard workerGeneration == self.museCodeBridgeGeneration else { break }
+                // Failure waits for a later refresh; it never retries immediately.
+                if !completed { break }
+            }
+        }
+    }
+
+    private func canPostMuseCodeBridge(generation: UInt64) -> Bool {
+        museCodeUsageBridgeEnabled && !museCodeIngestTokenBusy && generation == museCodeBridgeGeneration
+    }
+
+    /// The pending plan is saved before I/O and replayed with its exact event IDs.
+    /// A newer snapshot cannot change the quantity of an uncertain earlier post.
+    private func postMuseCodeBridge(report: MuseCodeSessionReport, generation: UInt64,
+                                    showNoNewStatus: Bool = true) async -> Bool {
+        guard canPostMuseCodeBridge(generation: generation) else { return true }
+        do {
+            var checkpoint = try loadMuseCodeBridgeCheckpoint()
+            let replayingPending = checkpoint.pending != nil
+            if checkpoint.pending == nil {
+                let plan = MuseCodeDeltaPlanner.plan(observations: report.latestObservations,
+                                                     previous: checkpoint.observations)
+                guard !plan.events.isEmpty else {
+                    checkpoint.observations = plan.updated
+                    try saveMuseCodeBridgeCheckpoint(checkpoint)
+                    if showNoNewStatus {
+                        museCodeBridgeStatus = report.latestObservations.isEmpty
+                            ? "No Muse sessions to post." : "No new Muse tokens to post."
+                    }
+                    return true
+                }
+                checkpoint.pending = MuseCodeBridgeCheckpoint.Pending(events: plan.events, updated: plan.updated)
+                try saveMuseCodeBridgeCheckpoint(checkpoint)
+            }
+            guard let pending = checkpoint.pending else { return false }
+            let token: String?
+            if let museCodeTokenReadForTesting { token = await museCodeTokenReadForTesting() }
+            else {
+                token = await TokenStore.read(server: MuseCodeSessionIngest.endpoint.absoluteString,
+                                               service: TokenStore.museCodeIngestService)
+            }
+            guard canPostMuseCodeBridge(generation: generation) else { return true }
+            guard let token = token.map(sanitizedToken(_:)), !token.isEmpty else {
+                museCodeBridgeStatus = "Save the Muse ingest token in the bridge setup."
+                return false
+            }
+            let events = pending.events.map { MuseCodeSessionIngest.event(observation: $0.observation, delta: $0.delta) }
+            let summary: MuseCodeIngestSummary
+            if let museCodePublishForTesting {
+                summary = try await museCodePublishForTesting(events, MuseCodeSessionIngest.endpoint, token)
+            } else {
+                summary = try await museCodePoster.publish(events: events, to: MuseCodeSessionIngest.endpoint, token: token,
+                    shouldContinue: { [weak self] in
+                        await self?.canPostMuseCodeBridge(generation: generation) == true
+                    })
+            }
+            guard summary.sent == events.count, summary.rejected == 0 else {
+                if canPostMuseCodeBridge(generation: generation) {
+                    museCodeBridgeStatus = "Usage Monitor rejected token events.\u{00A0} Pending events were retained."
+                }
+                return false
+            }
+            // Baselines belong to the immutable receiver and producer, not its token.
+            // Acknowledged old-token work must not be counted again after rotation.
+            checkpoint.observations = pending.updated
+            checkpoint.pending = nil
+            try saveMuseCodeBridgeCheckpoint(checkpoint)
+            guard canPostMuseCodeBridge(generation: generation) else { return true }
+            museCodeBridgeStatus = "Posted \(summary.sent) token events: \(summary.persisted) persisted, \(summary.duplicates) duplicates, \(summary.rejected) rejected."
+            if replayingPending {
+                return await postMuseCodeBridge(report: report, generation: generation, showNoNewStatus: false)
+            }
+            return true
+        } catch {
+            guard canPostMuseCodeBridge(generation: generation) else { return true }
+            museCodeBridgeStatus = "Bridge submission could not be confirmed.\u{00A0} The saved pending events will be checked on the next refresh."
+            return false
+        }
+    }
+
+    private func loadMuseCodeBridgeCheckpoint() throws -> MuseCodeBridgeCheckpoint {
+        if let data = defaults.data(forKey: "museCodeIngestCheckpoint") {
+            guard data.count <= 8_388_608 else { throw MuseCodeBridgeCheckpoint.Failure.invalid }
+            let checkpoint = try JSONDecoder().decode(MuseCodeBridgeCheckpoint.self, from: data)
+            guard checkpoint.hasExpectedScope else { throw MuseCodeBridgeCheckpoint.Failure.invalid }
+            return checkpoint
+        }
+        var checkpoint = MuseCodeBridgeCheckpoint()
+        if let data = defaults.data(forKey: "museCodeIngestObservations") {
+            checkpoint.observations = try JSONDecoder().decode([String: MuseCodeSessionObservation].self, from: data)
+        }
+        guard checkpoint.hasExpectedScope else { throw MuseCodeBridgeCheckpoint.Failure.invalid }
+        return checkpoint
+    }
+
+    private func saveMuseCodeBridgeCheckpoint(_ checkpoint: MuseCodeBridgeCheckpoint) throws {
+        defaults.set(try JSONEncoder().encode(checkpoint), forKey: "museCodeIngestCheckpoint")
+        guard defaults.synchronize() else { throw MuseCodeBridgeCheckpoint.Failure.persistence }
+    }
+
+    @discardableResult
+    func saveMuseCodeIngestToken(_ raw: String) async -> Bool {
+        guard !museCodeIngestTokenBusy else { return false }
+        let token = sanitizedToken(raw)
+        guard !token.isEmpty else { museCodeIngestTokenStatus = "Enter the Muse ingest token."; return false }
+        museCodeIngestTokenBusy = true
+        museCodeBridgeGeneration &+= 1
+        defer { finishMuseCodeTokenChange() }
+        do {
+            if let museCodeTokenSaveForTesting { try await museCodeTokenSaveForTesting(token) }
+            else {
+                try await TokenStore.save(token, server: MuseCodeSessionIngest.endpoint.absoluteString,
+                                           service: TokenStore.museCodeIngestService)
+            }
+            museCodeHasSavedIngestToken = true
+            defaults.set(true, forKey: "museCodeHasSavedIngestToken")
+            museCodeIngestTokenStatus = "Muse ingest token saved."
+            return true
+        } catch { museCodeIngestTokenStatus = "Keychain could not save the Muse ingest token."; return false }
+    }
+
+    func reauthorizeMuseCodeIngestToken() async {
+        guard !museCodeIngestTokenBusy else { return }
+        museCodeIngestTokenBusy = true
+        museCodeBridgeGeneration &+= 1
+        defer { finishMuseCodeTokenChange() }
+        let token: String?
+        if let museCodeTokenReauthorizeForTesting { token = await museCodeTokenReauthorizeForTesting() }
+        else {
+            token = await TokenStore.readAllowingInteraction(server: MuseCodeSessionIngest.endpoint.absoluteString,
+                                                             service: TokenStore.museCodeIngestService)
+        }
+        guard let token, !sanitizedToken(token).isEmpty else {
+            museCodeIngestTokenStatus = "The saved Muse ingest token is unavailable in Keychain."
+            return
+        }
+        museCodeHasSavedIngestToken = true
+        defaults.set(true, forKey: "museCodeHasSavedIngestToken")
+        museCodeIngestTokenStatus = "Saved Muse ingest token authorized."
+    }
+
+    func forgetMuseCodeIngestToken() async {
+        guard !museCodeIngestTokenBusy else { return }
+        museCodeIngestTokenBusy = true
+        museCodeBridgeGeneration &+= 1
+        defer { finishMuseCodeTokenChange() }
+        do {
+            if let museCodeTokenDeleteForTesting { try await museCodeTokenDeleteForTesting() }
+            else {
+                try await TokenStore.delete(server: MuseCodeSessionIngest.endpoint.absoluteString,
+                                             service: TokenStore.museCodeIngestService)
+            }
+            museCodeHasSavedIngestToken = false
+            defaults.removeObject(forKey: "museCodeHasSavedIngestToken")
+            museCodeUsageBridgeEnabled = false
+            museCodeIngestTokenStatus = "Muse ingest token forgotten."
+        } catch { museCodeIngestTokenStatus = "Keychain could not forget the Muse ingest token." }
+    }
+
+    private func finishMuseCodeTokenChange() {
+        museCodeIngestTokenBusy = false
+        if museCodeUsageBridgeEnabled, let museCodeReport { enqueueMuseCodeBridge(report: museCodeReport) }
+    }
+
     private func appendRunawayAlert(_ record: RunawayAlertRecord) {
         var list = runawayAlertHistory
         list.insert(record, at: 0)
@@ -2893,37 +3632,37 @@ final class MonitorModel: ObservableObject {
         "\(providerKey)\u{1f}\(windowId)"
     }
 
-    private nonisolated static func readLocalSources() async -> LocalQuotaResult {
-        async let primary = LocalQuotaReader().read()
-        async let cursor = CursorQuotaReader().read()
-        async let copilot = CopilotQuotaReader().read()
-        async let grokBot = GrokBotQuotaReader().read()
-        // EXTRA Grok Bot source beside Cursor DashboardService; `source: "gbu"`
-        // so Settings can rank/disable it without replacing the Cursor reader.
-        async let gbu = GbuQuotaReader().read()
+    private nonisolated static func readLocalSources(
+        preferences: QuotaReaderPreferences = .init()
+    ) async -> LocalQuotaResult {
+        let registry = LocalQuotaReaderRegistry.configured(zCodeCredentialProvider: {
+            await ZAIQuotaCredentialStore.shared.load()
+        })
+        async let registered = registry.read(preferences: preferences)
         async let antigravity = AntigravitySummaryReader().read()
-        let results = await [primary, cursor, copilot, grokBot, gbu]
+        var result = await registered
         let summary = await antigravity
-        var windows = results.flatMap(\.windows)
-        var issues = results.reduce(into: [String: String]()) { $0.merge($1.issues) { _, next in next } }
+        var windows = result.windows
+        var issues = result.issues
         if summary.windows.contains(where: { $0.boundedRemainingPercent != nil }) {
             windows.removeAll { $0.canonicalProviderKey == "google-antigravity" }
             windows += summary.windows
             issues["google-antigravity"] = nil
         }
-        let consentNeeded = results.reduce(into: Set<String>()) { $0.formUnion($1.consentNeeded) }
+        result = LocalQuotaResult(windows: windows, issues: issues,
+                                  consentNeeded: result.consentNeeded)
         // One reader's "could not read" placeholder says nothing when another
         // reader of the same provider has a reading (Grok Bot's gbu and
         // DashboardService), and used to be drawn as an empty second bar.
-        return LocalQuotaResult(windows: windows, issues: issues, consentNeeded: consentNeeded)
-            .droppingSupersededPlaceholders()
+        return result.droppingSupersededPlaceholders()
     }
 
     private nonisolated static func readLocalResult(useLocal: Bool,
-                                                    testingResult: LocalQuotaResult?) async -> LocalQuotaResult? {
+                                                    testingResult: LocalQuotaResult?,
+                                                    preferences: QuotaReaderPreferences) async -> LocalQuotaResult? {
         guard useLocal else { return nil }
         if let testingResult { return testingResult }
-        return await readLocalSources()
+        return await readLocalSources(preferences: preferences)
     }
 }
 

@@ -80,6 +80,16 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
     /// a window's history when this changes, so switching accounts is never
     /// mistaken for a reset.  Local only, like `periodStart`: not a coding key.
     public var accountKey: String? = nil
+    /// The collector that produced the reading this window shows, when the
+    /// unified subscription pool filled the window in from another provider.
+    ///
+    /// It names the producer of the number, never the identity of the row:
+    /// `source` keeps naming the row's own collector, and
+    /// `producerInstanceId` keeps naming the installation that produced the
+    /// push, because the fleet ownership rules read that field to decide
+    /// whose copy a window is.  Local only, like `periodStart`: not a coding
+    /// key, so the fleet ingest payload and the handoff file are unchanged.
+    public var sharedPoolOrigin: String? = nil
 
     private enum CodingKeys: String, CodingKey {
         case id, provider, providerKey, providerLabel, via, sourceApp, modelId, modelType, label
@@ -116,7 +126,8 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
         periodStart: String? = nil,
         accountKey: String? = nil,
         producerInstanceId: String? = nil,
-        machine: String? = nil
+        machine: String? = nil,
+        sharedPoolOrigin: String? = nil
     ) {
         self.id = id
         self.provider = provider
@@ -146,6 +157,7 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
         self.source = source
         self.periodStart = periodStart
         self.accountKey = accountKey
+        self.sharedPoolOrigin = sharedPoolOrigin
     }
 
     public init(from decoder: Decoder) throws {
@@ -189,9 +201,12 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
 
     /// Video allowances are supplementary to MiniMax's coding subscription.
     public var isSupplementaryVideoQuota: Bool {
-        guard canonicalProviderKey == "minimax" else { return false }
-        let identity = [modelId, modelType, label].compactMap { $0 }.joined(separator: " ").lowercased()
-        return identity.contains("video") || identity.contains("hailuo")
+        QuotaCapRule.isSupplementaryVideoQuota(
+            providerKey: canonicalProviderKey,
+            modelId: modelId,
+            modelType: modelType,
+            label: label
+        )
     }
 
     /// Extraneous weekly video quotas (e.g. 35/35) are omitted because the daily/interval allowance (5/5)
@@ -209,24 +224,13 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
     /// Whether this window represents a model-specific sub-quota (e.g. Gemini 4 Argon or Claude Fable/Sonnet)
     /// rather than the platform's primary shared account/pool quota.
     public var isSubModelLimit: Bool {
-        if canonicalProviderKey == "openai" {
-            return ["local-mac:openai:code-review", "openai:code-review", "code-review"].contains(id)
-                || id.hasPrefix("local-mac:openai:additional:") || id.hasPrefix("local-mac:openai:code-review:")
-                || id.hasPrefix("openai:additional:") || id.hasPrefix("openai:code-review:")
-                || id.hasPrefix("additional:") || id.hasPrefix("code-review:")
-        }
-        if canonicalProviderKey == "google-antigravity" {
-            if let modelId = modelId?.lowercased(), modelId.contains("argon") { return true }
-            if let modelType = modelType?.lowercased(), modelType.contains("argon") { return true }
-            if label.localizedCaseInsensitiveContains("argon") { return true }
-            return false
-        }
-        if canonicalProviderKey == "anthropic" {
-            if let model = modelId?.lowercased(), !model.isEmpty { return true }
-            let lower = label.lowercased()
-            return lower.contains("fable") || lower.contains("sonnet") || lower.contains("opus") || lower.contains("haiku")
-        }
-        return false
+        QuotaCapRule.isSubModelLimit(
+            providerKey: canonicalProviderKey,
+            id: id,
+            modelId: modelId,
+            modelType: modelType,
+            label: label
+        )
     }
 
     /// Whether this window is a scoped allowance that sits beside the
@@ -237,7 +241,13 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
     /// does: that fallback exists so a plan whose windows are all sub-model
     /// quotas is not silently reported as never capped.
     public var isScopedPoolAllowance: Bool {
-        canonicalProviderKey == "openai" && isSubModelLimit
+        QuotaCapRule.isScopedPoolAllowance(
+            providerKey: canonicalProviderKey,
+            id: id,
+            modelId: modelId,
+            modelType: modelType,
+            label: label
+        )
     }
 
     /// A bounded value suitable for display.  NaN and infinities are unknown.
@@ -281,14 +291,46 @@ public struct QuotaWindow: Codable, Equatable, Sendable {
         let bounded = boundedRemainingPercent
         copy.remainingPercent = bounded
         copy.remainingUnknown = bounded == nil
-        copy.isExhausted = isExhausted || bounded == 0
+        copy.isExhausted = isExhausted || QuotaCapRule.isAtCap(remainingPercent: bounded)
         if copy.isExhausted {
             copy.status = .exhausted
         } else if status == .unknown, bounded != nil {
             copy.status = QuotaWindowStatus.derived(remainingPercent: bounded)
         }
-        copy.skip = skip || copy.isExhausted
-        copy.skipReason = skipReason ?? (copy.isExhausted ? "quota exhausted" : nil)
+        // `skip` means "a reading that must not be believed", which is not the
+        // same question as "is the allowance spent".  The shared cap rule
+        // answers the second one for any reading at or under the threshold,
+        // and a spent window is still a window with a reading in it:  when
+        // `skip` followed the rule, a window at 0.3% was dropped from the
+        // picture in picture along with its cap line, while the menu bar still
+        // announced the cap, so the same window was live in one place and
+        // gone in the other (Kody review 2026-10-22).
+        //
+        // The provider's own exhausted word is believed only when the reading
+        // disagrees with it, because only the provider knows why (a rejected
+        // session, a suspended plan) and the reading cannot say.  It is also
+        // the answer when there is no reading at all.  An exact zero is the
+        // one reading that is never shown as a meter.
+        //
+        // The reading is what makes this rule safe to apply twice, which the
+        // display path does:  the picture in picture rebuilds a snapshot from
+        // an already derived window, and a rule that read the derived
+        // `isExhausted` back as the provider's word would hide the window
+        // again on the second pass.
+        let providerWordCounts: Bool
+        if let bounded {
+            providerWordCounts = isExhausted && bounded > QuotaCapRule.spentThreshold
+        } else {
+            providerWordCounts = isExhausted
+        }
+        copy.skip = skip || bounded == 0 || providerWordCounts
+        // The reason explains a skip, so it is attached to a skip and never
+        // to a window that stays visible, and it never claims an exhaustion
+        // the window does not have:  a provider that hides a healthy window
+        // without saying why gets no reason at all, because "quota exhausted"
+        // on a window with room left is a false claim, and a consumer that
+        // filters on the reason would act on it (Kody review 2026-10-26).
+        copy.skipReason = skipReason ?? (copy.skip && copy.isExhausted ? "quota exhausted" : nil)
         let monthlyHint = copy.canonicalProviderKey == "cursor"
             && copy.label.lowercased().contains("plan")
         if let rewritten = QuotaWindowVocabulary.sanitizeLabelIfNeeded(
@@ -397,6 +439,147 @@ public struct QuotaProviderGroup: Codable, Equatable, Sendable {
     }
 }
 
+/// The providers this Mac reads locally.
+///
+/// A local window that carries no reading (a plan-details window) does not
+/// mean this Mac reads that provider.  Counting it as one dropped the fleet's
+/// live reading for the provider and left the row with no reading at all:  the
+/// xAI row read "unavailable" while the fleet carried this Mac's own live
+/// SuperGrok Heavy reading for it (owner, 2026-10-23).
+public enum QuotaLocalScope {
+    /// The provider keys this Mac has a local reading for.
+    ///
+    /// The local window is what greys out an ended period, so a provider
+    /// without one has nothing to show for an expired reading, and a copy of
+    /// that ended period must not stand in for a reading either.
+    ///
+    /// A window counts when it carries a percentage or an absolute balance,
+    /// which is the codebase's own notion of a reading
+    /// (`QuotaWindow.hasReading`):  several readers report an absolute balance
+    /// and no percentage at all, and a provider read that way is read
+    /// locally.  Counting only the percentages said otherwise, so the Mac
+    /// merge did not hold the fleet out and another machine's reading of the
+    /// same provider was merged into this Mac's row and labelled local, giving
+    /// the row two readings where it had one.
+    public static func providers(withReadings windows: [QuotaWindow]) -> Set<String> {
+        Set(windows.filter { $0.hasReading }.map(\.canonicalProviderKey))
+    }
+
+    /// Own pushes have already been separated from foreign readings by
+    /// FleetOrigin.split.  Keep an informative local copy when its push returns;
+    /// an informative push can replace an empty local copy at the merge.
+    /// Foreign producers are never deduped by this local adoption rule.
+    public static func adoptedOwnPush(_ ownPush: [QuotaWindow], localWindows: [QuotaWindow]) -> [QuotaWindow] {
+        let localProviders = providers(withReadings: localWindows)
+        let localKeys = Set(localWindows.map(windowKey))
+        return ownPush.filter {
+            // A local reading still owns its provider.  An empty local copy
+            // must not hide an informative returning push with the same key.
+            !localProviders.contains($0.canonicalProviderKey)
+                && (!localKeys.contains(windowKey($0)) || $0.hasReading)
+        }
+    }
+
+    /// Only an informative adopted own push replaces its empty local copy.
+    /// The collector's actual local windows are not changed by this merge view.
+    public static func localWindowsForMerge(_ localWindows: [QuotaWindow], adopted: [QuotaWindow]) -> [QuotaWindow] {
+        let replacementKeys = Set(adopted.filter { $0.hasReading }.map(windowKey))
+        return localWindows.filter { $0.hasReading || !replacementKeys.contains(windowKey($0)) }
+    }
+
+    /// The fleet's windows that may join this Mac's local list, and the
+    /// own-push windows they supersede.
+    ///
+    /// A provider this Mac does not read locally takes its reading from the
+    /// fleet, and the fleet's copy is the newer one whenever it was reported
+    /// after this Mac's own push.  That is the Antigravity case:  the Mac's
+    /// local reader needs a running Antigravity language server, and when
+    /// there was none the row read "unavailable" while the fleet carried a
+    /// fresh reading from this same Mac's collector, Argon included.
+    ///
+    /// The older own-push copy of the same period is dropped with the fleet's
+    /// window, so one period can never be drawn twice:  the fleet's Gemini
+    /// weekly and this Mac's older "Gemini 4 Argon · 7-day" are the same
+    /// allowance read twice.
+    ///
+    /// A provider whose own push is the newer reading keeps it:  the fleet's
+    /// copy is redundant then, and the rule does not change.
+    public static func fleetFallback(
+        fleet: [QuotaWindow],
+        adopted: [QuotaWindow],
+        localProviders: Set<String>,
+        expectedKeys: [String] = expectedQuotaProviderKeys
+    ) -> (fallback: [QuotaWindow], superseded: [QuotaWindow]) {
+        var fallback: [QuotaWindow] = []
+        var superseded: [QuotaWindow] = []
+        let fleetByProvider = Dictionary(grouping: fleet, by: \.canonicalProviderKey)
+        let adoptedByProvider = Dictionary(grouping: adopted, by: \.canonicalProviderKey)
+
+        for (key, windows) in fleetByProvider {
+            // A provider this Mac reads itself keeps its own reading, and a
+            // key nothing expects must not sprout a row.
+            guard expectedKeys.contains(key), !localProviders.contains(key) else { continue }
+            let own = adoptedByProvider[key] ?? []
+            // Only a reading claims the provider.  This Mac's own plan
+            // details carry no reading, so they never stand in for one and
+            // never hold the fleet's live reading out of the row.
+            let ownReadings = own.filter(\.hasReading)
+            // The comparison is per period, not per provider:  a fresh
+            // five-hour own reading must not hold back a newer weekly fleet
+            // reading, and a stale weekly own copy must not admit a weekly
+            // fleet window that is older than it.  The five-hour and weekly
+            // meters are read and judged on their own (per periodKey).
+            let ownByPeriod = Dictionary(grouping: ownReadings, by: Self.periodKey)
+            for (period, periodWindows) in Dictionary(grouping: windows, by: Self.periodKey) {
+                let fleetNewest = periodWindows.compactMap(\.occurredDate).max()
+                let ownNewest = ownByPeriod[period]?.compactMap(\.occurredDate).max()
+                guard let fleetNewest else {
+                    // The fleet's windows carry no timestamp, so they cannot
+                    // be shown to be newer than this Mac's own push.  A
+                    // period this Mac never published is still served by
+                    // them.
+                    if ownNewest == nil { fallback.append(contentsOf: periodWindows) }
+                    continue
+                }
+                if let ownNewest, ownNewest >= fleetNewest {
+                    // This Mac's own reading of the period is the newer one:
+                    // it keeps the row, and the fleet's copy is redundant.
+                    continue
+                }
+                // The fleet's reading of the period is the newer one:  it
+                // joins the row and this Mac's older copy of the same period
+                // is dropped with it, so one period is never drawn twice.
+                fallback.append(contentsOf: periodWindows)
+                for ownWindow in ownByPeriod[period] ?? [] {
+                    guard let ownDate = ownWindow.occurredDate, ownDate < fleetNewest else { continue }
+                    superseded.append(ownWindow)
+                }
+            }
+        }
+        return (fallback, superseded)
+    }
+
+    /// The period a window measures, for comparing two readings of the same
+    /// allowance.  The shared resolver, so "7d" and "weekly" are the same
+    /// period.
+    private static func periodKey(_ window: QuotaWindow) -> String {
+        guard let seconds = ResetAlarmCadence.periodSeconds(token: window.window, label: window.label) else {
+            // Two windows of unresolvable periods are not the same meter just
+            // because neither resolves:  carry a per-window identity, or
+            // unrelated periods would supersede each other and distinct
+            // periods would drop as duplicates.
+            return "unknown:\(window.window ?? "-")#\(window.label)"
+        }
+        return String(Int(seconds.rounded()))
+    }
+
+    private static func windowKey(_ window: QuotaWindow) -> [String] {
+        let prefix = QuotaWindowVocabulary.localDeviceWindowPrefix
+        let id = window.id.hasPrefix(prefix) ? String(window.id.dropFirst(prefix.count)) : window.id
+        return [window.canonicalProviderKey, id]
+    }
+}
+
 /// Response from GET /api/quota-windows.  `providerGroups` is additive and is
 /// optional on decode so this remains compatible with the original response.
 public struct QuotaResponse: Codable, Equatable, Sendable {
@@ -490,7 +673,7 @@ public struct QuotaWindowSnapshot: Equatable, Sendable {
     /// an explicit exhausted flag still counts.  With neither, the window is
     /// unreadable rather than spent, and it keeps the neutral track.
     public var isAtCap: Bool {
-        if let remainingPercent { return remainingPercent <= 0 }
+        if let remainingPercent { return QuotaCapRule.isAtCap(remainingPercent: remainingPercent) }
         return window.isExhausted
     }
 
@@ -502,17 +685,28 @@ public struct QuotaWindowSnapshot: Equatable, Sendable {
         self.remainingPercent = normalized.boundedRemainingPercent
         self.status = normalized.status
 
-        let observedIsFresh: Bool
-        if let observedAt {
-            let age = now.timeIntervalSince(observedAt)
-            observedIsFresh = age < QuotaPolicy.staleAfter && age >= -QuotaPolicy.maximumFutureSkew
-        } else {
-            observedIsFresh = false
+        let isAtCap = remainingPercent.map { QuotaCapRule.isAtCap(remainingPercent: $0) } ?? normalized.isExhausted
+        let duration = resetAt.flatMap { end in
+            ResetAlarmCadence.duration(
+                token: normalized.window,
+                label: normalized.label,
+                providerKey: normalized.canonicalProviderKey,
+                isSupplementaryVideoQuota: normalized.isSupplementaryVideoQuota,
+                endingAt: end
+            )
         }
+
+        let isFreshReading = QuotaFreshnessRule.isFresh(
+            observedAt: observedAt,
+            resetAt: resetAt,
+            now: now,
+            isAtCap: isAtCap,
+            cadenceDuration: duration
+        )
 
         if let resetAt, resetAt <= now {
             freshness = .awaitingRefresh
-        } else if observedIsFresh {
+        } else if isFreshReading {
             freshness = .fresh
         } else {
             freshness = .stale
@@ -574,13 +768,19 @@ public struct QuotaPlatformSection: Equatable, Sendable {
     /// Antigravity pool grouper knows about — are filtered by the caller, in
     /// `DisplaySection.atCapWindow()`.
     public func atCapWindow() -> QuotaWindowSnapshot? {
-        let eligible = windows
-            .filter { !$0.window.isSupplementaryVideoQuota && !$0.window.isScopedPoolAllowance && $0.remainingPercent != nil }
-        let primary = eligible.filter { !$0.window.isSubModelLimit }
-        let pool = primary.isEmpty ? eligible : primary
-        return pool
-            .filter(\.isAtCap)
-            .max { ($0.resetAt ?? .distantPast) < ($1.resetAt ?? .distantPast) }
+        let facts = windows.map {
+            QuotaCapRule.WindowFacts(
+                id: $0.window.id,
+                remainingPercent: $0.remainingPercent,
+                resetAt: $0.resetAt,
+                isFresh: $0.isFresh,
+                isSupplementaryVideoQuota: $0.window.isSupplementaryVideoQuota,
+                isScopedPoolAllowance: $0.window.isScopedPoolAllowance,
+                isSubModelLimit: $0.window.isSubModelLimit
+            )
+        }
+        guard let bindingIndex = QuotaCapRule.bindingWindowIndex(in: facts) else { return nil }
+        return windows[bindingIndex]
     }
 
     /// Whether this plan is at its cap on any window it reports honestly.
@@ -600,6 +800,43 @@ public extension QuotaResponse {
         return copy
     }
 
+    /// The Grok subscription credits pool is reported twice: the local CLI
+    /// reader files it under `grok`, while the fleet collector buckets the
+    /// same payload as `xai:subscription`.  When both carry a subscription
+    /// window, keep the fresher reading and drop the staler duplicate, so
+    /// the two rows can never disagree about one pool.  Any other xAI
+    /// window (API usage, a different cadence) is untouched.
+    static func dedupedGrokSubscription(_ windows: [QuotaWindow]) -> [QuotaWindow] {
+        // The one Grok credits pool, identified by exact component equality on the
+        // window id.  Ids carry an optional source prefix
+        // (`local-mac:grok:subscription`), so the canonical form is the last
+        // two components: `<providerKey>:<token>`, each compared in full.
+        // `grok:legacy:subscription` names a different window and is not the
+        // pool; `xai:api-monthly` is not the pool either.
+        //
+        // A window the unified subscription pool filled in is not a second
+        // report of the pool: it is the pool's own participant row.  The
+        // Grok row and the xAI row of one shared pool then tie on time, and
+        // the tie used to drop one of them from the dashboard, taking the
+        // live reading with it.  The pool's rows are left alone here, and
+        // the two collectors' own reports are still deduped.
+        func isPool(_ window: QuotaWindow) -> Bool {
+            guard window.sharedPoolOrigin == nil else { return false }
+            let parts = window.id.split(separator: ":")
+            guard parts.count >= 2 else { return false }
+            return parts[parts.count - 2] == Substring(window.canonicalProviderKey)
+                && parts[parts.count - 1] == "subscription"
+        }
+        guard let grokIndex = windows.firstIndex(where: { isPool($0) && $0.canonicalProviderKey == "grok" }),
+              let xaiIndex = windows.firstIndex(where: { isPool($0) && $0.canonicalProviderKey == "xai" })
+        else { return windows }
+        let grokDate = windows[grokIndex].occurredDate ?? .distantPast
+        let xaiDate = windows[xaiIndex].occurredDate ?? .distantPast
+        var copy = windows
+        copy.remove(at: grokDate >= xaiDate ? xaiIndex : grokIndex)
+        return copy
+    }
+
     /// Returns the stable native dashboard order, followed by future provider
     /// keys supplied by the server.  Missing expected providers are explicit.
     ///
@@ -609,19 +846,30 @@ public extension QuotaResponse {
     /// offline fallback / pre-manifest backend path.  That branch is kept as a
     /// safety net for first-launch installs before a sync has completed.
     func platformSections(now: Date = Date()) -> [QuotaPlatformSection] {
-        let normalizedWindows = windows.map { $0.normalized() }
+        // Collect every reading the response carries, then dedupe once over
+        // the whole collection.  Dedupe before the provider groups are
+        // merged would drop the fleet `xai:subscription` only for a group to
+        // hand back the same duplicate moments later — the one disagreement
+        // this dedupe exists to remove, reached by the additive manifest path.
+        var collected = windows.map { $0.normalized() }
+        // Older responses may not have top-level windows but do have the
+        // additive provider groups.  Fill only absent IDs to avoid duplicates.
+        var seen = Set(collected.map { "\($0.canonicalProviderKey):\($0.id)" })
+        for group in providerGroups {
+            for window in group.windows.map({ $0.normalized() }) where seen.insert("\(window.canonicalProviderKey):\(window.id)").inserted {
+                collected.append(window)
+            }
+        }
+        let normalizedWindows = Self.dedupedGrokSubscription(collected)
+        // A provider whose every reading the dedupe removed is not missing:
+        // its one pool is shown on the other row.  Keep it out of the
+        // sections, or its expected-provider entry renders an empty card
+        // ("Quota unavailable") beside the row that carries the reading.
+        let emptiedByDedupe = Set(collected.map(\.canonicalProviderKey))
+            .subtracting(normalizedWindows.map(\.canonicalProviderKey))
         var grouped = Dictionary<String, [QuotaWindow]>(minimumCapacity: normalizedWindows.count)
         for window in normalizedWindows {
             grouped[window.canonicalProviderKey, default: []].append(window)
-        }
-
-        // Older responses may not have top-level windows but do have the
-        // additive provider groups.  Fill only absent IDs to avoid duplicates.
-        var seen = Set(normalizedWindows.map { "\($0.canonicalProviderKey):\($0.id)" })
-        for group in providerGroups {
-            for window in group.windows.map({ $0.normalized() }) where seen.insert("\(window.canonicalProviderKey):\(window.id)").inserted {
-                grouped[window.canonicalProviderKey, default: []].append(window)
-            }
         }
 
         // Build the manifest view: key, label, via, expected, iconHint, and
@@ -691,7 +939,7 @@ public extension QuotaResponse {
         }
 
         var sections: [QuotaPlatformSection] = []
-        for entry in manifest {
+        for entry in manifest where !emptiedByDedupe.contains(entry.key) {
             sections.append(makeSection(key: entry.key, label: entry.label, via: entry.via, expected: entry.expected, iconHint: entry.iconHint, grouped: grouped, now: now))
         }
 
@@ -720,9 +968,9 @@ public extension QuotaResponse {
         grouped: [String: [QuotaWindow]],
         now: Date
     ) -> QuotaPlatformSection {
-        let reports = key == "google-antigravity"
+        let reports = (key == "google-antigravity"
             ? AntigravityQuotaGroups.normalize(grouped[key] ?? [], includeMissing: true)
-            : grouped[key] ?? []
+            : grouped[key] ?? [])
         let snapshots = reports.map { QuotaWindowSnapshot(window: $0, now: now) }
             .sorted { left, right in
                 if key == "google-antigravity" { return left.window.id < right.window.id }
@@ -764,12 +1012,59 @@ private extension QuotaWindow {
     }
 }
 
-private enum QuotaPolicy {
-    static let staleAfter: TimeInterval = 30 * 60
-    static let maximumFutureSkew: TimeInterval = 5 * 60
-}
+/// Memoizes parsed ISO-8601 instants.
+///
+/// Parsing one instant is not cheap.  `ISO8601DateFormatter` builds a fresh
+/// ICU calendar for every call, and ICU loads — then tears down — its
+/// date-format symbol tables from resources each time, which is what a hang
+/// capture shows as `icu::DateFormatSymbols::loadAllSymbols` underneath
+/// `udat_parseCalendar`.
+///
+/// Every window is parsed four times per `platformSections` call: twice for
+/// the snapshot, and twice more in `normalizedForExport`.  `displaySections`
+/// is a computed property, so each of its readers recomputed the whole set,
+/// and the main thread paid that cost thousands of times per view update.
+/// That is what pushed it past two seconds and produced the "App hanging for
+/// at least 2000 ms" reports.
+///
+/// The same instants are parsed over and over, so the results are memoized.
+/// The cache is bounded, and the lock also keeps the two shared formatters
+/// off concurrent callers, because `ISO8601DateFormatter` is not itself
+/// thread-safe.
+final class ISO8601DateMemo: @unchecked Sendable {
+    static let shared = ISO8601DateMemo()
 
-private enum ISO8601Date {
+    private let lock = NSLock()
+    private var cache: [String: Date] = [:]
+    /// Bounded, so a long-lived menu bar app cannot grow the cache forever.
+    private let cacheLimit = 1024
+
+    /// How many instants were actually parsed.  A test reads this to prove
+    /// the memo works rather than trusting the comment above it.
+    private(set) var parseCount = 0
+
+    func date(from value: String) -> Date? {
+        guard !value.isEmpty else { return nil }
+        lock.lock()
+        defer { lock.unlock() }
+        if let hit = cache[value] { return hit }
+        let parsed = ISO8601DateMemo.fractional.date(from: value)
+            ?? ISO8601DateMemo.standard.date(from: value)
+        parseCount += 1
+        if let parsed {
+            if cache.count >= cacheLimit { cache.removeAll(keepingCapacity: true) }
+            cache[value] = parsed
+        }
+        return parsed
+    }
+
+    /// Test hook: drops every memoized instant.
+    func removeAll() {
+        lock.lock()
+        defer { lock.unlock() }
+        cache.removeAll()
+    }
+
     private static let fractional: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -780,9 +1075,11 @@ private enum ISO8601Date {
         formatter.formatOptions = [.withInternetDateTime]
         return formatter
     }()
+}
 
+private enum ISO8601Date {
     static func parse(_ value: String) -> Date? {
-        fractional.date(from: value) ?? standard.date(from: value)
+        ISO8601DateMemo.shared.date(from: value)
     }
 }
 
@@ -795,7 +1092,7 @@ enum QuotaProviders {
 
     // deepseek is retired as a quota provider (no local reader ever existed for it);
     // hidden also drops any server-pulled window that still canonicalizes to it.
-    static let hidden: Set<String> = ["kimi", "windsurf", "deepseek", "gemini-cli"]
+    static let hidden: Set<String> = ["windsurf", "deepseek", "gemini-cli"]
 
     static let expected: [Expected] = [
         Expected(key: "anthropic", label: "Claude", via: nil),
@@ -809,6 +1106,8 @@ enum QuotaProviders {
         Expected(key: "minimax", label: "MiniMax", via: nil),
         Expected(key: "muse-assist", label: "Muse Assist", via: nil),
         Expected(key: "muse-code", label: "Muse Code", via: nil),
+        Expected(key: "kimi", label: "Kimi", via: nil),
+        Expected(key: "zcode", label: "ZCode", via: nil),
     ]
 
     static func canonicalKey(provider: String, providerKey: String?, via: String?) -> String {
@@ -843,6 +1142,7 @@ enum QuotaProviders {
             // "no report" while the data sat in the handoff, correctly formed.
             "muse": "muse-assist", "muse-cli": "muse-assist", "muse-sdk": "muse-assist",
             "kimi": "kimi", "moonshot": "kimi", "moonshot-ai": "kimi",
+            "zcode": "zcode", "z.ai": "zcode", "z-ai": "zcode", "zai": "zcode", "glm": "zcode", "glm-coding": "zcode",
             "gemini-cli": "gemini-cli",
             "copilot": "github-copilot", "github-copilot": "github-copilot", "github_copilot": "github-copilot",
             "windsurf": "windsurf", "codeium": "windsurf",
@@ -893,6 +1193,8 @@ public struct WindowPacing: Equatable, Sendable {
         remainingPercent: Double?,
         now: Date = Date(),
         periodStart: Date? = nil,
+        providerKey: String? = nil,
+        isSupplementaryVideoQuota: Bool = false,
         calendar: Calendar = QuotaPeriod.billingCalendar
     ) -> WindowPacing? {
         guard let resetAt, let remainingPercent else { return nil }
@@ -904,6 +1206,8 @@ public struct WindowPacing: Equatable, Sendable {
             label: windowLabel,
             resetAt: resetAt,
             explicitStart: periodStart,
+            providerKey: providerKey,
+            isSupplementaryVideoQuota: isSupplementaryVideoQuota,
             calendar: calendar
         ) else {
             return nil
@@ -970,36 +1274,15 @@ public struct WindowPacing: Equatable, Sendable {
         )
     }
 
+    /// The loose parser's answer, in seconds.
+    ///
+    /// It comes from the shared resolver, `ResetAlarmCadence.resolve`, so the
+    /// prose that names a period reads the same way here as it does beside the
+    /// Mac's caption, the phone's marker and the widget's marker (owner,
+    /// Oct-22-2026).
     public static func parseDurationSeconds(token: String?, label: String) -> TimeInterval? {
-        let combined = "\(token ?? "") \(label)".lowercased()
-        if combined.contains("weekly") || combined.contains("7-day") || combined.contains("7d") || combined.contains("7 day") {
-            return 7 * 86400
-        }
-        if combined.contains("monthly") || combined.contains("30d") || combined.contains("30-day") || combined.contains("month") {
-            return 30 * 86400
-        }
-        if combined.contains("daily") || combined.contains("24h") || combined.contains("24-hour") || combined.contains("1d") || combined.contains("day") {
-            return 86400
-        }
-        if combined.contains("5-hour") || combined.contains("5h") || combined.contains("5 hour") {
-            return 5 * 3600
-        }
-        if combined.contains("1-hour") || combined.contains("1h") || combined.contains("1 hour") {
-            return 3600
-        }
-        if combined.contains("2-hour") || combined.contains("2h") {
-            return 2 * 3600
-        }
-        if combined.contains("3-hour") || combined.contains("3h") {
-            return 3 * 3600
-        }
-        if combined.contains("6-hour") || combined.contains("6h") {
-            return 6 * 3600
-        }
-        if combined.contains("12-hour") || combined.contains("12h") {
-            return 12 * 3600
-        }
-        return nil
+        guard let period = ResetAlarmCadence.resolve(token: token, label: label) else { return nil }
+        return ResetAlarmCadence.seconds(for: period)
     }
 }
 
@@ -1012,48 +1295,14 @@ public extension QuotaWindowSnapshot {
             remainingPercent: remainingPercent,
             now: now,
             periodStart: window.periodStartDate,
+            providerKey: window.canonicalProviderKey,
+            isSupplementaryVideoQuota: window.isSupplementaryVideoQuota,
             calendar: calendar
         )
     }
 }
 
-// MARK: - Platform Custom Metadata
-
-public struct PlatformCustomInfo: Codable, Equatable, Sendable {
-    /// Persisted edit revision; quota observation time remains independent.
-    public var updatedAt: Date?
-    public var customSubtitle: String
-    public var planName: String
-    public var costUsd: String
-    public var renewalDateText: String
-    public var showCostAndRenewal: Bool
-
-    public init(
-        customSubtitle: String = "",
-        planName: String = "",
-        costUsd: String = "",
-        renewalDateText: String = "",
-        showCostAndRenewal: Bool = false
-    ) {
-        self.updatedAt = nil
-        self.customSubtitle = customSubtitle
-        self.planName = planName
-        self.costUsd = costUsd
-        self.renewalDateText = renewalDateText
-        self.showCostAndRenewal = showCostAndRenewal
-    }
-
-    /// Whether the owner's free-text Settings fields mention a plan or cost
-    /// change (e.g. "↓ $50/mo plan then").  Treated as an explicit plan-change
-    /// signal: the runaway detector stands down for this provider and the
-    /// informational plan-change state shows until the text no longer
-    /// mentions a change.
-    public var mentionsPlanChange: Bool {
-        let text = [planName, costUsd, renewalDateText].joined(separator: " ").lowercased()
-        let markers = ["↓", "↑", "→", "downgrade", "upgrade"]
-        return markers.contains { text.contains($0) }
-    }
-}
+// MARK: - Billing Renewal
 
 /// The Renewal Date field is a free-text override.  When the owner has not
 /// typed one, a platform that actually reports a billing-cycle end (Cursor's

@@ -130,6 +130,19 @@ test("the compile gate still checks the Mac package and the iOS companion", () =
   assert.match(code, /runs-on: macos-latest/);
 });
 
+test("the package job resolves packages with retries before Swift build", () => {
+  const code = withoutComments(swiftCi);
+  const resolveIndex = code.indexOf("Resolve Swift packages (retry)");
+  const buildIndex = code.indexOf("Swift build");
+  assert.ok(resolveIndex >= 0, "the package job must resolve packages with a retry step");
+  assert.ok(buildIndex > resolveIndex, "package resolve must run before Swift build");
+  const resolveBlock = code.slice(resolveIndex, buildIndex);
+  assert.match(resolveBlock, /swift package resolve/);
+  assert.match(resolveBlock, /for attempt in 1 2 3 4/);
+  assert.match(resolveBlock, /::warning::/);
+  assert.match(resolveBlock, /::error::/);
+});
+
 test("only the Mac release gate may replace a cancelled compile run", () => {
   const release = withoutComments(read(".github/workflows/mac-release.yml"));
   const ship = withoutComments(read(".github/workflows/ios-ship.yml"));
@@ -153,8 +166,25 @@ test("the gate script documents the exit codes it actually returns", () => {
   assert.match(header, /Exit 1 on a failed or skipped check, on a timeout, and on a cancelled/);
   assert.match(header, /check when REDISPATCH_ON_CANCEL is 0\./);
   assert.match(header, /Exit 2 when ONCE or CHECKS_JSON sees a check that has not finished\./);
+  assert.match(header, /Exit 3 is the classifier's "missing" verdict/);
+  assert.match(header, /MISSING_GRACE_SECONDS/);
   // The old text promised a failure on a cancelled check in every case.
   assert.doesNotMatch(header, /Exit 1 on a failed, skipped, or cancelled check/);
+});
+
+test("ios-ship and mac-release share the missing-check fast exit", () => {
+  const marker = "No Swift CI check run on this SHA fails after MISSING_GRACE_SECONDS";
+  const release = read(".github/workflows/mac-release.yml");
+  const ship = read(".github/workflows/ios-ship.yml");
+  assert.ok(release.includes(marker), "mac-release must document the shared missing-check exit");
+  assert.ok(ship.includes(marker), "ios-ship must document the shared missing-check exit");
+  const script = read("scripts/await-swift-ci-checks.sh");
+  assert.match(script, /Swift CI never started/);
+  assert.match(script, /MISSING_GRACE_SECONDS="\$\{MISSING_GRACE_SECONDS:-120\}"/);
+  // A fresh dispatch cannot pin the merge SHA, so neither gate starts one.
+  assert.doesNotMatch(script, /actions\/workflows\/.*\/dispatches/);
+  assert.doesNotMatch(release, /actions\/workflows\/.*\/dispatches/);
+  assert.doesNotMatch(ship, /actions\/workflows\/.*\/dispatches/);
 });
 
 test("the gate replaces a cancelled run by re-running it, not by dispatching a sha", () => {
@@ -165,4 +195,34 @@ test("the gate replaces a cancelled run by re-running it, not by dispatching a s
   assert.match(script, /actions\/runs\/\$\{eligible_run_id\}\/rerun/);
   assert.doesNotMatch(script, /actions\/workflows\/.*\/dispatches/);
   assert.doesNotMatch(script, /-f ref=/);
+});
+
+test("actions/checkout is SHA-pinned, not a floating tag", () => {
+  const code = withoutComments(swiftCi);
+  assert.doesNotMatch(code, /actions\/checkout@v\d/);
+  const pins = code.match(/actions\/checkout@[0-9a-f]{40} # v7/g) ?? [];
+  assert.equal(pins.length, 2, "both checkout steps must carry the full SHA pin");
+});
+
+test("the companion XcodeGen install is version and digest pinned", () => {
+  const code = withoutComments(swiftCi);
+  assert.match(code, /XCODEGEN_VERSION: "2\.46\.0"/);
+  assert.match(code, /XCODEGEN_SHA256: "[0-9a-f]{64}"/);
+  assert.match(code, /shasum -a 256 -c -/);
+});
+
+test("the companion job builds the Mac app scheme without signing", () => {
+  const code = withoutComments(swiftCi);
+  const companion = code.slice(code.indexOf("name: iOS companion compile"));
+  assert.notEqual(companion.indexOf("name: iOS companion compile"), -1);
+  const widget = companion.indexOf("Build Mac widget extension (no signing)");
+  const app = companion.indexOf("Build Mac app (no signing)");
+  assert.ok(widget >= 0, "the companion job must keep the unsigned Mac widget build");
+  assert.ok(app > widget, "the unsigned Mac app build follows the Mac widget step");
+  const next = companion.indexOf("- name:", app + 1);
+  const appBlock = companion.slice(app, next === -1 ? undefined : next);
+  assert.match(appBlock, /-scheme CodeCapsCompanionMac\b/);
+  assert.match(appBlock, /CODE_SIGNING_ALLOWED=NO/);
+  assert.match(appBlock, /CODE_SIGNING_REQUIRED=NO/);
+  assert.match(appBlock, /CODE_SIGN_IDENTITY=""/);
 });

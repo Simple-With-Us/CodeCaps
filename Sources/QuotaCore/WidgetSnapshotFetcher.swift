@@ -5,6 +5,7 @@ import Foundation
 public enum WidgetSnapshotFetcher {
     public enum FetchError: Error, Equatable {
         case invalidHTTPSURL
+        case invalidToken
         case nonHTTPResponse
         case unacceptableStatus(Int)
         case responseTooLarge
@@ -20,10 +21,12 @@ public enum WidgetSnapshotFetcher {
         configuration: URLSessionConfiguration = .ephemeral
     ) async throws -> Data {
         guard let url = URL(string: endpoint),
-              url.scheme?.lowercased() == "https",
-              let host = url.host, !host.isEmpty,
-              url.user == nil, url.password == nil else {
+              Self.isAllowedEndpoint(url) else {
             throw FetchError.invalidHTTPSURL
+        }
+        let token = Self.sanitizedToken(bearerToken)
+        guard !token.contains("\r"), !token.contains("\n") else {
+            throw FetchError.invalidToken
         }
 
         var config = configuration
@@ -31,14 +34,41 @@ public enum WidgetSnapshotFetcher {
         config.timeoutIntervalForResource = resourceTimeout
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: requestTimeout)
         request.httpMethod = "GET"
-        if !bearerToken.isEmpty {
-            request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
+        if !token.isEmpty {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
 
         return try await BoundedHTTPSRequest(
             origin: url,
             maximumResponseBytes: maximumResponseBytes
         ).perform(request, configuration: config)
+    }
+
+    /// HTTPS anywhere, or HTTP only on a loopback host (the same rule
+    /// `QuotaClient.isAllowedEndpoint` applies).  Userinfo, query and
+    /// fragment are refused so a pasted endpoint cannot smuggle a second
+    /// authority or credentials past the check.
+    static func isAllowedEndpoint(_ url: URL) -> Bool {
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let scheme = components.scheme?.lowercased(),
+              let host = components.host?.lowercased(), !host.isEmpty,
+              components.user == nil, components.password == nil,
+              components.query == nil, components.fragment == nil else { return false }
+        if scheme == "https" { return true }
+        let loopback = ["localhost", "127.0.0.1", "::1", "[::1]"].contains(host)
+        return scheme == "http" && loopback
+    }
+
+    /// Local copy of the token cleanup in `TokenHygiene.swift`: this file is
+    /// compiled on its own into the widget and companion targets, which do
+    /// not link that file.
+    static func sanitizedToken(_ raw: String) -> String {
+        var value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        while value.count >= 2, let first = value.first, let last = value.last,
+              first == last, first == "\"" || first == "'" {
+            value = String(value.dropFirst().dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return value
     }
 }
 
@@ -120,7 +150,6 @@ private final class BoundedHTTPSRequest: NSObject, URLSessionDataDelegate, URLSe
         completionHandler: @escaping (URLRequest?) -> Void
     ) {
         guard let destination = request.url,
-              destination.scheme?.lowercased() == "https",
               destination.user == nil, destination.password == nil,
               Self.hasSameOrigin(origin, destination) else {
             completionHandler(nil)
@@ -130,11 +159,12 @@ private final class BoundedHTTPSRequest: NSObject, URLSessionDataDelegate, URLSe
     }
 
     private static func hasSameOrigin(_ lhs: URL, _ rhs: URL) -> Bool {
-        let lhsPort = lhs.port ?? 443
-        let rhsPort = rhs.port ?? 443
-        return lhs.scheme?.lowercased() == "https"
-            && rhs.scheme?.lowercased() == "https"
+        let lhsScheme = lhs.scheme?.lowercased()
+        let rhsScheme = rhs.scheme?.lowercased()
+        let defaultPort = lhsScheme == "https" ? 443 : 80
+        return lhsScheme != nil
+            && lhsScheme == rhsScheme
             && lhs.host?.lowercased() == rhs.host?.lowercased()
-            && lhsPort == rhsPort
+            && (lhs.port ?? defaultPort) == (rhs.port ?? defaultPort)
     }
 }

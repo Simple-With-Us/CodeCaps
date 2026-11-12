@@ -242,6 +242,7 @@ public final class ResetAlarmManager: ObservableObject {
     private var updatingLegacySound = false
     private(set) var detectedResetHistory: [ResetAlertRecord] = []
     var onUsageDelivery: ((UsageAlertKind, String, String, UsageAlertOption) -> Void)?
+    var additionalDelivery: ((UsageAlertKind, String, String, String) -> Void)?
     private var popupWindows: [NSWindow] = []
     private let defaults: UserDefaults
 
@@ -581,6 +582,7 @@ public final class ResetAlarmManager: ObservableObject {
                            identifier: String, navigation: AlertNavigation? = nil) {
         let option = preferences[kind]
         guard option.enabled else { return }
+        additionalDelivery?(kind, title, body, identifier)
         if let onUsageDelivery {
             onUsageDelivery(kind, title, body, option)
             return
@@ -681,7 +683,7 @@ public final class ResetAlarmManager: ObservableObject {
         content.title = "Quota Running Low: \(platformLabel)"
         content.body = "\(platformLabel) is about \(headroom) of quota left."
             + sentenceGap
-            + "Wind up or hand off anything still running against it."
+            + "Finish or hand off anything still running on this plan."
         content.sound = notificationSound(for: sound)
         let request = UNNotificationRequest(
             identifier: "codecaps.exhaustion.\(platformLabel).\(Int(Date().timeIntervalSince1970))",
@@ -793,23 +795,16 @@ public final class ResetAlarmManager: ObservableObject {
 /// or — for Cursor's plan, which carries neither — its provider.  `nil` when
 /// nothing says, which the tracker treats as "not the largest window" unless
 /// the provider has nothing better.
+///
+/// The shared resolver answers, so the tracker's period is the same period the
+/// row's caption names and the row's marker is drawn for.
 func quotaWindowPeriodSeconds(_ snapshot: QuotaWindowSnapshot) -> TimeInterval? {
-    if snapshot.window.canonicalProviderKey == "minimax", !snapshot.window.isSupplementaryVideoQuota {
-        let token = (snapshot.window.window ?? "").lowercased()
-        let label = snapshot.window.label.lowercased()
-        if !token.contains("week") && !token.contains("7d") && !label.contains("week") && !label.contains("7d") {
-            return 5 * 3_600
-        }
+    if let period = glanceWindowPeriod(snapshot) {
+        return ResetAlarmCadence.seconds(for: period)
     }
     let token = (snapshot.window.window ?? "").lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-    if let seconds = glanceDurationSeconds(token) { return seconds }
-    if glanceIsMonthly(snapshot) { return 30 * 86_400 }
-    if let parsed = WindowPacing.parseDurationSeconds(token: snapshot.window.window, label: snapshot.window.label) {
-        return parsed
-    }
     switch token {
     case "session": return 5 * 3_600
-    case "daily", "day": return 86_400
     default: return nil
     }
 }
@@ -829,6 +824,7 @@ func resetAlarmObservations(for row: DisplaySection, scope: String) -> [ResetAla
                 windowLabel: glanceMeterCaption(snapshot),
                 periodSeconds: quotaWindowPeriodSeconds(snapshot),
                 resetAt: snapshot.resetAt,
+                periodStartAt: snapshot.window.periodStartDate,
                 remainingPercent: row.isMasked(snapshot) ? nil : snapshot.remainingPercent,
                 observedAt: snapshot.observedAt,
                 identity: snapshot.window.accountKey)

@@ -323,6 +323,54 @@ public enum QuotaWindowVocabulary {
         }
     }
 
+    /// The cadence in the words an at-cap line uses: "7-day", "5-hour".
+    ///
+    /// A window that already carries the canonical cadence keeps it; anything
+    /// else is re-derived from its own token by exact match, so an at-cap
+    /// line never says "Other limit" when the window meant something
+    /// narrower, and a look-alike token such as "notweekly" can never be
+    /// misread as "7-day" by a substring check.
+    public static func atCapCadence(cadence: String, resetAt: Date? = nil) -> String {
+        let known = [fiveHour, oneDay, sevenDay, oneMonth]
+        if known.contains(cadence) { return cadence }
+        // The cadence is a token, so the trailing " window" a caller may still
+        // carry is stripped before the token is resolved:  "7-day window" names
+        // the same period as "7-day".
+        return standardCadence(windowToken: stripTrailingWindowSuffix(cadence),
+                               label: "",
+                               resetAt: resetAt,
+                               monthlyHint: false)
+    }
+
+    /// The countdown an at-cap line quotes: the two largest non-zero units of
+    /// "1d 13h", "2h 42m", "45m".  A unit that is zero is skipped rather than
+    /// shown, so a countdown never reads "1d 0h".
+    ///
+    /// Empty when the window has no reset clock, and "due" when the reset has
+    /// already passed and a fresh reading has not arrived yet.
+    public static func resetCountdown(_ resetAt: Date?, now: Date = Date()) -> String {
+        guard let resetAt else { return "" }
+        let seconds = Int(resetAt.timeIntervalSince(now).rounded())
+        guard seconds > 0 else { return "due" }
+        guard seconds >= 60 else { return "<1m" }
+        let minutes = seconds / 60
+        let units = [(minutes / 1_440, "d"), ((minutes % 1_440) / 60, "h"), (minutes % 60, "m")]
+        return units.filter { $0.0 > 0 }.prefix(2).map { "\($0.0)\($0.1)" }.joined(separator: " ")
+    }
+
+    /// The line a capped plan says instead of its bars: "7-day cap resets in
+    /// 1d 13h".
+    ///
+    /// Shared by the Mac's menu-bar window, its PiP and the phone companion, so
+    /// one plan reads the same on every surface.  Owner 2026-10-21: the phone
+    /// said nothing at all when a provider was at its cap, so a capped Codex
+    /// or Antigravity plan looked like any other.
+    public static func atCapSummary(cadence: String, resetAt: Date?, now: Date = Date()) -> String {
+        let countdown = resetCountdown(resetAt, now: now)
+        guard !countdown.isEmpty, countdown != "due" else { return "\(cadence) cap" }
+        return "\(cadence) cap resets in \(countdown)"
+    }
+
     public static func isExtraAllowanceLabel(_ label: String) -> Bool {
         let lower = label.lowercased()
         return lower.contains("additional additional")
@@ -507,5 +555,509 @@ public enum QuotaWindowVocabulary {
         let lower = label.lowercased()
         let token = (windowToken ?? "").lowercased()
         return lower.contains("weekly") || token.contains("weekly") || lower.contains("free")
+    }
+
+    // MARK: - Whose reading is this
+
+    /// The id prefix a window carries when it is this device's own reading.
+    /// The fleet copy of a Mac reading keeps the prefix, so every surface can
+    /// tell an own reading from a copy of another machine's.
+    public static let localDeviceWindowPrefix = "local-mac:"
+
+    /// The producer id this app stamps its own windows with.
+    public static let localProducerId = "codecaps"
+
+    /// The producer ids this app and its legacy names stamp on their own
+    /// windows.
+    public static let localProducerIds = [localProducerId, "agent-bar", "local-mac"]
+
+    /// Whether a window is this device's own reading rather than a copy of
+    /// another machine's.
+    ///
+    /// A window that names a producer instance or a machine belongs to
+    /// somebody, so it is a copy.  A window that names neither, and whose
+    /// source is this app's own producer, is this device's own push coming
+    /// back from the server.
+    ///
+    /// The owning installation's own windows carry its producer instance, so a
+    /// window whose instance matches `ownInstanceId` is this device's own
+    /// reading even though it names an instance.  Every fleet-sourced window
+    /// names one, so without that the phone and the widget read this Mac's
+    /// own expired reading as somebody else's copy and deleted it, while the
+    /// Mac kept it, and the three surfaces decided differently about one
+    /// payload.  The Mac asks the same question the same way
+    /// (`FleetOrigin.isOwnPush` compares the instance and ignores case), so
+    /// the surfaces cannot drift.
+    ///
+    /// `ownInstanceId` is optional so a caller that does not know the owning
+    /// installation keeps the older behaviour rather than guessing:  an
+    /// invented id would make somebody else's reading look like this
+    /// device's own.
+    public static func isOwnDeviceWindow(
+        id: String,
+        source: String?,
+        machine: String?,
+        producerInstanceId: String?,
+        ownInstanceId: String? = nil
+    ) -> Bool {
+        // The producer instance decides before the prefix, the same
+        // precedence `FleetOrigin.isOwnPush` applies:  a window carrying this
+        // Mac's `local-mac:` id prefix but ANOTHER installation's producer
+        // instance is a foreign copy of a same-named payload, and the two
+        // surfaces must agree on one payload.  The comparison ignores case.
+        let instance = (producerInstanceId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let own = (ownInstanceId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !instance.isEmpty, !own.isEmpty { return instance.lowercased() == own.lowercased() }
+        if !instance.isEmpty { return false }
+        if id.hasPrefix(localDeviceWindowPrefix) { return true }
+        let named = (machine ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !named.isEmpty { return false }
+        let src = (source ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return localProducerIds.contains(src)
+    }
+}
+
+/// The one rule for "is this reading recent enough to believe", shared by
+/// every surface.
+///
+/// The Mac's dashboard number filtered on freshness while the cap rule beside
+/// it did not, so one account could read 96% in the sidebar and "7-day cap" in
+/// the row next to it:  a stale window that reported an exhausted allowance
+/// days ago still bound the cap (owner, Oct-22-2026).  The widget believed
+/// stale windows for the same reason, and read every provider as spent.
+///
+/// The rule lives here, in plain Foundation, because this file is compiled
+/// into the Mac app, the iOS app and the widget, and a rule the surfaces
+/// share cannot drift apart.
+public enum QuotaFreshnessRule {
+    /// How old a reading may be before it is stale.
+    ///
+    /// Half an hour is the Mac's own long standing answer, and the widget's
+    /// copy of it was the same number, so one threshold covers every surface.
+    public static let staleAfter: TimeInterval = 30 * 60
+
+    /// How far ahead of the clock a reading may sit before it is not believed
+    /// either:  a timestamp from the future says nothing about how old the
+    /// reading is.
+    public static let maximumFutureSkew: TimeInterval = 5 * 60
+
+    /// Whether a reading observed at `observedAt` is recent enough to believe
+    /// at `now`.
+    ///
+    /// A reading with no timestamp is never fresh:  there is nothing to date
+    /// it by, so nothing says it is current.
+    public static func isReadingRecent(observedAt: Date?, now: Date) -> Bool {
+        guard let observedAt else { return false }
+        let age = now.timeIntervalSince(observedAt)
+        return age < staleAfter && age >= -maximumFutureSkew
+    }
+
+    /// Whether a window is fresh:  its reading is recent and its period has
+    /// not already run out.
+    ///
+    /// A window whose reset has passed is waiting for a fresh reading, so its
+    /// old number says nothing about the plan now, and it cannot bind a cap.
+    ///
+    /// An exhausted allowance (at its cap) stays at cap until it resets:  the
+    /// plan remains capped throughout the active cycle until `resetAt`, so the
+    /// last reading of the cycle is believed for the cap even when it is older
+    /// than `staleAfter`.  Note this is a cap-binding rule, not a description
+    /// of collector behavior:  no reader in this repo skips polling while
+    /// spent (an earlier wording here claimed collectors skip polling "to
+    /// avoid quota-endpoint churn"; no such skip exists in the readers or the
+    /// refresh paths).  What an external producer does is a separate question,
+    /// so a stale timestamp on an at-cap row means the reading has not been
+    /// re-confirmed, not necessarily that polling stopped.  A reading from
+    /// before this cycle began is not believed.
+    public static func isFresh(
+        observedAt: Date?,
+        resetAt: Date?,
+        now: Date,
+        isAtCap: Bool = false,
+        cadenceDuration: TimeInterval? = nil
+    ) -> Bool {
+        if let resetAt, resetAt <= now { return false }
+        if isReadingRecent(observedAt: observedAt, now: now) { return true }
+        if isAtCap, let resetAt, let observedAt {
+            let age = now.timeIntervalSince(observedAt)
+            guard age >= -maximumFutureSkew else { return false }
+            if let duration = cadenceDuration, duration.isFinite, duration > 0 {
+                let cycleStart = resetAt.addingTimeInterval(-duration)
+                return observedAt >= cycleStart.addingTimeInterval(-3_600)
+            }
+            return true
+        }
+        return false
+    }
+
+    /// Whether a window is a dead copy of a period that has already ended.
+    ///
+    /// Owner 2026-10-23: the xAI row showed two 7-day windows at 0% with a
+    /// "due" caption while Grok, Cursor and Grok Bot showed the same weekly
+    /// allowance at 91% with a reset on 2026-10-29.  This Mac reads no xAI
+    /// quota locally, so the fleet fallback filled the xAI row with copies of
+    /// a period that ended days earlier, and the app printed them as live
+    /// readings.
+    ///
+    /// A window whose reset has already passed and whose reading is no longer
+    /// recent carries no live information:  it says how the plan looked before
+    /// the last refresh, so no surface may present it as a reading of the
+    /// plan now.
+    ///
+    /// It deliberately changes nothing else.  A window whose reset passed
+    /// moments ago was observed moments ago as well, so it stays and keeps
+    /// its `due` caption, because a period that rolls over must not blank the
+    /// row beside it.  A window with no reset clock has not expired, so it
+    /// stays too, and a window that is still inside its period is a reading
+    /// whatever its age.
+    ///
+    /// A window with no observation is unverified, not dead.  The Mac's
+    /// decoder maps an absent `occurredAt` to "", and the phone's wire window
+    /// may carry no timestamp either, so a payload without one must keep its
+    /// row:  an unverified reading is not the same thing as a reading of a
+    /// period that has ended.
+    public static func isDeadCopy(observedAt: Date?, resetAt: Date?, now: Date) -> Bool {
+        guard let observedAt, let resetAt, resetAt <= now else { return false }
+        return !isReadingRecent(observedAt: observedAt, now: now)
+    }
+}
+
+/// The one rule for "may this window stand in for a plan hitting its cap",
+/// shared by the Mac and the phone.
+///
+/// The Mac's `QuotaPlatformSection.atCapWindow()` and the phone's
+/// `CompanionQuotaItem.atCapWindow()` were two implementations of one
+/// question, and they answered it differently:  the phone let a provider's
+/// exhausted word override a reading that said there was room left, so it
+/// could announce a cap directly above a meter that read 50%.  The rule
+/// lives here, in plain Foundation, because this file is compiled into the
+/// Mac app, the iOS app and the widget, and a rule the two surfaces share
+/// cannot drift apart.
+public enum QuotaCapRule {
+    /// The level at or below which a remaining reading counts as spent.
+    ///
+    /// Half a point rather than zero, because the interface rounds a reading to
+    /// the nearest whole percent:  a window at 0.4% is drawn as "0%", so a rule
+    /// that called only an exact zero spent would answer "not at cap" beside a
+    /// reading of 0%.  Half a point is where the rounding happens, so the rule,
+    /// the drawing and the Antigravity pool's own weekly test all mean the same
+    /// thing by "at cap".
+    ///
+    /// This is the one number.  The Mac's Antigravity grouper reads it, the
+    /// phone's model reads it, and this file is compiled into the widget as
+    /// well, so no surface carries a copy of it.
+    public static let spentThreshold: Double = 0.5
+
+    /// What the cap rule needs to know about one window.
+    ///
+    /// The Mac's windows and the phone's windows are different types, so the
+    /// rule takes the facts rather than the window, and the caller maps the
+    /// answer back to its own type by `id`.
+    public struct WindowFacts: Equatable {
+        public let id: String
+        public let remainingPercent: Double?
+        public let resetAt: Date?
+        /// Whether the reading is recent enough to believe, by
+        /// `QuotaFreshnessRule`.  A stale window never binds a cap:  an
+        /// exhausted allowance that was reported days ago says nothing about
+        /// the plan now, and believing it put a "7-day cap" caption beside a
+        /// sidebar that read 96% (owner, Oct-22-2026).
+        ///
+        /// There is no default, so a caller that has not stated the freshness
+        /// of its window cannot compile.
+        public let isFresh: Bool
+        /// A reading that must not be believed, which only the Antigravity
+        /// pool grouper knows about.
+        public let isMasked: Bool
+        public let isSupplementaryVideoQuota: Bool
+        public let isScopedPoolAllowance: Bool
+        public let isSubModelLimit: Bool
+
+        public init(
+            id: String,
+            remainingPercent: Double?,
+            resetAt: Date?,
+            isFresh: Bool,
+            isMasked: Bool = false,
+            isSupplementaryVideoQuota: Bool = false,
+            isScopedPoolAllowance: Bool = false,
+            isSubModelLimit: Bool = false
+        ) {
+            self.id = id
+            self.remainingPercent = remainingPercent
+            self.resetAt = resetAt
+            self.isFresh = isFresh
+            self.isMasked = isMasked
+            self.isSupplementaryVideoQuota = isSupplementaryVideoQuota
+            self.isScopedPoolAllowance = isScopedPoolAllowance
+            self.isSubModelLimit = isSubModelLimit
+        }
+    }
+
+    /// The window that binds a plan's cap, and the one worth counting down to.
+    ///
+    /// A plan is capped when any of its real windows is at its cap, not when
+    /// all of them are:  a weekly allowance being spent stops a plan working,
+    /// whatever its shorter window still says.
+    ///
+    /// The rules, in the order they apply:
+    ///
+    /// - A window with no reading reports no cap.  When there is a reading it
+    ///   decides, so a provider's exhausted word cannot override a reading that
+    ///   says there is room left.
+    /// - A stale window reports no cap either.  Its reading says how the plan
+    ///   looked when it was taken, not how it looks now.
+    /// - An allowance that sits beside the subscription rather than inside it
+    ///   is skipped, and so is a masked reading.
+    /// - A primary window beats a sub-model window, so a plan with a window of
+    ///   its own is capped by that one.  A plan whose windows are all sub-model
+    ///   windows is still capped by them.
+    /// - Among the spent ones, the one that resets last binds, because the plan
+    ///   stays capped until that window recovers.
+    public static func bindingWindow(in windows: [WindowFacts]) -> WindowFacts? {
+        bindingWindowIndex(in: windows).map { windows[$0] }
+    }
+
+    /// The index of the binding window in the same array the facts came from.
+    ///
+    /// A caller that built the facts from its own window list carries the
+    /// choice back by position.  Re-finding the answer by id would pick the
+    /// first snapshot with that id, which can be the wrong window when a
+    /// section carries two snapshots with the same id.
+    public static func bindingWindowIndex(in windows: [WindowFacts]) -> Int? {
+        let now = Date()
+        let eligible = windows.indices.filter {
+            (windows[$0].isFresh || (isAtCap(remainingPercent: windows[$0].remainingPercent) && windows[$0].resetAt != nil && windows[$0].resetAt! > now))
+                && !windows[$0].isMasked
+                && !windows[$0].isSupplementaryVideoQuota
+                && !windows[$0].isScopedPoolAllowance
+                && windows[$0].remainingPercent != nil
+        }
+        let primary = eligible.filter { !windows[$0].isSubModelLimit }
+        let pool = primary.isEmpty ? eligible : primary
+        return pool
+            .filter { isAtCap(remainingPercent: windows[$0].remainingPercent) }
+            .max { (windows[$0].resetAt ?? .distantPast) < (windows[$1].resetAt ?? .distantPast) }
+    }
+
+    /// A reading bounded for display:  nil when there is no reading or it
+    /// is not a finite number, otherwise clamped into 0...100.
+    ///
+    /// Mirrors `QuotaWindow.boundedRemainingPercent`, which does the same
+    /// for the Mac's own windows.
+    public static func bounded(_ value: Double?) -> Double? {
+        guard let value, value.isFinite else { return nil }
+        return min(100, max(0, value))
+    }
+
+    /// Whether a window's allowance is spent.
+    ///
+    /// The reading decides whenever there is one:  a reading at or below
+    /// `spentThreshold` is a spent allowance and a reading above it is
+    /// headroom, even when the provider still carries an exhausted flag,
+    /// which the Mac's own export never clears and which would otherwise keep
+    /// reporting a cap long after the allowance came back.  With no reading at
+    /// all there is nothing to believe, and the window reports no cap.
+    public static func isAtCap(remainingPercent: Double?) -> Bool {
+        guard let bounded = bounded(remainingPercent) else { return false }
+        return bounded <= spentThreshold
+    }
+
+    /// Whether an allowance is spent, when the provider's own word and its
+    /// reading can disagree.
+    ///
+    /// The reading decides whenever there is one:  the Mac's export never
+    /// clears `isExhausted`, so a provider that still carries the flag long
+    /// after the allowance came back would otherwise keep reporting a spent
+    /// allowance, and the Mac and the phone would tell the owner different
+    /// things about one account.  With no reading at all the provider's word is
+    /// the only evidence there is, so it counts.
+    ///
+    /// This is the one place that decides, so no surface can carry its own
+    /// version of the question.
+    ///
+    /// A reading exists when `bounded` can make one.  A value that is not a
+    /// finite number is no reading at all, so it falls back to the provider's
+    /// word rather than passing the existence check and then being judged as
+    /// headroom, which is what the phone's previous `(pct ?? 100) <= 0 || flag`
+    /// never did.
+    public static func isExhausted(remainingPercent: Double?, providerSaysExhausted: Bool) -> Bool {
+        guard let reading = bounded(remainingPercent) else { return providerSaysExhausted }
+        return reading <= spentThreshold
+    }
+
+    /// The reading a row publishes for an allowance.
+    ///
+    /// An allowance the provider reports as gone without a figure still has to
+    /// publish a reading, because the cap rule only binds a window that
+    /// carries one:  a row with no percentage reports no cap at all, so the
+    /// cap line never appears beside it and the countdown it should quote is
+    /// lost.  A spent allowance publishes zero.
+    ///
+    /// The Mac's Antigravity pool grouper and the phone's own row synthesis
+    /// both do this, and both do it through here, so the two cannot drift.
+    ///
+    /// A published reading is bounded here, so every caller publishes the same
+    /// valid percentage:  the phone passes the raw wire value, and an
+    /// out-of-range one would otherwise render as "150%" while the cap rule
+    /// judged the same window at 100.
+    public static func publishedReading(remainingPercent: Double?, allowanceSpent: Bool) -> Double? {
+        if let reading = bounded(remainingPercent) { return reading }
+        return allowanceSpent ? 0 : nil
+    }
+
+    /// Whether this window is a supplementary video allowance beside
+    /// MiniMax's coding subscription rather than inside it.
+    ///
+    /// Spending one of these is not the subscription hitting its cap, so it
+    /// never stands in for the subscription's own window.
+    public static func isSupplementaryVideoQuota(
+        providerKey: String,
+        modelId: String? = nil,
+        modelType: String? = nil,
+        label: String = ""
+    ) -> Bool {
+        guard providerKey == "minimax" else { return false }
+        let identity = [modelId, modelType, label].compactMap { $0 }.joined(separator: " ").lowercased()
+        return identity.contains("video") || identity.contains("hailuo")
+    }
+
+    /// Whether this window is a model-specific sub-quota rather than the
+    /// platform's primary shared pool quota.
+    ///
+    /// A sub-model window is a real limit, so it can still cap a plan, but
+    /// it is not the limit the plan is sold on, and a plan with a primary
+    /// window of its own is capped by that one.
+    public static func isSubModelLimit(
+        providerKey: String,
+        id: String,
+        modelId: String? = nil,
+        modelType: String? = nil,
+        label: String = ""
+    ) -> Bool {
+        if providerKey == "openai" {
+            return ["local-mac:openai:code-review", "openai:code-review", "code-review"].contains(id)
+                || id.hasPrefix("local-mac:openai:additional:") || id.hasPrefix("local-mac:openai:code-review:")
+                || id.hasPrefix("openai:additional:") || id.hasPrefix("openai:code-review:")
+                || id.hasPrefix("additional:") || id.hasPrefix("code-review:")
+        }
+        // Exact tokens, not substrings: "Argonaut" or "fable-era" is not a
+        // per-model limit (Kody review, PR #367).
+        func tokens(_ raw: String) -> Set<String> {
+            // A hyphen or underscore stays inside a token:  a model id like
+            // "fable-era" is one model, not the Fable limit; structural
+            // separators (":", "/", whitespace) are what split the fields.
+            Set(raw.lowercased()
+                .split(whereSeparator: { $0.isWhitespace || ":·/|,;".contains($0) })
+                .map(String.init))
+        }
+        if providerKey == "google-antigravity" {
+            if let modelId, !tokens(modelId).isDisjoint(with: ["argon"]) { return true }
+            if let modelType, !tokens(modelType).isDisjoint(with: ["argon"]) { return true }
+            return !tokens(label).isDisjoint(with: ["argon"])
+        }
+        if providerKey == "anthropic" {
+            if let model = modelId?.lowercased(), !model.isEmpty { return true }
+            return !tokens(label).isDisjoint(with: ["fable", "sonnet", "opus", "haiku"])
+        }
+        return false
+    }
+
+    /// Whether this window is a money meter rather than a quota meter.
+    ///
+    /// Cursor's plan spend window reports dollars against its billing cycle.
+    /// The shared pool already keeps it out of the included allowance, and it
+    /// must not stand in for a quota meter either:  a dollar balance is not a
+    /// percentage of anything, so it never fills a meter slot and never draws
+    /// a meter line of its own (owner 2026-11-09:  the Cursor row showed an
+    /// empty `1-month | 1m | —` line beside its one weekly meter).
+    ///
+    /// A billing cycle names money, and a currency unit names money.  A window
+    /// that counts requests, videos or credits is a quota, so it stays.
+    public static func isMoneyMeter(cadenceToken: String?, quotaUnit: String?, label: String? = nil) -> Bool {
+        let token = (cadenceToken ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if ["billing-cycle", "billing_cycle", "billing cycle", "billingcycle"].contains(token) {
+            return true
+        }
+        let unit = (quotaUnit ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if ["$", "usd", "us$"].contains(unit) { return true }
+        // The labels this codebase already mints for a money window.
+        let label = (label ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return ["api credits", "billing cycle spend"].contains(label)
+    }
+
+    /// The windows that may stand as this row's quota meters.
+    ///
+    /// A money meter is not a quota meter, so it never takes a slot beside a
+    /// real quota meter:  the Cursor row keeps exactly one weekly meter and
+    /// draws no `1-month | 1m | —` line beside it (owner 2026-11-09).
+    ///
+    /// But a plan whose only reading is a dollar balance must still show that
+    /// reading.  The Mac drew it, so a phone or a widget that rendered
+    /// nothing was a cross-surface disagreement, and a blank card is worse
+    /// than a dollar meter (Sentry review, PR #439).
+    public static func meterWindows<T>(_ windows: [T], isMoneyMeter: (T) -> Bool) -> [T] {
+        let quota = windows.filter { !isMoneyMeter($0) }
+        return quota.isEmpty ? windows : quota
+    }
+
+    /// Whether this window is a scoped allowance that sits beside the
+    /// subscription rather than inside it, which is Codex's Code Review and
+    /// additional rate-limit pools.
+    ///
+    /// A Claude or Gemini sub-model quota is not one of these:  a plan whose
+    /// windows are all sub-model quotas is still capped by them.
+    public static func isScopedPoolAllowance(
+        providerKey: String,
+        id: String,
+        modelId: String? = nil,
+        modelType: String? = nil,
+        label: String = ""
+    ) -> Bool {
+        guard providerKey == "openai" else { return false }
+        return isSubModelLimit(providerKey: providerKey, id: id, modelId: modelId, modelType: modelType, label: label)
+    }
+}
+
+/// The model a sub-model quota belongs to, in the provider's own words.
+///
+/// A per-model window such as Claude's Fable weekly limit carries a
+/// cadence-only label ("7-day"), so a surface that hides a label that only
+/// repeats its cadence caption hid the one thing telling the owner which
+/// model the row was (owner, 2026-10-30).  The name comes from the reading
+/// itself: a reader that writes "<model> · <cadence>" already names the
+/// model, and otherwise the model id or type the reader recorded is used.
+///
+/// Nil for a primary window, and for OpenAI's scoped pools, whose labels
+/// already say what they are.
+///
+/// Plain Foundation and no other QuotaCore type, like the rest of this file,
+/// so every companion target already compiles it and the Mac menu bar, the
+/// PiP and the phone cannot drift apart (iOS compile, 2026-11-06).
+public enum SubModelNaming {
+    /// The model a sub-model quota belongs to, answered with the reading's
+    /// own fields, so every surface asks the same question the same way.
+    public static func name(isSubModelLimit: Bool, canonicalProviderKey: String, label: String,
+                            modelType: String?, modelId: String?) -> String? {
+        guard isSubModelLimit, canonicalProviderKey != "openai" else { return nil }
+        if let separator = label.range(of: " · ") {
+            let name = label[..<separator.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
+            if !name.isEmpty { return name }
+        }
+        for candidate in [modelType, modelId] {
+            let raw = (candidate ?? "")
+                .replacingOccurrences(of: "_", with: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !raw.isEmpty { return initialCapped(raw) }
+        }
+        return nil
+    }
+
+    /// Each word's first letter upper-cased and the rest left as the reader
+    /// wrote it, so "fable" reads "Fable" while "GPT-4o" keeps its casing.
+    private static func initialCapped(_ text: String) -> String {
+        text.split(separator: " ", omittingEmptySubsequences: true)
+            .map { String($0.prefix(1)).uppercased() + String($0.dropFirst()) }
+            .joined(separator: " ")
     }
 }

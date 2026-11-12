@@ -46,12 +46,35 @@ public struct AntigravitySummaryReader: Sendable {
                 guard let family else { continue }
                 for bucket in (group["buckets"] as? [[String: Any]]) ?? [] {
                     guard let bucketID = bucket["bucketId"] as? String, let period = period(bucket) else { continue }
-                    let fraction = finiteNumber(bucket["remainingFraction"]).flatMap { $0 >= 0 && $0 <= 1 ? $0 : nil }
+                    // A fraction this reader cannot interpret is not a fraction
+                    // it may offer as remaining quota, so a value outside
+                    // 0...1 is refused the same way an omitted value is:  no
+                    // remaining, exhausted.  The provider's payload is a 0...1
+                    // fraction, so a number outside that range means the shape
+                    // changed and nothing in it can be believed.
+                    let fraction = finiteNumber(bucket["remainingFraction"])
+                        .flatMap { $0 >= 0 && $0 <= 1 ? $0 : nil }
                     let reset = bucket["resetTime"] as? String
                     let cadenceName = period == "5h" ? QuotaWindowVocabulary.fiveHour : QuotaWindowVocabulary.sevenDay
                     let label = modelId == "argon"
                         ? "Gemini 4 Argon · \(cadenceName)"
                         : "\(family) · \(cadenceName)"
+                    // A bucket that reports no fraction means none remains —
+                    // it does not mean the reading is unknown.  Owner 2026-09-04:
+                    // an omitted remaining value (N/A in the provider's table)
+                    // means the allowance is spent, so "treat as exhausted 0%,
+                    // not 'unknown' and not 100%".  The rest of the fleet says
+                    // the same thing: the Usage Monitor collector turns a
+                    // missing fraction into `isExhausted` with 0% remaining,
+                    // and BotFleet's `isAntigravityModelCapped` counts a
+                    // missing percentage as capped while `remainingPercentDisplay`
+                    // shows 0% for it.
+                    //
+                    // Reading it as unknown here is what let the Mac offer quota
+                    // that was not there.  An unknown weekly window drops out of
+                    // its pool's count, so the five-hour window drove the pool's
+                    // headline instead, and the row showed a number the owner
+                    // could not act on while the pool was at its cap.
                     windows.append(QuotaWindow(
                         id: "local-mac:antigravity-summary:\(bucketID)",
                         provider: "Antigravity",
@@ -62,8 +85,9 @@ public struct AntigravitySummaryReader: Sendable {
                         modelId: modelId,
                         modelType: modelId,
                         label: label,
-                        remainingPercent: fraction.map { $0 * 100 },
-                        remainingUnknown: fraction == nil,
+                        remainingPercent: fraction.map { $0 * 100 } ?? 0,
+                        remainingUnknown: false,
+                        isExhausted: fraction == nil,
                         resetAt: reset,
                         window: period,
                         occurredAt: iso8601(observed),
@@ -147,13 +171,17 @@ public struct AntigravitySummaryReader: Sendable {
     }
 
     private static func fetch(_ request: URLRequest) async throws -> Data {
-        let delegate = LocalTLSDelegate(); let config = URLSessionConfiguration.ephemeral; config.timeoutIntervalForRequest = request.timeoutInterval; config.timeoutIntervalForResource = request.timeoutInterval; config.httpCookieStorage = nil; config.urlCache = nil
-        let session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil); defer { session.invalidateAndCancel() }
-        let (bytes, response) = try await session.bytes(for: request)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw SummaryError.unavailable }
-        var data = Data(); data.reserveCapacity(16_384)
-        for try await byte in bytes { guard data.count < 1_048_576 else { throw SummaryError.tooLarge }; data.append(byte) }
-        return data
+        do {
+            let (data, response) = try await BoundedHTTPFetch.data(for: request, timeout: request.timeoutInterval, maxBytes: 1_048_576, delegate: LocalTLSDelegate())
+            guard (200..<300).contains(response.statusCode) else { throw SummaryError.unavailable }
+            return data
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let failure as BoundedHTTPFetch.Failure where failure == .tooLarge {
+            throw SummaryError.tooLarge
+        } catch {
+            throw SummaryError.unavailable
+        }
     }
 
     private enum SummaryError: Error { case unavailable, tooLarge, malformed }
