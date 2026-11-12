@@ -687,6 +687,7 @@ final class MonitorModel: ObservableObject {
     private var currentCodexAccountID: String?
     private let sessionFileReader = CodexSessionQuotaReader()
     private var serverWindows: [QuotaWindow] = []
+    var serverWindowsForTesting: [QuotaWindow] { serverWindows }
     @Published private(set) var fleetWindowGroups: [FleetWindowGroup] = []
     private var refreshTimer: Timer?
     private var sessionFileTimer: Timer?
