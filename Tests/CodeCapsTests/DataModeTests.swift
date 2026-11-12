@@ -226,6 +226,34 @@ final class DataModeTests: XCTestCase {
         XCTAssertFalse(model.isSyncing)
     }
 
+    func testTransientFleetPullFailureKeepsLastGoodWithoutServerError() async {
+        defaults.set(false, forKey: "localEnabled")
+        defaults.set(true, forKey: "serverEnabled")
+        defaults.set("https://usage.jays.services/api/quota-windows", forKey: "endpoint")
+        defaults.set(true, forKey: "hasSavedToken")
+        let model = MonitorModel(defaults: defaults)
+        model.skipsSnapshotIOForTesting = true
+
+        let remote = window("remote", source: "fleet")
+        model.serverFetchForTesting = { QuotaResponse(generatedAt: "seed", windows: [remote]) }
+        model.refresh()
+        XCTAssertTrue(await waitForRefreshToFinish(model))
+        XCTAssertNil(model.serverError)
+        XCTAssertEqual(model.serverWindows.count, 1)
+
+        model.serverFetchForTesting = { throw QuotaClientError.httpStatus(503) }
+        model.refresh()
+        XCTAssertTrue(await waitForRefreshToFinish(model))
+        XCTAssertNil(model.serverError)
+        XCTAssertEqual(model.serverWindows.count, 1)
+
+        model.serverFetchForTesting = { throw QuotaClientError.unauthorized }
+        model.refresh()
+        XCTAssertTrue(await waitForRefreshToFinish(model))
+        XCTAssertNotNil(model.serverError)
+        XCTAssertEqual(model.serverWindows.count, 1)
+    }
+
     private func noPublishableModel() -> MonitorModel {
         defaults.set(true, forKey: "localEnabled")
         defaults.set(false, forKey: "serverEnabled")

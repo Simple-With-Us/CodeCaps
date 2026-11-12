@@ -82,27 +82,82 @@ public actor QuotaClient {
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
 
-        do {
-            let (data, http) = try await perform(request)
-            guard (200..<300).contains(http.statusCode) else {
-                if http.statusCode == 401 { throw QuotaClientError.unauthorized }
-                throw QuotaClientError.httpStatus(http.statusCode)
-            }
-            guard data.count <= maxResponseBytes else { throw QuotaClientError.responseTooLarge }
-            do {
-                return try JSONDecoder().decode(QuotaResponse.self, from: data)
-            } catch {
-                throw QuotaClientError.malformedResponse
-            }
-        } catch let error as QuotaClientError {
-            throw error
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch let urlError as URLError where urlError.code == .timedOut {
-            throw QuotaClientError.timedOut
-        } catch {
-            throw QuotaClientError.transport
+        IdempotentGETRetryFilter.beginFetch(endpoint: endpoint)
+        var clearSessionOnExit = true
+        defer {
+            if clearSessionOnExit { IdempotentGETRetryFilter.endFetch(endpoint: endpoint) }
         }
+
+        let maxAttempts = IdempotentGETRetryFilter.maxExtraRetries + 1
+        for attempt in 1...maxAttempts {
+            do {
+                let (data, http) = try await perform(request)
+                guard (200..<300).contains(http.statusCode) else {
+                    if http.statusCode == 401 {
+                        IdempotentGETRetryFilter.allowAutomaticFailedRequestCapture(endpoint: endpoint)
+                        throw QuotaClientError.unauthorized
+                    }
+                    if IdempotentGETRetryFilter.isRetriableHTTPStatus(http.statusCode), attempt < maxAttempts {
+                        try await backoff(beforeAttempt: attempt, retryAfter: http.value(forHTTPHeaderField: "Retry-After"))
+                        continue
+                    }
+                    let statusError = QuotaClientError.httpStatus(http.statusCode)
+                    if IdempotentGETRetryFilter.isRetriableHTTPStatus(http.statusCode), attempt == maxAttempts {
+                        clearSessionOnExit = false
+                        IdempotentGETRetryFilter.notifyExhausted(endpoint: endpoint, error: statusError)
+                    } else {
+                        IdempotentGETRetryFilter.allowAutomaticFailedRequestCapture(endpoint: endpoint)
+                    }
+                    throw statusError
+                }
+                guard data.count <= maxResponseBytes else {
+                    IdempotentGETRetryFilter.allowAutomaticFailedRequestCapture(endpoint: endpoint)
+                    throw QuotaClientError.responseTooLarge
+                }
+                do {
+                    return try JSONDecoder().decode(QuotaResponse.self, from: data)
+                } catch {
+                    IdempotentGETRetryFilter.allowAutomaticFailedRequestCapture(endpoint: endpoint)
+                    throw QuotaClientError.malformedResponse
+                }
+            } catch let error as QuotaClientError {
+                throw error
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let urlError as URLError where urlError.code == .timedOut {
+                if attempt < maxAttempts {
+                    try await backoff(beforeAttempt: attempt, retryAfter: nil)
+                    continue
+                }
+                let mapped = QuotaClientError.timedOut
+                clearSessionOnExit = false
+                IdempotentGETRetryFilter.notifyExhausted(endpoint: endpoint, error: mapped)
+                throw mapped
+            } catch let urlError as URLError where IdempotentGETRetryFilter.isRetriableTransport(urlError) {
+                if attempt < maxAttempts {
+                    try await backoff(beforeAttempt: attempt, retryAfter: nil)
+                    continue
+                }
+                let mapped = QuotaClientError.transport
+                clearSessionOnExit = false
+                IdempotentGETRetryFilter.notifyExhausted(endpoint: endpoint, error: mapped)
+                throw mapped
+            } catch let urlError as URLError where urlError.code == .cancelled {
+                throw CancellationError()
+            } catch {
+                IdempotentGETRetryFilter.allowAutomaticFailedRequestCapture(endpoint: endpoint)
+                throw QuotaClientError.transport
+            }
+        }
+        IdempotentGETRetryFilter.allowAutomaticFailedRequestCapture(endpoint: endpoint)
+        throw QuotaClientError.transport
+    }
+
+    private func backoff(beforeAttempt attempt: Int, retryAfter: String?) async throws {
+        try Task.checkCancellation()
+        let delay = IdempotentGETRetryFilter.backoffDelay(attemptIndex: attempt, retryAfter: retryAfter)
+        try await QuotaClientRetryTiming.sleep(delay)
+        try Task.checkCancellation()
     }
 
     private func perform(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
