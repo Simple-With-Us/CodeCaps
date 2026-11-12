@@ -210,3 +210,19 @@ test("the companion XcodeGen install is version and digest pinned", () => {
   assert.match(code, /XCODEGEN_SHA256: "[0-9a-f]{64}"/);
   assert.match(code, /shasum -a 256 -c -/);
 });
+
+test("the companion job builds the Mac app scheme without signing", () => {
+  const code = withoutComments(swiftCi);
+  const companion = code.slice(code.indexOf("name: iOS companion compile"));
+  assert.notEqual(companion.indexOf("name: iOS companion compile"), -1);
+  const widget = companion.indexOf("Build Mac widget extension (no signing)");
+  const app = companion.indexOf("Build Mac app (no signing)");
+  assert.ok(widget >= 0, "the companion job must keep the unsigned Mac widget build");
+  assert.ok(app > widget, "the unsigned Mac app build follows the Mac widget step");
+  const next = companion.indexOf("- name:", app + 1);
+  const appBlock = companion.slice(app, next === -1 ? undefined : next);
+  assert.match(appBlock, /-scheme CodeCapsCompanionMac\b/);
+  assert.match(appBlock, /CODE_SIGNING_ALLOWED=NO/);
+  assert.match(appBlock, /CODE_SIGNING_REQUIRED=NO/);
+  assert.match(appBlock, /CODE_SIGN_IDENTITY=""/);
+});
