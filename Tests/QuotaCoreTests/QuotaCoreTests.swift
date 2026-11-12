@@ -423,7 +423,8 @@ final class QuotaCoreTests: XCTestCase {
     }
 }
 
-private final class StubURLProtocol: URLProtocol, @unchecked Sendable {
+// QuotaClientRetryTests uses this stub. File-private would hide failURLError and reply().
+final class StubURLProtocol: URLProtocol, @unchecked Sendable {
     struct Reply {
         let status: Int
         let headers: [String: String]
