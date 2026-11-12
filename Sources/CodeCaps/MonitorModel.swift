@@ -687,6 +687,7 @@ final class MonitorModel: ObservableObject {
     private var currentCodexAccountID: String?
     private let sessionFileReader = CodexSessionQuotaReader()
     private var serverWindows: [QuotaWindow] = []
+    var serverWindowsForTesting: [QuotaWindow] { serverWindows }
     @Published private(set) var fleetWindowGroups: [FleetWindowGroup] = []
     private var refreshTimer: Timer?
     private var sessionFileTimer: Timer?
@@ -2535,7 +2536,14 @@ final class MonitorModel: ObservableObject {
                 if let serverFetchForTesting {
                     do { newServer = try await serverFetchForTesting() }
                     catch is CancellationError { return }
-                    catch { failure = error.localizedDescription }
+                    catch {
+                        if preserveFleetOnTransientFailure,
+                           IdempotentGETRetryFilter.preservesLastGoodFleetOnPullFailure(error) {
+                            failure = nil
+                        } else {
+                            failure = error.localizedDescription
+                        }
+                    }
                 } else {
                     let token = await TokenStore.read(server: currentEndpoint, service: TokenStore.readService)
                         .map(sanitizedToken(_:))

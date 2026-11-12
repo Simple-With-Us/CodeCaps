@@ -237,27 +237,31 @@ final class DataModeTests: XCTestCase {
         let remote = window("remote", source: "fleet")
         model.serverFetchForTesting = { QuotaResponse(generatedAt: "seed", windows: [remote]) }
         model.refresh()
-        XCTAssertTrue(await waitForRefreshToFinish(model))
+        let seeded = await waitForRefreshToFinish(model)
+        XCTAssertTrue(seeded)
         XCTAssertNil(model.serverError)
-        XCTAssertEqual(model.serverWindows.count, 1)
+        XCTAssertEqual(model.serverWindowsForTesting.count, 1)
 
         model.serverFetchForTesting = { throw QuotaClientError.httpStatus(503) }
         model.refresh()
-        XCTAssertTrue(await waitForRefreshToFinish(model))
+        let afterGatewayFailure = await waitForRefreshToFinish(model)
+        XCTAssertTrue(afterGatewayFailure)
         XCTAssertNil(model.serverError)
-        XCTAssertEqual(model.serverWindows.count, 1)
+        XCTAssertEqual(model.serverWindowsForTesting.count, 1)
 
         model.serverFetchForTesting = { throw QuotaClientError.transport }
         model.refresh()
-        XCTAssertTrue(await waitForRefreshToFinish(model))
+        let afterTransportFailure = await waitForRefreshToFinish(model)
+        XCTAssertTrue(afterTransportFailure)
         XCTAssertNotNil(model.serverError)
-        XCTAssertEqual(model.serverWindows.count, 1)
+        XCTAssertEqual(model.serverWindowsForTesting.count, 1)
 
         model.serverFetchForTesting = { throw QuotaClientError.unauthorized }
         model.refresh()
-        XCTAssertTrue(await waitForRefreshToFinish(model))
+        let afterUnauthorized = await waitForRefreshToFinish(model)
+        XCTAssertTrue(afterUnauthorized)
         XCTAssertNotNil(model.serverError)
-        XCTAssertEqual(model.serverWindows.count, 1)
+        XCTAssertEqual(model.serverWindowsForTesting.count, 1)
     }
 
     private func noPublishableModel() -> MonitorModel {
