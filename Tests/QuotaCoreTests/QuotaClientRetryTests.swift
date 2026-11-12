@@ -136,7 +136,7 @@ final class QuotaClientRetryTests: XCTestCase {
       urlProtocolClasses: [StubURLProtocol.self]
     )
     _ = try await client.fetch()
-    XCTAssertEqual(attempts, 2)
+    XCTAssertEqual(attempts, 3)
     XCTAssertEqual(StubURLProtocol.seenURLs.count, 3)
   }
 
