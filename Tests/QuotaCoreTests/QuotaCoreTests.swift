@@ -9,6 +9,7 @@ final class QuotaCoreTests: XCTestCase {
         super.setUp()
         QuotaClientStubURLProtocol.seenURLs = []
         QuotaClientStubURLProtocol.handler = nil
+        QuotaClientStubURLProtocol.failURLError = nil
     }
 
     private func window(

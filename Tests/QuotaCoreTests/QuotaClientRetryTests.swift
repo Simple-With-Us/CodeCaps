@@ -16,6 +16,12 @@ final class QuotaClientRetryTests: XCTestCase {
     IdempotentGETRetryFilter.endFetch(endpoint: URL(string: "https://usage.jays.services/api/quota-windows")!)
   }
 
+  override func tearDown() {
+    QuotaClientStubURLProtocol.failURLError = nil
+    QuotaClientStubURLProtocol.handler = nil
+    super.tearDown()
+  }
+
   func testRetriable503sRetryUntilSuccess() async throws {
     var attempts = 0
     QuotaClientStubURLProtocol.handler = { _ in
