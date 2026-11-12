@@ -8,9 +8,9 @@ struct SMSAlertKindToggle: View {
 
     var body: some View {
         if SMSAlertPreferences.eligibleKinds.contains(kindID) {
-            Toggle("SMS", isOn: Binding(get: { controller.preferences[kindID] },
+            Toggle("Text Message", isOn: Binding(get: { controller.preferences[kindID] },
                                         set: { controller.preferences[kindID] = $0 }))
-                .help("Send a text through your saved Twilio setup when this alert is enabled.")
+                .help("Send a text message when this alert is on.")
         }
     }
 }
@@ -62,11 +62,11 @@ struct SMSSettingsView: View {
                 Text(status).font(.caption).foregroundStyle(.secondary)
             }
         } header: {
-            Text("Twilio Text Alerts")
+            Text("Text Message Alerts")
         } footer: {
-            Text("SMS starts off for every alert kind." + sentenceGap
-                 + "Enable SMS beside an eligible alert above and save your own Twilio API key, Messaging Service, and recipient." + sentenceGap
-                 + "Your Twilio account pays for texts; accepted submissions do not confirm delivery.")
+            Text("Text messages start off for every alert." + sentenceGap
+                 + "Turn on Text Message beside an alert above, then save your Twilio account, messaging service, and phone number." + sentenceGap
+                 + "Your Twilio account pays for texts. A saved setup does not confirm that a text arrived.")
         }
         .onAppear { adoptConfiguration() }
     }

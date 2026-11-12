@@ -11,7 +11,7 @@ import UIKit
 final class RemotePushRegistration: NSObject, ObservableObject, URLSessionTaskDelegate {
     static let shared = RemotePushRegistration()
     @Published private(set) var enabled: Bool
-    @Published private(set) var status = "Remote push is off."
+    @Published private(set) var status = "Alerts while the app is closed are off."
     @Published private(set) var hasCredential = false
     @Published private(set) var hasError = false
     private var endpoint = ""
@@ -27,9 +27,9 @@ final class RemotePushRegistration: NSObject, ObservableObject, URLSessionTaskDe
         super.init()
         hasCredential = credential() != nil
         token = credential(account: "deviceToken")
-        if enabled { status = "Waiting to register for remote push." }
+        if enabled { status = "Waiting to turn on alerts." }
         else if defaults.string(forKey: "remotePushEnrolledURL") != nil {
-            status = "Push is off on this device; retry to remove its server enrollment."
+            status = "Alerts are off on this iPhone." + sentenceGap + "Try turning them off on the server again."
             hasError = true
         }
     }
@@ -51,7 +51,7 @@ final class RemotePushRegistration: NSObject, ObservableObject, URLSessionTaskDe
         guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         let result = save(value.trimmingCharacters(in: .whitespacesAndNewlines), account: "registration")
         hasCredential = credential() != nil
-        if result != errSecSuccess { fail("Could not save the push registration credential in Keychain."); return }
+        if result != errSecSuccess { fail("Could not save the access code on this iPhone."); return }
         if enabled { enroll() }
     }
 
@@ -60,11 +60,11 @@ final class RemotePushRegistration: NSObject, ObservableObject, URLSessionTaskDe
         task?.cancel()
         if value {
             guard enabled || defaults.string(forKey: "remotePushEnrolledURL") == nil else {
-                fail("Finish server removal before enabling remote push again." + sentenceGap + "Use Retry Server Removal.")
+                fail("Finish turning off alerts on the server before turning them on again." + sentenceGap + "Use Try Turning Off Again.")
                 return
             }
-            guard hasCredential else { fail("Save the server's push registration credential first."); return }
-            guard registrationURL() != nil else { fail("Set an HTTPS quota sync endpoint first."); return }
+            guard hasCredential else { fail("Save an access code first."); return }
+            guard registrationURL() != nil else { fail("Add an https share address in Sources first."); return }
         }
         enabled = value
         defaults.set(value, forKey: "remotePushEnabled")
@@ -72,7 +72,7 @@ final class RemotePushRegistration: NSObject, ObservableObject, URLSessionTaskDe
             registerWithApple()
         } else {
             UIApplication.shared.unregisterForRemoteNotifications()
-            status = "Removing this device from remote push."
+            status = "Turning off alerts on the server."
             let generation = revision
             task = Task { await removeEnrollment(generation: generation) }
         }
@@ -258,11 +258,11 @@ final class RemotePushRegistration: NSObject, ObservableObject, URLSessionTaskDe
         task?.cancel()
         guard enabled, let token else { if enabled { registerWithApple() }; return }
         guard let url = registrationURL(), let credential = credential() else {
-            fail("Remote push needs an HTTPS sync endpoint and a separate registration credential."); return
+            fail("Alerts while the app is closed need an https share address and a separate access code."); return
         }
         guard let installationId = installationId(), let payloadGeneration = nextGeneration() else { return }
         let generation = revision
-        status = "Saving remote push choices."
+        status = "Saving alert choices."
         hasError = false
         let preferenceData = try? JSONEncoder().encode(preferences)
         let preferenceObject = preferenceData.flatMap { try? JSONSerialization.jsonObject(with: $0) }
@@ -278,7 +278,7 @@ final class RemotePushRegistration: NSObject, ObservableObject, URLSessionTaskDe
             do {
                 // Remove enrollment at an old server before moving the device to a new one.
                 if let old = defaults.string(forKey: "remotePushEnrolledURL"), old != url.absoluteString {
-                    fail("Disable remote push before changing its server.")
+                    fail("Turn off alerts while the app is closed before changing the share address.")
                     return
                 }
                 var request = URLRequest(url: url, timeoutInterval: 15)
@@ -311,16 +311,16 @@ final class RemotePushRegistration: NSObject, ObservableObject, URLSessionTaskDe
                     return
                 }
                 defaults.set(url.absoluteString, forKey: "remotePushEnrolledURL")
-                status = "Remote push registered."
+                status = "Alerts while the app is closed are on."
                 hasError = false
-            } catch { if !Task.isCancelled, generation == revision { fail("Apple registration succeeded; remote push choices were not saved." + sentenceGap + "Retry when the server is reachable.") } }
+            } catch { if !Task.isCancelled, generation == revision { fail("Apple registration succeeded; alert choices were not saved." + sentenceGap + "Retry when the server is reachable.") } }
         }
     }
 
     private func removeEnrollment(generation: Int) async {
         guard !Task.isCancelled, generation == revision, !enabled else { return }
         guard let enrolled = defaults.string(forKey: "remotePushEnrolledURL") else {
-            status = "Remote push is off."
+            status = "Alerts while the app is closed are off."
             hasError = false
             return
         }
@@ -345,16 +345,16 @@ final class RemotePushRegistration: NSObject, ObservableObject, URLSessionTaskDe
             }
             guard let acknowledgment = try? JSONDecoder().decode(CompanionPushRemovalAcknowledgment.self, from: data),
                   let serverGeneration = Self.responseGeneration(result["generation"]) else {
-                fail("The server returned an invalid push removal acknowledgment." + sentenceGap + "Retry Server Removal.")
+                fail("The server returned an invalid push removal acknowledgment." + sentenceGap + "Use Try Turning Off Again.")
                 return
             }
             guard adoptServerGeneration(serverGeneration) else { return }
             guard acknowledgment.confirmsRemoval(requestedGeneration: payloadGeneration) else {
-                fail("Server removal was not confirmed." + sentenceGap + "Retry Server Removal.")
+                fail("Server removal was not confirmed." + sentenceGap + "Use Try Turning Off Again.")
                 return
             }
             defaults.removeObject(forKey: "remotePushEnrolledURL")
-            status = "Remote push is off."
+            status = "Alerts while the app is closed are off."
             hasError = false
         } catch { if !Task.isCancelled, generation == revision { fail("Push is off on this device; retry to remove its server enrollment.") } }
     }
@@ -412,24 +412,24 @@ struct RemotePushSettingsView: View {
 
     var body: some View {
         Section {
-            SecureField("Push Registration Credential", text: $credential)
+            SecureField("Alert Access Code", text: $credential)
                 .textContentType(.password)
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
-            Button("Save Push Credential") { push.saveCredential(credential); credential = "" }
+            Button("Save Access Code") { push.saveCredential(credential); credential = "" }
                 .disabled(credential.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            Text(push.hasCredential ? "Registration credential saved in Keychain." : "No push registration credential saved.")
+            Text(push.hasCredential ? "Access code saved on this iPhone." : "No access code saved.")
                 .font(.caption).foregroundStyle(.secondary)
-            Toggle("Enable Remote Push", isOn: Binding(get: { push.enabled }, set: { push.setEnabled($0) }))
-            Button(push.enabled ? "Retry Push Registration" : "Retry Server Removal") {
+            Toggle("Send Alerts While Closed", isOn: Binding(get: { push.enabled }, set: { push.setEnabled($0) }))
+            Button(push.enabled ? "Try Again" : "Try Turning Off Again") {
                 if push.enabled { push.registerWithApple() } else { push.setEnabled(false) }
             }
             Text(push.status).font(.caption).foregroundStyle(push.hasError ? Color.orange : Color.secondary)
         } header: {
-            Text("Remote Push")
+            Text("Alerts While Closed")
         } footer: {
-            Text("System notifications while CodeCaps is closed require remote push, a running Mac collector, and the configured sync server." + sentenceGap
-                 + "In-app alerts appear only while CodeCaps is open; server registration does not verify end-to-end delivery.")
+            Text("Alerts while CodeCaps is closed need a Mac that is on and the share address in Sources." + sentenceGap
+                 + "Alerts inside the app appear only while CodeCaps is open.")
         }
     }
 }
