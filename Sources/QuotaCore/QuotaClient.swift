@@ -121,28 +121,21 @@ public actor QuotaClient {
                     throw QuotaClientError.malformedResponse
                 }
             } catch let error as QuotaClientError {
-                throw error
+                // `QuotaSessionDelegate` maps `URLError` into these cases before
+                // the continuation resumes, so retry here — not on raw `URLError`.
+                switch error {
+                case .timedOut, .transport:
+                    if attempt < maxAttempts {
+                        try await backoff(beforeAttempt: attempt, retryAfter: nil)
+                        continue
+                    }
+                    clearSessionOnExit = false
+                    IdempotentGETRetryFilter.notifyExhausted(endpoint: endpoint, error: error)
+                    throw error
+                default:
+                    throw error
+                }
             } catch is CancellationError {
-                throw CancellationError()
-            } catch let urlError as URLError where urlError.code == .timedOut {
-                if attempt < maxAttempts {
-                    try await backoff(beforeAttempt: attempt, retryAfter: nil)
-                    continue
-                }
-                let mapped = QuotaClientError.timedOut
-                clearSessionOnExit = false
-                IdempotentGETRetryFilter.notifyExhausted(endpoint: endpoint, error: mapped)
-                throw mapped
-            } catch let urlError as URLError where IdempotentGETRetryFilter.isRetriableTransport(urlError) {
-                if attempt < maxAttempts {
-                    try await backoff(beforeAttempt: attempt, retryAfter: nil)
-                    continue
-                }
-                let mapped = QuotaClientError.transport
-                clearSessionOnExit = false
-                IdempotentGETRetryFilter.notifyExhausted(endpoint: endpoint, error: mapped)
-                throw mapped
-            } catch let urlError as URLError where urlError.code == .cancelled {
                 throw CancellationError()
             } catch {
                 IdempotentGETRetryFilter.allowAutomaticFailedRequestCapture(endpoint: endpoint)

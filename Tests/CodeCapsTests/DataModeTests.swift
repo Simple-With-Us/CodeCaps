@@ -247,6 +247,12 @@ final class DataModeTests: XCTestCase {
         XCTAssertNil(model.serverError)
         XCTAssertEqual(model.serverWindows.count, 1)
 
+        model.serverFetchForTesting = { throw QuotaClientError.transport }
+        model.refresh()
+        XCTAssertTrue(await waitForRefreshToFinish(model))
+        XCTAssertNotNil(model.serverError)
+        XCTAssertEqual(model.serverWindows.count, 1)
+
         model.serverFetchForTesting = { throw QuotaClientError.unauthorized }
         model.refresh()
         XCTAssertTrue(await waitForRefreshToFinish(model))

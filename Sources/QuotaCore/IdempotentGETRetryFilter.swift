@@ -116,6 +116,15 @@ public enum IdempotentGETRetryFilter {
     }
   }
 
+  /// After `QuotaClient` exhausts retries, hide the pull error banner only for
+  /// gateway-style 5xx responses (the CODECAPS-3 class).  Transport and timeout
+  /// failures still surface so a dead endpoint does not look healthy.
+  public static func preservesLastGoodFleetOnPullFailure(_ error: Error) -> Bool {
+    guard let client = error as? QuotaClientError,
+          case let .httpStatus(status) = client else { return false }
+    return isRetriableHTTPStatus(status)
+  }
+
   public static func backoffDelay(attemptIndex: Int, retryAfter header: String?) -> TimeInterval {
     if let header {
       let trimmed = header.trimmingCharacters(in: .whitespaces)

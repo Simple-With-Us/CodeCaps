@@ -2532,7 +2532,8 @@ final class MonitorModel: ObservableObject {
                         newServer = try await client.fetch()
                     } catch is CancellationError { return }
                     catch {
-                        if preserveFleetOnTransientFailure, QuotaClientError.isTransientPullFailure(error) {
+                        if preserveFleetOnTransientFailure,
+                           IdempotentGETRetryFilter.preservesLastGoodFleetOnPullFailure(error) {
                             failure = nil
                         } else {
                             failure = (error as? LocalizedError)?.errorDescription
