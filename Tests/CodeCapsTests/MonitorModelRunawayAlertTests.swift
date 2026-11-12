@@ -128,7 +128,7 @@ final class MonitorModelRunawayAlertTests: XCTestCase {
 
         model.localResultForTesting = LocalQuotaResult(windows: [localWindow(remaining: latestRemaining(drop: 10))])
         model.setLocalEnabled(false)
-        await waitForRefresh(model)
+        await waitForRefresh(model, task: model.refreshTaskForTesting)
         XCTAssertTrue(model.activeRunawayAnomalies.isEmpty)
         XCTAssertEqual(delivered, 1)
     }
@@ -287,15 +287,22 @@ final class MonitorModelRunawayAlertTests: XCTestCase {
 
     private func refreshAndWait(_ model: MonitorModel) async {
         model.refresh()
-        await waitForRefresh(model)
+        await waitForRefresh(model, task: model.refreshTaskForTesting)
     }
 
-    /// Awaits the refresh task itself. Polling `isRefreshing` can observe the
-    /// flag before the task's writes to the anomaly list are visible.
-    private func waitForRefresh(_ model: MonitorModel) async {
-        let task = model.refreshTaskForTesting
-        await task?.value
-        if model.isRefreshing {
+    /// The task handle is captured by the caller before this await, so a fast
+    /// refresh cannot clear it first. The wait ends when that task finishes,
+    /// which is what makes its anomaly writes visible. A task that is still
+    /// running after two seconds is cancelled and the test fails.
+    private func waitForRefresh(_ model: MonitorModel, task: Task<Void, Never>?) async {
+        if let task {
+            let finished = await taskFinished(task, withinNanoseconds: 2_000_000_000)
+            if !finished {
+                task.cancel()
+                XCTFail("The injected local refresh did not finish")
+                return
+            }
+        } else if model.isRefreshing {
             for _ in 0..<2_000 where model.isRefreshing {
                 try? await Task.sleep(nanoseconds: 1_000_000)
             }
@@ -303,5 +310,33 @@ final class MonitorModelRunawayAlertTests: XCTestCase {
         if model.isRefreshing {
             XCTFail("The injected local refresh did not finish")
         }
+    }
+
+    /// Races the refresh against the deadline without waiting for the loser.
+    /// A task group would keep the test parked on `task.value` after the
+    /// deadline, which is the hang this bound exists to prevent.
+    private func taskFinished(_ task: Task<Void, Never>, withinNanoseconds timeout: UInt64) async -> Bool {
+        let gate = RefreshWaitGate()
+        return await withCheckedContinuation { continuation in
+            Task.detached {
+                await task.value
+                await gate.resume(continuation, returning: true)
+            }
+            Task.detached {
+                try? await Task.sleep(nanoseconds: timeout)
+                await gate.resume(continuation, returning: false)
+            }
+        }
+    }
+}
+
+/// Lets the refresh wait and its deadline resume one continuation between them.
+private actor RefreshWaitGate {
+    private var resumed = false
+
+    func resume(_ continuation: CheckedContinuation<Bool, Never>, returning value: Bool) {
+        guard !resumed else { return }
+        resumed = true
+        continuation.resume(returning: value)
     }
 }
