@@ -27,6 +27,7 @@ struct WidgetParseMirrorGenPlugin: BuildToolPlugin {
         "Sources/QuotaCore/FleetOrigin.swift",
         "Sources/QuotaCore/FleetSourceDisagreement.swift",
         "Sources/QuotaCore/GrokGrpcCredits.swift",
+        "Sources/QuotaCore/IdempotentGETRetryFilter.swift",
         "Sources/QuotaCore/InfisicalBinding.swift",
         "Sources/QuotaCore/InfisicalSettings.swift",
         "Sources/QuotaCore/LocalQuotaSnapshot.swift",

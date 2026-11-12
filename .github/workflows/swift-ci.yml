@@ -245,6 +245,13 @@ jobs:
             -target CodeCapsWidgetsMac -configuration Release \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             build
+      - name: Build Mac app (no signing)
+        run: |
+          cd ios/CodeCapsCompanion
+          xcodebuild -project CodeCapsCompanion.xcodeproj \
+            -scheme CodeCapsCompanionMac -configuration Release \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build
       - name: Upload iOS platform-reordering screenshot
         uses: actions/upload-artifact@v7
         with:

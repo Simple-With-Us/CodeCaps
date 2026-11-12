@@ -27,9 +27,9 @@ struct ExhaustionPopupView: View {
                     onDismiss()
                 } label: {
                     Image(systemName: "xmark")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(Theme.solidMark.opacity(0.55))
-                        .frame(width: 28, height: 28)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Theme.ink)
+                        .frame(width: 44, height: 44)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -46,9 +46,9 @@ struct ExhaustionPopupView: View {
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.ink.opacity(0.85))
 
-            Text("Wind up or hand off anything still running against it.")
-                .font(.system(size: 11))
-                .foregroundStyle(Theme.ink.opacity(0.6))
+            Text("Finish or hand off anything still running on this plan.")
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.ink.opacity(0.78))
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(14)
@@ -108,7 +108,7 @@ final class ExhaustionPopupController {
         self.hosting = hosting
         shownId = popup.id
         let p = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 320, height: 150),
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 176),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered, defer: false)
         p.contentViewController = hosting
@@ -125,7 +125,7 @@ final class ExhaustionPopupController {
             let frame = screen.visibleFrame
             // Top-right of the main screen: out of the way, and near the menu
             // bar the owner is already looking at.
-            p.setFrameOrigin(NSPoint(x: frame.maxX - 320 - 16, y: frame.maxY - 150 - 16))
+            p.setFrameOrigin(NSPoint(x: frame.maxX - 320 - 16, y: frame.maxY - 176 - 16))
         }
         panel = p
         p.orderFrontRegardless()

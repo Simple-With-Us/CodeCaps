@@ -123,9 +123,9 @@ struct GlancePopover: View {
             if localSections.isEmpty && !model.localEnabled {
                 GlanceEmptyState(
                     symbol: "laptopcomputer",
-                    title: "Local readers are off",
+                    title: "Local Readers Are Off",
                     message: "This Mac is not reading any AI plan right now." + sentenceGap
-                        + "Turn local readers on in the Dashboard to see them here.",
+                        + "Turn on readings from this Mac in the Dashboard.",
                     actionTitle: "Open Dashboard") { openConsole(.settingsSourcesFleet) }
             } else {
                 ForEach(Array(localSections.enumerated()), id: \.element.id) { index, row in
@@ -179,18 +179,18 @@ struct GlancePopover: View {
                 if model.serverEnabled {
                     GlanceEmptyState(
                         symbol: "arrow.down.circle",
-                        title: "No fleet readings yet",
+                        title: "No Readings From Other Devices",
                         message: model.serverError
-                            ?? ("Your fleet endpoint has not reported any readings yet." + sentenceGap
-                                + "Readings appear here after the next pull."),
-                        actionTitle: "Open Fleet Dashboard") { openConsole(.settingsSourcesFleet) }
+                            ?? ("Your other devices have not reported yet." + sentenceGap
+                                + "Readings appear here after the next check."),
+                        actionTitle: "Open Dashboard") { openConsole(.settingsSourcesFleet) }
                 } else {
                     GlanceEmptyState(
                         symbol: "arrow.up.arrow.down.circle",
-                        title: "No fleet endpoint connected",
-                        message: "From Fleet shows the quotas your other machines push to an endpoint you run."
-                            + sentenceGap + "Add the endpoint and its Read Token in the Dashboard to connect it.",
-                        actionTitle: "Connect Fleet Endpoint") { openConsole(.settingsSourcesFleet) }
+                        title: "Other Devices Are Not Connected",
+                        message: "All Sources shows this Mac plus plans shared from your other devices."
+                            + sentenceGap + "Add the share address and its read token in the Dashboard.",
+                        actionTitle: "Connect Other Devices") { openConsole(.settingsSourcesFleet) }
                 }
             } else {
                 // One heading band per reporting source, so a row always says
@@ -2447,7 +2447,7 @@ struct GlanceRow: View {
             }
         }
         switch origin {
-        case .fleet: parts.append("from the fleet")
+        case .fleet: parts.append("from another device")
         case .local: parts.append(isLive ? "live" : "last report")
         }
         if let issue { parts.append(issue) }
@@ -2501,9 +2501,9 @@ struct FleetSetupRow: View {
                     .font(.system(size: 16))
                     .foregroundStyle(Theme.fleet)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Set Up Fleet Sync")
+                    Text("Share With Other Devices")
                         .font(.system(size: 13, weight: .medium))
-                    Text("Share this Mac's quota, or show your other machines here.")
+                    Text("Share this Mac's readings, or show your other devices here.")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
@@ -2523,8 +2523,8 @@ struct FleetSetupRow: View {
         }
         .buttonStyle(.plain)
         .contentShape(Rectangle())
-        .help("Set Up Fleet Sync")
-        .accessibilityLabel("Set Up Fleet Sync")
+        .help("Share With Other Devices")
+        .accessibilityLabel("Share With Other Devices")
     }
 }
 

@@ -2141,7 +2141,7 @@ final class MonitorModel: ObservableObject {
     func testPullConnection(endpoint input: String, token inputToken: String) async -> (success: Bool, message: String) {
         let value = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let url = URL(string: value), QuotaClient.isAllowedEndpoint(url) else {
-            return (false, "Invalid endpoint URL." + sentenceGap + "Use HTTPS, or HTTP for localhost only.")
+            return (false, "That address is not allowed." + sentenceGap + "Use https, or http for this Mac only.")
         }
         let cleanToken = sanitizedToken(inputToken)
         let resolvedToken = !cleanToken.isEmpty ? cleanToken : await TokenStore.read(server: value, service: TokenStore.readService).map(sanitizedToken(_:))
@@ -2306,12 +2306,12 @@ final class MonitorModel: ObservableObject {
 
     func testAndPushSync(endpoint input: String = "", token inputToken: String = "", format inputFormat: QuotaSyncFormat? = nil) async -> (success: Bool, message: String) {
         guard localEnabled, syncEnabled else {
-            return (false, "Enable Local Readers and push sharing before sending.")
+            return (false, "Turn on readings from this Mac and sharing before sending.")
         }
         let endpointValue = input.trimmingCharacters(in: .whitespacesAndNewlines)
         let targetEndpoint = !endpointValue.isEmpty ? endpointValue : syncEndpoint
         guard let url = URL(string: targetEndpoint), QuotaClient.isAllowedEndpoint(url) else {
-            return (false, "Invalid endpoint URL." + sentenceGap + "Use HTTPS, or HTTP for localhost only.")
+            return (false, "That address is not allowed." + sentenceGap + "Use https, or http for this Mac only.")
         }
         guard targetEndpoint == syncEndpoint else {
             return (false, "Save the Push Endpoint before sending.")

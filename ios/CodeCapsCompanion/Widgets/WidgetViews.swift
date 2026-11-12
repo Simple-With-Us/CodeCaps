@@ -208,7 +208,7 @@ struct WidgetEmptyStateView: View {
     let title: String
     let subtitle: String
 
-    init(title: String = "No Quotas Synced", subtitle: String = "Open CodeCaps to connect AI subscription plans.") {
+    init(title: String = "No Readings Yet", subtitle: String = "Open CodeCaps to see your plans.") {
         self.title = title
         self.subtitle = subtitle
     }
@@ -300,8 +300,8 @@ struct OverviewSmallView: View {
     var body: some View {
         if entry.platforms.isEmpty {
             WidgetEmptyStateView(
-                title: "No Quotas Synced",
-                subtitle: "Open CodeCaps to sync"
+                title: "No Readings Yet",
+                subtitle: "Open CodeCaps to see your plans."
             )
             .padding(8)
         } else if let selected = entry.selectedSmallDetail, entry.detailLevel != .compact {
@@ -352,8 +352,8 @@ struct OverviewMediumView: View {
     var body: some View {
         if entry.platforms.isEmpty {
             WidgetEmptyStateView(
-                title: "No AI Subscription Quotas Synced",
-                subtitle: "Open CodeCaps to connect AI subscription plans."
+                title: "No Readings Yet",
+                subtitle: "Open CodeCaps to see your plans."
             )
             .padding(14)
         } else {
@@ -416,8 +416,8 @@ struct OverviewLargeView: View {
     var body: some View {
         if entry.platforms.isEmpty {
             WidgetEmptyStateView(
-                title: "No AI Subscription Quotas Synced",
-                subtitle: "Open CodeCaps on your Mac or iOS to connect and monitor your plans."
+                title: "No Readings Yet",
+                subtitle: "Open CodeCaps on your Mac or iPhone to see your plans."
             )
             .padding(14)
         } else if let selected = entry.selectedDetail, entry.detailLevel != .compact {
@@ -520,8 +520,8 @@ struct ProviderFocusView: View {
             }
         } else {
             WidgetEmptyStateView(
-                title: "No Quota Synced",
-                subtitle: "Open CodeCaps to connect plans"
+                title: "No Reading Yet",
+                subtitle: "Open CodeCaps to see your plans."
             )
             .padding(10)
         }
@@ -874,12 +874,12 @@ struct AccessoryView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("CodeCaps")
                         .font(.system(size: 12, weight: .bold))
-                    Text("No quotas synced")
+                    Text("No readings yet")
                         .font(.system(size: 10))
                         .foregroundColor(.secondary)
                 }
             case .accessoryInline:
-                Text("CodeCaps: Open to connect")
+                Text("Open CodeCaps")
             default:
                 Text("CodeCaps")
             }
