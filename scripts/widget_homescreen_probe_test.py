@@ -317,6 +317,19 @@ class SeedAndResultTests(unittest.TestCase):
         self.assertEqual(outcome, Outcome.FAILED)
         self.assertIn("pinned UI test never ran", message)
 
+    def test_xcode_14_plus_pinned_ui_test_spelling_is_recognized(self):
+        # XCTest on Xcode 14+ prints "Test case" and a nested class name,
+        # then "started on '<device>'" instead of a bare "started."
+        log = (
+            "Test case '-[WidgetHomeScreenProbeUITests.WidgetHomeScreenProbeUITests "
+            "testHomeScreenRendersSeededQuota]' started on 'iPhone 16'\n"
+            "** TEST SUCCEEDED **\n"
+        )
+        self.assertTrue(pinned_ui_test_ran(log))
+        outcome, message = interpret_log(log, 12000)
+        self.assertEqual(outcome, Outcome.VERIFIED)
+        self.assertIn("37%", message)
+
     def test_a_real_gallery_mismatch_stays_a_refusal(self):
         log = (
             "error: -[WidgetHomeScreenProbeUITests testHomeScreenRendersSeededQuota] : "
