@@ -192,10 +192,12 @@ targets:
       - path: ../../Sources/QuotaCore/CompanionReadTokenStore.swift
         group: Shared
       - path: ../../Sources/QuotaCore/QuotaWindowPairing.swift
+        group: Shared
       - path: ../../Sources/QuotaCore/QuotaMeterCadence.swift
         group: Shared
-        group: Shared
       - path: ../../Sources/QuotaCore/WidgetSnapshotFetcher.swift
+        group: Shared
+      - path: ../../Sources/QuotaCore/AppGroupSnapshotReadPolicy.swift
         group: Shared
     dependencies:
       - target: CodeCapsWidgetsMac
@@ -247,11 +249,13 @@ targets:
         group: Shared
       - path: ../../Sources/QuotaCore/WidgetSnapshotFetcher.swift
         group: Shared
+      - path: ../../Sources/QuotaCore/AppGroupSnapshotReadPolicy.swift
+        group: Shared
       - path: ../../Sources/QuotaCore/CompanionReadTokenStore.swift
         group: Shared
       - path: ../../Sources/QuotaCore/QuotaWindowPairing.swift
-      - path: ../../Sources/QuotaCore/QuotaMeterCadence.swift
         group: Shared
+      - path: ../../Sources/QuotaCore/QuotaMeterCadence.swift
         group: Shared
     entitlements:
       path: Generated/CodeCapsWidgetsMac.entitlements
