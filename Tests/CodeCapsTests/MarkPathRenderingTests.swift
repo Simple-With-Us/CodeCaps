@@ -206,4 +206,139 @@ final class MarkPathRenderingTests: XCTestCase {
         XCTAssertNil(PlatformLogoImage.cachedImage(providerKey: key, iconHint: "old", style: .custom))
         XCTAssertNil(PlatformLogoImage.cachedImage(providerKey: pool, iconHint: "star", style: .custom, isDarkMode: true))
     }
+
+    /// The mini panel asks for a template mark on a dark fill.  The popover
+    /// asks for the colour mark.  A miss on one key must not blank the other,
+    /// and it must not be stored as an image the row can keep drawing.
+    func testTemplateMissDoesNotBlankThePopoverMarkOrCacheThePlaceholder() {
+        defer { PlatformLogoImage.invalidateCaches() }
+        PlatformLogoImage.invalidateCaches()
+        PlatformLogoImage.recordBundledMissForTesting(providerKey: "claude", style: .template, isDarkMode: true)
+        let before = PlatformLogoImage.bundledCandidateProbes
+
+        XCTAssertNil(PlatformLogoImage.load(providerKey: "claude", style: .template, isDarkMode: true))
+        XCTAssertNil(PlatformLogoImage.cachedImage(providerKey: "claude", style: .template, isDarkMode: true))
+        XCTAssertEqual(PlatformLogoImage.bundledCandidateProbes, before,
+                       "the dark mini-panel key stays a miss until a catalog wave, without another probe")
+
+        XCTAssertNotNil(PlatformLogoImage.load(providerKey: "claude", style: .standard, isDarkMode: false),
+                        "the popover's colour mark uses a different cache key and must still resolve")
+        XCTAssertNotNil(PlatformLogoImage.cachedImage(providerKey: "claude", style: .standard, isDarkMode: false))
+        XCTAssertNil(PlatformLogoImage.cachedImage(providerKey: "claude", style: .template, isDarkMode: true),
+                     "a colour hit must not invent a bitmap for the style that missed")
+    }
+
+    /// Preload is what runs at launch, off the main thread.  A miss a row
+    /// recorded first has to be replaced, for both the panel's template key
+    /// and the popover's colour key, including Antigravity's pool id.
+    func testPreloadReplacesNegativeMissesForBothSurfaces() {
+        defer { PlatformLogoImage.invalidateCaches() }
+        PlatformLogoImage.invalidateCaches()
+        let minimax = NSImage(size: NSSize(width: 2, height: 2))
+        PlatformLogoImage.cacheCustomImageForTesting(minimax, providerKey: "minimax", isDarkMode: true)
+        PlatformLogoImage.recordBundledMissForTesting(providerKey: "claude", style: .template, isDarkMode: true)
+        PlatformLogoImage.recordBundledMissForTesting(providerKey: "cursor", style: .template, isDarkMode: true)
+        PlatformLogoImage.recordBundledMissForTesting(providerKey: "google-antigravity:gemini", style: .standard, isDarkMode: false)
+
+        XCTAssertNotNil(PlatformLogoImage.cachedImage(providerKey: "minimax", style: .custom, isDarkMode: true))
+        XCTAssertNil(PlatformLogoImage.cachedImage(providerKey: "claude", style: .template, isDarkMode: true))
+        XCTAssertNil(PlatformLogoImage.cachedImage(providerKey: "google-antigravity:gemini", style: .standard))
+
+        PlatformLogoImage.preloadBundledMarks()
+
+        XCTAssertNotNil(PlatformLogoImage.cachedImage(providerKey: "claude", style: .template, isDarkMode: true))
+        XCTAssertNotNil(PlatformLogoImage.cachedImage(providerKey: "claude", style: .standard, isDarkMode: false))
+        XCTAssertNotNil(PlatformLogoImage.cachedImage(providerKey: "cursor", style: .template, isDarkMode: true))
+        XCTAssertNotNil(PlatformLogoImage.cachedImage(providerKey: "google-antigravity:gemini", style: .standard, isDarkMode: false))
+        XCTAssertNotNil(PlatformLogoImage.cachedImage(providerKey: "google-antigravity:gemini", style: .template, isDarkMode: true))
+        XCTAssertNotNil(PlatformLogoImage.cachedImage(providerKey: "minimax", style: .custom, isDarkMode: true))
+        XCTAssertNil(PlatformLogoImage.cachedImage(providerKey: "not-a-provider", style: .standard),
+                     "the dashed placeholder is not cached as a mark")
+    }
+
+    /// A published wave drops misses recorded on the previous epoch, so a
+    /// row does not keep '?' until its own backoff fires.
+    func testPublishedCatalogDropsANegativeMiss() {
+        defer { PlatformLogoImage.invalidateCaches() }
+        PlatformLogoImage.invalidateCaches()
+        PlatformLogoImage.recordBundledMissForTesting(providerKey: "grok", style: .template, isDarkMode: true)
+        let before = PlatformLogoImage.bundledCandidateProbes
+        XCTAssertNil(PlatformLogoImage.load(providerKey: "grok", style: .template, isDarkMode: true))
+        XCTAssertEqual(PlatformLogoImage.bundledCandidateProbes, before)
+
+        // A preload in an earlier test may still have a coalesced note
+        // queued.  Deliver it before arming this expectation, or the bump
+        // belongs to that wave and this wait hangs.
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        let epoch = PlatformLogoImage.markCatalogEpoch
+        let posted = expectation(forNotification: PlatformLogoImage.marksDidResolve, object: nil)
+        PlatformLogoImage.publishMarksResolved()
+        XCTAssertGreaterThan(PlatformLogoImage.markCatalogEpoch, epoch)
+        wait(for: [posted], timeout: 2)
+
+        XCTAssertNotNil(PlatformLogoImage.load(providerKey: "grok", style: .template, isDarkMode: true))
+        XCTAssertNotNil(PlatformLogoImage.cachedImage(providerKey: "grok", style: .template, isDarkMode: true))
+        XCTAssertNotNil(PlatformLogoImage.load(providerKey: "grok", style: .standard, isDarkMode: false))
+    }
+
+    /// A pool row's bundled miss is cleared with the platform, the same way
+    /// a pool-scoped custom fallback is.  Otherwise '?' stays after the
+    /// platform mark is invalidated.
+    func testPlatformInvalidationDropsPoolScopedBundledMisses() {
+        defer { PlatformLogoImage.invalidateCaches() }
+        PlatformLogoImage.invalidateCaches()
+        PlatformLogoImage.recordBundledMissForTesting(providerKey: "google-antigravity:gemini",
+                                                      style: .template, isDarkMode: true)
+        let before = PlatformLogoImage.bundledCandidateProbes
+        XCTAssertNil(PlatformLogoImage.load(providerKey: "google-antigravity:gemini",
+                                            style: .template, isDarkMode: true))
+        XCTAssertEqual(PlatformLogoImage.bundledCandidateProbes, before)
+
+        PlatformLogoImage.invalidateCache(for: "google-antigravity")
+
+        XCTAssertNotNil(PlatformLogoImage.load(providerKey: "google-antigravity:gemini",
+                                               style: .template, isDarkMode: true))
+        XCTAssertNotNil(PlatformLogoImage.cachedImage(providerKey: "google-antigravity:gemini",
+                                                      style: .template, isDarkMode: true))
+    }
+
+    /// While the resource bundle cannot be resolved, a failed probe must not
+    /// become a sticky miss.  The next probe has to look again.
+    func testUnresolvedBundleIsNotRememberedAsAMiss() {
+        defer { PlatformLogoImage.invalidateCaches() }
+        PlatformLogoImage.invalidateCaches()
+        PlatformLogoImage.bundleUnavailableForTesting = true
+        defer { PlatformLogoImage.bundleUnavailableForTesting = false }
+
+        let before = PlatformLogoImage.bundledCandidateProbes
+        XCTAssertNil(PlatformLogoImage.load(providerKey: "xai", style: .template, isDarkMode: true))
+        let mid = PlatformLogoImage.bundledCandidateProbes
+        XCTAssertGreaterThan(mid, before)
+        XCTAssertNil(PlatformLogoImage.cachedImage(providerKey: "xai", style: .template, isDarkMode: true))
+        XCTAssertNil(PlatformLogoImage.load(providerKey: "xai", style: .template, isDarkMode: true))
+        XCTAssertGreaterThan(PlatformLogoImage.bundledCandidateProbes, mid,
+                             "a failure before the bundle is reachable must be probed again")
+
+        PlatformLogoImage.bundleUnavailableForTesting = false
+        XCTAssertNotNil(PlatformLogoImage.load(providerKey: "xai", style: .template, isDarkMode: true))
+        XCTAssertNotNil(PlatformLogoImage.load(providerKey: "xai", style: .standard, isDarkMode: false))
+    }
+
+    /// Custom style falls back to the bundled colour mark.  A miss on that
+    /// fallback must not stick in the custom cache as a placeholder, and a
+    /// later decode has to show up on the memory-only read the row uses.
+    func testCustomStylePicksUpTheBundledFallbackAfterAMiss() {
+        defer { PlatformLogoImage.invalidateCaches() }
+        XCTAssertFalse(PlatformLogoImage.hasCustomMark(providerKey: "kimi"),
+                       "kimi must not have an on-disk custom mark for this test")
+        PlatformLogoImage.invalidateCaches()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        PlatformLogoImage.recordBundledMissForTesting(providerKey: "kimi", style: .standard, isDarkMode: false)
+        XCTAssertNil(PlatformLogoImage.load(providerKey: "kimi", style: .custom))
+        XCTAssertNil(PlatformLogoImage.cachedImage(providerKey: "kimi", style: .custom))
+
+        PlatformLogoImage.publishMarksResolved()
+        XCTAssertNotNil(PlatformLogoImage.load(providerKey: "kimi", style: .custom))
+        XCTAssertNotNil(PlatformLogoImage.cachedImage(providerKey: "kimi", style: .custom))
+    }
 }
