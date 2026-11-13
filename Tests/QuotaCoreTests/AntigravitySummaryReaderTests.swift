@@ -86,6 +86,19 @@ final class AntigravitySummaryReaderTests: XCTestCase {
         XCTAssertNotNil(result.issues["google-antigravity"])
     }
 
+    func testCLIArgonQuotaDoesNotReplaceTheSharedGeminiPool() async {
+        let reader = AntigravitySummaryReader(fetchSummary: {
+            Data(#"{"status":"SUCCESS","command":{"data":{"groups":[{"name":"Gemini Models","buckets":[{"id":"gemini-weekly","window":"weekly","remaining_fraction":0.27}]},{"name":"Gemini 4 Argon","buckets":[{"id":"gemini-argon-wtu-weekly","window":"weekly","remaining_fraction":0.15}]}]}}}"#.utf8)
+        })
+        let result = await reader.read()
+        let pooled = AntigravityQuotaGroups.normalize(result.windows)
+        XCTAssertEqual(pooled.count, 2)
+        XCTAssertEqual(pooled.first { $0.id == "antigravity:gemini:weekly" }?.remainingPercent, 27)
+        let argon = pooled.first { $0.modelId == "argon" }
+        XCTAssertEqual(argon?.remainingPercent, 15)
+        XCTAssertEqual(argon?.isSubModelLimit, true)
+    }
+
     private static let cliSummary = #"{"status":"SUCCESS","command":{"name":"usage","data":{"groups":[{"id":"gemini","name":"Gemini Models","buckets":[{"id":"gemini-weekly","window":"weekly","remaining_fraction":0.3419,"reset_time":"2026-11-15T05:46:00Z"},{"id":"gemini-5h","window":"5h","remaining_fraction":0.6845}]},{"id":"third-party","name":"Claude and GPT models","buckets":[{"id":"third-party-weekly","window":"weekly"},{"id":"third-party-5h","window":"5h","remaining_fraction":0.6}]}]}}}"#
 
 }
