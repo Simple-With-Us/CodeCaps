@@ -71,7 +71,7 @@ PINNED_UI_TEST = (
 )
 PINNED_UI_TEST_CASE_RE = re.compile(
     r"Test [Cc]ase '-\[(?:\w+\.)*WidgetHomeScreenProbeUITests "
-    r"testHomeScreenRendersSeededQuota\]'"
+    r"testHomeScreenRendersSeededQuota\]' (?:started|passed)"
 )
 
 

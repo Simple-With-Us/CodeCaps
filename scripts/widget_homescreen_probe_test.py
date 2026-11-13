@@ -330,6 +330,19 @@ class SeedAndResultTests(unittest.TestCase):
         self.assertEqual(outcome, Outcome.VERIFIED)
         self.assertIn("37%", message)
 
+    def test_skipped_pinned_ui_test_is_a_failure(self):
+        # A skipped pinned test can still end the run with TEST SUCCEEDED.
+        # The status anchor must keep that from counting as a render.
+        log = (
+            "Test case '-[WidgetHomeScreenProbeUITests.WidgetHomeScreenProbeUITests "
+            "testHomeScreenRendersSeededQuota]' skipped (0.0 seconds).\n"
+            "** TEST SUCCEEDED **\n"
+        )
+        self.assertFalse(pinned_ui_test_ran(log))
+        outcome, message = interpret_log(log, 12000)
+        self.assertEqual(outcome, Outcome.FAILED)
+        self.assertIn("pinned UI test never ran", message)
+
     def test_a_real_gallery_mismatch_stays_a_refusal(self):
         log = (
             "error: -[WidgetHomeScreenProbeUITests testHomeScreenRendersSeededQuota] : "
