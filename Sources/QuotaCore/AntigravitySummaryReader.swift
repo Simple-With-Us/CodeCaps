@@ -231,7 +231,8 @@ public struct AntigravitySummaryReader: Sendable {
 
 private func summaryString(_ record: [String: Any], keys: [String]) -> String? {
     keys.compactMap { record[$0] as? String }
-        .first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .first { !$0.isEmpty }
 }
 
 private func finiteNumber(_ value: Any?) -> Double? {
