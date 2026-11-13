@@ -75,10 +75,14 @@ final class ClaudeConsentTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: home) }
         // Expired, exactly like the stale file this Mac actually carries.
         try writeFixtureLogin(expiresAt: 1_000_000_000_000, to: home)
+        let attempts = Counter()
         let reader = LocalQuotaReader(homeDirectory: home,
                                       runAntigravity: { Data("{}".utf8) },
-                                      readClaudeCredential: { .unauthorized })
+                                      readClaudeCredential: { .unauthorized },
+                                      renewClaudeLogin: { attempts.bump() },
+                                      renewalThrottle: ClaudeRenewalThrottle())
         let result = await reader.read()
+        XCTAssertEqual(attempts.value, 1)
         XCTAssertEqual(result.issues["anthropic"], ClaudeLoginState.needsPermission.issue)
         XCTAssertTrue(result.consentNeeded.contains("anthropic"))
         XCTAssertTrue(result.windows.filter { $0.providerKey == "anthropic" }.isEmpty)
@@ -88,10 +92,14 @@ final class ClaudeConsentTests: XCTestCase {
         let home = try makeHome()
         defer { try? FileManager.default.removeItem(at: home) }
         try writeFixtureLogin(expiresAt: 1_000_000_000_000, to: home)
+        let attempts = Counter()
         let reader = LocalQuotaReader(homeDirectory: home,
                                       runAntigravity: { Data("{}".utf8) },
-                                      readClaudeCredential: { .missing })
+                                      readClaudeCredential: { .missing },
+                                      renewClaudeLogin: { attempts.bump() },
+                                      renewalThrottle: ClaudeRenewalThrottle())
         let result = await reader.read()
+        XCTAssertEqual(attempts.value, 1)
         XCTAssertEqual(result.issues["anthropic"], ClaudeLoginState.signedOut.issue)
         XCTAssertFalse(result.consentNeeded.contains("anthropic"))
     }
@@ -130,7 +138,8 @@ final class ClaudeConsentTests: XCTestCase {
             readClaudeCredential: {
                 probed.set()
                 return .unauthorized
-            })
+            },
+            renewClaudeLogin: { XCTFail("a usable login must not start the fallback") })
         let result = await reader.read()
         XCTAssertFalse(probed.value, "a fresh credentials file must not cost a Keychain read")
         XCTAssertEqual(result.windows.first { $0.providerKey == "anthropic" }?.remainingPercent, 90)
@@ -150,6 +159,75 @@ final class ClaudeConsentTests: XCTestCase {
         private var count = 0
         func bump() { lock.lock(); count += 1; lock.unlock() }
         var value: Int { lock.lock(); defer { lock.unlock() }; return count }
+    }
+
+    func testUnavailableCredentialLetsClaudeCodeRecoverItsOwnLogin() async throws {
+        let unavailable: [ClaudeCredentialAccess] = [
+            .missing, .unauthorized, .temporarilyUnavailable,
+            .authorized(Data(#"{"claudeAiOauth":{"accessToken":"old","expiresAt":1000000000000}}"#.utf8)),
+        ]
+        for initial in unavailable {
+            let home = try makeHome()
+            defer { try? FileManager.default.removeItem(at: home) }
+            let attempts = Counter()
+            let reader = LocalQuotaReader(
+                homeDirectory: home,
+                fetchJSON: { request in
+                    XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer new")
+                    return Self.httpResponse(#"{"five_hour":{"utilization":25}}"#)
+                },
+                runAntigravity: { Data("{}".utf8) },
+                readClaudeCredential: {
+                    attempts.value == 0 ? initial : .authorized(Self.freshLogin)
+                },
+                renewClaudeLogin: { attempts.bump() },
+                renewalThrottle: ClaudeRenewalThrottle())
+            let result = await reader.read()
+            XCTAssertEqual(attempts.value, 1)
+            XCTAssertEqual(result.windows.first { $0.providerKey == "anthropic" }?.remainingPercent, 75)
+            XCTAssertNil(result.issues["anthropic"])
+            XCTAssertFalse(result.consentNeeded.contains("anthropic"))
+        }
+    }
+
+    func testMissingCredentialFallbackIsThrottled() async throws {
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let attempts = Counter()
+        let reader = LocalQuotaReader(
+            homeDirectory: home,
+            runAntigravity: { Data("{}".utf8) },
+            readClaudeCredential: { .missing },
+            renewClaudeLogin: { attempts.bump() },
+            renewalThrottle: ClaudeRenewalThrottle())
+        _ = await reader.read()
+        let result = await reader.read()
+        XCTAssertEqual(attempts.value, 1)
+        XCTAssertEqual(result.issues["anthropic"], ClaudeLoginState.signedOut.issue)
+    }
+
+    func testThrottledUsageRejectionDoesNotRereadCredentialsOrRunClaude() async throws {
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        try writeFixtureLogin(expiresAt: 4_102_444_800_000, to: home)
+        let now = Date()
+        let throttle = ClaudeRenewalThrottle()
+        _ = await throttle.perform(now: now) {}
+        let credentialReads = Counter()
+        let attempts = Counter()
+        let reader = LocalQuotaReader(
+            homeDirectory: home,
+            now: { now },
+            fetchJSON: { _ in Self.httpResponse(#"{"error":"unauthorized"}"#, status: 401) },
+            runAntigravity: { Data("{}".utf8) },
+            readClaudeCredential: { credentialReads.bump(); return .missing },
+            renewClaudeLogin: { attempts.bump() },
+            renewalThrottle: throttle)
+        let result = await reader.read()
+        XCTAssertEqual(credentialReads.value, 0)
+        XCTAssertEqual(attempts.value, 0)
+        XCTAssertEqual(result.issues["anthropic"], ClaudeLoginState.signedOut.issue)
+        XCTAssertFalse(result.consentNeeded.contains("anthropic"))
     }
 
     /// Serves the expired login until `bump()` has been called, then a fresh one.
@@ -236,7 +314,7 @@ final class ClaudeConsentTests: XCTestCase {
         XCTAssertEqual(renewals.value, 1)
     }
 
-    func testUnrenewableExpiredLoginNeverAsksClaudeCodeToRenew() async throws {
+    func testUnrenewableExpiredLoginStillAsksClaudeCodeToTry() async throws {
         let home = try makeHome()
         defer { try? FileManager.default.removeItem(at: home) }
         let renewals = Counter()
@@ -249,7 +327,7 @@ final class ClaudeConsentTests: XCTestCase {
             renewClaudeLogin: { renewals.bump() },
             renewalThrottle: ClaudeRenewalThrottle())
         let result = await reader.read()
-        XCTAssertEqual(renewals.value, 0)
+        XCTAssertEqual(renewals.value, 1)
         XCTAssertEqual(result.issues["anthropic"], ClaudeLoginState.signedOut.issue)
     }
 
@@ -410,6 +488,139 @@ final class ClaudeConsentTests: XCTestCase {
         let renewableExpired = Data(#"{"claudeAiOauth":{"accessToken":"old","refreshToken":"r","expiresAt":1}}"#.utf8)
         XCTAssertTrue(ClaudeCredentialSource.rememberedGrantStillUsable(renewableExpired, now: now))
         XCTAssertFalse(ClaudeCredentialSource.rememberedGrantIsFresh(renewableExpired, now: now))
+    }
+
+    func testInvalidatedFreshGrantKeepsPermissionOnFailedReadAndRetries() {
+        let updated = Data(#"{"claudeAiOauth":{"accessToken":"updated","expiresAt":4102444800000}}"#.utf8)
+        for failure: SecurityCLIOutcome in [.denied, .timedOut, .failed] {
+            ClaudeCredentialSource.remember(Self.freshLogin)
+            ClaudeCredentialSource.invalidateRememberedCredentialFreshness()
+            let log = ProbeLog()
+            let probe = makeProbe(log: log, cli: [failure, .found(updated)], presence: .present)
+            XCTAssertEqual(ClaudeCredentialSource.resolveSilently(probe: probe), .authorized(Self.freshLogin))
+            XCTAssertEqual(ClaudeCredentialSource.resolveSilently(probe: probe), .authorized(updated))
+            XCTAssertEqual(log.calls, ["lookup", "cli", "lookup", "cli"])
+            let next = ProbeLog()
+            XCTAssertEqual(ClaudeCredentialSource.resolveSilently(
+                probe: makeProbe(log: next, cli: [.denied], presence: .present)), .authorized(updated))
+            XCTAssertEqual(next.calls, ["lookup"])
+        }
+    }
+
+    func testAReadStartedBeforeRecoveryCannotRevalidateItsOldToken() {
+        let rejected = Data(#"{"claudeAiOauth":{"accessToken":"rejected","expiresAt":4102444800000}}"#.utf8)
+        ClaudeCredentialSource.remember(rejected)
+        ClaudeCredentialSource.invalidateRememberedCredentialFreshness()
+        let oldRead = ClaudeKeychainProbe(
+            readViaSecurityCLI: { _, _ in
+                ClaudeCredentialSource.invalidateRememberedCredentialFreshness()
+                return .found(rejected)
+            },
+            lookUpItem: { .present })
+        XCTAssertEqual(ClaudeCredentialSource.resolveSilently(probe: oldRead), .temporarilyUnavailable)
+        let log = ProbeLog()
+        XCTAssertEqual(ClaudeCredentialSource.resolveSilently(
+            probe: makeProbe(log: log, cli: [.found(Self.freshLogin)], presence: .present)),
+            .authorized(Self.freshLogin))
+        XCTAssertEqual(log.calls, ["lookup", "cli"])
+    }
+
+    func testCompetingSuccessfulReadReturnsTheNewerRememberedToken() {
+        let rejected = Data(#"{"claudeAiOauth":{"accessToken":"rejected","expiresAt":4102444800000}}"#.utf8)
+        ClaudeCredentialSource.remember(rejected)
+        ClaudeCredentialSource.invalidateRememberedCredentialFreshness()
+        let newerRead = ClaudeKeychainProbe(
+            readViaSecurityCLI: { _, _ in .found(Self.freshLogin) },
+            lookUpItem: { .present })
+        let olderRead = ClaudeKeychainProbe(
+            readViaSecurityCLI: { _, _ in
+                _ = ClaudeCredentialSource.resolveSilently(probe: newerRead)
+                return .found(rejected)
+            },
+            lookUpItem: { .present })
+        XCTAssertEqual(ClaudeCredentialSource.resolveSilently(probe: olderRead), .authorized(Self.freshLogin))
+        XCTAssertEqual(ClaudeCredentialSource.rememberedCredential(), Self.freshLogin)
+        let log = ProbeLog()
+        XCTAssertEqual(ClaudeCredentialSource.resolveSilently(
+            probe: makeProbe(log: log, cli: [.denied], presence: .present)), .authorized(Self.freshLogin))
+        XCTAssertEqual(log.calls, ["lookup"])
+    }
+
+    func testUsageRecoveryRereadsTheRealRememberedKeychainPath() async throws {
+        for recacheDuringRecovery in [false, true] {
+            ClaudeCredentialSource.resetRememberedCredential()
+            let home = try makeHome()
+            defer { try? FileManager.default.removeItem(at: home) }
+            let rejected = Data(#"{"claudeAiOauth":{"accessToken":"rejected","expiresAt":4102444800000}}"#.utf8)
+            let attempts = Counter()
+            let reads = Counter()
+            let probe = ClaudeKeychainProbe(
+                readViaSecurityCLI: { _, _ in
+                    reads.bump()
+                    return .found(attempts.value == 0 ? rejected : Self.freshLogin)
+                },
+                lookUpItem: { .present })
+            let reader = LocalQuotaReader(
+                homeDirectory: home,
+                fetchJSON: { request in
+                    if request.value(forHTTPHeaderField: "Authorization") != "Bearer new" {
+                        return Self.httpResponse(#"{"error":"unauthorized"}"#, status: 401)
+                    }
+                    return Self.httpResponse(#"{"five_hour":{"utilization":25}}"#)
+                },
+                runAntigravity: { Data("{}".utf8) },
+                readClaudeCredential: { ClaudeCredentialSource.resolveSilently(probe: probe) },
+                renewClaudeLogin: {
+                    if recacheDuringRecovery {
+                        _ = ClaudeCredentialSource.resolveSilently(probe: probe)
+                    }
+                    attempts.bump()
+                },
+                renewalThrottle: ClaudeRenewalThrottle())
+            let result = await reader.read()
+            XCTAssertEqual(attempts.value, 1)
+            XCTAssertEqual(reads.value, recacheDuringRecovery ? 3 : 2)
+            XCTAssertEqual(ClaudeCredentialSource.rememberedCredential(), Self.freshLogin)
+            XCTAssertEqual(result.windows.first { $0.providerKey == "anthropic" }?.remainingPercent, 75)
+            XCTAssertNil(result.issues["anthropic"])
+            XCTAssertFalse(result.consentNeeded.contains("anthropic"))
+        }
+    }
+
+    func testUsageRecoveryFailedKeychainReadKeepsTheGrantAndRetriesNextRead() async throws {
+        let rejected = Data(#"{"claudeAiOauth":{"accessToken":"rejected","expiresAt":4102444800000}}"#.utf8)
+        for failure: SecurityCLIOutcome in [.denied, .timedOut, .failed] {
+            ClaudeCredentialSource.resetRememberedCredential()
+            let home = try makeHome()
+            defer { try? FileManager.default.removeItem(at: home) }
+            let attempts = Counter()
+            let log = ProbeLog()
+            let probe = makeProbe(log: log,
+                                  cli: [.found(rejected), failure, .found(Self.freshLogin)],
+                                  presence: .present)
+            let reader = LocalQuotaReader(
+                homeDirectory: home,
+                fetchJSON: { request in
+                    if request.value(forHTTPHeaderField: "Authorization") != "Bearer new" {
+                        return Self.httpResponse(#"{"error":"unauthorized"}"#, status: 401)
+                    }
+                    return Self.httpResponse(#"{"five_hour":{"utilization":25}}"#)
+                },
+                runAntigravity: { Data("{}".utf8) },
+                readClaudeCredential: { ClaudeCredentialSource.resolveSilently(probe: probe) },
+                renewClaudeLogin: { attempts.bump() },
+                renewalThrottle: ClaudeRenewalThrottle())
+            let failed = await reader.read()
+            XCTAssertFalse(failed.consentNeeded.contains("anthropic"))
+            XCTAssertNotEqual(failed.issues["anthropic"], ClaudeLoginState.needsPermission.issue)
+            XCTAssertEqual(ClaudeCredentialSource.rememberedCredential(), rejected)
+            XCTAssertEqual(log.calls.filter { $0 == "cli" }.count, 2)
+            let recovered = await reader.read()
+            XCTAssertEqual(recovered.windows.first { $0.providerKey == "anthropic" }?.remainingPercent, 75)
+            XCTAssertNil(recovered.issues["anthropic"])
+            XCTAssertEqual(attempts.value, 1)
+            XCTAssertEqual(log.calls.filter { $0 == "cli" }.count, 3)
+        }
     }
 
     func testUnexpiredRememberedGrantStaysUsable() {
@@ -681,9 +892,8 @@ final class ClaudeConsentTests: XCTestCase {
                        .connected)
     }
 
-    /// The reader stops at a transient read: no renewal run, no second read,
-    /// and neither the sign-in wording nor the consent button.
-    func testTransientReadSurfacesTheNeutralIssueAndNeverRenews() async throws {
+    /// A failed CLI attempt preserves the neutral temporary issue.
+    func testTransientReadTriesClaudeBeforeReportingTheNeutralIssue() async throws {
         let home = try makeHome()
         defer { try? FileManager.default.removeItem(at: home) }
         // Expired but renewable, which would otherwise ask Claude Code to renew.
@@ -707,8 +917,8 @@ final class ClaudeConsentTests: XCTestCase {
         XCTAssertNotEqual(result.issues["anthropic"], ClaudeLoginState.signedOut.issue)
         XCTAssertFalse(result.consentNeeded.contains("anthropic"))
         XCTAssertTrue(result.windows.filter { $0.providerKey == "anthropic" }.isEmpty)
-        XCTAssertEqual(reads.value, 1)
-        XCTAssertEqual(renewals.value, 0)
+        XCTAssertEqual(reads.value, 2)
+        XCTAssertEqual(renewals.value, 1)
     }
 
     func testReauthErrorFromAnthropicServerNeverAsksForKeychainConsent() async throws {
@@ -727,6 +937,64 @@ final class ClaudeConsentTests: XCTestCase {
         XCTAssertFalse(result.consentNeeded.contains("anthropic"), "Server 401 reauth must never trigger Keychain consent prompt")
         XCTAssertEqual(result.issues["anthropic"], ClaudeLoginState.signedOut.issue)
         XCTAssertNil(ClaudeCredentialSource.rememberedCredential())
+    }
+
+    func testUsageRejectionKeepsTheLatestCredentialFailureAfterTryingClaude() async throws {
+        let failures: [(ClaudeCredentialAccess, ClaudeLoginState)] = [
+            (.unauthorized, .needsPermission),
+            (.temporarilyUnavailable, .temporarilyUnavailable),
+            (.missing, .signedOut),
+        ]
+        for (access, expectedState) in failures {
+            let home = try makeHome()
+            defer { try? FileManager.default.removeItem(at: home) }
+            let reads = Counter()
+            let attempts = Counter()
+            let reader = LocalQuotaReader(
+                homeDirectory: home,
+                fetchJSON: { _ in Self.httpResponse(#"{"error":"unauthorized"}"#, status: 401) },
+                runAntigravity: { Data("{}".utf8) },
+                readClaudeCredential: {
+                    reads.bump()
+                    return reads.value == 1 ? .authorized(Self.freshLogin) : access
+                },
+                renewClaudeLogin: { attempts.bump() },
+                renewalThrottle: ClaudeRenewalThrottle())
+            let result = await reader.read()
+            XCTAssertEqual(attempts.value, 1)
+            XCTAssertEqual(result.issues["anthropic"], expectedState.issue)
+            XCTAssertEqual(result.consentNeeded.contains("anthropic"), expectedState.needsConsent)
+            XCTAssertTrue(result.windows.filter { $0.providerKey == "anthropic" }.isEmpty)
+        }
+    }
+
+    func testUsageRejectionRecoversWithoutAVisibleRefreshToken() async throws {
+        for status in [401, 403] {
+            let home = try makeHome()
+            defer { try? FileManager.default.removeItem(at: home) }
+            let attempts = Counter()
+            let reader = LocalQuotaReader(
+                homeDirectory: home,
+                fetchJSON: { request in
+                    if request.value(forHTTPHeaderField: "Authorization") != "Bearer new" {
+                        return Self.httpResponse(#"{"error":"unauthorized"}"#, status: status)
+                    }
+                    return Self.httpResponse(#"{"five_hour":{"utilization":25}}"#)
+                },
+                runAntigravity: { Data("{}".utf8) },
+                readClaudeCredential: {
+                    .authorized(attempts.value == 0
+                        ? Data(#"{"claudeAiOauth":{"accessToken":"revoked","expiresAt":4102444800000}}"#.utf8)
+                        : Self.freshLogin)
+                },
+                renewClaudeLogin: { attempts.bump() },
+                renewalThrottle: ClaudeRenewalThrottle())
+            let result = await reader.read()
+            XCTAssertEqual(attempts.value, 1)
+            XCTAssertEqual(result.windows.first { $0.providerKey == "anthropic" }?.remainingPercent, 75)
+            XCTAssertNil(result.issues["anthropic"])
+            XCTAssertFalse(result.consentNeeded.contains("anthropic"))
+        }
     }
 
     // MARK: - Helpers

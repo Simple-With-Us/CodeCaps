@@ -306,8 +306,8 @@ public enum ClaudeCredentialSource {
             // "login idle" while Claude Code sat right there signed in — the
             // Keychain item held a fresh token the app simply never re-read.
             // So: serve memory only while its own access token is unexpired.
-            let remembered = rememberedCredential()
-            if let data = remembered, rememberedGrantIsFresh(data) {
+            let (remembered, needsRefresh, generation) = rememberedCredentialState()
+            if let data = remembered, !needsRefresh, rememberedGrantIsFresh(data) {
                 return .authorized(data)
             }
             // Past that point, or with nothing remembered at all, read the
@@ -321,7 +321,13 @@ public enum ClaudeCredentialSource {
             let outcome = probe.readViaSecurityCLI(attemptDeadline, { isAbandoned() })
             log.notice("claude keychain silent security CLI: \(outcome.logLabel, privacy: .public)")
             if case .found(let data) = outcome {
-                remember(data)
+                guard remember(data, ifGenerationMatches: generation) else {
+                    let (latest, requiresRefresh, _) = rememberedCredentialState()
+                    if let latest, !requiresRefresh, rememberedGrantIsFresh(latest) {
+                        return .authorized(latest)
+                    }
+                    return .temporarilyUnavailable
+                }
                 return .authorized(data)
             }
             // The read produced nothing.  With a grant already remembered that
@@ -361,13 +367,35 @@ public enum ClaudeCredentialSource {
 
     private static let memoryLock = NSLock()
     private static var remembered: Data?
+    private static var rememberedNeedsRefresh = false
+    private static var rememberedGeneration: UInt64 = 0
 
     /// Keeps a successful Allow Access payload for the refresh loop.  The
     /// value is never logged.
-    static func remember(_ data: Data) {
+    @discardableResult
+    static func remember(_ data: Data, ifGenerationMatches expected: UInt64? = nil) -> Bool {
         memoryLock.lock()
+        defer { memoryLock.unlock() }
+        if let expected, expected != rememberedGeneration { return false }
         remembered = data
+        rememberedNeedsRefresh = false
+        rememberedGeneration &+= 1
+        return true
+    }
+
+    /// Claude Code may rewrite an unexpired token during recovery.
+    /// Force a silent reread while retaining the known grant on read failure.
+    static func invalidateRememberedCredentialFreshness() {
+        memoryLock.lock()
+        rememberedNeedsRefresh = true
+        rememberedGeneration &+= 1
         memoryLock.unlock()
+    }
+
+    private static func rememberedCredentialState() -> (Data?, Bool, UInt64) {
+        memoryLock.lock()
+        defer { memoryLock.unlock() }
+        return (remembered, rememberedNeedsRefresh, rememberedGeneration)
     }
 
     static func rememberedCredential() -> Data? {
@@ -381,6 +409,8 @@ public enum ClaudeCredentialSource {
     static func resetRememberedCredential() {
         memoryLock.lock()
         remembered = nil
+        rememberedNeedsRefresh = false
+        rememberedGeneration &+= 1
         memoryLock.unlock()
     }
 

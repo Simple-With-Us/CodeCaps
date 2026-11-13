@@ -81,7 +81,7 @@ public struct LocalQuotaReader: Sendable {
 
     /// Reads all configured local sources concurrently.  This method never
     /// refreshes OAuth credentials itself and never posts telemetry.  The one
-    /// exception is asking Claude Code to renew its own expired login, which
+    /// exception is asking Claude Code to recover its own unavailable login, which
     /// Claude Code performs and writes on its own.
     public func read() async -> LocalQuotaResult {
         await withTaskGroup(of: ProviderRead.self, returning: LocalQuotaResult.self) { group in
@@ -130,24 +130,18 @@ public struct LocalQuotaReader: Sendable {
         var renewable = false
         if candidate == nil {
             access = await ClaudeCredentialSource.boundedAccess(timeout: claudeKeychainTimeout) { await readClaudeCredential() }
-            // A read that could not finish says nothing about the login, so
-            // stop here: no renewal run and no second read on a Mac that is
-            // already too loaded to answer, and the row says "temporarily
-            // unavailable" rather than "sign in" or "needs permission".
-            if access == .temporarilyUnavailable {
-                return ProviderRead(provider: provider, windows: [],
-                                    issue: ClaudeLoginState.temporarilyUnavailable.issue)
-            }
             var keychainRoot = credentialRoot(access)
             candidate = ClaudeOAuthParser.validOAuth(in: keychainRoot, now: now())
             renewable = ClaudeOAuthParser.isRenewable(in: file, now: now())
                 || ClaudeOAuthParser.isRenewable(in: keychainRoot, now: now())
-            // Claude Code refreshes its 8-hour access token only while it
-            // runs.  An expired-but-renewable login means it is idle, so ask
-            // it to renew its own login (at most once per 15 minutes) and
-            // read the result back.  CodeCaps never writes or refreshes it.
-            if candidate == nil, renewable,
+            // A failed credential read does not prove Claude Code is signed out.
+            // Let its quota-only command try its own login even when CodeCaps
+            // cannot see a refresh token, then reread the result.
+            // The existing throttle bounds repeated attempts and shares a run.
+            try Task.checkCancellation()
+            if candidate == nil,
                await renewalThrottle.perform(now: now(), action: renewClaudeLogin) {
+                ClaudeCredentialSource.invalidateRememberedCredentialFreshness()
                 file = (try? readJSONObject(relativePath: ".claude/.credentials.json")) ?? [:]
                 access = await ClaudeCredentialSource.boundedAccess(timeout: claudeKeychainTimeout) { await readClaudeCredential() }
                 keychainRoot = credentialRoot(access)
@@ -172,27 +166,20 @@ public struct LocalQuotaReader: Sendable {
             payload = try await requestJSON(request)
         } catch LocalReaderError.reauth {
             // A usage 401 or 403 is never the generic "sign in again" sentence.
-            // Drop remembered bytes, try one Claude Code renewal when the login
-            // is renewable, then surface idle or signed-out wording.  Allow
-            // Access stays for a silent Keychain read that was refused, not for
-            // a token Anthropic rejected.
-            ClaudeCredentialSource.resetRememberedCredential()
-            let rejectionFile = (try? readJSONObject(relativePath: ".claude/.credentials.json")) ?? file
-            let rejectionAccess = await ClaudeCredentialSource.boundedAccess(timeout: claudeKeychainTimeout) { await readClaudeCredential() }
-            let rejectionKeychain = credentialRoot(rejectionAccess)
-            let mayRenewAfterRejection =
-                ClaudeOAuthParser.canRenewAfterUsageRejection(in: rejectionFile, now: now())
-                || ClaudeOAuthParser.canRenewAfterUsageRejection(in: rejectionKeychain, now: now())
-            var renewed = false
-            if mayRenewAfterRejection {
-                renewed = await renewalThrottle.perform(now: now(), action: renewClaudeLogin)
-            }
+            // Invalidate remembered bytes and let Claude Code try its own login
+            // without requiring CodeCaps to see a refresh token first.
+            // A rejected readable token is not a Keychain consent failure.
+            ClaudeCredentialSource.invalidateRememberedCredentialFreshness()
+            var recoveryFile = file
+            var recoveryAccess = access
+            try Task.checkCancellation()
+            let renewed = await renewalThrottle.perform(now: now(), action: renewClaudeLogin)
             if renewed {
-                let refreshedFile = (try? readJSONObject(relativePath: ".claude/.credentials.json")) ?? [:]
-                let refreshedAccess = await ClaudeCredentialSource.boundedAccess(timeout: claudeKeychainTimeout) { await readClaudeCredential() }
-                let refreshedKeychain = credentialRoot(refreshedAccess)
-                if let refreshedOAuth = ClaudeOAuthParser.validOAuth(in: refreshedFile, now: now())
-                    ?? ClaudeOAuthParser.validOAuth(in: refreshedKeychain, now: now()),
+                ClaudeCredentialSource.invalidateRememberedCredentialFreshness()
+                recoveryFile = (try? readJSONObject(relativePath: ".claude/.credentials.json")) ?? [:]
+                recoveryAccess = await ClaudeCredentialSource.boundedAccess(timeout: claudeKeychainTimeout) { await readClaudeCredential() }
+                if let refreshedOAuth = ClaudeOAuthParser.validOAuth(in: recoveryFile, now: now())
+                    ?? ClaudeOAuthParser.validOAuth(in: credentialRoot(recoveryAccess), now: now()),
                    let refreshedToken = firstString(refreshedOAuth, ["accessToken", "access_token"]) {
                     var retryRequest = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/usage")!)
                     retryRequest.httpMethod = "GET"
@@ -211,11 +198,16 @@ public struct LocalQuotaReader: Sendable {
                     }
                 }
             }
-            let idleAfterRejection = ClaudeOAuthParser.isRenewable(in: rejectionFile, now: now())
-                || ClaudeOAuthParser.isRenewable(in: rejectionKeychain, now: now())
-            let issue = idleAfterRejection ? ClaudeLoginState.idle.issue : ClaudeLoginState.signedOut.issue
-            return ProviderRead(provider: provider, windows: [], issue: issue,
-                                needsConsent: false)
+            let recoveryRoot = credentialRoot(recoveryAccess)
+            let readableLogin = ClaudeOAuthParser.validOAuth(in: recoveryFile, now: now()) != nil
+                || ClaudeOAuthParser.validOAuth(in: recoveryRoot, now: now()) != nil
+            let state = ClaudeLoginState.resolve(
+                hasUsableCredential: false,
+                access: readableLogin ? .missing : recoveryAccess,
+                renewable: ClaudeOAuthParser.isRenewable(in: recoveryFile, now: now())
+                    || ClaudeOAuthParser.isRenewable(in: recoveryRoot, now: now()))
+            return ProviderRead(provider: provider, windows: [], issue: state.issue,
+                                needsConsent: state.needsConsent)
         }
         let details = await claudeUsageDetails(payload: payload, usageRequest: request)
         let windows = parseClaude(payload, planType: claudePlanName(oauth), observedAt: now()).map { value in

@@ -1,8 +1,7 @@
 import Foundation
 
-/// Reads the grouped Antigravity quota summary.  The default transport is left
-/// injectable so callers can supply the running language-server connection
-/// without exposing process credentials to this library.
+/// Reads grouped Antigravity quota through the CLI's quota-only command,
+/// with the running language server as a fallback for older installations.
 public struct AntigravitySummaryReader: Sendable {
     private let now: @Sendable () -> Date
     private let fetchSummary: @Sendable () async throws -> Data
@@ -22,12 +21,18 @@ public struct AntigravitySummaryReader: Sendable {
             let data = try await fetchSummary()
             guard data.count <= 1_048_576 else { throw SummaryError.tooLarge }
             guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw SummaryError.malformed }
-            let response = (root["response"] as? [String: Any]) ?? root
+            let response = Self.summaryResponse(root)
             let groups = (response["groups"] as? [[String: Any]]) ?? []
             let observed = now()
             var windows: [QuotaWindow] = []
             for group in groups {
-                guard let displayName = group["displayName"] as? String else { continue }
+                guard let displayName = ["displayName", "name", "id"]
+                    .compactMap({ group[$0] as? String })
+                    .first(where: { name in
+                        ["argon", "gemini", "claude", "gpt", "third"].contains {
+                            name.localizedCaseInsensitiveContains($0)
+                        }
+                    }) else { continue }
                 let family: String?
                 let modelId: String?
                 if displayName.localizedCaseInsensitiveContains("argon") {
@@ -45,16 +50,16 @@ public struct AntigravitySummaryReader: Sendable {
                 }
                 guard let family else { continue }
                 for bucket in (group["buckets"] as? [[String: Any]]) ?? [] {
-                    guard let bucketID = bucket["bucketId"] as? String, let period = period(bucket) else { continue }
+                    guard let bucketID = summaryString(bucket, keys: ["bucketId", "id"]), let period = period(bucket) else { continue }
                     // A fraction this reader cannot interpret is not a fraction
                     // it may offer as remaining quota, so a value outside
                     // 0...1 is refused the same way an omitted value is:  no
                     // remaining, exhausted.  The provider's payload is a 0...1
                     // fraction, so a number outside that range means the shape
                     // changed and nothing in it can be believed.
-                    let fraction = finiteNumber(bucket["remainingFraction"])
+                    let fraction = (finiteNumber(bucket["remainingFraction"]) ?? finiteNumber(bucket["remaining_fraction"]))
                         .flatMap { $0 >= 0 && $0 <= 1 ? $0 : nil }
-                    let reset = bucket["resetTime"] as? String
+                    let reset = summaryString(bucket, keys: ["resetTime", "reset_time"])
                     let cadenceName = period == "5h" ? QuotaWindowVocabulary.fiveHour : QuotaWindowVocabulary.sevenDay
                     let label = modelId == "argon"
                         ? "Gemini 4 Argon · \(cadenceName)"
@@ -105,18 +110,55 @@ public struct AntigravitySummaryReader: Sendable {
     private func period(_ bucket: [String: Any]) -> String? {
         let value = (bucket["window"] as? String)?.lowercased()
         if value == "5h" || value == "weekly" { return value }
-        let id = (bucket["bucketId"] as? String)?.lowercased() ?? ""
+        let id = summaryString(bucket, keys: ["bucketId", "id"])?.lowercased() ?? ""
         if id.hasSuffix("-5h") { return "5h" }
         if id.hasSuffix("-weekly") { return "weekly" }
         return nil
     }
 
+    /// Print-mode slash commands return their structured payload under
+    /// command.data; the language-server RPC returns it under response.
+    private static func summaryResponse(_ root: [String: Any]) -> [String: Any] {
+        if let command = root["command"] as? [String: Any] {
+            if let status = root["status"] as? String,
+               !["success", "ok"].contains(status.lowercased()) { return [:] }
+            if let data = command["data"] as? [String: Any] { return data }
+        }
+        return (root["response"] as? [String: Any]) ?? root
+    }
+
+    private static func cliPath(homeDirectory: URL) -> String? {
+        [homeDirectory.appendingPathComponent(".local/bin/agy").path,
+         "/opt/homebrew/bin/agy", "/usr/local/bin/agy"]
+            .first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+
     private static func makeLocalFetcher(homeDirectory: URL) -> @Sendable () async throws -> Data {
         {
             let deadline = ProcessInfo.processInfo.systemUptime + 20
+            func budget(_ maximum: TimeInterval) throws -> TimeInterval {
+                let remaining = deadline - ProcessInfo.processInfo.systemUptime
+                guard remaining > 0 else { throw SummaryError.unavailable }
+                return min(maximum, remaining)
+            }
+            // /usage is handled by the CLI itself: it neither runs an agent
+            // turn nor spends model quota, and uses the CLI's own sign-in.
+            // Do not require the interactive CLI or IDE to be running.
+            if let path = cliPath(homeDirectory: homeDirectory) {
+                do {
+                    let data = try await BoundedQuotaProcess().run(
+                        path: path, arguments: ["-p", "/usage", "--output-format", "json"],
+                        home: homeDirectory, timeout: try budget(15), maxBytes: 1_048_576)
+                    if let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let groups = summaryResponse(root)["groups"] as? [[String: Any]], !groups.isEmpty {
+                        return data
+                    }
+                } catch is CancellationError { throw CancellationError() }
+                catch { /* An older CLI may not support structured /usage. */ }
+            }
             let pids = try await BoundedQuotaProcess().run(
                 path: "/usr/bin/pgrep", arguments: ["-f", "language_server|language-server|/agy( |$)"],
-                home: homeDirectory, timeout: 2, maxBytes: 16_384)
+                home: homeDirectory, timeout: try budget(2), maxBytes: 16_384)
             var candidates = 0
             for line in String(decoding: pids, as: UTF8.self).split(whereSeparator: \.isNewline).reversed() {
                 try Task.checkCancellation()
@@ -124,7 +166,7 @@ public struct AntigravitySummaryReader: Sendable {
                 guard let pid = Int32(line.trimmingCharacters(in: .whitespacesAndNewlines)), pid > 0,
                       let commandData = try? await BoundedQuotaProcess().run(
                         path: "/bin/ps", arguments: ["-p", "\(pid)", "-o", "command="],
-                        home: homeDirectory, timeout: 2, maxBytes: 65_536) else { continue }
+                        home: homeDirectory, timeout: try budget(2), maxBytes: 65_536) else { continue }
                 let command = String(decoding: commandData, as: UTF8.self)
                 let identity = command.lowercased()
                 let cli = identity.contains("/antigravity-cli/") || identity.contains("/antigravity_cli/")
@@ -137,7 +179,7 @@ public struct AntigravitySummaryReader: Sendable {
                 var ports: [Int] = []
                 if let lsof = try? await BoundedQuotaProcess().run(
                     path: "/usr/sbin/lsof", arguments: ["-nP", "-iTCP", "-sTCP:LISTEN", "-a", "-p", "\(pid)", "-Fn"],
-                    home: homeDirectory, timeout: 2, maxBytes: 16_384) {
+                    home: homeDirectory, timeout: try budget(2), maxBytes: 16_384) {
                     ports = lsofPorts(String(decoding: lsof, as: UTF8.self))
                 }
                 for name in ["--https_server_port", "--extension_server_port"] {
@@ -151,7 +193,7 @@ public struct AntigravitySummaryReader: Sendable {
                         var request = URLRequest(url: url)
                         request.httpMethod = "POST"
                         request.httpBody = Data("{}".utf8)
-                        request.timeoutInterval = min(3, deadline - ProcessInfo.processInfo.systemUptime)
+                        request.timeoutInterval = try budget(3)
                         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
                         request.setValue("application/json", forHTTPHeaderField: "Accept")
                         request.setValue("1", forHTTPHeaderField: "Connect-Protocol-Version")
@@ -159,7 +201,7 @@ public struct AntigravitySummaryReader: Sendable {
                         do {
                             let data = try await Self.fetch(request)
                             let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
-                            let response = root["response"] as? [String: Any] ?? root
+                            let response = summaryResponse(root)
                             if let groups = response["groups"] as? [[String: Any]], !groups.isEmpty { return data }
                         } catch is CancellationError { throw CancellationError() }
                         catch { continue }
@@ -185,6 +227,12 @@ public struct AntigravitySummaryReader: Sendable {
     }
 
     private enum SummaryError: Error { case unavailable, tooLarge, malformed }
+}
+
+private func summaryString(_ record: [String: Any], keys: [String]) -> String? {
+    keys.compactMap { record[$0] as? String }
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .first { !$0.isEmpty }
 }
 
 private func finiteNumber(_ value: Any?) -> Double? {
