@@ -6,6 +6,7 @@ final class QuotaClientRetryTests: XCTestCase {
   private let successBody = """
   {"generatedAt":"2023-11-14T22:10:00Z","windows":[],"skipModelTypes":[]}
   """.data(using: .utf8)!
+  private let defaultSleep = QuotaClientRetryTiming.sleep
 
   override func setUp() {
     super.setUp()
@@ -19,6 +20,7 @@ final class QuotaClientRetryTests: XCTestCase {
   override func tearDown() {
     QuotaClientStubURLProtocol.failURLError = nil
     QuotaClientStubURLProtocol.handler = nil
+    QuotaClientRetryTiming.sleep = defaultSleep
     super.tearDown()
   }
 
@@ -192,45 +194,4 @@ final class QuotaClientRetryTests: XCTestCase {
       exceptionValues: ["HTTP Client Error with status code: 503"]
     ))
   }
-}
-
-// File-private so each test file in this target keeps its own URL stub.
-private final class StubURLProtocol: URLProtocol, @unchecked Sendable {
-  struct Reply {
-    let status: Int
-    let headers: [String: String]
-    let body: Data
-  }
-
-  static var handler: ((URLRequest) -> Reply)?
-  static var failURLError: ((URLRequest) -> URLError?)?
-  static var seenURLs: [String] = []
-
-  static func reply(status: Int, headers: [String: String] = [:], body: Data) -> Reply {
-    Reply(status: status, headers: headers, body: body)
-  }
-
-  override class func canInit(with request: URLRequest) -> Bool { true }
-  override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-
-  override func startLoading() {
-    guard let url = request.url else { return }
-    Self.seenURLs.append(url.path)
-    if let urlError = Self.failURLError?(request) {
-      client?.urlProtocol(self, didFailWithError: urlError)
-      return
-    }
-    let reply = Self.handler?(request) ?? Self.reply(status: 500, body: Data())
-    let response = HTTPURLResponse(
-      url: url,
-      statusCode: reply.status,
-      httpVersion: "HTTP/1.1",
-      headerFields: reply.headers
-    )!
-    client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-    client?.urlProtocol(self, didLoad: reply.body)
-    client?.urlProtocolDidFinishLoading(self)
-  }
-
-  override func stopLoading() {}
 }

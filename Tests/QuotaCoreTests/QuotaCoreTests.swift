@@ -433,6 +433,7 @@ final class QuotaClientStubURLProtocol: URLProtocol, @unchecked Sendable {
     }
 
     static var handler: ((URLRequest) -> Reply)?
+    static var failURLError: ((URLRequest) -> URLError?)?
     static var seenURLs: [String] = []
 
     static func reply(status: Int, headers: [String: String] = [:], body: Data) -> Reply {
@@ -444,6 +445,10 @@ final class QuotaClientStubURLProtocol: URLProtocol, @unchecked Sendable {
     override func startLoading() {
         guard let url = request.url else { return }
         Self.seenURLs.append(url.path)
+        if let urlError = Self.failURLError?(request) {
+            client?.urlProtocol(self, didFailWithError: urlError)
+            return
+        }
         let reply = Self.handler?(request) ?? Self.reply(status: 500, body: Data())
         let response = HTTPURLResponse(url: url, statusCode: reply.status, httpVersion: "HTTP/1.1", headerFields: reply.headers)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
