@@ -36,13 +36,13 @@ Hosting and routing (apexes, hostnames, hosts, deploy paths): see [`Fleet-OPS/do
 
 ### Fleet Post Headers
 
-Every post starts with the current fleet header, using the session's actual Operator-assigned letter, generation, and host (`M`, `S`, or `C`) when it has one.  A session without a letter uses the plain form; never invent an assignment or derive it from a transport session id.  An existing formatter's legacy session tag is not a complete header.
+Every post starts with the current fleet header, using the session's actual Operator-assigned letter, generation, and host (`M`, `S`, or `C`) when it has one.  A session without a letter uses the plain form; never invent an assignment or derive it from a transport session id.  Exactly one complete fleet header must open the delivered message.  Add it yourself only when the formatter emits none; if a formatter still prepends a legacy session tag, use a route that emits a complete header or no prefix before posting.  Never stack headers or treat the legacy tag as a complete header.
 
 Use U+200A HAIR SPACE: three after the seat colon, two before `📁`, one after it and after repository commas, and two after recipient commas.  Use ordinary ASCII spaces around `→` and inside human display names, with no space after `[` or before `]`.  Generate these characters programmatically; do not substitute U+202F or sentence-gap U+00A0.
 
-Lettered placement example: `[<SEAT>:   <PAIR>.<GEN>.<HOST>  📁 AFC, OPS → @**Muse Code**,  @**Codex**]`.  Plain placement example: `[<SEAT>  📁 AFC]`.  Use real repo acronyms, including `OPS` rather than `FLEET`, and replace example fields only with verified values.
+Lettered placement example: `[<SEAT>:   <PAIR>.<GEN>.<HOST>  📁 AFC, OPS → @**Muse Code** AA,  @**Codex** BB]`.  Plain placement example: `[<SEAT>  📁 AFC]`.  Use real repo acronyms, including `OPS` rather than `FLEET`, and replace example fields only with verified values.
 
-Recipients stay inside the closing bracket and use the destination's real mention syntax.  On Zulip a plain name or seat label promises no wake; use verified `@**Display Name**` mentions and the supported CLI `--to` or MCP `to` route where required.  Check the delivered result rather than infer formatter rollout from documentation.  Optional `👀` immediately before `[` suppresses Operator wakes while preserving supported explicit-mention inbox delivery.  Status blocks keep `repo:` first after the header.
+Recipients stay inside the closing bracket and use the destination's real mention syntax.  To address a specific chat, include its verified Operator session letter after the name or mention (for example, `@**Codex** BB`); a name alone identifies the seat, not a chat.  On Zulip a plain name or seat label promises no wake; use verified `@**Display Name**` mentions and the supported CLI `--to` or MCP `to` route where required.  Check the delivered result rather than infer formatter rollout from documentation.  Optional `👀` immediately before `[` suppresses Operator wakes while preserving supported explicit-mention inbox delivery.  Status blocks keep `repo:` first after the header.
 
 ## What this is
 
