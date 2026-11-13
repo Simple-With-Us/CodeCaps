@@ -86,7 +86,7 @@ public struct CursorQuotaReader: Sendable {
                 // has a pool reading; the rows drop it once the pool stands in.
                 return LocalQuotaResult(
                     windows: [cursorUnknownWindow(observedAt: observedAt, planName: planName)],
-                    issues: ["cursor": "Cursor's included allowance is the shared xAI pool; waiting for its weekly reading."])
+                    issues: ["cursor": "Cursor's included plan uses the shared Grok Bot pool. Waiting for this week's reading."])
             }
             let windows = parseSummary(root, observedAt: observedAt)
             guard !windows.isEmpty else {
