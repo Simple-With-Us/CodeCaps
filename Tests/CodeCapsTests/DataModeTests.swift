@@ -237,29 +237,97 @@ final class DataModeTests: XCTestCase {
         let remote = window("remote", source: "fleet")
         model.serverFetchForTesting = { QuotaResponse(generatedAt: "seed", windows: [remote]) }
         model.refresh()
-        var refreshed = await waitForRefreshToFinish(model)
-        XCTAssertTrue(refreshed)
+        let seeded = await waitForRefreshToFinish(model)
+        XCTAssertTrue(seeded)
         XCTAssertNil(model.serverError)
+        XCTAssertFalse(model.fleetGroups.isEmpty)
         XCTAssertEqual(model.serverWindowsForTesting.count, 1)
 
         model.serverFetchForTesting = { throw QuotaClientError.httpStatus(503) }
         model.refresh()
-        refreshed = await waitForRefreshToFinish(model)
-        XCTAssertTrue(refreshed)
+        let afterGatewayFailure = await waitForRefreshToFinish(model)
+        XCTAssertTrue(afterGatewayFailure)
         XCTAssertNil(model.serverError)
         XCTAssertEqual(model.serverWindowsForTesting.count, 1)
 
         model.serverFetchForTesting = { throw QuotaClientError.transport }
         model.refresh()
-        refreshed = await waitForRefreshToFinish(model)
-        XCTAssertTrue(refreshed)
+        let afterTransportFailure = await waitForRefreshToFinish(model)
+        XCTAssertTrue(afterTransportFailure)
         XCTAssertNotNil(model.serverError)
         XCTAssertEqual(model.serverWindowsForTesting.count, 1)
 
         model.serverFetchForTesting = { throw QuotaClientError.unauthorized }
         model.refresh()
-        refreshed = await waitForRefreshToFinish(model)
-        XCTAssertTrue(refreshed)
+        let afterUnauthorized = await waitForRefreshToFinish(model)
+        XCTAssertTrue(afterUnauthorized)
+        XCTAssertNotNil(model.serverError)
+        XCTAssertEqual(model.serverWindowsForTesting.count, 1)
+    }
+
+    func testExpiredFleetKeepsAGatewayPullFailureVisible() async {
+        defaults.set(false, forKey: "localEnabled")
+        defaults.set(true, forKey: "serverEnabled")
+        defaults.set("https://usage.jays.services/api/quota-windows", forKey: "endpoint")
+        defaults.set(true, forKey: "hasSavedToken")
+        let model = MonitorModel(defaults: defaults)
+        model.skipsSnapshotIOForTesting = true
+
+        let formatter = ISO8601DateFormatter()
+        let now = Date()
+        var expired = window("expired", source: "fleet")
+        expired.occurredAt = formatter.string(from: now.addingTimeInterval(-2 * 60 * 60))
+        expired.resetAt = formatter.string(from: now.addingTimeInterval(-60 * 60))
+        expired.producerInstanceId = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"
+        model.serverFetchForTesting = { QuotaResponse(generatedAt: "seed", windows: [expired]) }
+        model.refresh()
+        let seeded = await waitForRefreshToFinish(model)
+        XCTAssertTrue(seeded)
+        XCTAssertEqual(model.serverWindowsForTesting.count, 1)
+        XCTAssertTrue(model.fleetGroups.isEmpty)
+
+        model.serverFetchForTesting = { throw QuotaClientError.httpStatus(503) }
+        model.refresh()
+        let afterGatewayFailure = await waitForRefreshToFinish(model)
+        XCTAssertTrue(afterGatewayFailure)
+        XCTAssertNotNil(model.serverError)
+        XCTAssertEqual(model.serverWindowsForTesting.count, 1)
+    }
+
+    func testGatewayFailureSurfacesWhenThisRefreshPrunesTheLastFleetGroup() async {
+        defaults.set(false, forKey: "localEnabled")
+        defaults.set(true, forKey: "serverEnabled")
+        defaults.set("https://usage.jays.services/api/quota-windows", forKey: "endpoint")
+        defaults.set(true, forKey: "hasSavedToken")
+        let model = MonitorModel(defaults: defaults)
+        model.skipsSnapshotIOForTesting = true
+
+        let formatter = ISO8601DateFormatter()
+        let publishedAt = Date(timeIntervalSince1970: 1_763_000_000)
+        var live = window("live", source: "fleet")
+        live.occurredAt = formatter.string(from: publishedAt.addingTimeInterval(-60))
+        live.resetAt = formatter.string(from: publishedAt.addingTimeInterval(10 * 60))
+        live.producerInstanceId = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"
+        model.nowForTesting = { publishedAt }
+        model.serverFetchForTesting = { QuotaResponse(generatedAt: "seed", windows: [live]) }
+        model.refresh()
+        let seeded = await waitForRefreshToFinish(model)
+        XCTAssertTrue(seeded)
+        XCTAssertNil(model.serverError)
+        XCTAssertFalse(model.fleetGroups.isEmpty)
+        XCTAssertEqual(model.serverWindowsForTesting.count, 1)
+
+        // Same stored window, later clock: the reset has passed and the
+        // reading is older than the freshness window, so this refresh
+        // publishes no fleet row.  The 503 has to stay on screen.
+        let prunedAt = publishedAt.addingTimeInterval(QuotaFreshnessRule.staleAfter + 60)
+        model.nowForTesting = { prunedAt }
+        model.serverFetchForTesting = { throw QuotaClientError.httpStatus(503) }
+        model.refresh()
+        let afterGatewayFailure = await waitForRefreshToFinish(model)
+        XCTAssertTrue(afterGatewayFailure)
+        XCTAssertTrue(model.fleetWindowGroups.isEmpty)
+        XCTAssertTrue(model.fleetGroups.isEmpty)
         XCTAssertNotNil(model.serverError)
         XCTAssertEqual(model.serverWindowsForTesting.count, 1)
     }
