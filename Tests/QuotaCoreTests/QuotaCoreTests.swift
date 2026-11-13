@@ -7,8 +7,9 @@ final class QuotaCoreTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
-        StubURLProtocol.seenURLs = []
-        StubURLProtocol.handler = nil
+        QuotaClientStubURLProtocol.seenURLs = []
+        QuotaClientStubURLProtocol.handler = nil
+        QuotaClientStubURLProtocol.failURLError = nil
     }
 
     private func window(
@@ -378,13 +379,13 @@ final class QuotaCoreTests: XCTestCase {
     }
 
     func testUnauthorizedAndRedirectAreRejectedWithoutFollowingRedirect() async throws {
-        StubURLProtocol.handler = { request in
+        QuotaClientStubURLProtocol.handler = { request in
             if request.url?.path == "/unauthorized" {
-                return StubURLProtocol.reply(status: 401, body: Data())
+                return QuotaClientStubURLProtocol.reply(status: 401, body: Data())
             }
-            return StubURLProtocol.reply(status: 302, headers: ["Location": "https://evil.example/collect"], body: Data())
+            return QuotaClientStubURLProtocol.reply(status: 302, headers: ["Location": "https://evil.example/collect"], body: Data())
         }
-        let unauthorized = try QuotaClient(endpoint: URL(string: "http://localhost/unauthorized")!, token: "secret", urlProtocolClasses: [StubURLProtocol.self])
+        let unauthorized = try QuotaClient(endpoint: URL(string: "http://localhost/unauthorized")!, token: "secret", urlProtocolClasses: [QuotaClientStubURLProtocol.self])
         do {
             _ = try await unauthorized.fetch()
             XCTFail("expected 401")
@@ -392,19 +393,19 @@ final class QuotaCoreTests: XCTestCase {
             XCTAssertEqual(error, .unauthorized)
         }
 
-        let redirect = try QuotaClient(endpoint: URL(string: "http://localhost/redirect")!, token: "secret", urlProtocolClasses: [StubURLProtocol.self])
+        let redirect = try QuotaClient(endpoint: URL(string: "http://localhost/redirect")!, token: "secret", urlProtocolClasses: [QuotaClientStubURLProtocol.self])
         do {
             _ = try await redirect.fetch()
             XCTFail("expected redirect rejection")
         } catch let error as QuotaClientError {
             XCTAssertEqual(error, .httpStatus(302))
         }
-        XCTAssertEqual(StubURLProtocol.seenURLs, ["/unauthorized", "/redirect"])
+        XCTAssertEqual(QuotaClientStubURLProtocol.seenURLs, ["/unauthorized", "/redirect"])
     }
 
     func testMalformedAndOversizedResponsesAreRejected() async throws {
-        StubURLProtocol.handler = { _ in StubURLProtocol.reply(status: 200, body: Data(repeating: 0x78, count: 32)) }
-        let malformed = try QuotaClient(endpoint: URL(string: "http://localhost/malformed")!, token: "secret", urlProtocolClasses: [StubURLProtocol.self])
+        QuotaClientStubURLProtocol.handler = { _ in QuotaClientStubURLProtocol.reply(status: 200, body: Data(repeating: 0x78, count: 32)) }
+        let malformed = try QuotaClient(endpoint: URL(string: "http://localhost/malformed")!, token: "secret", urlProtocolClasses: [QuotaClientStubURLProtocol.self])
         do {
             _ = try await malformed.fetch()
             XCTFail("expected malformed")
@@ -412,8 +413,8 @@ final class QuotaCoreTests: XCTestCase {
             XCTAssertEqual(error, .malformedResponse)
         }
 
-        StubURLProtocol.handler = { _ in StubURLProtocol.reply(status: 200, body: Data(repeating: 0x78, count: 33)) }
-        let oversized = try QuotaClient(endpoint: URL(string: "http://localhost/large")!, token: "secret", maxResponseBytes: 32, urlProtocolClasses: [StubURLProtocol.self])
+        QuotaClientStubURLProtocol.handler = { _ in QuotaClientStubURLProtocol.reply(status: 200, body: Data(repeating: 0x78, count: 33)) }
+        let oversized = try QuotaClient(endpoint: URL(string: "http://localhost/large")!, token: "secret", maxResponseBytes: 32, urlProtocolClasses: [QuotaClientStubURLProtocol.self])
         do {
             _ = try await oversized.fetch()
             XCTFail("expected oversized")
@@ -423,7 +424,8 @@ final class QuotaCoreTests: XCTestCase {
     }
 }
 
-private final class StubURLProtocol: URLProtocol, @unchecked Sendable {
+// QuotaClientRetryTests uses this stub. File-private would hide failURLError and reply().
+final class QuotaClientStubURLProtocol: URLProtocol, @unchecked Sendable {
     struct Reply {
         let status: Int
         let headers: [String: String]
@@ -431,6 +433,7 @@ private final class StubURLProtocol: URLProtocol, @unchecked Sendable {
     }
 
     static var handler: ((URLRequest) -> Reply)?
+    static var failURLError: ((URLRequest) -> URLError?)?
     static var seenURLs: [String] = []
 
     static func reply(status: Int, headers: [String: String] = [:], body: Data) -> Reply {
@@ -442,6 +445,10 @@ private final class StubURLProtocol: URLProtocol, @unchecked Sendable {
     override func startLoading() {
         guard let url = request.url else { return }
         Self.seenURLs.append(url.path)
+        if let urlError = Self.failURLError?(request) {
+            client?.urlProtocol(self, didFailWithError: urlError)
+            return
+        }
         let reply = Self.handler?(request) ?? Self.reply(status: 500, body: Data())
         let response = HTTPURLResponse(url: url, statusCode: reply.status, httpVersion: "HTTP/1.1", headerFields: reply.headers)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
