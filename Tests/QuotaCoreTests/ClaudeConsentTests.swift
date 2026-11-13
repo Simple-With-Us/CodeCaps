@@ -466,6 +466,110 @@ final class ClaudeConsentTests: XCTestCase {
         XCTAssertFalse(ClaudeCredentialSource.rememberedGrantIsFresh(renewableExpired, now: now))
     }
 
+    func testInvalidatedFreshGrantKeepsPermissionOnFailedReadAndRetries() {
+        let updated = Data(#"{"claudeAiOauth":{"accessToken":"updated","expiresAt":4102444800000}}"#.utf8)
+        for failure: SecurityCLIOutcome in [.denied, .timedOut, .failed] {
+            ClaudeCredentialSource.remember(Self.freshLogin)
+            ClaudeCredentialSource.invalidateRememberedCredentialFreshness()
+            let log = ProbeLog()
+            let probe = makeProbe(log: log, cli: [failure, .found(updated)], presence: .present)
+            XCTAssertEqual(ClaudeCredentialSource.resolveSilently(probe: probe), .authorized(Self.freshLogin))
+            XCTAssertEqual(ClaudeCredentialSource.resolveSilently(probe: probe), .authorized(updated))
+            XCTAssertEqual(log.calls, ["lookup", "cli", "lookup", "cli"])
+            let next = ProbeLog()
+            XCTAssertEqual(ClaudeCredentialSource.resolveSilently(
+                probe: makeProbe(log: next, cli: [.denied], presence: .present)), .authorized(updated))
+            XCTAssertEqual(next.calls, ["lookup"])
+        }
+    }
+
+    func testAReadStartedBeforeRecoveryCannotRevalidateItsOldToken() {
+        let rejected = Data(#"{"claudeAiOauth":{"accessToken":"rejected","expiresAt":4102444800000}}"#.utf8)
+        ClaudeCredentialSource.remember(rejected)
+        ClaudeCredentialSource.invalidateRememberedCredentialFreshness()
+        let oldRead = ClaudeKeychainProbe(
+            readViaSecurityCLI: { _, _ in
+                ClaudeCredentialSource.invalidateRememberedCredentialFreshness()
+                return .found(rejected)
+            },
+            lookUpItem: { .present })
+        XCTAssertEqual(ClaudeCredentialSource.resolveSilently(probe: oldRead), .temporarilyUnavailable)
+        let log = ProbeLog()
+        XCTAssertEqual(ClaudeCredentialSource.resolveSilently(
+            probe: makeProbe(log: log, cli: [.found(Self.freshLogin)], presence: .present)),
+            .authorized(Self.freshLogin))
+        XCTAssertEqual(log.calls, ["lookup", "cli"])
+    }
+
+    func testUsageRecoveryRereadsTheRealRememberedKeychainPath() async throws {
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let rejected = Data(#"{"claudeAiOauth":{"accessToken":"rejected","expiresAt":4102444800000}}"#.utf8)
+        let attempts = Counter()
+        let reads = Counter()
+        let probe = ClaudeKeychainProbe(
+            readViaSecurityCLI: { _, _ in
+                reads.bump()
+                return .found(attempts.value == 0 ? rejected : Self.freshLogin)
+            },
+            lookUpItem: { .present })
+        let reader = LocalQuotaReader(
+            homeDirectory: home,
+            fetchJSON: { request in
+                if request.value(forHTTPHeaderField: "Authorization") != "Bearer new" {
+                    return Self.httpResponse(#"{"error":"unauthorized"}"#, status: 401)
+                }
+                return Self.httpResponse(#"{"five_hour":{"utilization":25}}"#)
+            },
+            runAntigravity: { Data("{}".utf8) },
+            readClaudeCredential: { ClaudeCredentialSource.resolveSilently(probe: probe) },
+            renewClaudeLogin: { attempts.bump() },
+            renewalThrottle: ClaudeRenewalThrottle())
+        let result = await reader.read()
+        XCTAssertEqual(attempts.value, 1)
+        XCTAssertEqual(reads.value, 3)
+        XCTAssertEqual(ClaudeCredentialSource.rememberedCredential(), Self.freshLogin)
+        XCTAssertEqual(result.windows.first { $0.providerKey == "anthropic" }?.remainingPercent, 75)
+        XCTAssertNil(result.issues["anthropic"])
+        XCTAssertFalse(result.consentNeeded.contains("anthropic"))
+    }
+
+    func testUsageRecoveryFailedKeychainReadKeepsTheGrantAndRetriesNextRead() async throws {
+        let rejected = Data(#"{"claudeAiOauth":{"accessToken":"rejected","expiresAt":4102444800000}}"#.utf8)
+        for failure: SecurityCLIOutcome in [.denied, .timedOut, .failed] {
+            ClaudeCredentialSource.resetRememberedCredential()
+            let home = try makeHome()
+            defer { try? FileManager.default.removeItem(at: home) }
+            let attempts = Counter()
+            let log = ProbeLog()
+            let probe = makeProbe(log: log,
+                                  cli: [.found(rejected), .found(rejected), failure, .found(Self.freshLogin)],
+                                  presence: .present)
+            let reader = LocalQuotaReader(
+                homeDirectory: home,
+                fetchJSON: { request in
+                    if request.value(forHTTPHeaderField: "Authorization") != "Bearer new" {
+                        return Self.httpResponse(#"{"error":"unauthorized"}"#, status: 401)
+                    }
+                    return Self.httpResponse(#"{"five_hour":{"utilization":25}}"#)
+                },
+                runAntigravity: { Data("{}".utf8) },
+                readClaudeCredential: { ClaudeCredentialSource.resolveSilently(probe: probe) },
+                renewClaudeLogin: { attempts.bump() },
+                renewalThrottle: ClaudeRenewalThrottle())
+            let failed = await reader.read()
+            XCTAssertFalse(failed.consentNeeded.contains("anthropic"))
+            XCTAssertNotEqual(failed.issues["anthropic"], ClaudeLoginState.needsPermission.issue)
+            XCTAssertEqual(ClaudeCredentialSource.rememberedCredential(), rejected)
+            XCTAssertEqual(log.calls.filter { $0 == "cli" }.count, 3)
+            let recovered = await reader.read()
+            XCTAssertEqual(recovered.windows.first { $0.providerKey == "anthropic" }?.remainingPercent, 75)
+            XCTAssertNil(recovered.issues["anthropic"])
+            XCTAssertEqual(attempts.value, 1)
+            XCTAssertEqual(log.calls.filter { $0 == "cli" }.count, 4)
+        }
+    }
+
     func testUnexpiredRememberedGrantStaysUsable() {
         let payload = Data(#"{"claudeAiOauth":{"accessToken":"fixture","expiresAt":4102444800000}}"#.utf8)
         XCTAssertTrue(ClaudeCredentialSource.rememberedGrantStillUsable(payload, now: Date(timeIntervalSince1970: 1_700_000_000)))

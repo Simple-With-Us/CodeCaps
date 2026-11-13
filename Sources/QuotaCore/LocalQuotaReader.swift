@@ -141,6 +141,7 @@ public struct LocalQuotaReader: Sendable {
             try Task.checkCancellation()
             if candidate == nil,
                await renewalThrottle.perform(now: now(), action: renewClaudeLogin) {
+                ClaudeCredentialSource.invalidateRememberedCredentialFreshness()
                 file = (try? readJSONObject(relativePath: ".claude/.credentials.json")) ?? [:]
                 access = await ClaudeCredentialSource.boundedAccess(timeout: claudeKeychainTimeout) { await readClaudeCredential() }
                 keychainRoot = credentialRoot(access)
@@ -165,15 +166,16 @@ public struct LocalQuotaReader: Sendable {
             payload = try await requestJSON(request)
         } catch LocalReaderError.reauth {
             // A usage 401 or 403 is never the generic "sign in again" sentence.
-            // Drop remembered bytes and let Claude Code try its own login
+            // Invalidate remembered bytes and let Claude Code try its own login
             // without requiring CodeCaps to see a refresh token first.
             // A rejected readable token is not a Keychain consent failure.
-            ClaudeCredentialSource.resetRememberedCredential()
+            ClaudeCredentialSource.invalidateRememberedCredentialFreshness()
             var recoveryFile = (try? readJSONObject(relativePath: ".claude/.credentials.json")) ?? file
             var recoveryAccess = await ClaudeCredentialSource.boundedAccess(timeout: claudeKeychainTimeout) { await readClaudeCredential() }
             try Task.checkCancellation()
             let renewed = await renewalThrottle.perform(now: now(), action: renewClaudeLogin)
             if renewed {
+                ClaudeCredentialSource.invalidateRememberedCredentialFreshness()
                 recoveryFile = (try? readJSONObject(relativePath: ".claude/.credentials.json")) ?? [:]
                 recoveryAccess = await ClaudeCredentialSource.boundedAccess(timeout: claudeKeychainTimeout) { await readClaudeCredential() }
                 if let refreshedOAuth = ClaudeOAuthParser.validOAuth(in: recoveryFile, now: now())

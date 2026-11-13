@@ -170,7 +170,7 @@ final class LocalQuotaReaderTests: XCTestCase {
         XCTAssertEqual(result.windows.first { $0.providerKey == "grok" }?.remainingPercent, 40)
     }
 
-    func testClaudeUsageRejectionDropsTheRememberedGrantAndAsksAgain() async throws {
+    func testClaudeUsageRejectionPreservesTheKnownGrantWithoutAskingForConsent() async throws {
         let home = try makeFixtureHome()
         defer { try? FileManager.default.removeItem(at: home) }
         try writeJSON(["mcpOAuth": [:]], to: home.appendingPathComponent(".claude/.credentials.json"))
@@ -186,7 +186,7 @@ final class LocalQuotaReaderTests: XCTestCase {
         let result = await reader.read()
         XCTAssertEqual(result.issues["anthropic"], ClaudeLoginState.signedOut.issue)
         XCTAssertEqual(result.consentNeeded, [])
-        XCTAssertNil(ClaudeCredentialSource.rememberedCredential())
+        XCTAssertEqual(ClaudeCredentialSource.rememberedCredential(), stale)
     }
 
     func testClaudeFileTokenUsageRejectionTriggersRenewalWhenRefreshTokenPresent() async throws {
@@ -324,7 +324,7 @@ final class LocalQuotaReaderTests: XCTestCase {
         }
         let payloadDict: [String: Any] = [
             "claudeAiOauth": [
-                "accessToken": "fixture-large-claude",
+                "accessToken": "fixture-claude",
                 "expiresAt": 4102444800000
             ],
             "metadata": padding
@@ -334,7 +334,7 @@ final class LocalQuotaReaderTests: XCTestCase {
         XCTAssertLessThan(payloadData.count, 1_048_576)
 
         let reader = LocalQuotaReader(homeDirectory: home, fetchJSON: { request in
-            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer fixture-large-claude")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer fixture-claude")
             return Self.httpResponse(#"{"five_hour":{"utilization":20}}"#)
         }, runAntigravity: { Data("{}".utf8) }, readClaudeCredential: {
             .authorized(payloadData)
