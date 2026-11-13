@@ -649,6 +649,9 @@ final class MonitorModel: ObservableObject {
     var handoffWriteForTesting: (([QuotaWindow]) -> Void)?
     var widgetWriteForTesting: (([QuotaWindow]) -> Void)?
     var serverFetchForTesting: (@MainActor () async throws -> QuotaResponse)?
+    /// Replaces `Date()` for one refresh so a test can age a stored fleet
+    /// window across the dead-copy boundary without waiting out the clock.
+    var nowForTesting: (@MainActor () -> Date)?
     var syncTokenReadForTesting: (@MainActor () async -> String?)?
     var readTokenReadForTesting: (@MainActor () async -> String?)?
     var settingsWriteForTesting: (@MainActor (String, String) async throws -> Void)?
@@ -717,6 +720,9 @@ final class MonitorModel: ObservableObject {
     /// Re-checks the saved-token states when `TokenStore` gains a token nobody
     /// was waiting for, so the Re-Authorize button clears without a refresh.
     private var tokenChanges: AnyCancellable?
+    /// Redraws rows when the background custom-mark index finishes.  The rows
+    /// themselves only read that index.
+    private var markCatalogChanges: AnyCancellable?
 
     private enum PushOutcome {
         case success(QuotaPublishResult)
@@ -867,6 +873,11 @@ final class MonitorModel: ObservableObject {
                 // Answered from the cache: a token already held, or already
                 // failed, is not asked for again.
                 Task { @MainActor in await self?.refreshSavedTokenStates() }
+            }
+        markCatalogChanges = NotificationCenter.default.publisher(for: PlatformLogoImage.marksDidResolve)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
             }
     }
 
@@ -1902,16 +1913,23 @@ final class MonitorModel: ObservableObject {
 
     func customMarkURL(for providerKey: String, isDarkMode: Bool = false) -> URL? {
         let key = providerKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if isDarkMode {
-            if let path = customMarkDarkPaths[key], FileManager.default.fileExists(atPath: path) {
-                return URL(fileURLWithPath: path)
+        let stored = isDarkMode ? customMarkDarkPaths[key] : customMarkPaths[key]
+        if let stored {
+            switch PlatformLogoImage.storedCustomMarkPresence(atPath: stored) {
+            case .present, .unknown:
+                return URL(fileURLWithPath: stored)
+            case .absent:
+                break
             }
-            return PlatformLogoImage.customDarkMarkURL(providerKey: key)
         }
-        if let path = customMarkPaths[key], FileManager.default.fileExists(atPath: path) {
-            return URL(fileURLWithPath: path)
+        // The Logo Style rows run on the main thread.  A disk-backed lookup
+        // would list the marks directory during body evaluation.  The
+        // memory-only snapshot answers nil until the background listing
+        // lands, and `marksDidResolve` redraws this model when it does.
+        if isDarkMode {
+            return PlatformLogoImage.cachedCustomDarkMarkURL(providerKey: key)
         }
-        return PlatformLogoImage.customPrimaryMarkURL(providerKey: key)
+        return PlatformLogoImage.cachedCustomPrimaryMarkURL(providerKey: key)
     }
 
     /// Persist a custom mark for `providerKey`.  Reads the file out of the
@@ -2516,22 +2534,18 @@ final class MonitorModel: ObservableObject {
             // After the first read of the launch it is served from memory, and
             // a failed read is not retried here (see `TokenCache`).
             var savedTokenReadable = false
-            let preserveFleetOnTransientFailure = self?.serverWindows.isEmpty == false
+            // A 502/503/504 is eligible to stay quiet, but only once this
+            // refresh has published its fleet rows.  Deciding from the previous
+            // refresh's groups hid the outage for one cycle when those rows
+            // aged into dead copies before the split below.
+            var suppressTransientPullFailure = false
             if useServer {
                 if let serverFetchForTesting {
                     do { newServer = try await serverFetchForTesting() }
                     catch is CancellationError { return }
                     catch {
-                        // The injected fetch has to follow the same rule as
-                        // QuotaClient: a retriable HTTP status keeps the last
-                        // good fleet reading and does not raise the banner.
-                        if preserveFleetOnTransientFailure,
-                           IdempotentGETRetryFilter.preservesLastGoodFleetOnPullFailure(error) {
-                            failure = nil
-                        } else {
-                            failure = (error as? LocalizedError)?.errorDescription
-                                ?? error.localizedDescription
-                        }
+                        suppressTransientPullFailure = IdempotentGETRetryFilter.preservesLastGoodFleetOnPullFailure(error)
+                        failure = error.localizedDescription
                     }
                 } else {
                     let token = await TokenStore.read(server: currentEndpoint, service: TokenStore.readService)
@@ -2544,13 +2558,9 @@ final class MonitorModel: ObservableObject {
                         newServer = try await client.fetch()
                     } catch is CancellationError { return }
                     catch {
-                        if preserveFleetOnTransientFailure,
-                           IdempotentGETRetryFilter.preservesLastGoodFleetOnPullFailure(error) {
-                            failure = nil
-                        } else {
-                            failure = (error as? LocalizedError)?.errorDescription
-                                ?? ("Unable to reach the server." + sentenceGap + "Check the Quota Endpoint and the Read Token.")
-                        }
+                        suppressTransientPullFailure = IdempotentGETRetryFilter.preservesLastGoodFleetOnPullFailure(error)
+                        failure = (error as? LocalizedError)?.errorDescription
+                            ?? ("Unable to reach the server." + sentenceGap + "Check the Quota Endpoint and the Read Token.")
                     }
                 }
             }
@@ -2563,7 +2573,7 @@ final class MonitorModel: ObservableObject {
                 self.readTokenState = SavedTokenState.resolve(hasSavedFlag: self.hasSavedToken,
                                                               silentReadSucceeded: savedTokenReadable)
             }
-            self.now = Date()
+            self.now = self.nowForTesting?() ?? Date()
             self.lastChecked = self.now
             if useLocal { self.currentCodexAccountID = currentAccount }
             self.providerResult = providerRead
@@ -2614,7 +2624,6 @@ final class MonitorModel: ObservableObject {
                     : newServer.windows
             }
             if !useServer { self.serverWindows = [] }
-            self.serverError = failure
             // A local window that carries no reading (a plan-details window,
             // or any window whose percentage is unknown) does not mean this Mac
             // reads that provider, and it must not hold the fleet's live
@@ -2639,6 +2648,15 @@ final class MonitorModel: ObservableObject {
             self.fleetWindowGroups = split.groups.map {
                 FleetWindowGroup(id: $0.id, title: $0.title, windows: $0.windows)
             }
+            // The split and the banner share this refresh's clock.  A gateway
+            // failure stays quiet only while a fleet row is actually published;
+            // a window that died during this refresh leaves the glance empty,
+            // and the empty state has to show the outage instead of "no device
+            // has reported".
+            if suppressTransientPullFailure, !self.fleetWindowGroups.isEmpty {
+                failure = nil
+            }
+            self.serverError = failure
 
             // This Mac's own push fills in only a provider no local reader
             // produced — with local readers off, that is every provider.
