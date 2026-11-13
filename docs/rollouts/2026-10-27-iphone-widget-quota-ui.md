@@ -13,4 +13,4 @@ Detail selection is presentation-only App Group state, scoped by widget configur
 
 Use `scripts/test-widget-ui-native.sh` on macOS to compile the production widget sources, test missing/zero/extra caption states and select/back persistence, and render light/dark views without a live account or network fetch. Inspect the resulting pixels. `swift test --filter 'WidgetTests|CompanionModelTests'` checks the companion contracts. Build the iOS app and widgets using the generated Xcode project with signing disabled for compile qualification.
 
-Native component renders and AppIntent persistence tests do not prove a physical iPhone Home Screen tap. That final hosted interaction check and release-artifact qualification remain separate from source tests and compilation.
+Native component renders and AppIntent persistence tests do not prove a physical iPhone Home Screen tap.  The home-screen check is `scripts/test-widget-homescreen.sh`.  Release-artifact qualification remains separate from source tests and compilation.
