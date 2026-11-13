@@ -237,27 +237,31 @@ final class DataModeTests: XCTestCase {
         let remote = window("remote", source: "fleet")
         model.serverFetchForTesting = { QuotaResponse(generatedAt: "seed", windows: [remote]) }
         model.refresh()
-        XCTAssertTrue(await waitForRefreshToFinish(model))
+        var refreshed = await waitForRefreshToFinish(model)
+        XCTAssertTrue(refreshed)
         XCTAssertNil(model.serverError)
-        XCTAssertEqual(model.serverWindows.count, 1)
+        XCTAssertEqual(model.serverWindowsForTesting.count, 1)
 
         model.serverFetchForTesting = { throw QuotaClientError.httpStatus(503) }
         model.refresh()
-        XCTAssertTrue(await waitForRefreshToFinish(model))
+        refreshed = await waitForRefreshToFinish(model)
+        XCTAssertTrue(refreshed)
         XCTAssertNil(model.serverError)
-        XCTAssertEqual(model.serverWindows.count, 1)
+        XCTAssertEqual(model.serverWindowsForTesting.count, 1)
 
         model.serverFetchForTesting = { throw QuotaClientError.transport }
         model.refresh()
-        XCTAssertTrue(await waitForRefreshToFinish(model))
+        refreshed = await waitForRefreshToFinish(model)
+        XCTAssertTrue(refreshed)
         XCTAssertNotNil(model.serverError)
-        XCTAssertEqual(model.serverWindows.count, 1)
+        XCTAssertEqual(model.serverWindowsForTesting.count, 1)
 
         model.serverFetchForTesting = { throw QuotaClientError.unauthorized }
         model.refresh()
-        XCTAssertTrue(await waitForRefreshToFinish(model))
+        refreshed = await waitForRefreshToFinish(model)
+        XCTAssertTrue(refreshed)
         XCTAssertNotNil(model.serverError)
-        XCTAssertEqual(model.serverWindows.count, 1)
+        XCTAssertEqual(model.serverWindowsForTesting.count, 1)
     }
 
     private func noPublishableModel() -> MonitorModel {

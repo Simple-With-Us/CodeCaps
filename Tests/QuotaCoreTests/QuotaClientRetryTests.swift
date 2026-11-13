@@ -9,44 +9,50 @@ final class QuotaClientRetryTests: XCTestCase {
 
   override func setUp() {
     super.setUp()
-    StubURLProtocol.seenURLs = []
-    StubURLProtocol.handler = nil
-    StubURLProtocol.failURLError = nil
+    QuotaClientStubURLProtocol.seenURLs = []
+    QuotaClientStubURLProtocol.handler = nil
+    QuotaClientStubURLProtocol.failURLError = nil
     QuotaClientRetryTiming.sleep = { _ in }
     IdempotentGETRetryFilter.endFetch(endpoint: URL(string: "https://usage.jays.services/api/quota-windows")!)
   }
 
+  override func tearDown() {
+    QuotaClientStubURLProtocol.failURLError = nil
+    QuotaClientStubURLProtocol.handler = nil
+    super.tearDown()
+  }
+
   func testRetriable503sRetryUntilSuccess() async throws {
     var attempts = 0
-    StubURLProtocol.handler = { _ in
+    QuotaClientStubURLProtocol.handler = { _ in
       attempts += 1
       if attempts < 3 {
-        return StubURLProtocol.reply(status: 503, body: Data())
+        return QuotaClientStubURLProtocol.reply(status: 503, body: Data())
       }
-      return StubURLProtocol.reply(status: 200, body: self.successBody)
+      return QuotaClientStubURLProtocol.reply(status: 200, body: self.successBody)
     }
     let client = try QuotaClient(
       endpoint: URL(string: "https://usage.jays.services/api/quota-windows")!,
       token: "secret",
-      urlProtocolClasses: [StubURLProtocol.self]
+      urlProtocolClasses: [QuotaClientStubURLProtocol.self]
     )
     let response = try await client.fetch()
     XCTAssertEqual(response.windows.count, 0)
     XCTAssertEqual(attempts, 3)
-    XCTAssertEqual(StubURLProtocol.seenURLs.count, 3)
+    XCTAssertEqual(QuotaClientStubURLProtocol.seenURLs.count, 3)
   }
 
   func testExhausted503ThrowsAfterThreeAttempts() async throws {
     var attempts = 0
-    StubURLProtocol.handler = { _ in
+    QuotaClientStubURLProtocol.handler = { _ in
       attempts += 1
-      return StubURLProtocol.reply(status: 503, body: Data())
+      return QuotaClientStubURLProtocol.reply(status: 503, body: Data())
     }
     let endpoint = URL(string: "https://usage.jays.services/api/quota-windows")!
     let client = try QuotaClient(
       endpoint: endpoint,
       token: "secret",
-      urlProtocolClasses: [StubURLProtocol.self]
+      urlProtocolClasses: [QuotaClientStubURLProtocol.self]
     )
     var exhausted = false
     QuotaClientExhaustedTransientRead.onExhausted = { url, error in
@@ -68,14 +74,14 @@ final class QuotaClientRetryTests: XCTestCase {
 
   func testNonRetriable500DoesNotRetry() async throws {
     var attempts = 0
-    StubURLProtocol.handler = { _ in
+    QuotaClientStubURLProtocol.handler = { _ in
       attempts += 1
-      return StubURLProtocol.reply(status: 500, body: Data())
+      return QuotaClientStubURLProtocol.reply(status: 500, body: Data())
     }
     let client = try QuotaClient(
       endpoint: URL(string: "https://usage.jays.services/api/quota-windows")!,
       token: "secret",
-      urlProtocolClasses: [StubURLProtocol.self]
+      urlProtocolClasses: [QuotaClientStubURLProtocol.self]
     )
     do {
       _ = try await client.fetch()
@@ -120,36 +126,36 @@ final class QuotaClientRetryTests: XCTestCase {
 
   func testWrappedTransportErrorsRetryUntilSuccess() async throws {
     var attempts = 0
-    StubURLProtocol.failURLError = { _ in
+    QuotaClientStubURLProtocol.failURLError = { _ in
       attempts += 1
       if attempts < 3 {
         return URLError(.networkConnectionLost)
       }
       return nil
     }
-    StubURLProtocol.handler = { _ in
-      StubURLProtocol.reply(status: 200, body: self.successBody)
+    QuotaClientStubURLProtocol.handler = { _ in
+      QuotaClientStubURLProtocol.reply(status: 200, body: self.successBody)
     }
     let client = try QuotaClient(
       endpoint: URL(string: "https://usage.jays.services/api/quota-windows")!,
       token: "secret",
-      urlProtocolClasses: [StubURLProtocol.self]
+      urlProtocolClasses: [QuotaClientStubURLProtocol.self]
     )
     _ = try await client.fetch()
     XCTAssertEqual(attempts, 3)
-    XCTAssertEqual(StubURLProtocol.seenURLs.count, 3)
+    XCTAssertEqual(QuotaClientStubURLProtocol.seenURLs.count, 3)
   }
 
   func testWrappedTransportErrorsExhaustAfterThreeAttempts() async throws {
     var attempts = 0
-    StubURLProtocol.failURLError = { _ in
+    QuotaClientStubURLProtocol.failURLError = { _ in
       attempts += 1
       return URLError(.networkConnectionLost)
     }
     let client = try QuotaClient(
       endpoint: URL(string: "https://usage.jays.services/api/quota-windows")!,
       token: "secret",
-      urlProtocolClasses: [StubURLProtocol.self]
+      urlProtocolClasses: [QuotaClientStubURLProtocol.self]
     )
     do {
       _ = try await client.fetch()
@@ -158,7 +164,7 @@ final class QuotaClientRetryTests: XCTestCase {
       XCTAssertEqual(error, .transport)
     }
     XCTAssertEqual(attempts, 3)
-    XCTAssertEqual(StubURLProtocol.seenURLs.count, 3)
+    XCTAssertEqual(QuotaClientStubURLProtocol.seenURLs.count, 3)
   }
 
   func testSentrySuppressesAutomatic503WhileFetchInFlight() {
