@@ -170,8 +170,8 @@ public struct LocalQuotaReader: Sendable {
             // without requiring CodeCaps to see a refresh token first.
             // A rejected readable token is not a Keychain consent failure.
             ClaudeCredentialSource.invalidateRememberedCredentialFreshness()
-            var recoveryFile = (try? readJSONObject(relativePath: ".claude/.credentials.json")) ?? file
-            var recoveryAccess = await ClaudeCredentialSource.boundedAccess(timeout: claudeKeychainTimeout) { await readClaudeCredential() }
+            var recoveryFile = file
+            var recoveryAccess = access
             try Task.checkCancellation()
             let renewed = await renewalThrottle.perform(now: now(), action: renewClaudeLogin)
             if renewed {

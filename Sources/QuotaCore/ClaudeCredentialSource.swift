@@ -321,7 +321,13 @@ public enum ClaudeCredentialSource {
             let outcome = probe.readViaSecurityCLI(attemptDeadline, { isAbandoned() })
             log.notice("claude keychain silent security CLI: \(outcome.logLabel, privacy: .public)")
             if case .found(let data) = outcome {
-                guard remember(data, ifGenerationMatches: generation) else { return .temporarilyUnavailable }
+                guard remember(data, ifGenerationMatches: generation) else {
+                    let (latest, requiresRefresh, _) = rememberedCredentialState()
+                    if let latest, !requiresRefresh, rememberedGrantIsFresh(latest) {
+                        return .authorized(latest)
+                    }
+                    return .temporarilyUnavailable
+                }
                 return .authorized(data)
             }
             // The read produced nothing.  With a grant already remembered that
@@ -373,7 +379,7 @@ public enum ClaudeCredentialSource {
         if let expected, expected != rememberedGeneration { return false }
         remembered = data
         rememberedNeedsRefresh = false
-        if expected == nil { rememberedGeneration &+= 1 }
+        rememberedGeneration &+= 1
         return true
     }
 
