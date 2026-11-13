@@ -257,6 +257,8 @@ targets:
       - path: ../../Sources/QuotaCore/QuotaMeterCadence.swift
         group: Shared
         group: Shared
+      - path: ../../Sources/QuotaCore/AppGroupSnapshotReadPolicy.swift
+        group: Shared
     entitlements:
       path: Generated/CodeCapsWidgetsMac.entitlements
       properties:
