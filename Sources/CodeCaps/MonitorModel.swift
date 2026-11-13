@@ -2974,7 +2974,7 @@ final class MonitorModel: ObservableObject {
             guard snapshot.isFresh, let remaining = snapshot.remainingPercent, let observedAt = snapshot.observedAt,
                   !window.isSupplementaryVideoQuota, !masked.contains(window.id),
                   !window.remainingUnknown,
-                  issues[window.canonicalProviderKey] == nil,
+                  rowIssue(for: window.canonicalProviderKey) == nil,
                   !disabledSources.contains(window.source ?? "") else { continue }
             let key = window.canonicalProviderKey + "|" + window.id + "|" + (window.accountKey ?? "")
             let previous = exhaustionObservationState[key]
